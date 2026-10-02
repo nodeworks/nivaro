@@ -25,7 +25,8 @@ export async function up(knex: Knex): Promise<void> {
     t.uuid('created_by').nullable()
     t.datetime('created_at').notNullable().defaultTo(utcNow(knex))
     t.datetime('updated_at').notNullable().defaultTo(utcNow(knex))
-    t.index(['store', 'created_at'], 'ix_traffic_investigations_store_created')
+    // the list is the newest-updated 30 of a store (every autosave bumps updated_at)
+    t.index(['store', 'updated_at'], 'ix_traffic_investigations_store_updated')
   })
 }
 

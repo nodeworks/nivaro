@@ -3,7 +3,7 @@
  * stack as links (each opens its level), "Restore this stack" and what each level showed when it
  * was saved (useful once the live data has aged out).
  */
-import { useQueryClient } from '@tanstack/react-query'
+import { type QueryClient, useQueryClient } from '@tanstack/react-query'
 import { History, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -51,47 +51,104 @@ function when(iso: string): string {
 
 type SaveState = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
 
+/** The detail query key prefix every `notebook` level of `id` reads (any anchor / window). */
+function notebookKey(id: string): readonly unknown[] {
+  return ['tm-inspect', 'notebook', id]
+}
+
+/**
+ * PATCH the notes and write the answer into every cached detail of this notebook, so reopening
+ * the level (from the list, a crumb, or the URL) shows what was saved and never re-saves the
+ * pre-edit text. Without a usable answer the detail is invalidated instead.
+ */
+async function patchNotes(qc: QueryClient, id: string, text: string): Promise<void> {
+  const res = await api.patch(`/traffic-map/investigations/${id}`, { notes: text })
+  const fresh = (res?.data as { data?: InvestigationDetail | null } | undefined)?.data
+  if (fresh && typeof fresh === 'object' && fresh.id === id) {
+    qc.setQueriesData<InvestigationDetail>({ queryKey: notebookKey(id) }, (old) =>
+      old ? { ...old, ...fresh } : old
+    )
+  } else {
+    void qc.invalidateQueries({ queryKey: notebookKey(id) })
+  }
+  void qc.invalidateQueries({ queryKey: ['traffic-map', 'investigations'] })
+}
+
+/**
+ * Notes saved as you type. Saves run one after another on a single promise chain, so a slow
+ * earlier save can never land after — and overwrite — a later one. `initial` is the server's
+ * text: when it changes underneath (a refetch, another admin's edit) and there is nothing
+ * unsaved here, the editor takes it over.
+ */
 function useNotesAutosave(id: string, initial: string | null, enabled: boolean) {
   const qc = useQueryClient()
   const [value, setValue] = useState(initial ?? '')
   const [state, setState] = useState<SaveState>('idle')
   const [error, setError] = useState<string | null>(null)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** What the textarea shows. */
   const latest = useRef(value)
+  /** What the server is known to hold. */
   const saved = useRef(initial ?? '')
+  /** The newest text handed to the chain (in flight or queued). */
+  const sent = useRef<string | null>(null)
+  const chain = useRef<Promise<void>>(Promise.resolve())
+  const mounted = useRef(true)
 
-  const save = async (text: string) => {
-    if (text === saved.current) {
-      setState('saved')
-      return
-    }
-    setState('saving')
-    try {
-      await api.patch(`/traffic-map/investigations/${id}`, { notes: text })
-      saved.current = text
-      setState(latest.current === text ? 'saved' : 'pending')
-      setError(null)
-      void qc.invalidateQueries({ queryKey: ['traffic-map', 'investigations'] })
-    } catch (e) {
-      setState('error')
-      setError(apiErrorOf(e).message)
-    }
+  const save = (text: string) => {
+    sent.current = text
+    chain.current = chain.current.then(async () => {
+      if (text === saved.current) {
+        if (mounted.current) setState(latest.current === text ? 'saved' : 'pending')
+        return
+      }
+      if (mounted.current) setState('saving')
+      try {
+        await patchNotes(qc, id, text)
+        saved.current = text
+        if (!mounted.current) return
+        setState(latest.current === text ? 'saved' : 'pending')
+        setError(null)
+      } catch (e) {
+        if (!mounted.current) return
+        setState('error')
+        setError(apiErrorOf(e).message)
+      }
+    })
   }
 
-  // flush a pending edit when the level closes
+  // take over text that changed on the server while nothing is unsaved here
+  useEffect(() => {
+    const server = initial ?? ''
+    if (server === saved.current || latest.current !== saved.current) return
+    saved.current = server
+    latest.current = server
+    setValue(server)
+  }, [initial])
+
+  // flush a pending edit when the level closes — unless that text is already on its way
   // biome-ignore lint/correctness/useExhaustiveDependencies: unmount-only flush of the latest text
-  useEffect(
-    () => () => {
-      if (timer.current) {
-        clearTimeout(timer.current)
-        if (latest.current !== saved.current)
-          void api
-            .patch(`/traffic-map/investigations/${id}`, { notes: latest.current })
-            .catch(() => {})
-      }
-    },
-    []
-  )
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+      if (!timer.current) return
+      clearTimeout(timer.current)
+      timer.current = null
+      const text = latest.current
+      if (text === saved.current || text === sent.current) return
+      sent.current = text
+      chain.current = chain.current.then(async () => {
+        if (text === saved.current) return
+        try {
+          await patchNotes(qc, id, text)
+          saved.current = text
+        } catch {
+          /* the level is gone; the next open shows what the server kept */
+        }
+      })
+    }
+  }, [])
 
   const change = (text: string) => {
     if (!enabled) return
@@ -101,10 +158,10 @@ function useNotesAutosave(id: string, initial: string | null, enabled: boolean) 
     if (timer.current) clearTimeout(timer.current)
     timer.current = setTimeout(() => {
       timer.current = null
-      void save(latest.current)
+      save(latest.current)
     }, SAVE_DELAY_MS)
   }
-  return { value, change, state, error, retry: () => void save(latest.current) }
+  return { value, change, state, error, retry: () => save(latest.current) }
 }
 
 function SaveStatus({
@@ -256,13 +313,27 @@ export function NotebookPanel({ inspectRef, anchor }: InspectPanelProps) {
             className={BTN}
             disabled={openable.length === 0}
             onClick={() => replaceInspect(openable)}
-            data-tm-inspect-notebook-restore=''
-            data-tip='Open these levels again in this panel, as they were'
+            data-tm-inspect-notebook-restore={
+              openable.length === all.length ? '' : `${openable.length}/${all.length}`
+            }
+            data-tip={
+              openable.length === all.length
+                ? 'Open these levels again in this panel, as they were'
+                : `Only ${openable.length} of ${all.length} saved levels can open on this page; the others are skipped`
+            }
           >
             <History className='h-3.5 w-3.5' aria-hidden='true' />
-            Restore this stack
+            {openable.length === all.length || openable.length === 0
+              ? 'Restore this stack'
+              : `Restore ${openable.length} of ${all.length} levels`}
           </button>
         </div>
+        {openable.length > 0 && openable.length !== all.length && (
+          <p className={MUTED} data-tm-inspect-notebook-restore-partial=''>
+            {openable.length} of {all.length} levels can open here: nothing on this page shows the
+            others, so the restored stack is shorter and starts from the first one that opens.
+          </p>
+        )}
         {all.length === 0 ? (
           <p className={MUTED}>The saved stack could not be read.</p>
         ) : (

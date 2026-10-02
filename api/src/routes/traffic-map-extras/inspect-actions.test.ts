@@ -210,11 +210,25 @@ describe('explain', () => {
     const res = await a.inject({
       method: 'POST',
       url: '/traffic-map/inspect/explain',
-      payload: { context: { levels: [{ kind: 'request', title: 'GET /api/items' }] } }
+      payload: {
+        context: {
+          levels: [
+            {
+              kind: 'request',
+              title: 'GET /api/items',
+              detail: { headers: { authorization: 'Bearer s3cret' }, status: 500 }
+            }
+          ]
+        }
+      }
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().data.text).toBe('What happened: a 500 [L1].')
     expect(sent).not.toBeNull()
+    // the prompt carries the facts but never a credential-looking value
+    const prompt = JSON.stringify((sent as unknown as { messages: unknown[] }).messages)
+    expect(prompt).toContain('500')
+    expect(prompt).not.toContain('s3cret')
     expect(activity.calls).toHaveLength(1)
     expect(activity.calls[0].action).toBe('traffic-inspect-explain')
     expect(String(activity.calls[0].comment)).not.toContain('500')

@@ -41,6 +41,13 @@ export interface CompactResult {
 
 const BODY_KEY =
   /^(body|request_body|response_body|response|payload|raw|html|screenshot|events|chunks|post_data|captured_body)$/i
+/**
+ * Keys that look like they carry a credential — the server's SENSITIVE_KEY_PATTERN
+ * (api/src/services/secret-mask.ts), applied again here so nothing credential-shaped leaves the
+ * page in an Explain or notebook context even before the server masks it.
+ */
+const SENSITIVE_KEY = /secret|token|password|passwd|key|cookie|auth|session|signature|credential/i
+const MASK = '••••••'
 const MAX_DEPTH = 7
 
 function iso(ms: number | null | undefined): string | undefined {
@@ -57,7 +64,10 @@ function size(v: unknown): number {
   }
 }
 
-/** A JSON-safe copy, depth-limited (cycles and functions never reach the server). */
+/**
+ * A JSON-safe copy, depth-limited (cycles and functions never reach the server), with every
+ * non-empty value under a credential-looking key replaced by `••••••`.
+ */
 function plain(v: unknown, depth = 0): unknown {
   if (v == null || typeof v === 'number' || typeof v === 'boolean') return v ?? null
   if (typeof v === 'string') return v
@@ -68,7 +78,7 @@ function plain(v: unknown, depth = 0): unknown {
   const out: Record<string, unknown> = {}
   for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
     if (typeof x === 'function' || x === undefined) continue
-    out[k] = plain(x, depth + 1)
+    out[k] = SENSITIVE_KEY.test(k) && x != null && x !== '' ? MASK : plain(x, depth + 1)
   }
   return out
 }
@@ -441,11 +451,19 @@ export function tailMatcher(ref: InspectRef, detail?: unknown): TailMatcher | nu
     return { label: id, match: (ev) => ev.caller === id || ev.run === id }
   }
   if (ref.kind === 'request') {
-    const facts = requestFacts(detail, ref)
+    // Events carry the route *template* (`GET /api/items/:id`). The request detail keeps it under
+    // `route`, nested in `row` / `log` / `request` by the request source, so that is read first;
+    // the label (set from a ticker row, already the template) next; and only then the concrete
+    // "METHOD /path" of the log row, which only matches routes without parameters.
     const d = detail && typeof detail === 'object' ? (detail as Record<string, unknown>) : {}
+    const nested = ['row', 'log', 'request']
+      .map((k) => d[k])
+      .find((x): x is Record<string, unknown> => !!x && typeof x === 'object' && !Array.isArray(x))
+    const facts = requestFacts(detail, ref)
     const route =
-      (typeof d.route === 'string' && d.route) ||
-      (ref.label && /^[A-Z]+\s+\//.test(ref.label) ? ref.label : null) ||
+      str(nested?.route) ??
+      str(d.route) ??
+      (ref.label && /^[A-Z]+\s+\//.test(ref.label) ? ref.label : null) ??
       (facts ? `${facts.method} ${facts.path}` : null)
     if (!route) return null
     return { label: route, match: (ev) => ev.route === route }
@@ -466,6 +484,49 @@ export function tailEvents(
     if (out.length >= max) break
   }
   return out
+}
+
+export interface TailRow {
+  /** Stable per event object for the strip's row keys. */
+  key: number
+  ev: TrafficEventWire
+}
+
+/**
+ * A strip's own accumulating buffer: the page's event buffers are capped across all traffic, so
+ * a quiet entity's events would be pushed out of them within seconds. Every event object the
+ * model streams is looked at once (`seen`), the matches are kept newest first, capped at `max`.
+ */
+export interface TailBuffer {
+  rows: TailRow[]
+  seen: WeakSet<TrafficEventWire>
+  next: number
+}
+
+export function newTailBuffer(): TailBuffer {
+  return { rows: [], seen: new WeakSet(), next: 1 }
+}
+
+/**
+ * Folds one frame of `events` (newest first, the same objects the model keeps) into `buf`.
+ * Returns the rows — the same array as before when nothing new matched. Idempotent for a frame
+ * already seen, so a repeated render adds nothing.
+ */
+export function tailAppend(
+  buf: TailBuffer,
+  events: readonly TrafficEventWire[],
+  m: TailMatcher,
+  max = 50
+): TailRow[] {
+  const fresh: TailRow[] = []
+  for (const ev of events) {
+    if (buf.seen.has(ev)) continue
+    buf.seen.add(ev)
+    if (m.match(ev)) fresh.push({ key: buf.next++, ev })
+  }
+  if (fresh.length === 0) return buf.rows
+  buf.rows = [...fresh, ...buf.rows].slice(0, max)
+  return buf.rows
 }
 
 // ── Explain answer ──

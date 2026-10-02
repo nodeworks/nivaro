@@ -6,7 +6,7 @@
  */
 import { useQueryClient } from '@tanstack/react-query'
 import { Radio, X } from 'lucide-react'
-import { useContext, useLayoutEffect, useMemo, useState } from 'react'
+import { useContext, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { TrafficMapContext } from '../../context'
@@ -14,7 +14,7 @@ import { callerLabel, fmtMs, KindPill } from '../../EventTicker'
 import { fmtClock, refForEvent } from '../../inspect/format'
 import type { InspectPanelProps, InspectRef } from '../../registry/inspectables'
 import { cachedDetail } from './context'
-import { tailEvents, tailMatcher } from './logic'
+import { newTailBuffer, type TailBuffer, type TailMatcher, tailAppend, tailMatcher } from './logic'
 import { ICON_BTN, ICON_BTN_ON, MUTED, useInspectStack } from './ui'
 
 export const TAIL_KINDS = new Set(['entity', 'caller', 'request'])
@@ -54,13 +54,26 @@ function TailStrip({
   const s = useInspectStack()
   const detail = cachedDetail(qc, inspectRef, s.anchor)
   const matcher = useMemo(() => tailMatcher(inspectRef, detail), [inspectRef, detail])
-  // ctx.tick changes once per applied frame — re-read the model's events then
+  // The strip keeps its own buffer: the page's event buffers (ticker 80, log 1500) are shared by
+  // all traffic, so a quiet entity's rows would be pushed out of them within seconds. Each frame
+  // (ctx.tick) folds the model's newest events in; the buffer starts over when the matcher or
+  // the page model changes.
+  const buf = useRef<{ for: TailMatcher | null; model: unknown; b: TailBuffer }>({
+    for: null,
+    model: null,
+    b: newTailBuffer()
+  })
   const tick = ctx?.tick ?? 0
   // biome-ignore lint/correctness/useExhaustiveDependencies: tick marks a new frame in the mutable model
-  const rows = useMemo(
-    () => (ctx && matcher ? tailEvents(ctx.model.events, matcher, TAIL_MAX) : []),
-    [ctx, matcher, tick]
-  )
+  const rows = useMemo(() => {
+    if (!ctx || !matcher) return []
+    const cur = buf.current
+    if (cur.for !== matcher || cur.model !== ctx.model)
+      buf.current = { for: matcher, model: ctx.model, b: newTailBuffer() }
+    // the event log (newest first, cap 1500) is the ticker's superset and survives longer
+    const source = ctx.model.eventLog?.length ? ctx.model.eventLog : ctx.model.events
+    return tailAppend(buf.current.b, source, matcher, TAIL_MAX)
+  }, [ctx, matcher, tick])
   return (
     <section
       className='order-first grid gap-1.5 rounded-md border border-[var(--tm-line)] bg-[var(--tm-card-2)] p-2'
@@ -103,10 +116,10 @@ function TailStrip({
         </p>
       ) : (
         <ul className='grid max-h-48 overflow-auto' data-tm-inspect-tail-rows=''>
-          {rows.map((ev, i) => {
+          {rows.map(({ key, ev }) => {
             const target = refForEvent(ev)
             return (
-              <li key={`${ev.t}-${ev.rid ?? ''}-${i}`}>
+              <li key={key}>
                 <button
                   type='button'
                   onClick={() => open(target)}

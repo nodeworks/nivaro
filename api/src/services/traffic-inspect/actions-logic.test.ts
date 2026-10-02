@@ -9,7 +9,8 @@ import {
   cleanTitle,
   explainActivityLabel,
   explainContextOf,
-  explainUserMessage
+  explainUserMessage,
+  INVESTIGATION_ID_RE
 } from './actions-logic.js'
 
 const U1 = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
@@ -31,6 +32,24 @@ describe('cleanStack', () => {
     expect(cleanStack(`entity:${'x'.repeat(4000)}`)).toBeNull()
     expect(cleanStack(Array.from({ length: 9 }, (_, i) => `entity:e${i}`).join('/'))).toBeNull()
   })
+  it('allows @ inside an id, reading only a digits suffix as the time (as the page does)', () => {
+    expect(cleanStack('caller:u%40x.com@1800000000000')).toBe('caller:u%40x.com@1800000000000')
+    expect(cleanStack('page:beth@acme.test@1800000000000')).toBe(
+      'page:beth@acme.test@1800000000000'
+    )
+    // the page drops a segment whose last @-part is not a time; so does the server
+    expect(cleanStack('caller:beth@acme.test')).toBeNull()
+    expect(cleanStack('caller:@123')).toBeNull()
+  })
+})
+
+describe('INVESTIGATION_ID_RE', () => {
+  it('is a real uuid, not 36 dashes', () => {
+    expect(INVESTIGATION_ID_RE.test(U1)).toBe(true)
+    expect(INVESTIGATION_ID_RE.test(U1.toUpperCase())).toBe(true)
+    expect(INVESTIGATION_ID_RE.test('-'.repeat(36))).toBe(false)
+    expect(INVESTIGATION_ID_RE.test(U1.replace(/-/g, ''))).toBe(false)
+  })
 })
 
 describe('titles, notes, context', () => {
@@ -51,6 +70,18 @@ describe('titles, notes, context', () => {
     expect(cleanContext('{"a":1}')).toBe('{"a":1}')
     expect(() => cleanContext('{not json')).toThrow('invalid')
     expect(() => cleanContext({ big: 'x'.repeat(CONTEXT_MAX) })).toThrow('too_big')
+  })
+  it('masks credential-looking values in the stored context, object or string', () => {
+    const ctx = {
+      levels: [{ kind: 'caller', detail: { headers: { authorization: 'Bearer abc' }, n: 1 } }]
+    }
+    const stored = cleanContext(ctx) as string
+    expect(stored).not.toContain('abc')
+    expect(JSON.parse(stored).levels[0].detail).toEqual({
+      headers: { authorization: '••••••' },
+      n: 1
+    })
+    expect(cleanContext('{"api_key":"k-1","x":2}')).toBe('{"api_key":"••••••","x":2}')
   })
 })
 
@@ -81,5 +112,21 @@ describe('explain', () => {
     expect(msg).toContain('2 levels')
     expect(msg).toContain('… (cut)')
     expect(explainActivityLabel(ctx)).toBe('Explain: request › trace')
+  })
+  it('never sends a credential-looking value to the model', () => {
+    const ctx = {
+      levels: [
+        {
+          kind: 'request',
+          title: 'POST /api/login',
+          detail: { row: { cookie: 'sid=1', status: 200 }, token: 'tkn' }
+        }
+      ]
+    }
+    const msg = explainUserMessage(ctx)
+    expect(msg).not.toContain('sid=1')
+    expect(msg).not.toContain('tkn')
+    expect(msg).toContain('"status":200')
+    expect(msg).toContain('••••••')
   })
 })

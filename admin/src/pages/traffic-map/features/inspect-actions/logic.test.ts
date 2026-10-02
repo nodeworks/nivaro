@@ -14,8 +14,10 @@ import {
   compactStackContext,
   exportFileName,
   keyFacts,
+  newTailBuffer,
   parseExplain,
   requestFacts,
+  tailAppend,
   tailEvents,
   tailMatcher
 } from './logic'
@@ -83,6 +85,23 @@ describe('compactStackContext', () => {
       windowSec: 60
     })
     expect(r.context.levels[0]).toMatchObject({ detail: null, note: 'not loaded' })
+  })
+  it('masks credential-looking keys at any depth before anything leaves the page', () => {
+    const detail = {
+      status: 500,
+      headers: { authorization: 'Bearer abc', accept: 'json' },
+      row: { api_key: 'k-123', label: 'Partner', empty_token: '' }
+    }
+    const r = compactStackContext([lvl({ kind: 'caller', id: 'k12' }, detail, true)], {
+      anchor: null,
+      windowSec: 60
+    })
+    const d = r.context.levels[0].detail as Record<string, any>
+    expect(d.status).toBe(500)
+    expect(d.headers).toEqual({ authorization: '••••••', accept: 'json' })
+    expect(d.row).toEqual({ api_key: '••••••', label: 'Partner', empty_token: '' })
+    expect(JSON.stringify(r.context)).not.toContain('abc')
+    expect(JSON.stringify(r.context)).not.toContain('k-123')
   })
 })
 
@@ -246,6 +265,26 @@ describe('live tail', () => {
     expect(tailMatcher({ kind: 'request', id: RID })).toBeNull()
     expect(tailMatcher({ kind: 'trace', id: RID })).toBeNull()
   })
+  it('a request opened without a label follows the route template of its log row', () => {
+    // the detail nests the row and keeps the template under `route`; the path is concrete
+    const detail = {
+      row: {
+        method: 'GET',
+        path: '/api/items/workflows/42',
+        route: 'GET /api/items/workflows/:id',
+        status: 200
+      },
+      trace: null
+    }
+    const m = tailMatcher({ kind: 'request', id: RID }, detail)
+    expect(m?.label).toBe('GET /api/items/workflows/:id')
+    expect(m?.match(ev({ route: 'GET /api/items/workflows/:id' }))).toBe(true)
+    expect(m?.match(ev({ route: 'GET /api/items/workflows/42' }))).toBe(false)
+    // no template anywhere: the concrete "METHOD /path" is the best there is
+    expect(
+      tailMatcher({ kind: 'request', id: RID }, { row: { method: 'get', path: '/api/x' } })?.label
+    ).toBe('GET /api/x')
+  })
   it('keeps the newest 50', () => {
     const list = Array.from({ length: 80 }, (_, i) => ev({ t: AT - i }))
     const m = tailMatcher({ kind: 'caller', id: 'k12' })
@@ -253,6 +292,28 @@ describe('live tail', () => {
     const out = tailEvents(list, m)
     expect(out).toHaveLength(50)
     expect(out[0].t).toBe(AT)
+  })
+  it('the strip buffer keeps matches across frames, once each, capped and newest first', () => {
+    const m = tailMatcher({ kind: 'entity', id: 'items/workflows' })
+    if (!m) throw new Error('no matcher')
+    const buf = newTailBuffer()
+    const first = ev({ t: AT, rid: RID })
+    const rows1 = tailAppend(buf, [first, ev({ t: AT - 1, entity: 'regions' })], m)
+    expect(rows1.map((r) => r.ev)).toEqual([first])
+    // the page buffer moved on without the entity's event: the row stays
+    const rows2 = tailAppend(buf, [ev({ t: AT + 1, entity: 'regions' })], m)
+    expect(rows2).toBe(rows1)
+    // the same object again is not listed twice; new matches go in front, keys are stable
+    const newer = ev({ t: AT + 2 })
+    const rows3 = tailAppend(buf, [newer, first], m)
+    expect(rows3.map((r) => r.ev)).toEqual([newer, first])
+    expect(rows3[1].key).toBe(rows1[0].key)
+    expect(rows3[0].key).not.toBe(rows3[1].key)
+    // capped at max, newest first
+    const flood = Array.from({ length: 60 }, (_, i) => ev({ t: AT + 100 + i }))
+    const rows4 = tailAppend(buf, flood.slice().reverse(), m, 50)
+    expect(rows4).toHaveLength(50)
+    expect(rows4[0].ev.t).toBe(AT + 159)
   })
 })
 

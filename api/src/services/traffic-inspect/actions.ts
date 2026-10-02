@@ -46,13 +46,15 @@ registerInspectSource({
     const rec = await getInvestigation(id)
     if (!rec) return null
     const levels = rec.stack ? rec.stack.split('/').length : 0
+    const updated = Date.parse(rec.updated_at)
     return {
       title: rec.title,
       lines: [
         `${levels} level${levels === 1 ? '' : 's'} saved`,
         `Saved by ${rec.created_by_name ?? 'someone'} · updated ${rec.updated_at.slice(0, 16).replace('T', ' ')} UTC`
       ],
-      at: rec.updated_at
+      // epoch ms: the hover card formats it with fmtClock
+      at: Number.isNaN(updated) ? null : updated
     }
   },
   async detail(id, ctx) {

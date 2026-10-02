@@ -12,14 +12,16 @@ import { currentStoreId } from '../traffic-taps.js'
 export const INVESTIGATIONS_TABLE = 'nivaro_traffic_investigations'
 const LIST_LIMIT = 30
 const PROBE_MISS_MS = 60_000
+/** A hit is re-probed too, so a rolled-back table (down(), a pre-390 restore) turns into the designed 503 within minutes rather than raw SQL errors for the life of the process. */
+const PROBE_HIT_MS = 5 * 60_000
 
 const ready = new Map<string, { ok: boolean; at: number }>()
 
-/** True once migration 390 has run here (a hit is cached forever, a miss re-probed after 60 s). */
+/** True once migration 390 has run here (a hit is re-probed after 5 min, a miss after 60 s). */
 export async function investigationsReady(): Promise<boolean> {
   const scope = getTenantId() ?? ''
   const hit = ready.get(scope)
-  if (hit && (hit.ok || Date.now() - hit.at < PROBE_MISS_MS)) return hit.ok
+  if (hit && Date.now() - hit.at < (hit.ok ? PROBE_HIT_MS : PROBE_MISS_MS)) return hit.ok
   let ok = false
   try {
     ok = await db.schema.hasTable(INVESTIGATIONS_TABLE)

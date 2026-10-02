@@ -4,7 +4,9 @@
  * cleaning, the edit permission rule and the "Explain" prompt. No database, no AI client.
  */
 
-export const INVESTIGATION_ID_RE = /^[0-9a-f-]{36}$/i
+import { maskBodySecrets } from '../secret-mask.js'
+
+export const INVESTIGATION_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const TITLE_MAX = 200
 export const NOTES_MAX = 20_000
 export const STACK_MAX = 4000
@@ -15,8 +17,25 @@ const MAX_LEVELS = 8
 /** Explain takes the whole stack (the page caps its JSON); the URL / saved form keeps 8. */
 const EXPLAIN_MAX_LEVELS = 40
 
-/** One stack segment: `kind:<uri-encoded id>` optionally `@<epoch ms>` (the page's URL form). */
-const SEGMENT_RE = /^[a-z][a-z0-9_-]{0,31}:[^/\s@]{1,512}(@\d{1,15})?$/
+const SEGMENT_KIND_RE = /^[a-z][a-z0-9_-]{0,31}$/
+const SEGMENT_ID_RE = /^[^/\s]{1,512}$/
+
+/**
+ * One stack segment: `kind:<uri-encoded id>` optionally `@<epoch ms>` (the page's URL form).
+ * Read the way the page decodes it: the part after the LAST `@` is the time when it is all
+ * digits, so an id may itself contain `@` (an e-mail-like caller or page id).
+ */
+function validSegment(seg: string): boolean {
+  const cut = seg.indexOf(':')
+  if (cut <= 0 || !SEGMENT_KIND_RE.test(seg.slice(0, cut))) return false
+  let rest = seg.slice(cut + 1)
+  const atCut = rest.lastIndexOf('@')
+  if (atCut >= 0) {
+    if (!/^\d{1,15}$/.test(rest.slice(atCut + 1))) return false
+    rest = rest.slice(0, atCut)
+  }
+  return SEGMENT_ID_RE.test(rest)
+}
 
 /** The page's encoded stack (`kind:id@at/kind:id`) when well formed, else null. */
 export function cleanStack(raw: unknown): string | null {
@@ -25,7 +44,7 @@ export function cleanStack(raw: unknown): string | null {
   if (!s || s.length > STACK_MAX) return null
   const segs = s.split('/')
   if (segs.length > MAX_LEVELS) return null
-  return segs.every((seg) => SEGMENT_RE.test(seg)) ? s : null
+  return segs.every(validSegment) ? s : null
 }
 
 /** A title: trimmed, one line, capped; '' when there is none. */
@@ -42,7 +61,9 @@ export function cleanNotes(raw: unknown): string | null {
 }
 
 /**
- * The context JSON as stored text. undefined = absent (keep), null = cleared, or a JSON string
+ * The context JSON as stored text, with every value under a credential-looking key masked (the
+ * panels' details carry header maps and key labels; what is kept for ever, or sent to the AI
+ * provider, never carries a token). undefined = absent (keep), null = cleared, or a JSON string
  * ≤ max. Throws `too_big` when it would not fit — the caller answers 413.
  */
 export function cleanContext(raw: unknown, max = CONTEXT_MAX): string | null | undefined {
@@ -61,6 +82,7 @@ export function cleanContext(raw: unknown, max = CONTEXT_MAX): string | null | u
       throw new Error('invalid')
     }
   }
+  text = maskBodySecrets(text) ?? text
   if (text.length > max) throw new Error('too_big')
   return text
 }
@@ -107,11 +129,14 @@ export function explainContextOf(raw: unknown): ExplainContext | null {
   return raw as ExplainContext
 }
 
-/** The user message for the model: the context JSON, cut to `max` characters. */
+/**
+ * The user message for the model: the context JSON with credential-looking values masked, cut
+ * to `max` characters.
+ */
 export function explainUserMessage(ctx: ExplainContext, max = EXPLAIN_CONTEXT_MAX): string {
   let json = ''
   try {
-    json = JSON.stringify(ctx)
+    json = maskBodySecrets(JSON.stringify(ctx)) ?? '{}'
   } catch {
     json = '{}'
   }

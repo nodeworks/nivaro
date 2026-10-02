@@ -32,19 +32,48 @@ function ev(over: Partial<TrafficEventWire>): TrafficEventWire {
   }
 }
 
-function ctx(events: TrafficEventWire[]): TrafficMapContextValue {
+/** The page context as the strip reads it: the model's event buffers (newest first) and a frame tick. */
+function ctx(
+  events: TrafficEventWire[],
+  tick = 1,
+  model: Record<string, unknown> = {}
+): TrafficMapContextValue {
   return {
-    model: { events } as unknown as TrafficMapContextValue['model'],
+    model: Object.assign(model, {
+      events,
+      eventLog: events
+    }) as unknown as TrafficMapContextValue['model'],
     filters: {} as TrafficMapContextValue['filters'],
     setFilters: () => {},
     selection: null,
     setSelection: () => {},
     catalog: null,
-    tick: 1,
+    tick,
     win: 60,
     paused: false,
     ready: true
   }
+}
+
+function page(value: TrafficMapContextValue, qc: QueryClient) {
+  return (
+    <QueryClientProvider client={qc}>
+      <MemoryRouter>
+        <TrafficMapContext.Provider value={value}>
+          <InspectHost />
+        </TrafficMapContext.Provider>
+      </MemoryRouter>
+    </QueryClientProvider>
+  )
+}
+
+function registerTail() {
+  register(inspectables, { id: 'entity', label: 'Entity', Panel: () => <p>entity panel</p> })
+  register(inspectHeaderActions, {
+    id: 'live-tail',
+    applies: (r) => TAIL_KINDS.has(r.kind),
+    Component: LiveTailAction
+  })
 }
 
 afterEach(() => {
@@ -55,27 +84,14 @@ afterEach(() => {
 
 describe('live tail', () => {
   it('lists the entity events and opens a row', () => {
-    register(inspectables, { id: 'entity', label: 'Entity', Panel: () => <p>entity panel</p> })
-    register(inspectHeaderActions, {
-      id: 'live-tail',
-      applies: (r) => TAIL_KINDS.has(r.kind),
-      Component: LiveTailAction
-    })
+    registerTail()
     const events = [
       ev({ rid: RID }),
       ev({ entity: 'regions', route: 'GET /api/items/regions' }),
       ev({ t: T - 1000 })
     ]
     const qc = new QueryClient()
-    render(
-      <QueryClientProvider client={qc}>
-        <MemoryRouter>
-          <TrafficMapContext.Provider value={ctx(events)}>
-            <InspectHost />
-          </TrafficMapContext.Provider>
-        </MemoryRouter>
-      </QueryClientProvider>
-    )
+    render(page(ctx(events), qc))
     act(() => openInspect({ kind: 'entity', id: 'items/workflows' }, { root: true }))
     expect(document.querySelector('[data-tm-inspect-tail]')).toBeNull()
     fireEvent.click(screen.getByLabelText('Live tail'))
@@ -89,5 +105,41 @@ describe('live tail', () => {
     fireEvent.click(rows[0])
     const s = getInspectSnapshot()
     expect(s.levels.map((l) => l.kind)).toEqual(['entity', 'request'])
+  })
+
+  it('keeps a row after the page buffer has dropped its event, with a stable row node', () => {
+    registerTail()
+    const qc = new QueryClient()
+    const model = {}
+    const mine = ev({ rid: RID })
+    // frame 1: the entity's event is in the page buffer
+    const { rerender } = render(
+      page(ctx([mine, ev({ t: T - 1000, entity: 'regions' })], 1, model), qc)
+    )
+    act(() => openInspect({ kind: 'entity', id: 'items/workflows' }, { root: true }))
+    fireEvent.click(screen.getByLabelText('Live tail'))
+    expect(document.querySelectorAll('[data-tm-inspect-tail-row]')).toHaveLength(1)
+    const li = document.querySelector('[data-tm-inspect-tail-row]')?.closest('li')
+    expect(li).not.toBeNull()
+
+    // frame 2: only unrelated traffic is left in the page buffer (the ticker cap pushed ours out)
+    const unrelated = Array.from({ length: 3 }, (_, i) =>
+      ev({ t: T + 1000 + i, entity: 'regions', route: 'GET /api/items/regions' })
+    )
+    rerender(page(ctx(unrelated, 2, model), qc))
+    const rows = document.querySelectorAll('[data-tm-inspect-tail-row]')
+    expect(rows).toHaveLength(1)
+    expect(rows[0].getAttribute('data-tm-inspect-tail-row')).toBe(`request:${RID}`)
+    // the same <li> survived the frame — keys are per event, not per index
+    expect(rows[0].closest('li')).toBe(li)
+
+    // frame 3: the same event object again plus a new match — no duplicate, newest first
+    const newer = ev({ t: T + 5000, kind: 'update', record: '7' })
+    rerender(page(ctx([newer, mine, ...unrelated], 3, model), qc))
+    const after = [...document.querySelectorAll('[data-tm-inspect-tail-row]')].map((r) =>
+      r.getAttribute('data-tm-inspect-tail-row')
+    )
+    expect(after).toEqual(['record:workflows:7', `request:${RID}`])
+    expect(screen.getByText('2 seen')).toBeTruthy()
   })
 })
