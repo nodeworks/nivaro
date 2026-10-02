@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-01T23:53:16.940Z",
+  "generated_at": "2026-10-02T00:22:05.965Z",
   "releases": [
+    {
+      "version": "0.2.15",
+      "tag": "v0.2.15",
+      "date": "2026-10-01T20:21:54-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "admin nav: intent-based categories, Find box, grouped and reorderable favorites",
+              "hash": "41b4fa8a"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.14",
       "tag": "v0.2.14",
-      "date": "2026-10-01T19:53:05-04:00",
+      "date": "2026-10-01T19:53:16-04:00",
       "sections": [
         {
           "label": "Other",
