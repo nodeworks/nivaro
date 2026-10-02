@@ -46,6 +46,13 @@ import '../features/people-lenses'
 import '../features/stale-tabs'
 import '../features/platform'
 import '../features/db-lenses'
+import '../features/inspect-core'
+import '../features/inspect-request'
+import '../features/inspect-record'
+import '../features/inspect-background'
+import '../features/inspect-entities'
+import '../features/inspect-nav'
+import '../features/inspect-actions'
 
 export {
   type CanvasLayer,
@@ -63,6 +70,23 @@ export {
 } from './canvasLayers'
 export { type EventAction, eventActions } from './eventActions'
 export { type HotColumn, hotColumns } from './hotColumns'
+export {
+  type Inspectable,
+  type InspectPanelProps,
+  type InspectRef,
+  inspectableFor,
+  inspectables
+} from './inspectables'
+export {
+  type InspectFooter,
+  InspectFooters,
+  inspectFooters
+} from './inspectFooters'
+export {
+  type InspectHeaderAction,
+  InspectHeaderActions,
+  inspectHeaderActions
+} from './inspectHeaderActions'
 export { type InspectorAction, inspectorActions } from './inspectorActions'
 export { type InspectorPanel, inspectorPanels } from './inspectorPanels'
 export { type PagePanel, pagePanels } from './pagePanels'

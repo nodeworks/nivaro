@@ -60,6 +60,18 @@ export interface TrafficEventWire {
   tags?: string[]
   /** Tap-specific fields. */
   extra?: Record<string, unknown>
+  /** Request id (uuid) — opens the request in the investigation stack. */
+  rid?: string
+  /** API instance (node) that served it. */
+  node?: string
+  /** Client facts the browser sent (x-nivaro-client / page context headers). */
+  tab?: string
+  build?: string
+  app?: string
+  page?: string
+  load?: string
+  /** Background source id (`cron:<job>`, …) when no request carried the event. */
+  run?: string
 }
 export interface TrafficFrame {
   v: 1

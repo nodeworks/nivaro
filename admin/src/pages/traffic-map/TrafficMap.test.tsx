@@ -1,8 +1,12 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { StrictMode } from 'react'
 import { MemoryRouter } from 'react-router'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
+import { getInspectSnapshot } from './inspect/stack'
+import { inspectables } from './registry/inspectables'
+import { register } from './registry/registry'
 
 const handlers = new Map<string, (p: unknown) => void>()
 const socketHandlers = new Map<string, () => void>()
@@ -803,5 +807,36 @@ describe('plug-in seams on the page', () => {
     renderPage()
     await waitFor(() => expect(screen.getByTestId('tm-strip-rps').textContent).toBe('2.0'))
     expect(document.querySelector('[data-tm-page-panels]')).toBeNull()
+  })
+  it('restores an inspect= link under StrictMode and closes the stack on unmount', async () => {
+    mockApi()
+    register(inspectables, { id: 'entity', label: 'Entity', Panel: () => <p>Entity panel</p> })
+    // the page writes the param through URLSearchParams, so the encoded id is encoded once more
+    const qs = new URLSearchParams({ inspect: 'entity:items%2Fworkflows@5' }).toString()
+    window.history.replaceState(null, '', `/traffic-map?${qs}`)
+    try {
+      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+      const view = render(
+        <StrictMode>
+          <QueryClientProvider client={qc}>
+            <MemoryRouter>
+              <TrafficMap />
+            </MemoryRouter>
+          </QueryClientProvider>
+        </StrictMode>
+      )
+      expect(await screen.findByText('Entity panel')).toBeTruthy()
+      expect(getInspectSnapshot().levels).toEqual([
+        { kind: 'entity', id: 'items/workflows', at: 5 }
+      ])
+      view.unmount()
+      expect(getInspectSnapshot().levels).toEqual([])
+    } finally {
+      inspectables.splice(
+        inspectables.findIndex((x) => x.id === 'entity'),
+        1
+      )
+      window.history.replaceState(null, '', '/')
+    }
   })
 })
