@@ -36,6 +36,7 @@ import {
   Inspector,
   InspectorPlaceholder
 } from './Inspector'
+import { InspectHost } from './inspect/InspectHost'
 import { MapCanvas } from './MapCanvas'
 import { defaultFilters, laneOf, TrafficModel } from './model'
 // Feature registrations (registry/index.ts) run before the page renders.
@@ -824,96 +825,99 @@ export default function TrafficMap() {
           </div>
         </header>
 
-        <div className='flex-1 overflow-auto bg-[var(--tm-bg)] p-6 text-[var(--tm-fg)]'>
-          {snapError && (
-            <div
-              role='alert'
-              id='tm-snapshot-error'
-              className='mb-3.5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--tm-error)] bg-[var(--tm-error-soft)] px-3.5 py-2 text-[12.5px]'
-            >
-              <span>
-                {ready
-                  ? 'The latest snapshot could not be loaded; the map shows the last one.'
-                  : 'The traffic snapshot could not be loaded.'}{' '}
-                <span className='font-mono text-[11.5px] text-[var(--tm-fg-2)]'>{snapError}</span>
-              </span>
-              <button
-                type='button'
-                id='tm-snapshot-retry'
-                className={cn(CHIP, CHIP_OFF)}
-                onClick={() => void loadSnapshot(filtersRef.current.win)}
+        <div className='relative flex min-h-0 flex-1'>
+          <div className='min-w-0 flex-1 overflow-auto bg-[var(--tm-bg)] p-6 text-[var(--tm-fg)]'>
+            {snapError && (
+              <div
+                role='alert'
+                id='tm-snapshot-error'
+                className='mb-3.5 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[var(--tm-error)] bg-[var(--tm-error-soft)] px-3.5 py-2 text-[12.5px]'
               >
-                Retry
-              </button>
-            </div>
-          )}
-          <FrozenBanner snap={frozen} />
-          {ready && (paused || frozen) ? (
-            <RewindBar
-              model={m}
-              win={win}
-              viewSec={viewSec}
-              frozen={!!frozen}
-              onRewind={rewindTo}
-              onLive={goLive}
-            />
-          ) : null}
-          <SummaryStrip d={view?.strip ?? null} />
-          <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-[minmax(0,1fr)_360px]'>
-            <MapCanvas
-              model={m}
-              filters={ef}
-              selection={selection}
-              onSelect={setSelection}
-              catalog={catalog}
-              tick={tick}
-              paused={paused}
-              stale={stale && !paused}
-            />
-            <p className='sr-only' aria-live='polite' id='tm-inspector-announce'>
-              {inspector
-                ? `Inspecting ${inspector.name}${canHistory && hours > 0 ? `, ${hoursPhrase(hours)}` : ''}`
-                : ''}
-            </p>
-            {inspector && selection ? (
-              <Inspector
-                d={inspector}
-                catalog={catalog}
-                sel={selection}
-                selKey={selection.id}
-                history={{
-                  hours,
-                  onHours: setHours,
-                  available: canHistory,
-                  data: historyQ.data ?? null,
-                  // a Retry after a failure shows the skeleton while it runs (isError holds until it lands)
-                  state: historyQ.isFetching ? 'loading' : historyQ.isError ? 'error' : 'idle',
-                  error: historyQ.error ? errorText(historyQ.error) : null,
-                  onRetry: () => void historyQ.refetch()
-                }}
-              />
-            ) : (
-              <InspectorPlaceholder loading={!ready} />
+                <span>
+                  {ready
+                    ? 'The latest snapshot could not be loaded; the map shows the last one.'
+                    : 'The traffic snapshot could not be loaded.'}{' '}
+                  <span className='font-mono text-[11.5px] text-[var(--tm-fg-2)]'>{snapError}</span>
+                </span>
+                <button
+                  type='button'
+                  id='tm-snapshot-retry'
+                  className={cn(CHIP, CHIP_OFF)}
+                  onClick={() => void loadSnapshot(filtersRef.current.win)}
+                >
+                  Retry
+                </button>
+              </div>
             )}
+            <FrozenBanner snap={frozen} />
+            {ready && (paused || frozen) ? (
+              <RewindBar
+                model={m}
+                win={win}
+                viewSec={viewSec}
+                frozen={!!frozen}
+                onRewind={rewindTo}
+                onLive={goLive}
+              />
+            ) : null}
+            <SummaryStrip d={view?.strip ?? null} />
+            <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-[minmax(0,1fr)_360px]'>
+              <MapCanvas
+                model={m}
+                filters={ef}
+                selection={selection}
+                onSelect={setSelection}
+                catalog={catalog}
+                tick={tick}
+                paused={paused}
+                stale={stale && !paused}
+              />
+              <p className='sr-only' aria-live='polite' id='tm-inspector-announce'>
+                {inspector
+                  ? `Inspecting ${inspector.name}${canHistory && hours > 0 ? `, ${hoursPhrase(hours)}` : ''}`
+                  : ''}
+              </p>
+              {inspector && selection ? (
+                <Inspector
+                  d={inspector}
+                  catalog={catalog}
+                  sel={selection}
+                  selKey={selection.id}
+                  history={{
+                    hours,
+                    onHours: setHours,
+                    available: canHistory,
+                    data: historyQ.data ?? null,
+                    // a Retry after a failure shows the skeleton while it runs (isError holds until it lands)
+                    state: historyQ.isFetching ? 'loading' : historyQ.isError ? 'error' : 'idle',
+                    error: historyQ.error ? errorText(historyQ.error) : null,
+                    onRetry: () => void historyQ.refetch()
+                  }}
+                />
+              ) : (
+                <InspectorPlaceholder loading={!ready} />
+              )}
+            </div>
+            <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-2'>
+              <EventTicker
+                events={view?.events ?? []}
+                newestT={m.events[0]?.t ?? 0}
+                win={win}
+                catalog={catalog}
+                total={eventsSeen.current}
+                loading={!ready}
+              />
+              <HotEntities
+                rows={view?.hot ?? []}
+                catalog={catalog}
+                selectedKey={selection?.kind === 'entity' ? selection.id : null}
+                onSelect={(key) => setSelection({ kind: 'entity', id: key })}
+                loading={!ready}
+              />
+            </div>
+            <PagePanels />
           </div>
-          <div className='mt-3.5 grid items-start gap-3.5 min-[1100px]:grid-cols-2'>
-            <EventTicker
-              events={view?.events ?? []}
-              newestT={m.events[0]?.t ?? 0}
-              win={win}
-              catalog={catalog}
-              total={eventsSeen.current}
-              loading={!ready}
-            />
-            <HotEntities
-              rows={view?.hot ?? []}
-              catalog={catalog}
-              selectedKey={selection?.kind === 'entity' ? selection.id : null}
-              onSelect={(key) => setSelection({ kind: 'entity', id: key })}
-              loading={!ready}
-            />
-          </div>
-          <PagePanels />
+          <InspectHost />
         </div>
       </div>
     </TrafficMapContext.Provider>

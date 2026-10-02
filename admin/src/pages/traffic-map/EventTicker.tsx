@@ -1,4 +1,6 @@
-import { useEffect, useRef } from 'react'
+import { type MouseEvent, useEffect, useRef } from 'react'
+import { refForEvent } from './inspect/format'
+import { openInspect } from './inspect/stack'
 import { sourceLabel } from './nodeKinds'
 import { EventActions, eventActions } from './registry/eventActions'
 import type { Kind, TrafficCatalog, TrafficEventWire } from './types'
@@ -118,6 +120,18 @@ function Tags({ tags }: { tags?: string[] }) {
   )
 }
 
+/**
+ * A click on the row itself (not one of its action buttons or links, and not the end of a text
+ * selection) opens the event's most specific level as a new investigation.
+ */
+function openFromRow(e: MouseEvent<HTMLElement>, ev: TrafficEventWire): void {
+  const target = e.target as HTMLElement | null
+  const hit = target?.closest('button, a, input, textarea, select, [role="menuitem"]')
+  if (hit && hit !== e.currentTarget && e.currentTarget.contains(hit)) return
+  if (typeof window !== 'undefined' && String(window.getSelection?.() ?? '').length > 0) return
+  openInspect(refForEvent(ev), { root: true })
+}
+
 const FADE_MS = 600
 const WINDOW_TEXT: Record<number, string> = { 60: '60 s', 300: '5 min', 900: '15 min' }
 
@@ -206,11 +220,23 @@ export function EventTicker({
               ? 'grid-cols-[58px_62px_minmax(0,1fr)_auto]'
               : 'grid-cols-[58px_62px_minmax(0,1fr)]'
             return (
+              // biome-ignore lint/a11y/useSemanticElements: a row that holds its own action buttons cannot be a <button>
               <div
                 key={keyOf(ev)}
                 data-tm-event={ev.kind}
-                className={`grid ${cols} items-baseline gap-2 border-b border-[var(--tm-line-2)] px-3.5 py-1 text-[12px] last:border-0 ${
-                  isErr ? 'bg-[var(--tm-error-soft)]' : ''
+                role='button'
+                tabIndex={0}
+                aria-label={`Inspect ${ev.kind} on ${name}`}
+                onClick={(e) => openFromRow(e, ev)}
+                onKeyDown={(e) => {
+                  if (e.target !== e.currentTarget) return
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    openInspect(refForEvent(ev), { root: true })
+                  }
+                }}
+                className={`grid ${cols} cursor-pointer items-baseline gap-2 border-b border-[var(--tm-line-2)] px-3.5 py-1 text-[12px] last:border-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan ${
+                  isErr ? 'bg-[var(--tm-error-soft)]' : 'hover:bg-[var(--tm-card-2)]'
                 } ${fresh ? 'tm-ev-fresh' : ''}`}
               >
                 <span className={`font-mono text-[10.5px] tabular-nums ${quiet}`}>

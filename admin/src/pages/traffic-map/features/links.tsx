@@ -1,7 +1,9 @@
 /**
  * Inspector and ticker links (#1090 #1091 #1092):
- *  - an error row opens its logged request in API Analytics (body + Replay);
- *  - a record id opens the record; a write or error opens its event path (chain sheet);
+ *  - an error row's Request, a record id and a write's Path open in the investigation stack
+ *    beside the map (drill-down Wave 0); while nothing is registered to show that kind yet —
+ *    or an event carries no request id — each keeps its old behaviour (API Analytics link,
+ *    record page, event path sheet) so no row loses its action;
  *  - a caller opens Inbound calls filtered to it, a person their profile;
  *  - an entity opens where it is configured; a partner opens its external API.
  */
@@ -9,9 +11,11 @@ import { lazy, Suspense, useState } from 'react'
 import { Link } from 'react-router'
 import { useTrafficMap } from '../context'
 import { entityLabel } from '../EventTicker'
+import { openInspect } from '../inspect/stack'
 import { callerLinks, entityUrl, recordUrl, requestUrl } from '../links'
 import { eventActions } from '../registry/eventActions'
 import { hotColumns } from '../registry/hotColumns'
+import { inspectableFor } from '../registry/inspectables'
 import { inspectorActions } from '../registry/inspectorActions'
 import { register } from '../registry/registry'
 import type { TrafficEventWire } from '../types'
@@ -23,12 +27,30 @@ const ROW_LINK =
   'rounded-sm px-1 text-[11px] font-medium text-[var(--tm-accent-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
 
 function OpenRequest({ ev }: { ev: TrafficEventWire }) {
+  const rid = ev.rid
+  if (rid && inspectableFor('request')) {
+    return (
+      <button
+        type='button'
+        className={ROW_LINK}
+        data-tm-open-request={rid}
+        title='Inspect this request: trace, statements, body'
+        onClick={(e) => {
+          e.stopPropagation()
+          openInspect({ kind: 'request', id: rid, at: ev.t, label: ev.route }, { root: true })
+        }}
+      >
+        Request
+      </button>
+    )
+  }
   return (
     <Link
       to={requestUrl(ev)}
       className={ROW_LINK}
       data-tm-open-request=''
       title='Open this request in API Analytics (body and Replay)'
+      onClick={(e) => e.stopPropagation()}
     >
       Request
     </Link>
@@ -37,9 +59,40 @@ function OpenRequest({ ev }: { ev: TrafficEventWire }) {
 
 function OpenRecord({ ev }: { ev: TrafficEventWire }) {
   const url = recordUrl(ev.lane, ev.entity, ev.record)
-  if (!url) return null
+  const record = ev.record
+  if (!url || !record) return null
+  if (inspectableFor('record')) {
+    return (
+      <button
+        type='button'
+        className={ROW_LINK}
+        data-tm-open-record={record}
+        title={`Inspect ${record}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          openInspect(
+            {
+              kind: 'record',
+              id: `${ev.entity}:${record}`,
+              at: ev.t,
+              label: `${ev.entity} ${record}`
+            },
+            { root: true }
+          )
+        }}
+      >
+        Record
+      </button>
+    )
+  }
   return (
-    <Link to={url} className={ROW_LINK} data-tm-open-record={ev.record} title={`Open ${ev.record}`}>
+    <Link
+      to={url}
+      className={ROW_LINK}
+      data-tm-open-record={record}
+      title={`Open ${record}`}
+      onClick={(e) => e.stopPropagation()}
+    >
       Record
     </Link>
   )
@@ -48,22 +101,28 @@ function OpenRecord({ ev }: { ev: TrafficEventWire }) {
 function ShowPath({ ev }: { ev: TrafficEventWire }) {
   const [open, setOpen] = useState(false)
   const { catalog } = useTrafficMap()
-  if (!ev.chain) return null
+  const chain = ev.chain
+  if (!chain) return null
   const label = `${entityLabel(catalog, ev.lane, ev.entity)}${ev.record ? ` ${ev.record}` : ''} · ${ev.kind}`
+  const inStack = !!inspectableFor('chain')
   return (
     <>
       <button
         type='button'
         className={ROW_LINK}
-        data-tm-show-path={ev.chain}
+        data-tm-show-path={chain}
         title='Show the event path: request, writes, transitions, partner pushes, flows'
-        onClick={() => setOpen(true)}
+        onClick={(e) => {
+          e.stopPropagation()
+          if (inStack) openInspect({ kind: 'chain', id: chain, at: ev.t, label }, { root: true })
+          else setOpen(true)
+        }}
       >
         Path
       </button>
-      {open && (
+      {open && !inStack && (
         <Suspense fallback={null}>
-          <PathSheetHost chainId={ev.chain} label={label} onClose={() => setOpen(false)} />
+          <PathSheetHost chainId={chain} label={label} onClose={() => setOpen(false)} />
         </Suspense>
       )}
     </>

@@ -35,11 +35,11 @@ export function safeApplies(fn: () => boolean): boolean {
 }
 
 /**
- * A feature's component that throws renders nothing (and warns once) instead of taking the
- * page down; `resetKey` changing (e.g. a new selection) gives it another try.
+ * A feature's component that throws renders nothing — or `fallback` — (and warns once) instead
+ * of taking the page down; `resetKey` changing (e.g. a new selection) gives it another try.
  */
 export class FeatureBoundary extends Component<
-  { id: string; resetKey?: string; children: ReactNode },
+  { id: string; resetKey?: string; children: ReactNode; fallback?: ReactNode },
   { failed: boolean; key?: string }
 > {
   state: { failed: boolean; key?: string } = { failed: false, key: this.props.resetKey }
@@ -57,6 +57,6 @@ export class FeatureBoundary extends Component<
     console.warn(`[traffic-map] feature "${this.props.id}" failed to render`, err)
   }
   render(): ReactNode {
-    return this.state.failed ? null : this.props.children
+    return this.state.failed ? (this.props.fallback ?? null) : this.props.children
   }
 }
