@@ -2,7 +2,35 @@
 // timeline: drag back to any second the client ring holds and the map, strip, ticker and hot
 // table show that second; Live returns to the present.
 import { History } from 'lucide-react'
+import { useEffect, useRef } from 'react'
 import type { TrafficModel } from './model'
+
+/*
+ * #1206: a programmatic "rewind to this second" for features (the investigation panel's
+ * "Rewind map to here"). While the bar is on screen (paused or a frozen snapshot) the request goes
+ * straight to it; otherwise the page is paused through its own Pause control and the bar applies
+ * the second as soon as it mounts.
+ */
+let liveRewind: ((sec: number) => void) | null = null
+let pending: { sec: number; until: number } | null = null
+const PENDING_MS = 4000
+
+export type MapRewindResult = 'rewound' | 'pausing' | 'unavailable'
+
+/** Rewind the map to epoch ms `ms` (whole seconds). 'unavailable' when the page cannot pause. */
+export function requestMapRewind(ms: number): MapRewindResult {
+  if (!Number.isFinite(ms)) return 'unavailable'
+  const sec = Math.floor(ms / 1000)
+  if (liveRewind) {
+    liveRewind(sec)
+    return 'rewound'
+  }
+  const pause = typeof document !== 'undefined' ? document.getElementById('tm-pause') : null
+  if (!(pause instanceof HTMLButtonElement) || pause.disabled) return 'unavailable'
+  pending = { sec, until: Date.now() + PENDING_MS }
+  pause.click()
+  return 'pausing'
+}
 
 const fmtClock = (sec: number) =>
   new Date(sec * 1000).toLocaleTimeString(undefined, {
@@ -35,6 +63,17 @@ export function RewindBar({
 }) {
   const { min, max } = m.rewindRange(win)
   const at = viewSec == null ? max : Math.min(max, Math.max(min, viewSec))
+  const onRewindRef = useRef(onRewind)
+  onRewindRef.current = onRewind
+  useEffect(() => {
+    const fn = (sec: number) => onRewindRef.current(sec)
+    liveRewind = fn
+    if (pending && pending.until >= Date.now()) fn(pending.sec)
+    pending = null
+    return () => {
+      if (liveRewind === fn) liveRewind = null
+    }
+  }, [])
   const fineFrom = m.fineFrom
   const none = max - min < 5
   return (

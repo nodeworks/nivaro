@@ -18,6 +18,7 @@ import {
   normalizeScreenPath,
   screenKey
 } from '../traffic-client-facts.js'
+import { LoadCallBuffer } from '../traffic-inspect/nav-load-buffer.js'
 import { currentTrafficSec } from '../traffic-map.js'
 import { MinuteCounter, registerTrafficTap, type TapRequestCtx, tapState } from '../traffic-taps.js'
 
@@ -65,6 +66,8 @@ interface State {
   open: Map<string, OpenLoad>
   finished: Map<string, ScreenLoads>
   lastSweep: number
+  /** #1205: the calls of each recent load (rid, route, start, ms, status), for the waterfall. */
+  callLog: LoadCallBuffer
 }
 
 function state(): State {
@@ -75,7 +78,8 @@ function state(): State {
     byEntity: new MinuteCounter(400),
     open: new Map(),
     finished: new Map(),
-    lastSweep: 0
+    lastSweep: 0,
+    callLog: new LoadCallBuffer()
   }))
 }
 
@@ -139,6 +143,18 @@ export function onScreenRequest(c: TapRequestCtx): void {
   finishIdleLoads(c.sec)
   const loadId = normalizeLoadId(header(c.ev.req, 'x-nivaro-load'))
   if (!loadId) return
+  const rid = (c.ev.req as { requestId?: unknown } | undefined)?.requestId
+  s.callLog.note(
+    loadId,
+    { screen, caller: c.caller, user: c.ev.userId ?? null },
+    {
+      rid: typeof rid === 'string' && rid ? rid.slice(0, 64) : (c.event?.rid ?? null),
+      route: c.route,
+      start: c.ev.at - Math.max(0, c.ev.latencyMs),
+      ms: c.ev.latencyMs,
+      status: c.ev.status
+    }
+  )
   const key = `${loadId}|${c.caller}`
   let l = s.open.get(key)
   if (l && l.screen !== screen) {
@@ -270,6 +286,19 @@ export function screensFor(
     .filter(([k]) => k.startsWith(prefix))
     .slice(0, 10)
     .map(([k, n]) => ({ screen: k.slice(prefix.length), n }))
+}
+
+/** #1205: the kept calls of one page load (null when this process no longer holds it). */
+export function loadCalls(loadId: string) {
+  return state().callLog.get(loadId)
+}
+/** #1205: the load a request belonged to, while it is kept. */
+export function loadOfRequest(rid: string) {
+  return state().callLog.loadOfRequest(rid)
+}
+/** #1205: kept loads (newest first), optionally only those matching `filter`. */
+export function recentLoads(filter?: Parameters<LoadCallBuffer['list']>[0], n = 30) {
+  return state().callLog.list(filter, n)
 }
 
 registerTrafficTap({
