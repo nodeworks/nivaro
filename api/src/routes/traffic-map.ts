@@ -1,32 +1,24 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { extensionRoutes, loadedExtensionLabels } from '../extensions/loader.js'
-import { hasColumn } from '../lib/column-probe.js'
+import { loadedExtensionLabels } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getRealtimeStats } from '../plugins/socketio.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { currentSeq } from '../services/event-journal.js'
-import { listTraces } from '../services/request-trace.js'
-import { downHistoryFor } from '../services/traffic-down-history.js'
-import { LANES, pathTemplate, type TrafficLane } from '../services/traffic-entities.js'
+import { LANES, type TrafficLane } from '../services/traffic-entities.js'
 import {
-  HISTORY_ROW_CAP,
-  type HistoryRow,
-  historyNarrowing,
-  issueMatch,
-  issueRouteLikes,
-  summarizeHistory,
-  traceBelongsTo
-} from '../services/traffic-history.js'
+  downNodeHistory,
+  entityHistory,
+  entityTapDetails,
+  HistoryUnavailableError
+} from '../services/traffic-entity-history.js'
 import {
   buildSnapshot,
-  currentTrafficSec,
-  matchExtensionRoute,
   seenCallerKeys,
   seenPartnerIds,
   seenSources
 } from '../services/traffic-map.js'
-import { currentStoreId, NO_STORE, trafficTaps } from '../services/traffic-taps.js'
+import { currentStoreId, NO_STORE } from '../services/traffic-taps.js'
 import { trafficMapExtraRoutes } from './traffic-map-extras/index.js'
 
 /**
@@ -285,21 +277,7 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
           .code(400)
           .send({ error: 'key or window is not valid', code: 'ENTITY_DETAIL_PARAMS_INVALID' })
       }
-      const sec = currentTrafficSec()
-      const data: Record<string, unknown> = {}
-      await Promise.all(
-        trafficTaps()
-          .filter((t) => t.entityDetail)
-          .map(async (t) => {
-            try {
-              const v = await t.entityDetail?.(key, windowS, sec)
-              if (v !== undefined) data[t.id] = v
-            } catch (err) {
-              req.log.warn({ err, tap: t.id }, 'traffic-map tap entity detail failed')
-            }
-          })
-      )
-      return { data }
+      return { data: await entityTapDetails(key, windowS, (o, m) => req.log.warn(o, m)) }
     }
   )
 
@@ -314,87 +292,14 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
           .code(400)
           .send({ error: 'lane, entity or hours is not valid', code: 'HISTORY_PARAMS_INVALID' })
       }
-      const extUrls =
-        lane === 'extension' ? (extensionRoutes.get(entity) ?? []).map((r) => r.url) : []
-      const since = new Date(Date.now() - hours * 3600_000)
-      const n = historyNarrowing(lane, entity, extUrls)
-      const q = db('nivaro_api_logs')
-        .where('created_at', '>=', since)
-        .orderBy('created_at', 'desc')
-        .limit(HISTORY_ROW_CAP)
-        .select(
-          'method',
-          'path',
-          'status',
-          'latency_ms',
-          'auth',
-          'api_key_id',
-          'user',
-          'graphql_operation',
-          'graphql_kind',
-          'created_at'
-        )
-      // #1139: the query string tells a dry run apart (a tenant behind migration 357 has none).
-      if (await hasColumn('nivaro_api_logs', 'query').catch(() => false)) q.select('query')
-      if (lane === 'extension' && !n.like?.length) {
-        return { data: summarizeHistory([], lane, entity, hours as 1 | 6 | 24) }
-      }
-      q.where((b) => {
-        if (n.column) {
-          b.where((g) => {
-            if (n.equals === null) g.whereNull(n.column as string)
-            else g.where(n.column as string, n.equals as string)
-            if (n.pathIn) g.whereIn('path', n.pathIn)
-          })
-        }
-        for (const l of n.like ?? []) b.orWhereRaw("path LIKE ? ESCAPE '\\'", [l])
-      })
-      let logRows: HistoryRow[]
       try {
-        logRows = (await q) as HistoryRow[]
-      } catch (err) {
-        req.log.warn({ err }, 'traffic-map entity history read failed')
-        return reply.code(503).send(HISTORY_UNAVAILABLE)
-      }
-      const body = summarizeHistory(
-        logRows,
-        lane,
-        entity,
-        hours as 1 | 6 | 24,
-        new Date(),
-        matchExtensionRoute
-      )
-      // #1102: by the issue's stored route (+ request URL for per-entity lanes), not its title.
-      const im = issueMatch(lane, entity, extUrls)
-      let issues: Array<Record<string, unknown>> = []
-      if (im.routePrefixes.length) {
-        const iq = db('nivaro_issues')
-          .where('source', 'server')
-          .whereNot('status', 'resolved')
-          .where((b) => {
-            for (const p of im.routePrefixes)
-              for (const l of issueRouteLikes(p)) b.orWhereRaw("details LIKE ? ESCAPE '\\'", [l])
-          })
-        const urls = im.urlLike
-        if (urls?.length) {
-          iq.where((b) => {
-            for (const l of urls) b.orWhereRaw("details LIKE ? ESCAPE '\\'", [l])
-            b.orWhereRaw("details NOT LIKE '%Request context:%'")
-          })
+        return {
+          data: await entityHistory(lane, entity, hours as 1 | 6 | 24, (o, m) => req.log.warn(o, m))
         }
-        issues = (await Promise.resolve(
-          iq
-            .orderBy('last_seen_at', 'desc')
-            .limit(10)
-            .select('id', 'title', 'severity', 'status', 'occurrence_count', 'last_seen_at')
-        ).catch(() => [])) as Array<Record<string, unknown>>
+      } catch (err) {
+        if (err instanceof HistoryUnavailableError) return reply.code(503).send(HISTORY_UNAVAILABLE)
+        throw err
       }
-      // Request traces are per process, not per tenant: cloud mode leaves them out (#1132).
-      const slow = (process.env.CLOUD_META_DB_URL ? [] : listTraces(200))
-        .filter((t) => traceBelongsTo(t, lane, entity, n.routePrefix, matchExtensionRoute))
-        .slice(0, 5)
-        .map((t) => ({ id: t.id, route: t.route, total_ms: t.total_ms, ts: t.ts }))
-      return { data: { ...body, issues, slow_traces: slow } }
     }
   )
 
@@ -408,98 +313,17 @@ export async function trafficMapRoutes(app: FastifyInstance): Promise<void> {
           .code(400)
           .send({ error: 'hours must be 1, 6 or 24', code: 'HISTORY_PARAMS_INVALID' })
       }
-      if (id === 'db' || id === 'redis' || id === 'store') {
-        return {
-          data: {
-            key: id,
-            hours,
-            series: [],
-            note: 'Per-request attribution only — see DB Health for server-side figures.'
-          }
-        }
-      }
-      // Down nodes a feature added (email, AI, webhooks, extension nodes) bring their own log.
       try {
-        const provided = await downHistoryFor(id, hours as 1 | 6 | 24)
-        if (provided) return { data: provided }
-      } catch (err) {
-        req.log.warn({ err }, 'traffic-map down-node history provider failed')
-        return reply.code(503).send(HISTORY_UNAVAILABLE)
-      }
-      const m = id.match(/^ext:(\d{1,9})$/)
-      if (!m) {
-        return reply.code(400).send({ error: 'unknown down node', code: 'HISTORY_PARAMS_INVALID' })
-      }
-      const since = new Date(Date.now() - hours * 3600_000)
-      const bucketS = hours === 1 ? 60 : hours === 6 ? 300 : 900
-      let logRows: Array<{
-        method: string
-        path: string | null
-        status: number | null
-        ok: boolean | number
-        duration_ms: number
-        created_at: Date
-      }>
-      try {
-        logRows = await db('nivaro_outbound_log')
-          .where('api_id', Number(m[1]))
-          .where('created_at', '>=', since)
-          .orderBy('created_at', 'desc')
-          .limit(HISTORY_ROW_CAP)
-          .select('method', 'path', 'status', 'ok', 'duration_ms', 'created_at')
-      } catch (err) {
-        req.log.warn({ err }, 'traffic-map down-node history read failed')
-        return reply.code(503).send(HISTORY_UNAVAILABLE)
-      }
-      const start = Math.floor(since.getTime() / 1000)
-      const points = (hours * 3600) / bucketS
-      const series = Array.from({ length: points }, (_, i) => ({
-        t: new Date((start + i * bucketS) * 1000).toISOString(),
-        req: 0,
-        error: 0,
-        lat: [] as number[]
-      }))
-      const paths = new Map<string, number>()
-      const codes: Record<string, number> = {}
-      let error = 0
-      let total = 0
-      for (const r of logRows) {
-        const i = Math.floor(
-          (Math.floor(new Date(r.created_at).getTime() / 1000) - start) / bucketS
-        )
-        if (i < 0 || i >= points) continue
-        total++
-        const failed = !(r.ok === true || r.ok === 1)
-        series[i].req++
-        if (failed) {
-          series[i].error++
-          error++
+        const r = await downNodeHistory(id, hours as 1 | 6 | 24, (o, m) => req.log.warn(o, m))
+        if (r.kind === 'unknown') {
+          return reply
+            .code(400)
+            .send({ error: 'unknown down node', code: 'HISTORY_PARAMS_INVALID' })
         }
-        series[i].lat.push(r.duration_ms)
-        // Templated like request routes, so `/orders/123` and `/orders/456` aggregate.
-        const key = `${String(r.method || 'GET').toUpperCase()} ${pathTemplate(r.path ?? '').slice(0, 120)}`
-        paths.set(key, (paths.get(key) ?? 0) + 1)
-        const code = String(r.status ?? 'network')
-        codes[code] = (codes[code] ?? 0) + 1
-      }
-      const p95 = (a: number[]) =>
-        a.length
-          ? a.slice().sort((x, y) => x - y)[Math.min(a.length - 1, Math.floor(a.length * 0.95))]
-          : 0
-      return {
-        data: {
-          key: id,
-          hours,
-          bucket_s: bucketS,
-          series: series.map((s) => ({ t: s.t, req: s.req, error: s.error, p95: p95(s.lat) })),
-          totals: { req: total, error },
-          status_codes: codes,
-          top_paths: [...paths]
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 5)
-            .map(([path, n]) => ({ path, n })),
-          truncated: logRows.length >= HISTORY_ROW_CAP
-        }
+        return { data: r.data }
+      } catch (err) {
+        if (err instanceof HistoryUnavailableError) return reply.code(503).send(HISTORY_UNAVAILABLE)
+        throw err
       }
     }
   )
