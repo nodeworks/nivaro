@@ -37,6 +37,7 @@ import {
   InspectorPlaceholder
 } from './Inspector'
 import { InspectHost } from './inspect/InspectHost'
+import { closeInspect } from './inspect/stack'
 import { MapCanvas } from './MapCanvas'
 import { defaultFilters, laneOf, TrafficModel } from './model'
 // Feature registrations (registry/index.ts) run before the page renders.
@@ -489,6 +490,10 @@ export default function TrafficMap() {
       return { ...f, kinds }
     })
 
+  // The investigation stack is a module store: close it when the page goes away, so coming back
+  // neither reopens it nor rewrites `inspect=` into the URL. Declared BEFORE the apply-once effect
+  // below, so a StrictMode remount (cleanup → setup) closes first and the link re-applies after.
+  useEffect(() => () => closeInspect(), [])
   // #1166: a link's lens / workspace / zoom params apply once on open. A link that carries any
   // view param is a whole view: params it leaves out go back to their defaults.
   useEffect(() => {

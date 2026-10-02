@@ -110,6 +110,7 @@ export function IdPeek({
     if (closeT.current) clearTimeout(closeT.current)
     closeT.current = setTimeout(() => setOpen(false), PEEK_CLOSE_DELAY_MS)
   }
+  const cardRef = useRef<HTMLDivElement | null>(null)
   const keep = () => {
     if (closeT.current) clearTimeout(closeT.current)
     closeT.current = null
@@ -132,7 +133,7 @@ export function IdPeek({
       }}
       onBlur={(e) => {
         const next = e.relatedTarget as Node | null
-        if (next && document.querySelector('[data-tm-inspect-peek-card]')?.contains(next)) return
+        if (next && cardRef.current?.contains(next)) return
         scheduleClose()
       }}
       onKeyDown={(e) => {
@@ -151,6 +152,7 @@ export function IdPeek({
       <PopoverPrimitive.Anchor asChild>{wrapper}</PopoverPrimitive.Anchor>
       {open && (
         <PopoverContent
+          ref={cardRef}
           side='bottom'
           align='start'
           className='traffic-map w-[300px] border-[var(--tm-line)] bg-[var(--tm-card)] p-3 text-[var(--tm-fg)]'

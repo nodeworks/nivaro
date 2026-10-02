@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import { createPortal } from 'react-dom'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { EventTicker } from '../EventTicker'
@@ -158,6 +159,104 @@ describe('InspectHost', () => {
     expect(document.querySelector('[data-tm-inspect-failed]')).toBeTruthy()
     errSpy.mockRestore()
     warn.mockRestore()
+  })
+})
+
+describe('fix round 1', () => {
+  it('split falls back to the current level when the region is narrower than 760px', () => {
+    register(inspectables, { id: 'request', label: 'Request', Panel: RequestPanel })
+    const container = document.body.appendChild(document.createElement('div'))
+    Object.defineProperty(container, 'clientWidth', { configurable: true, value: 700 })
+    render(wrap(<InspectHost />), { container })
+    act(() => openInspect({ kind: 'request', id: RID }, { root: true }))
+    // the aside renders inside wrap()'s providers; its parent is the container
+    fireEvent.click(document.querySelector('[data-tm-inspect-pin]') as HTMLElement)
+    fireEvent.click(screen.getByText('Drill trace'))
+    expect(getInspectSnapshot().pinned).toBe(0)
+    expect(document.querySelector('[data-tm-inspect-split]')).toBeNull()
+    expect(document.querySelectorAll('[data-tm-inspect-level]')).toHaveLength(1)
+    expect(screen.getByText('Nothing can show a trace yet.')).toBeTruthy()
+    expect(document.querySelector('[data-tm-inspect-pin-hidden]')).toBeTruthy()
+    expect(document.querySelector('[data-tm-inspect-pin]')?.getAttribute('aria-pressed')).toBe(
+      'true'
+    )
+    container.remove()
+  })
+
+  it('closing returns focus to what had it when the panel opened', () => {
+    register(inspectables, { id: 'request', label: 'Request', Panel: RequestPanel })
+    render(
+      wrap(
+        <>
+          <button type='button'>origin</button>
+          <InspectHost />
+        </>
+      )
+    )
+    const origin = screen.getByText('origin')
+    origin.focus()
+    act(() => openInspect({ kind: 'request', id: RID }, { root: true }))
+    const host = screen.getByRole('complementary', { name: 'Investigation' })
+    expect(document.activeElement).toBe(host)
+    fireEvent.click(document.querySelector('[data-tm-inspect-close]') as HTMLElement)
+    expect(document.querySelector('[data-tm-inspect-host]')).toBeNull()
+    expect(document.activeElement).toBe(origin)
+  })
+
+  it('folds middle crumbs into "…" so the root and the last two always show', () => {
+    render(wrap(<InspectHost />))
+    act(() => {
+      openInspect({ kind: 'a', id: '1', label: 'Root' }, { root: true })
+      openInspect({ kind: 'b', id: '2', label: 'Second' })
+      openInspect({ kind: 'c', id: '3', label: 'Third' })
+      openInspect({ kind: 'd', id: '4', label: 'Fourth' })
+      openInspect({ kind: 'e', id: '5', label: 'Current' })
+    })
+    const shown = [...document.querySelectorAll('nav [data-tm-inspect-crumb]')].map(
+      (b) => b.textContent
+    )
+    expect(shown).toEqual(['Root', 'Fourth', 'Current'])
+    expect(
+      document.querySelector('[data-tm-inspect-crumb="4"]')?.getAttribute('aria-current')
+    ).toBe('page')
+    fireEvent.click(document.querySelector('[data-tm-inspect-crumb-more]') as HTMLElement)
+    const list = document.querySelector('[data-tm-inspect-crumb-list]') as HTMLElement
+    expect([...list.querySelectorAll('button')].map((b) => b.textContent)).toEqual([
+      'Second',
+      'Third'
+    ])
+    fireEvent.click(list.querySelector('[data-tm-inspect-crumb="1"]') as HTMLElement)
+    expect(getInspectSnapshot().levels.map((l) => l.label)).toEqual(['Root', 'Second'])
+    // three or fewer levels: no fold
+    expect(document.querySelector('[data-tm-inspect-crumb-more]')).toBeNull()
+  })
+})
+
+describe('ticker rows and portals', () => {
+  it('a click inside a portal opened from a row action does not open the row', () => {
+    const ev: TrafficEventWire = {
+      t: 1000,
+      lane: 'items',
+      entity: 'workflows',
+      kind: 'update',
+      caller: 'k7',
+      route: 'PATCH /api/items/workflows/:id',
+      record: '12'
+    }
+    register(eventActions, {
+      id: 'sheet',
+      applies: () => true,
+      Component: () => createPortal(<p data-portaled=''>sheet body</p>, document.body)
+    })
+    render(
+      wrap(
+        <EventTicker events={[ev]} newestT={0} win={60} catalog={null} total={1} loading={false} />
+      )
+    )
+    fireEvent.click(document.querySelector('[data-portaled]') as HTMLElement)
+    expect(getInspectSnapshot().levels).toHaveLength(0)
+    fireEvent.click(document.querySelector('[data-tm-event]') as HTMLElement)
+    expect(getInspectSnapshot().levels).toHaveLength(1)
   })
 })
 

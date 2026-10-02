@@ -125,6 +125,9 @@ function Tags({ tags }: { tags?: string[] }) {
  * selection) opens the event's most specific level as a new investigation.
  */
 function openFromRow(e: MouseEvent<HTMLElement>, ev: TrafficEventWire): void {
+  // React events bubble through portals: a click inside a sheet or popover a row action opened
+  // reaches the row too, but its target is not in the row's DOM.
+  if (!e.currentTarget.contains(e.target as Node)) return
   const target = e.target as HTMLElement | null
   const hit = target?.closest('button, a, input, textarea, select, [role="menuitem"]')
   if (hit && hit !== e.currentTarget && e.currentTarget.contains(hit)) return

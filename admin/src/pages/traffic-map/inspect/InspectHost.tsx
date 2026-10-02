@@ -4,10 +4,13 @@
  * breadcrumbs, back / forward, pin-to-split and the registered header actions and footers.
  *
  * Keys (when focus is inside the panel, or nothing is focused): Escape back (close at the root),
- * [ back, ] forward, p pin / split. Never while typing in a field.
+ * [ back, ] forward, p pin / split. Never while typing in a field. Closing returns focus to
+ * whatever had it when the panel opened. Split needs ~760px; narrower, only the current level
+ * shows (the pin stays on).
  */
 import { ArrowLeft, ArrowRight, ChevronRight, Columns2, X } from 'lucide-react'
-import { Suspense, useEffect, useRef, useSyncExternalStore } from 'react'
+import { Suspense, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 import { type InspectPanelProps, type InspectRef, inspectableFor } from '../registry/inspectables'
 import { InspectFooters } from '../registry/inspectFooters'
@@ -112,17 +115,162 @@ function Level({
   )
 }
 
+/** Below this much available width the split view shows only the current level. */
+export const SPLIT_MIN_WIDTH = 760
+
+const CRUMB =
+  'truncate rounded-sm px-1 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+
+function Crumb({ refAt, i, current }: { refAt: InspectRef; i: number; current: boolean }) {
+  const title = refTitle(refAt)
+  return (
+    <button
+      type='button'
+      onClick={() => goTo(i)}
+      aria-current={current ? 'page' : undefined}
+      data-tip={title}
+      data-tm-inspect-crumb={i}
+      className={cn(
+        CRUMB,
+        current
+          ? 'max-w-[260px] font-semibold text-[var(--tm-fg)]'
+          : 'max-w-[160px] text-[var(--tm-accent-ink)] hover:underline'
+      )}
+    >
+      {title}
+    </button>
+  )
+}
+
+function Sep() {
+  return (
+    <ChevronRight className='mx-0.5 h-3 w-3 shrink-0 text-[var(--tm-muted)]' aria-hidden='true' />
+  )
+}
+
+/**
+ * Breadcrumbs: the root and the last two levels always show; anything between folds into a
+ * "…" button whose popover lists them. The current (last) crumb never shrinks — the others do.
+ */
+function Crumbs({ levels, index }: { levels: InspectRef[]; index: number }) {
+  const [moreOpen, setMoreOpen] = useState(false)
+  const fold = levels.length > 3
+  const hidden = fold ? levels.slice(1, levels.length - 2).map((r, k) => ({ r, i: k + 1 })) : []
+  const shown = fold
+    ? [
+        { r: levels[0], i: 0 },
+        { r: levels[levels.length - 2], i: levels.length - 2 },
+        { r: levels[levels.length - 1], i: levels.length - 1 }
+      ]
+    : levels.map((r, i) => ({ r, i }))
+  return (
+    <nav aria-label='Investigation path' className='mx-1 min-w-0 flex-1'>
+      <ol className='flex min-w-0 items-center gap-0.5 overflow-hidden text-[12px]'>
+        {shown.map(({ r, i }, k) => {
+          const current = i === index
+          return (
+            <li
+              key={`${i}:${r.kind}:${r.id}`}
+              className={cn('flex items-center', current ? 'shrink-0' : 'min-w-0')}
+            >
+              {k > 0 && <Sep />}
+              {fold && k === 1 && (
+                <>
+                  <Popover open={moreOpen} onOpenChange={setMoreOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type='button'
+                        className={cn(CRUMB, 'shrink-0 text-[var(--tm-accent-ink)]')}
+                        aria-label={`${hidden.length} more levels`}
+                        data-tip={`${hidden.length} more levels`}
+                        data-tm-inspect-crumb-more=''
+                      >
+                        …
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align='start'
+                      className='traffic-map w-[260px] border-[var(--tm-line)] bg-[var(--tm-card)] p-1 text-[var(--tm-fg)]'
+                    >
+                      <ul className='grid' data-tm-inspect-crumb-list=''>
+                        {hidden.map(({ r: h, i: hi }) => (
+                          <li key={`${hi}:${h.kind}:${h.id}`}>
+                            <button
+                              type='button'
+                              className='w-full truncate rounded px-2 py-1 text-left text-[12px] text-[var(--tm-accent-ink)] hover:bg-[var(--tm-card-2)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                              data-tm-inspect-crumb={hi}
+                              onClick={() => {
+                                setMoreOpen(false)
+                                goTo(hi)
+                              }}
+                            >
+                              {refTitle(h)}
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </PopoverContent>
+                  </Popover>
+                  <Sep />
+                </>
+              )}
+              <Crumb refAt={r} i={i} current={current} />
+            </li>
+          )
+        })}
+      </ol>
+    </nav>
+  )
+}
+
+/** Width of the region the panel docks into (re-measured on resize); null before mount. */
+function useAvailableWidth(el: HTMLElement | null): number | null {
+  const [w, setW] = useState<number | null>(null)
+  useEffect(() => {
+    const parent = el?.parentElement
+    if (!parent) return
+    const measure = () => setW(parent.clientWidth)
+    measure()
+    if (typeof ResizeObserver === 'undefined') {
+      window.addEventListener('resize', measure)
+      return () => window.removeEventListener('resize', measure)
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(parent)
+    return () => ro.disconnect()
+  }, [el])
+  return w
+}
+
 export function InspectHost() {
   const s = useInspectStack()
   const hostRef = useRef<HTMLElement | null>(null)
+  const [hostEl, setHostEl] = useState<HTMLElement | null>(null)
+  const setHostRef = useCallback((el: HTMLElement | null) => {
+    hostRef.current = el
+    setHostEl(el)
+  }, [])
   const isOpen = s.levels.length > 0
   const current = s.levels[s.index] ?? null
-  const split = s.pinned != null && s.pinned !== s.index ? s.pinned : null
+  const avail = useAvailableWidth(hostEl)
+  // 0 = not laid out (or a test DOM): treat as roomy
+  const roomForSplit = !avail || avail >= SPLIT_MIN_WIDTH
+  const split = s.pinned != null && s.pinned !== s.index && roomForSplit ? s.pinned : null
 
-  // Move focus into the panel when it opens (an explicit action opened it), so its keys work.
+  // Opening moves focus into the panel (an explicit action opened it) so its keys work; closing
+  // gives focus back to whatever had it before.
   const wasOpen = useRef(false)
+  const returnTo = useRef<Element | null>(null)
   useEffect(() => {
-    if (isOpen && !wasOpen.current) hostRef.current?.focus({ preventScroll: true })
+    if (isOpen && !wasOpen.current) {
+      returnTo.current = document.activeElement
+      hostRef.current?.focus({ preventScroll: true })
+    } else if (!isOpen && wasOpen.current) {
+      const el = returnTo.current
+      returnTo.current = null
+      if (el instanceof HTMLElement && el.isConnected && el !== document.body)
+        el.focus({ preventScroll: true })
+    }
     wasOpen.current = isOpen
   }, [isOpen])
 
@@ -162,16 +310,17 @@ export function InspectHost() {
     anchor: s.anchor,
     windowSec: s.windowSec
   }
+  const pinNoRoom = s.pinned != null && s.pinned !== s.index && !roomForSplit
   return (
     <aside
-      ref={hostRef}
+      ref={setHostRef}
       tabIndex={-1}
       aria-label='Investigation'
       data-tm-inspect-host=''
       data-tm-inspect-split={split != null ? '' : undefined}
       className={cn(
         'absolute inset-y-0 right-0 z-30 flex max-w-full flex-col border-l border-[var(--tm-line)] bg-[var(--tm-card)] text-[var(--tm-fg)] shadow-[-8px_0_24px_-12px_rgba(15,23,42,0.25)] outline-none',
-        split != null ? 'w-[1040px]' : 'w-[600px]'
+        split != null ? 'w-[min(1040px,100%)]' : 'w-[min(600px,100%)]'
       )}
     >
       <header className='shrink-0 border-b border-[var(--tm-line-2)] px-3 py-2'>
@@ -198,40 +347,7 @@ export function InspectHost() {
           >
             <ArrowRight className='h-4 w-4' aria-hidden='true' />
           </button>
-          <nav aria-label='Investigation path' className='mx-1 min-w-0 flex-1'>
-            <ol className='flex min-w-0 items-center gap-0.5 overflow-hidden text-[12px]'>
-              {s.levels.map((ref, i) => {
-                const title = refTitle(ref)
-                const isCur = i === s.index
-                return (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: the same ref may sit at two depths
-                  <li key={`${i}:${ref.kind}:${ref.id}`} className='flex min-w-0 items-center'>
-                    {i > 0 && (
-                      <ChevronRight
-                        className='mx-0.5 h-3 w-3 shrink-0 text-[var(--tm-muted)]'
-                        aria-hidden='true'
-                      />
-                    )}
-                    <button
-                      type='button'
-                      onClick={() => goTo(i)}
-                      aria-current={isCur ? 'page' : undefined}
-                      data-tip={title}
-                      data-tm-inspect-crumb={i}
-                      className={cn(
-                        'max-w-[180px] truncate rounded-sm px-1 py-0.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
-                        isCur
-                          ? 'font-semibold text-[var(--tm-fg)]'
-                          : 'text-[var(--tm-accent-ink)] hover:underline'
-                      )}
-                    >
-                      {title}
-                    </button>
-                  </li>
-                )
-              })}
-            </ol>
-          </nav>
+          <Crumbs levels={s.levels} index={s.index} />
           <InspectHeaderActions {...headerProps} />
           <button
             type='button'
@@ -243,11 +359,14 @@ export function InspectHost() {
             aria-pressed={s.pinned != null}
             aria-label={s.pinned != null ? 'Unpin' : 'Pin this level and split'}
             data-tip={
-              s.pinned != null
-                ? 'Unpin ( p )'
-                : 'Pin this level; the next one opens beside it ( p )'
+              pinNoRoom
+                ? 'Pinned — too narrow to show it beside this level. Unpin ( p )'
+                : s.pinned != null
+                  ? 'Unpin ( p )'
+                  : 'Pin this level; the next one opens beside it ( p )'
             }
             data-tm-inspect-pin=''
+            data-tm-inspect-pin-hidden={pinNoRoom ? '' : undefined}
           >
             <Columns2 className='h-4 w-4' aria-hidden='true' />
           </button>
@@ -267,7 +386,7 @@ export function InspectHost() {
         className={cn(
           'min-h-0 flex-1',
           split != null
-            ? 'grid grid-cols-[520px_520px] divide-x divide-[var(--tm-line-2)]'
+            ? 'grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] divide-x divide-[var(--tm-line-2)]'
             : 'flex flex-col'
         )}
       >
