@@ -198,6 +198,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_admin_journeys',
   'nivaro_session_recordings',
   'nivaro_traffic_snapshots',
+  'nivaro_traffic_investigations',
   'nivaro_session_events',
   'nivaro_item_locks',
   'nivaro_notifications',
