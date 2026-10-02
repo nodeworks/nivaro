@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-02T00:22:05.965Z",
+  "generated_at": "2026-10-02T00:45:17.307Z",
   "releases": [
+    {
+      "version": "0.2.16",
+      "tag": "v0.2.16",
+      "date": "2026-10-01T20:45:05-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "push readiness: values the step's own dialog collects are asked, not missing",
+              "hash": "02541b9e"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.15",
       "tag": "v0.2.15",
-      "date": "2026-10-01T20:21:54-04:00",
+      "date": "2026-10-01T20:22:06-04:00",
       "sections": [
         {
           "label": "Other",
