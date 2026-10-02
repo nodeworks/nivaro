@@ -214,5 +214,7 @@ declare module 'fastify' {
     userRole?: Role | null
     isAdmin?: boolean
     workspaceId: string | null
+    /** The request id (= its trace id), stamped by plugins/request-trace.ts on /api requests. */
+    requestId?: string
   }
 }

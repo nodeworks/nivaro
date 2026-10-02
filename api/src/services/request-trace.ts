@@ -277,15 +277,24 @@ export function setTraceUser(userId: string): void {
   if (ctx) ctx.userId = userId
 }
 
-/** What the AI call log attributes a call to: the request id, route and user, if any. */
+/**
+ * What the AI call log attributes a call to: the request id, route and user, if any. `request`
+ * is false inside `runInTrace` (a background job's own id — no request, no API log row behind it).
+ */
 export function currentTraceMeta(): {
   id: string
   urlHint: string | null
   userId: string | null
+  request?: boolean
 } | null {
   const ctx = als.getStore()
   if (!ctx) return null
-  return { id: ctx.id, urlHint: ctx.urlHint ?? null, userId: ctx.userId ?? null }
+  return {
+    id: ctx.id,
+    urlHint: ctx.urlHint ?? null,
+    userId: ctx.userId ?? null,
+    request: ctx.request != null
+  }
 }
 
 /** #304 — the current request's URL, for pool-leak attribution. */
@@ -698,7 +707,9 @@ export function finishTrace(meta: {
   const spans = [...ctx.spans].sort((a, b) => a.at - b.at)
 
   buffer.push({
-    id: randomUUID(),
+    // The request id (plugins/request-trace.ts stamps it on req.requestId, the API log row and
+    // the x-nivaro-request-id header), so getTrace(requestId) finds this request's trace.
+    id: ctx.id,
     method: meta.method,
     route: meta.route,
     url: meta.url,

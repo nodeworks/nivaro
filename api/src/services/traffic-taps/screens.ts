@@ -11,6 +11,13 @@
  * Loads: requests are grouped by load id; a load that has been quiet for LOAD_IDLE_S is finished
  * and kept (newest per screen). A screen whose load fired more than FANOUT_LIMIT calls is flagged.
  */
+
+import {
+  normalizeApp,
+  normalizeLoadId,
+  normalizeScreenPath,
+  screenKey
+} from '../traffic-client-facts.js'
 import { currentTrafficSec } from '../traffic-map.js'
 import { MinuteCounter, registerTrafficTap, type TapRequestCtx, tapState } from '../traffic-taps.js'
 
@@ -24,67 +31,10 @@ export const LOAD_IDLE_S = 15
 const OPEN_LOADS_CAP = 1000
 const FINISHED_PER_SCREEN = 12
 const ROUTES_PER_LOAD = 30
-const SCREEN_MAX_LEN = 140
-const SEGMENTS_MAX = 10
 
-const SAFE_SEG = /^[A-Za-z0-9_.:-]{1,60}$/
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
-
-/** One path segment: anything that could be an id (a digit, a uuid, an email, a token) is `:id`. */
-function patternSegment(raw: string): string | null {
-  let s = raw
-  try {
-    s = decodeURIComponent(raw)
-  } catch {
-    /* keep raw */
-  }
-  if (!s) return null
-  if (s.startsWith(':')) return /^:[A-Za-z_][A-Za-z0-9_]{0,30}$/.test(s) ? s : ':id'
-  if (/\d/.test(s) || UUID.test(s) || s.includes('@') || s.length > 40) return ':id'
-  return SAFE_SEG.test(s) ? s.toLowerCase() : ':id'
-}
-
-/** A screen pattern from the untrusted header: `/collections/workflows/:id`, or null. */
-export function normalizeScreenPath(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  let p = value.trim()
-  if (!p || p.length > 400) return null
-  const cut = p.search(/[?#]/)
-  if (cut >= 0) p = p.slice(0, cut)
-  if (!p.startsWith('/')) return null
-  const segs: string[] = []
-  for (const raw of p.split('/')) {
-    if (!raw) continue
-    const s = patternSegment(raw)
-    if (s) segs.push(s)
-    if (segs.length >= SEGMENTS_MAX) break
-  }
-  // Collapse repeated ids (`/:id/:id`) and cap the length.
-  const out = `/${segs.filter((s, i) => !(s === ':id' && segs[i - 1] === ':id')).join('/')}`
-  return out.slice(0, SCREEN_MAX_LEN)
-}
-
-/** `admin`, `efp-new`… or null when absent / not a plain slug. */
-export function normalizeApp(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const v = value.trim().toLowerCase()
-  return /^[a-z0-9][a-z0-9-]{0,23}$/.test(v) ? v : null
-}
-
-/** The screen key: `<app> <pattern>` (the app is optional). */
-export function screenKey(app: unknown, page: unknown): string | null {
-  const p = normalizeScreenPath(page)
-  if (!p) return null
-  const a = normalizeApp(app)
-  return a ? `${a} ${p}` : p
-}
-
-/** A load id the client minted (random, short); anything else is ignored. */
-export function normalizeLoadId(value: unknown): string | null {
-  if (typeof value !== 'string') return null
-  const v = value.trim()
-  return /^[A-Za-z0-9_-]{6,40}$/.test(v) ? v : null
-}
+// The header normalisers live in a leaf module (the aggregator reads them for event client facts
+// without loading this tap); re-exported here for the taps that already import them from screens.
+export { normalizeApp, normalizeLoadId, normalizeScreenPath, screenKey }
 
 interface OpenLoad {
   screen: string

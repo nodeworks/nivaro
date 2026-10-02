@@ -35,6 +35,8 @@ interface ApiLogRow {
   chain_id?: string | null
   /** null = this request started the chain (the ROOT row); else the caller's open step. */
   chain_parent?: string | null
+  /** The request id (= its trace id, migration 389) — joins the row to Traffic Map events. */
+  request_id?: string | null
 }
 
 // #67 — keep the JSON body of an inbound INTEGRATION write (token / api-key
@@ -189,11 +191,15 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
               ...rest
             }) => rest
           )
+      // And the request id (migration 389).
+      const withRequestId = (await hasColumn('nivaro_api_logs', 'request_id'))
+        ? shaped
+        : shaped.map(({ request_id: _r, ...rest }) => rest)
       // #666 — which instance served it (migration 379); the SLO dashboard
       // groups by it because several instances can share one database.
       const stamped = (await hasColumn('nivaro_api_logs', 'instance'))
-        ? shaped.map((r) => ({ ...r, instance: INSTANCE }))
-        : shaped
+        ? withRequestId.map((r) => ({ ...r, instance: INSTANCE }))
+        : withRequestId
       // Insert in modest chunks to stay under MSSQL parameter limits
       for (let i = 0; i < stamped.length; i += 50) {
         await db('nivaro_api_logs').insert(stamped.slice(i, i + 50))
@@ -362,7 +368,8 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       ...graphqlColumns(req as unknown as { __nvrGql?: GraphQLStampLike }),
       created_at: new Date(),
       chain_id: req.chainId ?? null,
-      chain_parent: req.chainParent ?? null
+      chain_parent: req.chainParent ?? null,
+      request_id: req.requestId ?? null
     })
 
     // Live traffic view (#276): stream to admin watchers only when someone is
