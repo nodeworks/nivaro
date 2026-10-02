@@ -2,13 +2,13 @@
 import { useMutation } from '@tanstack/react-query'
 import { Play } from 'lucide-react'
 import { Link } from 'react-router'
-import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { inspectErrorOf, useInspectDetail } from '../../inspect/api'
 import { InspectLink } from '../../inspect/InspectLink'
 import type { InspectPanelProps } from '../../registry/inspectables'
+import { type FlowDryRunAnswer, postFlowDryRun } from './data'
 import { SubmissionList } from './lists'
-import { type FlowDetail, type FlowTestStep, fmtDuration, fmtWhen, hasMask } from './logic'
+import { type FlowDetail, fmtDuration, fmtWhen, hasMask } from './logic'
 import {
   ACTION_BTN,
   BodyBlock,
@@ -22,30 +22,21 @@ import {
   StatusPill
 } from './ui'
 
-interface TestAnswer {
-  steps: FlowTestStep[]
-  output: unknown
-  error: string | null
-  dry_run: boolean
-}
-
-function DryRun({ flowId, payload }: { flowId: string; payload: unknown }) {
-  const m = useMutation<TestAnswer, unknown>({
-    mutationFn: async () => {
-      const res = await api.post(`/flows/${encodeURIComponent(flowId)}/test`, {
-        payload: payload && typeof payload === 'object' ? payload : {},
-        dry_run: true
-      })
-      return (res?.data as { data: TestAnswer }).data
-    }
+/**
+ * The dry run happens server-side from the run id alone: the server reads the run's stored
+ * payload (the real values) and runs the flow as it is today in dry-run mode. The masked view
+ * this panel shows is never what goes in.
+ */
+function DryRun({ runId }: { runId: string }) {
+  const m = useMutation<FlowDryRunAnswer, unknown>({
+    mutationFn: () => postFlowDryRun(runId)
   })
-  const masked = hasMask(payload)
   return (
     <Section title='Dry run' hook='flow-dry-run'>
       <Note hook='flow-dry-run-what'>
-        Runs the flow as it is today with this run’s payload. Mail, notifications, webhooks and
-        partner calls render without sending; the tester records its own run.
-        {masked ? ' Values under credential-like keys are masked and go in masked.' : ''}
+        Runs the flow as it is today with this run’s stored payload — the real values, not the
+        masked view above. Mail, notifications, webhooks and partner calls render without sending;
+        the tester records its own run.
       </Note>
       <div>
         <button
@@ -64,6 +55,11 @@ function DryRun({ flowId, payload }: { flowId: string; payload: unknown }) {
       ) : null}
       {m.data ? (
         <div className='grid gap-1.5' data-tm-inspect-flow-dry-run-result={m.data.steps.length}>
+          {m.data.payload_used === 'empty' ? (
+            <Note hook='flow-dry-run-empty-payload'>
+              The stored payload is not an object (text or a list), so the flow ran on an empty one.
+            </Note>
+          ) : null}
           {m.data.steps.length ? (
             <ol className={LIST}>
               {m.data.steps.map((s, i) => (
@@ -208,7 +204,7 @@ export function FlowPanel({ inspectRef, anchor, windowSec }: InspectPanelProps) 
         <BodyBlock label='What it was given' value={d.input} hook='flow-input' />
         <BodyBlock label='What it ended with' value={d.output} hook='flow-output' />
       </Section>
-      {d.flow ? <DryRun flowId={d.flow.id} payload={d.input} /> : null}
+      {d.flow ? <DryRun runId={d.id} /> : null}
       {d.submissions.length ? (
         <Section
           title={`Partner pushes in its chain (${d.submissions.length})`}

@@ -1,9 +1,8 @@
 /**
  * Pure helpers for the background investigation panels (AI call, job run, flow run, partner
  * push): wire types of the server details, formatting, tones, and the small decisions the
- * panels and footers make (which run a ref carries, which partner an event reached). No React.
+ * panels and footers make (which run a ref carries, which down node is a partner). No React.
  */
-import type { TrafficEventWire } from '../../types'
 
 export interface PersonRef {
   id: string
@@ -286,17 +285,32 @@ export function apiIdOfDown(id: unknown): number | null {
 }
 
 /**
- * The external API a ticker event reached, when the event names one (a tap's `extra.api_id` /
- * `extra.apiId`, or `extra.down` = `ext:<id>`). null for every ordinary request / write.
+ * A down node that receives partner pushes: `ext:<api id>`, or an extension-declared node
+ * (`x:<extension>.<id>`, which the server resolves to its APIs by name). Databases, caches and
+ * the like never do.
  */
-export function outboundApiOf(ev: Pick<TrafficEventWire, 'extra'>): number | null {
-  const x = ev.extra
-  if (!x || typeof x !== 'object') return null
-  for (const v of [x.api_id, x.apiId]) {
-    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : Number.NaN
-    if (Number.isSafeInteger(n) && n > 0) return n
+export function isPartnerDown(id: unknown): boolean {
+  if (typeof id !== 'string') return false
+  return apiIdOfDown(id) != null || /^x:[A-Za-z0-9][A-Za-z0-9_.:-]{0,120}$/.test(id)
+}
+
+/**
+ * The moment a level's detail is about, as epoch ms: `timestamp` / `at` / `created_at` / `t`,
+ * as ISO text or a number (top level, else under `event`). null when the detail names none —
+ * the caller must not fall back to "now".
+ */
+export function timeOfDetail(detail: unknown): number | null {
+  if (!detail || typeof detail !== 'object') return null
+  const d = detail as Record<string, unknown>
+  const ev = d.event && typeof d.event === 'object' ? (d.event as Record<string, unknown>) : null
+  for (const v of [d.timestamp, d.at, d.created_at, d.t, ev?.timestamp, ev?.at, ev?.t]) {
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v
+    if (typeof v === 'string' && v) {
+      const t = Date.parse(v)
+      if (Number.isFinite(t)) return t
+    }
   }
-  return apiIdOfDown(x.down)
+  return null
 }
 
 /** "13 ms", "2.2 s", "3 min 4 s", "1 h 2 min"; "—" for nothing. */

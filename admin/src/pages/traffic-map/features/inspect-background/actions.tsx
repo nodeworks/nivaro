@@ -1,27 +1,39 @@
 /**
- * Live-ticker row actions: a write a cron tick or flow made opens that run; an event that names
- * a partner call opens the matching push. Each resolves on click (never per row on render) and
- * starts a new investigation at that level.
+ * Live-ticker row actions: a write a cron tick or flow made opens that run. Each resolves on
+ * click (never per row on render) and starts a new investigation at that level.
+ *
+ * There is no "Push" action: no tap stamps a partner API on a ticker event, so nothing could
+ * ever apply. Pushes are reached from the partner node's footer and from the job / flow panels.
  */
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { inspectErrorOf } from '../../inspect/api'
 import { openInspect } from '../../inspect/stack'
 import type { TrafficEventWire } from '../../types'
-import { fetchRunFor, fetchSubmissionsFor } from './data'
-import { outboundApiOf, runKindOf } from './logic'
+import { fetchRunFor } from './data'
+import { runKindOf } from './logic'
 
 const ROW_LINK =
   'rounded-sm px-1 text-[11px] font-medium text-[var(--tm-accent-ink)] hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-50'
 
+/**
+ * One in-flight resolve at a time. The guard is a ref, not the rendered state: two clicks in
+ * the same tick both see the stale `busy` of the render they came from, so state alone would
+ * let both through and open the level twice.
+ */
 function useBusy(): [boolean, (fn: () => Promise<void>) => void] {
   const [busy, setBusy] = useState(false)
+  const inFlight = useRef(false)
   return [
     busy,
     (fn) => {
-      if (busy) return
+      if (inFlight.current) return
+      inFlight.current = true
       setBusy(true)
-      void fn().finally(() => setBusy(false))
+      void fn().finally(() => {
+        inFlight.current = false
+        setBusy(false)
+      })
     }
   ]
 }
@@ -74,52 +86,6 @@ function RunAction({ ev }: { ev: TrafficEventWire }) {
   )
 }
 
-function PartnerPushAction({ ev }: { ev: TrafficEventWire }) {
-  const [busy, run] = useBusy()
-  const apiId = outboundApiOf(ev)
-  if (apiId == null) return null
-  return (
-    <button
-      type='button'
-      className={ROW_LINK}
-      disabled={busy}
-      data-tm-open-submission={apiId}
-      title='Inspect the partner push behind this'
-      onClick={(e) => {
-        e.stopPropagation()
-        run(async () => {
-          try {
-            const found = await fetchSubmissionsFor({
-              api: apiId,
-              chain: ev.chain ?? null,
-              at: ev.t,
-              window: 60
-            })
-            const first = found.rows[0]
-            if (!first) {
-              toast.message('No stored push to that partner matches this moment.')
-              return
-            }
-            openInspect(
-              {
-                kind: 'submission',
-                id: String(first.id),
-                at: ev.t,
-                label: `Push #${first.id}${first.api_name ? ` → ${first.api_name}` : ''}`
-              },
-              { root: true }
-            )
-          } catch (err) {
-            toast.error(`Could not find the push: ${inspectErrorOf(err).message}`)
-          }
-        })
-      }}
-    >
-      Push
-    </button>
-  )
-}
-
 export function JobRunAction({ ev }: { ev: TrafficEventWire }) {
   return <RunAction ev={ev} />
 }
@@ -127,5 +93,3 @@ export function JobRunAction({ ev }: { ev: TrafficEventWire }) {
 export function FlowRunAction({ ev }: { ev: TrafficEventWire }) {
   return <RunAction ev={ev} />
 }
-
-export { PartnerPushAction }

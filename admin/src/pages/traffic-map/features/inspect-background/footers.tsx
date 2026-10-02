@@ -8,14 +8,15 @@ import type { InspectPanelProps } from '../../registry/inspectables'
 import { useAiCallsForRequest, useRunFor, useSubmissionsFor } from './data'
 import { SubmissionList } from './lists'
 import {
-  apiIdOfDown,
   flowRunOfDetail,
   fmtCost,
   fmtDuration,
   fmtWhen,
   isoMs,
+  isPartnerDown,
   runKindOf,
-  runOfDetail
+  runOfDetail,
+  timeOfDetail
 } from './logic'
 import { LIST, Note, Row, Section, StatusPill } from './ui'
 
@@ -55,12 +56,14 @@ export function AiCallsFooter({ inspectRef }: InspectPanelProps) {
 /**
  * "Job run" / "Flow run" under any level whose detail names the background run it belongs to
  * (a write a cron tick made…). Reads the level's detail from the shared cache — no extra fetch.
+ * The run is picked at the level's own moment: the ref's time, else the anchor, else a time the
+ * detail carries. With none of those it says so rather than naming whichever run covers now.
  */
 export function BackgroundRunFooter({ inspectRef, anchor, windowSec }: InspectPanelProps) {
   const detail = useInspectDetail<unknown>(inspectRef, anchor, windowSec)
   const flowRun = flowRunOfDetail(detail.data)
   const run = flowRun ? null : runOfDetail(detail.data)
-  const at = inspectRef.at ?? anchor ?? null
+  const at = inspectRef.at ?? anchor ?? timeOfDetail(detail.data)
   const q = useRunFor(run, at)
   if (flowRun)
     return (
@@ -76,7 +79,12 @@ export function BackgroundRunFooter({ inspectRef, anchor, windowSec }: InspectPa
   const title = kind === 'cron' ? 'Job run' : 'Flow run'
   return (
     <Section title={title} hook='footer-background-run'>
-      {q.isLoading ? (
+      {at == null ? (
+        <Note hook='footer-background-run-no-moment'>
+          This level carries no time, so the {kind === 'cron' ? `${name} run` : 'flow run'} behind
+          it cannot be picked. Open it from the ticker, or set a moment, to find the run.
+        </Note>
+      ) : q.isLoading ? (
         <Note>Finding the run…</Note>
       ) : q.data ? (
         <div className='grid gap-0.5' data-tm-inspect-footer-run={`${q.data.kind}:${q.data.id}`}>
@@ -106,12 +114,15 @@ export function BackgroundRunFooter({ inspectRef, anchor, windowSec }: InspectPa
   )
 }
 
-/** Pushes a partner node (`ext:<api id>`) received around the investigated moment. */
+/**
+ * Pushes a partner node received around the investigated moment — a plain `ext:<api id>` node
+ * or an extension-declared one (`x:<extension>.<id>`), which the server resolves to its APIs.
+ */
 export function PartnerPushesFooter({ inspectRef, anchor, windowSec }: InspectPanelProps) {
-  const apiId = inspectRef.kind === 'down' ? apiIdOfDown(inspectRef.id) : null
+  const node = inspectRef.kind === 'down' && isPartnerDown(inspectRef.id) ? inspectRef.id : null
   const at = inspectRef.at ?? anchor ?? null
-  const q = useSubmissionsFor(apiId, at, windowSec)
-  if (apiId == null) return null
+  const q = useSubmissionsFor(node, at, windowSec)
+  if (node == null) return null
   const rows = q.data?.rows ?? []
   const span = windowSec >= 120 ? `${Math.round(windowSec / 60)} min` : `${windowSec} s`
   return (
@@ -120,6 +131,8 @@ export function PartnerPushesFooter({ inspectRef, anchor, windowSec }: InspectPa
         <Note>Reading the push log…</Note>
       ) : q.isError ? (
         <Note>The push log could not be read.</Note>
+      ) : q.data?.reason ? (
+        <Note hook='footer-partner-pushes-unresolved'>{q.data.reason}</Note>
       ) : rows.length ? (
         <SubmissionList rows={rows} />
       ) : (

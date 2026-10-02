@@ -8,19 +8,22 @@
  * or table leaves that part empty with a reason, never a failed panel.
  */
 import { randomUUID } from 'node:crypto'
-import type { FastifyRequest } from 'fastify'
+import type { FastifyBaseLogger, FastifyRequest } from 'fastify'
 import { db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../../plugins/api-logger.js'
 import { AI_LOG_RETENTION_DAYS } from '../ai-log.js'
 import { CRON_DESCRIPTIONS } from '../cron-descriptions.js'
+import { executeFlow, type FlowTraceStep } from '../flow-executor.js'
 import { INSTANCE_ID } from '../instance-roster.js'
 import { buildSubmissionDetail, gatherSubmissionFacts } from '../submission-detail.js'
 import { type InspectCtx, type InspectPeek, registerInspectSource } from '../traffic-inspect.js'
+import { trafficNodeTester } from '../traffic-taps/nodes.js'
 import { resolveFriendlyIds } from '../workflow-transitions.js'
 import {
   aiRequestParts,
   aiResponseText,
+  COVER_TOLERANCE_MS,
   isDigitsId,
   iso,
   isUuid,
@@ -30,6 +33,7 @@ import {
   parseMaybeJson,
   parseRunSource,
   pickCoveringRun,
+  type RunWindow,
   type ShapedAttempts,
   shapeAttempts
 } from './background-logic.js'
@@ -220,30 +224,74 @@ async function submissionsInChain(chainId: string): Promise<SubmissionRow[]> {
 }
 
 /**
+ * The external API id(s) behind a down node id: `ext:<id>` names one directly; an extension-
+ * declared node (`x:<extension>.<id>`, #1114) names its partners by API name, looked up in
+ * nivaro_external_apis. `reason` says why a node resolves to nothing.
+ */
+export async function apisOfDownNode(
+  node: string
+): Promise<{ ids: number[]; reason: string | null }> {
+  const ext = /^ext:(\d{1,9})$/.exec(node)
+  if (ext) return { ids: [Number(ext[1])], reason: null }
+  if (!node.startsWith('x:')) return { ids: [], reason: 'Only partner nodes receive pushes.' }
+  const tester = trafficNodeTester(node)
+  if (!tester) {
+    return {
+      ids: [],
+      reason:
+        'This node was declared by an extension that is not loaded on this process, so its partner APIs are not known here.'
+    }
+  }
+  if (!tester.apis?.length) {
+    return {
+      ids: [],
+      reason:
+        'This node matches calls by a custom rule rather than by partner API, so its pushes cannot be listed.'
+    }
+  }
+  const names = new Set(tester.apis.map((a) => String(a).toLowerCase()))
+  const rows = (await db('nivaro_external_apis')
+    .select('id', 'name')
+    .catch(() => [])) as Row[]
+  const ids = rows
+    .filter((r) => names.has(String(r.name ?? '').toLowerCase()))
+    .map((r) => Number(r.id))
+    .filter((n) => Number.isSafeInteger(n) && n > 0)
+  if (!ids.length) {
+    return { ids: [], reason: 'No external API carries the name this node was declared with.' }
+  }
+  return { ids, reason: null }
+}
+
+/**
  * Partner pushes for a down node / chain / moment: by chain id when one is given (exact), else
- * by API inside `at ± windowSec` (newest first).
+ * by API inside `at ± windowSec` (newest first). `apiIds` lists every API behind a node.
  */
 export async function submissionsFor(opts: {
   apiId?: number | null
+  apiIds?: number[] | null
   chainId?: string | null
   at?: number | null
   windowSec?: number
   limit?: number
 }): Promise<{ rows: SubmissionRow[]; matched_by: 'chain' | 'api-time' | null }> {
   const limit = Math.min(50, Math.max(1, opts.limit ?? 20))
+  const apiIds = [...(opts.apiIds ?? []), ...(opts.apiId != null ? [opts.apiId] : [])].filter(
+    (n) => Number.isSafeInteger(n) && n > 0
+  )
   if (opts.chainId && isUuid(opts.chainId)) {
     const rows = (await hasColumn('nivaro_erp_submissions', 'chain_id').catch(() => false))
       ? await submissionRows((q) => q.where('s.chain_id', opts.chainId as string), limit)
       : []
-    if (rows.length || !opts.apiId) return { rows, matched_by: 'chain' }
+    if (rows.length || !apiIds.length) return { rows, matched_by: 'chain' }
   }
-  if (opts.apiId != null && Number.isSafeInteger(opts.apiId) && opts.apiId > 0) {
+  if (apiIds.length) {
     const at = opts.at ?? Date.now()
     const w = (opts.windowSec ?? 300) * 1000
     const rows = await submissionRows(
       (q) =>
         q
-          .where('s.external_api', opts.apiId as number)
+          .whereIn('s.external_api', apiIds)
           .where('s.updated_at', '>=', new Date(at - w))
           .where('s.created_at', '<=', new Date(at + w)),
       limit
@@ -319,7 +367,7 @@ async function aiPeek(id: string): Promise<InspectPeek | null> {
       `${str(r.model) ?? 'unknown model'} · ${str(r.status) ?? '?'}`,
       `${num(r.latency_ms) ?? '?'} ms${cost != null ? ` · $${cost.toFixed(4)}` : ''}`
     ],
-    at: iso(r.created_at)
+    at: ms(r.created_at)
   }
 }
 
@@ -460,8 +508,61 @@ async function jobPeek(id: string): Promise<InspectPeek | null> {
   return {
     title: `${str(r.job_id) ?? 'Job'} · run #${r.id}`,
     lines: [`${str(r.kind) ?? 'job'} · ${str(r.status) ?? '?'}${d != null ? ` · ${d} ms` : ''}`],
-    at: iso(r.started_at)
+    at: ms(r.started_at)
   }
+}
+
+/** Runs that started this close before the moment are read in full (newest 200). */
+const RUN_RECENT_MS = 30 * 60_000
+/** A run that started earlier than that still counts when it was still open at the moment. */
+const RUN_LONG_MS = 24 * 60 * 60_000
+
+/**
+ * Candidate runs for a moment: every run started within RUN_RECENT_MS before it (and up to 5 s
+ * after — clocks differ), plus the newest earlier run (up to RUN_LONG_MS back) that was still
+ * running at the moment — a 45-minute import is one run, and a write at minute 35 belongs to it.
+ */
+async function runWindows(
+  table: 'nivaro_job_runs' | 'nivaro_flow_runs',
+  where: Record<string, unknown>,
+  finishedCol: 'finished_at' | 'completed_at',
+  at: number
+): Promise<RunWindow[]> {
+  const lo = new Date(at - RUN_RECENT_MS)
+  const hi = new Date(at + 5_000)
+  const cols = ['id', 'started_at', finishedCol]
+  const [recent, longRunning] = await Promise.all([
+    db(table)
+      .where(where)
+      .whereBetween('started_at', [lo, hi])
+      .orderBy('started_at', 'desc')
+      .limit(200)
+      .select(...cols)
+      .catch(() => []) as Promise<Row[]>,
+    db(table)
+      .where(where)
+      .where('started_at', '<', lo)
+      .where('started_at', '>=', new Date(at - RUN_LONG_MS))
+      .where((q) => {
+        void q.whereNull(finishedCol).orWhere(finishedCol, '>=', new Date(at - COVER_TOLERANCE_MS))
+      })
+      .orderBy('started_at', 'desc')
+      .limit(1)
+      .select(...cols)
+      .catch(() => []) as Promise<Row[]>
+  ])
+  const out: RunWindow[] = []
+  for (const r of [...recent, ...longRunning]) {
+    const started = ms(r.started_at)
+    // A row without a readable start cannot cover anything (it would read as epoch 0).
+    if (started == null) continue
+    out.push({
+      id: table === 'nivaro_job_runs' ? Number(r.id) : String(r.id).toLowerCase(),
+      started,
+      finished: ms(r[finishedCol])
+    })
+  }
+  return out
 }
 
 /**
@@ -479,43 +580,20 @@ export async function runForSource(
 } | null> {
   const parsed = parseRunSource(source)
   if (!parsed) return null
-  const lo = new Date(at - 30 * 60_000)
-  const hi = new Date(at + 5_000)
   if (parsed.kind === 'cron') {
-    const rows = (await db('nivaro_job_runs')
-      .where({ kind: 'cron', job_id: parsed.job })
-      .whereBetween('started_at', [lo, hi])
-      .orderBy('started_at', 'desc')
-      .limit(200)
-      .select('id', 'started_at', 'finished_at')
-      .catch(() => [])) as Row[]
-    const pick = pickCoveringRun(
-      rows.map((r) => ({
-        id: Number(r.id),
-        started: ms(r.started_at) ?? 0,
-        finished: ms(r.finished_at)
-      })),
+    const runs = await runWindows(
+      'nivaro_job_runs',
+      { kind: 'cron', job_id: parsed.job },
+      'finished_at',
       at
     )
+    const pick = pickCoveringRun(runs, at)
     return pick
       ? { kind: 'job', id: pick.id, covering: pick.covering, started_at: iso(pick.started) }
       : null
   }
-  const rows = (await db('nivaro_flow_runs')
-    .where('flow', parsed.flowId)
-    .whereBetween('started_at', [lo, hi])
-    .orderBy('started_at', 'desc')
-    .limit(200)
-    .select('id', 'started_at', 'completed_at')
-    .catch(() => [])) as Row[]
-  const pick = pickCoveringRun(
-    rows.map((r) => ({
-      id: String(r.id).toLowerCase(),
-      started: ms(r.started_at) ?? 0,
-      finished: ms(r.completed_at)
-    })),
-    at
-  )
+  const runs = await runWindows('nivaro_flow_runs', { flow: parsed.flowId }, 'completed_at', at)
+  const pick = pickCoveringRun(runs, at)
   return pick
     ? { kind: 'flow', id: pick.id, covering: pick.covering, started_at: iso(pick.started) }
     : null
@@ -619,7 +697,63 @@ async function flowPeek(id: string): Promise<InspectPeek | null> {
     lines: [
       `${str(r.trigger) ?? '?'} · ${str(r.status) ?? '?'}${num(r.duration_ms) != null ? ` · ${num(r.duration_ms)} ms` : ''}`
     ],
-    at: iso(r.started_at)
+    at: ms(r.started_at)
+  }
+}
+
+export interface FlowDryRunResult {
+  steps: FlowTraceStep[]
+  output: unknown
+  error: string | null
+  dry_run: true
+  /** How the stored input reached the flow: as it was, or `{}` because it was not an object. */
+  payload_used: 'stored' | 'empty'
+}
+
+/**
+ * Dry-run a flow run's own stored payload through the flow as it is today — the real stored
+ * values, never the masked view the panel shows — exactly as `POST /flows/:id/test` does with a
+ * caller-supplied payload (the tester records its own run with trigger `test`). Step previews
+ * and the output are masked on the way out. null when the run or its flow is gone.
+ */
+export async function flowDryRun(
+  runId: string,
+  opts: { userId?: string; log: FastifyBaseLogger }
+): Promise<FlowDryRunResult | null> {
+  const run = (await db('nivaro_flow_runs').where({ id: runId }).first('id', 'flow', 'input')) as
+    | Row
+    | undefined
+  if (!run) return null
+  const flow = (await db('nivaro_flows')
+    .where({ id: String(run.flow ?? '') })
+    .first('id', 'name')) as Row | undefined
+  if (!flow) return null
+  const stored = parseMaybeJson(run.input)
+  const isObject = stored != null && typeof stored === 'object' && !Array.isArray(stored)
+  const payload = isObject ? (stored as Record<string, unknown>) : {}
+  const trace: FlowTraceStep[] = []
+  let output: Record<string, unknown> = {}
+  let error: string | null = null
+  try {
+    output = await executeFlow({
+      flowId: String(flow.id),
+      flowName: String(flow.name ?? ''),
+      trigger: 'test',
+      payload,
+      log: opts.log,
+      userId: opts.userId,
+      dryRun: true,
+      trace
+    })
+  } catch (err) {
+    error = err instanceof Error ? err.message : String(err)
+  }
+  return {
+    steps: trace.map((s) => (s.preview == null ? s : { ...s, preview: maskedBody(s.preview) })),
+    output: maskedBody(output),
+    error,
+    dry_run: true,
+    payload_used: isObject ? 'stored' : 'empty'
   }
 }
 
@@ -717,7 +851,7 @@ async function submissionPeek(id: string): Promise<InspectPeek | null> {
   return {
     title: `Push #${r.id} → ${str(r.api) ?? 'unknown partner'}`,
     lines,
-    at: iso(r.created_at)
+    at: ms(r.created_at)
   }
 }
 

@@ -1,13 +1,13 @@
 // Investigation group "background" — Task 5 of the Traffic Map drill-down (#1195 #1196 #1197
 // #1198): the inspectables ai, job, flow, submission; footers that lead to them from other
-// levels; and ticker actions that open the run / push behind an event.
+// levels; and ticker actions that open the run behind an event.
 // Imported once from registry/index.ts; edit only this folder.
 import { eventActions } from '../../registry/eventActions'
 import { inspectables } from '../../registry/inspectables'
 import { inspectFooters } from '../../registry/inspectFooters'
 import { register } from '../../registry/registry'
 import { AiPanel } from './AiPanel'
-import { FlowRunAction, JobRunAction, PartnerPushAction } from './actions'
+import { FlowRunAction, JobRunAction } from './actions'
 import { FlowPanel } from './FlowPanel'
 import {
   AiCallsFooter,
@@ -16,7 +16,7 @@ import {
   RUN_CARRYING_KINDS
 } from './footers'
 import { JobPanel } from './JobPanel'
-import { apiIdOfDown, outboundApiOf, runKindOf } from './logic'
+import { isPartnerDown, runKindOf } from './logic'
 import { SubmissionPanel } from './SubmissionPanel'
 
 register(inspectables, {
@@ -61,10 +61,12 @@ register(inspectFooters, {
   Component: BackgroundRunFooter
 })
 
+// Every partner node, plain `ext:<id>` or extension-declared `x:…` — the server resolves the
+// latter to its APIs and says why when it cannot.
 register(inspectFooters, {
   id: 'background-partner-pushes',
   order: 42,
-  applies: (ref) => ref.kind === 'down' && apiIdOfDown(ref.id) != null,
+  applies: (ref) => ref.kind === 'down' && isPartnerDown(ref.id),
   Component: PartnerPushesFooter
 })
 
@@ -80,11 +82,4 @@ register(eventActions, {
   order: 41,
   applies: (ev) => runKindOf(ev.run) === 'flow',
   Component: FlowRunAction
-})
-
-register(eventActions, {
-  id: 'partner-push',
-  order: 42,
-  applies: (ev) => outboundApiOf(ev) != null,
-  Component: PartnerPushAction
 })

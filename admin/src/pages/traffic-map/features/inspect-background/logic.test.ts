@@ -5,12 +5,13 @@ import {
   fmtCost,
   fmtDuration,
   hasMask,
+  isPartnerDown,
   jobStatusNote,
   notFoundWhy,
-  outboundApiOf,
   runKindOf,
   runOfDetail,
   statusTone,
+  timeOfDetail,
   triggerWords,
   writeLabel
 } from './logic'
@@ -39,6 +40,17 @@ describe('runKindOf / runOfDetail', () => {
     )
     expect(flowRunOfDetail({ chain_parent: 'flow_run:nope' })).toBeNull()
   })
+
+  it('reads the moment a detail is about, and never invents one', () => {
+    expect(timeOfDetail({ timestamp: '2026-10-01T10:00:00Z' })).toBe(
+      Date.parse('2026-10-01T10:00:00Z')
+    )
+    expect(timeOfDetail({ at: 1700000000000 })).toBe(1700000000000)
+    expect(timeOfDetail({ event: { t: 1700000000000 } })).toBe(1700000000000)
+    expect(timeOfDetail({ created_at: 'not a date' })).toBeNull()
+    expect(timeOfDetail({ id: 'x' })).toBeNull()
+    expect(timeOfDetail(null)).toBeNull()
+  })
 })
 
 describe('partner ids', () => {
@@ -47,12 +59,13 @@ describe('partner ids', () => {
     expect(apiIdOfDown('x:efp-ops.mdsi')).toBeNull()
     expect(apiIdOfDown('db')).toBeNull()
   })
-  it('reads the partner an event names, ignoring ordinary events', () => {
-    expect(outboundApiOf({ extra: { api_id: 4 } })).toBe(4)
-    expect(outboundApiOf({ extra: { apiId: '7' } })).toBe(7)
-    expect(outboundApiOf({ extra: { down: 'ext:2' } })).toBe(2)
-    expect(outboundApiOf({ extra: { storm: true } })).toBeNull()
-    expect(outboundApiOf({})).toBeNull()
+  it('knows which down nodes are partners (plain or extension-declared)', () => {
+    expect(isPartnerDown('ext:9')).toBe(true)
+    expect(isPartnerDown('x:efp-ops.mdsi')).toBe(true)
+    expect(isPartnerDown('db')).toBe(false)
+    expect(isPartnerDown('redis')).toBe(false)
+    expect(isPartnerDown("x:a'b")).toBe(false)
+    expect(isPartnerDown(undefined)).toBe(false)
   })
 })
 

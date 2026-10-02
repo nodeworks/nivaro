@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
-import { inspectErrorOf, useInspectDetail } from '../../inspect/api'
+import { fetchInspect, inspectErrorOf, useInspectDetail } from '../../inspect/api'
 import { InspectLink } from '../../inspect/InspectLink'
 import type { InspectPanelProps } from '../../registry/inspectables'
 import { fmtDuration, fmtWhen, hasMask, type Requester, type SubmissionDetail } from './logic'
@@ -41,7 +41,15 @@ function RequesterText({ r }: { r: Requester }) {
   )
 }
 
-/** Two clicks: the first arms (and says what will happen), the second sends. */
+/** Thrown when the fresh re-read before a resend says the push may no longer be resent. */
+class ResendRefused extends Error {}
+
+/**
+ * Two clicks: the first arms (and says what will happen), the second sends. Before sending, the
+ * push's eligibility is read again fresh: the retry route itself checks only the stored
+ * endpoint, so a newer push that landed during the armed window (another tab, a flow) would
+ * otherwise be overwritten by this older payload.
+ */
 function Resend({ d }: { d: SubmissionDetail }) {
   const qc = useQueryClient()
   const [armed, setArmed] = useState(false)
@@ -52,6 +60,14 @@ function Resend({ d }: { d: SubmissionDetail }) {
   }, [armed])
   const m = useMutation({
     mutationFn: async () => {
+      const fresh = await fetchInspect<SubmissionDetail>('submission', d.id)
+      if (fresh && !fresh.retry?.eligible) {
+        qc.setQueriesData({ queryKey: ['tm-inspect', 'submission', d.id] }, fresh)
+        throw new ResendRefused(
+          fresh.retry?.reason ??
+            'This push can no longer be resent — it changed since it was shown.'
+        )
+      }
       const res = await api.post(`/erp-submissions/${encodeURIComponent(d.id)}/retry`)
       return (res?.data as { data?: { status?: string; last_error?: string | null } })?.data
     },
@@ -66,7 +82,8 @@ function Resend({ d }: { d: SubmissionDetail }) {
     },
     onError: (err) => {
       setArmed(false)
-      toast.error(`Resend failed: ${inspectErrorOf(err).message}`)
+      if (err instanceof ResendRefused) toast.error(`Not resent: ${err.message}`)
+      else toast.error(`Resend failed: ${inspectErrorOf(err).message}`)
     }
   })
   const blocked = !d.retry.eligible
