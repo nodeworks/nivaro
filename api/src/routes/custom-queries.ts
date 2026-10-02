@@ -14,6 +14,7 @@ import {
   type ParamDef,
   type ParamType
 } from '../services/custom-query-exec.js'
+import { capturedPlanFor, rememberCapturedPlan } from '../services/custom-query-plans.js'
 import { applyScopeParams } from '../services/custom-query-scope.js'
 import { recordCacheOutcome, recordQueryError } from '../services/query-cache-stats.js'
 import {
@@ -152,15 +153,6 @@ export function parsePlanXml(xml: string) {
 // memory): when a slug execute takes longer than SLOW_PLAN_MS the plan is
 // fetched right after, so the editor can show WHY without re-running it.
 const SLOW_PLAN_MS = Number(process.env.CUSTOM_QUERY_SLOW_PLAN_MS ?? 5000)
-const capturedPlans = new Map<
-  number,
-  {
-    at: number
-    duration_ms: number
-    params: Record<string, unknown>
-    plan: ReturnType<typeof parsePlanXml>
-  }
->()
 const capturing = new Set<number>()
 function captureSlowPlan(
   id: number,
@@ -173,7 +165,7 @@ function captureSlowPlan(
   void explainSqlPlan(sqlText, params)
     .then((xml) => {
       if (!xml) return
-      capturedPlans.set(id, {
+      rememberCapturedPlan(id, {
         at: Date.now(),
         duration_ms: durationMs,
         params,
@@ -184,9 +176,9 @@ function captureSlowPlan(
     .catch(() => {})
     .finally(() => capturing.delete(id))
 }
-export function capturedPlanFor(id: number) {
-  return capturedPlans.get(id) ?? null
-}
+
+// The captured plans live in services/custom-query-plans.ts now; re-exported for callers.
+export { capturedPlanFor }
 
 async function shapeReport(): Promise<
   Array<{
