@@ -35,6 +35,9 @@ export {
 export { dayHeading, EventsView, type EventsViewProps, Segment } from './EventsView'
 export {
   ancestorsOf as eventPathAncestorsOf,
+  EventPathBody,
+  type EventPathBodyProps,
+  EventPathFacts,
   EventPathSheet,
   type EventPathSheetProps,
   flattenVisible as eventPathFlattenVisible,
