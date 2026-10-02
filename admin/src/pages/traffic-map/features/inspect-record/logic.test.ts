@@ -71,22 +71,20 @@ describe('stepRefFor', () => {
 
 describe('requestFactsOf', () => {
   const U = '7A0411F3-C687-40E5-ADF5-614157CF88EC'
-  it('reads a flat api log row', () => {
-    expect(requestFactsOf({ user: U, created_at: AT })).toEqual({ user: U, at: Date.parse(AT) })
+  // The `request` detail shape (services/traffic-inspect/request.ts): the log row under `row`.
+  it('reads the person and time from the request detail’s row', () => {
+    expect(
+      requestFactsOf({ rid: 'x', pending: false, row: { user: U, created_at: AT, status: 500 } })
+    ).toEqual({ user: U, at: Date.parse(AT) })
   })
-  it('reads user_id and a nested row', () => {
-    expect(requestFactsOf({ log: { user_id: U, created_at: AT } })).toEqual({
-      user: U,
+  it('names nobody for key and anonymous callers, or a pending/missing request', () => {
+    expect(requestFactsOf({ row: { user: null, api_key_id: 12, created_at: AT } })).toEqual({
+      user: null,
       at: Date.parse(AT)
     })
-    expect(requestFactsOf({ request: { user: U, at: 1790000000000 } })).toEqual({
-      user: U,
-      at: 1790000000000
-    })
-  })
-  it('refuses non-uuid users and missing times', () => {
-    expect(requestFactsOf({ user: 'k12', created_at: AT }).user).toBeNull()
-    expect(requestFactsOf({ pending: true })).toEqual({ user: null, at: null })
+    expect(requestFactsOf({ row: { user: 'k12', created_at: AT } }).user).toBeNull()
+    expect(requestFactsOf({ pending: true, row: null })).toEqual({ user: null, at: null })
+    expect(requestFactsOf({ user: U, created_at: AT })).toEqual({ user: null, at: null })
     expect(requestFactsOf(null)).toEqual({ user: null, at: null })
   })
 })

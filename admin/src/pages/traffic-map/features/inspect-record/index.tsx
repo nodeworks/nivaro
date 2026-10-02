@@ -78,7 +78,7 @@ function OpenIssue({ ev }: { ev: TrafficEventWire }) {
       type='button'
       className={ROW_LINK}
       data-tm-open-issue={rid}
-      data-tip='The issue this server error raised in the issue log (matched by route and time)'
+      data-tip='The issue this server error raised in the issue log (matched by its error message and route)'
       onClick={(e) => {
         e.stopPropagation()
         openInspect({ kind: 'issue', id: `rid:${rid}`, at: ev.t }, { root: true })

@@ -1,8 +1,10 @@
 /**
  * #1201 — one issue from the issue log: what failed, how often, the stack, the screenshot, and
  * the replay of the moment (opens the recording). Opened by issue id, or as `rid:<request>` —
- * the open server issue that request raised, matched by route and time.
+ * the open server issue that request raised, matched by its error fingerprint (route + message),
+ * or by the route alone when the message matched no open issue (the panel says which).
  */
+import { useEffect } from 'react'
 import { Link } from 'react-router'
 import { useInspectDetail } from '../../inspect/api'
 import { InspectLink } from '../../inspect/InspectLink'
@@ -20,8 +22,16 @@ interface IssueRecording {
   at: number | null
 }
 
+/** The request a `rid:` lookup resolved — the anchor for "what they saw". */
+interface MatchedRequest {
+  id: string
+  user: string | null
+  at: number | null
+  matched_by: 'fingerprint' | 'route'
+}
+
 type IssueDetail =
-  | { none: true; reason: string | null; request_id: string }
+  | { none: true; reason: string | null; request_id: string; pending?: boolean }
   | {
       none?: false
       id: number
@@ -46,8 +56,11 @@ type IssueDetail =
       recording_note: string | null
       screenshot: string | null
       screenshot_note: string | null
-      matched_request: string | null
+      matched_request: MatchedRequest | null
     }
+
+/** How long to wait before asking again for a request whose log row is not flushed yet. */
+const PENDING_RETRY_MS = 5_000
 
 function prettyContext(raw: string): string {
   try {
@@ -57,17 +70,42 @@ function prettyContext(raw: string): string {
   }
 }
 
+/**
+ * Whose recording shows the failure, and when: for a `rid:` match the request's own person and
+ * time; otherwise the first raiser at the moment the issue was raised (`raised_by` is set on
+ * insert only, so pairing it with `last_seen_at` would name the wrong moment).
+ */
+function watchAnchor(
+  d: Extract<IssueDetail, { id: number }>
+): { user: string; at: number; name: string | null } | null {
+  const m = d.matched_request
+  if (m?.user && m.at) return { user: m.user, at: m.at, name: null }
+  const createdAt = d.created_at ? Date.parse(d.created_at) : Number.NaN
+  if (d.raised_by && Number.isFinite(createdAt))
+    return { user: d.raised_by, at: createdAt, name: d.raised_by_name }
+  return null
+}
+
 export default function IssuePanel(props: InspectPanelProps) {
   const { inspectRef, anchor, windowSec } = props
   const q = useInspectDetail<IssueDetail>(inspectRef, anchor, windowSec)
+  const pending = !!q.data?.none && !!q.data.pending
+  // The log is written in batches: a request that just failed has no row for a few seconds,
+  // and the detail cache would otherwise keep that answer for 30 s.
+  const refetch = q.refetch
+  useEffect(() => {
+    if (!pending) return
+    const t = setTimeout(() => void refetch(), PENDING_RETRY_MS)
+    return () => clearTimeout(t)
+  }, [pending, refetch, q.dataUpdatedAt])
   if (q.isLoading) return <Skeleton rows={[75, 60, 90, 80, 50]} />
   if (q.isError || !q.data) return <LoadFailed error={q.error} what='issue' />
   const d = q.data
   if (d.none) {
     return (
-      <div className='grid gap-2' data-tm-inspect-issue='none'>
+      <div className='grid gap-2' data-tm-inspect-issue={d.pending ? 'pending' : 'none'}>
         <p className='text-[13px] font-medium text-[var(--tm-fg)]'>
-          No open issue for this request
+          {d.pending ? 'Waiting for the API log' : 'No open issue for this request'}
         </p>
         <Note hook='issue-none'>{d.reason ?? 'Nothing matched.'}</Note>
         <InspectLink inspectRef={{ kind: 'request', id: d.request_id, label: 'Request' }}>
@@ -76,7 +114,8 @@ export default function IssuePanel(props: InspectPanelProps) {
       </div>
     )
   }
-  const lastAt = d.last_seen_at ? Date.parse(d.last_seen_at) : null
+  const watch = watchAnchor(d)
+  const createdAt = d.created_at ? Date.parse(d.created_at) : null
   return (
     <div className='grid min-w-0 gap-3' data-tm-inspect-issue={d.id}>
       <div className='flex flex-wrap items-baseline justify-between gap-2'>
@@ -92,9 +131,10 @@ export default function IssuePanel(props: InspectPanelProps) {
         </Link>
       </div>
       {d.matched_request && (
-        <Note hook='issue-matched'>
-          Matched to this request by route and time — the issue log groups repeats, so other
-          requests share it.
+        <Note hook={`issue-matched-${d.matched_request.matched_by}`}>
+          {d.matched_request.matched_by === 'fingerprint'
+            ? 'This request raised this issue — its error message and route are the issue’s fingerprint; the issue log groups repeats, so other requests share it.'
+            : 'Matched by route only — the request’s error message did not match any open issue on this route, so this is the newest open issue there and may not be the one this request raised.'}
         </Note>
       )}
       <Facts
@@ -124,7 +164,7 @@ export default function IssuePanel(props: InspectPanelProps) {
                 inspectRef={{
                   kind: 'caller',
                   id: `u${d.raised_by.toUpperCase()}`,
-                  at: lastAt ?? undefined,
+                  at: createdAt ?? undefined,
                   label: d.raised_by_name ?? undefined
                 }}
               >
@@ -165,9 +205,7 @@ export default function IssuePanel(props: InspectPanelProps) {
         ) : (
           <>
             {d.recording_note && <Note hook='issue-replay'>{d.recording_note}</Note>}
-            {d.raised_by && lastAt ? (
-              <WatchWhatTheySaw user={d.raised_by} at={lastAt} name={d.raised_by_name} />
-            ) : null}
+            {watch ? <WatchWhatTheySaw user={watch.user} at={watch.at} name={watch.name} /> : null}
           </>
         )}
       </Block>

@@ -30,12 +30,15 @@ export function Note({ children, hook }: { children: ReactNode; hook?: string })
   )
 }
 
-/** Why a panel could not load, in words: not found, invalid id, or the server's reason. */
-export function LoadFailed({ error, what }: { error: unknown; what: string }) {
+/**
+ * Why a panel could not load, in words: not found (plus `gone`, the kind's own retention
+ * sentence, when given), invalid id, or the server's reason.
+ */
+export function LoadFailed({ error, what, gone }: { error: unknown; what: string; gone?: string }) {
   const e = inspectErrorOf(error)
   const text =
     e.status === 404
-      ? `There is no ${what} to show — it is gone, or it never existed.`
+      ? `There is no ${what} to show — it is gone, or it never existed.${gone ? ` ${gone}` : ''}`
       : e.status === 400
         ? `That is not a valid ${what} id.`
         : `Could not load this ${what}: ${e.message}`

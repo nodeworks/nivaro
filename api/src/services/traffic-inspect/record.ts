@@ -8,13 +8,15 @@
  *               (id = `collection:id`)
  *   write     — one nivaro_activity row and its field delta (id = activity id)
  *   issue     — one nivaro_issues row (id = issue id, or `rid:<request uuid>` = the open server
- *               issue that request raised, matched by route and time)
+ *               issue that request raised, matched by its error fingerprint — route + message
+ *               — with a route-only fallback the answer names)
  * Sources register at module load; routes/traffic-map-extras/inspect-record.ts imports this.
  */
 import { db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import type { User } from '../../types.js'
 import { hasChainColumns } from '../chain-columns.js'
+import { issueFingerprint, issueMessage } from '../error-tracking.js'
 import { buildChainPath } from '../event-path/index.js'
 import {
   CollectionNotFoundError,
@@ -26,14 +28,16 @@ import {
 import { labelledChanges } from '../mail-types.js'
 import { getLabels } from '../queues.js'
 import { type InspectCtx, type InspectPeek, registerInspectSource } from '../traffic-inspect.js'
+import { messageOfBody } from '../traffic-taps/error-groups.js'
 import {
   API_LOG_RETENTION_MS,
   CLIP_SLACK_MS,
   INT_RE,
-  issueTitleMatchesRequest,
+  type IssueMatchBy,
   parseIssueId,
   parseRecordId,
   parseRecordingId,
+  pickIssueForRequest,
   pickRecordingFor,
   type RecordingPick,
   type RecordingRow,
@@ -122,7 +126,7 @@ async function chainDetail(id: string): Promise<unknown | null> {
 async function chainPeek(id: string): Promise<InspectPeek | null> {
   const chainId = id.toLowerCase()
   const lines: string[] = []
-  let at: string | null = null
+  let at: number | null = null
   if (await hasChainColumns('nivaro_api_logs')) {
     const row = (await db('nivaro_api_logs')
       .where('chain_id', chainId)
@@ -131,7 +135,7 @@ async function chainPeek(id: string): Promise<InspectPeek | null> {
       .first('method', 'path', 'status', 'created_at')) as Record<string, unknown> | undefined
     if (row) {
       lines.push(`${row.method} ${row.path} · ${row.status}`)
-      at = iso(row.created_at)
+      at = toMs(row.created_at)
     }
   }
   if (await hasChainColumns('nivaro_activity')) {
@@ -255,18 +259,9 @@ async function recordingDetail(id: string, ctx: InspectCtx): Promise<unknown | n
       recording_on: sw.recordingOn
     }
   }
+  // A recording uuid that is gone (purged after 7 days) is a 404, like every missing thing.
   const row = await recordingRow(parsed.id)
-  if (!row) {
-    return {
-      none: true,
-      reason:
-        'This recording no longer exists — recordings are kept for 7 days, and error clips with them.',
-      user: null,
-      user_name: null,
-      at: ctx.at ? new Date(ctx.at).toISOString() : null,
-      recording_on: sw.recordingOn
-    }
-  }
+  if (!row) return null
   const start = toMs(row.started_at)
   const offset = ctx.at != null && start != null ? Math.max(0, ctx.at - start) : null
   return {
@@ -288,9 +283,9 @@ async function recordingPeek(id: string, ctx: InspectCtx): Promise<InspectPeek |
     }
   }
   const row = await recordingRow(parsed.id)
-  if (!row) return { title: 'Recording', lines: ['No longer kept'] }
+  if (!row) return null
   const w = recordingWire(row)
-  const start = toMs(w.started_at)
+  const start = toMs(row.started_at)
   const end = recordingEnd(row as unknown as RecordingRow)
   const mins = start != null && end != null ? Math.max(0, Math.round((end - start) / 60_000)) : 0
   return {
@@ -299,7 +294,7 @@ async function recordingPeek(id: string, ctx: InspectCtx): Promise<InspectPeek |
       `${mins} min${w.live ? ' · live' : ''}`,
       `${w.event_count.toLocaleString()} events${w.app && !w.clip ? ` · ${w.app}` : ''}`
     ],
-    at: ctx.at ? new Date(ctx.at).toISOString() : w.started_at
+    at: ctx.at ?? start
   }
 }
 
@@ -437,7 +432,7 @@ async function recordPeek(id: string): Promise<InspectPeek | null> {
       parsed.collection,
       last[0] ? `last ${last[0].action} by ${last[0].who ?? 'someone'}` : 'no recorded writes'
     ],
-    at: last[0]?.at ?? null
+    at: toMs(last[0]?.at)
   }
 }
 
@@ -474,12 +469,57 @@ async function activityRow(id: number): Promise<Record<string, unknown> | null> 
   return row ?? null
 }
 
-async function writeDetail(id: string): Promise<unknown | null> {
+/**
+ * May the caller see this record's field values? The same `readOne` gate the record level uses
+ * (permissions, tree permission, row filter, route-only collections). A deleted record cannot
+ * be read by anyone, so a `delete` write still shows what the record held — nothing is left to
+ * filter — while every other refusal hides the old/new values.
+ */
+async function mayShowValues(
+  user: User,
+  collection: string,
+  item: string,
+  action: string
+): Promise<{ ok: boolean; note: string | null }> {
+  try {
+    await readOne(user, collection, item)
+    return { ok: true, note: null }
+  } catch (err) {
+    if (err instanceof ItemNotFoundError && action === 'delete') return { ok: true, note: null }
+    if (err instanceof ItemNotFoundError)
+      return {
+        ok: false,
+        note: 'The record cannot be read as you (gone, or outside your row filter), so the values it changed are not shown.'
+      }
+    if (err instanceof ForbiddenError)
+      return {
+        ok: false,
+        note: 'Your role cannot read this record, so the values this write changed are not shown.'
+      }
+    if (err instanceof RouteOnlyCollectionError)
+      return {
+        ok: false,
+        note: `"${collection}" is only readable through its own screen, so the values this write changed are not shown.`
+      }
+    if (err instanceof CollectionNotFoundError)
+      return {
+        ok: false,
+        note: `"${collection}" is not a browsable collection, so the values this write changed are not shown.`
+      }
+    throw err
+  }
+}
+
+async function writeDetail(id: string, ctx: InspectCtx): Promise<unknown | null> {
   if (!INT_RE.test(id)) return null
   const row = await activityRow(Number(id))
   if (!row) return null
   const collection = row.collection ? String(row.collection) : null
   const item = row.item != null ? String(row.item) : null
+  const gate =
+    collection && item
+      ? await mayShowValues(ctx.req.user as User, collection, item, String(row.action))
+      : { ok: false, note: null }
   const rev = (await db('nivaro_revisions')
     .where('activity', Number(id))
     .orderBy('id')
@@ -501,7 +541,7 @@ async function writeDetail(id: string): Promise<unknown | null> {
     hasRevision: !!rev
   })
   const changes =
-    shaped.delta && collection
+    gate.ok && shaped.delta && collection
       ? await labelledChanges(collection, shaped.delta, shaped.previous, 80).catch(() => [])
       : []
   const chainId = row.chain_id ? String(row.chain_id).toLowerCase() : null
@@ -549,7 +589,7 @@ async function writeDetail(id: string): Promise<unknown | null> {
     chain_id: chainId,
     revision_id: rev ? Number(rev.id) : null,
     changes,
-    changes_note: shaped.note,
+    changes_note: gate.ok ? shaped.note : (gate.note ?? shaped.note),
     request: req,
     request_note: requestNote
   }
@@ -564,57 +604,134 @@ async function writePeek(id: string): Promise<InspectPeek | null> {
     lines: [personName(row) ?? 'no person', row.origin ? `origin ${row.origin}` : ''].filter(
       Boolean
     ),
-    at: iso(row.timestamp)
+    at: toMs(row.timestamp)
   }
 }
 
 // ── issue ────────────────────────────────────────────────────────────────────────────────────
 
-/** The open server issue a request raised: same route + method, seen around its time. */
+/** The request a `rid:` issue lookup resolved — the anchor for "what they saw". */
+export interface MatchedRequest {
+  id: string
+  /** The signed-in person who made it (uuid), if any. */
+  user: string | null
+  /** When it was logged, epoch ms. */
+  at: number | null
+  /** `fingerprint` = the issue's error-tracking fingerprint (route + message) equals this
+   *  request's; `route` = only the route matched, the message did not. */
+  matched_by: IssueMatchBy
+}
+
+export type IssueForRequest =
+  | { id: number; reason: null; request: MatchedRequest; pending: false }
+  | {
+      id: null
+      reason: string
+      request: null
+      /** The log row is probably still in the logger's batch — worth asking again shortly. */
+      pending: boolean
+    }
+
+/** A request this fresh with no log row is probably still in the logger's batch. */
+export const LOG_PENDING_MS = 60_000
+
+/**
+ * The open server issue a request raised. The api-log row carries the error body, so the
+ * request's message goes through the same `messageOfBody` → `issueMessage` → `issueFingerprint`
+ * rule the error handler and the map's error groups use; among the open (or acknowledged)
+ * server issues seen around that time whose route names the request, the fingerprint hit wins.
+ * Without one, the newest route match is returned marked `route` so the panel can say so.
+ * `eventAt` (the event's time, when known) tells a missing log row apart from one not flushed
+ * yet.
+ */
 export async function issueForRequest(
-  rid: string
-): Promise<{ id: number | null; reason: string | null }> {
+  rid: string,
+  eventAt: number | null = null
+): Promise<IssueForRequest> {
   if (!(await hasColumn('nivaro_api_logs', 'request_id')))
-    return { id: null, reason: 'This database does not record request ids yet.' }
+    return {
+      id: null,
+      reason: 'This database does not record request ids yet.',
+      request: null,
+      pending: false
+    }
   const log = (await db('nivaro_api_logs')
     .where('request_id', rid)
     .orderBy('id')
-    .first('method', 'path', 'status', 'created_at')) as Record<string, unknown> | undefined
-  if (!log)
+    .first('method', 'path', 'status', 'created_at', 'error', 'user')) as
+    | Record<string, unknown>
+    | undefined
+  if (!log) {
+    const pending = eventAt == null || Date.now() - eventAt < LOG_PENDING_MS
     return {
       id: null,
-      reason:
-        'This request is not in the API log (not flushed yet, or older than API log retention).'
+      reason: pending
+        ? 'This request is not in the API log yet — the log is written in batches a few seconds apart. Checking again shortly.'
+        : 'This request is not in the API log (never flushed, or older than API log retention).',
+      request: null,
+      pending
     }
-  if (Number(log.status) < 500)
-    return { id: null, reason: 'Only server errors (5xx) raise issues; this request did not.' }
+  }
+  const status = Number(log.status)
+  if (status < 500)
+    return {
+      id: null,
+      reason: 'Only server errors (5xx) raise issues; this request did not.',
+      request: null,
+      pending: false
+    }
   const at = toMs(log.created_at) ?? Date.now()
+  const message = issueMessage(
+    messageOfBody(log.error == null ? null : String(log.error)) || `HTTP ${status}`
+  )
   const rows = (await db('nivaro_issues')
     .where('source', 'server')
-    .whereNot('status', 'resolved')
+    .whereIn('status', ['open', 'acknowledged'])
     .where('last_seen_at', '>=', new Date(at - 5_000))
     .where('created_at', '<=', new Date(at + 120_000))
     .orderBy('id', 'desc')
     .limit(50)
-    .select('id', 'title')) as Array<{ id: number; title: string | null }>
-  const hit = rows.find((r) =>
-    issueTitleMatchesRequest(String(r.title ?? ''), String(log.method), String(log.path))
+    .select('id', 'title', 'fingerprint')) as Array<{
+    id: number
+    title: string | null
+    fingerprint: string | null
+  }>
+  const hit = pickIssueForRequest(
+    rows,
+    { method: String(log.method), path: String(log.path) },
+    (routeKey) => issueFingerprint('server', routeKey, message)
   )
-  return hit
-    ? { id: Number(hit.id), reason: null }
-    : { id: null, reason: 'No open issue matches this request’s route around its time.' }
+  if (!hit)
+    return {
+      id: null,
+      reason: 'No open issue matches this request’s route around its time.',
+      request: null,
+      pending: false
+    }
+  return {
+    id: hit.id,
+    reason: null,
+    request: {
+      id: rid,
+      user: log.user && UUID_RE.test(String(log.user)) ? String(log.user) : null,
+      at: toMs(log.created_at),
+      matched_by: hit.matched_by
+    },
+    pending: false
+  }
 }
 
-async function issueDetail(id: string): Promise<unknown | null> {
+async function issueDetail(id: string, ctx: InspectCtx): Promise<unknown | null> {
   const parsed = parseIssueId(id)
   if (!parsed) return null
   let issueId: number
-  let matchedRequest: string | null = null
+  let matchedRequest: MatchedRequest | null = null
   if (parsed.kind === 'rid') {
-    const found = await issueForRequest(parsed.rid)
-    if (!found.id) return { none: true, reason: found.reason, request_id: parsed.rid }
+    const found = await issueForRequest(parsed.rid, ctx.at)
+    if (found.id == null)
+      return { none: true, reason: found.reason, request_id: parsed.rid, pending: found.pending }
     issueId = found.id
-    matchedRequest = parsed.rid
+    matchedRequest = found.request
   } else issueId = parsed.id
   const row = (await db('nivaro_issues').where('id', issueId).first()) as
     | Record<string, unknown>
@@ -677,7 +794,7 @@ async function issuePeek(id: string): Promise<InspectPeek | null> {
   const parsed = parseIssueId(id)
   if (!parsed) return null
   if (parsed.kind === 'rid')
-    return { title: 'Issue for this request', lines: ['Matched by route and time'] }
+    return { title: 'Issue for this request', lines: ['Matched by its error message and route'] }
   const row = (await db('nivaro_issues')
     .where('id', parsed.id)
     .first('title', 'status', 'occurrence_count', 'last_seen_at')) as
@@ -690,7 +807,7 @@ async function issuePeek(id: string): Promise<InspectPeek | null> {
       String(row.title ?? '').slice(0, 140),
       `${row.status} · ×${Number(row.occurrence_count ?? 1)}`
     ],
-    at: iso(row.last_seen_at)
+    at: toMs(row.last_seen_at)
   }
 }
 
@@ -715,12 +832,12 @@ registerInspectSource({
 registerInspectSource({
   kind: 'write',
   validId: (id) => INT_RE.test(id),
-  detail: (id) => writeDetail(id),
+  detail: writeDetail,
   peek: (id) => writePeek(id)
 })
 registerInspectSource({
   kind: 'issue',
   validId: (id) => parseIssueId(id) != null,
-  detail: (id) => issueDetail(id),
+  detail: issueDetail,
   peek: (id) => issuePeek(id)
 })

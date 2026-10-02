@@ -3,9 +3,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   issueTitleMatchesRequest,
+  issueTitleRoute,
   parseIssueId,
   parseRecordId,
   parseRecordingId,
+  pickIssueForRequest,
   pickRecordingFor,
   shapeWriteDelta,
   splitIssueDetails,
@@ -228,6 +230,60 @@ describe('issueTitleMatchesRequest', () => {
     expect(issueTitleMatchesRequest('[server] GET /files/*: gone', 'GET', '/files/a/b/c')).toBe(
       true
     )
+  })
+  it('reads the route a server title names', () => {
+    expect(issueTitleRoute(title)).toEqual({
+      method: 'PATCH',
+      template: '/api/items/:collection/:id'
+    })
+    expect(issueTitleRoute('[client] /x: boom')).toBeNull()
+  })
+})
+
+describe('pickIssueForRequest', () => {
+  const route = 'PATCH /api/items/:collection/:id'
+  const fpOf = (message: string) => `fp(${route}|${message})`
+  const rows = [
+    { id: 55, title: `[server] ${route}: Deadlock victim`, fingerprint: fpOf('Deadlock victim') },
+    {
+      id: 40,
+      title: `[server] ${route}: Validation failed`,
+      fingerprint: fpOf('Validation failed')
+    },
+    { id: 12, title: '[server] GET /api/other: Validation failed', fingerprint: fpOf('x') }
+  ]
+  const req = { method: 'PATCH', path: '/api/items/workflows/12' }
+
+  it('prefers the issue whose fingerprint is the request’s own error', () => {
+    expect(pickIssueForRequest(rows, req, (k) => `fp(${k}|Validation failed)`)).toEqual({
+      id: 40,
+      matched_by: 'fingerprint'
+    })
+    expect(pickIssueForRequest(rows, req, (k) => `fp(${k}|Deadlock victim)`)).toEqual({
+      id: 55,
+      matched_by: 'fingerprint'
+    })
+  })
+  it('falls back to the newest route match, marked as such', () => {
+    expect(pickIssueForRequest(rows, req, (k) => `fp(${k}|Something new)`)).toEqual({
+      id: 55,
+      matched_by: 'route'
+    })
+  })
+  it('nothing on the route → null; computes each route key once', () => {
+    const seen: string[] = []
+    expect(
+      pickIssueForRequest(rows, { method: 'DELETE', path: '/api/items/a/1' }, (k) => {
+        seen.push(k)
+        return k
+      })
+    ).toBeNull()
+    expect(seen).toEqual([])
+    pickIssueForRequest(rows, req, (k) => {
+      seen.push(k)
+      return 'none'
+    })
+    expect(seen).toEqual([route])
   })
 })
 

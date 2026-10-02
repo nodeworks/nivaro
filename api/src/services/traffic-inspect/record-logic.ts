@@ -206,15 +206,21 @@ export function shapeWriteDelta(input: {
   }
 }
 
+/** The `METHOD /route/:template` a server issue title (`[server] METHOD /route: message`) names. */
+export function issueTitleRoute(title: string): { method: string; template: string } | null {
+  const m = /^\[server\]\s+([A-Z]+)\s+(\S+?):\s/.exec(title)
+  return m ? { method: m[1], template: m[2] } : null
+}
+
 /**
  * Does an issue title (`[server] METHOD /route/:param: message`) name this request? The
  * route template's `:params` match any one path segment; the query string is ignored.
  */
 export function issueTitleMatchesRequest(title: string, method: string, path: string): boolean {
-  const m = /^\[server\]\s+([A-Z]+)\s+(\S+?):\s/.exec(title)
-  if (!m) return false
-  if (m[1] !== method.toUpperCase()) return false
-  const template = m[2]
+  const r = issueTitleRoute(title)
+  if (!r) return false
+  if (r.method !== method.toUpperCase()) return false
+  const template = r.template
   const cleanPath = path.split('?')[0]
   const tSegs = template.split('/')
   const pSegs = cleanPath.split('/')
@@ -234,6 +240,37 @@ export function issueTitleMatchesRequest(title: string, method: string, path: st
     if (t !== p) return false
   }
   return true
+}
+
+export type IssueMatchBy = 'fingerprint' | 'route'
+
+/**
+ * Which open issue a failed request raised. `rows` are the candidate server issues (newest
+ * first); each must name the request's route (title template vs concrete path). Among those,
+ * the one whose fingerprint equals `fingerprintFor('METHOD /template')` — the error-tracking
+ * dedupe rule over the request's own error message — is the exact hit. With no fingerprint
+ * hit, the newest route match is returned as `route` so the panel can say the message did not
+ * match (two open issues on one route family would otherwise be told apart by id alone).
+ */
+export function pickIssueForRequest(
+  rows: Array<{ id: number; title: string | null; fingerprint: string | null }>,
+  req: { method: string; path: string },
+  fingerprintFor: (routeKey: string) => string
+): { id: number; matched_by: IssueMatchBy } | null {
+  const onRoute = rows.filter((r) =>
+    issueTitleMatchesRequest(String(r.title ?? ''), req.method, req.path)
+  )
+  if (!onRoute.length) return null
+  const want = new Map<string, string>()
+  for (const r of onRoute) {
+    const route = issueTitleRoute(String(r.title ?? ''))
+    if (!route || !r.fingerprint) continue
+    const key = `${route.method} ${route.template}`
+    const fp = want.get(key) ?? fingerprintFor(key)
+    want.set(key, fp)
+    if (r.fingerprint === fp) return { id: Number(r.id), matched_by: 'fingerprint' }
+  }
+  return { id: Number(onRoute[0].id), matched_by: 'route' }
 }
 
 /** The newest-first touch list a record panel shows, or the latest ones when the window is empty. */

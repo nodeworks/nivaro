@@ -87,7 +87,14 @@ export default function RecordingPanel(props: InspectPanelProps) {
   const { inspectRef, anchor, windowSec } = props
   const q = useInspectDetail<RecordingDetail>(inspectRef, anchor, windowSec)
   if (q.isLoading) return <Skeleton rows={[60, 100, 100, 40]} />
-  if (q.isError || !q.data) return <LoadFailed error={q.error} what='recording' />
+  if (q.isError || !q.data)
+    return (
+      <LoadFailed
+        error={q.error}
+        what='recording'
+        gone='Recordings are kept for 7 days, and error clips with them.'
+      />
+    )
   const d = q.data
   if (d.none) {
     const name = d.user_name ?? 'this person'

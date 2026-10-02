@@ -84,26 +84,20 @@ export function stepRefLabel(ref: InspectRef): string {
 }
 
 /**
- * The person + moment a `request` detail names (Task 3's source: the api log row, maybe nested
- * under `log` / `row` / `request`). Tolerates `user` or `user_id`, `created_at` or `at`.
+ * The person + moment a `request` detail names. Pinned to the `request` source's shape
+ * (services/traffic-inspect/request.ts `requestDetail`): the api-log row rides under `row`
+ * (null while the request is pending or missing) with `user` (the signed-in person's uuid, or
+ * null for key and anonymous callers) and `created_at` (ISO). Anything else → nulls, so the
+ * footer stays away rather than guessing.
  */
 export function requestFactsOf(detail: unknown): { user: string | null; at: number | null } {
-  const pick = (o: Record<string, unknown> | null | undefined) => {
-    if (!o || typeof o !== 'object') return { user: null, at: null }
-    const u = o.user ?? o.user_id
-    const user = typeof u === 'string' && UUID.test(u) ? u : null
-    const raw = o.created_at ?? o.at ?? o.started_at
-    const t = typeof raw === 'number' ? raw : typeof raw === 'string' ? Date.parse(raw) : Number.NaN
-    return { user, at: Number.isFinite(t) && t > 0 ? t : null }
-  }
-  const d = (detail ?? null) as Record<string, unknown> | null
-  const top = pick(d)
-  if (top.user && top.at) return top
-  for (const k of ['log', 'row', 'request']) {
-    const inner = pick(d?.[k] as Record<string, unknown> | undefined)
-    if (inner.user || inner.at) return { user: top.user ?? inner.user, at: top.at ?? inner.at }
-  }
-  return top
+  const none = { user: null, at: null }
+  const d = (detail ?? null) as { row?: unknown } | null
+  const row = d && typeof d === 'object' ? (d.row as Record<string, unknown> | null) : null
+  if (!row || typeof row !== 'object') return none
+  const user = typeof row.user === 'string' && UUID.test(row.user) ? row.user : null
+  const t = typeof row.created_at === 'string' ? Date.parse(row.created_at) : Number.NaN
+  return { user, at: Number.isFinite(t) && t > 0 ? t : null }
 }
 
 /** "3 min", "1 h 4 min", "12 s". */
