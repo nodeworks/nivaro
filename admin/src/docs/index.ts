@@ -51,6 +51,7 @@ import {
   adminUxGlobalSearch,
   adminUxImportFromUrl,
   adminUxListSignals,
+  adminUxNavigation,
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
@@ -260,10 +261,10 @@ import {
 } from './sections/observability.js'
 import {
   dbHealthDocs,
+  deploysVersionsDocs,
   instanceOverridesDocs,
   mailHarnessDocs,
-  opsConsoleDocs,
-  deploysVersionsDocs
+  opsConsoleDocs
 } from './sections/ops-observability.js'
 import {
   opsBackups,
@@ -777,6 +778,7 @@ export const navSections: NavGroup[] = [
     items: [
       adminOpsAdditions,
       adminI18nDocs,
+      adminUxNavigation,
       adminUxGlobalSearch,
       adminUxSavedViews,
       adminUxFormCollaboration,

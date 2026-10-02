@@ -70,5 +70,13 @@
   "shell.notifications": "Notifications",
   "shell.profile": "Profile",
   "shell.search": "Search…",
-  "shell.workspace": "Workspace"
+  "shell.workspace": "Workspace",
+  "nav.Data": "Data",
+  "nav.Workflow": "Workflow",
+  "nav.Notifications": "Notifications",
+  "nav.Insights": "Insights",
+  "nav.Integrations": "Integrations",
+  "nav.Operations": "Operations",
+  "nav.Developer": "Developer",
+  "nav.Favorites": "Favorites"
 }

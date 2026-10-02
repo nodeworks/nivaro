@@ -13,101 +13,20 @@ import {
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
-  Activity,
-  AlertOctagon,
-  AlertTriangle,
-  ArrowRightLeft,
-  BarChart2,
-  BarChart3,
-  Bell,
-  BellDot,
-  BookOpen,
-  Braces,
-  Building2,
-  CalendarClock,
-  CalendarOff,
   Check,
-  CheckSquare,
-  Clapperboard,
-  ClipboardList,
-  Clock,
-  Code2,
-  Contrast,
-  Database,
-  DatabaseZap,
-  Eye,
-  FileBarChart,
-  FileImage,
-  FileSearch,
-  FileText,
-  FlaskConical,
-  GitBranch,
-  GitCompare,
-  Globe,
-  Grid3x3,
-  HeartPulse,
-  House,
-  Inbox,
-  KeyRound,
-  LayoutGrid,
-  LifeBuoy,
-  Link2,
-  ListFilter,
-  ListOrdered,
   LogOut,
-  Mail,
-  MailCheck,
-  Megaphone,
-  MessagesSquare,
-  Network,
-  Package,
   PanelLeftClose,
   PanelLeftOpen,
-  PuzzleIcon,
-  Radar,
-  Radio,
-  RefreshCw,
-  Replace,
-  Rocket,
-  RotateCcw,
-  Scale,
-  ScanSearch,
   ScrollText,
-  SearchCode,
-  ServerCog,
-  Settings,
-  Shield,
-  ShieldAlert,
-  ShieldCheck,
-  ShieldOff,
-  Siren,
-  SlidersHorizontal,
-  Sparkles,
   Star,
-  Terminal,
-  TerminalSquare,
-  ThumbsUp,
-  ToggleLeft,
-  Trash2,
-  TrendingUp,
-  Upload,
-  UserRound,
-  Users,
-  Users2,
-  UserX,
-  Video,
-  Waypoints,
-  Webhook,
-  Wifi,
-  Workflow,
-  Wrench
+  UserRound
 } from 'lucide-react'
 import {
   Component,
+  Fragment,
   type ReactNode,
   Suspense,
   useEffect,
-  useMemo,
   useRef,
   useState,
   useSyncExternalStore
@@ -117,7 +36,6 @@ import { toast } from 'sonner'
 import { DevStaleBanner } from '@/components/dev-stale-banner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
 import { getRecorderState, subscribeRecorder } from '@/lib/e2e-recorder'
-import { preloadRoute } from '@/lib/preload-routes'
 import { adminRealtime } from '@/lib/socket'
 import { applyThemeSettings } from '@/lib/theme-settings'
 
@@ -164,310 +82,24 @@ import { captureErrorClip, useSessionRecorder } from '@/lib/use-session-recorder
 import { useSettings } from '@/lib/useSettings'
 import { useUiPermissions } from '@/lib/useUiPermissions'
 import { cn } from '@/lib/utils'
+import { FavoritePinButton, FavoritesPanel, PanelLink, useNavFavorites } from './FavoritesNav'
+import { NavFind } from './NavFind'
+import {
+  findCategoryForPath,
+  iconForPath,
+  isActiveRoute,
+  type NavCategory,
+  type NavItem,
+  navCategories
+} from './nav-config'
 
 const announcementsClient = createNivaro(window.location.origin)
 
 const SIDEBAR_KEY = 'nivaro-sidebar-collapsed'
 const CATEGORY_KEY = 'nivaro-nav-category'
 
-export type NavItem = { icon: React.ElementType; label: string; to: string; section?: string }
-export type NavCategory = { id: string; icon: React.ElementType; label: string; items: NavItem[] }
-
-export const navCategories: NavCategory[] = [
-  {
-    id: 'home',
-    icon: House,
-    label: 'Home',
-    items: [
-      { icon: House, label: 'Overview', to: '/' },
-      { icon: Inbox, label: 'My Work', to: '/my-work' },
-      { icon: LifeBuoy, label: 'Support', to: '/support' },
-      { icon: Radar, label: 'Command Center', to: '/command' },
-      { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards' },
-      { icon: Sparkles, label: 'Ask AI', to: '/ask' },
-      { icon: MessagesSquare, label: 'Chat', to: '/chat' }
-    ]
-  },
-  {
-    id: 'content',
-    icon: Database,
-    label: 'Content',
-    items: [
-      { icon: Database, label: 'Collections', to: '/collections', section: 'Data' },
-      { icon: DatabaseZap, label: 'Data Model', to: '/data-model', section: 'Data' },
-      { icon: Network, label: 'Hierarchies', to: '/hierarchies', section: 'Data' },
-      { icon: CheckSquare, label: 'Tasks', to: '/tasks', section: 'Work' },
-      { icon: FileImage, label: 'Files', to: '/files', section: 'Work' },
-      { icon: FileText, label: 'Record Templates', to: '/record-templates', section: 'Authoring' },
-      {
-        icon: Package,
-        label: 'Collection Presets',
-        to: '/collection-presets',
-        section: 'Authoring'
-      },
-      { icon: LayoutGrid, label: 'Pages', to: '/pages-admin', section: 'Authoring' },
-      { icon: FileText, label: 'PDF Templates', to: '/pdf-templates', section: 'Authoring' }
-    ]
-  },
-  {
-    id: 'people',
-    icon: Users,
-    label: 'People',
-    items: [
-      { icon: Users, label: 'Users', to: '/users' },
-      { icon: Users2, label: 'Teams', to: '/user-groups' },
-      { icon: Shield, label: 'Roles', to: '/roles' },
-      { icon: Building2, label: 'Workspaces', to: '/workspaces' },
-      { icon: SlidersHorizontal, label: 'User Scopes', to: '/scope-dimensions' }
-    ]
-  },
-  {
-    id: 'automation',
-    icon: GitBranch,
-    label: 'Automation',
-    items: [
-      { icon: GitBranch, label: 'Pipelines', to: '/pipelines', section: 'Workflow' },
-      { icon: SlidersHorizontal, label: 'Flows', to: '/flows', section: 'Workflow' },
-      { icon: ThumbsUp, label: 'Approvals', to: '/approvals', section: 'Workflow' },
-      { icon: Inbox, label: 'Queues', to: '/queues', section: 'Workflow' },
-      { icon: ListFilter, label: 'Rules', to: '/rules', section: 'Workflow' },
-      { icon: Webhook, label: 'Webhooks', to: '/webhooks', section: 'Integrations' },
-      { icon: RefreshCw, label: 'Sync Jobs', to: '/sync-jobs', section: 'Integrations' },
-      { icon: Upload, label: 'ERP Submissions', to: '/erp-submissions', section: 'Integrations' },
-      { icon: CalendarOff, label: 'Blackout Dates', to: '/blackout-dates', section: 'Scheduling' },
-      {
-        icon: CalendarClock,
-        label: 'Scheduled Changes',
-        to: '/scheduled-changes',
-        section: 'Scheduling'
-      }
-    ]
-  },
-  {
-    id: 'monitoring',
-    icon: Activity,
-    label: 'Monitoring',
-    items: [
-      { icon: Activity, label: 'Activity', to: '/activity', section: 'Activity & Insight' },
-      { icon: Radio, label: 'Pulse', to: '/pulse', section: 'Activity & Insight' },
-      { icon: FileBarChart, label: 'Reports', to: '/reports', section: 'Activity & Insight' },
-      {
-        icon: FileBarChart,
-        label: 'Scheduled Reports',
-        to: '/scheduled-reports',
-        section: 'Activity & Insight'
-      },
-      {
-        icon: TrendingUp,
-        label: 'Team Throughput',
-        to: '/team-throughput',
-        section: 'Activity & Insight'
-      },
-      {
-        icon: BarChart2,
-        label: 'API Analytics',
-        to: '/api-analytics',
-        section: 'Activity & Insight'
-      },
-      {
-        icon: Sparkles,
-        label: 'AI Analytics',
-        to: '/ai-analytics',
-        section: 'Activity & Insight'
-      },
-      {
-        icon: MessagesSquare,
-        label: 'Chat Analytics',
-        to: '/chat-analytics',
-        section: 'Activity & Insight'
-      },
-      {
-        icon: FileSearch,
-        label: 'History Search',
-        to: '/revision-search',
-        section: 'Activity & Insight'
-      },
-      {
-        icon: GitBranch,
-        label: 'Value Provenance',
-        to: '/provenance',
-        section: 'Activity & Insight'
-      },
-      {
-        icon: SearchCode,
-        label: 'Config Search',
-        to: '/config-search',
-        section: 'Activity & Insight'
-      },
-      { icon: BellDot, label: 'Alerts', to: '/alerts', section: 'Alerts & Watching' },
-      { icon: Siren, label: 'Alert Manager', to: '/alert-manager', section: 'Alerts & Watching' },
-      { icon: AlertTriangle, label: 'At-Risk Rules', to: '/at-risk', section: 'Alerts & Watching' },
-      { icon: Clock, label: 'SLA Rules', to: '/sla-rules', section: 'Alerts & Watching' },
-      { icon: Radar, label: 'Monitors', to: '/monitors', section: 'Alerts & Watching' },
-      { icon: Eye, label: 'Field Watches', to: '/field-watches', section: 'Alerts & Watching' },
-      {
-        icon: Bell,
-        label: 'Subscriptions',
-        to: '/notification-subscriptions',
-        section: 'Alerts & Watching'
-      },
-      { icon: AlertOctagon, label: 'Issues', to: '/issues', section: 'Alerts & Watching' },
-      {
-        icon: ShieldCheck,
-        label: 'Access Audit',
-        to: '/access-audit',
-        section: 'Access & Compliance'
-      },
-      {
-        icon: KeyRound,
-        label: 'Access Requests',
-        to: '/access-requests',
-        section: 'Access & Compliance'
-      },
-      { icon: Users, label: 'Delegation', to: '/delegation', section: 'Access & Compliance' },
-      { icon: UserX, label: 'Coverage Gaps', to: '/coverage-gaps', section: 'Access & Compliance' },
-      {
-        icon: ShieldAlert,
-        label: 'Security Center',
-        to: '/security-center',
-        section: 'Access & Compliance'
-      },
-      { icon: Scale, label: 'Legal Holds', to: '/legal-holds', section: 'Access & Compliance' },
-      {
-        icon: ShieldOff,
-        label: 'Privacy & Retention',
-        to: '/privacy-retention',
-        section: 'Access & Compliance'
-      },
-      {
-        icon: ScanSearch,
-        label: 'Data Integrity',
-        to: '/data-integrity',
-        section: 'Access & Compliance'
-      },
-      {
-        icon: Sparkles,
-        label: 'Config Health',
-        to: '/config-health',
-        section: 'Access & Compliance'
-      },
-      { icon: Activity, label: 'Background Jobs', to: '/background-jobs', section: 'Operations' },
-      { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Operations' },
-      { icon: Waypoints, label: 'Traffic Map', to: '/traffic-map', section: 'Operations' },
-      { icon: Link2, label: 'Integrations', to: '/integration-health', section: 'Operations' },
-      { icon: Inbox, label: 'Inbound Mappings', to: '/inbound-mappings', section: 'Operations' },
-      { icon: CalendarClock, label: 'Ops Calendar', to: '/ops-calendar', section: 'Operations' },
-      { icon: CalendarClock, label: 'Cron Timeline', to: '/cron-timeline', section: 'Operations' },
-      { icon: HeartPulse, label: 'Health', to: '/health', section: 'Operations' },
-      { icon: Database, label: 'DB & Runtime', to: '/db-health', section: 'Operations' },
-      { icon: TerminalSquare, label: 'Ops Console', to: '/ops-console', section: 'Operations' },
-      { icon: Wrench, label: 'Ops Tasks', to: '/ops-tasks', section: 'Operations' },
-      { icon: Database, label: 'Redis Keys', to: '/ops-redis', section: 'Operations' },
-      { icon: RotateCcw, label: 'Dead Letters', to: '/dead-letters', section: 'Operations' },
-      {
-        icon: FlaskConical,
-        label: 'Automation Tests',
-        to: '/automation-tests',
-        section: 'Operations'
-      },
-      { icon: Rocket, label: 'Setup Checklist', to: '/setup-checklist', section: 'Operations' },
-      { icon: Upload, label: 'Imports', to: '/imports', section: 'Data Tools' },
-      { icon: Globe, label: 'Submission Forms', to: '/submission-forms', section: 'Data Tools' },
-      { icon: Replace, label: 'Find & Replace', to: '/find-replace', section: 'Data Tools' },
-      { icon: Grid3x3, label: 'M2M Matrix', to: '/m2m-matrix', section: 'Data Tools' },
-      {
-        icon: TerminalSquare,
-        label: 'SQL Scratchpad',
-        to: '/sql-scratchpad',
-        section: 'Data Tools'
-      },
-      { icon: BookOpen, label: 'Query Catalog', to: '/query-catalog', section: 'Data Tools' },
-      { icon: Contrast, label: 'Contrast Audit', to: '/contrast-audit', section: 'Data Tools' },
-      { icon: Video, label: 'E2E Recorder', to: '/e2e-recorder', section: 'Data Tools' },
-      { icon: ListOrdered, label: 'ID Sequences', to: '/sequences', section: 'Data Tools' },
-      { icon: Mail, label: 'Mail Templates', to: '/mail-templates', section: 'Data Tools' },
-      { icon: MailCheck, label: 'Mail Log', to: '/mail-log', section: 'Data Tools' },
-      {
-        icon: FlaskConical,
-        label: 'Notification Bench',
-        to: '/notification-bench',
-        section: 'Data Tools'
-      },
-      {
-        icon: BarChart3,
-        label: 'Notification Analytics',
-        to: '/notification-analytics',
-        section: 'Data Tools'
-      }
-    ]
-  },
-  {
-    id: 'system',
-    icon: Settings,
-    label: 'System',
-    items: [
-      { icon: Settings, label: 'Settings', to: '/settings', section: 'Configuration' },
-      { icon: ToggleLeft, label: 'Feature Flags', to: '/feature-flags', section: 'Configuration' },
-      { icon: ServerCog, label: 'Environments', to: '/environments', section: 'Configuration' },
-      {
-        icon: GitCompare,
-        label: 'Environment Config',
-        to: '/config-diff',
-        section: 'Configuration'
-      },
-      { icon: Rocket, label: 'Go-Live Readiness', to: '/readiness', section: 'Configuration' },
-      {
-        icon: ArrowRightLeft,
-        label: 'Content Promotion',
-        to: '/content-promotion',
-        section: 'Content Ops'
-      },
-      { icon: Package, label: 'Blueprints', to: '/blueprints', section: 'Content Ops' },
-      { icon: ClipboardList, label: 'Change Sets', to: '/change-sets', section: 'Content Ops' },
-      {
-        icon: Database,
-        label: 'Virtual Collections',
-        to: '/virtual-collections',
-        section: 'Content Ops'
-      },
-      { icon: Megaphone, label: 'Broadcasts', to: '/announcements', section: 'Content Ops' },
-      { icon: Trash2, label: 'Trash', to: '/trash', section: 'Content Ops' },
-      { icon: Link2, label: 'External APIs', to: '/external-apis', section: 'Developer' },
-      { icon: Braces, label: 'GraphQL', to: '/graphql', section: 'Developer' },
-      { icon: Code2, label: 'Custom Queries', to: '/custom-queries', section: 'Developer' },
-      { icon: Database, label: 'Procedures', to: '/procedures', section: 'Developer' },
-      { icon: Braces, label: 'Persisted Queries', to: '/persisted-queries', section: 'Developer' },
-      { icon: KeyRound, label: 'API Keys', to: '/api-keys', section: 'Developer' },
-      { icon: Terminal, label: 'Playground', to: '/playground', section: 'Developer' },
-      { icon: PuzzleIcon, label: 'Extensions', to: '/extensions', section: 'Developer' },
-      { icon: LayoutGrid, label: 'Widgets', to: '/widgets', section: 'Developer' },
-      { icon: BarChart2, label: 'Analytics', to: '/analytics', section: 'Insight & Docs' },
-      { icon: BarChart3, label: 'Report Studio', to: '/report-studio', section: 'Insight & Docs' },
-      { icon: Wifi, label: 'Presence', to: '/presence', section: 'Insight & Docs' },
-      {
-        icon: Clapperboard,
-        label: 'Session Replays',
-        to: '/session-replays',
-        section: 'Insight & Docs'
-      },
-      { icon: BookOpen, label: 'Docs', to: '/docs', section: 'Insight & Docs' },
-      { icon: ScrollText, label: 'API Docs', to: '/api-docs', section: 'Insight & Docs' }
-    ]
-  }
-]
-
-function isActiveRoute(itemTo: string, pathname: string): boolean {
-  return itemTo === '/' ? pathname === '/' : pathname.startsWith(itemTo)
-}
-
-function findCategoryForPath(pathname: string): string | null {
-  for (const cat of navCategories) {
-    for (const item of cat.items) {
-      if (isActiveRoute(item.to, pathname)) return cat.id
-    }
-  }
-  return null
-}
+export type { NavCategory, NavItem } from './nav-config'
+export { navCategories }
 
 class PageErrorBoundary extends Component<{ children: ReactNode }, { error: Error | null }> {
   constructor(props: { children: ReactNode }) {
@@ -595,108 +227,6 @@ function WorkspaceSwitcher() {
   )
 }
 
-/**
- * Per-user shortcuts to anywhere in the app. The nav is organised by what
- * things ARE (collections, monitoring, system), which is the right default and
- * the wrong shape for someone who lives in three specific screens all day —
- * this gives them those three, one click away, without reorganising navigation
- * for everyone else.
- *
- * Stored on the user's own preferences, so it follows them between machines.
- */
-/**
- * Pin control for the current page. The favorites themselves live in their own
- * rail category — they cut across categories, so listing them inside one was
- * always the wrong shape — and this is just the way to add and remove the page
- * you are looking at.
- */
-function FavoritePinButton() {
-  const { user, refetch } = useAuth()
-  const location = useLocation()
-  const [saving, setSaving] = useState(false)
-  const favorites = useMemo<Array<{ label: string; path: string }>>(() => {
-    const prefs = (user as { preferences?: { nav_favorites?: unknown } } | null)?.preferences
-    const list = prefs?.nav_favorites
-    return Array.isArray(list)
-      ? (list as Array<{ label?: unknown; path?: unknown }>)
-          .filter(
-            (f: { label?: unknown; path?: unknown }) =>
-              f && typeof f.path === 'string' && typeof f.label === 'string'
-          )
-          .map((f: { label?: unknown; path?: unknown }) => ({
-            label: String(f.label),
-            path: String(f.path)
-          }))
-      : []
-  }, [user])
-
-  const here = location.pathname + location.search
-  const pinned = favorites.some((f) => f.path === here)
-
-  const save = async (next: Array<{ label: string; path: string }>) => {
-    setSaving(true)
-    try {
-      await api.patch('/users/me/preferences', { nav_favorites: next })
-      await refetch()
-      toast.success(pinned ? 'Removed from favorites' : 'Added to favorites')
-    } catch {
-      toast.error('Could not save favorites')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  const toggle = () => {
-    if (pinned) return void save(favorites.filter((f) => f.path !== here))
-    // Name it what the page calls itself; a route is a poor label and there is
-    // nowhere here to rename it afterwards.
-    const heading = document.querySelector('h1')?.textContent?.trim()
-    const label = (heading || document.title.split('|')[0].trim() || here).slice(0, 60)
-    void save([...favorites, { label, path: here }])
-  }
-
-  if (here === '/') return null
-
-  return (
-    <button
-      type='button'
-      disabled={saving}
-      onClick={toggle}
-      title={pinned ? 'Remove this page from favorites' : 'Add this page to favorites'}
-      className='rounded p-1 text-slate-400 transition-colors hover:bg-white/5 hover:text-nvr-cyan disabled:opacity-50'
-    >
-      <Star
-        className={cn('h-3.5 w-3.5', pinned && 'fill-nvr-cyan text-nvr-cyan')}
-        strokeWidth={2}
-      />
-    </button>
-  )
-}
-
-function PanelNavItem({ icon: Icon, label, to }: NavItem) {
-  const { pathname } = useLocation()
-  const active = isActiveRoute(to, pathname)
-  const t = useT()
-
-  return (
-    <Link
-      to={to}
-      viewTransition
-      onMouseEnter={() => preloadRoute(to)}
-      className={cn(
-        // Full-bleed rows — the active background spans the entire panel width
-        'flex items-center gap-2.5 px-4 py-[7px] text-[13px] font-medium transition-colors duration-100',
-        active
-          ? 'bg-nvr-cyan/[0.12] text-nvr-cyan'
-          : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
-      )}
-    >
-      <Icon className={cn('h-[15px] w-[15px] shrink-0', active ? 'text-nvr-cyan' : '')} />
-      {t(`nav.${label}`, label)}
-    </Link>
-  )
-}
-
 /** `#00ceff` / `#0cf` → `"0 206 255"`. Returns null for anything else, so a
  *  non-hex setting leaves the default channels in place rather than breaking
  *  every tinted surface. */
@@ -719,7 +249,7 @@ export function AppLayout() {
   const t = useT()
   usePagePresence()
   useSessionRecorder()
-  const { user, refetch: refetchAuth } = useAuth()
+  const { user } = useAuth()
   // "View as" on a person's page (#640) opens a new tab as them.
   useEffect(() => registerViewAsOpener(openViewAsTab), [])
   const { data: settings } = useSettings()
@@ -845,9 +375,12 @@ export function AppLayout() {
       if (current === 'favorites') return current
       return findCategoryForPath(location.pathname) ?? current
     })
+    setFindQuery('')
   }, [location.pathname])
 
   function handleCategoryClick(catId: string) {
+    if (catId !== 'favorites') setOrganizing(false)
+    setFindQuery('')
     if (catId === activeCategory && !collapsed) {
       // clicking active category while panel is open → collapse
       setCollapsed(true)
@@ -876,51 +409,32 @@ export function AppLayout() {
 
   // The reader's own shortcuts get their own place in the rail rather than
   // sitting on top of one category's nav — they cut across categories, so
-  // living inside one of them was always the wrong shape.
-  const navFavorites = useMemo<Array<{ label: string; path: string }>>(() => {
-    const prefs = (user as { preferences?: { nav_favorites?: unknown } } | null)?.preferences
-    const list = prefs?.nav_favorites
-    return Array.isArray(list)
-      ? (list as Array<{ label?: unknown; path?: unknown }>)
-          .filter(
-            (f: { label?: unknown; path?: unknown }) =>
-              f && typeof f.path === 'string' && typeof f.label === 'string'
-          )
-          .map((f: { label?: unknown; path?: unknown }) => ({
-            label: String(f.label),
-            path: String(f.path)
-          }))
-      : []
-  }, [user])
-
-  // Wear the icon of the page you point at: a column of identical stars tells
-  // the reader nothing, and these are the same destinations they already know
-  // from the nav. Longest-prefix match so a record page inherits its list's
-  // icon; the star is only for somewhere the nav has no entry for.
-  const iconForPath = (path: string): React.ElementType => {
-    let best: { len: number; icon: React.ElementType } | null = null
-    for (const cat of navCategories) {
-      for (const item of cat.items) {
-        if (path === item.to || (item.to !== '/' && path.startsWith(`${item.to}/`))) {
-          if (!best || item.to.length > best.len) best = { len: item.to.length, icon: item.icon }
-        }
-      }
-    }
-    return best?.icon ?? Star
-  }
-
-  const removeFavorite = async (path: string) => {
-    await api.patch('/users/me/preferences', {
-      nav_favorites: navFavorites.filter((f) => f.path !== path)
-    })
-    await refetchAuth()
-  }
+  // living inside one of them was always the wrong shape. One instance for the
+  // star and the panel, so an optimistic reorder never snaps back.
+  const favoritesApi = useNavFavorites()
+  const [organizing, setOrganizing] = useState(false)
+  const [findQuery, setFindQuery] = useState('')
 
   const favoritesCategory: NavCategory = {
     id: 'favorites',
     icon: Star,
     label: 'Favorites',
-    items: navFavorites.map((f) => ({ icon: iconForPath(f.path), label: f.label, to: f.path }))
+    hint: 'Your pinned pages, in your order',
+    items: favoritesApi.favorites.items.map((f) => ({
+      icon: iconForPath(f.path) ?? Star,
+      label: f.label,
+      to: f.path,
+      section: f.group ?? undefined
+    }))
+  }
+
+  const openOrganize = () => {
+    setActiveCategory('favorites')
+    localStorage.setItem(CATEGORY_KEY, 'favorites')
+    setCollapsed(false)
+    localStorage.setItem(SIDEBAR_KEY, 'false')
+    setFindQuery('')
+    setOrganizing(true)
   }
 
   const visibleCategories = navCategories
@@ -940,8 +454,18 @@ export function AppLayout() {
       : activeCategory === 'system'
         ? [
             ...(activeCat?.items ?? []),
-            ...extensionNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href })),
-            ...cloudNavItems.map((e) => ({ icon: e.icon, label: e.label, to: e.href }))
+            ...extensionNavItems.map((e) => ({
+              icon: e.icon,
+              label: e.label,
+              to: e.href,
+              section: 'Extensions'
+            })),
+            ...cloudNavItems.map((e) => ({
+              icon: e.icon,
+              label: e.label,
+              to: e.href,
+              section: 'Account'
+            }))
           ]
         : activeCat.items
 
@@ -1029,38 +553,57 @@ export function AppLayout() {
                   className='flex min-h-0 w-full flex-1 flex-col gap-0.5 overflow-y-auto pb-3'
                   aria-label='Navigation categories'
                 >
-                  {railCategories.map((cat) => {
+                  {railCategories.map((cat, ci) => {
+                    // A rule between the day-to-day categories and the ones
+                    // for running the instance itself.
+                    const startsPlatform =
+                      cat.zone === 'platform' && railCategories[ci - 1]?.zone !== 'platform'
                     const hasActive = cat.items.some((item) =>
                       isActiveRoute(item.to, location.pathname)
                     )
                     const isSelected = activeCategory === cat.id
                     const panelOpen = isSelected && !collapsed
                     return (
-                      <Tooltip key={cat.id}>
-                        <TooltipTrigger asChild>
-                          <button
-                            type='button'
-                            onClick={() => handleCategoryClick(cat.id)}
-                            aria-pressed={panelOpen}
-                            aria-label={cat.label}
-                            className={cn(
-                              // Full-bleed rows — active background spans the entire rail width
-                              'relative flex h-9 w-full items-center justify-center transition-colors duration-100',
-                              panelOpen
-                                ? 'bg-nvr-cyan/[0.15] text-nvr-cyan'
-                                : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
+                      <Fragment key={cat.id}>
+                        {startsPlatform && (
+                          <div
+                            className='mx-auto my-1.5 h-px w-6 shrink-0 bg-white/[0.12]'
+                            aria-hidden
+                          />
+                        )}
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <button
+                              type='button'
+                              onClick={() => handleCategoryClick(cat.id)}
+                              aria-pressed={panelOpen}
+                              aria-label={cat.label}
+                              className={cn(
+                                // Full-bleed rows — active background spans the entire rail width
+                                'relative flex h-9 w-full items-center justify-center transition-colors duration-100',
+                                panelOpen
+                                  ? 'bg-nvr-cyan/[0.15] text-nvr-cyan'
+                                  : 'text-slate-400 hover:bg-white/[0.05] hover:text-slate-200'
+                              )}
+                            >
+                              <cat.icon className='h-[15px] w-[15px]' />
+                              {hasActive && !panelOpen && (
+                                <span className='absolute bottom-1.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-nvr-cyan/70' />
+                              )}
+                            </button>
+                          </TooltipTrigger>
+                          <TooltipContent side='right' sideOffset={8} className='max-w-[220px]'>
+                            <span className='font-semibold'>
+                              {t(`nav.${cat.label}`, cat.label)}
+                            </span>
+                            {cat.hint && (
+                              <span className='mt-0.5 block text-[11px] font-normal opacity-75'>
+                                {cat.hint}
+                              </span>
                             )}
-                          >
-                            <cat.icon className='h-[15px] w-[15px]' />
-                            {hasActive && !panelOpen && (
-                              <span className='absolute bottom-1.5 left-1/2 h-1 w-1 -translate-x-1/2 rounded-full bg-nvr-cyan/70' />
-                            )}
-                          </button>
-                        </TooltipTrigger>
-                        <TooltipContent side='right' sideOffset={8}>
-                          {t(`nav.${cat.label}`, cat.label)}
-                        </TooltipContent>
-                      </Tooltip>
+                          </TooltipContent>
+                        </Tooltip>
+                      </Fragment>
                     )
                   })}
                 </nav>
@@ -1176,74 +719,81 @@ export function AppLayout() {
               {/* Category panel — slides in/out */}
               <div
                 className={cn(
-                  'overflow-hidden border-r border-white/[0.07] transition-[width] duration-200 ease-in-out',
-                  collapsed ? 'w-0' : 'w-[168px]'
+                  'overflow-hidden border-r border-white/[0.07] transition-[width] duration-200 ease-out motion-reduce:transition-none',
+                  collapsed ? 'w-0' : 'w-[192px]'
                 )}
               >
-                <div className='flex h-full w-[168px] flex-col'>
+                <div className='flex h-full w-[192px] flex-col'>
                   {/* Panel header */}
-                  <div className='flex h-14 shrink-0 items-center justify-between gap-2 border-b border-white/[0.07] px-4'>
+                  <div className='flex h-14 shrink-0 items-center justify-between gap-1.5 border-b border-white/[0.07] pl-4 pr-2.5'>
                     <div className='min-w-0'>
-                      <p className='truncate text-[11px] font-medium leading-tight text-slate-500'>
+                      <p className='truncate text-[11px] font-medium leading-tight text-slate-400'>
                         {projectName}
                       </p>
                       <p className='truncate text-[13.5px] font-semibold leading-tight tracking-[-0.01em] text-white'>
                         {t(`nav.${activeCat.label}`, activeCat.label)}
                       </p>
                     </div>
-                    <FavoritePinButton />
+                    <div className='flex shrink-0 items-center gap-0.5'>
+                      {activeCategory === 'favorites' &&
+                        (favoritesApi.favorites.items.length > 0 ||
+                          favoritesApi.favorites.groups.length > 0) &&
+                        !organizing && (
+                          <button
+                            type='button'
+                            onClick={() => setOrganizing(true)}
+                            className='rounded px-1.5 py-0.5 text-[11px] font-medium text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
+                          >
+                            Organize
+                          </button>
+                        )}
+                      <FavoritePinButton {...favoritesApi} onOrganize={openOrganize} />
+                    </div>
                   </div>
 
+                  {!organizing && (
+                    <NavFind
+                      query={findQuery}
+                      onQuery={setFindQuery}
+                      categories={railCategories.map((c) =>
+                        c.id === activeCat.id ? { ...c, items: panelItems } : c
+                      )}
+                    />
+                  )}
+
                   {/* Nav items — no horizontal padding so active rows span full width */}
-                  <nav
-                    className='min-h-0 flex-1 overflow-y-auto py-3'
-                    aria-label={`${activeCat.label} navigation`}
-                  >
-                    {activeCategory === 'favorites' && panelItems.length === 0 && (
-                      <p className='px-4 py-2 text-[11px] leading-snug text-slate-400'>
-                        Star a page with the ☆ beside its category name to keep it here.
-                      </p>
-                    )}
-                    <div className='space-y-0.5'>
-                      {panelItems.map((item, idx) => (
-                        <div key={item.to}>
-                          {item.section && item.section !== panelItems[idx - 1]?.section && (
-                            <p
-                              className={cn(
-                                'px-2 pb-1 text-[10px] font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500',
-                                idx > 0 ? 'mt-3' : 'mt-1'
+                  {!findQuery.trim() && (
+                    <nav
+                      className='min-h-0 flex-1 overflow-y-auto pb-4 pt-1'
+                      aria-label={`${activeCat.label} navigation`}
+                    >
+                      {activeCategory === 'favorites' ? (
+                        <FavoritesPanel
+                          {...favoritesApi}
+                          organizing={organizing}
+                          setOrganizing={setOrganizing}
+                        />
+                      ) : (
+                        <div className='space-y-0.5'>
+                          {panelItems.map((item, idx) => (
+                            <div key={item.to}>
+                              {item.section && item.section !== panelItems[idx - 1]?.section && (
+                                <p
+                                  className={cn(
+                                    'px-4 pb-1 text-[11px] font-semibold text-slate-400',
+                                    idx > 0 ? 'mt-3.5' : 'mt-0.5'
+                                  )}
+                                >
+                                  {item.section}
+                                </p>
                               )}
-                            >
-                              {item.section}
-                            </p>
-                          )}
-                          {activeCategory === 'favorites' ? (
-                            // Favorites are removable HERE — the star toggle lives on
-                            // the page itself, which may no longer exist (a deleted
-                            // page-builder page left an unremovable favorite).
-                            <div key={item.to} className='group/fav relative'>
-                              <PanelNavItem {...item} />
-                              <button
-                                type='button'
-                                aria-label={`Remove ${item.label} from favorites`}
-                                title='Remove from favorites'
-                                onClick={(e) => {
-                                  e.preventDefault()
-                                  e.stopPropagation()
-                                  void removeFavorite(item.to)
-                                }}
-                                className='absolute right-1.5 top-1/2 hidden h-5 w-5 -translate-y-1/2 items-center justify-center rounded text-slate-400 hover:bg-slate-100 hover:text-red-500 group-hover/fav:flex dark:hover:bg-muted'
-                              >
-                                ✕
-                              </button>
+                              <PanelLink icon={item.icon} label={item.label} to={item.to} />
                             </div>
-                          ) : (
-                            <PanelNavItem {...item} />
-                          )}
+                          ))}
                         </div>
-                      ))}
-                    </div>
-                  </nav>
+                      )}
+                    </nav>
+                  )}
                 </div>
               </div>
             </aside>

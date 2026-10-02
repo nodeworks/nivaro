@@ -804,3 +804,63 @@ export const adminUxFormCollaboration: DocSection = {
     }
   ]
 }
+
+export const adminUxNavigation: DocSection = {
+  id: 'admin-navigation',
+  label: 'Navigation & Favorites',
+  content: [
+    { type: 'h1', id: 'admin-navigation', text: 'Navigation & Favorites' },
+    {
+      type: 'p',
+      text: 'The sidebar rail groups every admin page by the job you came to do. Hover a rail icon to see what its category covers; each category opens a panel split into short named sections. A thin rule in the rail separates the day-to-day categories from the ones for running the instance itself.'
+    },
+    {
+      type: 'table',
+      head: ['Category', 'What lives there'],
+      rows: [
+        ['Home', 'Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, Chat, Support'],
+        [
+          'Data',
+          'Records (collections, files, trash), structure (data model, hierarchies, virtual collections, ID sequences), templates & forms, bulk changes (imports, find & replace, M2M matrix, data integrity)'
+        ],
+        [
+          'Workflow',
+          'Processes (pipelines, approvals, queues), automations (flows, rules, automation tests), deadlines & risk (SLA, at-risk, scheduled changes, blackout dates)'
+        ],
+        [
+          'People',
+          'Directory, access (roles, user scopes, access requests, access audit), availability (delegation, coverage gaps, presence), security & privacy'
+        ],
+        [
+          'Notifications',
+          'Alerts & watching, messages (broadcasts, mail templates), delivery (mail log, notification analytics, notification bench)'
+        ],
+        ['Insights', 'Reports, usage analytics, session replays, and change history'],
+        [
+          'Integrations',
+          'Integration health, ERP submissions, dead letters, and partner connections'
+        ],
+        [
+          'Operations',
+          'Health, background jobs, ops tools, and release (environments, config diff, readiness, promotion, blueprints, change sets)'
+        ],
+        ['Developer', 'APIs, queries, extensions and test tooling, reference docs'],
+        ['System', 'Settings, feature flags, config health, config search, setup checklist']
+      ]
+    },
+    { type: 'h3', id: 'admin-navigation-find', text: 'Find a page' },
+    {
+      type: 'p',
+      text: 'The Find box at the top of the panel searches every category at once — page names, section names and common synonyms ("email" finds Mail Log, "cron" finds Background Jobs). Each hit shows under its category so you learn where it lives. Enter opens the best match; Escape clears.'
+    },
+    { type: 'h3', id: 'admin-navigation-favorites', text: 'Favorites' },
+    {
+      type: 'p',
+      text: 'Click the star next to the panel title to pin the page you are on (filtered list URLs keep their filter). The Favorites panel lists your pins; choose Organize to drag pages into your own order, name groups, file pages under them, rename a pin, or remove one. Group headings collapse, and a collapsed group shows a dot when the page you are on is inside it. Drag handles also work from the keyboard: focus a handle, press Space, move with the arrow keys, and press Space again.'
+    },
+    {
+      type: 'note',
+      text: 'Favorites follow you between machines: they are stored on your user preferences as nav_favorites (ordered list of {label, path, group?}) and nav_favorite_groups (group order). Up to 60 pages and 20 groups; paths must be in-app routes.'
+    }
+  ]
+}

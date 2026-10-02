@@ -509,6 +509,7 @@
         <div class="docs-nav-items" id="group-aux">
           <a class="docs-nav-item" data-section="admin-ops-additions" href="#admin-ops-additions">Admin &amp; Ops Additions</a>
           <a class="docs-nav-item" data-section="admin-i18n" href="#admin-i18n">Admin Languages</a>
+          <a class="docs-nav-item" data-section="admin-navigation" href="#admin-navigation">Navigation &amp; Favorites</a>
           <a class="docs-nav-item" data-section="global-search" href="#global-search">Global Search (Cmd+K)</a>
           <a class="docs-nav-item" data-section="saved-views" href="#saved-views">Saved Views</a>
           <a class="docs-nav-item" data-section="form-collaboration" href="#form-collaboration">Form Collaboration &amp; Drafts</a>
@@ -14753,6 +14754,33 @@ POST /api/message-actions/callback
           <p class="doc-p">The admin shell (navigation, layout chrome) is translatable — English, Español, Deutsch, Français ship built in. Pick the language in Settings → Localization; it applies per browser, instantly.</p>
           <div class="doc-note">This is separate from content localization (field translations / available_locales) — it changes the admin UI itself. Page-level translation is incremental: components call t('key', 'English fallback') from @/lib/i18n, so untranslated screens keep working in English.</div>
           <!-- /SYNC:admin-i18n -->
+        </div>
+
+        <div class="doc-section" id="s-admin-navigation" data-toc='[{"id":"admin-navigation","label":"Navigation & Favorites"},{"id":"admin-navigation-find","label":"Find a page"},{"id":"admin-navigation-favorites","label":"Favorites"}]'>
+          <!-- SYNC:admin-navigation -->
+          <h1 class="doc-h1" id="admin-navigation">Navigation &amp; Favorites</h1>
+          <p class="doc-p">The sidebar rail groups every admin page by the job you came to do. Hover a rail icon to see what its category covers; each category opens a panel split into short named sections. A thin rule in the rail separates the day-to-day categories from the ones for running the instance itself.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Category</th><th>What lives there</th></tr></thead>
+            <tbody>
+              <tr><td>Home</td><td>Overview, My Work, Tasks, Dashboards, Command Center, Ask AI, Chat, Support</td></tr>
+              <tr><td>Data</td><td>Records (collections, files, trash), structure (data model, hierarchies, virtual collections, ID sequences), templates &amp; forms, bulk changes (imports, find &amp; replace, M2M matrix, data integrity)</td></tr>
+              <tr><td>Workflow</td><td>Processes (pipelines, approvals, queues), automations (flows, rules, automation tests), deadlines &amp; risk (SLA, at-risk, scheduled changes, blackout dates)</td></tr>
+              <tr><td>People</td><td>Directory, access (roles, user scopes, access requests, access audit), availability (delegation, coverage gaps, presence), security &amp; privacy</td></tr>
+              <tr><td>Notifications</td><td>Alerts &amp; watching, messages (broadcasts, mail templates), delivery (mail log, notification analytics, notification bench)</td></tr>
+              <tr><td>Insights</td><td>Reports, usage analytics, session replays, and change history</td></tr>
+              <tr><td>Integrations</td><td>Integration health, ERP submissions, dead letters, and partner connections</td></tr>
+              <tr><td>Operations</td><td>Health, background jobs, ops tools, and release (environments, config diff, readiness, promotion, blueprints, change sets)</td></tr>
+              <tr><td>Developer</td><td>APIs, queries, extensions and test tooling, reference docs</td></tr>
+              <tr><td>System</td><td>Settings, feature flags, config health, config search, setup checklist</td></tr>
+            </tbody>
+          </table></div>
+          <h3 class="doc-h3" id="admin-navigation-find">Find a page</h3>
+          <p class="doc-p">The Find box at the top of the panel searches every category at once — page names, section names and common synonyms ("email" finds Mail Log, "cron" finds Background Jobs). Each hit shows under its category so you learn where it lives. Enter opens the best match; Escape clears.</p>
+          <h3 class="doc-h3" id="admin-navigation-favorites">Favorites</h3>
+          <p class="doc-p">Click the star next to the panel title to pin the page you are on (filtered list URLs keep their filter). The Favorites panel lists your pins; choose Organize to drag pages into your own order, name groups, file pages under them, rename a pin, or remove one. Group headings collapse, and a collapsed group shows a dot when the page you are on is inside it. Drag handles also work from the keyboard: focus a handle, press Space, move with the arrow keys, and press Space again.</p>
+          <div class="doc-note">Favorites follow you between machines: they are stored on your user preferences as nav_favorites (ordered list of {label, path, group?}) and nav_favorite_groups (group order). Up to 60 pages and 20 groups; paths must be in-app routes.</div>
+          <!-- /SYNC:admin-navigation -->
         </div>
 
         <div class="doc-section" id="s-global-search" data-toc='[{"id":"global-search","label":"Global Search (Cmd+K)"},{"id":"global-search-usage","label":"Searching"},{"id":"global-search-api","label":"API Reference"},{"id":"global-search-behavior","label":"Search Behavior"},{"id":"global-search-integration","label":"Integration"}]'>

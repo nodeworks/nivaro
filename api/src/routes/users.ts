@@ -626,25 +626,46 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.digest_hour = h
     }
+    if ('nav_favorite_groups' in body) {
+      // The ORDER of the reader's favorite groups, and the place an empty group
+      // lives while it is being filled. Names are labels, never ids.
+      const raw = Array.isArray(body.nav_favorite_groups) ? body.nav_favorite_groups : null
+      if (!raw) return reply.code(400).send({ error: 'nav_favorite_groups must be an array' })
+      const groups: string[] = []
+      for (const g of raw) {
+        const name = String(g ?? '')
+          .trim()
+          .slice(0, 40)
+        if (name && !groups.includes(name)) groups.push(name)
+      }
+      patch.nav_favorite_groups = groups.slice(0, 20)
+    }
     if ('nav_favorites' in body) {
       // Sidebar shortcuts. Validated rather than trusted: this is rendered as
       // navigation, so a path must be an in-app absolute route — never an
       // external or javascript: target — and the list is capped so a preference
-      // blob cannot grow without bound.
+      // blob cannot grow without bound. `group` files a favorite under one of
+      // nav_favorite_groups; an unknown group reads as ungrouped on the client.
       const raw = Array.isArray(body.nav_favorites) ? body.nav_favorites : null
       if (!raw) return reply.code(400).send({ error: 'nav_favorites must be an array' })
       const clean = raw
         .filter((f): f is { label?: unknown; path?: unknown } => !!f && typeof f === 'object')
-        .map((f) => ({
-          label: String((f as { label?: unknown }).label ?? '')
+        .map((f) => {
+          const group = String((f as { group?: unknown }).group ?? '')
             .trim()
-            .slice(0, 60),
-          path: String((f as { path?: unknown }).path ?? '')
-            .trim()
-            .slice(0, 500)
-        }))
+            .slice(0, 40)
+          return {
+            label: String((f as { label?: unknown }).label ?? '')
+              .trim()
+              .slice(0, 60),
+            path: String((f as { path?: unknown }).path ?? '')
+              .trim()
+              .slice(0, 500),
+            ...(group ? { group } : {})
+          }
+        })
         .filter((f) => f.label !== '' && /^\/(?!\/)/.test(f.path))
-        .slice(0, 30)
+        .slice(0, 60)
       patch.nav_favorites = clean
     }
     if ('theme_accent' in body) {
