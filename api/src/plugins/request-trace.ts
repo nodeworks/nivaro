@@ -4,6 +4,7 @@ import { _staticDb, db, dbRead } from '../db/index.js'
 import {
   attachQueryTracing,
   beginTrace,
+  clearTrace,
   currentTraceMeta,
   finishTrace,
   markSerializeEnd,
@@ -66,10 +67,14 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
 
   app.addHook('onRequest', async (req) => {
     const path = (req.raw.url ?? req.url).split('?')[0]
-    if (!path.startsWith('/api/')) return
     // Tracing the trace reader would be circular and would evict real traces
     // from the ring buffer every time the page polled.
-    if (path.startsWith('/api/traces')) return
+    if (!path.startsWith('/api/') || path.startsWith('/api/traces')) {
+      // beginTrace uses enterWith, so a previous request's trace can still be the store on a
+      // keep-alive socket — an untraced request must not inherit its id (public-page events).
+      clearTrace()
+      return
+    }
     beginTrace(path, req)
     // The trace id IS the request id: the API log row, the Traffic Map events, the trace ring
     // and the response header all carry it, so one id joins them.

@@ -1,5 +1,5 @@
 // api/src/test/unit/services/traffic-map.test.ts
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../services/request-trace.js', () => ({
   currentTraceCaller: vi.fn(() => null),
@@ -589,6 +589,9 @@ describe('final-review fixes', () => {
 })
 
 describe('event ids (drill-down Wave 0)', () => {
+  afterEach(() => {
+    vi.mocked(currentTraceMeta).mockReturnValue(null)
+  })
   const RID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
   const fastifyReq = {
     requestId: RID,

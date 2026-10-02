@@ -400,7 +400,6 @@ function pushEvent(ev: TrafficEventWire): void {
   pendingEvents.splice(worst, 1)
   st.bufferDropped++
 }
-/** The request's integration chain id (plugins/chain.ts stamps `req.chainId`). */
 /** Drop undefined keys, so an event never carries `rid: undefined` on the wire. */
 function definedOnly<T extends object>(o: T): Partial<T> {
   const out: Partial<T> = {}
@@ -409,6 +408,7 @@ function definedOnly<T extends object>(o: T): Partial<T> {
   }
   return out
 }
+/** The request's integration chain id (plugins/chain.ts stamps `req.chainId`). */
 function chainOfReq(req: unknown): string | undefined {
   const id = (req as { chainId?: unknown } | undefined)?.chainId
   return typeof id === 'string' && id ? id.slice(0, 64) : undefined
