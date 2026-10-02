@@ -209,7 +209,8 @@ export {
   type ApiRequestLogFilters,
   type AuthFailure,
   AuthFailuresSection,
-  InboundCallersView
+  InboundCallersView,
+  ReplayBlock
 } from './components/monitoring/ApiRequestLog'
 export { CallerChangesSection } from './components/monitoring/CallerChanges'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'

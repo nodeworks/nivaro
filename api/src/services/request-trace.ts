@@ -694,6 +694,47 @@ function consumeFollow(userId: string): boolean {
   return true
 }
 
+// ─── Keep-next (Traffic Map drill-down #1191 / #1213) ───────────────────────
+/** What a keep-next matcher sees about every finished traced request. */
+export interface KeepNextInfo {
+  /** The request id (= trace id). */
+  id: string
+  method: string
+  /** Fastify's route pattern (`/api/items/:collection/:id`). */
+  route: string
+  url: string
+  status: number
+  user: string | null
+  total_ms: number
+  /** The Fastify request (auth method, api key, GraphQL stamp, body) — read, never written. */
+  request: unknown
+}
+
+const keepNextMatchers = new Map<string, (info: KeepNextInfo) => boolean>()
+
+/**
+ * Register a keep-next matcher under `id` (same id replaces). Every finished traced request is
+ * offered to it; returning true keeps that request's trace whatever its speed (the matcher does
+ * its own counting — "keep the next N"). Returns an unregister function. Matchers run on the
+ * response path: they must be cheap and must not throw (a throw counts as false).
+ */
+export function keepNext(id: string, matcher: (info: KeepNextInfo) => boolean): () => void {
+  keepNextMatchers.set(id, matcher)
+  return () => {
+    if (keepNextMatchers.get(id) === matcher) keepNextMatchers.delete(id)
+  }
+}
+
+const keptListeners = new Set<(rec: TraceRecord, request: unknown) => void>()
+
+/** Called with every trace the ring keeps (slow, followed or kept-next). Returns unsubscribe. */
+export function onTraceKept(fn: (rec: TraceRecord, request: unknown) => void): () => void {
+  keptListeners.add(fn)
+  return () => {
+    keptListeners.delete(fn)
+  }
+}
+
 export function finishTrace(meta: {
   method: string
   route: string
@@ -708,7 +749,29 @@ export function finishTrace(meta: {
   // speed (their next N, whatever they touch), so a "it's slow for Beth"
   // report can be traced without waiting for a threshold breach.
   const followed = meta.user && consumeFollow(meta.user)
-  if (total < SLOW_MS && !followed) return
+  // Keep-next arms (Traffic Map "Trace next call" / "Capture next"): every matcher is offered
+  // every request, so each can count its own matches even when the request is slow anyway.
+  let forced = false
+  if (keepNextMatchers.size > 0) {
+    const info: KeepNextInfo = {
+      id: ctx.id,
+      method: meta.method,
+      route: meta.route,
+      url: meta.url,
+      status: meta.status,
+      user: meta.user,
+      total_ms: Math.round(total),
+      request: ctx.request
+    }
+    for (const m of keepNextMatchers.values()) {
+      try {
+        if (m(info)) forced = true
+      } catch {
+        /* a matcher never breaks a response */
+      }
+    }
+  }
+  if (total < SLOW_MS && !followed && !forced) return
 
   // Spans nest (a phase can contain sub-phases), so they are kept in start
   // order and the UI indents by overlap rather than being handed a tree the
@@ -738,6 +801,16 @@ export function finishTrace(meta: {
     wide: wideByTable(ctx.statements)
   })
   while (buffer.length > CAPACITY) buffer.shift()
+  if (keptListeners.size > 0) {
+    const rec = buffer[buffer.length - 1]
+    for (const fn of keptListeners) {
+      try {
+        fn(rec, ctx.request)
+      } catch {
+        /* a listener never breaks a response */
+      }
+    }
+  }
 }
 
 export function listTraces(limit = 50): TraceRecord[] {
