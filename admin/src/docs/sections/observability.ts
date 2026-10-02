@@ -531,6 +531,144 @@ export const obsTrafficMapInvestigate: DocSection = {
     {
       type: 'p',
       text: 'Explain (in the inspector) sends the node’s own window (rate, latency, errors, kinds, top routes and callers, recent errors and events) and returns two sentences plus where to look next. One call per click. Ask AI can answer the same kind of question in chat ("who hit forecasts hardest today?") through its traffic tool, for administrators only.'
+    },
+    { type: 'h2', id: 'traffic-map-stack', text: 'Investigating from an event' },
+    {
+      type: 'p',
+      text: 'The inspector tells you what a node is doing; the investigation panel tells you what one thing did. It is a second panel, docked to the right, that opens a request, a record, a job run or anything else by its exact id (every live event carries its request id, chain id, page-load id, client tab and build, and the job or flow behind a background write), and every id inside it opens the next thing on top. You never leave the map.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'From the live events: click a row, or its Inspect action, and the most specific thing it names opens: its request, else the record it wrote, else its entity. The Request, Record, Path and Issue actions on a row open those levels directly; Run and Flow open the job or flow run behind a background write.',
+        'From a node: Inspect in the inspector opens the selected entity, caller or data/partner node as the first level. Lanes have nothing to open.',
+        'From a hover card: rest the pointer on any id in a panel (or focus it with the keyboard) and after a moment a card shows what the server knows about it, a title and a few lines, with Open. Clicking the id opens it straight away.',
+        'From the search box in the toolbar: paste a request, chain, recording, trace or person id, an activity, job, issue, partner push or AI call number, an email address, a record id (CR26-80329, workflows/123) or a route path. Enter opens the first result as a new investigation; Show in the panel opens the result list as a level instead. Names and titles are not searched. An API key or token pasted here is refused and never sent.'
+      ]
+    },
+    {
+      type: 'ul',
+      items: [
+        'Breadcrumbs across the top are the path you took. The first and the last two always show; anything between folds into a "…" button. Click a crumb to go back to it.',
+        'Back (or Esc, or [) returns one level; ] goes forward again. Esc at the first level closes the panel and returns focus to where it was.',
+        'Pin (p) keeps the current level in a left column and opens the next ones beside it, so you can read a trace next to the request that made it. Split needs about 760 px; narrower, only the current level shows and the pin stays on.',
+        'The whole stack is in the URL as ?inspect=request:…/trace:…@<time>, up to eight levels, so the browser’s back button, a reload and Copy view link all keep it. Send the link to a colleague and they open the same stack at the same moment.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-stack-kinds', text: 'What you can open' },
+    {
+      type: 'table',
+      head: ['Level', 'What it shows and what you can do'],
+      rows: [
+        [
+          'Request',
+          'Method, path, query, status, time, caller, how it signed in, IP and user agent, the body (masked) and the error. A GraphQL request shows its operation and variables apart. The same caller’s other calls within 5 s either side. Replay (the same block as API Analytics; needs the stored body, which only token and API-key writes keep), Copy as curl, and Compare with… in the header.'
+        ],
+        [
+          'Trace',
+          'The request’s phases as a waterfall with the time nothing accounts for, its top SQL tagged N+1 (the same statement repeated) and wide (many columns selected), and Plan, which opens the execution plan inside the level (SELECT statements only). Trace arms the trace ring to keep the next call on this route, for up to 20 calls or 15 minutes, optionally only this caller, so you can trace a request that is not slow.'
+        ],
+        [
+          'Statement',
+          'One SQL shape from a trace’s top SQL: how often it ran and from cache, its plan, the routes that ran it (each opens the entity) and the index advisor’s advice for the tables it touches. Shapes live in each process’s memory.'
+        ],
+        [
+          'Compare',
+          'Two calls on the same route side by side (a fast one against a slow one): status and time, each phase, SQL shapes added, removed, slower and faster, and query parameters that differ. Compare with… lists the route’s recent calls, marking the traced ones and the same caller.'
+        ],
+        [
+          'Capture',
+          'A capture armed from Capture next… in the toolbar: the next requests matching a route, caller or entity (up to 50, for 1 to 15 minutes), filling in as they arrive, with Stop. Each opens with its full body and trace even when it was fast. See Capture the next N on the Act page.'
+        ],
+        [
+          'Event path (chain)',
+          'Everything one request, job or flow caused, as a tree: the writes, transitions, partner pushes, flows and mails that followed, and the request it replayed or was replayed as. Request, write, record, flow and partner push steps open; mail, notification and partner-call steps do not yet.'
+        ],
+        [
+          'Recording',
+          'The person’s session replay inside the level, started 5 s before the moment. With no recording covering it, the nearest error clip within two minutes, or Follow this person and Keep their next 50 traces. Recordings and clips are kept for 7 days.'
+        ],
+        [
+          'Record',
+          'A read-only view of the record and the writes to it around the anchor (the latest five when there are none in the window), each opening the write. Reads, comments and transitions are not listed. Open full page goes to the record.'
+        ],
+        [
+          'Write',
+          'One write: who, when, how they signed in, the key, IP and reason, the exact old → new change taken from the revision the activity row points to, and the chain and request that made it.'
+        ],
+        [
+          'Issue',
+          'An issue or error group: occurrences (a count, with first and last seen), status, severity, source, route, who raised it, the record, resolution notes, the stack, the redacted request context, a screenshot and Watch the moment it failed. Issue on a server-error row in the live events finds the issue by its error fingerprint.'
+        ],
+        [
+          'AI call',
+          'One call to the AI provider: the prompt as system and messages (tool calls and results inline), the tools offered by name, rounds, tokens in and out, cache reads and writes, cost, latency, stop reason, the model that answered and the response. Reached from the AI calls footer under a request. Kept 30 days.'
+        ],
+        [
+          'Job run',
+          'A scheduled job’s run: status (interrupted, still running, or failed silently), the process that held the lease, outcome, error and progress, the writes it made (through its chain), the flows and pushes that followed, and the job’s schedule and next run. There is no per-run log beyond outcome, error and progress.'
+        ],
+        [
+          'Flow run',
+          'Where the flow halted and its $error, input and output, the flow’s operations with the halted and failed ones marked, who or what started it, and Dry run with this payload, which re-runs the flow through the tester on the stored payload and shows each step. Live runs keep no step trace; only the dry run has one.'
+        ],
+        [
+          'Partner push (submission)',
+          'What was sent to a partner and what came back: status, endpoint, error class, attempts newest first, the matching outbound log rows, the obligation it satisfies and Resend (two clicks), which uses the existing retry route. Values under credential-like keys are masked.'
+        ],
+        [
+          'Caller',
+          'A person, API key or integration account: routes, status mix, p95 and error rate in the window, the key’s scopes, row scopes, rate limit, allowlist and expiry, refused credentials by reason, circuit breakers on it, recent requests, and Fields it depends on (collections and fields it reads and writes, fetched on demand). Follow and Watch recording for a person.'
+        ],
+        [
+          'Entity',
+          'A collection, widget, page, query or other row of the map: live figures, callers, error groups (each opens the issue), 1, 6 and 24-hour history with issues and slow traces, recent failed requests and recent writes, and the query or widget behind it.'
+        ],
+        [
+          'Query / Widget',
+          'A custom query: its SQL and parameters, cache hits and misses, freshness of its sources, the last slow plan, what uses it and recent failed runs. A widget: its definition, the query it is bound to and recent render errors.'
+        ],
+        [
+          'Page',
+          'A screen: calls and loads in the window against the fan-out limit, the busiest load with its routes and caller, who is on it (live presence for a fixed path; for a pattern such as /records/:id, the callers that requested it), recent page loads and the client builds open in tabs for that app.'
+        ],
+        [
+          'Data / partner node',
+          'The database, cache, storage, a partner API, a channel or the AI provider: live figures, the partner’s summary and health (no secrets), mock instances, history and recent submissions.'
+        ],
+        [
+          'Page load',
+          'Every call one screen load made, as a waterfall: the slowest, the ones called more than once and the errors, each opening its request, with the person’s name. Real-user timings beside it are the page’s 7-day 75th percentile, not this load’s own.'
+        ],
+        ['Search', 'The results of the search box as a level, each result an id you can open.'],
+        [
+          'Investigation (notebook)',
+          'A saved investigation: its notes (saved as you type), the saved stack as links, what each level showed when it was saved, Restore this stack and Delete. See Save investigation on the Act page.'
+        ]
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-stack-moving', text: 'Moving between things' },
+    {
+      type: 'ul',
+      items: [
+        'Related, at the foot of every level, groups what else happened around it: Same chain (everything this event caused), Same record (changes around this time), Same caller (around this time), Same error (earlier and later issues with the same fingerprint), Same statement shape (this request’s top SQL) and Same page load. Each group shows ten and says how many more; each item opens.',
+        'A request, trace or AI call carries a Page load link to the screen load it belonged to, and from there to every other call that load made: "why was this screen slow for Beth".',
+        'The clock in the panel header is the time anchor: the moment the investigation looks around (the first level’s time, or Now) and how wide (5 minutes by default; 1 minute to 1 hour). Every level’s related requests, writes and changes are read around it. Anchor at <time> moves it to the current level’s moment; Anchor at now brings it back.',
+        'Rewind map to here pauses the map at the anchor, so the canvas shows the same second the panel does. The map holds the last 15 minutes; older moments cannot be rewound to.',
+        'Keys: j and k move through the live events and Enter opens the selected one; in the panel, [ and ] go back and forward, p pins and Esc goes back (closes at the first level); / and ⌘K (Ctrl-K) jump to the search box while the map has focus. None of them fire while you type in a field. The ? button in the panel header lists them.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-stack-limits', text: 'Limits' },
+    {
+      type: 'ul',
+      items: [
+        'Traces live in each API process’s memory, 200 at a time (`TRACE_BUFFER`), and only requests slower than `TRACE_SLOW_MS` are kept unless something armed them: Trace on a trace level, Capture next…, or Keep their next 50 traces on a person. A trace kept by another process reads as not found; statement shapes, plans and captures are per process too.',
+        'Requests come from the API log, kept 14 days, so a request older than that opens with its facts but no body. AI calls are kept 30 days. Recordings and error clips are kept 7 days, and only exist where session replay is switched on.',
+        'Replay needs a stored body, which only token and API-key writes keep; a read can be run again from Copy as curl.',
+        'In cloud mode the investigation routes read process-wide state and are not tenant-aware, so they answer 404 and every level reads as not found. The map and the inspector history still work there.',
+        'Captured bodies and traces are held in memory only, with credential-like values masked, and dropped when the capture’s time runs out.',
+        'Explain this sends the model only what the open levels already loaded; a level you never opened is sent as "not loaded".'
+      ]
     }
   ]
 }
@@ -548,8 +686,8 @@ export const obsTrafficMapAct: DocSection = {
     {
       type: 'ul',
       items: [
-        'An error in the live events opens the logged request in API Analytics, where you can read the body and replay it.',
-        'A record id opens the record. A write or error offers Show path: the request, the writes it made, the transitions, partner pushes and flows that followed.',
+        'Request on a live event opens the logged request in the investigation panel, where you can read the body, replay it and open its trace (see Investigating from an event on the Investigate page).',
+        'Record opens the record there too, with the writes around that moment. Path opens the event path: the request, the writes it made, the transitions, partner pushes and flows that followed, each of which opens in turn.',
         'A caller opens Inbound calls filtered to it; a person opens their profile. An entity opens where it is configured; a partner opens its external API.',
         'Runbook links appear on a node when an Environments component’s notes name one, or when an extension declares one.'
       ]
@@ -611,6 +749,41 @@ export const obsTrafficMapAct: DocSection = {
     {
       type: 'p',
       text: 'The In flight panel lists requests this process has not finished, oldest first, with their age, route, caller and the SQL they are running. Cancel kills the database session running that statement: give a reason, then confirm. Use it for a runaway read, not for a write you want to finish.'
+    },
+    { type: 'h2', id: 'traffic-map-stack-actions', text: 'Acting from a drill-down' },
+    {
+      type: 'p',
+      text: 'The investigation panel’s header carries actions that work on the whole stack, not one level. The level-specific ones (Replay, Copy as curl, Trace, Compare with…, Dry run with this payload, Resend, Watch what they saw, Restore this stack) are listed under What you can open on the Investigate page.'
+    },
+    {
+      type: 'table',
+      head: ['Action', 'What it does'],
+      rows: [
+        [
+          'Explain this',
+          'Sends the open stack to the AI provider and returns what happened, the likely cause and where to look next, with [L1], [L2] citations that jump to the level they came from. It sends only what the levels already loaded, compacted to 24 KB with credential-like values masked, so open the trace or the event path first if you want them considered. Needs an AI provider (Settings → AI Features). Explain again asks once more; each call writes an activity row naming the kinds, never the text.'
+        ],
+        [
+          'Share',
+          'Create issue… makes an issue (title, severity) whose details are every level’s key facts as Markdown plus the ?inspect= link back to this view. Post to chat… posts the stack’s path, the current level’s key facts and the link to a chat room you pick. Request, trace and replay links are included only when those levels are on the stack.'
+        ],
+        [
+          'Save investigation',
+          'Saves the stack, what each level showed and your notes as an investigation (a notebook). Investigations in the toolbar lists the saved ones; each opens as a level where notes save as you type and Restore this stack reopens the levels. Saving writes an activity row that appears on the Ops Console incident timeline with the investigation’s title (the notes stay in the notebook). Delete needs two clicks.'
+        ],
+        [
+          'Live tail',
+          'On an entity, caller or request level: a strip inside the level that shows the live events matching that entity, that caller (or background source) or that route while the panel is open, up to 50, each opening its most specific level. Only events the process you are watching streams to the page are seen. It switches off when you move to another level.'
+        ],
+        [
+          'Export',
+          'Copy as Markdown or Download Markdown writes every level’s key facts, each with its own ?inspect= link, for a bug report or a ticket. Download HAR writes the request levels on the stack as a HAR 1.2 file for a browser or proxy tool; a stack with no request has nothing to export that way. Levels that were never loaded say so in the export.'
+        ],
+        [
+          'Capture the next N',
+          'Capture next… in the toolbar holds the next requests matching a route (GET /api/items/workflows/:id), a caller (k12, u<user id>) or an entity (items/workflows): up to 50 of them, for 1 to 15 minutes, with their full traces and request bodies even when they are fast. A capture level opens at once and fills in; Stop ends it early. Bodies are masked, held in memory only and dropped when the time runs out. Admins only, and every capture writes an activity row.'
+        ]
+      ]
     }
   ]
 }
