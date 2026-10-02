@@ -115,6 +115,18 @@ interface WorkflowBinding {
   owner_fallback_field: string | null
 }
 
+/**
+ * A binding change adds or removes the `workflow_instance` GraphQL field on the
+ * bound collection, which only exists in a rebuilt schema. Rebuilt in the
+ * background on this process; other replicas pick it up at their next restart
+ * or POST /graphql/rebuild.
+ */
+function refreshGraphQLForBindings(): void {
+  void import('../plugins/graphql.js')
+    .then((m) => m.rebuildGraphQLSchema())
+    .catch((err) => console.warn('[pipelines] GraphQL rebuild after binding change failed', err))
+}
+
 interface WorkflowInstance {
   id: string
   template: string
@@ -1113,6 +1125,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     await db('nivaro_workflow_template_versions').where({ template: id }).delete()
     const deleted = await db('nivaro_workflow_templates').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
+    refreshGraphQLForBindings()
     await logActivity({
       action: 'delete',
       collection: 'nivaro_workflow_templates',
@@ -1555,6 +1568,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       req,
       comment: `template:${id}`
     })
+    refreshGraphQLForBindings()
     return reply.code(201).send({ data: binding })
   })
 
@@ -1568,6 +1582,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     }
     const deleted = await db('nivaro_workflow_bindings').where({ id: bindingId }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
+    refreshGraphQLForBindings()
     await logActivity({
       action: 'delete',
       collection: 'nivaro_workflow_bindings',

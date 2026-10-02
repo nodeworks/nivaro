@@ -1421,6 +1421,7 @@ export function gqlState(s: WorkflowState) {
     id: s.id,
     key: s.key,
     label: s.label,
+    externalLabel: (s as { external_label?: string | null }).external_label ?? null,
     color: s.color,
     isInitial: coerceBool(s.is_initial),
     isTerminal: coerceBool(s.is_terminal),

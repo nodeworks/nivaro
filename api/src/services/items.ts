@@ -38,6 +38,7 @@ import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissio
 import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import { attachRecordInstance, splitInstanceField } from './record-instance.js'
 import {
   applyAgingFilter,
   applyStateFilter,
@@ -1082,7 +1083,8 @@ async function expandRelations(
     // `related.$state` — a projection, not a column. Out before selectCols is
     // built; 'id' is always selected below, which is all the attach needs.
     const subState = splitStateField(subDirect0)
-    const subDirect = subState.fields
+    const subInstance = splitInstanceField(subState.fields, subNested)
+    const subDirect = subInstance.fields
     delete subNested[STATE_FIELD]
 
     // Column-level permission filtering
@@ -1123,6 +1125,8 @@ async function expandRelations(
     relItems = await Promise.all(relItems.map((r) => decryptItemFields(relCollection, r)))
 
     if (subState.wantsState) await attachRecordState(relCollection, relItems)
+    if (subInstance.instance)
+      await attachRecordInstance(relCollection, relItems, user, subInstance.instance)
 
     // Recurse for deeper expansion
     if (Object.keys(subNested).length > 0) {
@@ -2929,9 +2933,16 @@ export async function readItems(
   // Split here rather than after field narrowing so a role with an explicit
   // policy field list — which can never name a virtual field — still gets it.
   const stateSplit = splitStateField(directFields0)
-  const directFields = stateSplit.fields
+  // `$workflow_instance` — same kind of projection: the record's instance.
+  const instanceSplit = splitInstanceField(stateSplit.fields, nestedFieldMap)
+  const directFields = instanceSplit.fields
   delete nestedFieldMap[STATE_FIELD]
-  if (stateSplit.wantsState && directFields.length === 0) directFields.push('id')
+  if ((stateSplit.wantsState || instanceSplit.instance) && directFields.length === 0)
+    directFields.push('id')
+  // The instance read is keyed by the record id — carry it in an explicit
+  // projection that left it out (`fields=name,$workflow_instance`).
+  if (instanceSplit.instance && directFields[0] !== '*' && !directFields.includes('id'))
+    directFields.push('id')
 
   const effectiveOffset = keyset ? 0 : page ? (page - 1) * limit : offset
   let selectFields =
@@ -3266,6 +3277,14 @@ export async function readItems(
   if (stateSplit.wantsState && data.length > 0) {
     await span('record-state', () => attachRecordState(collection, data), `${data.length} rows`)
   }
+  if (instanceSplit.instance && data.length > 0) {
+    const opts = instanceSplit.instance
+    await span(
+      'record-instance',
+      () => attachRecordInstance(collection, data, user, opts),
+      `${data.length} rows`
+    )
+  }
 
   // Expand M2O relations for dotted fields (e.g. 'category.name', 'category.*')
   if (Object.keys(nestedFieldMap).length > 0 && data.length > 0) {
@@ -3530,7 +3549,8 @@ export async function readOne(
 
   // `$state` — see readItems: split before the column machinery runs.
   const oneState = splitStateField(directFields0)
-  const directFields = oneState.fields
+  const oneInstance = splitInstanceField(oneState.fields, nestedFieldMap)
+  const directFields = oneInstance.fields
   delete nestedFieldMap[STATE_FIELD]
 
   let selectCols =
@@ -3542,7 +3562,11 @@ export async function readOne(
 
   // The state read is keyed by the record id — an explicit projection that asks
   // for `$state` must carry one.
-  if (oneState.wantsState && selectCols[0] !== '*' && !selectCols.includes('id')) {
+  if (
+    (oneState.wantsState || oneInstance.instance) &&
+    selectCols[0] !== '*' &&
+    !selectCols.includes('id')
+  ) {
     selectCols = ['id', ...selectCols]
   }
 
@@ -3610,6 +3634,8 @@ export async function readOne(
     await applyReadComputedFields(collection, [item], virtualSplit.requested)
     dropExtras([item], virtualSplit.extras)
     if (oneState.wantsState) await attachRecordState(collection, [item])
+    if (oneInstance.instance)
+      await attachRecordInstance(collection, [item], user, oneInstance.instance)
     if (Object.keys(nestedFieldMap).length > 0) {
       await expandRelations(user, [item], collection, nestedFieldMap, 0, workspaceId)
     }

@@ -25,7 +25,7 @@ import {
   domainSubscriptionFields
 } from '../graphql/resolvers.js'
 import { GraphQLJSON } from '../graphql/scalars.js'
-import { ALL_DOMAIN_TYPES, UserType } from '../graphql/types.js'
+import { ALL_DOMAIN_TYPES, UserType, WorkflowInstanceType } from '../graphql/types.js'
 import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
@@ -48,6 +48,7 @@ import {
   updateOne,
   upsertInfoOf
 } from './items.js'
+import { boundCollections, resolveRecordInstanceGql } from './record-instance.js'
 import { timedGate, timedResolver } from './traffic-taps/graphql-resolvers.js'
 import { runUnit } from './unit-of-work.js'
 import { RECORD_ORIGINS, translateVirtualKeys } from './virtual-filters.js'
@@ -494,6 +495,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       fields.filter((f) => !f.hidden || f.field === 'id')
     )
   }
+
+  // Collections bound to a pipeline get a `workflow_instance` field.
+  const pipelineBound = await boundCollections()
 
   // ── Relation maps ──────────────────────────────────────────────────────────
   const allRelations = await getRelations()
@@ -1056,6 +1060,17 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
 
           if (!gqlFields.tasks && !colName.startsWith('nivaro_'))
             gqlFields.tasks = tasksField(colName)
+
+          // A record of a pipeline-bound collection carries its current
+          // instance (open first, else newest) — batched per request.
+          if (pipelineBound.has(colName) && !gqlFields.workflow_instance)
+            gqlFields.workflow_instance = {
+              type: WorkflowInstanceType,
+              description:
+                "This record's pipeline instance: current state, available transitions, history.",
+              resolve: (parent, _args, ctx) =>
+                resolveRecordInstanceGql(ctx, colName, (parent as { id?: unknown } | null)?.id)
+            }
 
           return gqlFields
         }

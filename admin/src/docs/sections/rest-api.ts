@@ -760,6 +760,19 @@ export const apiFilter: DocSection = {
       type: 'p',
       text: "State keys are the pipeline's own keys. `__none__` stands for a record with no pipeline instance: name it in `_in` to include such records, or in `_nin` to leave them out."
     },
+    { type: 'h3', text: 'Reading the pipeline instance (`$workflow_instance`)' },
+    {
+      type: 'p',
+      text: "Ask for `$workflow_instance` in `fields` on any collection bound to a pipeline and each record carries its current instance: the current state (with the name partners are sent, `external_label`), when it entered that state, and the transitions the caller's role may run from it. Add `$workflow_instance.history` for the transition log. It is never part of `*`, a record with no pipeline reads `null`, and a whole page is read in a fixed number of queries. `$state` is the lighter read when only the state is needed."
+    },
+    {
+      type: 'pre',
+      code: '// Current state + available transitions\n?fields=id,workflow_id,$workflow_instance\n\n// ... plus the transition log\n?fields=id,$workflow_instance.history\n\n// On a related record\n?fields=id,workflow.$workflow_instance'
+    },
+    {
+      type: 'note',
+      text: 'Available transitions are filtered by role, not by their condition rules — the transition endpoint still judges those, so a listed transition can be refused.'
+    },
     { type: 'h3', text: 'Who wrote to it (`$origin`)' },
     {
       type: 'p',

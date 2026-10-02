@@ -60,6 +60,10 @@ export const WorkflowStateType: GraphQLObjectType = new GraphQLObjectType({
     id: { type: new GraphQLNonNull(GraphQLID) },
     key: { type: new GraphQLNonNull(GraphQLString) },
     label: { type: new GraphQLNonNull(GraphQLString) },
+    externalLabel: {
+      type: GraphQLString,
+      description: 'The name partner integrations are told this state is (falls back to label).'
+    },
     color: { type: GraphQLString },
     isInitial: { type: new GraphQLNonNull(GraphQLBoolean) },
     isTerminal: { type: new GraphQLNonNull(GraphQLBoolean) },
@@ -114,6 +118,10 @@ export const WorkflowInstanceType: GraphQLObjectType = new GraphQLObjectType({
     currentState: { type: WorkflowStateType },
     startedAt: { type: new GraphQLNonNull(GraphQLDateTime) },
     completedAt: { type: GraphQLDateTime },
+    enteredAt: {
+      type: GraphQLDateTime,
+      description: 'When the record entered its current state (instance start when it began there).'
+    },
     history: {
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(WorkflowHistoryEntryType)))
     },
@@ -198,6 +206,10 @@ export const PipelineStateType: GraphQLObjectType = new GraphQLObjectType({
     id: { type: new GraphQLNonNull(GraphQLID) },
     key: { type: new GraphQLNonNull(GraphQLString) },
     label: { type: new GraphQLNonNull(GraphQLString) },
+    externalLabel: {
+      type: GraphQLString,
+      description: 'The name partner integrations are told this state is (falls back to label).'
+    },
     color: { type: GraphQLString },
     isInitial: { type: new GraphQLNonNull(GraphQLBoolean) },
     isTerminal: { type: new GraphQLNonNull(GraphQLBoolean) },

@@ -342,6 +342,25 @@ query {
   }) { total }
 }`
     },
+    { type: 'h3', text: "A record's pipeline instance" },
+    {
+      type: 'p',
+      text: "Every collection bound to a pipeline has a `workflow_instance` field: the record's current instance with its state, when it entered it, the transitions your role may run and (when selected) its history. It resolves for a whole page in a fixed number of queries, and is null for a record with no pipeline. Binding or unbinding a collection rebuilds the schema on the process that made the change; other replicas pick it up on restart or `POST /api/graphql/rebuild`."
+    },
+    {
+      type: 'pre',
+      code: `query {
+  orders(limit: 25) {
+    id
+    workflow_instance {
+      currentState { key label externalLabel }
+      enteredAt
+      availableTransitions { id label }
+      history { timestamp toState { key } user { firstName } comment }
+    }
+  }
+}`
+    },
     { type: 'h3', text: 'Filtering on the link itself' },
     {
       type: 'p',
