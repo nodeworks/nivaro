@@ -12,6 +12,7 @@
  * and captures are per API process (memory) — every answer says when something lives elsewhere.
  */
 import { randomUUID } from 'node:crypto'
+import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { errorText, reasonWithoutSql } from '../../lib/db-refusal.js'
@@ -89,6 +90,23 @@ const iso = (v: unknown): string | null => {
   const d = v instanceof Date ? v : new Date(String(v))
   return Number.isNaN(d.getTime()) ? null : d.toISOString()
 }
+/** Epoch ms of a log timestamp (peeks carry `at` as a number). */
+const epoch = (v: string | null): number | null => {
+  if (v == null) return null
+  const n = Date.parse(v)
+  return Number.isFinite(n) ? n : null
+}
+
+/**
+ * A log row's route template, spelled as the map and the keep-next arms spell it: the root
+ * `/graphql` alias is logged under `/graphql`, but its work runs as an inner `/api/graphql`
+ * dispatch (that is the url keep-next sees and the route the map shows), so both read as
+ * `POST /api/graphql · op`. Without this a "Trace next call" armed from a root-alias row's
+ * panel could never match.
+ */
+export function logRoute(method: string, path: string, op: string | null): string {
+  return routeTemplate(method, path === '/graphql' ? '/api/graphql' : path, op)
+}
 const numOrNull = (v: unknown): number | null =>
   v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v)
 const strOrNull = (v: unknown): string | null => (v == null || v === '' ? null : String(v))
@@ -154,7 +172,7 @@ function shapeRow(r: Record<string, unknown>): RequestRow {
     user,
     api_key_id: apiKeyId,
     caller,
-    route: routeTemplate(method, path, op),
+    route: logRoute(method, path, op),
     entity: c ? entityKey(c.lane, c.entity) : null,
     record: recordRefFromPath(path)
   }
@@ -169,13 +187,15 @@ function rowQuery() {
 
 export interface FoundRow {
   row: RequestRow
-  matched_by: 'request_id' | 'chain_time' | 'time'
+  matched_by: 'request_id' | 'chain_time' | 'time' | 'chain'
 }
 
 /**
  * The log row of request `rid`. Falls back, for the root `/graphql` alias (its row carries the
  * chain id but no request id — the map's event names the inner dispatch), to the /graphql row of
- * the same chain within ±2 s, else to the only request-id-less /graphql row within ±2 s of `at`.
+ * the same chain within ±2 s, else to the only request-id-less /graphql row within ±2 s of `at`,
+ * else — `rid` being a chain id, which is how a root-alias row is named as a compare candidate —
+ * to the newest /graphql row of that chain.
  */
 export async function findRequestRow(rid: string, at: number | null): Promise<FoundRow | null> {
   if (!isRequestId(rid) || !(await hasColumn('nivaro_api_logs', 'request_id'))) return null
@@ -185,8 +205,9 @@ export async function findRequestRow(rid: string, at: number | null): Promise<Fo
     | undefined
   if (direct) return { row: shapeRow(direct), matched_by: 'request_id' }
 
+  const withChain = await hasColumn('nivaro_api_logs', 'chain_id')
   const chain = chainForGraphqlRequest(id)
-  if (chain && UUID_RE.test(chain.chainId) && (await hasColumn('nivaro_api_logs', 'chain_id'))) {
+  if (chain && UUID_RE.test(chain.chainId) && withChain) {
     const t = chain.at
     const r = (await rowQuery()
       .whereIn('l.path', ['/graphql', '/api/graphql'])
@@ -203,6 +224,15 @@ export async function findRequestRow(rid: string, at: number | null): Promise<Fo
       .whereBetween('l.created_at', [new Date(at - 2000), new Date(at + 2000)])
       .limit(2)) as Array<Record<string, unknown>>
     if (rows.length === 1) return { row: shapeRow(rows[0]), matched_by: 'time' }
+  }
+  if (withChain) {
+    const r = (await rowQuery()
+      .where('l.path', '/graphql')
+      .whereNull('l.request_id')
+      .where('l.chain_id', id)
+      .orderBy('l.id', 'desc')
+      .first()) as Record<string, unknown> | undefined
+    if (r) return { row: shapeRow(r), matched_by: 'chain' }
   }
   return null
 }
@@ -252,7 +282,7 @@ async function neighboursOf(row: RequestRow): Promise<
     status: Number(r.status),
     latency_ms: Number(r.latency_ms),
     created_at: iso(r.created_at),
-    route: routeTemplate(String(r.method), String(r.path), strOrNull(r.graphql_operation))
+    route: logRoute(String(r.method), String(r.path), strOrNull(r.graphql_operation))
   }))
 }
 
@@ -445,7 +475,7 @@ registerInspectSource({
     return {
       title: `${r.method} ${r.path}`,
       lines: [`${r.status} · ${r.latency_ms} ms`, r.caller.label],
-      at: r.created_at
+      at: epoch(r.created_at)
     }
   },
   detail: (id, ctx) => requestDetail(id, ctx)
@@ -464,7 +494,7 @@ registerInspectSource({
         `${t.total_ms} ms · ${t.queries} queries · ${t.sql_ms} ms SQL`,
         s.slowest_phase ? `Slowest: ${s.slowest_phase.phase} ${s.slowest_phase.ms} ms` : 'No phases'
       ],
-      at: t.ts
+      at: epoch(t.ts)
     }
   },
   async detail(id, ctx) {
@@ -507,6 +537,7 @@ registerInspectSource({
     let planNote: string | null = null
     if (s.truncated)
       planNote = 'The statement was cut when it was captured — too long to look up a plan.'
+    else if (!isMssql(db)) planNote = 'Plans are read on SQL Server only.'
     else {
       try {
         const { planForStatement } = await import('../custom-query-exec.js')
@@ -537,8 +568,7 @@ function compareSide(found: FoundRow | null, rid: string): CompareSide & { rid: 
     rid: rid.toLowerCase(),
     status: found?.row.status ?? t?.status ?? null,
     latency_ms: found?.row.latency_ms ?? t?.total_ms ?? null,
-    query:
-      found?.row.query ?? (t?.url.includes('?') ? t.url.slice(t.url.indexOf('?') + 1) : null),
+    query: found?.row.query ?? (t?.url.includes('?') ? t.url.slice(t.url.indexOf('?') + 1) : null),
     trace: t ? { total_ms: t.total_ms, spans: t.spans, top_sql: t.top_sql } : null
   }
 }
@@ -620,9 +650,13 @@ registerInspectSource({
   }
 })
 
+/** How far either side of the request the "Compare with…" picker looks. */
+export const COMPARE_WINDOW_MS = 3600_000
+
 /**
- * The same route's other recent requests (last hour, newest first, ≤ 20) — the "Compare with…"
- * picker. Null when `rid` has no log row.
+ * The same route's other requests within an hour either side of `rid`'s own time (nearest
+ * first, ≤ 20) — the "Compare with…" picker. A root-`/graphql` row (no request id, a chain id)
+ * is named by its chain id, which `findRequestRow` resolves. Null when `rid` has no log row.
  */
 export async function compareCandidates(rid: string, at: number | null) {
   const found = await findRequestRow(rid, at)
@@ -630,17 +664,34 @@ export async function compareCandidates(rid: string, at: number | null) {
   const row = found.row
   const f = routeLogFilter(row.route)
   if (!f) return { route: row.route, candidates: [] }
-  const withOp = await hasColumn('nivaro_api_logs', 'graphql_operation')
+  const [withOp, withChain] = await Promise.all([
+    hasColumn('nivaro_api_logs', 'graphql_operation'),
+    hasColumn('nivaro_api_logs', 'chain_id')
+  ])
+  const centre = epoch(row.created_at) ?? at ?? Date.now()
   const q = db('nivaro_api_logs as l')
-    .where('l.created_at', '>=', new Date(Date.now() - 3600_000))
+    .whereBetween('l.created_at', [
+      new Date(centre - COMPARE_WINDOW_MS),
+      new Date(centre + COMPARE_WINDOW_MS)
+    ])
     .where('l.method', f.method)
-    .whereNotNull('l.request_id')
-    .whereNot('l.request_id', rid.toLowerCase())
-  if (f.pathExact) void q.where('l.path', f.pathExact)
-  if (f.pathLike) void q.where('l.path', 'like', f.pathLike)
+    .whereNot('l.id', row.id)
+  // A row is a candidate when something names it: its request id, or (root /graphql) its chain.
+  if (withChain)
+    void q.where((b) => {
+      void b.whereNotNull('l.request_id').orWhere((c) => {
+        void c.whereNull('l.request_id').where('l.path', '/graphql').whereNotNull('l.chain_id')
+      })
+    })
+  else void q.whereNotNull('l.request_id')
+  if (f.pathExact === '/api/graphql') void q.whereIn('l.path', ['/graphql', '/api/graphql'])
+  else if (f.pathExact) void q.where('l.path', f.pathExact)
+  // Backslash escaping (routeLogFilter / escapeLike): SQL Server needs the ESCAPE clause spelled.
+  if (f.pathLike) void q.whereRaw("l.path LIKE ? ESCAPE '\\'", [f.pathLike])
   if (f.operation && withOp) void q.where('l.graphql_operation', f.operation)
   const rows = (await q
     .select(
+      'l.id',
       'l.request_id',
       'l.method',
       'l.path',
@@ -649,19 +700,27 @@ export async function compareCandidates(rid: string, at: number | null) {
       'l.created_at',
       'l.user',
       'l.api_key_id',
-      ...(withOp ? ['l.graphql_operation'] : [])
+      ...(withOp ? ['l.graphql_operation'] : []),
+      ...(withChain ? ['l.chain_id'] : [])
     )
     .orderBy('l.created_at', 'desc')
     .limit(200)) as Array<Record<string, unknown>>
   const candidates = rows
     .filter(
       (r) =>
-        routeTemplate(String(r.method), String(r.path), strOrNull(r.graphql_operation)) ===
-        row.route
+        logRoute(String(r.method), String(r.path), strOrNull(r.graphql_operation)) === row.route
+    )
+    .map((r) => ({ r, id: strOrNull(r.request_id) ?? strOrNull(r.chain_id) }))
+    .filter((x): x is { r: Record<string, unknown>; id: string } => x.id != null)
+    .sort(
+      (x, y) =>
+        Math.abs((epoch(iso(x.r.created_at)) ?? centre) - centre) -
+        Math.abs((epoch(iso(y.r.created_at)) ?? centre) - centre)
     )
     .slice(0, 20)
-    .map((r) => ({
-      request_id: String(r.request_id).toLowerCase(),
+    .map(({ r, id }) => ({
+      request_id: id.toLowerCase(),
+      by_chain: r.request_id == null,
       path: String(r.path),
       status: Number(r.status),
       latency_ms: Number(r.latency_ms),
@@ -669,7 +728,7 @@ export async function compareCandidates(rid: string, at: number | null) {
       same_caller:
         (row.api_key_id != null && Number(r.api_key_id) === row.api_key_id) ||
         (row.user != null && String(r.user ?? '').toUpperCase() === row.user.toUpperCase()),
-      traced: getTrace(String(r.request_id).toLowerCase()) != null
+      traced: getTrace(id.toLowerCase()) != null
     }))
   return { route: row.route, candidates }
 }

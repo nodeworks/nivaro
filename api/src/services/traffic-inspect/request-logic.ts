@@ -5,6 +5,7 @@
  * statement-shape ids and the compare diff. No db, no Redis, no Fastify.
  */
 import { createHash } from 'node:crypto'
+import { escapeLike } from '../traffic-history.js'
 
 export const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 export const SHA1_RE = /^[0-9a-f]{40}$/
@@ -369,8 +370,9 @@ export function recordRefFromPath(path: string | null | undefined): string | nul
 
 /**
  * A route template as a SQL filter on the request log: `GET /api/items/x/:id` → method GET, path
- * LIKE `/api/items/x/%` (LIKE wildcards in literal parts escaped, `:id` as `%`). GraphQL
- * templates filter on the operation instead.
+ * LIKE `/api/items/x/%` (LIKE wildcards in literal parts backslash-escaped like the rest of the
+ * traffic code — use with `ESCAPE '\'`; `:id` as `%`). GraphQL templates filter on the
+ * operation instead.
  */
 export function routeLogFilter(template: string): {
   method: string
@@ -390,10 +392,7 @@ export function routeLogFilter(template: string): {
     rest = rest.slice(0, dot)
   }
   if (!rest.includes(':id')) return { method, pathLike: null, pathExact: rest, operation }
-  const like = rest
-    .split(':id')
-    .map((part) => part.replace(/[%_[]/g, (c) => `[${c}]`))
-    .join('%')
+  const like = rest.split(':id').map(escapeLike).join('%')
   return { method, pathLike: like, pathExact: null, operation }
 }
 

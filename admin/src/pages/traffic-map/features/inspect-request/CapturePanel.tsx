@@ -37,11 +37,10 @@ function useNow(on: boolean): number {
 }
 
 export function CapturePanel({ inspectRef, anchor, windowSec }: InspectPanelProps) {
-  const q = useLiveDetail<CaptureDetail>(
-    inspectRef,
-    anchor,
-    windowSec,
-    (d) => !!d && d.expires_at > Date.now()
+  // Every 2 s while it can still catch something; once the count is reached only a slow poll, for
+  // entries a peer process kept in the same instant; nothing once it has expired.
+  const q = useLiveDetail<CaptureDetail>(inspectRef, anchor, windowSec, (d) =>
+    !d || d.expires_at <= Date.now() ? false : d.done ? 15_000 : 2000
   )
   const live = !!q.data && q.data.expires_at > Date.now()
   const now = useNow(live)

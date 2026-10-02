@@ -262,7 +262,7 @@ export function CompareAction({ inspectRef, anchor, open: openRef }: InspectPane
       <PopoverContent align='end' className='w-[340px] p-2'>
         <div className='traffic-map grid gap-1.5' data-tm-inspect-compare-picker=''>
           <span className='text-[12px] font-medium text-[var(--tm-fg)]'>
-            {q.data ? `Recent ${q.data.route}` : 'Same route, last hour'}
+            {q.data ? `${q.data.route}, within an hour` : 'Same route, within an hour'}
           </span>
           {q.isLoading ? (
             <PanelSkeleton rows={4} />
@@ -270,7 +270,7 @@ export function CompareAction({ inspectRef, anchor, open: openRef }: InspectPane
             <p className='text-[11.5px] text-[var(--tm-muted)]'>{err.message}</p>
           ) : (q.data?.candidates.length ?? 0) === 0 ? (
             <p className='text-[11.5px] text-[var(--tm-muted)]'>
-              No other call of this route in the last hour.
+              No other call of this route within an hour of this one.
             </p>
           ) : (
             <ul className='grid max-h-72 gap-0.5 overflow-auto'>
@@ -301,6 +301,11 @@ export function CompareAction({ inspectRef, anchor, open: openRef }: InspectPane
                         </Tag>
                       )}
                       {c.same_caller && <Tag tip='Made by the same caller'>same caller</Tag>}
+                      {c.by_chain && (
+                        <Tag tip='A root /graphql call, logged without a request id — named by its chain'>
+                          by chain
+                        </Tag>
+                      )}
                     </span>
                   </button>
                 </li>

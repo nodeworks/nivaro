@@ -4,6 +4,7 @@
  */
 import { useEffect, useState } from 'react'
 import { SimpleSelect } from '@/components/ui/simple-select'
+import { inspectErrorOf } from '../../inspect/api'
 import { InspectLink } from '../../inspect/InspectLink'
 import { BTN, errorOf } from '../shared'
 import { armTraceNext, stopArm, useArmStatus } from './api'
@@ -39,9 +40,15 @@ export function TraceNextControl({ route, caller }: { route: string; caller: str
     return () => clearInterval(t)
   }, [armId])
 
-  const expired =
-    (status.error as { response?: { status?: number } } | null)?.response?.status === 404 ||
-    (status.data != null && status.data.expires_at <= now)
+  const gone = status.error ? inspectErrorOf(status.error) : null
+  const notFound = gone?.status === 404
+  const expired = notFound || (status.data != null && status.data.expires_at <= now)
+  // Count reached: what it kept stays listed, but the arm is spent — offer to arm again, and stop
+  // re-selecting it for this route when the panel is reopened.
+  const finished = !!status.data?.done
+  useEffect(() => {
+    if (finished && armId && armed.get(key) === armId) armed.delete(key)
+  }, [finished, armId, key])
 
   async function start() {
     setBusy(true)
@@ -65,7 +72,7 @@ export function TraceNextControl({ route, caller }: { route: string; caller: str
   const d = status.data
   return (
     <div className='grid gap-1.5' data-tm-inspect-trace-next={armId ?? ''}>
-      {(!armId || expired) && (
+      {(!armId || expired || finished) && (
         <div className='flex flex-wrap items-center gap-2'>
           <button
             type='button'
@@ -74,7 +81,7 @@ export function TraceNextControl({ route, caller }: { route: string; caller: str
             onClick={start}
             data-tm-inspect-trace-next-start=''
           >
-            {busy ? 'Arming…' : 'Trace'}
+            {busy ? 'Arming…' : armId ? 'Trace again' : 'Trace'}
           </button>
           <SimpleSelect
             value={count}
@@ -100,7 +107,9 @@ export function TraceNextControl({ route, caller }: { route: string; caller: str
       {err && <Note tone='error'>{err}</Note>}
       {armId && expired && (
         <Note hook='trace-next-expired'>
-          The last trace-next ran out of time (15 minutes) — arm another to keep waiting.
+          {notFound
+            ? `${gone?.message ?? 'That trace-next has ended'} — arm another to keep waiting.`
+            : 'The last trace-next ran out of time (15 minutes) — arm another to keep waiting.'}
         </Note>
       )}
       {armId && !expired && d && (

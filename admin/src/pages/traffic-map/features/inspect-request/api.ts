@@ -4,7 +4,7 @@
  * group's own routes (trace-next, capture, compare candidates, statement plans).
  */
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { api } from '@/lib/api'
 import { fetchInspect } from '../../inspect/api'
 import type { InspectRef } from '../../registry/inspectables'
@@ -77,7 +77,7 @@ export interface RequestDetail {
   instance: string
   pending: boolean
   missing: string | null
-  matched_by: 'request_id' | 'chain_time' | 'time' | null
+  matched_by: 'request_id' | 'chain_time' | 'time' | 'chain' | null
   row: RequestRow | null
   trace: TraceKept | TraceAbsent
   neighbours: Neighbour[]
@@ -263,7 +263,9 @@ export interface ArmStatus {
 }
 
 export interface CompareCandidate {
+  /** A request id — or, for a root /graphql call (logged without one), its chain id. */
   request_id: string
+  by_chain: boolean
   path: string
   status: number
   latency_ms: number
@@ -284,58 +286,74 @@ function noRetry4xx(count: number, err: unknown): boolean {
 }
 
 /**
+ * When each request was first seen `pending`, by request id. Module-level rather than a ref: a
+ * panel remounted within the cache's 30 s (Back from a deeper level, split view, reopened) is
+ * served the cached pending answer without a fetch, and must keep counting from the first sight,
+ * not start over — or, worse, never poll and never give up.
+ */
+const firstPending = new Map<string, number>()
+const FIRST_PENDING_CAP = 200
+
+function firstPendingAt(id: string, pending: boolean): number | null {
+  if (!pending) {
+    firstPending.delete(id)
+    return null
+  }
+  let t = firstPending.get(id)
+  if (t == null) {
+    t = Date.now()
+    firstPending.set(id, t)
+    while (firstPending.size > FIRST_PENDING_CAP) {
+      const oldest = firstPending.keys().next().value
+      if (oldest === undefined) break
+      firstPending.delete(oldest)
+    }
+  }
+  return t
+}
+
+/**
  * A request's detail. A request this fresh may not be in the API log yet (the logger flushes in
- * batches): the server answers `pending` and this polls every 2 s for up to 20 s.
+ * batches): the server answers `pending` and this polls every 2 s for up to 20 s after the
+ * request was first seen pending, then gives up (`gaveUp`).
  */
 export function useRequestDetail(ref: InspectRef, anchor: number | null, windowSec: number) {
   const { at, key } = detailKey(ref, anchor, windowSec)
-  const firstAt = useRef<number | null>(null)
-  const firstFor = useRef<string | null>(null)
-  if (firstFor.current !== ref.id) {
-    firstFor.current = ref.id
-    firstAt.current = null
-  }
   const q = useQuery<RequestDetail>({
     queryKey: key,
-    queryFn: async () => {
-      const d = await fetchInspect<RequestDetail>(ref.kind, ref.id, { at, window: windowSec })
-      if (firstAt.current == null) firstAt.current = Date.now()
-      return d
-    },
+    queryFn: () => fetchInspect<RequestDetail>(ref.kind, ref.id, { at, window: windowSec }),
     staleTime: 30_000,
     retry: noRetry4xx,
     refetchInterval: (query) => {
       const d = query.state.data
       if (!d?.pending) return false
-      return firstAt.current != null && shouldRetryPending(firstAt.current, Date.now())
-        ? PENDING_RETRY_MS
-        : false
+      const first = firstPendingAt(ref.id, true)
+      return first != null && shouldRetryPending(first, Date.now()) ? PENDING_RETRY_MS : false
     }
   })
+  const pending = !!q.data?.pending
+  const first = firstPendingAt(ref.id, pending)
   // The last poll schedules nothing, so a timer re-renders once the 20 s are up.
   const [, setTick] = useState(0)
-  const pending = !!q.data?.pending
   useEffect(() => {
-    if (!pending || firstAt.current == null) return
-    const left = firstAt.current + PENDING_GIVE_UP_MS - Date.now()
+    if (!pending || first == null) return
+    const left = first + PENDING_GIVE_UP_MS - Date.now()
     const t = setTimeout(() => setTick((n) => n + 1), Math.max(0, left) + 50)
     return () => clearTimeout(t)
-  }, [pending])
-  const gaveUp =
-    pending &&
-    firstAt.current != null &&
-    !shouldRetryPending(firstAt.current, Date.now()) &&
-    !q.isFetching
+  }, [pending, first])
+  const gaveUp = pending && first != null && !shouldRetryPending(first, Date.now()) && !q.isFetching
   return { ...q, gaveUp }
 }
 
-/** A detail that refreshes every `ms` while `live` (captures fill while you watch). */
+/**
+ * A detail that refreshes while something is still happening (captures fill while you watch):
+ * `interval(d)` says how often, in ms, or false to stop.
+ */
 export function useLiveDetail<T>(
   ref: InspectRef,
   anchor: number | null,
   windowSec: number,
-  live: (d: T | undefined) => boolean,
-  ms = 2000
+  interval: (d: T | undefined) => number | false
 ) {
   const { at, key } = detailKey(ref, anchor, windowSec)
   return useQuery<T>({
@@ -343,7 +361,7 @@ export function useLiveDetail<T>(
     queryFn: () => fetchInspect<T>(ref.kind, ref.id, { at, window: windowSec }),
     staleTime: 1000,
     retry: noRetry4xx,
-    refetchInterval: (query) => (live(query.state.data as T | undefined) ? ms : false)
+    refetchInterval: (query) => interval(query.state.data as T | undefined)
   })
 }
 
@@ -395,7 +413,7 @@ export function useArmStatus(id: string | null) {
 
 export function useCompareCandidates(rid: string, at: number | null, enabled: boolean) {
   return useQuery<{ route: string; candidates: CompareCandidate[] }>({
-    queryKey: ['tm-inspect-compare-candidates', rid],
+    queryKey: ['tm-inspect-compare-candidates', rid, at],
     queryFn: async () =>
       (
         (

@@ -170,4 +170,9 @@ export function resetStatementShapes(): void {
   seenTraces.clear()
 }
 
-onTraceKept((rec, request) => noteTraceStatements(rec, request))
+// Guarded like request-capture's keepNext: a partial mock of request-trace must not break loading.
+try {
+  onTraceKept((rec, request) => noteTraceStatements(rec, request))
+} catch {
+  /* no kept-trace hook on this request-trace — shapes are backfilled from listTraces on read */
+}

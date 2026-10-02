@@ -261,7 +261,7 @@ describe('paths and routes', () => {
   it('turns a route template into a log filter, wildcards escaped', () => {
     expect(routeLogFilter('GET /api/items/work_flows/:id')).toEqual({
       method: 'GET',
-      pathLike: '/api/items/work[_]flows/%',
+      pathLike: '/api/items/work\\_flows/%',
       pathExact: null,
       operation: null
     })

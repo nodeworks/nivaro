@@ -1,17 +1,19 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { api } from '@/lib/api'
 import { CapturePanel } from './CapturePanel'
 import { RequestPanel } from './RequestPanel'
 import { StatementPanel } from './StatementPanel'
+import { TraceNextControl } from './TraceNextControl'
 import { TracePanel } from './TracePanel'
 
 vi.mock('@/lib/api', () => ({ api: { get: vi.fn(), post: vi.fn(), delete: vi.fn() } }))
 
 const RID = '0f8fad5b-d9cb-469f-a165-70867728950e'
 const get = vi.mocked(api.get)
+const post = vi.mocked(api.post)
 
 function wrap(ui: React.ReactNode) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -29,7 +31,10 @@ const props = (kind: string, id: string) => ({
   windowSec: 300
 })
 
-afterEach(() => get.mockReset())
+afterEach(() => {
+  get.mockReset()
+  post.mockReset()
+})
 
 const row = {
   id: 9,
@@ -128,6 +133,67 @@ describe('RequestPanel', () => {
     })
     render(wrap(<RequestPanel {...props('request', RID)} />))
     await screen.findByText(/Waiting for the API log/)
+  })
+})
+
+describe('TraceNextControl', () => {
+  it('lists what a finished arm kept and offers to arm again', async () => {
+    const armId = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+    post.mockResolvedValue({
+      data: { data: { id: armId, expires_at: Date.now() + 900_000, total: 1 } }
+    })
+    get.mockResolvedValue({
+      data: {
+        data: {
+          id: armId,
+          kind: 'trace',
+          spec: { route: 'GET /api/items/workflows/:id', caller: null, entity: null },
+          total: 1,
+          remaining: 0,
+          done: true,
+          expires_at: Date.now() + 900_000,
+          traces: [
+            {
+              rid: RID,
+              at: Date.now(),
+              ms: 12,
+              status: 200,
+              path: '/api/items/workflows/5',
+              node: 'n1'
+            }
+          ]
+        }
+      }
+    })
+    render(wrap(<TraceNextControl route='GET /api/items/workflows/:id' caller='uU1' />))
+    fireEvent.click(screen.getByText('Trace'))
+    await screen.findByText('Kept 1 of 1.')
+    expect(post).toHaveBeenCalledWith(
+      '/traffic-map/inspect/trace-next',
+      expect.objectContaining({ route: 'GET /api/items/workflows/:id', count: 1 })
+    )
+    expect(document.querySelector(`[data-tm-inspect-link="trace:${RID}"]`)).not.toBeNull()
+    expect(document.querySelector('[data-tm-inspect-trace-next-stop]')).toBeNull()
+    expect(screen.getByText('Trace again')).toBeTruthy()
+  })
+  it('surfaces the server’s reason when the arm is gone', async () => {
+    const armId = '8d9e6679-7425-40de-944b-e07fc1f90ae8'
+    post.mockResolvedValue({
+      data: { data: { id: armId, expires_at: Date.now() + 900_000, total: 1 } }
+    })
+    get.mockRejectedValue({
+      response: {
+        status: 404,
+        data: {
+          code: 'ARM_NOT_FOUND',
+          error: 'That trace-next has expired (or was armed on an API process that has restarted)'
+        }
+      }
+    })
+    render(wrap(<TraceNextControl route='GET /api/items/units/:id' caller={null} />))
+    fireEvent.click(screen.getByText('Trace'))
+    await screen.findByText(/armed on an API process that has restarted/)
+    expect(screen.getByText('Trace again')).toBeTruthy()
   })
 })
 

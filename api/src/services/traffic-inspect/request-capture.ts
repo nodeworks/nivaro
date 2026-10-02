@@ -108,7 +108,11 @@ function factsOf(info: KeepNextInfo, req: ReqLike | null, path: string): Request
   }
 }
 
-/** The request body as a capture keeps it: masked JSON text, capped; or why there is none. */
+/**
+ * The request body as a capture keeps it: masked JSON text, capped; or why there is none. JSON
+ * only, like the API log (plugins/api-logger.ts captureRequestBody): `maskBodySecrets` masks by
+ * key name inside JSON, so a plain-text or form-encoded body could carry a credential through.
+ */
 export function captureBody(
   req: ReqLike | null,
   method: string
@@ -126,6 +130,11 @@ export function captureBody(
   const ct = String(req.headers?.['content-type'] ?? '')
   if (ct.includes('multipart'))
     return { body: null, note: 'Multipart upload — the body is not captured' }
+  if (!ct.toLowerCase().includes('json'))
+    return {
+      body: null,
+      note: 'Non-JSON body — only JSON bodies are captured (credentials are masked by key)'
+    }
   try {
     const text = typeof req.body === 'string' ? req.body : JSON.stringify(req.body)
     if (typeof text !== 'string') return { body: null, note: 'The body could not be read' }
@@ -182,7 +191,13 @@ export function inspectKeepNext(info: KeepNextInfo): boolean {
   return true
 }
 
-keepNext('traffic-inspect-request', inspectKeepNext)
+// Registered at module load so the matcher is in place before the first request. Guarded: a test
+// that mocks request-trace without `keepNext` must not fail to load every module importing this.
+try {
+  keepNext('traffic-inspect-request', inspectKeepNext)
+} catch {
+  /* no keep-next hook on this request-trace (a partial mock) — arms match nothing */
+}
 
 // ─── Redis relay ─────────────────────────────────────────────────────────────
 

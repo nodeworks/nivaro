@@ -26,7 +26,9 @@ const WRITES = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
 const MATCHED: Record<string, string> = {
   chain_time:
     'Matched by chain and time — the root /graphql alias writes its log row without a request id, so this is the /graphql call of the same chain within 2 seconds.',
-  time: 'Matched by time only — the only /graphql call logged without a request id within 2 seconds of this event.'
+  time: 'Matched by time only — the only /graphql call logged without a request id within 2 seconds of this event.',
+  chain:
+    'Matched by chain — this id is a chain id, and this is the newest root /graphql call logged in that chain (such calls carry no request id).'
 }
 
 function replayRow(r: RequestRow): ApiLogRow {
