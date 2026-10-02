@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   bucketCounts,
   dependencyKeyOf,
+  historyAnchorNote,
   historyHoursFor,
   mapWindowFor,
   p95Of,
@@ -148,6 +149,19 @@ describe('windows and ranges', () => {
     expect(historyHoursFor(300)).toBe(1)
     expect(historyHoursFor(7200)).toBe(6)
     expect(historyHoursFor(86_400)).toBe(24)
+  })
+  it('widens the history to reach an anchor, and says when 24 h cannot', () => {
+    const now = 1_000_000_000_000
+    const h = 3600_000
+    expect(historyHoursFor(300, now - 10 * 60_000, now)).toBe(1)
+    expect(historyHoursFor(300, now - 3 * h, now)).toBe(6)
+    expect(historyHoursFor(300, now - h + 1000, now)).toBe(6) // window pushes it past 1 h
+    expect(historyHoursFor(300, now - 20 * h, now)).toBe(24)
+    expect(historyHoursFor(300, now - 48 * h, now)).toBe(24)
+    expect(historyHoursFor(300, now + 60_000, now)).toBe(1) // an anchor in the future is "now"
+    expect(historyAnchorNote(6, 300, now - 3 * h, now)).toBeNull()
+    expect(historyAnchorNote(24, 300, null, now)).toBeNull()
+    expect(historyAnchorNote(24, 300, now - 48 * h, now)).toMatch(/older than 24 h/)
   })
   it('looks around an anchor, never past now', () => {
     const now = 1_000_000_000

@@ -1,11 +1,15 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { parseRefusal } from '../lib/parse-refusal.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { instanceScope } from '../services/api-log-instances.js'
 import { recordReplayRoot } from '../services/chain-roots.js'
 import { queryIsReplayable } from '../services/secret-mask.js'
+
+// The parser lives in lib/ now (the Traffic Map's caller panel shares it); kept here for callers.
+export { parseRefusal }
 
 const LATENCY_SAMPLE_CAP = 50000
 
@@ -963,33 +967,4 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
       }
     })
   })
-}
-
-/**
- * The refusal as the caller received it. The log keeps the first part of the
- * response body; a body cut mid-JSON still yields its code by pattern.
- */
-export function parseRefusal(
-  raw: unknown,
-  status: number
-): { code: string; message: string | null } {
-  const fallback = status === 429 ? 'RATE_LIMITED' : status === 403 ? 'FORBIDDEN' : 'UNAUTHORIZED'
-  if (typeof raw !== 'string' || !raw) return { code: fallback, message: null }
-  try {
-    const body = JSON.parse(raw) as Record<string, unknown>
-    const first = Array.isArray(body.errors)
-      ? (body.errors[0] as Record<string, unknown> | undefined)
-      : undefined
-    const ext = (first?.extensions ?? {}) as Record<string, unknown>
-    const code = body.code ?? ext.code
-    const message = body.message ?? first?.message ?? body.error
-    return {
-      code: typeof code === 'string' && code ? code : fallback,
-      message: typeof message === 'string' ? message.slice(0, 300) : null
-    }
-  } catch {
-    const code = raw.match(/"code"\s*:\s*"([A-Z0-9_]+)"/)?.[1]
-    const message = raw.match(/"message"\s*:\s*"([^"]{1,300})/)?.[1]
-    return { code: code ?? fallback, message: message ?? null }
-  }
 }

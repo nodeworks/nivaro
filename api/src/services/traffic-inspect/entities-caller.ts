@@ -9,9 +9,10 @@
  * circuit breakers on it, and the recent requests (each with its request id when the log row
  * carries one). Field dependencies are heavy (a 14-day log scan) and load on their own route.
  */
+import type { Knex } from 'knex'
 import { db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
-import { parseRefusal } from '../../routes/api-analytics.js'
+import { parseRefusal } from '../../lib/parse-refusal.js'
 import { callerDependencies } from '../partner-dependencies.js'
 import { activeBreakers } from '../traffic-breaker.js'
 import type { InspectCtx, InspectPeek } from '../traffic-inspect.js'
@@ -37,8 +38,12 @@ const personName = (u: { first_name?: unknown; last_name?: unknown; email?: unkn
   String(u.email ?? '').split('@')[0] ||
   null
 
+/**
+ * The caller's API-log rows in the range, newest first — null for callers the log cannot hold:
+ * background sources, and the map's `cron` bucket (work noted outside any request).
+ */
 async function logRows(c: CallerRef, from: Date, to: Date): Promise<LogRow[] | null> {
-  if (c.kind !== 'key' && c.kind !== 'person') return null
+  if (c.kind === 'source' || c.kind === 'cron') return null
   const withRid = await hasColumn('nivaro_api_logs', 'request_id').catch(() => false)
   const q = db('nivaro_api_logs')
     .where('created_at', '>=', from)
@@ -56,11 +61,13 @@ async function logRows(c: CallerRef, from: Date, to: Date): Promise<LogRow[] | n
       'error'
     )
   if (withRid) q.select('request_id')
+  const notKey = (b: Knex.QueryBuilder) => {
+    b.whereNull('auth').orWhereNot('auth', 'api_key')
+  }
   if (c.kind === 'key') q.where('api_key_id', c.apiKeyId).where('auth', 'api_key')
-  else
-    q.whereIn('user', [c.userId, c.userId.toLowerCase()]).where((b) => {
-      b.whereNull('auth').orWhereNot('auth', 'api_key')
-    })
+  else if (c.kind === 'person') q.whereIn('user', [c.userId, c.userId.toLowerCase()]).where(notKey)
+  // The map's `anon` bucket: requests that carried no credential.
+  else q.whereNull('user').where(notKey)
   return (await q) as LogRow[]
 }
 
@@ -220,7 +227,12 @@ export async function callerDetail(id: string, ctx: InspectCtx): Promise<unknown
     c.kind === 'person' ? personInfo(c.userId) : Promise.resolve(null),
     c.kind === 'source' ? sourceRuns(c) : Promise.resolve(null)
   ])
-  if (c.kind === 'key' && !key && !rows?.length) return null
+  // Not found: a key or person that no longer exists and left no request in the range.
+  if (
+    (c.kind === 'key' && !key && !rows?.length) ||
+    (c.kind === 'person' && !person && !rows?.length)
+  )
+    return null
   const summary = rows ? summarizeRequests(rows, 20) : null
   const failures = new Map<
     string,

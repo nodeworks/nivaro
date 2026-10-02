@@ -14,8 +14,8 @@ import { db } from '../../db/index.js'
 import { extensionRoutes } from '../../extensions/loader.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { usersOnPath } from '../../plugins/socketio.js'
-import { capturedPlanFor } from '../../routes/custom-queries.js'
 import { customQueryDependents } from '../custom-query-dependents.js'
+import { capturedPlanFor } from '../custom-query-plans.js'
 import { cachedDefinition } from '../definition-cache.js'
 import { cacheStats, lastQueryError } from '../query-cache-stats.js'
 import { queryFreshness } from '../query-freshness.js'
@@ -32,6 +32,7 @@ import { currentTrafficSec } from '../traffic-map.js'
 import { screensReport } from '../traffic-taps/screens.js'
 import { trafficTaps } from '../traffic-taps.js'
 import {
+  historyAnchorNote,
   historyHoursFor,
   jsonArray,
   jsonObject,
@@ -162,7 +163,8 @@ export async function entityDetail(id: string, ctx: InspectCtx): Promise<unknown
   const range = rangeFor(ctx.at, ctx.windowSec)
   const from = new Date(range.from)
   const to = new Date(range.to)
-  const hours = historyHoursFor(ctx.windowSec)
+  // History reads back from now; wide enough to reach the anchor (#1206) when it can.
+  const hours = historyHoursFor(ctx.windowSec, ctx.at)
   let historyError: string | null = null
   const [label, taps, history, errors, writes] = await Promise.all([
     entityLabel(lane, entity),
@@ -195,6 +197,7 @@ export async function entityDetail(id: string, ctx: InspectCtx): Promise<unknown
     history_note: NO_LOG_LANES.has(lane)
       ? 'Socket events are counted on the map only — the API log holds no rows for them.'
       : null,
+    history_anchor_note: historyAnchorNote(hours, ctx.windowSec, ctx.at),
     callers: callers.slice(0, 10),
     error_groups: groups.slice(0, 10),
     other_lenses: Object.keys(taps)
@@ -215,24 +218,32 @@ export async function entityPeek(id: string): Promise<InspectPeek | null> {
 
 // ── query ─────────────────────────────────────────────────────────────────────
 
+const QUERY_COLUMNS = [
+  'id',
+  'name',
+  'description',
+  'slug',
+  'sql_text',
+  'params',
+  'cache_ttl',
+  'enabled',
+  'access',
+  'warm_daily',
+  'updated_at',
+  'freshness_sources'
+]
+
+/** The query by slug; an all-digit id that is no slug falls back to the numeric primary key. */
 async function loadQuery(id: string): Promise<Record<string, unknown> | null> {
-  const q = db('nivaro_custom_queries').select(
-    'id',
-    'name',
-    'description',
-    'slug',
-    'sql_text',
-    'params',
-    'cache_ttl',
-    'enabled',
-    'access',
-    'warm_daily',
-    'updated_at',
-    'freshness_sources'
-  )
-  if (/^\d{1,9}$/.test(id)) q.where('id', Number(id))
-  else q.where('slug', id)
-  return ((await q.first()) as Record<string, unknown> | undefined) ?? null
+  const bySlug = (await db('nivaro_custom_queries')
+    .where('slug', id)
+    .first(...QUERY_COLUMNS)) as Record<string, unknown> | undefined
+  if (bySlug) return bySlug
+  if (!/^\d{1,9}$/.test(id)) return null
+  const byId = (await db('nivaro_custom_queries')
+    .where('id', Number(id))
+    .first(...QUERY_COLUMNS)) as Record<string, unknown> | undefined
+  return byId ?? null
 }
 
 export async function queryDetail(id: string, ctx: InspectCtx): Promise<unknown | null> {
@@ -501,8 +512,13 @@ const OWN_LABELS: Record<string, string> = {
   store: 'File storage'
 }
 
+/**
+ * null (→ 404) when nothing answers for the id: a node neither the map owns nor a provider or
+ * the outbound log knows, or a partner id with no configuration and no outbound rows. A deleted
+ * partner whose log still has rows stays readable (`partner_missing`).
+ */
 export async function downDetail(id: string, ctx: InspectCtx): Promise<unknown | null> {
-  const hours = historyHoursFor(ctx.windowSec)
+  const hours = historyHoursFor(ctx.windowSec, ctx.at)
   const apiId = partnerIdOf(id)
   let historyError: string | null = null
   const [history, partner, submissions] = await Promise.all([
@@ -516,6 +532,12 @@ export async function downDetail(id: string, ctx: InspectCtx): Promise<unknown |
     apiId != null ? partnerSummary(apiId) : Promise.resolve(null),
     apiId != null ? partnerSubmissions(apiId) : Promise.resolve(null)
   ])
+  if (apiId == null) {
+    if (history?.kind === 'unknown' && !OWN_LABELS[id]) return null
+  } else if (!partner && !historyError) {
+    const totals = history?.kind === 'ok' ? (history.data.totals as { req?: number }) : null
+    if (!(Number(totals?.req) > 0) && !submissions?.length) return null
+  }
   return {
     id,
     label: OWN_LABELS[id] ?? partner?.name ?? null,
@@ -526,6 +548,7 @@ export async function downDetail(id: string, ctx: InspectCtx): Promise<unknown |
       history?.kind === 'unknown'
         ? 'No log is kept for this node — only the live figures on the map.'
         : null,
+    history_anchor_note: historyAnchorNote(hours, ctx.windowSec, ctx.at),
     partner,
     partner_missing: apiId != null && !partner,
     submissions

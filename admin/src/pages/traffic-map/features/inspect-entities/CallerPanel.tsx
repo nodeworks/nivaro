@@ -8,7 +8,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import { fmtCount, fmtMs, fmtTime } from '../../EventTicker'
-import { useInspectDetail } from '../../inspect/api'
+import { inspectErrorOf, useInspectDetail } from '../../inspect/api'
 import { InspectLink } from '../../inspect/InspectLink'
 import type { InspectPanelProps } from '../../registry/inspectables'
 import { following } from '../follow-person'
@@ -188,7 +188,14 @@ function Dependencies({ callerKey }: { callerKey: string }) {
       </button>
     )
   if (q.isLoading) return <PanelLoading />
-  if (q.isError) return <PanelError error={q.error} what='dependency map' />
+  if (q.isError) {
+    // The route is not tenant-aware: in cloud mode it answers 404, which is "not here", not "gone".
+    if (inspectErrorOf(q.error).status === 404)
+      return (
+        <Muted hook='deps-unavailable'>Field dependencies are not available on this server.</Muted>
+      )
+    return <PanelError error={q.error} what='dependency map' />
+  }
   const d = q.data as {
     found: boolean
     calls?: number
@@ -376,7 +383,7 @@ export function CallerPanel({ inspectRef, anchor, windowSec }: InspectPanelProps
         <Block title='Circuit breakers on this caller' hook='breakers'>
           <ul className='grid gap-1 text-[12px]'>
             {d.breakers.map((b) => (
-              <li key={b.until} data-tm-inspect-caller-breaker={b.mode}>
+              <li key={`${b.mode}:${b.until}`} data-tm-inspect-caller-breaker={b.mode}>
                 {b.mode === 'refuse' ? 'Refusing every request' : `Limited to ${b.limit}/min`} until{' '}
                 {fmtTime(b.until)} — “{b.reason}”{b.by_name ? ` (${b.by_name})` : ''}
               </li>

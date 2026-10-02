@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest'
 import {
-  callerKeyOfUser,
   callerKindOf,
   callerTitle,
   downTitle,
@@ -34,8 +33,6 @@ describe('caller keys', () => {
     expect(callerTitle({ kind: 'caller', id: 'flow:abc' })).toBe('Flow abc')
     expect(callerTitle({ kind: 'caller', id: 'cron' })).toBe('Crons & flows')
     expect(callerTitle({ kind: 'caller', id: 'k1', label: 'Fusion' })).toBe('Fusion')
-    expect(callerKeyOfUser(UUID.toLowerCase())).toBe(`u${UUID}`)
-    expect(callerKeyOfUser('k3')).toBe('k3')
   })
 })
 
@@ -86,13 +83,16 @@ describe('recording-for answers', () => {
 describe('page loads', () => {
   it('cleans the load list and computes stats', () => {
     const rows = parseLoadList([
-      { load: 'aaaaaa', at: 1, calls: 10, ms: 400, user: 'u1' },
-      { load: 'bbbbbb', at: 2, calls: 30, ms: 900 },
+      { load: 'aaaaaa', at: 1, calls: 10, ms: 400, user: 'Beth', caller: `u${UUID}` },
+      { load: 'bbbbbb', at: 2, calls: 30, ms: 900, caller: 'not a key' },
       { nope: true },
       'x'
     ])
     expect(rows).toHaveLength(2)
+    // `user` is a display name, kept as text; `caller` is the key, kept only when it is one
+    expect(rows[0]).toMatchObject({ user: 'Beth', caller: `u${UUID}` })
     expect(rows[1].user).toBeNull()
+    expect(rows[1].caller).toBeNull()
     expect(loadStats(rows)).toEqual({ n: 2, calls_avg: 20, calls_p95: 30, ms_p95: 900 })
     expect(loadStats([])).toEqual({ n: 0, calls_avg: 0, calls_p95: 0, ms_p95: 0 })
     expect(parseLoadList({ data: [] })).toEqual([])

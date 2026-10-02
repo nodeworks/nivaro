@@ -133,11 +133,33 @@ export function mapWindowFor(windowSec: number): MapWindow {
   return 900
 }
 
-/** The history window (hours) covering the inspect window. */
-export function historyHoursFor(windowSec: number): 1 | 6 | 24 {
-  if (windowSec <= 3600) return 1
-  if (windowSec <= 6 * 3600) return 6
+export const HISTORY_HOURS = [1, 6, 24] as const
+export type HistoryHours = (typeof HISTORY_HOURS)[number]
+
+/**
+ * The history window (hours, read back from now) covering the inspect window — and, when the
+ * level is anchored, the anchor's own range (`at` − window), so an event 3 h ago lands inside
+ * the history shown next to it. 24 when even that cannot reach it (see `historyAnchorNote`).
+ */
+export function historyHoursFor(
+  windowSec: number,
+  at: number | null = null,
+  now = Date.now()
+): HistoryHours {
+  const needMs = windowSec * 1000 + (at == null ? 0 : Math.max(0, now - at))
+  for (const h of HISTORY_HOURS) if (needMs <= h * 3600_000) return h
   return 24
+}
+
+/** Why the history shown does not reach the anchor (null when it does, or there is none). */
+export function historyAnchorNote(
+  hours: HistoryHours,
+  windowSec: number,
+  at: number | null,
+  now = Date.now()
+): string | null {
+  if (at == null || now - at + windowSec * 1000 <= hours * 3600_000) return null
+  return `The anchored time is older than ${hours} h — the history shows the last ${hours} h from now, not the time around the event.`
 }
 
 /**

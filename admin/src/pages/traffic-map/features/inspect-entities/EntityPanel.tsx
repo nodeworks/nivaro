@@ -54,6 +54,8 @@ interface EntityDetail {
   history_hours: number
   history_error: string | null
   history_note: string | null
+  /** Why the history (read back from now) does not reach the anchored time, when it cannot. */
+  history_anchor_note: string | null
   callers: Array<{ key: string; sums: number[]; p95: number }>
   error_groups: Array<{
     key: string
@@ -100,7 +102,7 @@ function LiveFigures({ entityKey }: { entityKey: string }) {
   return (
     <div className='grid gap-1.5' data-tm-inspect-entity-live=''>
       <Figures>
-        <Figure label={`Requests · last ${figs.win / 60} min`} value={fmtCount(req)} />
+        <Figure label={`Requests · now, last ${figs.win / 60} min`} value={fmtCount(req)} />
         <Figure label='Errors' value={fmtCount(err)} tone={err ? 'error' : undefined} />
         <Figure label='p95' value={fmtMs(figs.p95)} />
       </Figures>
@@ -138,7 +140,7 @@ export function EntityPanel({ inspectRef, anchor, windowSec }: InspectPanelProps
 
       <LiveFigures entityKey={d.key} />
 
-      <Block title='Callers' aside={`last ${d.map_window / 60} min`} hook='callers'>
+      <Block title='Callers' aside={`now, last ${d.map_window / 60} min`} hook='callers'>
         {d.callers.length ? (
           <ul className='grid gap-0.5 text-[12px]'>
             {d.callers.map((c) => (
@@ -250,6 +252,7 @@ export function EntityPanel({ inspectRef, anchor, windowSec }: InspectPanelProps
       )}
 
       <Block title={`History · last ${d.history_hours} h`} hook='history'>
+        {d.history_anchor_note && <Muted hook='history-anchor'>{d.history_anchor_note}</Muted>}
         {h ? (
           <div className='grid gap-1.5'>
             <Spark

@@ -12,7 +12,7 @@ import { inspectErrorOf, useInspectDetail } from '../../inspect/api'
 import { InspectLink } from '../../inspect/InspectLink'
 import type { InspectPanelProps } from '../../registry/inspectables'
 import { SafeLink } from '../shared'
-import { callerKeyOfUser, loadStats, parseLoadList, partnerIdOf, seriesOf } from './logic'
+import { loadStats, parseLoadList, partnerIdOf, seriesOf } from './logic'
 import {
   Block,
   callerName,
@@ -104,20 +104,40 @@ function PageLoads({ pageId }: { pageId: string }) {
         <Figure label='Load time · p95' value={fmtMs(st.ms_p95)} />
       </Figures>
       <ul className='grid gap-0.5 text-[12px]'>
-        {rows.slice(0, 30).map((r) => (
-          <li key={r.load} className='grid grid-cols-[auto_minmax(0,1fr)_auto_auto] gap-x-2'>
-            <span className='tabular-nums text-[11px] text-[var(--tm-muted)]'>
-              {fmtTime(r.at ?? '')}
-            </span>
-            <InspectLink
-              inspectRef={{ kind: 'load', id: r.load, label: `Load ${r.load.slice(0, 8)}` }}
+        {rows.slice(0, 30).map((r) => {
+          // `user` is the person's display name (text); `caller` is the key that links.
+          const who = r.user ?? (r.caller ? callerName(cat, r.caller) : null)
+          return (
+            <li
+              key={r.load}
+              className='grid grid-cols-[auto_minmax(0,1fr)_auto_auto] gap-x-2'
+              data-tm-inspect-page-load={r.load}
             >
-              {r.user ? callerName(cat, callerKeyOfUser(r.user)) : `Load ${r.load.slice(0, 8)}`}
-            </InspectLink>
-            <span className='tabular-nums text-[var(--tm-fg-2)]'>{fmtCount(r.calls)} calls</span>
-            <span className='tabular-nums text-[11px] text-[var(--tm-muted)]'>{fmtMs(r.ms)}</span>
-          </li>
-        ))}
+              <span className='tabular-nums text-[11px] text-[var(--tm-muted)]'>
+                {fmtTime(r.at ?? '')}
+              </span>
+              <span className='min-w-0 truncate'>
+                <InspectLink
+                  inspectRef={{ kind: 'load', id: r.load, label: `Load ${r.load.slice(0, 8)}` }}
+                >
+                  Load {r.load.slice(0, 8)}
+                </InspectLink>
+                {who && r.caller ? (
+                  <>
+                    {' · '}
+                    <InspectLink inspectRef={{ kind: 'caller', id: r.caller, label: who }}>
+                      {who}
+                    </InspectLink>
+                  </>
+                ) : who ? (
+                  <span className='text-[var(--tm-fg-2)]'> · {who}</span>
+                ) : null}
+              </span>
+              <span className='tabular-nums text-[var(--tm-fg-2)]'>{fmtCount(r.calls)} calls</span>
+              <span className='tabular-nums text-[11px] text-[var(--tm-muted)]'>{fmtMs(r.ms)}</span>
+            </li>
+          )
+        })}
       </ul>
     </div>
   )
@@ -142,7 +162,8 @@ export function PagePanel({ inspectRef, anchor, windowSec }: InspectPanelProps) 
           {d.path}
         </p>
         <p className='text-[12px] text-[var(--tm-fg-2)]'>
-          {d.app ? `${d.app} app` : 'Every app'} · last {d.window_s / 60} min on this API process
+          {d.app ? `${d.app} app` : 'Every app'} · now, last {d.window_s / 60} min on this API
+          process
         </p>
       </div>
 
@@ -277,6 +298,8 @@ interface DownDetail {
   } | null
   history_error: string | null
   history_note: string | null
+  /** Why the history (read back from now) does not reach the anchored time, when it cannot. */
+  history_anchor_note: string | null
   partner: {
     id: number
     name: string
@@ -314,7 +337,7 @@ function DownLive({ id }: { id: string }) {
   if (!f) return null
   return (
     <Figures>
-      <Figure label={`Calls · last ${f.win / 60} min`} value={fmtCount(f.req)} />
+      <Figure label={`Calls · now, last ${f.win / 60} min`} value={fmtCount(f.req)} />
       <Figure label='Errors' value={fmtCount(f.err)} tone={f.err ? 'error' : undefined} />
       <Figure label='p95' value={fmtMs(f.p95)} />
     </Figures>
@@ -387,6 +410,7 @@ export function DownPanel({ inspectRef, anchor, windowSec }: InspectPanelProps) 
       )}
 
       <Block title={`History · last ${d.history_hours} h`} hook='history'>
+        {d.history_anchor_note && <Muted hook='history-anchor'>{d.history_anchor_note}</Muted>}
         {h ? (
           <div className='grid gap-1.5'>
             <Spark data={seriesOf(h)} caption={`Calls per bucket (${d.history_hours} h)`} />

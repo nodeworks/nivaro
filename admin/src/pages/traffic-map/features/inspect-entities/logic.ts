@@ -133,7 +133,10 @@ export interface LoadRow {
   at: number | string | null
   calls: number
   ms: number
+  /** The person's display name (or their id when unnamed) — text, never a caller key. */
   user: string | null
+  /** The caller key (`u<UUID>`, `k12`, `anon`) the load's requests ran as; links to the caller. */
+  caller: string | null
 }
 
 /** Rows of GET /traffic-map/inspect/load-list (Task 7), cleaned; [] when unreadable. */
@@ -149,7 +152,8 @@ export function parseLoadList(data: unknown): LoadRow[] {
       at: typeof o.at === 'number' || typeof o.at === 'string' ? o.at : null,
       calls: Number(o.calls) || 0,
       ms: Number(o.ms) || 0,
-      user: typeof o.user === 'string' && o.user ? o.user : null
+      user: typeof o.user === 'string' && o.user ? o.user : null,
+      caller: typeof o.caller === 'string' && callerKindOf(o.caller) ? o.caller : null
     })
   }
   return out
@@ -196,9 +200,4 @@ export function seriesOf(
   history: { series?: Array<{ req?: number }> } | null | undefined
 ): number[] {
   return (history?.series ?? []).map((s) => Number(s.req) || 0)
-}
-
-/** A user id as a caller key (`u<UUID>`); anything already a key passes through. */
-export function callerKeyOfUser(user: string): string {
-  return UUID.test(user) ? `u${user.toUpperCase()}` : user
 }
