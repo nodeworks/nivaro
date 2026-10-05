@@ -27,7 +27,8 @@ export const aiChatDocs: DocSection = {
         'Every answer shows the tool trace: exactly which queries produced it.',
         'A breakdown or a series (per state, per month, per vendor) comes with a chart: the model attaches a fenced `chart` block ({type, title, data:[{label, value}]}) that renders as a bar, line or pie under the prose.',
         'The same standalone question by the same person inside the answer-cache window (Settings → AI Features, default 15 minutes) answers from cache — the page says when it was first answered and offers "Ask again". Answers that propose an action are never cached; `fresh: true` in the request skips the cache.',
-        'Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.'
+        'Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.',
+        'Answers stream as they are written: send `stream: true` and the route answers `202 {data: {stream_id}}` at once, then emits `ai:delta` (text, with its round), `ai:status` (the tool running), `ai:done` (the full normal body — proposals, trace, request_id) and `ai:error` to your Socket.io user room; add `Accept: text/event-stream` to get the same events as SSE instead (widgets, hosts without the socket). A caller with neither gets the plain reply. `POST /api/ai/chat/:stream_id/stop` halts a running answer. /summarize and /generate take the same `stream` option with text deltas only. The /ask page streams by default, shows what the model is doing while tools run, and has a Stop button.'
       ]
     }
   ]

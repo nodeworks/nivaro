@@ -1,5 +1,11 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
+import {
+  type AiMessageStream,
+  type AiStreamEvent,
+  makeMessageStream,
+  type StreamOptions
+} from './ai-stream.js'
 import { currentTraceMeta } from './request-trace.js'
 import { noteAiCall } from './traffic-taps/ai.js'
 
@@ -71,37 +77,33 @@ function capJson(value: unknown, cap: number): string | null {
 
 type MessageParams = Anthropic.MessageCreateParams
 
-/**
- * Wrap a `messages.create` implementation so every call is logged. Never
- * throws on its own account — a logging failure must not fail the AI call.
- */
-export function loggedCreate(
-  provider: AiProviderKind,
-  create: (params: MessageParams) => Promise<Anthropic.Message>
-): (params: MessageParams) => Promise<Anthropic.Message> {
-  return async (params) => {
-    const meta = currentTraceMeta()
-    const started = performance.now()
-    const base = {
-      created_at: new Date(),
-      request_id: meta?.id ?? null,
-      user: meta?.userId ?? null,
-      feature: featureFromRoute(meta?.urlHint ?? null),
-      route: meta?.urlHint?.slice(0, 300) ?? null,
-      provider,
-      model: String(params.model ?? ''),
-      rounds: Array.isArray(params.messages) ? params.messages.length : null,
-      request: capJson(
-        {
-          system: params.system,
-          tools: params.tools?.map((t) => t.name),
-          messages: params.messages
-        },
-        REQUEST_CAP
-      )
-    }
-    try {
-      const res = await create(params)
+/** One call's log row in flight — `ok` / `fail` each write at most once. */
+function beginAiCall(provider: AiProviderKind, params: MessageParams) {
+  const meta = currentTraceMeta()
+  const started = performance.now()
+  const base = {
+    created_at: new Date(),
+    request_id: meta?.id ?? null,
+    user: meta?.userId ?? null,
+    feature: featureFromRoute(meta?.urlHint ?? null),
+    route: meta?.urlHint?.slice(0, 300) ?? null,
+    provider,
+    model: String(params.model ?? ''),
+    rounds: Array.isArray(params.messages) ? params.messages.length : null,
+    request: capJson(
+      {
+        system: params.system,
+        tools: params.tools?.map((t) => t.name),
+        messages: params.messages
+      },
+      REQUEST_CAP
+    )
+  }
+  let written = false
+  return {
+    ok(res: Anthropic.Message) {
+      if (written) return
+      written = true
       const usage = res.usage as
         | {
             input_tokens?: number
@@ -131,7 +133,7 @@ export function loggedCreate(
           ...base,
           model: res.model || base.model,
           status: 'ok',
-          latency_ms: Math.round(performance.now() - started),
+          latency_ms: latency,
           input_tokens: input,
           output_tokens: output,
           cache_read_tokens: cached,
@@ -142,8 +144,10 @@ export function loggedCreate(
           response: capJson(content, RESPONSE_CAP)
         })
         .catch(() => undefined)
-      return res
-    } catch (err) {
+    },
+    fail(err: unknown) {
+      if (written) return
+      written = true
       noteAiCall({
         provider,
         model: base.model,
@@ -158,8 +162,57 @@ export function loggedCreate(
           error: String((err as Error)?.message ?? err).slice(0, 1000)
         })
         .catch(() => undefined)
+    }
+  }
+}
+
+/**
+ * Wrap a `messages.create` implementation so every call is logged. Never
+ * throws on its own account — a logging failure must not fail the AI call.
+ */
+export function loggedCreate(
+  provider: AiProviderKind,
+  create: (params: MessageParams) => Promise<Anthropic.Message>
+): (params: MessageParams) => Promise<Anthropic.Message> {
+  return async (params) => {
+    const call = beginAiCall(provider, params)
+    try {
+      const res = await create(params)
+      call.ok(res)
+      return res
+    } catch (err) {
+      call.fail(err)
       throw err
     }
+  }
+}
+
+/**
+ * The streaming twin (#688): `open` starts the provider stream and hands back
+ * the event source; the returned stream logs ONE row with the assembled
+ * message's usage once the last event lands (or an error row when the stream
+ * breaks) — the same fields a non-streamed call records.
+ */
+export function loggedStream(
+  provider: AiProviderKind,
+  open: (
+    params: MessageParams,
+    opts: StreamOptions
+  ) => Promise<{ events: AsyncIterable<AiStreamEvent>; abort: () => void }>
+): (params: MessageParams, opts?: StreamOptions) => Promise<AiMessageStream> {
+  return async (params, opts = {}) => {
+    const call = beginAiCall(provider, params)
+    let source: { events: AsyncIterable<AiStreamEvent>; abort: () => void }
+    try {
+      source = await open(params, opts)
+    } catch (err) {
+      call.fail(err)
+      throw err
+    }
+    return makeMessageStream(source.events, source.abort, {
+      onFinal: (m) => call.ok(m),
+      onError: (err) => call.fail(err)
+    })
   }
 }
 

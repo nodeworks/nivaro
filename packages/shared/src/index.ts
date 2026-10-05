@@ -486,6 +486,13 @@ export {
   type ThemeAccent
 } from './lib/theme-accents'
 export {
+  type AiStreamHandle,
+  type AiStreamHandlers,
+  type AiStreamState,
+  type AiStreamSubscribe,
+  useAiStream
+} from './lib/use-ai-stream'
+export {
   effectiveScopeSeedIds,
   matchScopeDimension,
   translateScopeValues,
