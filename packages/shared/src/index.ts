@@ -250,6 +250,16 @@ export {
   useSubscriptionMutations
 } from './components/notifications/SubscriptionEditor'
 export { OfflineBanner } from './components/OfflineBanner'
+export {
+  DbTuningView,
+  type TuningKind,
+  type TuningObserveReport,
+  type TuningProof,
+  type TuningProposal,
+  type TuningSettings,
+  type TuningStatus,
+  type TuningSummary
+} from './components/ops/DbTuningView'
 export { type OpsTaskRow, type OpsTaskRun, OpsTasksView } from './components/ops/OpsTasksView'
 export type {
   PageRendererPage,
