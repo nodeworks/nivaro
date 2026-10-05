@@ -769,6 +769,9 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       } catch (err) {
         return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad params' })
       }
+      void import('../services/db-tuning/param-sets.js').then(({ recordParamSet }) =>
+        recordParamSet('query', query.slug, finalParams)
+      )
 
       // User-scope injection — must precede the cache key so scoped and
       // unscoped callers never share a cached result.
