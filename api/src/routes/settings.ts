@@ -127,6 +127,7 @@ const allowedSettingsKeys = [
   // Hours an open record may sit before a manager's team view calls it stuck
   // (#1031); blank = 240
   'team_stuck_hours',
+  'db_tuning',
   // Sign-in session max age + idle timeout, default and per role (#665)
   'session_policy',
   // SLO targets for the Health page (#666): availability %, p95 ms, window days
@@ -322,6 +323,22 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { bustTeamSettings } = await import('../services/team.js')
       reply.raw.once('finish', () => bustTeamSettings())
+    }
+
+    if ('db_tuning' in patch) {
+      const { validateTuningSettings, bustTuningSettings } = await import(
+        '../services/db-tuning/settings.js'
+      )
+      try {
+        const raw = patch.db_tuning
+        const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw
+        patch.db_tuning = raw == null ? null : JSON.stringify(validateTuningSettings(parsed))
+      } catch (err) {
+        return reply
+          .code(400)
+          .send({ error: `db_tuning: ${err instanceof Error ? err.message : 'invalid'}` })
+      }
+      bustTuningSettings()
     }
 
     // Push / Teams test mode (#832): the next send reads the new switch.

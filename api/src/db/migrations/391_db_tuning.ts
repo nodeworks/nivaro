@@ -40,6 +40,11 @@ export async function up(knex: Knex): Promise<void> {
       t.index(['fingerprint'], 'ix_tuning_proposals_fingerprint')
     })
   }
+  if (!(await knex.schema.hasColumn('nivaro_settings', 'db_tuning'))) {
+    await knex.schema.alterTable('nivaro_settings', (t) => {
+      t.text('db_tuning').nullable()
+    })
+  }
   if (!(await knex.schema.hasTable('nivaro_tuning_param_sets'))) {
     await knex.schema.createTable('nivaro_tuning_param_sets', (t) => {
       t.increments('id')
