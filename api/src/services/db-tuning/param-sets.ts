@@ -5,6 +5,15 @@ import { isSensitiveKey, MASK } from '../secret-mask.js'
 
 const KEEP = 10
 
+/** Only what a call actually bound: undefined, null and '' fall back to the default. */
+export function effectiveParams(params: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(params)) {
+    if (v !== undefined && v !== null && v !== '') out[k] = v
+  }
+  return out
+}
+
 export function maskParams(params: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(params)) out[k] = isSensitiveKey(k) ? MASK : v
@@ -33,6 +42,7 @@ export async function recordParamSet(
 ): Promise<void> {
   try {
     if (!(await tablePresent())) return
+    params = effectiveParams(params)
     const hash = paramSetHash(params)
     const t = target.slice(0, 300)
     const updated = await db('nivaro_tuning_param_sets')

@@ -577,8 +577,9 @@ Rules: only reference tables and columns shown above; the procedure name must be
         parts.push(`${p.name} = ?`)
         bindings.push(value)
       }
-      void import('../services/db-tuning/param-sets.js').then(({ recordParamSet }) =>
-        recordParamSet('proc', name, supplied as Record<string, unknown>)
+      void import('../services/db-tuning/param-sets.js').then(
+        ({ effectiveParams, recordParamSet }) =>
+          recordParamSet('proc', name, effectiveParams(supplied as Record<string, unknown>))
       )
       const started = Date.now()
       try {
