@@ -148,10 +148,10 @@ export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
     async (req, reply) => {
       try {
         if (!(await getProposal(req.params.id))) return reply.code(404).send({ error: 'Not found' })
-        await dismissProposal(req.params.id, {
-          userId: req.user?.id ?? null,
-          note: String(req.body?.note ?? '')
-        })
+        const note = String(req.body?.note ?? '').trim()
+        if (!note)
+          return reply.code(400).send({ error: 'A note is required', code: 'TUNING_INVALID' })
+        await dismissProposal(req.params.id, { userId: req.user?.id ?? null, note })
         return { data: { ok: true } }
       } catch (err) {
         return refuse(reply, err)
@@ -190,27 +190,55 @@ export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
         status: proof.passed ? 'proposed' : 'rejected_by_proof',
         last_seen: new Date()
       })
+    await logActivity({
+      action: 'tuning-reprove',
+      user: req.user?.id,
+      collection: T,
+      item: row.id,
+      comment:
+        `Reproved: ${row.title} — ${proof.method} ${proof.passed ? 'passed' : 'failed'}`.slice(
+          0,
+          1000
+        ),
+      req
+    })
     return { data: await getProposal(row.id) }
   })
 
   app.post<{ Body: { dry_run?: boolean } | null }>('/observe', async (req, reply) => {
-    const report = await runObserve({
-      dryRun: req.body?.dry_run === true,
-      trigger: 'run-now',
-      userId: req.user?.id ?? null
-    })
-    return reply.code(202).send({ data: report })
+    const userId = req.user?.id ?? null
+    if (req.body?.dry_run === true)
+      return { data: await runObserve({ dryRun: true, trigger: 'run-now', userId }) }
+    if (!(await readTuningSettings()).enabled)
+      return reply
+        .code(409)
+        .send({ error: 'Database tuning is turned off', code: 'TUNING_DISABLED' })
+    if (isObserveRunning())
+      return reply
+        .code(409)
+        .send({ error: 'An observe run is already in progress', code: 'TUNING_RUNNING' })
+    // a real run can take up to an hour: answer now, the run records itself in the job runs
+    void runObserve({ trigger: 'run-now', userId }).catch((err) =>
+      app.log.error({ err }, 'db-tuning observe failed')
+    )
+    return reply.code(202).send({ data: { started: true } })
   })
 
   app.get('/settings', async () => ({ data: await readTuningSettings() }))
 
   app.patch<{ Body: Record<string, unknown> | null }>('/settings', async (req, reply) => {
-    let next: ReturnType<typeof validateTuningSettings>
-    try {
-      next = validateTuningSettings({ ...(await readTuningSettings()), ...(req.body ?? {}) })
-    } catch (err) {
-      return reply.code(400).send({ error: err instanceof Error ? err.message : 'invalid' })
+    const merged = { ...(await readTuningSettings()), ...(req.body ?? {}) }
+    // the validator stops at the first bad key; ask it one key at a time to name them all
+    const problems: string[] = []
+    for (const [k, v] of Object.entries(merged)) {
+      try {
+        validateTuningSettings({ [k]: v })
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : `${k} is invalid`)
+      }
     }
+    if (problems.length) return reply.code(400).send({ error: problems.join('; '), problems })
+    const next = validateTuningSettings(merged)
     await db('nivaro_settings')
       .where('id', 1)
       .update({ db_tuning: JSON.stringify(next) })

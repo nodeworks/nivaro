@@ -54,7 +54,7 @@ import {
   TuningRefusal
 } from '../../../services/db-tuning/apply.js'
 import { getProposal, listProposals, updateProposal } from '../../../services/db-tuning/ledger.js'
-import { runObserve } from '../../../services/db-tuning/observe-run.js'
+import { isObserveRunning, runObserve } from '../../../services/db-tuning/observe-run.js'
 import { prove } from '../../../services/db-tuning/proof.js'
 import {
   bustTuningSettings,
@@ -271,7 +271,7 @@ describe('db-tuning routes', () => {
     expect(updateProposal).not.toHaveBeenCalled()
   })
 
-  it('observe answers 202 with the report, passing dry_run through', async () => {
+  it('observe dry run is awaited and answers 200 with the report', async () => {
     const report = { skipped: 'disabled', candidates: 0 }
     vi.mocked(runObserve).mockResolvedValue(report as never)
     const res = await buildApp().inject({
@@ -279,13 +279,82 @@ describe('db-tuning routes', () => {
       url: '/db-tuning/observe',
       payload: { dry_run: true }
     })
-    expect(res.statusCode).toBe(202)
+    expect(res.statusCode).toBe(200)
     expect(res.json().data).toEqual(report)
     expect(runObserve).toHaveBeenCalledWith({
       dryRun: true,
       trigger: 'run-now',
       userId: 'user-admin'
     })
+  })
+
+  it('observe starts a real run in the background and answers 202 started', async () => {
+    let finish: (v: unknown) => void = () => {}
+    vi.mocked(runObserve).mockReturnValue(new Promise((r) => (finish = r)) as never)
+    const res = await buildApp().inject({ method: 'POST', url: '/db-tuning/observe', payload: {} })
+    expect(res.statusCode).toBe(202)
+    expect(res.json().data).toEqual({ started: true })
+    expect(runObserve).toHaveBeenCalledWith({ trigger: 'run-now', userId: 'user-admin' })
+    finish({})
+  })
+
+  it('observe refuses with 409 when tuning is off or a run is in progress', async () => {
+    const app = buildApp()
+    vi.mocked(readTuningSettings).mockResolvedValue({ ...TUNING_DEFAULTS, enabled: false })
+    const off = await app.inject({ method: 'POST', url: '/db-tuning/observe', payload: {} })
+    expect(off.statusCode).toBe(409)
+    expect(off.json().code).toBe('TUNING_DISABLED')
+
+    vi.mocked(readTuningSettings).mockResolvedValue({ ...TUNING_DEFAULTS, enabled: true })
+    vi.mocked(isObserveRunning).mockReturnValueOnce(true)
+    const busy = await app.inject({ method: 'POST', url: '/db-tuning/observe', payload: {} })
+    expect(busy.statusCode).toBe(409)
+    expect(busy.json().code).toBe('TUNING_RUNNING')
+    expect(runObserve).not.toHaveBeenCalled()
+  })
+
+  it('dismiss requires a note', async () => {
+    const app = buildApp()
+    for (const payload of [{}, { note: '   ' }]) {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/db-tuning/proposals/p1/dismiss',
+        payload
+      })
+      expect(res.statusCode).toBe(400)
+      expect(res.json()).toMatchObject({ code: 'TUNING_INVALID', error: 'A note is required' })
+    }
+    expect(dismissProposal).not.toHaveBeenCalled()
+  })
+
+  it('reprove writes a tuning-reprove activity row', async () => {
+    vi.mocked(prove).mockResolvedValue({
+      passed: false,
+      method: 'hypothetical',
+      before: {},
+      after: {},
+      detail: 'no gain'
+    })
+    await buildApp().inject({ method: 'POST', url: '/db-tuning/proposals/p1/reprove' })
+    expect(logActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'tuning-reprove',
+        collection: 'nivaro_tuning_proposals',
+        item: 'p1',
+        comment: expect.stringContaining('hypothetical failed')
+      })
+    )
+  })
+
+  it('PATCH settings names every invalid key', async () => {
+    const res = await buildApp().inject({
+      method: 'PATCH',
+      url: '/db-tuning/settings',
+      payload: { watch_days: -5, regression_pct: 1000 }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().problems).toHaveLength(2)
+    expect(res.json().error).toMatch(/watch_days.*regression_pct/)
   })
 
   it('PATCH settings rejects a bad value with 400 and writes nothing', async () => {
