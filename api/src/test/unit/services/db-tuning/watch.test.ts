@@ -466,6 +466,35 @@ describe('runWatch', () => {
       'nightly re-check: parameter set #1 differs from the previous body (+1 / −0 rows)'
     )
   })
+  it('a live procedure whose own two runs differ is nondeterministic: listed, never rolled back', async () => {
+    vi.setSystemTime(Date.parse('2026-10-05T07:55:00Z'))
+    put(
+      qrow({
+        kind: 'proc_rewrite',
+        target: 'p',
+        title: 'Busy one',
+        evidence: { parameter_set_values: [{ a: 1 }] },
+        apply: { type: 'proc_body', proc: 'p', body: 'NEW', hash: 'n' },
+        undo: { type: 'proc_body', proc: 'p', body: 'OLD', hash: 'o' }
+      })
+    )
+    // a1 ≠ a2: the twin harness refuses, carrying the unstable set as its rows_diff
+    m.prove.mockImplementation(async () => ({
+      passed: false,
+      method: 'refused',
+      before: { sets: 1 },
+      after: {},
+      detail: 'nondeterministic: results differ between identical runs (set 1)',
+      rows_diff: [{ set: 1, added: ['[2]'], removed: ['[1]'] }]
+    }))
+    const out = await runWatch(app)
+    expect(m.rollback).not.toHaveBeenCalled()
+    expect(out.rolled_back).toBe(0)
+    expect(m.rows.get('w1')?.status).toBe('watching')
+    expect(out.actions).toContain(
+      're-check nondeterministic: Busy one — nondeterministic: results differ between identical runs (set 1)'
+    )
+  })
   it('a re-check that is refused or cannot run is listed, not read as a pass', async () => {
     vi.setSystemTime(Date.parse('2026-10-05T07:55:00Z'))
     const proc = {

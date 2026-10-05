@@ -199,8 +199,10 @@ const NO_PROOF: ProofResult = {
 
 /**
  * The nightly re-diff of a watched rewrite: the twin is the PREVIOUS body and "old" EXECs the
- * live procedure (the rewrite), one recorded parameter set per night in turn. The row diff is
- * symmetric, which is all it needs; the timing verdict is ignored (the old body is the slow one).
+ * live procedure (the rewrite), one recorded parameter set per night in turn, A B B A as in the
+ * proof. The row diff is symmetric, which is all it needs; the timing verdict is ignored (the old
+ * body is the slow one). Only a live-vs-previous difference rolls back: when the live
+ * procedure's own two runs (A, A) disagree, the data moved between them — nondeterminism, noted.
  */
 async function recheckRewrite(
   row: ProposalRow,
@@ -222,11 +224,13 @@ async function recheckRewrite(
     error = errText(err)
     return null
   })
-  const diff = re?.rows_diff?.[0]
+  const diff = re?.method === 'twin' ? re.rows_diff?.[0] : undefined
   if (diff)
     return `nightly re-check: parameter set #${index} differs from the previous body (+${diff.added.length} / −${diff.removed.length} rows)`
   // a re-check that judged nothing is said out loud, never read as a pass
   if (!re) note(`re-check could not run: ${row.title} — ${error ?? 'no result'}`)
+  else if (re.method === 'refused' && re.rows_diff?.length)
+    note(`re-check nondeterministic: ${row.title} — ${re.detail}`)
   else if (re.method === 'refused') note(`re-check refused: ${row.title} — ${re.detail}`)
   else if (re.detail.startsWith('proof run failed'))
     note(`re-check could not run: ${row.title} — ${re.detail}`)
