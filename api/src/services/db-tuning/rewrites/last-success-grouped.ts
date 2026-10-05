@@ -9,6 +9,7 @@ import {
   kw,
   lineOf,
   namesOtherAlias,
+  readsStatus,
   type Scan,
   STMT,
   scan,
@@ -26,8 +27,9 @@ import {
  * Narrow on purpose: the subquery must sit in the WHERE of a top-level SELECT whose FIRST FROM
  * table is the correlated alias; the correlation is one equality (either side), the rest of the
  * subquery's WHERE names only its own alias, and no top-level OR. Declines a bare `*` or an
- * unqualified key / max_id name in the statement (the join would add or clash with them), and a
- * statement that is the lone body of an IF / ELSE / WHILE.
+ * unqualified key / max_id name in the statement (the join would add or clash with them), a
+ * statement that is the lone body of an IF / ELSE / WHILE or reads @@ROWCOUNT / @@ERROR (the
+ * hoist would reset them), and a subquery with its own GROUP BY / HAVING / ORDER BY / UNION.
  */
 interface Shape {
   /** ISNULL token, the subquery's `(`…`)`. */
@@ -48,6 +50,17 @@ interface Shape {
   constTo: number
 }
 
+const SUB_TAIL = new Set([
+  'GROUP',
+  'HAVING',
+  'ORDER',
+  'UNION',
+  'EXCEPT',
+  'INTERSECT',
+  'OPTION',
+  'FOR'
+])
+
 function shapeAt(s: Scan, i: number): Shape | null {
   const { toks } = s
   // ISNULL ( ( SELECT MAX ( a . id ) FROM t s WHERE …
@@ -65,7 +78,11 @@ function shapeAt(s: Scan, i: number): Shape | null {
   const subOpen = i + 2
   const subClose = s.close.get(subOpen)
   if (subClose === undefined || !isOp(s, subClose + 1, ',')) return null
-  const parts = conjuncts(s, ref.last + 2, subClose, toks[subOpen].depth + 1)
+  const subDepth = toks[subOpen].depth + 1
+  // GROUP BY / HAVING / ORDER BY / a set operator in the subquery would fold into the hoist
+  for (let k = ref.last + 2; k < subClose; k++)
+    if (toks[k].depth === subDepth && SUB_TAIL.has(kw(s, k))) return null
+  const parts = conjuncts(s, ref.last + 2, subClose, subDepth)
   if (!parts || parts.length < 2) return null
 
   // the correlation: inner.k = outer.k (or flipped), seven tokens exactly
@@ -172,6 +189,8 @@ function rewriteOnce(body: string): { body: string; note: string } | null {
     if (!m) continue
     const st = statementOf(s, i, ident(toks[m.outerAt]))
     if (!st || !statementStartOk(s, st.select)) continue
+    // the hoist runs right before the statement: it would reset what @@ROWCOUNT / @@ERROR read
+    if (readsStatus(s, st.select, st.end)) continue
     // a bare * would pick up the join's columns; an unqualified key / max_id would turn ambiguous
     const key = ident(toks[m.keyAt])
     if (key === 'max_id') continue

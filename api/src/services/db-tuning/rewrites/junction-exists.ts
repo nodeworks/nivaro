@@ -156,6 +156,8 @@ function nullRejecting(s: Scan, alias: string, from: number, to: number): boolea
     if (!isOp(s, restFrom, '(') || s.close.get(restFrom) !== to - 1) return false
   } else if (!(op.kind === 'op' && COMPARE.has(op.text)) && w !== 'LIKE' && w !== 'BETWEEN')
     return false
+  // `NULL <> ALL (empty set)` is TRUE: a quantified comparison keeps the missing row
+  if (['ALL', 'ANY', 'SOME'].includes(kw(s, restFrom))) return false
   const depth = toks[from].depth
   let ands = 0
   for (let k = restFrom; k < to; k++) {
@@ -166,6 +168,79 @@ function nullRejecting(s: Scan, alias: string, from: number, to: number): boolea
   }
   if (ands > (w === 'BETWEEN' ? 1 : 0)) return false
   return !namesOtherAlias(s, null, restFrom, to) // the rest names no alias at all
+}
+
+/**
+ * A nested owner (correlated / scalar subquery, APPLY body) sees the enclosing query's columns:
+ * an unqualified column that bound to the junction would silently rebind outward once the join
+ * is gone. Only a CTE or derived-table body directly under the statement sees nothing outside.
+ */
+function nestedNeedsQualified(s: Scan, j: Join, select: number): boolean {
+  if (j.depth === 0) return false
+  if (j.depth === 1 && isOp(s, select - 1, '(')) {
+    const before = kw(s, select - 2)
+    if (before === 'AS' || before === 'FROM' || before === 'JOIN') return false
+  }
+  return true
+}
+
+const NOT_COLUMN = new Set([
+  ...'SELECT FROM WHERE AND OR NOT IN IS NULL AS ON JOIN LEFT RIGHT INNER OUTER FULL CROSS APPLY'.split(
+    ' '
+  ),
+  ...'GROUP BY ORDER HAVING DISTINCT TOP PERCENT TIES WITH CASE WHEN THEN ELSE END EXISTS'.split(
+    ' '
+  ),
+  ...'BETWEEN LIKE ESCAPE ASC DESC UNION EXCEPT INTERSECT ALL ANY SOME OVER PARTITION ROWS'.split(
+    ' '
+  ),
+  ...'RANGE UNBOUNDED PRECEDING FOLLOWING CURRENT ROW OFFSET FETCH NEXT ONLY OPTION COLLATE'.split(
+    ' '
+  ),
+  ...'INTO INT BIGINT SMALLINT TINYINT BIT DECIMAL NUMERIC MONEY FLOAT REAL DATE DATETIME'.split(
+    ' '
+  ),
+  ...'DATETIME2 TIME VARCHAR NVARCHAR CHAR NCHAR MAX UNIQUEIDENTIFIER'.split(' ')
+])
+
+/**
+ * Whether the owning query (from its SELECT to the paren that closes it), outside the join and
+ * the conjunct that moves with it, names any column without a qualifier. Table names, aliases,
+ * hints, `AS name`, functions, variables and keywords are not columns; anything else counts.
+ */
+function hasUnqualified(
+  s: Scan,
+  j: Join,
+  select: number,
+  moved: { from: number; to: number } | undefined
+): boolean {
+  const { toks } = s
+  let end = toks.length
+  for (let k = select + 1; k < toks.length; k++)
+    if (toks[k].depth < j.depth) {
+      end = k
+      break
+    }
+  const skip = new Set<number>()
+  for (let k = select; k < end; k++) {
+    const w = kw(s, k)
+    if (w === 'AS') skip.add(k + 1)
+    if (w !== 'FROM' && w !== 'JOIN') continue
+    const t = tableRef(s, k + 1)
+    if (t < 0) continue
+    const a = aliasAfter(s, t)
+    for (let x = k + 1; x <= (a ? a.last : t); x++) skip.add(x)
+  }
+  for (let k = select; k < end; k++) {
+    if ((k >= j.first && k < j.after) || (moved && k >= moved.from && k < moved.to)) continue
+    const t = toks[k]
+    if ((t.kind !== 'word' && t.kind !== 'br') || skip.has(k)) continue
+    if (t.kind === 'word' && /^[@#]/.test(t.text)) continue
+    if (isOp(s, k - 1, '.') || isOp(s, k + 1, '.') || isOp(s, k + 1, '(')) continue
+    if (t.kind === 'word' && NOT_COLUMN.has(t.text.toUpperCase())) continue
+    return true
+  }
+  return false
 }
 
 function rewriteOnce(body: string): { body: string; note: string } | null {
@@ -201,6 +276,8 @@ function rewriteOnce(body: string): { body: string; note: string } | null {
     const used = mine.reduce((n, p) => n + refsTo(s, j.alias, p.from, p.to), onRefs)
     if (refsTo(s, j.alias) !== used || mine.length > 1) continue
     if (mine.length === 0 && (j.kind === 'left' || where < 0)) continue
+    if (nestedNeedsQualified(s, j, owner.select) && hasUnqualified(s, j, owner.select, mine[0]))
+      continue
 
     const onText = body.slice(toks[j.onFrom].start, toks[j.after - 1].end)
     const on = hasTopOr(s, j.onFrom, j.after, j.depth) ? `(${onText})` : onText

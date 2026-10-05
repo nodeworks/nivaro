@@ -1,5 +1,16 @@
 import type { Transformer } from './index.js'
-import { insertBefore, isOp, kw, lineOf, STMT, scan, splice, statementStartOk } from './scan.js'
+import {
+  insertBefore,
+  isOp,
+  kw,
+  lineOf,
+  readsStatus,
+  STMT,
+  scan,
+  splice,
+  statementEnd,
+  statementStartOk
+} from './scan.js'
 
 /**
  * Every `#t` a body BUILDS (SELECT … INTO #t / CREATE TABLE #t) must be dropped first — a failed
@@ -9,6 +20,7 @@ import { insertBefore, isOp, kw, lineOf, STMT, scan, splice, statementStartOk } 
  *   caller owns) — so `INSERT INTO #t EXEC` alone is never a build: that table is the caller's;
  * - when the build is the lone body of an IF / ELSE / WHILE, or a CTE / INSERT owns it — a new
  *   statement there would change the control flow;
+ * - when the build reads @@ROWCOUNT / ROWCOUNT_BIG() / @@ERROR — the guard would reset them;
  * - for `##global` tables, which other sessions may be using.
  */
 const guard = (name: string): string =>
@@ -51,6 +63,7 @@ export const tempTableGuard: Transformer = {
       if (toks.slice(0, b.at).some((t) => t.kind === 'word' && t.text.toLowerCase() === key))
         continue
       if (!statementStartOk(s, b.at)) continue
+      if (readsStatus(s, b.at, statementEnd(s, b.at))) continue
       const [at, text] = insertBefore(body, toks[b.at].start, [guard(b.name)])
       edits.push([at, at, text])
       notes.push(

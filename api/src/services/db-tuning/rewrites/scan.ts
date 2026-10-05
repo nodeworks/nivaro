@@ -261,6 +261,38 @@ export function hasTopOr(s: Scan, from: number, to: number, depth: number): bool
 }
 
 /**
+ * The token after the statement starting at `k` ends: the next `;` or statement word at its
+ * depth (CASE…END and a table hint's WITH are not ends), or where its paren closes.
+ */
+export function statementEnd(s: Scan, k: number): number {
+  const depth = s.toks[k].depth
+  for (let i = k + 1; i < s.toks.length; i++) {
+    const t = s.toks[i]
+    if (t.depth < depth) return i
+    if (t.depth > depth) continue
+    if (isOp(s, i, ';')) return i
+    const w = kw(s, i)
+    if (s.caseEnd.has(i)) i = s.caseEnd.get(i)!
+    else if (STMT.has(w) && !(w === 'WITH' && isOp(s, i + 1, '('))) return i
+  }
+  return s.toks.length
+}
+
+/**
+ * Whether tokens [from, to) read the previous statement's status — @@ROWCOUNT, ROWCOUNT_BIG(),
+ * @@ERROR. A statement inserted in front of them would reset what they read.
+ */
+export function readsStatus(s: Scan, from: number, to: number): boolean {
+  for (let k = from; k < to; k++) {
+    const t = s.toks[k]
+    if (t.kind !== 'word') continue
+    const w = t.text.toUpperCase()
+    if (w === '@@ROWCOUNT' || w === '@@ERROR' || w === 'ROWCOUNT_BIG') return true
+  }
+  return false
+}
+
+/**
  * Whether a statement can be inserted right before token `k` without changing what the code
  * around it means. Walks back to the previous statement boundary: a `;`, BEGIN/END, the header
  * AS or the start are fine, and so is any complete earlier statement. IF / ELSE / WHILE (whose
