@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { getTenantId } from '../../db/tenant-context.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
 import { OBSERVER_TIMEOUT_MS, withTimeout } from './deadline.js'
 import { closeUnseen, fingerprintOf, ledgerDecision, touchSeen, upsertProposal } from './ledger.js'
@@ -52,8 +53,10 @@ export const PROOF_BUDGET = 20
 export const AI_BUDGET = 5
 export const WALL_MS = 60 * 60_000
 const CLOSE_UNSEEN_DAYS = 14
-let running = false
-export const isObserveRunning = (): boolean => running
+/** Tenants with a run in flight on this process (self-hosted: the one key ''). */
+const running = new Set<string>()
+const tenantKey = (): string => getTenantId() ?? ''
+export const isObserveRunning = (): boolean => running.has(tenantKey())
 
 /** Total order: biggest estimate first, then kind, target, change_key — the chosen set is stable. */
 function byEstimate(a: Candidate, b: Candidate): number {
@@ -187,10 +190,11 @@ export async function runObserve(
     ms: 0
   }
   const dryRun = Boolean(opts.dryRun)
+  const tenant = tenantKey()
   const settings = await readTuningSettings()
   if (!settings.enabled) return { ...empty, skipped: 'disabled' }
-  if (!dryRun && running) return { ...empty, skipped: 'already running' }
-  if (!dryRun) running = true
+  if (!dryRun && running.has(tenant)) return { ...empty, skipped: 'already running' }
+  if (!dryRun) running.add(tenant)
   let run: JobRunHandle | null = null
   try {
     if (!dryRun && opts.trigger !== 'schedule')
@@ -271,7 +275,7 @@ export async function runObserve(
     await run?.fail(err)
     throw err
   } finally {
-    if (!dryRun) running = false
+    if (!dryRun) running.delete(tenant)
   }
 }
 

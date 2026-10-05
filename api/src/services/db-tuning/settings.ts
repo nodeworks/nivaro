@@ -1,4 +1,5 @@
 import { db } from '../../db/index.js'
+import { getTenantId } from '../../db/tenant-context.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { overlaySettings } from '../settings-overrides.js'
 
@@ -62,11 +63,14 @@ export function validateTuningSettings(raw: unknown): TuningSettings {
   }
 }
 
-let cache: { at: number; value: TuningSettings } | null = null
+/** One entry per tenant (cloud: the request's tenant ALS; self-hosted: the one key ''). */
+const cache = new Map<string, { at: number; value: TuningSettings }>()
 
 /** Lenient read: a malformed stored value reads as the defaults (never throws). 60 s cache. */
 export async function readTuningSettings(): Promise<TuningSettings> {
-  if (cache && Date.now() - cache.at < 60_000) return cache.value
+  const key = getTenantId() ?? ''
+  const hit = cache.get(key)
+  if (hit && Date.now() - hit.at < 60_000) return hit.value
   let value = TUNING_DEFAULTS
   try {
     if (await hasColumn('nivaro_settings', 'db_tuning')) {
@@ -81,7 +85,7 @@ export async function readTuningSettings(): Promise<TuningSettings> {
   } catch {
     value = TUNING_DEFAULTS
   }
-  cache = { at: Date.now(), value }
+  cache.set(key, { at: Date.now(), value })
   return value
 }
 
@@ -117,5 +121,5 @@ export async function readStoredTuningSettings(): Promise<Partial<TuningSettings
 }
 
 export function bustTuningSettings(): void {
-  cache = null
+  cache.delete(getTenantId() ?? '')
 }

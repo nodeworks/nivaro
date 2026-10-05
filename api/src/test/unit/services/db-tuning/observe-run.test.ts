@@ -4,6 +4,7 @@ import { OBSERVER_TIMEOUT_MS } from '../../../../services/db-tuning/deadline.js'
 import { fingerprintOf } from '../../../../services/db-tuning/ledger.js'
 import {
   AI_BUDGET,
+  isObserveRunning,
   PROOF_BUDGET,
   runObserve,
   selectForProof,
@@ -40,8 +41,11 @@ const m = vi.hoisted(() => ({
     (_body: string) => null as null | { body: string; notes: string[]; applied: string[] }
   ),
   indexCreate: vi.fn((): Candidate[] => []),
-  procSelections: vi.fn((): unknown[] => [])
+  procSelections: vi.fn((): unknown[] => []),
+  tenant: undefined as string | undefined
 }))
+
+vi.mock('../../../../db/tenant-context.js', () => ({ getTenantId: () => m.tenant }))
 
 vi.mock('../../../../db/index.js', () => {
   const chain = {
@@ -388,6 +392,34 @@ describe('runObserve', () => {
     expect((await first).proposed).toBe(1)
     m.prove.mockImplementation(async () => pass())
     expect((await runObserve({ trigger: 'schedule' })).skipped).toBeUndefined()
+  })
+
+  it("one tenant's run in flight does not hold another tenant's run", async () => {
+    m.indexCreate.mockImplementation(() => [c('index_create', 9000)])
+    let release: (p: ProofResult) => void = () => {}
+    m.prove.mockImplementation(
+      () =>
+        new Promise<ProofResult>((res) => {
+          release = res
+        })
+    )
+    try {
+      m.tenant = 'a'
+      const first = runObserve({ trigger: 'schedule' })
+      await vi.waitFor(() => expect(m.prove).toHaveBeenCalled())
+      expect(isObserveRunning()).toBe(true)
+      m.tenant = 'b'
+      expect(isObserveRunning()).toBe(false)
+      m.prove.mockImplementation(async () => pass())
+      expect((await runObserve({ trigger: 'schedule' })).skipped).toBeUndefined()
+      m.tenant = 'a'
+      expect((await runObserve({ trigger: 'run-now' })).skipped).toBe('already running')
+      release(pass())
+      await first
+      expect(isObserveRunning()).toBe(false)
+    } finally {
+      m.tenant = undefined
+    }
   })
 
   it('past the 60-minute wall the remaining chosen candidates carry over', async () => {
