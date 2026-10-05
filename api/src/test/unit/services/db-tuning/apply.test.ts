@@ -637,11 +637,18 @@ describe('executeSpec', () => {
 describe('applyProposal', () => {
   const app = {} as never
 
-  it('applies only a proposed row', async () => {
-    m.rows.set('x', { ...row({ status: 'rejected_by_proof' }) })
+  it('applies only a proposed row — stale / rejected_by_proof answer reprove first', async () => {
+    for (const status of ['rejected_by_proof', 'stale'] as const) {
+      m.rows.set('x', { ...row({ status }) })
+      const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+      expect(err.code).toBe('TUNING_NOT_APPLICABLE')
+      expect(err.status).toBe(409)
+      expect(err.message).toMatch(/reprove first/)
+    }
+    m.rows.set('x', { ...row({ status: 'watching' }) })
     const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
-    expect(err.code).toBe('TUNING_NOT_APPLICABLE')
-    expect(err.status).toBe(409)
+    expect(err.message).not.toMatch(/reprove/)
+    expect(m.startJobRun).not.toHaveBeenCalled()
   })
   it('refuses a replicated target without dba_ok — recorded or live', async () => {
     m.rows.set('x', { ...row({ replicated: true }) })

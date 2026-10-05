@@ -671,11 +671,13 @@ export async function applyProposal(
 ): Promise<ProposalRow> {
   const row = await getProposal(id)
   if (!row) throw new TuningRefusal('TUNING_NOT_APPLICABLE', 'proposal not found', 400)
-  if (!APPLY_FROM.includes(row.status))
+  if (!APPLY_FROM.includes(row.status)) {
+    const reprove = row.status === 'stale' || row.status === 'rejected_by_proof'
     throw new TuningRefusal(
       'TUNING_NOT_APPLICABLE',
-      `proposal is ${row.status}${row.status === 'stale' ? ' — re-prove it first' : ''}`
+      `proposal is ${row.status}${reprove ? ' — reprove first' : ''}`
     )
+  }
   const shape = specsProblem(row)
   if (shape) throw invalid(shape)
   if (!opts.dbaOk && (await replicatedNow(row)))
