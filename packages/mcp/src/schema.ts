@@ -48,11 +48,22 @@ export function clampLimit(limit: number | undefined): number {
   return Math.min(Math.max(Math.trunc(limit), 1), MAX_LIMIT)
 }
 
+// Collection names and ids ride in request PATHS. They are restricted to the
+// characters a registered name or key can hold, so a value like "../auth" or
+// "1?fields=*" can never reach a path the tool did not mean to call.
 export const collectionName = z
   .string()
-  .min(1)
+  .regex(/^[A-Za-z0-9_]{1,128}$/, 'A collection name is letters, digits and underscores')
   .describe('Collection name as registered in the instance, e.g. "articles".')
 
 export const recordId = z
-  .union([z.string(), z.number()])
+  .union([
+    z.string().regex(/^[A-Za-z0-9_.:-]{1,128}$/, 'An id is an integer, a uuid or a plain key'),
+    z.number().int().nonnegative()
+  ])
   .describe('Primary key of the record (integer or uuid).')
+
+export const transitionId = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,64}$/, 'A transition id is a uuid')
+  .describe('An id from available_transitions.')

@@ -317,6 +317,9 @@ export async function notificationsRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: 'Record not found' })
       throw err
     }
+    // readOne answers null (not a throw) for a row the caller cannot see or
+    // that is gone — the snapshot is withheld with it.
+    if (!current) return reply.code(404).send({ error: 'Record not found' })
     const revisionIdRaw = row.revision_id
     const snapshot = await pickSnapshotRevision({
       collection,

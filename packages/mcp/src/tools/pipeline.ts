@@ -12,7 +12,7 @@ import {
 } from '@nivaro/sdk'
 import { z } from 'zod'
 import { fail, ok } from '../result.js'
-import { collectionName, recordId } from '../schema.js'
+import { collectionName, recordId, transitionId } from '../schema.js'
 
 const HISTORY_ROWS = 10
 
@@ -123,7 +123,7 @@ export function registerPipelineTools(server: McpServer, client: NivaroClient) {
       inputSchema: {
         collection: collectionName,
         id: recordId,
-        transition_id: z.string().min(1).describe('An id from available_transitions.'),
+        transition_id: transitionId,
         comment: z.string().optional().describe("Recorded in the record's history.")
       },
       annotations: { destructiveHint: false }
