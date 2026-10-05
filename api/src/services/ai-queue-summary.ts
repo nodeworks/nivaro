@@ -215,9 +215,17 @@ export async function queueCatalogue(user: User): Promise<string[]> {
   const queues = await readableQueues(user)
   const shown = queues.slice(0, QUEUE_CATALOGUE_LIMIT)
   const sources = await sourceCollectionsFor(shown.map((q) => q.id))
+  // Names are data typed by whoever owns the queue: one line each, no control
+  // characters, capped — they must read as a catalogue entry, never as a rule.
+  const clean = (v: unknown, max: number) =>
+    String(v ?? '')
+      .replace(/[\r\n\t\u0000-\u001f\u007f]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, max)
   const lines = shown.map((q) => {
-    const cols = sources.get(String(q.id).toUpperCase()) ?? []
-    return `- ${q.id}: ${q.name}${cols.length ? ` — ${cols.join(', ')}` : ''}`
+    const cols = (sources.get(String(q.id).toUpperCase()) ?? []).map((c) => clean(c, 60))
+    return `- ${q.id}: "${clean(q.name, 80)}"${cols.length ? ` — ${cols.join(', ')}` : ''}`
   })
   if (queues.length > QUEUE_CATALOGUE_LIMIT) lines.push('- … and more; ask by name.')
   return lines

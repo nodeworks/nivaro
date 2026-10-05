@@ -7,6 +7,7 @@ import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
 import { cn, formatRelative } from '@/lib/utils'
 
 interface TraceEntry {
@@ -293,20 +294,34 @@ function AskPageInner() {
   // `?q=` seeds and sends one question (the queue page's "Ask about this
   // queue", #1276), then leaves the URL — a reload must not re-ask it.
   const seededRef = useRef(false)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: consume the param once on mount
+  // biome-ignore lint/correctness/useExhaustiveDependencies: consume the seeds once on mount
   useEffect(() => {
-    const q = searchParams.get('q')?.trim()
-    if (!q || seededRef.current) return
+    if (seededRef.current) return
     seededRef.current = true
-    setSearchParams(
-      (prev) => {
-        const next = new URLSearchParams(prev)
-        next.delete('q')
-        return next
-      },
-      { replace: true }
-    )
-    submit(q)
+    // A question handed over from inside the app (the queue page's "Ask about
+    // this queue") rides sessionStorage and submits at once. A `?q=` in the
+    // URL only fills the box — a link from outside must never fire a question
+    // on the reader's behalf.
+    let handed: string | null = null
+    try {
+      handed = sessionStorage.getItem(ASK_HANDOFF_KEY)
+      if (handed) sessionStorage.removeItem(ASK_HANDOFF_KEY)
+    } catch {
+      handed = null
+    }
+    const q = searchParams.get('q')?.trim()
+    if (q) {
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev)
+          next.delete('q')
+          return next
+        },
+        { replace: true }
+      )
+    }
+    if (handed?.trim()) submit(handed.trim())
+    else if (q) setInput(q)
   }, [])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new turns

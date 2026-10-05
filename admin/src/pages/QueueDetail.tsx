@@ -12,6 +12,7 @@ import { useNavigate, useParams } from 'react-router'
 import { io } from 'socket.io-client'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
+import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
 import { useAuth } from '@/lib/auth'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -149,11 +150,17 @@ export function QueueDetailPage() {
             <QueueWorklist
               queueId={id!}
               realtime={realtime}
-              onAsk={(q) =>
-                navigate(
-                  `/ask?q=${encodeURIComponent(`What is stuck in the "${q.name}" queue and why?`)}`
-                )
-              }
+              onAsk={(q) => {
+                try {
+                  sessionStorage.setItem(
+                    ASK_HANDOFF_KEY,
+                    `What is stuck in the "${q.name}" queue and why?`
+                  )
+                } catch {
+                  // storage blocked: the Ask page opens empty
+                }
+                navigate('/ask')
+              }}
             />
           </div>
         </ItemEditAuthContext.Provider>
