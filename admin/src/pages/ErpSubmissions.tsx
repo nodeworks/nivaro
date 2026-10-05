@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, ChevronDown, ChevronRight, ChevronsUpDown, RotateCw, Search } from 'lucide-react'
 import { useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import type { ErpStatus, ErpSubmission } from '@/components/erp-status-badge'
 import { Badge } from '@/components/ui/badge'
@@ -353,9 +354,16 @@ function SubmissionRow({
 export function ErpSubmissionsPage() {
   const { user } = useAuth()
   const queryClient = useQueryClient()
-  const [collection, setCollection] = useState('')
-  const [itemId, setItemId] = useState('')
-  const [applied, setApplied] = useState<{ collection: string; item: string } | null>(null)
+  // A record's file chips deep-link here as ?collection=&item= (#1288) — the
+  // lookup seeds from them so the history is already loaded on arrival.
+  const [searchParams] = useSearchParams()
+  const seedCollection = searchParams.get('collection') ?? ''
+  const seedItem = searchParams.get('item') ?? ''
+  const [collection, setCollection] = useState(seedCollection)
+  const [itemId, setItemId] = useState(seedItem)
+  const [applied, setApplied] = useState<{ collection: string; item: string } | null>(
+    seedCollection && seedItem ? { collection: seedCollection, item: seedItem } : null
+  )
 
   const { data: collections = [] } = useQuery({
     queryKey: ['collections'],

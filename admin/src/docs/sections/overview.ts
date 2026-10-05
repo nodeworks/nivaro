@@ -301,6 +301,10 @@ export const userFiles: DocSection = {
       text: 'The Unused scope lists files no record references (every foreign key into nivaro_files is checked live). "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).'
     },
     {
+      type: 'p',
+      text: 'On a record form every file chip carries a "used in" glyph with a count. Opening it lists what carried that file on this record: the addendum that attached it, the integration push whose payload named it, the email it rode, and the layout that generated it (a PDF stamped generated_by_layout). A match on the file\'s uuid reads as certain; one found only by its download name — an email body or a push payload that spells out the filename — is marked "by name". A file nothing carried says so. API: POST /api/files/usage/on-record {collection, item, file_ids} (read permission on the record; 200 ids per call).'
+    },
+    {
       type: 'table',
       head: ['Endpoint', 'Description'],
       rows: [

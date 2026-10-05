@@ -14,11 +14,12 @@ import {
   X
 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
-import { useGridFlush, useNivaroClient } from '../../context'
+import { useGridFlush, useNivaroClient, useParentDraft } from '../../context'
 import { useFileHealth } from '../../hooks/useFileHealth'
 import { del, get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
+import { FileUsageChip, useFileUsage, useOnceVisible } from './FileUsage'
 import { useM2MStaging } from './M2MStagingContext'
 import type { CMSRelation } from './types'
 
@@ -252,6 +253,18 @@ export function FilePickerField({
   const fileId = !pendingFile && value ? String(value) : null
   const getUrl = (id: string) => client.fileUrl(id)
 
+  // #1288 — what carried this file on the record (addendum / push / email /
+  // generated). Read once the chip is on screen; never on a new record.
+  const parentDraft = useParentDraft()
+  const recordId = parentDraft?.draft?.id != null ? String(parentDraft.draft.id) : null
+  const [usageRef, usageVisible] = useOnceVisible<HTMLDivElement>(!!fileId)
+  const usage = useFileUsage(
+    parentDraft?.collection,
+    recordId,
+    fileId ? [fileId] : [],
+    usageVisible
+  )
+
   // manage object URL lifecycle
   useEffect(() => {
     if (!pendingFile) {
@@ -332,7 +345,10 @@ export function FilePickerField({
     <div className='relative'>
       {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {hasFile ? (
-        <div className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'>
+        <div
+          ref={usageRef}
+          className='flex items-center gap-2 rounded-lg border border-slate-200 p-2 bg-slate-50'
+        >
           {hasPending ? (
             <FileThumb
               url={previewUrl ?? ''}
@@ -407,6 +423,15 @@ export function FilePickerField({
               )}
             </div>
           </div>
+          {!hasPending && fileId && (
+            <FileUsageChip
+              fileId={fileId}
+              uses={usage.data?.[fileId]}
+              loading={usage.isLoading}
+              collection={parentDraft?.collection}
+              itemId={recordId}
+            />
+          )}
           {!hasPending && fileId && (
             <a
               href={`${getUrl(fileId)}?download=1`}
@@ -642,6 +667,17 @@ export function FileM2MField({
       ? [...committedIds.filter((id) => !localRemovals.has(id)), ...localAdds]
       : committedIds
 
+  // #1288 — what carried each committed file on the record; one read for the
+  // whole list once the rows are on screen, never on a new record.
+  const parentDraft = useParentDraft()
+  const [usageRef, usageVisible] = useOnceVisible<HTMLDivElement>(committedIds.length > 0)
+  const usage = useFileUsage(
+    parentDraft?.collection,
+    isNew ? null : parentId,
+    committedIds,
+    usageVisible
+  )
+
   // Auto-check on load — live storage verdict beats the stored stamp.
   const health = useFileHealth(allFileIds)
   const { data: filesMap = {} } = useQuery<Record<string, NivaroFile>>({
@@ -733,7 +769,7 @@ export function FileM2MField({
     <div className='space-y-2'>
       {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
       {(allFileIds.length > 0 || pendingFiles.length > 0) && (
-        <div className='flex flex-col gap-1.5'>
+        <div ref={usageRef} className='flex flex-col gap-1.5'>
           {allFileIds.map((id) => {
             const f = filesMap[id]
             return (
@@ -798,6 +834,15 @@ export function FileM2MField({
                   >
                     file missing
                   </span>
+                )}
+                {!isNew && committedIds.includes(id) && (
+                  <FileUsageChip
+                    fileId={id}
+                    uses={usage.data?.[id]}
+                    loading={usage.isLoading}
+                    collection={parentDraft?.collection}
+                    itemId={parentId}
+                  />
                 )}
                 <a
                   href={`${getUrl(id)}?download=1`}
