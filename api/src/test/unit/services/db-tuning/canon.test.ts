@@ -5,6 +5,10 @@ describe('canon', () => {
   it('is column-order independent and normalises numerics', () => {
     expect(canonRow({ b: '2.5000', a: 1 })).toBe(canonRow({ a: 1.0, b: 2.5 }))
   })
+  it('keeps leading-zero strings distinct but agrees on 1.0 vs 1', () => {
+    expect(canonRow({ c: '007' })).not.toBe(canonRow({ c: '7' }))
+    expect(canonRow({ c: '1.0' })).toBe(canonRow({ c: 1 }))
+  })
   it('drops elapsed-time style columns', () => {
     expect(canonRow({ id: 1, elapsed_ms: 40 })).toBe(canonRow({ id: 1, elapsed_ms: 9999 }))
     expect(canonRow({ id: 1, age_days: 3 })).toBe(canonRow({ id: 1, age_days: 4 }))

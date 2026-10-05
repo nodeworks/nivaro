@@ -4,6 +4,7 @@
  * are excluded because several report procedures emit them and they can never agree
  * across two runs seconds apart.
  */
+// Known cost: a genuine data column such as `age_group` is excluded too.
 export const EXCLUDED_COLUMN_PATTERNS: RegExp[] = [
   /elapsed/i,
   /_ms$/i,
@@ -18,7 +19,8 @@ function norm(v: unknown): unknown {
   if (v === undefined) return null
   if (v instanceof Date) return v.toISOString()
   if (typeof v === 'number') return Number.isFinite(v) ? Math.round(v * 10000) / 10000 : String(v)
-  if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) {
+  // No leading zeros: varchar codes like "007" must stay distinct from "7".
+  if (typeof v === 'string' && /^-?(0|[1-9]\d*)(\.\d+)?$/.test(v.trim())) {
     const n = Number(v)
     if (Number.isFinite(n) && Math.abs(n) < 1e15) return Math.round(n * 10000) / 10000
   }
