@@ -30,7 +30,7 @@ const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
  * fooled by a quote inside a comment, a comment marker inside a string, or an
  * apostrophe inside a bracketed name.
  */
-function codeOnly(sql: string): string {
+export function codeOnly(sql: string): string {
   let out = ''
   let i = 0
   const n = sql.length
