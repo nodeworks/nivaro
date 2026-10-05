@@ -388,7 +388,7 @@ describe('record', () => {
     d = (await get('/traffic-map/inspect/record/workflows:12')).json().data
     expect(d.reason).toMatch(/Your role cannot read/)
 
-    vi.mocked(readOne).mockRejectedValueOnce(new CollectionNotFoundError())
+    vi.mocked(readOne).mockRejectedValueOnce(new CollectionNotFoundError('nivaro_users'))
     d = (await get('/traffic-map/inspect/record/nivaro_users:1')).json().data
     expect(d.reason).toMatch(/system table/)
 

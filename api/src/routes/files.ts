@@ -280,8 +280,12 @@ export async function filesRoutes(app: FastifyInstance) {
     } catch {
       return reply.code(404).send({ error: 'Not found' })
     }
-    const { fileUsageOnRecord } = await import('../services/file-usage.js')
-    const data = await fileUsageOnRecord(collection, item, ids)
+    const { fileUsageOnRecord, fileIdsAttachedTo } = await import('../services/file-usage.js')
+    // Only files the record itself carries may be looked up — anything else
+    // would let a reader probe whether an arbitrary file rode a push or email.
+    const attached = await fileIdsAttachedTo(collection, item)
+    const allowed = ids.filter((id) => attached.has(id.toLowerCase()))
+    const data = allowed.length > 0 ? await fileUsageOnRecord(collection, item, allowed) : {}
     return reply.send({ data })
   })
 

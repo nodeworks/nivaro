@@ -56,6 +56,66 @@ export async function getFileUsage(
   return { usages, total: usages.reduce((s, u) => s + u.count, 0) }
 }
 
+/** The file ids a record actually carries: its own file-FK columns, the rows
+ *  of every junction that links it to nivaro_files, and the attachments of its
+ *  addendums. Used to bound the on-record usage lookup to files the record
+ *  shows — a caller may read the record, but must not probe other files. */
+export async function fileIdsAttachedTo(
+  collection: string,
+  itemId: string | number
+): Promise<Set<string>> {
+  const out = new Set<string>()
+  const item = String(itemId)
+  const add = (v: unknown) => {
+    if (v != null && String(v).trim()) out.add(String(v).toLowerCase())
+  }
+  if (!/^[A-Za-z0-9_]+$/.test(collection)) return out
+  const refs = await getFileRefColumns()
+  // Direct file columns on the record's own table.
+  const own = refs.filter((r) => r.table === collection)
+  if (own.length > 0) {
+    const cols = own.map((r) => `[${r.column}]`).join(', ')
+    const rows = (await db
+      .raw(`SELECT ${cols} FROM [${collection}] WHERE [id] = ?`, [item])
+      .catch(() => [])) as Array<Record<string, unknown>>
+    for (const row of rows) for (const r of own) add(row[r.column])
+  }
+  // Junctions: a table with a file FK AND an FK to this collection.
+  const junctions = (await db
+    .raw(
+      `SELECT OBJECT_NAME(fk.parent_object_id) AS tbl, c.name AS col
+       FROM sys.foreign_keys fk
+       JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+       JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
+       WHERE OBJECT_NAME(fk.referenced_object_id) = ?`,
+      [collection]
+    )
+    .catch(() => [])) as Array<{ tbl: string; col: string }>
+  for (const j of junctions) {
+    const fileCols = refs.filter((r) => r.table === j.tbl)
+    if (fileCols.length === 0) continue
+    const cols = fileCols.map((r) => `[${r.column}]`).join(', ')
+    const rows = (await db
+      .raw(`SELECT ${cols} FROM [${j.tbl}] WHERE [${j.col}] = ?`, [item])
+      .catch(() => [])) as Array<Record<string, unknown>>
+    for (const row of rows) for (const r of fileCols) add(row[r.column])
+  }
+  // Addendum attachments on this record.
+  const adds = (await db('nivaro_addendums')
+    .select('attachments')
+    .where({ parent_collection: collection, parent_id: item })
+    .catch(() => [])) as Array<{ attachments: unknown }>
+  for (const a of adds) {
+    try {
+      const list = typeof a.attachments === 'string' ? JSON.parse(a.attachments) : a.attachments
+      if (Array.isArray(list)) for (const v of list) add(v)
+    } catch {
+      // unreadable JSON — contributes nothing
+    }
+  }
+  return out
+}
+
 /** Files referenced by nothing — safe-to-delete candidates. */
 export async function findOrphanFiles(opts: { limit?: number; offset?: number } = {}): Promise<{
   data: Array<Record<string, unknown>>

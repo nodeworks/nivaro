@@ -78,6 +78,10 @@ export async function mailSuppressionRoutes(app: FastifyInstance): Promise<void>
       if (!address.includes('@')) return reply.code(400).send({ error: 'address is required' })
       const row = await suppressionFor(address)
       if (!row) return { data: { suppressed: false, reason: null, since: null, id: null } }
+      // Non-admins learn only that the address bounces and since when; the
+      // relay's reason text and the counts are admin detail.
+      if (!req.isAdmin)
+        return { data: { suppressed: true, id: null, reason: null, since: row.first_seen } }
       return {
         data: {
           suppressed: true,
