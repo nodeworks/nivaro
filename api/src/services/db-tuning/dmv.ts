@@ -16,33 +16,60 @@ export function isMssqlDb(): boolean {
 const bracket = (s: string) => `[${s}]`
 const rowsOf = (r: unknown) => (Array.isArray(r) ? (r as Array<Record<string, unknown>>) : [])
 
-export async function serverUptimeDays(): Promise<number | null> {
+/** When SQL Server last started: index usage stats count from here. */
+export async function serverStartTime(): Promise<Date | null> {
   if (!isMssqlDb()) return null
   const rows = rowsOf(
     await db.raw('SELECT sqlserver_start_time AS t FROM sys.dm_os_sys_info').catch(() => [])
   )
   const t = rows[0]?.t
   if (!t) return null
-  const ms = Date.now() - new Date(t as Date).getTime()
-  return Number.isFinite(ms) ? ms / 86_400_000 : null
+  const d = new Date(t as Date)
+  return Number.isFinite(d.getTime()) ? d : null
+}
+
+export async function serverUptimeDays(): Promise<number | null> {
+  const t = await serverStartTime()
+  return t ? (Date.now() - t.getTime()) / 86_400_000 : null
+}
+
+/** The database and default schema unqualified names resolve in. */
+export async function currentDbAndSchema(): Promise<{ database: string; schema: string } | null> {
+  if (!isMssqlDb()) return null
+  const rows = rowsOf(await db.raw('SELECT DB_NAME() AS db, SCHEMA_NAME() AS sch').catch(() => []))
+  const r = rows[0]
+  return r?.db && r?.sch ? { database: String(r.db), schema: String(r.sch) } : null
+}
+
+/** `[name]` → `name` when the inside is one IDENT; anything else (`[a]]b]`, `a`, …) → null. */
+export function unbracket(token: string): string | null {
+  const m = token.trim().match(/^\[([A-Za-z_][A-Za-z0-9_]*)\]$/)
+  return m ? m[1] : null
+}
+
+/** A DMV column list `[a], [b]` → names; null when any token is not a plain bracketed IDENT. */
+export function bracketedList(s: string | null): string[] | null {
+  if (!s) return []
+  const out: string[] = []
+  for (const token of s.split(',')) {
+    const name = unbracket(token)
+    if (!name) return null
+    out.push(name)
+  }
+  return out
 }
 
 export interface MissingIndex {
   table: string
   equality: string[]
   inequality: string[]
+  /** INCLUDE columns the optimizer asked for — evidence only; INCLUDE-widening is not proposed. */
+  include?: string[]
   seeks: number
   scans: number
   avg_impact: number
   avg_cost: number
 }
-const cols = (s: string | null) =>
-  s
-    ? s
-        .split(',')
-        .map((c) => c.trim().replace(/[[\]]/g, ''))
-        .filter(Boolean)
-    : []
 
 export async function missingIndexGroups(): Promise<MissingIndex[]> {
   if (!isMssqlDb()) return []
@@ -50,22 +77,93 @@ export async function missingIndexGroups(): Promise<MissingIndex[]> {
     await db
       .raw(`
     SELECT OBJECT_NAME(d.object_id) AS table_name, d.equality_columns, d.inequality_columns,
-           s.user_seeks, s.user_scans, s.avg_total_user_cost, s.avg_user_impact
+           d.included_columns, s.user_seeks, s.user_scans, s.avg_total_user_cost, s.avg_user_impact
     FROM sys.dm_db_missing_index_details d
     JOIN sys.dm_db_missing_index_groups g ON g.index_handle = d.index_handle
     JOIN sys.dm_db_missing_index_group_stats s ON s.group_handle = g.index_group_handle
     WHERE d.database_id = DB_ID() AND OBJECT_SCHEMA_NAME(d.object_id) = SCHEMA_NAME()`)
       .catch(() => [])
   )
-  return rows.map((r) => ({
-    table: String(r.table_name ?? ''),
-    equality: cols(r.equality_columns as string | null),
-    inequality: cols(r.inequality_columns as string | null),
-    seeks: Number(r.user_seeks ?? 0),
-    scans: Number(r.user_scans ?? 0),
-    avg_impact: Number(r.avg_user_impact ?? 0),
-    avg_cost: Number(r.avg_total_user_cost ?? 0)
-  }))
+  const out: MissingIndex[] = []
+  for (const r of rows) {
+    const equality = bracketedList(r.equality_columns as string | null)
+    const inequality = bracketedList(r.inequality_columns as string | null)
+    const include = bracketedList(r.included_columns as string | null)
+    // A column we cannot name exactly is a suggestion we cannot build.
+    if (!equality || !inequality || !include) continue
+    out.push({
+      table: String(r.table_name ?? ''),
+      equality,
+      inequality,
+      include,
+      seeks: Number(r.user_seeks ?? 0),
+      scans: Number(r.user_scans ?? 0),
+      avg_impact: Number(r.avg_user_impact ?? 0),
+      avg_cost: Number(r.avg_total_user_cost ?? 0)
+    })
+  }
+  return out
+}
+
+export interface IndexKeys {
+  table: string
+  index: string
+  keys: string[]
+}
+
+/** Every live index's key columns in key order (default schema, user tables). Null on error,
+ *  so a caller that must not duplicate an index can refuse to propose instead of guessing. */
+export async function indexKeyLists(): Promise<IndexKeys[] | null> {
+  if (!isMssqlDb()) return null
+  const res = await db
+    .raw(`
+    SELECT OBJECT_NAME(i.object_id) AS table_name, i.name AS index_name, c.name AS column_name
+    FROM sys.indexes i
+    JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.key_ordinal > 0
+    JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
+    WHERE i.index_id > 0 AND i.is_hypothetical = 0 AND i.is_disabled = 0
+      AND OBJECTPROPERTY(i.object_id,'IsUserTable') = 1 AND OBJECT_SCHEMA_NAME(i.object_id) = SCHEMA_NAME()
+    ORDER BY i.object_id, i.index_id, ic.key_ordinal`)
+    .then((r: unknown) => (Array.isArray(r) ? rowsOf(r) : null))
+    .catch(() => null)
+  if (!res) return null
+  const byIndex = new Map<string, IndexKeys>()
+  for (const r of res) {
+    const k = `${r.table_name}.${r.index_name}`
+    const cur = byIndex.get(k) ?? {
+      table: String(r.table_name),
+      index: String(r.index_name),
+      keys: []
+    }
+    cur.keys.push(String(r.column_name))
+    byIndex.set(k, cur)
+  }
+  return [...byIndex.values()]
+}
+
+/** Which of `names` appear (case-insensitively) anywhere in a module definition — a hint such
+ *  as WITH (INDEX(name)) would fail with error 308 once the index is gone. Deliberately loose:
+ *  a mention is enough to decline. Null on error. */
+export async function indexNamesInModules(names: string[]): Promise<Set<string> | null> {
+  if (!isMssqlDb()) return null
+  const valid = [...new Set(names.filter((n) => IDENT.test(n)).map((n) => n.toLowerCase()))]
+  const out = new Set<string>()
+  // A table value constructor takes at most 1000 rows.
+  for (let i = 0; i < valid.length; i += 500) {
+    const chunk = valid.slice(i, i + 500)
+    const res = await db
+      .raw(
+        `SELECT n.name FROM (VALUES ${chunk.map(() => '(?)').join(', ')}) AS n(name)
+         WHERE EXISTS (SELECT 1 FROM sys.sql_modules m
+                        WHERE CHARINDEX(LOWER(n.name), LOWER(m.definition)) > 0)`,
+        chunk
+      )
+      .then((r: unknown) => (Array.isArray(r) ? rowsOf(r) : null))
+      .catch(() => null)
+    if (!res) return null
+    for (const r of res) out.add(String(r.name).toLowerCase())
+  }
+  return out
 }
 
 export interface UsageRow {
@@ -79,7 +177,8 @@ export interface UsageRow {
   type: string
 }
 
-/** Every index on a user table in the default schema (the one unqualified names resolve to). */
+/** Every live (not hypothetical, not disabled) index on a user table in the default schema
+ *  (the one unqualified names resolve to). */
 export async function indexUsage(): Promise<UsageRow[]> {
   if (!isMssqlDb()) return []
   const rows = rowsOf(
@@ -93,6 +192,7 @@ export async function indexUsage(): Promise<UsageRow[]> {
     FROM sys.indexes i
     LEFT JOIN sys.dm_db_index_usage_stats us ON us.object_id=i.object_id AND us.index_id=i.index_id AND us.database_id=DB_ID()
     WHERE i.index_id > 0 AND OBJECTPROPERTY(i.object_id,'IsUserTable')=1 AND i.name IS NOT NULL
+      AND i.is_hypothetical = 0 AND i.is_disabled = 0
       AND OBJECT_SCHEMA_NAME(i.object_id) = SCHEMA_NAME()`)
       .catch(() => [])
   )
@@ -115,7 +215,8 @@ export interface RedundantRow {
 }
 
 /** Indexes whose key list is a strict prefix of another's (the GET /ops-db/redundant-indexes
- *  query), one row per redundant index naming its widest covering index. */
+ *  query, restricted to live coverers in the default schema), one row per redundant index
+ *  naming its widest covering index. */
 export async function redundantIndexes(): Promise<RedundantRow[]> {
   if (!isMssqlDb()) return []
   const rows = rowsOf(
@@ -132,6 +233,8 @@ export async function redundantIndexes(): Promise<RedundantRow[]> {
                    WHERE ic.object_id = i.object_id AND ic.index_id = i.index_id AND ic.is_included_column = 1) AS includes
             FROM sys.indexes i
            WHERE i.index_id > 0 AND i.type_desc = 'NONCLUSTERED'
+             -- a leftover hypothetical (DTA) or a disabled index serves no query: never a coverer
+             AND i.is_hypothetical = 0 AND i.is_disabled = 0
         )
         SELECT t.name AS table_name, a.name AS index_name, a.key_list AS keys,
                b.name AS covered_by, b.key_list AS covered_keys,
@@ -147,6 +250,7 @@ export async function redundantIndexes(): Promise<RedundantRow[]> {
           LEFT JOIN sys.dm_db_index_usage_stats us ON us.object_id = a.object_id AND us.index_id = a.index_id AND us.database_id = DB_ID()
           LEFT JOIN sys.dm_db_partition_stats ps ON ps.object_id = a.object_id AND ps.index_id = a.index_id
          WHERE a.is_unique = 0 AND a.is_primary_key = 0 AND a.includes = 0 AND a.has_filter = 0
+           AND SCHEMA_NAME(t.schema_id) = SCHEMA_NAME()
          GROUP BY t.name, a.name, a.key_list, b.name, b.key_list, us.user_updates, us.user_seeks, us.user_scans, us.user_lookups
          ORDER BY ISNULL(us.user_updates, 0) DESC
       `)
