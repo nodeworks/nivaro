@@ -5,6 +5,13 @@ import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
+import {
+  applySenderName,
+  brandContextFor,
+  brandTemplateContext,
+  type MailBrandingLookup,
+  resolveMailBranding
+} from './mail-branding.js'
 import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
@@ -66,11 +73,25 @@ export async function renderMailTemplate(
   template: string,
   data?: Record<string, unknown>
 ): Promise<string> {
+  const ctx = await withBrand(data, {})
   const override = await getTemplateOverride(template)
   if (override !== null) {
-    return engine.parseAndRender(override, data ?? {})
+    return engine.parseAndRender(override, ctx)
   }
-  return engine.renderFile(template, data ?? {})
+  return engine.renderFile(template, ctx)
+}
+
+/** Mail branding (#1463): base.liquid reads `brand` off the context. A caller
+ *  that already put one there keeps it; otherwise it resolves from the lookup
+ *  (explicit workspace → record's workspace → recipient's → instance), with
+ *  the harness's render scope honoured when the lookup names no workspace. */
+async function withBrand(
+  data: Record<string, unknown> | undefined,
+  lookup: MailBrandingLookup
+): Promise<Record<string, unknown>> {
+  const base = data ?? {}
+  if (base.brand && typeof base.brand === 'object') return base
+  return { ...base, ...(await brandContextFor(lookup)) }
 }
 
 /** Wrap a bare HTML fragment in the branded `message` chrome — the same wrap
@@ -83,7 +104,8 @@ export async function wrapMailFragment(
 ): Promise<string> {
   if (/<html[\s>]/i.test(html)) return html
   try {
-    return await engine.renderFile('message', { ...(extra ?? {}), html, title: title ?? null })
+    const ctx = await withBrand(extra, {})
+    return await engine.renderFile('message', { ...ctx, html, title: title ?? null })
   } catch {
     return html
   }
@@ -120,7 +142,7 @@ export async function previewMailBody(
   body: string,
   data?: Record<string, unknown>
 ): Promise<string> {
-  return engine.parseAndRender(body, data ?? {})
+  return engine.parseAndRender(body, await withBrand(data, {}))
 }
 
 /** The file template's source (for the editor's baseline + revert preview). */
@@ -489,6 +511,31 @@ export interface MailOptions {
    *  notification rules. Per recipient by construction: pass it on
    *  single-recipient sends; a list send gets one shared line. */
   why?: string | null
+  /** Mail branding (#1463): the workspace whose chrome this email wears. Unset
+   *  = the record's (`record` / `collection`) workspace, else the recipient's. */
+  workspace_id?: string | null
+  /** The record the email is about, when it differs from the logged
+   *  `collection`/`item` context (otherwise those two already decide). */
+  record?: { collection: string; id: string | number } | null
+}
+
+/** The branding lookup a send derives from its options (#1463). */
+function brandLookupFor(opts: {
+  workspace_id?: string | null
+  record?: { collection: string; id: string | number } | null
+  collection?: string | null
+  item?: string | number | null
+  to: string | string[]
+}): MailBrandingLookup {
+  const list = (Array.isArray(opts.to) ? opts.to : String(opts.to).split(/[,;]/))
+    .map((s) => s.trim())
+    .filter(Boolean)
+  return {
+    workspaceId: opts.workspace_id ?? null,
+    recordCollection: opts.record?.collection ?? opts.collection ?? null,
+    recordId: opts.record?.id ?? opts.item ?? null,
+    recipientEmail: list.length === 1 ? list[0] : null
+  }
 }
 
 /** Outbound mail log (#71): every send ATTEMPT gets a row — sent, failed
@@ -582,7 +629,10 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   // The why-me footer rides the template context (the base layout renders
   // it); an explicit `why` in data wins over the option.
   const whyCtx = await whyContext(opts.to, (opts.data?.why as string | undefined) ?? opts.why)
-  const renderData = { ...(opts.data ?? {}), ...whyCtx }
+  // Mail branding (#1463): the workspace chrome the base layout renders, and
+  // the From display name when the workspace names a sender.
+  const brand = await resolveMailBranding(brandLookupFor(opts))
+  const renderData = { ...brandTemplateContext(brand), ...(opts.data ?? {}), ...whyCtx }
   let html: string
   try {
     html = await engine.renderFile(opts.template, renderData)
@@ -600,6 +650,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c] as string
     )
     html = await engine.renderFile('message', {
+      ...brandTemplateContext(brand),
       ...whyCtx,
       title: opts.subject,
       html: safe ? `<p style="margin:0;white-space:pre-wrap;">${safe}</p>` : ''
@@ -657,7 +708,7 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   const sendStarted = Date.now()
   try {
     await buildTransporter(smtp).sendMail({
-      from: smtp.from,
+      from: applySenderName(smtp.from, brand.from_name),
       to: routed.to,
       subject: withEnvLabel(smtp, routed.subject),
       html,
@@ -710,6 +761,9 @@ export async function sendRawMail(opts: {
   /** Logged as the mail-log `template` so raw sends (flow ops, digests)
    *  group on the delivery board instead of landing as "(untemplated)". */
   template?: string | null
+  /** See MailOptions.workspace_id / MailOptions.record (#1463). */
+  workspace_id?: string | null
+  record?: { collection: string; id: string | number } | null
 }): Promise<MailResult> {
   // Chaos drill (#333): a mail_down fault makes sends fail like a dead SMTP
   // host would, verifying the callers' failure paths (mail log, outbox).
@@ -727,11 +781,18 @@ export async function sendRawMail(opts: {
   // branding at all. Unless explicitly opted out — or the caller already
   // built a full document — wrap the fragment in the branded base layout
   // (the 'message' template), so ad-hoc emails match templated ones.
+  // Mail branding (#1463): the workspace chrome + From display name.
+  const brand = await resolveMailBranding(brandLookupFor(opts))
   let html = opts.html
   if (opts.wrap !== false && !/<html[\s>]/i.test(html)) {
     try {
       const whyCtx = await whyContext(opts.to, opts.why)
-      html = await engine.renderFile('message', { ...whyCtx, html, title: opts.title ?? null })
+      html = await engine.renderFile('message', {
+        ...brandTemplateContext(brand),
+        ...whyCtx,
+        html,
+        title: opts.title ?? null
+      })
     } catch {
       // Template missing/broken — the unwrapped fragment still sends.
     }
@@ -793,12 +854,14 @@ export async function sendRawMail(opts: {
     cadence: _cadence,
     collection: _collection,
     item: _item,
+    workspace_id: _workspaceId,
+    record: _record,
     ...mailOpts
   } = opts
   const sendStarted = Date.now()
   try {
     await buildTransporter(smtp).sendMail({
-      from: smtp.from,
+      from: applySenderName(smtp.from, brand.from_name),
       ...mailOpts,
       html,
       to: routed.to,

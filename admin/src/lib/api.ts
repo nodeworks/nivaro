@@ -121,6 +121,11 @@ export interface Workspace {
   slug: string
   icon: string | null
   color: string | null
+  /** Mail branding (#1463) — null = the instance branding. */
+  mail_logo?: string | null
+  mail_color?: string | null
+  mail_sender_name?: string | null
+  mail_footer?: string | null
   created_at: string
   updated_at: string
 }

@@ -441,6 +441,11 @@ export const mailHarnessDocs: DocSection = {
         'The rules link is the profile page — portal route key `profile` (Settings → Project → Frontend app), admin fallback /profile.'
       ]
     },
+    { type: 'h2', id: 'mail-harness-branding', text: 'Mail branding per workspace' },
+    {
+      type: 'p',
+      text: 'The chrome around every email — logo, accent colour, the "Sent by" name (also the From display name) and a footer line — can differ per workspace. Each workspace sets its own on the Workspaces page (Mail branding card); anything left blank keeps the instance branding from Settings → Project (project name, project colour), and with nothing set anywhere the stock chrome stands. A send resolves the workspace from an explicit `workspace_id` option, else the record it is about (its collection\'s workspace), else the recipient\'s current workspace. The From ADDRESS never changes — only its display name. The harness has a workspace picker beside the sample picker so every type can be previewed and sent as any workspace; the Workspaces page has a chrome-only preview of its own.'
+    },
     { type: 'h2', id: 'notification-bench', text: 'Notification test bench' },
     {
       type: 'p',

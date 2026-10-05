@@ -12,10 +12,11 @@ import { clearEncryptedFieldCache } from './encryption.js'
 import { bustFormulaContextCache } from './formula-context.js'
 import { bustContractCache } from './integration-contracts.js'
 import { bustMailTemplateOverrides } from './mail.js'
+import { bustMailBrandingCache } from './mail-branding.js'
 import { bustNotificationTemplateCache } from './notification-templates.js'
+import { clearPickerRuleCache } from './picker-rules.js'
 import { bustOwnerGroupCache } from './pipeline-engine.js'
 import { clearRelationLimitCache } from './relation-limits.js'
-import { clearPickerRuleCache } from './picker-rules.js'
 import { bustRollupContributorCache } from './rollups.js'
 import { clearRowRuleCache } from './row-rules-autofill.js'
 import { bustSectionLockCache } from './section-locks.js'
@@ -60,6 +61,11 @@ export function registerKnownCaches(): void {
     'mail-template-overrides',
     'DB mail-template override layer (60s TTL)',
     bustMailTemplateOverrides
+  )
+  registerCache(
+    'mail-branding',
+    'Mail branding per workspace + instance fallback (60s TTL, busted by workspace/settings writes)',
+    bustMailBrandingCache
   )
   registerCache(
     'instance-settings-overrides',

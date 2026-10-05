@@ -1,5 +1,5 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Send, Users } from 'lucide-react'
+import { Building2, Check, ChevronsUpDown, Send, Users } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -40,6 +40,12 @@ interface Rendered {
   html: string
   recipients: Array<{ email: string; reason: string; app?: 'portal' | 'admin' }>
 }
+/** A workspace the harness can render as (#1463) — `branded` = it sets any mail chrome. */
+interface BrandWorkspace {
+  id: string
+  name: string
+  branded: boolean
+}
 
 const SAMPLE_LABEL: Record<string, string> = {
   history: 'Pick a transition',
@@ -57,11 +63,19 @@ export function MailHarness() {
   const [rendered, setRendered] = useState<Rendered | null>(null)
   const [address, setAddress] = useState('')
   const [confirmReal, setConfirmReal] = useState(false)
+  // Mail branding (#1463): render the email as this workspace's chrome.
+  const [workspaceId, setWorkspaceId] = useState<string | null>(null)
+  const [wsPickerOpen, setWsPickerOpen] = useState(false)
 
   const { data: types = [] } = useQuery<MailType[]>({
     queryKey: ['mail-types'],
     queryFn: () => api.get('/mail-types').then((r) => r.data.data)
   })
+  const { data: brandWorkspaces = [] } = useQuery<BrandWorkspace[]>({
+    queryKey: ['mail-branding-workspaces'],
+    queryFn: () => api.get('/mail-types/workspaces').then((r) => r.data.data)
+  })
+  const brandWorkspace = brandWorkspaces.find((w) => w.id === workspaceId) ?? null
   const type = types.find((t) => t.key === typeKey) ?? null
   const groups = useMemo(() => {
     const m = new Map<string, MailType[]>()
@@ -87,23 +101,27 @@ export function MailHarness() {
   const preview = useMutation({
     mutationFn: () =>
       api
-        .post(`/mail-types/${typeKey}/preview`, { sample_id: sample?.id })
+        .post(`/mail-types/${typeKey}/preview`, {
+          sample_id: sample?.id,
+          workspace_id: workspaceId ?? undefined
+        })
         .then((r) => r.data.data as Rendered),
     onSuccess: (r) => setRendered(r),
     onError: (e: { response?: { data?: { error?: string } } }) =>
       toast.error(e.response?.data?.error ?? 'Preview failed')
   })
-  // biome-ignore lint/correctness/useExhaustiveDependencies: preview is stable per sample
+  // biome-ignore lint/correctness/useExhaustiveDependencies: preview is stable per sample + workspace
   useEffect(() => {
     if (typeKey && (sample || type?.sample.kind === 'none')) preview.mutate()
-  }, [sample?.id, typeKey])
+  }, [sample?.id, typeKey, workspaceId])
 
   const send = useMutation({
     mutationFn: (mode: 'self' | 'address' | 'recipients') =>
       api.post(`/mail-types/${typeKey}/send`, {
         sample_id: sample?.id,
         mode,
-        to: mode === 'address' ? address : undefined
+        to: mode === 'address' ? address : undefined,
+        workspace_id: workspaceId ?? undefined
       }),
     onSuccess: (r) => {
       setConfirmReal(false)
@@ -209,6 +227,78 @@ export function MailHarness() {
                                     </span>
                                   )}
                                 </span>
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                )}
+                {brandWorkspaces.length > 0 && (
+                  <Popover open={wsPickerOpen} onOpenChange={setWsPickerOpen}>
+                    <PopoverTrigger asChild>
+                      <button
+                        type='button'
+                        className={cn(
+                          'inline-flex h-8 items-center gap-1.5 rounded-md border px-3 text-left text-[12.5px] hover:border-slate-400',
+                          brandWorkspace
+                            ? 'border-nvr-cyan/40 bg-nvr-cyan/5 text-slate-800 dark:bg-nvr-cyan/10 dark:text-slate-100'
+                            : 'border-slate-200 bg-white text-slate-600 dark:border-border dark:bg-background dark:text-slate-300'
+                        )}
+                        data-tip='Render the email as this workspace’s mail branding'
+                        data-mail-workspace-trigger
+                      >
+                        <Building2 className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                        <span className='max-w-[180px] truncate'>
+                          {brandWorkspace ? brandWorkspace.name : 'Instance branding'}
+                        </span>
+                        <ChevronsUpDown className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                      </button>
+                    </PopoverTrigger>
+                    <PopoverContent align='start' className='w-[300px] p-0'>
+                      <Command>
+                        <CommandInput placeholder='Workspace…' />
+                        <CommandList className='max-h-[280px]'>
+                          <CommandEmpty>No workspaces</CommandEmpty>
+                          <CommandGroup>
+                            <CommandItem
+                              value='__instance__'
+                              onSelect={() => {
+                                setWorkspaceId(null)
+                                setWsPickerOpen(false)
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  'mr-2 h-3.5 w-3.5',
+                                  workspaceId === null ? 'opacity-100' : 'opacity-0'
+                                )}
+                              />
+                              Instance branding
+                            </CommandItem>
+                            {brandWorkspaces.map((w) => (
+                              <CommandItem
+                                key={w.id}
+                                value={`${w.name} ${w.id}`}
+                                onSelect={() => {
+                                  setWorkspaceId(w.id)
+                                  setWsPickerOpen(false)
+                                }}
+                                data-mail-workspace-option={w.id}
+                              >
+                                <Check
+                                  className={cn(
+                                    'mr-2 h-3.5 w-3.5',
+                                    workspaceId === w.id ? 'opacity-100' : 'opacity-0'
+                                  )}
+                                />
+                                <span className='min-w-0 flex-1 truncate'>{w.name}</span>
+                                {w.branded && (
+                                  <span className='ml-2 rounded bg-slate-100 px-1 py-px text-[9.5px] font-semibold uppercase text-slate-500 dark:bg-muted dark:text-slate-400'>
+                                    branded
+                                  </span>
+                                )}
                               </CommandItem>
                             ))}
                           </CommandGroup>

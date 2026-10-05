@@ -901,6 +901,11 @@ export const userWorkspacesGuide: DocSection = {
     {
       type: 'p',
       text: 'Each workspace can carry an accent color (the color picker in the workspace form). While a workspace with a color is active, the whole admin re-tints to it — buttons, highlights, and tinted surfaces all follow, and the switcher dot shows the same color — so you can always tell at a glance which workspace you are in. Workspaces without a color fall back to the instance project color, then the default cyan.'
+    },
+    { type: 'h3', text: 'Mail branding' },
+    {
+      type: 'p',
+      text: 'The Mail branding card on a workspace sets the email chrome its notifications wear: a logo URL (a public address a mail client can fetch), an accent colour, the sender name (the From display name and the "Sent by" footer line — the From address itself never changes) and a footer line. Blank fields keep the instance branding from Settings → Project. An email is branded by the workspace of the record it is about, else the recipient\'s current workspace. Preview renders the saved values; the Mail Templates → Send a real one harness can render any email type as any workspace.'
     }
   ]
 }

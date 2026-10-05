@@ -1686,7 +1686,7 @@ async function collectionSubscriberRecipients(
 export async function sendRenderedMail(
   rendered: MailRendered,
   to: string[],
-  opts: { collection?: string; item?: string; template?: string } = {}
+  opts: { collection?: string; item?: string; template?: string; workspace_id?: string } = {}
 ): Promise<void> {
   for (const addr of to) {
     await sendRawMail({
@@ -1695,6 +1695,9 @@ export async function sendRenderedMail(
       html: rendered.html,
       wrap: false,
       skipDigest: true,
+      // The harness rendered under this workspace's chrome; the From display
+      // name follows it too (#1463).
+      ...(opts.workspace_id ? { workspace_id: opts.workspace_id } : {}),
       // Logged under the type's template so harness sends group on the board.
       ...(opts.template ? { template: opts.template } : {}),
       ...(rendered.category ? { category: rendered.category } : {}),
