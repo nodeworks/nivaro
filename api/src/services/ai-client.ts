@@ -1,7 +1,19 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { loggedCreate } from './ai-log.js'
+import { loggedCreate, loggedStream } from './ai-log.js'
+import {
+  type AiMessageStream,
+  type AiStreamEvent,
+  abortError,
+  eventsOfMessage,
+  openAiChunkToEvents,
+  openAiStreamEnd,
+  openAiStreamState,
+  readSseJson,
+  type StreamOptions,
+  streamMessage
+} from './ai-stream.js'
 import { overlaySettings } from './settings-overrides.js'
 import { noteAiFallback } from './traffic-taps/ai.js'
 
@@ -23,9 +35,20 @@ import { noteAiFallback } from './traffic-taps/ai.js'
  *                Either way the configured gateway model replaces whatever a
  *                call site asked for: the gateway only knows its own ids.
  *
- * Streaming is not used anywhere in the code base, so the openai translation
- * covers non-streaming calls only.
+ * Streaming (#688): every client also carries `messages.createStream`, which
+ * yields Anthropic-shaped events on all three paths (the SDK's own stream on
+ * the Anthropic and anthropic-native-gateway paths; the openai shim sets
+ * `stream: true` and translates the SSE chunks). Call sites reach it through
+ * `streamMessage()` in ai-stream.ts, which falls back to a one-shot create
+ * for a client without it. A streamed call is logged once, like a plain one.
  */
+
+/** What `getAiClient()` really returns: the SDK surface plus the stream twin. */
+export type AiClient = Anthropic & {
+  messages: Anthropic['messages'] & {
+    createStream: (params: MessageParams, opts?: StreamOptions) => Promise<AiMessageStream>
+  }
+}
 
 export interface AiSettingsRow {
   ai_chat_guide?: string | null
@@ -248,20 +271,50 @@ export function withPromptCaching(params: MessageParams): MessageParams {
   return out
 }
 
+/** The SDK's own stream as an event source (`abort` cancels the request). */
+function sdkStream(
+  inner: Anthropic,
+  params: MessageParams,
+  opts: StreamOptions
+): { events: AsyncIterable<AiStreamEvent>; abort: () => void } {
+  const controller = new AbortController()
+  if (opts.signal) {
+    if (opts.signal.aborted) controller.abort()
+    else opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
+  }
+  const stream = inner.messages.stream({ ...params, stream: true } as never, {
+    signal: controller.signal
+  })
+  return {
+    events: stream as unknown as AsyncIterable<AiStreamEvent>,
+    abort: () => {
+      controller.abort()
+      try {
+        stream.abort()
+      } catch {
+        /* already done */
+      }
+    }
+  }
+}
+
 /** `messages.create` with the caching markers applied on the way in. */
 function cachingClient(
   inner: Anthropic,
   provider: 'anthropic' | 'gateway-anthropic',
   model?: string
 ): Anthropic {
+  const prepare = (params: MessageParams) =>
+    withPromptCaching(model ? { ...params, model } : params)
   const create = loggedCreate(
     provider,
     (params: MessageParams) =>
-      inner.messages.create(
-        withPromptCaching(model ? { ...params, model } : params) as never
-      ) as Promise<Anthropic.Message>
+      inner.messages.create(prepare(params) as never) as Promise<Anthropic.Message>
   )
-  return { messages: { create } } as unknown as Anthropic
+  const createStream = loggedStream(provider, async (params, opts) =>
+    sdkStream(inner, prepare(params), opts)
+  )
+  return { messages: { create, createStream } } as unknown as Anthropic
 }
 
 /** The plain SDK client, every call logged. */
@@ -270,14 +323,16 @@ function loggedClient(
   provider: 'anthropic' | 'gateway-anthropic',
   model?: string
 ): Anthropic {
+  const prepare = (params: MessageParams) => (model ? { ...params, model } : params)
   const create = loggedCreate(
     provider,
     (params: MessageParams) =>
-      inner.messages.create(
-        (model ? { ...params, model } : params) as never
-      ) as Promise<Anthropic.Message>
+      inner.messages.create(prepare(params) as never) as Promise<Anthropic.Message>
   )
-  return { messages: { create } } as unknown as Anthropic
+  const createStream = loggedStream(provider, async (params, opts) =>
+    sdkStream(inner, prepare(params), opts)
+  )
+  return { messages: { create, createStream } } as unknown as Anthropic
 }
 
 // ─── gateway: settings + bearer cache ────────────────────────────────────────
@@ -355,7 +410,7 @@ function textOf(content: string | Block[] | undefined | null): string {
     .join('\n')
 }
 
-function toOpenAi(params: MessageParams, model: string): Record<string, unknown> {
+function toOpenAi(params: MessageParams, model: string, stream = false): Record<string, unknown> {
   const messages: Array<Record<string, unknown>> = []
   const system =
     typeof params.system === 'string'
@@ -436,7 +491,10 @@ function toOpenAi(params: MessageParams, model: string): Record<string, unknown>
     max_tokens: params.max_tokens,
     ...(params.temperature != null ? { temperature: params.temperature } : {}),
     ...(params.stop_sequences?.length ? { stop: params.stop_sequences } : {}),
-    stream: false,
+    stream,
+    // usage on the stream's last chunk (OpenAI's own option; a gateway that
+    // ignores it simply reports zero tokens for the streamed call)
+    ...(stream ? { stream_options: { include_usage: true } } : {}),
     ...(tools.length ? { tools, ...(tool_choice ? { tool_choice } : {}) } : {})
   }
 }
@@ -529,9 +587,85 @@ function openAiCompatClient(api: GatewayApi, model: string, caching: boolean): A
     }
     return attempt(true)
   }
-  // Call sites only ever use messages.create; the rest of the SDK surface is
-  // deliberately absent (a throw is better than a silent no-op there).
-  return { messages: { create: loggedCreate('gateway-openai', create) } } as unknown as Anthropic
+  /** Open the streamed request: the SSE body becomes Anthropic events. A
+   *  non-2xx answer throws BEFORE any event (so the model fallback still
+   *  sees a refusal); a cut body ends the message with what arrived. */
+  const openStream = async (
+    raw: MessageParams,
+    opts: StreamOptions
+  ): Promise<{ events: AsyncIterable<AiStreamEvent>; abort: () => void }> => {
+    const params = caching ? withPromptCaching(raw) : raw
+    const controller = new AbortController()
+    if (opts.signal) {
+      if (opts.signal.aborted) controller.abort()
+      else opts.signal.addEventListener('abort', () => controller.abort(), { once: true })
+    }
+    const attempt = async (retryOn401: boolean): Promise<Response> => {
+      const bearer = await gatewayBearer(api)
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'text/event-stream',
+          Authorization: `Bearer ${bearer}`
+        },
+        body: JSON.stringify(toOpenAi(params, model, true)),
+        signal: controller.signal
+      })
+      if (res.status === 401 && retryOn401) {
+        bustGatewayBearer()
+        return attempt(false)
+      }
+      if (!res.ok) {
+        const text = await res.text()
+        let detail: string | undefined
+        try {
+          const body = JSON.parse(text) as OpenAiResponse
+          detail = typeof body.error === 'string' ? body.error : body.error?.message
+        } catch {
+          /* non-JSON error body */
+        }
+        throw new Error(`AI gateway ${res.status}: ${detail ?? text.slice(0, 300)}`)
+      }
+      if (!res.body) throw new Error('AI gateway answered without a body')
+      return res
+    }
+    const res = await attempt(true)
+    const body = res.body as ReadableStream<Uint8Array>
+    const events = (async function* (): AsyncGenerator<AiStreamEvent> {
+      const state = openAiStreamState(model)
+      // a non-streamed JSON answer (a gateway that ignored stream: true)
+      const ctype = res.headers.get('content-type') ?? ''
+      if (!/event-stream/i.test(ctype)) {
+        const text = await res.text()
+        let parsed: OpenAiResponse = {}
+        try {
+          parsed = JSON.parse(text) as OpenAiResponse
+        } catch {
+          throw new Error(`AI gateway answered ${ctype || 'an unknown type'} to a streamed call`)
+        }
+        const whole = fromOpenAi(parsed, model)
+        for (const e of eventsOfMessage(whole)) yield e
+        return
+      }
+      for await (const chunk of readSseJson(body, controller.signal)) {
+        const err = (chunk as { error?: { message?: string } | string }).error
+        if (err) throw new Error(`AI gateway: ${typeof err === 'string' ? err : err.message}`)
+        for (const e of openAiChunkToEvents(chunk as never, state)) yield e
+      }
+      if (controller.signal.aborted) throw abortError()
+      for (const e of openAiStreamEnd(state)) yield e
+    })()
+    return { events, abort: () => controller.abort() }
+  }
+  // Call sites only ever use messages.create / createStream; the rest of the
+  // SDK surface is deliberately absent (a throw is better than a silent no-op).
+  return {
+    messages: {
+      create: loggedCreate('gateway-openai', create),
+      createStream: loggedStream('gateway-openai', openStream)
+    }
+  } as unknown as Anthropic
 }
 
 /** The real SDK against the gateway's Anthropic-native path, model pinned. */
@@ -572,12 +706,13 @@ export function withModelFallback(
     }
     return c
   }
-  const create = async (params: MessageParams): Promise<Anthropic.Message> => {
+  /** Try the chain in order; a refusal of the model id moves to the next. */
+  const viaChain = async <T>(run: (client: AiClient, model: string) => Promise<T>): Promise<T> => {
     let lastErr: unknown
     for (let i = 0; i < chain.length; i++) {
-      const client = await clientFor(chain[i])
+      const client = (await clientFor(chain[i])) as AiClient
       try {
-        return (await client.messages.create(params)) as Anthropic.Message
+        return await run(client, chain[i])
       } catch (err) {
         lastErr = err
         const msg = String((err as Error)?.message ?? '')
@@ -595,7 +730,18 @@ export function withModelFallback(
     }
     throw lastErr
   }
-  return { messages: { create } } as unknown as Anthropic
+  const create = (params: MessageParams): Promise<Anthropic.Message> =>
+    viaChain((client) => client.messages.create(params) as Promise<Anthropic.Message>)
+  // A streamed refusal arrives when the stream OPENS (the openai shim reads
+  // the status before any event; the SDK throws on connect), so the fallback
+  // covers streams too — once events flow, errors are the caller's.
+  const createStream = (params: MessageParams, opts?: StreamOptions): Promise<AiMessageStream> =>
+    viaChain((client) =>
+      typeof client.messages.createStream === 'function'
+        ? client.messages.createStream(params, opts)
+        : streamMessage(client, params, opts)
+    )
+  return { messages: { create, createStream } } as unknown as Anthropic
 }
 
 let fallbackCount = 0

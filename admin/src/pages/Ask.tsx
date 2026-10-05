@@ -1,12 +1,19 @@
 import { createNivaro } from '@nivaro/sdk'
-import { AiFeedbackButtons, AiMarkdown, NavigationContext, NivaroProvider } from '@nivaro/shared'
-import { useMutation } from '@tanstack/react-query'
-import { Loader2, Mic, Send, Sparkles, Volume2, VolumeX, Wrench } from 'lucide-react'
+import {
+  AiFeedbackButtons,
+  AiMarkdown,
+  type AiStreamSubscribe,
+  NavigationContext,
+  NivaroProvider,
+  useAiStream
+} from '@nivaro/shared'
+import { Loader2, Mic, Send, Sparkles, Square, Volume2, VolumeX, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { getSocket } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
 
 interface TraceEntry {
@@ -34,6 +41,30 @@ interface ChatTurn {
   playbooksUsed?: number
   /** Served from the answer cache (#723) — when it was first answered. */
   cachedAt?: string | null
+  /** Stopped by the person before the model finished (#688). */
+  stopped?: boolean
+}
+
+interface ChatBody {
+  reply: string
+  trace: TraceEntry[]
+  proposals?: Proposal[]
+  request_id?: string | null
+  playbooks_used?: number
+  cached?: boolean
+  cached_at?: string
+  stopped?: boolean
+}
+
+// The answer streams over the shared admin socket (#688): the route emits
+// ai:delta / ai:status / ai:done / ai:error to the user's own room, so every
+// tab of theirs hears it and this one pairs the events to its stream id.
+const subscribeAi: AiStreamSubscribe = (event, handler) => {
+  const s = getSocket()
+  s.on(event, handler)
+  return () => {
+    s.off(event, handler)
+  }
 }
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
@@ -224,25 +255,10 @@ function AskPageInner() {
     window.speechSynthesis.speak(new SpeechSynthesisUtterance(plain))
   }
 
-  const send = useMutation({
-    mutationFn: (history: ChatTurn[]) =>
-      api
-        .post<{
-          data: {
-            reply: string
-            trace: TraceEntry[]
-            proposals?: Proposal[]
-            request_id?: string | null
-            playbooks_used?: number
-            cached?: boolean
-            cached_at?: string
-          }
-        }>('/ai/chat', {
-          messages: history.map((t) => ({ role: t.role, content: t.content })),
-          fresh: freshRef.current
-        })
-        .then((r) => r.data.data),
-    onSuccess: (data) => {
+  const send = useAiStream<ChatBody>(sharedClient, {
+    subscribe: subscribeAi,
+    connected: () => getSocket().connected,
+    onDone: (data) => {
       setTurns((prev) => [
         ...prev,
         {
@@ -252,15 +268,15 @@ function AskPageInner() {
           proposals: data.proposals,
           requestId: data.request_id ?? null,
           playbooksUsed: data.playbooks_used ?? 0,
-          cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null
+          cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null,
+          stopped: data.stopped === true
         }
       ])
       freshRef.current = false
       speak(data.reply)
     },
-    onError: (err: unknown) => {
-      const msg = (err as { response?: { data?: { error?: string } } })?.response?.data?.error
-      toast.error(msg ?? 'Chat request failed')
+    onError: (message) => {
+      toast.error(message || 'Chat request failed')
       setTurns((prev) => prev.slice(0, -1)) // roll back the optimistic user turn
     }
   })
@@ -278,11 +294,14 @@ function AskPageInner() {
 
   function submit(text?: string) {
     const content = (text ?? input).trim()
-    if (!content || send.isPending) return
+    if (!content || send.active) return
     const next = [...turns, { role: 'user' as const, content }]
     setTurns(next)
     setInput('')
-    send.mutate(next)
+    void send.start({
+      messages: next.map((t) => ({ role: t.role, content: t.content })),
+      fresh: freshRef.current
+    })
   }
 
   useEffect(() => {
@@ -292,7 +311,7 @@ function AskPageInner() {
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new turns
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
-  }, [turns.length, send.isPending])
+  }, [turns.length, send.active, send.text, send.status])
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -375,6 +394,14 @@ function AskPageInner() {
                         </button>
                       </div>
                     )}
+                    {t.stopped && (
+                      <div
+                        className='mb-1.5 text-[11px] text-amber-700 dark:text-amber-400'
+                        data-ask-stopped
+                      >
+                        Stopped — this is what had arrived.
+                      </div>
+                    )}
                     <AiMarkdown content={t.content} />
                     {t.proposals?.map((p) => (
                       <ProposalCard key={p.proposal_id} proposal={p} />
@@ -414,10 +441,33 @@ function AskPageInner() {
             </div>
           ))}
 
-          {send.isPending && (
-            <div className='flex justify-start'>
-              <div className='flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13px] text-slate-400 dark:border-border dark:bg-card'>
-                <Loader2 className='h-3.5 w-3.5 animate-spin' /> Querying your data…
+          {send.active && (
+            <div className='flex justify-start' data-ask-streaming>
+              <div className='max-w-[85%] rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13.5px] text-slate-800 dark:border-border dark:bg-card dark:text-slate-200'>
+                {send.narration && (
+                  <p
+                    className='mb-1 text-[12px] italic text-slate-500 dark:text-slate-400'
+                    data-ask-narration
+                  >
+                    {send.narration}
+                  </p>
+                )}
+                {send.text ? (
+                  <AiMarkdown content={send.text} />
+                ) : (
+                  <div className='flex items-center gap-2 text-[13px] text-slate-400'>
+                    <Loader2 className='h-3.5 w-3.5 animate-spin' />
+                    {send.status ?? 'Querying your data…'}
+                  </div>
+                )}
+                {send.text && send.status && (
+                  <div
+                    className='mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400'
+                    data-ask-status
+                  >
+                    <Loader2 className='h-3 w-3 animate-spin' /> {send.status}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -465,9 +515,21 @@ function AskPageInner() {
               <VolumeX className='h-3.5 w-3.5' />
             )}
           </Button>
-          <Button size='sm' disabled={!input.trim() || send.isPending} onClick={() => submit()}>
-            <Send className='h-3.5 w-3.5' />
-          </Button>
+          {send.active && send.streamId ? (
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => void send.stop()}
+              data-tip='Stop the answer here'
+              data-ask-stop
+            >
+              <Square className='h-3.5 w-3.5' />
+            </Button>
+          ) : (
+            <Button size='sm' disabled={!input.trim() || send.active} onClick={() => submit()}>
+              <Send className='h-3.5 w-3.5' />
+            </Button>
+          )}
         </div>
       </div>
     </div>

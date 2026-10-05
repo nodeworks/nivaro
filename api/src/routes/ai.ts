@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type Anthropic from '@anthropic-ai/sdk'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { findDuplicates, getAiCollectionSettings, runAiValidation } from '../hooks/ai-validation.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { MAX_ROUNDS, runChatLoop } from '../services/ai-chat-loop.js'
 import { describeAiProvider, getAiClient, getAiModelSettings } from '../services/ai-client.js'
 import {
   feedbackSummary,
@@ -13,6 +14,16 @@ import {
   recordPlaybook,
   retrievePlaybooks
 } from '../services/ai-playbooks.js'
+import { consumeText, streamMessage } from '../services/ai-stream.js'
+import {
+  pickStreamMode,
+  registerStream,
+  requestStreamStop,
+  type StreamDelivery,
+  socketDelivery,
+  sseDelivery,
+  userHasSocket
+} from '../services/ai-stream-delivery.js'
 import { loadProposal, saveProposal } from '../services/autofill-store.js'
 import { proposeFromDocuments } from '../services/document-autofill.js'
 import { ACCEPTED_EXTENSIONS, extractDocumentText } from '../services/document-extract.js'
@@ -954,6 +965,60 @@ export async function aiRoutes(app: FastifyInstance) {
     }
   })
 
+  /**
+   * Streamed one-shot answers (#688): `produce` runs the model with a delta
+   * sink and returns the finished body. `stream: true` in the request picks
+   * the transport — the caller's socket (202 + events), SSE when the request
+   * accepts text/event-stream — and a caller with neither gets the plain
+   * reply, unchanged.
+   */
+  async function deliverOneShot(
+    req: FastifyRequest,
+    reply: FastifyReply,
+    urlHint: string,
+    produce: (
+      sink: { onDelta: (text: string) => void; signal: AbortSignal } | null
+    ) => Promise<Record<string, unknown>>
+  ) {
+    const userId = String(req.user!.id)
+    let mode = pickStreamMode(req)
+    if (mode === 'socket' && !(await userHasSocket(app.io, userId))) mode = null
+    if (!mode) {
+      const body = await produce(null)
+      return reply.send({ data: body })
+    }
+    const run = async (d: StreamDelivery) => {
+      const stopper = registerStream(app, d.id, userId)
+      const controller = new AbortController()
+      const poll = setInterval(() => {
+        if (stopper.stopped()) controller.abort()
+      }, 250)
+      poll.unref()
+      try {
+        const body = await produce({
+          onDelta: (text) => d.emit('ai:delta', { text, round: 0 }),
+          signal: controller.signal
+        })
+        d.done({ data: body })
+      } catch (err) {
+        req.log.error({ err }, 'AI stream failed')
+        d.error(
+          controller.signal.aborted ? 'Stopped' : (err as Error)?.message || 'AI request failed'
+        )
+      } finally {
+        clearInterval(poll)
+        stopper.dispose()
+      }
+    }
+    if (mode === 'sse') {
+      await run(sseDelivery(req, reply))
+      return
+    }
+    const d = socketDelivery(app.io, userId)
+    void runInTrace(urlHint, userId, () => run(d))
+    return reply.code(202).send({ data: { stream_id: d.id } })
+  }
+
   app.post('/generate', { preHandler: requireAdmin }, async (req, reply) => {
     const client = await getAiClient()
     if (!client) {
@@ -984,24 +1049,29 @@ export async function aiRoutes(app: FastifyInstance) {
 
     const { model, maxTokensGenerate } = await getAiModelSettings()
 
-    const message = await client.messages.create({
-      model,
-      max_tokens: maxTokensGenerate,
-      messages: [{ role: 'user', content: prompt }]
+    return deliverOneShot(req, reply, '/api/ai/generate?stream=1', async (sink) => {
+      const params = {
+        model,
+        max_tokens: maxTokensGenerate,
+        messages: [{ role: 'user' as const, content: prompt }]
+      }
+      const message = sink
+        ? await consumeText(
+            await streamMessage(client, params, { signal: sink.signal }),
+            sink.onDelta
+          )
+        : await client.messages.create(params)
+      const value = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
+      await logActivity({
+        action: 'ai-generate',
+        user: req.user?.id,
+        collection,
+        item: String(item_id),
+        comment: field,
+        req
+      })
+      return { value }
     })
-
-    const value = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
-
-    await logActivity({
-      action: 'ai-generate',
-      user: req.user?.id,
-      collection,
-      item: String(item_id),
-      comment: field,
-      req
-    })
-
-    return reply.send({ data: { value } })
   })
 
   // POST /ai/summarize — summarize a record in 2-3 sentences
@@ -1047,23 +1117,28 @@ export async function aiRoutes(app: FastifyInstance) {
 
     const { model, maxTokensSummarize } = await getAiModelSettings()
 
-    const message = await client.messages.create({
-      model,
-      max_tokens: maxTokensSummarize,
-      messages: [{ role: 'user', content: prompt }]
+    return deliverOneShot(req, reply, '/api/ai/summarize?stream=1', async (sink) => {
+      const params = {
+        model,
+        max_tokens: maxTokensSummarize,
+        messages: [{ role: 'user' as const, content: prompt }]
+      }
+      const message = sink
+        ? await consumeText(
+            await streamMessage(client, params, { signal: sink.signal }),
+            sink.onDelta
+          )
+        : await client.messages.create(params)
+      const summary = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
+      await logActivity({
+        action: 'ai-summarize',
+        user: req.user?.id,
+        collection,
+        item: String(item_id),
+        req
+      })
+      return { summary }
     })
-
-    const summary = message.content[0]?.type === 'text' ? message.content[0].text.trim() : ''
-
-    await logActivity({
-      action: 'ai-summarize',
-      user: req.user?.id,
-      collection,
-      item: String(item_id),
-      req
-    })
-
-    return reply.send({ data: { summary } })
   })
 
   // POST /ai/review — pre-submission record review: findings list over the
@@ -1422,6 +1497,8 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const { messages, fresh } = req.body as {
       messages?: Array<{ role: string; content: string }>
       fresh?: boolean
+      /** #688 — deliver the answer as it is written (socket or SSE). */
+      stream?: boolean
     }
     if (!Array.isArray(messages) || messages.length === 0) {
       return reply.code(400).send({ error: 'messages array is required' })
@@ -1434,8 +1511,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(400).send({ error: 'last message must be from the user' })
     }
 
-    const { buildChatSystemPrompt, buildWrapUpMessages, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } =
-      await import('../services/ai-chat.js')
+    const { buildChatSystemPrompt } = await import('../services/ai-chat.js')
     // Playbooks: similar past questions + the tool plans that answered them,
     // offered as worked examples. Only the newest user turn is matched.
     const question = history[history.length - 1].content
@@ -1443,7 +1519,6 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const system = await buildChatSystemPrompt(req.user!, {
       playbooks: formatPlaybooksForPrompt(playbooks)
     })
-    const requestId = currentTraceMeta()?.id ?? null
     const playbooksUsed = playbooks.length
     // `convo` below aliases `history` and grows per round — judge "standalone" now.
     const standalone = history.length === 1
@@ -1454,6 +1529,16 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       standalone && answerCacheMinutes > 0 && redis
         ? `nvr:aichat:${req.user!.id}:${createHash('sha1').update(question.trim().toLowerCase().replace(/\s+/g, ' ')).digest('hex')}`
         : null
+    const userId = String(req.user!.id)
+    const user = req.user!
+
+    // How the answer travels (#688): a plain reply, the caller's socket, or
+    // SSE. A `stream: true` caller without a connected socket gets the plain
+    // reply — nothing is lost, it just arrives whole.
+    let mode = pickStreamMode(req)
+    if (mode === 'socket' && !(await userHasSocket(app.io, userId))) mode = null
+
+    let cachedBody: Record<string, unknown> | null = null
     if (cacheKey && !fresh) {
       try {
         const hit = await redis!.get(cacheKey)
@@ -1461,148 +1546,151 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           const cached = JSON.parse(hit) as Record<string, unknown>
           await logActivity({
             action: 'ai-chat',
-            user: req.user?.id,
+            user: user.id,
             comment: 'answered from cache',
             req
           })
-          return reply.send({ data: { ...cached, cached: true, playbooks_used: 0 } })
+          cachedBody = { ...cached, cached: true, playbooks_used: 0 }
         }
       } catch {
         // a cache miss is the normal path
       }
     }
-    const trace: Array<{ tool: string; input: Record<string, unknown>; summary: string }> = []
-    const proposals: Array<Record<string, unknown>> = []
-    const convo: Anthropic.MessageParam[] = history
+    if (cachedBody && !mode) return reply.send({ data: cachedBody })
 
-    try {
-      for (let round = 0; round < MAX_ROUNDS; round++) {
-        const response = await client.messages.create({
+    /** The whole answer: the loop, the playbook, the cache write, the body. */
+    const answer = async (delivery: StreamDelivery | null): Promise<Record<string, unknown>> => {
+      const requestId = currentTraceMeta()?.id ?? null
+      if (cachedBody) {
+        // a cached answer streams as one delta so the client's path is the same
+        delivery?.emit('ai:delta', { text: String(cachedBody.reply ?? ''), round: 0 })
+        return cachedBody
+      }
+      const stopper = delivery ? registerStream(app, delivery.id, userId) : null
+      try {
+        const result = await runChatLoop({
+          client,
           model: settings.model,
-          max_tokens: 1500,
           system,
-          tools: CHAT_TOOLS,
-          messages: convo
+          user,
+          convo: history,
+          onDelta: delivery
+            ? (text, round) => delivery.emit('ai:delta', { text, round })
+            : undefined,
+          onStatus: delivery
+            ? (st) => delivery.emit('ai:status', { text: st.text, round: st.round, tool: st.tool })
+            : undefined,
+          shouldStop: stopper ? () => stopper.stopped() : undefined,
+          warn: (err, msg) => req.log.warn({ err }, msg)
         })
-
-        if (response.stop_reason !== 'tool_use') {
-          const text = response.content
-            .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-            .map((b) => b.text)
-            .join('\n')
-          await logActivity({
-            action: 'ai-chat',
-            user: req.user?.id,
-            comment: `${trace.length} tool call(s)`,
-            req
-          })
-          // A standalone question (no earlier turns) answered with tool calls
-          // becomes a playbook. Follow-ups ("and for 2025?") are skipped —
-          // they mean nothing without the conversation.
-          if (standalone && trace.length > 0) {
-            void recordPlaybook({
-              userId: req.user?.id,
-              requestId,
-              question,
-              trace,
-              answer: text,
-              rounds: round + 1
-            }).catch((err) => req.log.warn({ err }, 'AI playbook record failed'))
-          }
-          const payload = {
-            reply: text,
+        const { trace, proposals } = result
+        await logActivity({
+          action: 'ai-chat',
+          user: user.id,
+          comment: result.stopped
+            ? `stopped after ${trace.length} tool call(s)`
+            : result.truncated
+              ? `tool-call limit after ${trace.length} tool call(s)`
+              : `${trace.length} tool call(s)`,
+          req
+        })
+        if (result.truncated) {
+          return {
+            reply:
+              result.text ||
+              `I used all ${MAX_ROUNDS} tool calls without reaching an answer — try a narrower question, or name the collection and fields you mean.`,
             trace,
             proposals,
+            truncated: true,
+            stopped: result.stopped || undefined,
             request_id: requestId,
             playbooks_used: playbooksUsed
           }
-          // An answer that proposes an ACTION is never cached — a proposal
-          // is single-use and expires; only plain answers repeat.
-          if (cacheKey && proposals.length === 0 && text) {
-            void redis!
-              .set(
-                cacheKey,
-                JSON.stringify({ ...payload, cached_at: new Date().toISOString() }),
-                'EX',
-                answerCacheMinutes * 60
-              )
-              .catch(() => {})
-          }
-          return reply.send({ data: payload })
         }
-
-        convo.push({ role: 'assistant', content: response.content })
-        const results: Anthropic.ToolResultBlockParam[] = []
-        for (const block of response.content) {
-          if (block.type !== 'tool_use') continue
-          const input = (block.input ?? {}) as Record<string, unknown>
-          try {
-            const { result, summary } = await executeChatTool(req.user!, block.name, input)
-            trace.push({ tool: block.name, input, summary })
-            if (block.name === 'propose_action' && result && typeof result === 'object') {
-              proposals.push(result as Record<string, unknown>)
-            }
-            results.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: JSON.stringify(result).slice(0, 12_000)
-            })
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : 'Tool failed'
-            trace.push({ tool: block.name, input, summary: `error: ${msg}` })
-            results.push({
-              type: 'tool_result',
-              tool_use_id: block.id,
-              content: `Error: ${msg}`,
-              is_error: true
-            })
-          }
+        const text = result.text
+        // A standalone question (no earlier turns) answered with tool calls
+        // becomes a playbook. Follow-ups ("and for 2025?") are skipped —
+        // they mean nothing without the conversation. A stopped answer is
+        // not one either: it was never finished.
+        if (standalone && trace.length > 0 && !result.stopped) {
+          void recordPlaybook({
+            userId: user.id,
+            requestId,
+            question,
+            trace,
+            answer: text,
+            rounds: result.rounds
+          }).catch((err) => req.log.warn({ err }, 'AI playbook record failed'))
         }
-        convo.push({ role: 'user', content: results })
-      }
-      // Out of rounds: one last call with NO tools and NO tool blocks (the
-      // transcript rides as plain text — some providers refuse tool history
-      // without a tool config), so the model answers from what it gathered
-      // instead of the user getting a dead end.
-      let text = ''
-      try {
-        const final = await client.messages.create({
-          model: settings.model,
-          max_tokens: 1500,
-          system,
-          messages: buildWrapUpMessages(convo)
-        })
-        text = final.content
-          .filter((b): b is Anthropic.TextBlock => b.type === 'text')
-          .map((b) => b.text)
-          .join('\n')
-          .trim()
-      } catch (err) {
-        req.log.warn({ err }, 'AI chat wrap-up call failed')
-      }
-      await logActivity({
-        action: 'ai-chat',
-        user: req.user?.id,
-        comment: `tool-call limit after ${trace.length} tool call(s)`,
-        req
-      })
-      return reply.send({
-        data: {
-          reply:
-            text ||
-            `I used all ${MAX_ROUNDS} tool calls without reaching an answer — try a narrower question, or name the collection and fields you mean.`,
+        const payload: Record<string, unknown> = {
+          reply: text,
           trace,
           proposals,
-          truncated: true,
           request_id: requestId,
           playbooks_used: playbooksUsed
         }
-      })
-    } catch (err) {
-      req.log.error({ err }, 'AI chat failed')
-      return reply.code(502).send({ error: 'AI request failed' })
+        if (result.stopped) payload.stopped = true
+        // An answer that proposes an ACTION is never cached — a proposal
+        // is single-use and expires; only plain answers repeat.
+        if (cacheKey && proposals.length === 0 && text && !result.stopped) {
+          void redis!
+            .set(
+              cacheKey,
+              JSON.stringify({ ...payload, cached_at: new Date().toISOString() }),
+              'EX',
+              answerCacheMinutes * 60
+            )
+            .catch(() => {})
+        }
+        return payload
+      } finally {
+        stopper?.dispose()
+      }
     }
+
+    if (!mode) {
+      try {
+        return reply.send({ data: await answer(null) })
+      } catch (err) {
+        req.log.error({ err }, 'AI chat failed')
+        return reply.code(502).send({ error: 'AI request failed' })
+      }
+    }
+
+    const run = async (d: StreamDelivery) => {
+      try {
+        d.done({ data: await answer(d) })
+      } catch (err) {
+        req.log.error({ err }, 'AI chat failed')
+        d.error('AI request failed')
+      }
+    }
+    if (mode === 'sse') {
+      await run(sseDelivery(req, reply))
+      return
+    }
+    const d = socketDelivery(app.io, userId)
+    // Detached from the request: the trace (and so the ai-calls request_id
+    // the feedback buttons rate) is the background one.
+    void runInTrace('/api/ai/chat?stream=1', userId, () => run(d))
+    return reply.code(202).send({ data: { stream_id: d.id } })
   })
+
+  // ─── POST /chat/:stream_id/stop — halt a streamed answer (#688) ─────────
+  app.post<{ Params: { stream_id: string } }>(
+    '/chat/:stream_id/stop',
+    { preHandler: authenticate },
+    async (req, reply) => {
+      const id = req.params.stream_id
+      if (!/^[A-Za-z0-9-]{8,64}$/.test(id)) return reply.code(400).send({ error: 'bad stream id' })
+      const outcome = await requestStreamStop(app, id, {
+        id: String(req.user!.id),
+        admin: !!req.isAdmin
+      })
+      if (outcome === 'forbidden') return reply.code(403).send({ error: 'Not your stream' })
+      return reply.send({ data: { stream_id: id, outcome } })
+    }
+  )
 
   // ─── POST /feedback — thumbs on one chat answer (by request_id) ───────────
   // ── Fill a new record from a document ─────────────────────────────────────
