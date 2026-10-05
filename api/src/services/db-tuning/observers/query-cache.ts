@@ -43,7 +43,8 @@ const QUIET_GAP_MIN = 6 * 60
 const NIGHTLY_QUIET_SHARE = 0.8
 const DAY_MS = 86_400_000
 const WINDOW_DAYS = 7
-const WINDOW_MIN = WINDOW_DAYS * 24 * 60
+const DAY_MIN = 24 * 60
+const WINDOW_MIN = WINDOW_DAYS * DAY_MIN
 /** Newest activity rows read per source; a busier table's median comes from its recent writes. */
 const MAX_WRITES_PER_SOURCE = 5000
 
@@ -55,15 +56,16 @@ export function proposeTtl(f: QueryFreshnessShape): number {
   return f.gapAssumed ? Math.min(ttl, ASSUMED_GAP_TTL) : ttl
 }
 
-/** Gaps in minutes between consecutive distinct write minutes, in time order. */
-function writeGaps(stamps: Array<Date | string>): number[] {
-  const minutes = [
+/** Distinct write minutes (minutes since the epoch), ascending. */
+function writeMinutes(stamps: Array<Date | string>): number[] {
+  return [
     ...new Set(
       stamps.map((s) => Math.floor(new Date(s).getTime() / 60_000)).filter(Number.isFinite)
     )
   ].sort((a, b) => a - b)
-  return minutes.slice(1).map((m, i) => m - minutes[i])
 }
+
+const gapsOf = (minutes: number[]): number[] => minutes.slice(1).map((m, i) => m - minutes[i])
 
 const median = (xs: number[]): number | null => {
   if (!xs.length) return null
@@ -74,28 +76,46 @@ const median = (xs: number[]): number | null => {
 
 /** Median gap in minutes between distinct write minutes; null with fewer than two. */
 export function medianGapMinutes(stamps: Array<Date | string>): number | null {
-  return median(writeGaps(stamps))
+  return median(gapsOf(writeMinutes(stamps)))
 }
 
 /**
  * Nightly = the window is mostly quiet: gaps of 6 h or more add up to at least 80% of it, and one
  * of them lasts 20 h or more. A nightly burst (a write a minute for ten minutes) has a 1-minute
- * median, so the median alone never finds it. Only gaps between writes count, not the stretch
- * before the first write or after the last.
+ * median, so the median alone never finds it. Only gaps between writes count over the 7 days.
+ * The last 24 h must be quiet too: the 6 h+ gaps, clipped to that day, must cover 80% of it.
+ * Without this, one old write followed by a busy today would count as nightly. The last day also
+ * counts the stretch from the newest write to now, so the result does not depend on how long
+ * after the night's burst the run happens.
  */
-function isNightly(gaps: number[]): boolean {
+function isNightly(minutes: number[], nowMin: number): boolean {
+  const gaps = gapsOf(minutes)
   const quiet = gaps.filter((g) => g >= QUIET_GAP_MIN).reduce((a, g) => a + g, 0)
-  return quiet / WINDOW_MIN >= NIGHTLY_QUIET_SHARE && gaps.some((g) => g >= NIGHTLY_GAP_MIN)
+  if (quiet / WINDOW_MIN < NIGHTLY_QUIET_SHARE) return false
+  if (!gaps.some((g) => g >= NIGHTLY_GAP_MIN)) return false
+  const dayStart = nowMin - DAY_MIN
+  const last = minutes[minutes.length - 1]
+  const points = last < nowMin ? [...minutes, nowMin] : minutes
+  let dayQuiet = 0
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1]
+    const b = points[i]
+    if (b - a < QUIET_GAP_MIN) continue
+    dayQuiet += Math.max(0, Math.min(b, nowMin) - Math.max(a, dayStart))
+  }
+  return dayQuiet / DAY_MIN >= NIGHTLY_QUIET_SHARE
 }
 
 /** A query's freshness from each source's write stamps (any source's write makes it stale). */
-export function freshnessFromWrites(perSource: Array<Array<Date | string>>): QueryFreshnessShape {
+export function freshnessFromWrites(
+  perSource: Array<Array<Date | string>>,
+  now: number = Date.now()
+): QueryFreshnessShape {
   const gapAssumed = perSource.some((w) => w.length === 0)
-  const all = perSource.flat()
-  const gaps = writeGaps(all)
+  const minutes = writeMinutes(perSource.flat())
   // a single write minute in the whole window: written about once a week
-  const medianGapMin = all.length ? (median(gaps) ?? WINDOW_MIN) : null
-  const nightly = isNightly(gaps)
+  const medianGapMin = minutes.length ? (median(gapsOf(minutes)) ?? WINDOW_MIN) : null
+  const nightly = isNightly(minutes, Math.floor(now / 60_000))
   return { sources: perSource.length, nightly, medianGapMin, gapAssumed }
 }
 

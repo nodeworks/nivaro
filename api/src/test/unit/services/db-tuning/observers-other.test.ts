@@ -306,7 +306,7 @@ describe('measured write gaps', () => {
     expect(out[0].apply).toMatchObject({ patch: { cache_ttl: ASSUMED_GAP_TTL } })
   })
   it('a source written once a day is nightly (6 h)', () => {
-    const f = freshnessFromWrites([every(24 * 60, 7)])
+    const f = freshnessFromWrites([every(24 * 60, 7)], at(6 * 24 * 60 + 60).getTime())
     expect(f).toMatchObject({ medianGapMin: 24 * 60, nightly: true, gapAssumed: false })
     expect(proposeTtl(f)).toBe(6 * 3600)
   })
@@ -314,14 +314,25 @@ describe('measured write gaps', () => {
     const burst = Array.from({ length: 7 }, (_, d) =>
       Array.from({ length: 10 }, (_, m) => at(d * 24 * 60 + m))
     ).flat()
-    const f = freshnessFromWrites([burst])
+    // the run lands an hour after the last night's burst began
+    const f = freshnessFromWrites([burst], at(6 * 24 * 60 + 60).getTime())
     expect(f).toMatchObject({ medianGapMin: 1, nightly: true })
+    // or late the next evening: the quiet since the burst still counts
+    expect(freshnessFromWrites([burst], at(6 * 24 * 60 + 20 * 60).getTime()).nightly).toBe(true)
     expect(proposeTtl(f)).toBe(6 * 3600)
   })
   it('a table written every 5 min all day is not nightly', () => {
     const f = freshnessFromWrites([every(5, 7 * 24 * 12)])
     expect(f).toMatchObject({ medianGapMin: 5, nightly: false })
     expect(proposeTtl(f)).toBe(150)
+  })
+  it('one write 6 days ago and a write every minute today is not nightly', () => {
+    const today = Array.from({ length: 12 * 60 }, (_, m) => at(6 * 24 * 60 + m))
+    const now = at(6 * 24 * 60 + 12 * 60).getTime()
+    expect(freshnessFromWrites([[at(0), ...today]], now)).toMatchObject({
+      medianGapMin: 1,
+      nightly: false
+    })
   })
   it('the busiest source sets the gap', () => {
     expect(freshnessFromWrites([every(24 * 60, 7), every(10, 1000)]).nightly).toBe(false)
