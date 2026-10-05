@@ -70,6 +70,13 @@ export function mechanicalProcRewrite(
   return applyTransformers(body, { exclude: PROC_EXCLUDED_TRANSFORMERS })
 }
 
+/**
+ * An AI attempt is keyed by the body it rewrites, not by what the model answered (a different
+ * body every night): one attempt per live body, so a rejected attempt stays quiet instead of
+ * minting a new fingerprint each run. A mechanical rewrite is keyed by its (stable) new body.
+ */
+export const aiChangeKey = (oldBody: string): string => `ai:${bodyHash(oldBody)}`
+
 export function buildProcCandidate(
   sel: ProcSelection,
   rewritten: { body: string; notes: string[]; applied: string[] }
@@ -79,7 +86,7 @@ export function buildProcCandidate(
   return {
     kind: 'proc_rewrite',
     target: sel.proc,
-    change_key: hash,
+    change_key: rewritten.applied.includes('ai') ? aiChangeKey(sel.body) : hash,
     title: `Rewrite ${sel.proc} — ${(sel.stat.avg_elapsed_ms / 1000).toFixed(1)} s avg over ${Math.round(perDay)} runs/day`,
     // The prior body lives in `undo`, not here.
     evidence: {

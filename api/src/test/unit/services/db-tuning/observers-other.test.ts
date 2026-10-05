@@ -17,6 +17,7 @@ import {
   storableRollup
 } from '../../../../services/db-tuning/observers/rollup-store.js'
 import { applyTransformers } from '../../../../services/db-tuning/rewrites/index.js'
+import { bodyHash } from '../../../../services/db-tuning/twin.js'
 
 const stat = (name: string, avg: number, runs: number) => ({
   name,
@@ -118,6 +119,16 @@ describe('buildProcCandidate', () => {
     expect(c.kind).toBe('proc_rewrite')
     expect(c.risk).toBe('review')
     expect(c.estimate_ms_per_day).toBe(Math.round(10 * 2500 * 0.25))
+  })
+  it('a mechanical rewrite is keyed by its new body; an AI one by the body it rewrites', () => {
+    expect(c.change_key).toBe(bodyHash('CREATE PROC rpt AS SELECT 2'))
+    const ai = (body: string) => buildProcCandidate(sel, { body, notes: [], applied: ['ai'] })
+    expect(ai('CREATE PROC rpt AS SELECT 3').change_key).toBe(`ai:${bodyHash(READ)}`)
+    expect(ai('CREATE PROC rpt AS SELECT 4').change_key).toBe(`ai:${bodyHash(READ)}`)
+    // the apply still carries (and hashes) the AI body itself
+    expect(ai('CREATE PROC rpt AS SELECT 4').apply).toMatchObject({
+      hash: bodyHash('CREATE PROC rpt AS SELECT 4')
+    })
   })
 })
 

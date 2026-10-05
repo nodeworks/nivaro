@@ -88,6 +88,18 @@ describe('ledger', () => {
       upsertDecision({ open: null, recent: { status: 'rolled_back', at: at(100) } }, now)
     ).toBe('insert')
   })
+  it('upsertDecision: a proof rejection is quiet for 7 days, then proved again', () => {
+    const now = new Date()
+    const at = (d: number) => new Date(now.getTime() - d * 86_400_000)
+    const rejected = (d: number) => ({ open: { status: 'rejected_by_proof' as const, at: at(d) } })
+    expect(upsertDecision({ ...rejected(1), recent: null }, now)).toBe('quiet')
+    expect(upsertDecision({ ...rejected(6.9), recent: null }, now)).toBe('quiet')
+    expect(upsertDecision({ ...rejected(7.1), recent: null }, now)).toBe('update')
+    // dismissed and rolled back keep their 90 days
+    expect(upsertDecision({ open: null, recent: { status: 'dismissed', at: at(30) } }, now)).toBe(
+      'quiet'
+    )
+  })
   it('upsertDecision: stale updates, applied is quiet', () => {
     const now = new Date()
     expect(upsertDecision({ open: { status: 'stale' }, recent: null }, now)).toBe('update')
@@ -186,6 +198,8 @@ describe('upsertProposal', () => {
     expect(await ledgerDecision('f')).toBe('quiet')
     stub([{ id: 'abc', status: 'proposed' }])
     expect(await ledgerDecision('f')).toBe('update')
+    stub([{ id: 'abc', status: 'rejected_by_proof', last_seen: new Date() }])
+    expect(await ledgerDecision('f')).toBe('quiet')
   })
 
   it('touchSeen bumps last_seen on open rows only, in chunks', async () => {
@@ -199,7 +213,8 @@ describe('upsertProposal', () => {
     expect(update).toHaveBeenCalledTimes(2)
     expect(update.mock.calls[0][0]).toEqual({ last_seen: expect.any(Date) })
     expect(whereIn.mock.calls[0]).toEqual(['fingerprint', fps.slice(0, 500)])
-    expect(whereIn.mock.calls[1]).toEqual(['status', ['proposed', 'stale', 'rejected_by_proof']])
+    // a rejected row's last_seen is when it was last proved (its 7 quiet days count from there)
+    expect(whereIn.mock.calls[1]).toEqual(['status', ['proposed', 'stale']])
     expect(whereIn.mock.calls[2]).toEqual(['fingerprint', ['f500']])
   })
 

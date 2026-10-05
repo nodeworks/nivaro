@@ -13,6 +13,8 @@ import {
 
 const T = 'nivaro_tuning_proposals'
 export const QUIET_DAYS = 90
+/** A proof rejection stands this long before the same change is proved again. */
+export const QUIET_REJECTED_DAYS = 7
 const IN_FLIGHT_STATUSES: readonly TuningStatus[] = ['applying', 'watching', 'applied']
 const EVIDENCE_CAP = 32 * 1024
 
@@ -65,21 +67,30 @@ export function parseRow(raw: Record<string, unknown>): ProposalRow {
   }
 }
 
-/** Pure: what the nightly run does with a candidate given what the ledger already holds. */
+/**
+ * Pure: what the nightly run does with a candidate given what the ledger already holds. An open
+ * row is updated — unless it is a proof rejection younger than 7 days (`at` = its last_seen, the
+ * last time it was proved: touchSeen leaves rejected rows alone), which stays quiet so the same
+ * failing change does not take a proof slot every night.
+ */
 export function upsertDecision(
   found: {
-    open: { status: TuningStatus } | null
+    open: { status: TuningStatus; at?: Date | null } | null
     recent: { status: TuningStatus; at: Date } | null
   },
   now: Date
 ): 'insert' | 'update' | 'quiet' {
-  if (found.open) return OPEN_STATUSES.includes(found.open.status) ? 'update' : 'quiet'
+  const days = (at: Date) => (now.getTime() - at.getTime()) / 86_400_000
+  if (found.open) {
+    const { status, at } = found.open
+    if (status === 'rejected_by_proof' && at && days(at) < QUIET_REJECTED_DAYS) return 'quiet'
+    return OPEN_STATUSES.includes(status) ? 'update' : 'quiet'
+  }
   if (
     found.recent &&
     (found.recent.status === 'dismissed' || found.recent.status === 'rolled_back')
   ) {
-    const age = (now.getTime() - found.recent.at.getTime()) / 86_400_000
-    if (age < QUIET_DAYS) return 'quiet'
+    if (days(found.recent.at) < QUIET_DAYS) return 'quiet'
   }
   return 'insert'
 }
@@ -119,7 +130,10 @@ export async function isQuiet(fingerprint: string): Promise<boolean> {
   return upsertDecision({ open: null, recent }, new Date()) === 'quiet'
 }
 
-type OpenRow = { id: string; status: TuningStatus }
+type OpenRow = { id: string; status: TuningStatus; last_seen?: Date | string | null }
+
+const openOf = (row: OpenRow | null) =>
+  row ? { status: row.status, at: row.last_seen ? new Date(row.last_seen) : null } : null
 
 /** The open or in-flight row for a fingerprint, else its newest closed twin. */
 async function ledgerLookup(
@@ -128,14 +142,14 @@ async function ledgerLookup(
   const open = (await db(T)
     .where({ fingerprint })
     .whereIn('status', [...OPEN_STATUSES, ...IN_FLIGHT_STATUSES])
-    .first('id', 'status')) as OpenRow | undefined
+    .first('id', 'status', 'last_seen')) as OpenRow | undefined
   return { open: open ?? null, recent: open ? null : await findRecentTwin(fingerprint) }
 }
 
 /** What `upsertProposal` would do with this fingerprint — the run asks before spending a proof. */
 export async function ledgerDecision(fingerprint: string): Promise<'insert' | 'update' | 'quiet'> {
   const { open, recent } = await ledgerLookup(fingerprint)
-  return upsertDecision({ open: open ? { status: open.status } : null, recent }, new Date())
+  return upsertDecision({ open: openOf(open), recent }, new Date())
 }
 
 export async function upsertProposal(
@@ -146,7 +160,7 @@ export async function upsertProposal(
   const fingerprint = fingerprintOf(c)
   const now = new Date()
   const { open, recent } = await ledgerLookup(fingerprint)
-  const decision = upsertDecision({ open: open ? { status: open.status } : null, recent }, now)
+  const decision = upsertDecision({ open: openOf(open), recent }, now)
   // a proof that errored judged nothing: a standing proposal stays as it was, only seen again
   if (decision === 'update' && open?.status === 'proposed' && isErrorRefusal(proof)) {
     await db(T).where({ id: open.id }).update({ last_seen: now, run_id: runId })
@@ -214,6 +228,11 @@ export async function updateProposal(
 
 const TOUCH_CHUNK = 500
 
+/** Rows a sighting keeps alive. A rejection's last_seen stays the time it was proved. */
+const TOUCHED_STATUSES: readonly TuningStatus[] = OPEN_STATUSES.filter(
+  (s) => s !== 'rejected_by_proof'
+)
+
 /**
  * Tonight's observers saw these fingerprints: their open rows stay alive even when the proof
  * budget or the wall clock carried them over, so `closeUnseen` never reads them as gone.
@@ -226,7 +245,7 @@ export async function touchSeen(fingerprints: string[]): Promise<number> {
     n += Number(
       await db(T)
         .whereIn('fingerprint', fps.slice(i, i + TOUCH_CHUNK))
-        .whereIn('status', [...OPEN_STATUSES])
+        .whereIn('status', [...TOUCHED_STATUSES])
         .update({ last_seen: now })
     )
   return n

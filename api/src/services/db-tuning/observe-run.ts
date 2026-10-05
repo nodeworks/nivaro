@@ -6,6 +6,7 @@ import { closeUnseen, fingerprintOf, ledgerDecision, touchSeen, upsertProposal }
 import { loadIndexCreateEvidence, observeIndexCreate } from './observers/index-create.js'
 import { loadIndexDropEvidence, observeIndexDrop } from './observers/index-drop.js'
 import {
+  aiChangeKey,
   buildProcCandidate,
   loadProcEvidence,
   mechanicalProcRewrite,
@@ -115,7 +116,19 @@ async function procCandidates(
   let aiUsed = 0
   for (const sel of selectProcCandidates(ev)) {
     let rewritten = mechanicalProcRewrite(sel.body)
-    if (!rewritten && aiAllowed && aiUsed < AI_BUDGET && remaining() > 0) {
+    // an attempt on this body that is quiet (rejected lately, dismissed) is not asked again
+    const aiKey = fingerprintOf({
+      kind: 'proc_rewrite',
+      target: sel.proc,
+      change_key: aiChangeKey(sel.body)
+    })
+    if (
+      !rewritten &&
+      aiAllowed &&
+      aiUsed < AI_BUDGET &&
+      remaining() > 0 &&
+      (await ledgerDecision(aiKey)) !== 'quiet'
+    ) {
       aiUsed++
       const ai = await aiRewriteCandidate({
         proc: sel.proc,

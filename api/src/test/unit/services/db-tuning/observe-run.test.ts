@@ -16,6 +16,7 @@ import {
   runExtensionObservers,
   unregisterTuningObservers
 } from '../../../../services/db-tuning/observers/registry.js'
+import { bodyHash } from '../../../../services/db-tuning/twin.js'
 import type { Candidate, ProofResult } from '../../../../services/db-tuning/types.js'
 
 const m = vi.hoisted(() => ({
@@ -574,6 +575,42 @@ describe('runObserve', () => {
     expect(m.aiRewriteCandidate).toHaveBeenCalledTimes(AI_BUDGET)
     m.aiRewriteCandidate.mockClear()
     m.aiBudgetAllows.mockImplementation(async () => false)
+    await runObserve({ trigger: 'schedule' })
+    expect(m.aiRewriteCandidate).not.toHaveBeenCalled()
+  })
+
+  it('an AI rewrite is keyed by the body it rewrites, and not asked again while that key is quiet', async () => {
+    const sel = {
+      proc: 'rpt',
+      body: 'CREATE PROC rpt AS SELECT 1',
+      stat: {
+        name: 'rpt',
+        execution_count: 70,
+        avg_elapsed_ms: 3000,
+        total_elapsed_ms: 210000,
+        cached_days: 7
+      },
+      paramSets: [{}],
+      planOps: [],
+      replicated: false
+    }
+    m.procSelections.mockImplementation(() => [sel])
+    let n = 0
+    m.aiRewriteCandidate.mockImplementation(async () => ({
+      body: `CREATE PROC rpt AS SELECT ${++n + 1}`,
+      notes: ['AI-written']
+    }))
+    await runObserve({ trigger: 'schedule' })
+    const first = m.upsertProposal.mock.calls[0]?.[0] as Candidate
+    expect(first.change_key).toBe(`ai:${bodyHash(sel.body)}`)
+    // tonight's different AI body is the same attempt on the same live body
+    m.upsertProposal.mockClear()
+    await runObserve({ trigger: 'schedule' })
+    expect((m.upsertProposal.mock.calls[0]?.[0] as Candidate).change_key).toBe(first.change_key)
+    // its rejection is quiet: the AI is not asked again
+    m.aiRewriteCandidate.mockClear()
+    const fp = fingerprintOf(first)
+    m.decision.mockImplementation(async (f) => (f === fp ? 'quiet' : 'insert'))
     await runObserve({ trigger: 'schedule' })
     expect(m.aiRewriteCandidate).not.toHaveBeenCalled()
   })
