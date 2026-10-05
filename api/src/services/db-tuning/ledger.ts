@@ -12,6 +12,7 @@ import {
 
 const T = 'nivaro_tuning_proposals'
 export const QUIET_DAYS = 90
+const IN_FLIGHT_STATUSES: readonly TuningStatus[] = ['applying', 'watching', 'applied']
 const EVIDENCE_CAP = 32 * 1024
 
 export function fingerprintOf(c: Pick<Candidate, 'kind' | 'target' | 'change_key'>): string {
@@ -95,56 +96,41 @@ type RecentRow = {
   rolled_back_at: Date | null
 }
 
-export async function isQuiet(fingerprint: string): Promise<boolean> {
+/** The newest dismissed / rolled-back row for a fingerprint, with when it was closed. */
+async function findRecentTwin(
+  fingerprint: string
+): Promise<{ status: TuningStatus; at: Date } | null> {
   const recent = (await db(T)
     .where({ fingerprint })
     .whereIn('status', ['dismissed', 'rolled_back'])
     .orderBy('last_seen', 'desc')
     .first('status', 'dismissed_at', 'rolled_back_at')) as RecentRow | undefined
+  if (!recent) return null
+  return {
+    status: recent.status,
+    at: new Date(recent.dismissed_at ?? recent.rolled_back_at ?? 0)
+  }
+}
+
+export async function isQuiet(fingerprint: string): Promise<boolean> {
+  const recent = await findRecentTwin(fingerprint)
   if (!recent) return false
-  const at = recent.dismissed_at ?? recent.rolled_back_at ?? new Date(0)
-  return (
-    upsertDecision(
-      { open: null, recent: { status: recent.status, at: new Date(at) } },
-      new Date()
-    ) === 'quiet'
-  )
+  return upsertDecision({ open: null, recent }, new Date()) === 'quiet'
 }
 
 export async function upsertProposal(
   c: Candidate,
   proof: ProofResult,
   runId: number | null
-): Promise<{ id: string; action: 'inserted' | 'updated' | 'quiet' }> {
+): Promise<{ id: string | null; action: 'inserted' | 'updated' | 'quiet' }> {
   const fingerprint = fingerprintOf(c)
   const now = new Date()
   const open = (await db(T)
     .where({ fingerprint })
-    .whereIn('status', [
-      'proposed',
-      'stale',
-      'rejected_by_proof',
-      'applying',
-      'watching',
-      'applied'
-    ])
+    .whereIn('status', [...OPEN_STATUSES, ...IN_FLIGHT_STATUSES])
     .first('id', 'status')) as { id: string; status: TuningStatus } | undefined
-  const recent = open
-    ? null
-    : ((await db(T)
-        .where({ fingerprint })
-        .whereIn('status', ['dismissed', 'rolled_back'])
-        .orderBy('last_seen', 'desc')
-        .first('status', 'dismissed_at', 'rolled_back_at')) as RecentRow | undefined)
-  const decision = upsertDecision(
-    {
-      open: open ? { status: open.status } : null,
-      recent: recent
-        ? { status: recent.status, at: new Date(recent.dismissed_at ?? recent.rolled_back_at ?? 0) }
-        : null
-    },
-    now
-  )
+  const recent = open ? null : await findRecentTwin(fingerprint)
+  const decision = upsertDecision({ open: open ? { status: open.status } : null, recent }, now)
   const status: TuningStatus = proof.passed ? 'proposed' : 'rejected_by_proof'
   const common = {
     title: c.title.slice(0, 300),
@@ -159,7 +145,7 @@ export async function upsertProposal(
     last_seen: now,
     run_id: runId
   }
-  if (decision === 'quiet') return { id: open?.id ?? '', action: 'quiet' }
+  if (decision === 'quiet') return { id: open?.id ?? null, action: 'quiet' }
   if (decision === 'update' && open) {
     await db(T)
       .where({ id: open.id })

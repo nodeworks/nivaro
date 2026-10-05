@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../../db/index.js'
-import { fingerprintOf, parseRow, upsertDecision } from '../../../../services/db-tuning/ledger.js'
+import {
+  fingerprintOf,
+  parseRow,
+  upsertDecision,
+  upsertProposal
+} from '../../../../services/db-tuning/ledger.js'
+import type { Candidate, ProofResult } from '../../../../services/db-tuning/types.js'
 
 describe('ledger', () => {
   afterEach(() => vi.clearAllMocks())
@@ -70,7 +76,94 @@ describe('ledger', () => {
     )
     expect(upsertDecision({ open: { status: 'watching' }, recent: null }, new Date())).toBe('quiet')
   })
-  it('db mock is present', () => {
-    expect(db).toBeDefined()
+  it('upsertDecision: rolled_back twin quiet inside 90 days, insert outside', () => {
+    const now = new Date()
+    const at = (d: number) => new Date(now.getTime() - d * 86_400_000)
+    expect(upsertDecision({ open: null, recent: { status: 'rolled_back', at: at(10) } }, now)).toBe(
+      'quiet'
+    )
+    expect(
+      upsertDecision({ open: null, recent: { status: 'rolled_back', at: at(100) } }, now)
+    ).toBe('insert')
+  })
+  it('upsertDecision: stale updates, applied is quiet', () => {
+    const now = new Date()
+    expect(upsertDecision({ open: { status: 'stale' }, recent: null }, now)).toBe('update')
+    expect(upsertDecision({ open: { status: 'applied' }, recent: null }, now)).toBe('quiet')
+  })
+})
+
+describe('upsertProposal', () => {
+  afterEach(() => vi.clearAllMocks())
+
+  const cand: Candidate = {
+    kind: 'index_create',
+    target: 'workflows.project_type',
+    change_key: 'project_type',
+    title: 't',
+    evidence: {},
+    estimate_ms_per_day: 10,
+    risk: 'reversible',
+    apply: { type: 'sql', statements: [] },
+    undo: { type: 'sql', statements: [] }
+  }
+  const proof = (passed: boolean): ProofResult => ({
+    passed,
+    method: 'hypothetical',
+    before: {},
+    after: {},
+    detail: ''
+  })
+
+  // One chainable builder per db(T) call: open lookup, then twin lookup (if reached), then write.
+  function stub(firsts: unknown[]) {
+    const insert = vi.fn().mockResolvedValue(undefined)
+    const update = vi.fn().mockResolvedValue(1)
+    const queue = [...firsts]
+    const builder: Record<string, unknown> = {
+      insert,
+      update,
+      first: vi.fn(async () => queue.shift())
+    }
+    for (const m of ['where', 'whereIn', 'orderBy']) builder[m] = vi.fn(() => builder)
+    vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(builder)
+    return { insert, update }
+  }
+
+  it('inserts when there is no open row and no recent twin', async () => {
+    const { insert, update } = stub([undefined, undefined])
+    const r = await upsertProposal(cand, proof(true), 7)
+    expect(r.action).toBe('inserted')
+    expect(r.id).toEqual(expect.any(String))
+    expect(insert).toHaveBeenCalledOnce()
+    expect(insert.mock.calls[0][0]).toMatchObject({ status: 'proposed', run_id: 7 })
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('updates an open proposed row, rejected_by_proof when the proof failed', async () => {
+    const { insert, update } = stub([{ id: 'abc', status: 'proposed' }])
+    const r = await upsertProposal(cand, proof(false), null)
+    expect(r).toEqual({ id: 'abc', action: 'updated' })
+    expect(update).toHaveBeenCalledOnce()
+    expect(update.mock.calls[0][0]).toMatchObject({ status: 'rejected_by_proof' })
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('stays quiet for a watching row', async () => {
+    const { insert, update } = stub([{ id: 'abc', status: 'watching' }])
+    const r = await upsertProposal(cand, proof(true), null)
+    expect(r).toEqual({ id: 'abc', action: 'quiet' })
+    expect(insert).not.toHaveBeenCalled()
+    expect(update).not.toHaveBeenCalled()
+  })
+
+  it('quiet with null id for a young dismissed twin', async () => {
+    const { insert } = stub([
+      undefined,
+      { status: 'dismissed', dismissed_at: new Date(), rolled_back_at: null }
+    ])
+    const r = await upsertProposal(cand, proof(true), null)
+    expect(r).toEqual({ id: null, action: 'quiet' })
+    expect(insert).not.toHaveBeenCalled()
   })
 })
