@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../../db/index.js'
 import {
   fingerprintOf,
+  inFlightTargets,
   ledgerDecision,
   parseRow,
   touchSeen,
@@ -216,6 +217,34 @@ describe('upsertProposal', () => {
     // a rejected row's last_seen is when it was last proved (its 7 quiet days count from there)
     expect(whereIn.mock.calls[1]).toEqual(['status', ['proposed', 'stale']])
     expect(whereIn.mock.calls[2]).toEqual(['fingerprint', ['f500']])
+  })
+
+  it('inFlightTargets: applying, watching, and applied rows still inside their window', async () => {
+    const now = new Date('2026-10-05T12:00:00Z')
+    const rows = [
+      { kind: 'proc_rewrite', target: 'rpt', status: 'watching', watch_until: null },
+      { kind: 'index_create', target: 'Orders.Status', status: 'applying', watch_until: null },
+      {
+        kind: 'query_cache',
+        target: 'spend',
+        status: 'applied',
+        watch_until: new Date('2026-10-06T00:00:00Z')
+      },
+      {
+        kind: 'query_cache',
+        target: 'old',
+        status: 'applied',
+        watch_until: new Date('2026-10-01T00:00:00Z')
+      }
+    ]
+    const whereIn = vi.fn()
+    const builder: Record<string, unknown> = { select: vi.fn(async () => rows) }
+    builder.whereIn = whereIn.mockImplementation(() => builder)
+    vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(builder)
+    expect(await inFlightTargets(now)).toEqual(
+      new Set(['proc_rewrite|rpt', 'index_create|orders.status', 'query_cache|spend'])
+    )
+    expect(whereIn).toHaveBeenCalledWith('status', ['applying', 'watching', 'applied'])
   })
 
   it('stays quiet for a watching row', async () => {

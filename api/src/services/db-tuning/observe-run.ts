@@ -2,7 +2,15 @@ import { db } from '../../db/index.js'
 import { getTenantId } from '../../db/tenant-context.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
 import { OBSERVER_TIMEOUT_MS, withTimeout } from './deadline.js'
-import { closeUnseen, fingerprintOf, ledgerDecision, touchSeen, upsertProposal } from './ledger.js'
+import {
+  closeUnseen,
+  fingerprintOf,
+  inFlightTargets,
+  ledgerDecision,
+  targetKey,
+  touchSeen,
+  upsertProposal
+} from './ledger.js'
 import { loadIndexCreateEvidence, observeIndexCreate } from './observers/index-create.js'
 import { loadIndexDropEvidence, observeIndexDrop } from './observers/index-drop.js'
 import {
@@ -245,7 +253,9 @@ export async function runObserve(
     const aiAllowed =
       !dryRun && settings.ai_rewrites && (await aiBudgetAllows(settings.ai_daily_budget_usd))
     const cands = await gatherCandidates(aiAllowed, remaining)
-    // one candidate per fingerprint; quiet and in-flight ones never take a proof slot
+    // one candidate per fingerprint; quiet and in-flight ones never take a proof slot — nor
+    // does any change on a target that already has one in flight
+    const busy = await inFlightTargets().catch(() => new Set<string>())
     const seen = new Set<string>()
     const fresh: Candidate[] = []
     let duplicates = 0
@@ -257,7 +267,7 @@ export async function runObserve(
         continue
       }
       seen.add(fp)
-      if ((await ledgerDecision(fp)) === 'quiet') {
+      if (busy.has(targetKey(c)) || (await ledgerDecision(fp)) === 'quiet') {
         quiet++
         continue
       }

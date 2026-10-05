@@ -2,6 +2,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { OBSERVER_TIMEOUT_MS } from '../../../../services/db-tuning/deadline.js'
 import { fingerprintOf } from '../../../../services/db-tuning/ledger.js'
+
+const targetKey = (c: { kind: string }, target: string) => `${c.kind}|${target.toLowerCase()}`
+
 import {
   AI_BUDGET,
   isObserveRunning,
@@ -46,7 +49,8 @@ const m = vi.hoisted(() => ({
   tenant: undefined as string | undefined,
   /** `running` db-tuning-observe job rows started in the last 70 minutes */
   inFlight: 0,
-  wheres: [] as unknown[][]
+  wheres: [] as unknown[][],
+  inFlightTargets: vi.fn(async () => new Set<string>())
 }))
 
 vi.mock('../../../../db/tenant-context.js', () => ({ getTenantId: () => m.tenant }))
@@ -77,6 +81,7 @@ vi.mock('../../../../services/job-runs.js', () => ({ startJobRun: m.startJobRun 
 vi.mock('../../../../services/db-tuning/ledger.js', async (orig) => ({
   ...(await orig<typeof import('../../../../services/db-tuning/ledger.js')>()),
   ledgerDecision: m.decision,
+  inFlightTargets: m.inFlightTargets,
   upsertProposal: m.upsertProposal,
   touchSeen: m.touchSeen,
   closeUnseen: m.closeUnseen
@@ -283,6 +288,7 @@ describe('runObserve', () => {
     m.procSelections.mockReset().mockImplementation(() => [])
     m.inFlight = 0
     m.wheres = []
+    m.inFlightTargets.mockReset().mockImplementation(async () => new Set<string>())
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
   afterEach(() => vi.restoreAllMocks())
@@ -409,6 +415,20 @@ describe('runObserve', () => {
     expect((await first).proposed).toBe(1)
     m.prove.mockImplementation(async () => pass())
     expect((await runObserve({ trigger: 'schedule' })).skipped).toBeUndefined()
+  })
+
+  it('a target with a change in flight is left alone, whatever the new change', async () => {
+    m.indexCreate.mockImplementation(() => [
+      { ...c('index_create', 9000), target: 'orders.customer_id', change_key: 'other' },
+      { ...c('index_create', 8000), target: 'orders.status' }
+    ])
+    m.inFlightTargets.mockImplementation(
+      async () => new Set([targetKey(c('index_create', 0), 'orders.customer_id')])
+    )
+    const r = await runObserve({ trigger: 'schedule' })
+    expect(m.prove).toHaveBeenCalledOnce()
+    expect(m.prove.mock.calls[0][0]).toMatchObject({ target: 'orders.status' })
+    expect(r).toMatchObject({ candidates: 2, quiet: 1, proved: 1 })
   })
 
   it('refuses while a fresh running observe row exists anywhere (another process)', async () => {

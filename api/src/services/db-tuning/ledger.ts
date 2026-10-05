@@ -152,6 +152,35 @@ export async function ledgerDecision(fingerprint: string): Promise<'insert' | 'u
   return upsertDecision({ open: openOf(open), recent }, new Date())
 }
 
+/** One change per object: a candidate's kind and target, case-folded. */
+export const targetKey = (c: Pick<Candidate, 'kind' | 'target'>): string =>
+  `${c.kind}|${c.target.toLowerCase()}`
+
+/**
+ * `targetKey`s of every change in flight: applying, watching, or applied with its watch window
+ * still open. A second change on one of these (another rewrite of a watched procedure) would be
+ * what the watch measures and would make its rollback refuse, so the run leaves the target be.
+ */
+export async function inFlightTargets(now = new Date()): Promise<Set<string>> {
+  const rows = (await db(T)
+    .whereIn('status', [...IN_FLIGHT_STATUSES])
+    .select('kind', 'target', 'status', 'watch_until')) as Array<{
+    kind: TuningKind
+    target: string
+    status: TuningStatus
+    watch_until: Date | string | null
+  }>
+  return new Set(
+    rows
+      .filter(
+        (r) =>
+          r.status !== 'applied' ||
+          (r.watch_until != null && new Date(r.watch_until).getTime() > now.getTime())
+      )
+      .map(targetKey)
+  )
+}
+
 export async function upsertProposal(
   c: Candidate,
   proof: ProofResult,
