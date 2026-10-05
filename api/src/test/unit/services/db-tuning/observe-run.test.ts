@@ -42,18 +42,32 @@ const m = vi.hoisted(() => ({
   ),
   indexCreate: vi.fn((): Candidate[] => []),
   procSelections: vi.fn((): unknown[] => []),
-  tenant: undefined as string | undefined
+  tenant: undefined as string | undefined,
+  /** `running` db-tuning-observe job rows started in the last 70 minutes */
+  inFlight: 0,
+  wheres: [] as unknown[][]
 }))
 
 vi.mock('../../../../db/tenant-context.js', () => ({ getTenantId: () => m.tenant }))
 
 vi.mock('../../../../db/index.js', () => {
-  const chain = {
-    where: () => chain,
-    orderBy: () => chain,
-    first: async () => undefined
+  const chain = () => {
+    let counted = false
+    const q: Record<string, unknown> = {
+      where: (...args: unknown[]) => {
+        m.wheres.push(args)
+        return q
+      },
+      orderBy: () => q,
+      count: () => {
+        counted = true
+        return q
+      },
+      first: async () => (counted ? { n: m.inFlight } : undefined)
+    }
+    return q
   }
-  return { db: Object.assign(() => chain, { raw: async () => [] }) }
+  return { db: Object.assign(() => chain(), { raw: async () => [] }) }
 })
 vi.mock('../../../../services/db-tuning/settings.js', () => ({
   readTuningSettings: async () => m.settings
@@ -266,6 +280,8 @@ describe('runObserve', () => {
     m.mechanical.mockReset().mockImplementation(() => null)
     m.indexCreate.mockReset().mockImplementation(() => [])
     m.procSelections.mockReset().mockImplementation(() => [])
+    m.inFlight = 0
+    m.wheres = []
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
   afterEach(() => vi.restoreAllMocks())
@@ -394,6 +410,29 @@ describe('runObserve', () => {
     expect((await runObserve({ trigger: 'schedule' })).skipped).toBeUndefined()
   })
 
+  it('refuses while a fresh running observe row exists anywhere (another process)', async () => {
+    m.indexCreate.mockImplementation(() => [c('index_create', 9000)])
+    m.inFlight = 1
+    const r = await runObserve({ trigger: 'run-now', userId: 'u1' })
+    expect(r.skipped).toBe('running')
+    expect(m.startJobRun).not.toHaveBeenCalled()
+    expect(m.prove).not.toHaveBeenCalled()
+    const since = m.wheres.find((w) => w[0] === 'started_at')
+    expect(since?.[1]).toBe('>')
+    expect(Date.now() - (since?.[2] as Date).getTime()).toBeGreaterThanOrEqual(70 * 60_000 - 1000)
+    expect(Date.now() - (since?.[2] as Date).getTime()).toBeLessThanOrEqual(70 * 60_000 + 1000)
+    expect(m.wheres).toContainEqual([{ job_id: 'db-tuning-observe', status: 'running' }])
+    // the lock is released: the next run (nothing else in flight) goes ahead
+    m.inFlight = 0
+    expect((await runObserve({ trigger: 'run-now' })).skipped).toBeUndefined()
+  })
+  it('a scheduled run counts its own cron row: only a second one holds it', async () => {
+    m.indexCreate.mockImplementation(() => [c('index_create', 9000)])
+    m.inFlight = 1
+    expect((await runObserve({ trigger: 'schedule' })).skipped).toBeUndefined()
+    m.inFlight = 2
+    expect((await runObserve({ trigger: 'schedule' })).skipped).toBe('running')
+  })
   it("one tenant's run in flight does not hold another tenant's run", async () => {
     m.indexCreate.mockImplementation(() => [c('index_create', 9000)])
     let release: (p: ProofResult) => void = () => {}

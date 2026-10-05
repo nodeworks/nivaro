@@ -11,7 +11,12 @@ import {
   TuningRefusal
 } from '../services/db-tuning/apply.js'
 import { getProposal, listProposals, updateProposal } from '../services/db-tuning/ledger.js'
-import { isObserveRunning, OBSERVE_JOB_ID, runObserve } from '../services/db-tuning/observe-run.js'
+import {
+  isObserveRunning,
+  OBSERVE_JOB_ID,
+  observeRunsInFlight,
+  runObserve
+} from '../services/db-tuning/observe-run.js'
 import { listTuningObservers } from '../services/db-tuning/observers/registry.js'
 import { prove } from '../services/db-tuning/proof.js'
 import {
@@ -87,7 +92,7 @@ export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
         open_estimate_ms_per_day: open_estimate,
         applied_30d: Number(applied?.n ?? 0),
         last_run: last ?? null,
-        is_running: isObserveRunning(),
+        is_running: isObserveRunning() || (await observeRunsInFlight()) > 0,
         observers: listTuningObservers()
       }
     }
@@ -228,7 +233,8 @@ export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
       return reply
         .code(409)
         .send({ error: 'Database tuning is turned off', code: 'TUNING_DISABLED' })
-    if (isObserveRunning())
+    // this process's run, or one another process holds (its job-run row)
+    if (isObserveRunning() || (await observeRunsInFlight()) > 0)
       return reply
         .code(409)
         .send({ error: 'An observe run is already in progress', code: 'TUNING_RUNNING' })

@@ -35,6 +35,7 @@ vi.mock('../../../services/db-tuning/ledger.js', () => ({
 vi.mock('../../../services/db-tuning/observe-run.js', () => ({
   OBSERVE_JOB_ID: 'db-tuning-observe',
   isObserveRunning: vi.fn(() => false),
+  observeRunsInFlight: vi.fn(async () => 0),
   runObserve: vi.fn()
 }))
 vi.mock('../../../services/db-tuning/observers/registry.js', () => ({
@@ -58,7 +59,11 @@ import {
   TuningRefusal
 } from '../../../services/db-tuning/apply.js'
 import { getProposal, listProposals, updateProposal } from '../../../services/db-tuning/ledger.js'
-import { isObserveRunning, runObserve } from '../../../services/db-tuning/observe-run.js'
+import {
+  isObserveRunning,
+  observeRunsInFlight,
+  runObserve
+} from '../../../services/db-tuning/observe-run.js'
 import { prove } from '../../../services/db-tuning/proof.js'
 import {
   bustTuningSettings,
@@ -333,6 +338,11 @@ describe('db-tuning routes', () => {
     const busy = await app.inject({ method: 'POST', url: '/db-tuning/observe', payload: {} })
     expect(busy.statusCode).toBe(409)
     expect(busy.json().code).toBe('TUNING_RUNNING')
+    // a run another process holds (its job-run row) counts too
+    vi.mocked(observeRunsInFlight).mockResolvedValueOnce(1)
+    const elsewhere = await app.inject({ method: 'POST', url: '/db-tuning/observe', payload: {} })
+    expect(elsewhere.statusCode).toBe(409)
+    expect(elsewhere.json().code).toBe('TUNING_RUNNING')
     expect(runObserve).not.toHaveBeenCalled()
   })
 

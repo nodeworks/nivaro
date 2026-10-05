@@ -53,6 +53,28 @@ export const PROOF_BUDGET = 20
 export const AI_BUDGET = 5
 export const WALL_MS = 60 * 60_000
 const CLOSE_UNSEEN_DAYS = 14
+/** A running row older than this is a dead process's (the wall is 60 minutes), not a live run. */
+const IN_FLIGHT_FRESH_MS = 70 * 60_000
+
+/**
+ * Observe runs in flight anywhere on this database: `running` job rows of the observe job (the
+ * CronManager's row for a tick or a Background Jobs run-now, or the row a manual run opens)
+ * started in the last 70 minutes. The per-process flag cannot see another replica or a dev
+ * process on the shared database. Unreadable → 0 (the per-process flag still holds).
+ */
+export async function observeRunsInFlight(): Promise<number> {
+  try {
+    const row = (await db('nivaro_job_runs')
+      .where({ job_id: OBSERVE_JOB_ID, status: 'running' })
+      .where('started_at', '>', new Date(Date.now() - IN_FLIGHT_FRESH_MS))
+      .count({ n: '*' })
+      .first()) as { n?: number | string } | undefined
+    return Number(row?.n ?? 0)
+  } catch {
+    return 0
+  }
+}
+
 /** Tenants with a run in flight on this process (self-hosted: the one key ''). */
 const running = new Set<string>()
 const tenantKey = (): string => getTenantId() ?? ''
@@ -197,6 +219,9 @@ export async function runObserve(
   if (!dryRun) running.add(tenant)
   let run: JobRunHandle | null = null
   try {
+    // a scheduled run's own cron row is already running; anything beyond it is another run
+    const own = opts.trigger === 'schedule' ? 1 : 0
+    if (!dryRun && (await observeRunsInFlight()) > own) return { ...empty, skipped: 'running' }
     if (!dryRun && opts.trigger !== 'schedule')
       run = await startJobRun('tuning', OBSERVE_JOB_ID, {
         label: 'Database tuning — observe',
