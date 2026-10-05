@@ -17,6 +17,8 @@ import type { ProofResult, ProposalRow, WatchSample } from './types.js'
 const T = 'nivaro_tuning_proposals'
 /** Fewer judged samples than this never regress (one bad hour is not a regression). */
 export const MIN_SAMPLES = 20
+/** The trailing samples a regression is judged over (a day of hourly ticks). */
+export const JUDGE_WINDOW = 24
 const SAMPLE_CAP = 400
 /** A claim older than this whose job run is over belongs to an apply/rollback that died. */
 export const STUCK_CLAIM_MS = 30 * 60_000
@@ -83,7 +85,11 @@ export async function captureBaseline(row: ProposalRow): Promise<Record<string, 
   return { metric: await measure(row) }
 }
 
-/** Pure: worse than the baseline by more than pct on at least 20 samples AND on ≥ 80% of them. */
+/**
+ * Pure: over the trailing 24 measured samples, at least 20 are worse than the baseline by more
+ * than pct. A trailing window (not the whole history) so a regression that starts late in the
+ * watch is still caught; one bad hour never is.
+ */
 export function judgeRegression(
   samples: WatchSample[],
   baseline: number | null,
@@ -96,11 +102,11 @@ export function judgeRegression(
   if (vals.length < MIN_SAMPLES)
     return { regressed: false, reason: `${vals.length} of ${MIN_SAMPLES} samples` }
   const limit = baseline * (1 + pct / 100)
-  const bad = vals.filter((v) => v > limit).length
-  const regressed = bad >= MIN_SAMPLES && bad / vals.length >= 0.8
+  const window = vals.slice(-JUDGE_WINDOW)
+  const bad = window.filter((v) => v > limit).length
   return {
-    regressed,
-    reason: `${bad} of ${vals.length} samples above ${Math.round(limit)} (baseline ${Math.round(baseline)}, +${pct}%)`
+    regressed: bad >= MIN_SAMPLES,
+    reason: `${bad} of ${window.length} trailing samples above ${Math.round(limit)} (baseline ${Math.round(baseline)}, +${pct}%)`
   }
 }
 
@@ -131,13 +137,18 @@ export function isStuckClaim(
 /** First sighting of a claim with no run record, by proposal id (this process). */
 const runlessSince = new Map<string, number>()
 
+export type ClaimJob = 'apply' | 'rollback' | 'apply or rollback'
+
+/** One claim: a re-claim of the same row (a new run, or none) starts its own clock. */
+const claimKey = (row: ProposalRow) => `${row.id}:${row.run_id ?? '-'}`
+
 /** The `applying` rows whose apply or rollback is no longer running, with which one it was. */
 export async function stuckClaims(
   now = Date.now()
-): Promise<Array<{ row: ProposalRow; job: 'apply' | 'rollback' }>> {
+): Promise<Array<{ row: ProposalRow; job: ClaimJob }>> {
   const rows = await listProposals({ status: ['applying'] })
-  const claimed = new Set(rows.map((r) => r.id))
-  for (const id of runlessSince.keys()) if (!claimed.has(id)) runlessSince.delete(id)
+  const claimed = new Set(rows.map(claimKey))
+  for (const key of runlessSince.keys()) if (!claimed.has(key)) runlessSince.delete(key)
   const ids = rows.map((r) => r.run_id).filter((id): id is number => id != null)
   const runs = ids.length
     ? ((await db('nivaro_job_runs')
@@ -145,15 +156,21 @@ export async function stuckClaims(
         .select('id', 'job_id', 'status', 'started_at')) as Array<Record<string, unknown>>)
     : []
   const byId = new Map(runs.map((r) => [Number(r.id), r]))
-  const out: Array<{ row: ProposalRow; job: 'apply' | 'rollback' }> = []
+  const out: Array<{ row: ProposalRow; job: ClaimJob }> = []
   for (const row of rows) {
     const run = row.run_id == null ? undefined : byId.get(row.run_id)
-    if (!run && !runlessSince.has(row.id)) runlessSince.set(row.id, now)
+    const key = claimKey(row)
+    if (!run && !runlessSince.has(key)) runlessSince.set(key, now)
     const claimRun = run
       ? { status: String(run.status), started_at: run.started_at as Date | string | null }
       : null
-    if (!isStuckClaim(claimRun, runlessSince.get(row.id) ?? null, now)) continue
-    const job = String(run?.job_id ?? '').startsWith('tuning:rollback:') ? 'rollback' : 'apply'
+    if (!isStuckClaim(claimRun, runlessSince.get(key) ?? null, now)) continue
+    const jobId = String(run?.job_id ?? '')
+    const job: ClaimJob = !run
+      ? 'apply or rollback'
+      : jobId.startsWith('tuning:rollback:')
+        ? 'rollback'
+        : 'apply'
     out.push({ row, job })
   }
   return out
@@ -185,19 +202,35 @@ const NO_PROOF: ProofResult = {
  * live procedure (the rewrite), one recorded parameter set per night in turn. The row diff is
  * symmetric, which is all it needs; the timing verdict is ignored (the old body is the slow one).
  */
-async function recheckRewrite(row: ProposalRow, settings: TuningSettings): Promise<string | null> {
+async function recheckRewrite(
+  row: ProposalRow,
+  settings: TuningSettings,
+  note: (line: string) => void
+): Promise<string | null> {
   if (row.apply.type !== 'proc_body' || row.undo.type !== 'proc_body') return null
   const sets =
     (row.evidence.parameter_set_values as Array<Record<string, unknown>> | undefined) ?? []
-  const today = Math.floor(Date.now() / 86_400_000)
+  const index = sets.length ? Math.floor(Date.now() / 86_400_000) % sets.length : 0
+  let error: string | null = null
   const re = await proveProcedureRewrite({
     proc: row.apply.proc,
     oldBody: row.apply.body,
     newBody: row.undo.body,
-    paramSets: sets.length ? [sets[today % sets.length]] : [],
+    paramSets: sets.length ? [sets[index]] : [],
     timeoutMs: settings.proc_timeout_minutes * 60_000
-  }).catch(() => null)
-  return re?.rows_diff?.length ? 'nightly re-check: rows differ from the previous body' : null
+  }).catch((err: unknown) => {
+    error = errText(err)
+    return null
+  })
+  const diff = re?.rows_diff?.[0]
+  if (diff)
+    return `nightly re-check: parameter set #${index} differs from the previous body (+${diff.added.length} / −${diff.removed.length} rows)`
+  // a re-check that judged nothing is said out loud, never read as a pass
+  if (!re) note(`re-check could not run: ${row.title} — ${error ?? 'no result'}`)
+  else if (re.method === 'refused') note(`re-check refused: ${row.title} — ${re.detail}`)
+  else if (re.detail.startsWith('proof run failed'))
+    note(`re-check could not run: ${row.title} — ${re.detail}`)
+  return null
 }
 
 /** Why this row must roll back now, or null. */
@@ -206,14 +239,15 @@ async function regression(
   value: number | null,
   samples: WatchSample[],
   settings: TuningSettings,
-  dryRun: boolean
+  opts: { dryRun: boolean; note: (line: string) => void }
 ): Promise<string | null> {
   // a stored rollup that disagrees with the live figure is wrong data, not slow data: at once
   if (row.kind === 'rollup_store' && value != null && value > 0)
     return `${value} sampled row(s) drifted from the live rollup`
   // the re-diff deploys a twin, so a dry run does not run it
-  if (row.kind === 'proc_rewrite' && !dryRun && new Date().getUTCHours() === RECHECK_UTC_HOUR) {
-    const differs = await recheckRewrite(row, settings)
+  const recheck = new Date().getUTCHours() === RECHECK_UTC_HOUR
+  if (row.kind === 'proc_rewrite' && !opts.dryRun && recheck) {
+    const differs = await recheckRewrite(row, settings, opts.note)
     if (differs) return differs
   }
   const baseline = row.watch_baseline?.before?.metric ?? null
@@ -324,7 +358,10 @@ export async function runWatch(
       const samples = [...(row.proof?.watch ?? []), sample].slice(-SAMPLE_CAP)
       if (!dryRun)
         await updateProposal(row.id, { proof: { ...(row.proof ?? NO_PROOF), watch: samples } })
-      const reason = await regression(row, value, samples, settings, dryRun)
+      const reason = await regression(row, value, samples, settings, {
+        dryRun,
+        note: (line) => out.actions.push(line)
+      })
       if (reason) {
         if (dryRun) {
           out.rolled_back++

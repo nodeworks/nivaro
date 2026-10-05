@@ -25,6 +25,7 @@ async function staleTwins(): Promise<string[]> {
   const rows = (await db.raw(
     `SELECT p.name FROM sys.procedures p
      WHERE p.name LIKE '%[_][_]tune' AND p.is_ms_shipped = 0
+       AND SCHEMA_NAME(p.schema_id) = 'dbo'
        AND p.modify_date < DATEADD(minute, -${TWIN_STALE_MINUTES}, GETDATE())`
   )) as unknown
   return (Array.isArray(rows) ? (rows as Array<{ name: string }>) : []).map((r) => r.name)
@@ -42,6 +43,16 @@ async function lastObserveAt(): Promise<number | null> {
 export async function tuningReadiness(now = Date.now()): Promise<ReadinessResult> {
   const settings = await readTuningSettings()
   if (!settings.enabled) return { status: 'pass', detail: 'Database tuning is off' }
+  try {
+    return await judgeTuning(now)
+  } catch (err) {
+    // a read the check cannot make (a denied catalog view, a missing table) is a warning
+    const msg = err instanceof Error ? err.message : String(err)
+    return { status: 'warn', detail: `Database tuning check could not run: ${msg}` }
+  }
+}
+
+async function judgeTuning(now: number): Promise<ReadinessResult> {
   const fails = (await staleTwins()).map(
     (name) =>
       `Leftover twin procedure ${name} is more than a day old — a proof died before dropping it; drop it`

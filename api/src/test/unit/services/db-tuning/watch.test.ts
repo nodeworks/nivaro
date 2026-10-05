@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   runs: [] as Array<Record<string, unknown>>,
   collRows: [] as Array<Record<string, unknown>>,
   twins: [] as Array<{ name: string }>,
+  rawError: null as string | null,
   mssql: true,
   settings: { enabled: true, regression_pct: 25, watch_days: 7, proc_timeout_minutes: 10 },
   cacheMs: 100 as number | null,
@@ -71,7 +72,11 @@ vi.mock('../../../../db/index.js', () => {
     }
     return q
   }
-  return { db: Object.assign(builder, { raw: async () => m.twins }) }
+  const raw = async () => {
+    if (m.rawError) throw new Error(m.rawError)
+    return m.twins
+  }
+  return { db: Object.assign(builder, { raw }) }
 })
 vi.mock('../../../../db/dialect.js', () => ({ isMssql: () => m.mssql }))
 vi.mock('../../../../services/db-tuning/ledger.js', () => ({
@@ -139,6 +144,31 @@ describe('judgeRegression', () => {
     expect(r.regressed).toBe(false)
     expect(r.reason).toMatch(/19 of 20/)
   })
+  it('judges the trailing 24: 19 bad of them is not a regression', () => {
+    const vals = [...Array(5).fill(100), ...Array(19).fill(200)]
+    expect(judgeRegression(s(vals), 100, 25).regressed).toBe(false)
+  })
+  it('a regression that starts late (after 100 good hours) is still caught', () => {
+    const vals = [...Array(100).fill(100), ...Array(20).fill(200)]
+    const r = judgeRegression(s(vals), 100, 25)
+    expect(r.regressed).toBe(true)
+    expect(r.reason).toMatch(/20 of 24 trailing/)
+  })
+  it('good hours before the trailing window do not count', () => {
+    const vals = [...Array(30).fill(200), ...Array(20).fill(100)]
+    expect(judgeRegression(s(vals), 100, 25).regressed).toBe(false)
+  })
+  it('a value exactly at the limit is not worse', () => {
+    expect(judgeRegression(s(Array(24).fill(125)), 100, 25).regressed).toBe(false)
+    expect(judgeRegression(s(Array(24).fill(125.01)), 100, 25).regressed).toBe(true)
+  })
+  it('a zero baseline is no baseline', () => {
+    expect(judgeRegression(s(Array(24).fill(999)), 0, 25)).toEqual({
+      regressed: false,
+      reason: 'no baseline'
+    })
+    expect(judgeRegression(s(Array(24).fill(999)), null, 25).reason).toBe('no baseline')
+  })
 })
 
 describe('isStuckClaim', () => {
@@ -200,6 +230,7 @@ beforeEach(() => {
   m.runs = []
   m.collRows = []
   m.twins = []
+  m.rawError = null
   m.mssql = true
   m.updates = []
   m.cacheMs = 100
@@ -281,7 +312,7 @@ describe('runWatch', () => {
     expect(out.rolled_back).toBe(1)
     expect(m.rollback).toHaveBeenCalledWith('w1', {
       userId: null,
-      reason: expect.stringMatching(/^regressed: 20 of 20 samples above 125/),
+      reason: expect.stringMatching(/^regressed: 20 of 20 trailing samples above 125/),
       app
     })
     expect(m.notifyUser).toHaveBeenCalledTimes(1)
@@ -402,7 +433,7 @@ describe('runWatch', () => {
     expect(write?.where).toMatchObject({ id: 'w1', status: 'watching' })
   })
   it('re-diffs one parameter set of a watched rewrite at 07 UTC: old body as the twin', async () => {
-    vi.setSystemTime(Date.parse('2026-10-05T07:00:00Z'))
+    vi.setSystemTime(Date.parse('2026-10-05T07:55:00Z'))
     put(
       qrow({
         kind: 'proc_rewrite',
@@ -426,7 +457,37 @@ describe('runWatch', () => {
     expect(args).toMatchObject({ proc: 'p', oldBody: 'NEW', newBody: 'OLD', timeoutMs: 600_000 })
     expect(args.paramSets).toHaveLength(1)
     expect(out.rolled_back).toBe(1)
-    expect(m.rollback.mock.calls[0][1].reason).toMatch(/nightly re-check/)
+    // day 20731 % 2 sets → set #1 (the sets rotate by day); one row added, none removed
+    expect(args.paramSets).toEqual([{ a: 2 }])
+    expect(m.rollback.mock.calls[0][1].reason).toBe(
+      'nightly re-check: parameter set #1 differs from the previous body (+1 / −0 rows)'
+    )
+  })
+  it('a re-check that is refused or cannot run is listed, not read as a pass', async () => {
+    vi.setSystemTime(Date.parse('2026-10-05T07:55:00Z'))
+    const proc = {
+      kind: 'proc_rewrite' as const,
+      target: 'p',
+      apply: { type: 'proc_body' as const, proc: 'p', body: 'NEW', hash: 'n' },
+      undo: { type: 'proc_body' as const, proc: 'p', body: 'OLD', hash: 'o' }
+    }
+    put(qrow({ id: 'r1', title: 'Refused one', ...proc }))
+    put(qrow({ id: 'r2', title: 'Broken one', ...proc }))
+    m.prove
+      .mockImplementationOnce(async () => ({
+        passed: false,
+        method: 'refused',
+        before: {},
+        after: {},
+        detail: 'current body writes to a table'
+      }))
+      .mockImplementationOnce(async () => {
+        throw new Error('pool exhausted')
+      })
+    const out = await runWatch(app)
+    expect(out.rolled_back).toBe(0)
+    expect(out.actions).toContain('re-check refused: Refused one — current body writes to a table')
+    expect(out.actions).toContain('re-check could not run: Broken one — pool exhausted')
   })
   it('does not re-diff outside 07 UTC', async () => {
     put(
@@ -508,6 +569,32 @@ describe('runWatch — stuck applying sweep', () => {
     const out = await runWatch(app)
     expect(out.stuck).toBe(1)
     expect(m.rows.get('norun')?.status).toBe('failed')
+    expect(m.rows.get('norun')?.rollback_reason).toBe(
+      'apply or rollback did not finish (process restart?)'
+    )
+  })
+  it('a re-claim starts its own clock (the first sighting is per claim)', async () => {
+    put(qrow({ id: 're', status: 'applying', run_id: null }))
+    await runWatch(app)
+    // between ticks the claim ended and the row was claimed again (its run row is missing)
+    const r = m.rows.get('re')
+    if (r) r.run_id = 99
+    vi.setSystemTime(NOW + 61 * 60_000)
+    expect((await runWatch(app)).stuck).toBe(0)
+    expect(m.rows.get('re')?.status).toBe('applying')
+    vi.setSystemTime(NOW + 122 * 60_000)
+    expect((await runWatch(app)).stuck).toBe(1)
+  })
+  it('a dry run reports a stuck claim and writes nothing', async () => {
+    put(qrow({ id: 'dry', title: 'Dry one', status: 'applying', run_id: 5 }))
+    m.runs = [{ id: 5, status: 'interrupted', started_at: ago(45), job_id: 'tuning:apply:dry' }]
+    const out = await runWatch(app, { dryRun: true })
+    expect(out.stuck).toBe(1)
+    expect(out.actions).toContain(
+      'would mark failed: Dry one — apply did not finish (process restart?)'
+    )
+    expect(m.updates).toHaveLength(0)
+    expect(m.rows.get('dry')?.status).toBe('applying')
   })
 })
 
@@ -537,6 +624,13 @@ describe('tuning readiness', () => {
     const r = await tuningReadiness()
     expect(r.status).toBe('pass')
     expect(r.detail).toMatch(/1 change\(s\) under watch/)
+  })
+  it('a read the check cannot make is a warning, never a throw', async () => {
+    m.rawError = 'VIEW DEFINITION permission denied'
+    expect(await tuningReadiness()).toEqual({
+      status: 'warn',
+      detail: 'Database tuning check could not run: VIEW DEFINITION permission denied'
+    })
   })
   it('fails on a twin procedure older than a day, naming it', async () => {
     m.runs = healthyRun()

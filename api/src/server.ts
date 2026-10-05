@@ -1714,7 +1714,7 @@ export async function buildServer() {
       )
       app.cron.schedule(
         'db-tuning-watch',
-        '0 * * * *',
+        '55 * * * *',
         async () => {
           const { runWatch, watchSummary } = await import('./services/db-tuning/watch.js')
           app.log.info(`db-tuning-watch: ${watchSummary(await runWatch(app))}`)
@@ -1722,7 +1722,7 @@ export async function buildServer() {
         {
           idempotent: 'safe',
           description:
-            'Hourly — re-measures every applied database tuning change against its pre-change baseline. Rolls a change back (and tells whoever applied it) when 20+ samples, 80% of them, run worse by regression_pct, when a stored rollup drifts from the live figure, or when a rewritten procedure differs on its nightly re-diff; finishes changes past their watch window; marks failed an apply or rollback whose run died (no undo). Returns at once while db_tuning.enabled is off. Dry run reports what it would roll back, finish or mark failed.',
+            'Hourly at :55 — re-measures every applied database tuning change against its pre-change baseline. Rolls a change back (and tells whoever applied it) when 20 of the last 24 samples run worse by regression_pct, when a stored rollup drifts from the live figure, or when a rewritten procedure differs on its nightly re-diff; finishes changes past their watch window; marks failed an apply or rollback whose run died (no undo). Returns at once while db_tuning.enabled is off. Dry run reports what it would roll back, finish or mark failed.',
           dryRun: async () => {
             const { runWatch } = await import('./services/db-tuning/watch.js')
             return runWatch(app, { dryRun: true })
