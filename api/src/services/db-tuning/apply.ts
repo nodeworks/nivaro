@@ -491,12 +491,47 @@ async function tableColumns(table: string): Promise<Set<string>> {
 async function indexRow(table: string, name: string): Promise<Record<string, unknown> | null> {
   const rows = rowsOf(
     await db.raw(
-      `SELECT i.type_desc, i.is_primary_key, i.is_unique_constraint FROM sys.indexes i
+      `SELECT i.type_desc, i.is_primary_key, i.is_unique_constraint, i.is_unique FROM sys.indexes i
         WHERE i.object_id = OBJECT_ID(?, 'U') AND i.name = ?`,
       [table, name]
     )
   )
   return rows[0] ?? null
+}
+
+/**
+ * Why the index an index_drop would drop is not ours to drop, read live: a unique index (it
+ * changes what inserts accept), one backing a PK / unique constraint, or one a foreign key
+ * relies on (the referenced key, or an index led by the referencing column — the observer's
+ * fkBackedIndexes). Null when it is plain. A rollback's DROP of an index_create is not judged
+ * here: an index we created on a foreign-key column is ours to take back off.
+ */
+async function dropApplyProblem(row: ProposalRow): Promise<string | null> {
+  const s = row.apply.type === 'sql' ? parseIndexStatement(row.apply.statements[0] ?? '') : null
+  if (s?.op !== 'drop') return null
+  const ix = rowsOf(
+    await db.raw(
+      `SELECT i.is_unique, i.is_primary_key, i.is_unique_constraint,
+              CASE WHEN EXISTS (SELECT 1 FROM sys.foreign_keys fk
+                                 WHERE fk.referenced_object_id = i.object_id
+                                   AND fk.key_index_id = i.index_id)
+                     OR EXISTS (SELECT 1 FROM sys.foreign_key_columns fkc
+                                  JOIN sys.index_columns ic
+                                    ON ic.object_id = fkc.parent_object_id
+                                   AND ic.column_id = fkc.parent_column_id AND ic.key_ordinal = 1
+                                 WHERE fkc.parent_object_id = i.object_id
+                                   AND ic.index_id = i.index_id)
+                   THEN 1 ELSE 0 END AS fk_backed
+         FROM sys.indexes i WHERE i.object_id = OBJECT_ID(?, 'U') AND i.name = ?`,
+      [s.table, s.name]
+    )
+  )[0]
+  if (!ix) return null // revalidate answers "no longer exists"
+  if (truthy(ix.is_primary_key) || truthy(ix.is_unique_constraint))
+    return `${s.name} backs a primary key or unique constraint`
+  if (truthy(ix.is_unique)) return `${s.name} is a unique index`
+  if (truthy(ix.fk_backed)) return `${s.name} backs a foreign key`
+  return null
 }
 
 /**
@@ -606,7 +641,8 @@ async function catalogProblem(s: IndexStatement): Promise<string | null> {
   if (
     ix.type_desc !== 'NONCLUSTERED' ||
     truthy(ix.is_primary_key) ||
-    truthy(ix.is_unique_constraint)
+    truthy(ix.is_unique_constraint) ||
+    truthy(ix.is_unique)
   )
     return `${s.name} is not a plain nonclustered index`
   return null
@@ -824,6 +860,10 @@ export async function applyProposal(
   if (problem) {
     await transition(id, APPLY_FROM, { status: 'stale' })
     throw new TuningRefusal('TUNING_STALE', problem)
+  }
+  if (row.kind === 'index_drop') {
+    const notOurs = await dropApplyProblem(row)
+    if (notOurs) throw new TuningRefusal('TUNING_NOT_APPLICABLE', notOurs)
   }
   const settings = await readTuningSettings()
   const run = await claim(row, APPLY_FROM, 'apply', opts.userId)

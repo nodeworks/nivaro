@@ -415,13 +415,20 @@ describe('prove — every branch passes and fails', () => {
     apply: { type: 'sql', statements: ['DROP INDEX [idx_workflows_owner] ON [workflows]'] },
     undo: { type: 'sql', statements: ['CREATE NONCLUSTERED INDEX …'] }
   })
-  const dropDeps = (exists: boolean): Partial<ProofDeps> => ({ indexExists: async () => exists })
+  const dropDeps = (
+    exists: boolean | ((name: string) => boolean),
+    usage: { reads: number; uptime_days: number | null } = { reads: 0, uptime_days: 31.5 }
+  ): Partial<ProofDeps> => ({
+    indexExists: async (_t, name) => (typeof exists === 'function' ? exists(name) : exists),
+    indexUsageNow: async () => usage
+  })
   it('index_drop passes on zero reads over 30+ days, or a strict prefix', async () => {
     const unused = await prove(drop({ reads: 0, uptime_days: 31, covered_by: null }), {
       procTimeoutMs: 1,
       deps: dropDeps(true)
     })
     expect(unused).toMatchObject({ passed: true, method: 'usage-stats' })
+    expect(unused.before).toEqual({ reads: 0, uptime_days: 31 })
     const prefix = await prove(drop({ reads: 400, uptime_days: 31, covered_by: 'idx_wide' }), {
       procTimeoutMs: 1,
       deps: dropDeps(true)
@@ -431,10 +438,44 @@ describe('prove — every branch passes and fails', () => {
   it('index_drop fails with the actual reads when the index is read', async () => {
     const r = await prove(drop({ reads: 5, uptime_days: 31, covered_by: null }), {
       procTimeoutMs: 1,
-      deps: dropDeps(true)
+      deps: dropDeps(true, { reads: 5, uptime_days: 31 })
     })
     expect(r).toMatchObject({ passed: false, method: 'usage-stats' })
     expect(r.detail).toBe('5 reads over 31 days of uptime (needs 0 reads over ≥ 30 days)')
+  })
+  it('index_drop re-reads usage live: an index read since it was proposed fails', async () => {
+    const r = await prove(drop({ reads: 0, uptime_days: 31, covered_by: null }), {
+      procTimeoutMs: 1,
+      deps: dropDeps(true, { reads: 3, uptime_days: 40 })
+    })
+    expect(r).toMatchObject({ passed: false, method: 'usage-stats' })
+    expect(r.detail).toBe('3 reads over 40 days of uptime (needs 0 reads over ≥ 30 days)')
+    // a restart since the proposal resets the stats: too little uptime to judge
+    const fresh = await prove(drop({ reads: 0, uptime_days: 31, covered_by: null }), {
+      procTimeoutMs: 1,
+      deps: dropDeps(true, { reads: 0, uptime_days: 2 })
+    })
+    expect(fresh.passed).toBe(false)
+  })
+  it('index_drop of a prefix fails once its covering index is gone', async () => {
+    const r = await prove(drop({ reads: 400, uptime_days: 31, covered_by: 'idx_wide' }), {
+      procTimeoutMs: 1,
+      deps: dropDeps((name) => name !== 'idx_wide')
+    })
+    expect(r).toMatchObject({ passed: false, method: 'usage-stats' })
+    expect(r.detail).toBe('the covering index idx_wide no longer exists')
+  })
+  it('index_drop errors (judging nothing) when the live usage cannot be read', async () => {
+    const r = await prove(drop({ reads: 0, uptime_days: 31, covered_by: null }), {
+      procTimeoutMs: 1,
+      deps: {
+        indexExists: async () => true,
+        indexUsageNow: async () => {
+          throw new Error('VIEW SERVER STATE denied')
+        }
+      }
+    })
+    expect(isErrorRefusal(r)).toBe(true)
   })
   it('index_drop fails when the index no longer exists', async () => {
     const r = await prove(drop({ reads: 0, uptime_days: 31, covered_by: null }), {

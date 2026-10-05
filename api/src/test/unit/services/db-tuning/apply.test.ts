@@ -15,7 +15,13 @@ import { bodyHash } from '../../../../services/db-tuning/twin.js'
 import type { ProposalRow } from '../../../../services/db-tuning/types.js'
 import { createIndexSql, indexName } from '../../../../services/index-advisor.js'
 
-type IndexInfo = { type_desc: string; is_primary_key: boolean; is_unique_constraint: boolean }
+type IndexInfo = {
+  type_desc: string
+  is_primary_key: boolean
+  is_unique_constraint: boolean
+  is_unique?: boolean
+  fk_backed?: number
+}
 
 const m = vi.hoisted(() => ({
   rows: new Map<string, Record<string, unknown>>(),
@@ -813,6 +819,43 @@ describe('applyProposal', () => {
     expect(err.code).toBe('TUNING_REPLICATED')
     expect(err.detail?.target).toBe('orders.total')
     expect(m.schemaTable).not.toHaveBeenCalled()
+  })
+  describe('index_drop', () => {
+    const DEF = 'CREATE NONCLUSTERED INDEX [ix_owner] ON [workflows] ([status])'
+    const dropRow = () =>
+      row({
+        kind: 'index_drop',
+        target: 'workflows.ix_owner',
+        apply: { type: 'sql', statements: ['DROP INDEX [ix_owner] ON [workflows]'] },
+        undo: { type: 'sql', statements: [DEF] },
+        proof: { passed: true, method: 'usage-stats', before: {}, after: {}, detail: '' }
+      })
+    beforeEach(() => {
+      m.rows.set('x', { ...dropRow() })
+      m.indexDef.mockImplementation(async () => DEF)
+    })
+    it('drops a plain index', async () => {
+      m.indexes.workflows.ix_owner = { ...PLAIN_NC, is_unique: false, fk_backed: 0 }
+      const out = await applyProposal('x', { userId: 'u', dbaOk: false, app })
+      expect(out.status).toBe('watching')
+      expect(m.runLongSql).toHaveBeenCalledWith('DROP INDEX [ix_owner] ON [workflows]')
+    })
+    it('refuses a unique, a constraint-backing or a foreign-key-backing index, live', async () => {
+      for (const ix of [
+        { ...PLAIN_NC, is_unique: true },
+        { ...PLAIN_NC, is_unique_constraint: true },
+        { ...PLAIN_NC, is_primary_key: true },
+        { ...PLAIN_NC, fk_backed: 1 }
+      ]) {
+        m.rows.set('x', { ...dropRow() })
+        m.indexes.workflows.ix_owner = ix
+        const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+        expect(err.code).toBe('TUNING_NOT_APPLICABLE')
+        expect(err.status).toBe(409)
+      }
+      expect(m.runLongSql).not.toHaveBeenCalled()
+      expect(m.startJobRun).not.toHaveBeenCalled()
+    })
   })
   it('stale proc hash → status stale, 409 TUNING_STALE, nothing runs', async () => {
     m.rows.set('x', { ...procRow() })

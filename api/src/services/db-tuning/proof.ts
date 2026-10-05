@@ -1,6 +1,11 @@
 import { db } from '../../db/index.js'
 import { withLongConnection } from '../run-long.js'
-import { statementsTouching as dmvStatements, isMssqlDb, type StatementStat } from './dmv.js'
+import {
+  statementsTouching as dmvStatements,
+  isMssqlDb,
+  type StatementStat,
+  serverUptimeDays
+} from './dmv.js'
 import { MIN_UPTIME_DAYS } from './observers/index-drop.js'
 import { MIN_SAVING_MS } from './observers/query-cache.js'
 import { codeOnly, provability, proveProcedureRewrite, twinName } from './twin.js'
@@ -30,6 +35,11 @@ export interface ProofDeps {
     statements: string[]
   ) => Promise<HypotheticalCosts>
   indexExists: (table: string, name: string) => Promise<boolean>
+  /** One index's reads since the server started, and that uptime (null when unknown). */
+  indexUsageNow: (
+    table: string,
+    name: string
+  ) => Promise<{ reads: number; uptime_days: number | null }>
   twin: typeof proveProcedureRewrite
   /** Each callee's sys.sql_modules definition (null when not found), keyed `schema.name` as asked. */
   calleeBodies: (names: string[]) => Promise<Map<string, string | null>>
@@ -187,6 +197,25 @@ async function indexExists(table: string, name: string): Promise<boolean> {
   return rows.length > 0
 }
 
+/** Throws on a DMV error: the proof errors rather than judge on the proposal's own figures. */
+async function indexUsageNow(
+  table: string,
+  name: string
+): Promise<{ reads: number; uptime_days: number | null }> {
+  if (!isMssqlDb()) throw new Error('index usage is read on SQL Server only')
+  const rows = rowsOf(
+    await db.raw(
+      `SELECT ISNULL(SUM(us.user_seeks + us.user_scans + us.user_lookups), 0) AS reads
+       FROM sys.indexes i
+       LEFT JOIN sys.dm_db_index_usage_stats us
+         ON us.object_id = i.object_id AND us.index_id = i.index_id AND us.database_id = DB_ID()
+       WHERE i.object_id = OBJECT_ID(?) AND i.name = ?`,
+      [table, name]
+    )
+  )
+  return { reads: Number(rows[0]?.reads ?? 0), uptime_days: await serverUptimeDays() }
+}
+
 /** Throws on a catalog error: the caller refuses rather than guess. */
 async function calleeBodies(names: string[]): Promise<Map<string, string | null>> {
   const out = new Map<string, string | null>()
@@ -223,6 +252,7 @@ const defaultDeps: ProofDeps = {
   statementsTouching: dmvStatements,
   hypotheticalCosts,
   indexExists,
+  indexUsageNow,
   twin: proveProcedureRewrite,
   calleeBodies,
   procExists
@@ -438,19 +468,34 @@ async function proveKind(
           after: {},
           detail: 'index no longer exists'
         }
-      const ev = c.evidence as { reads?: number; uptime_days?: number; covered_by?: string | null }
-      const passed =
-        Boolean(ev.covered_by) ||
-        ((ev.reads ?? 1) === 0 && (ev.uptime_days ?? 0) >= MIN_UPTIME_DAYS)
-      return {
+      const usage = (passed: boolean, detail: string, before = {}): ProofResult => ({
         passed,
         method: 'usage-stats',
-        before: { reads: ev.reads ?? null, uptime_days: ev.uptime_days ?? null },
+        before,
         after: {},
-        detail: ev.covered_by
-          ? `strict prefix of ${ev.covered_by}`
-          : `${ev.reads ?? 'unknown'} reads over ${ev.uptime_days ?? 'unknown'} days of uptime${passed ? '' : ` (needs 0 reads over ≥ ${MIN_UPTIME_DAYS} days)`}`
+        detail
+      })
+      // The evidence is only what the observer saw: the proof reads the live catalog again.
+      const coveredBy = (c.evidence as { covered_by?: unknown }).covered_by
+      if (typeof coveredBy === 'string' && coveredBy) {
+        if (!IDENT.test(coveredBy)) return refused('not a plain covering index name')
+        return (await deps.indexExists(table, coveredBy))
+          ? usage(true, `strict prefix of ${coveredBy}`)
+          : usage(false, `the covering index ${coveredBy} no longer exists`)
       }
+      let live: { reads: number; uptime_days: number | null }
+      try {
+        live = await deps.indexUsageNow(table, index)
+      } catch (err) {
+        return errorRefusal('could not read the index usage', err)
+      }
+      const days = live.uptime_days == null ? null : Math.floor(live.uptime_days)
+      const passed = live.reads === 0 && days != null && days >= MIN_UPTIME_DAYS
+      return usage(
+        passed,
+        `${live.reads} reads over ${days ?? 'unknown'} days of uptime${passed ? '' : ` (needs 0 reads over ≥ ${MIN_UPTIME_DAYS} days)`}`,
+        { reads: live.reads, uptime_days: days }
+      )
     }
     case 'proc_rewrite': {
       if (c.apply.type !== 'proc_body' || c.undo.type !== 'proc_body')
