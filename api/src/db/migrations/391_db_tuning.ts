@@ -64,4 +64,8 @@ export async function down(knex: Knex): Promise<void> {
     await knex.schema.dropTable('nivaro_tuning_param_sets')
   if (await knex.schema.hasTable('nivaro_tuning_proposals'))
     await knex.schema.dropTable('nivaro_tuning_proposals')
+  if (await knex.schema.hasColumn('nivaro_settings', 'db_tuning'))
+    await knex.schema.alterTable('nivaro_settings', (t) => {
+      t.dropColumn('db_tuning')
+    })
 }
