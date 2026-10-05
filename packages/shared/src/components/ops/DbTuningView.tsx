@@ -641,12 +641,16 @@ function SettingsCard({
     aiRewrites !== s.ai_rewrites ||
     NUM_FIELDS.some(([k]) => nums[k] !== String(s[k]))
   const save = useMutation({
+    // only what changed here: `s` is this instance's effective settings, overrides included,
+    // and an unchanged value sent back would land in the shared row
     mutationFn: () =>
       client.request(
         patch('/db-tuning/settings', {
-          enabled,
-          ai_rewrites: aiRewrites,
-          ...Object.fromEntries(NUM_FIELDS.map(([k]) => [k, Number(nums[k])]))
+          ...(enabled !== s.enabled ? { enabled } : {}),
+          ...(aiRewrites !== s.ai_rewrites ? { ai_rewrites: aiRewrites } : {}),
+          ...Object.fromEntries(
+            NUM_FIELDS.filter(([k]) => nums[k] !== String(s[k])).map(([k]) => [k, Number(nums[k])])
+          )
         })
       ),
     onSuccess: () => {

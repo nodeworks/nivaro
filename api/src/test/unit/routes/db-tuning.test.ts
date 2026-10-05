@@ -392,21 +392,57 @@ describe('db-tuning routes', () => {
     expect(bustTuningSettings).not.toHaveBeenCalled()
   })
 
-  it('PATCH settings merges onto the current settings, writes the column and busts the cache', async () => {
+  /** nivaro_settings id 1 as stored: `first` reads the raw column, `update` writes it. */
+  const settingsRow = (stored: unknown) => {
     const update = vi.fn(async () => 1)
-    const where = vi.fn(() => ({ update }))
+    const first = vi.fn(async () => ({ db_tuning: stored }))
+    const where = vi.fn(() => ({ update, first }))
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue({ where })
+    return { update, first }
+  }
+
+  it('PATCH settings merges onto the stored settings, writes the column and busts the cache', async () => {
+    const { update } = settingsRow(JSON.stringify({ enabled: true, regression_pct: 40 }))
     const res = await buildApp().inject({
       method: 'PATCH',
       url: '/db-tuning/settings',
       payload: { watch_days: 3 }
     })
     expect(res.statusCode).toBe(200)
-    expect(res.json().data).toEqual({ ...TUNING_DEFAULTS, enabled: true, watch_days: 3 })
-    expect(update).toHaveBeenCalledWith({
-      db_tuning: JSON.stringify({ ...TUNING_DEFAULTS, enabled: true, watch_days: 3 })
-    })
+    const want = { ...TUNING_DEFAULTS, enabled: true, regression_pct: 40, watch_days: 3 }
+    expect(res.json().data).toEqual(want)
+    expect(update).toHaveBeenCalledWith({ db_tuning: JSON.stringify(want) })
     expect(bustTuningSettings).toHaveBeenCalled()
+  })
+
+  it('PATCH settings never copies an instance override into the shared row', async () => {
+    // this instance runs with db_tuning.enabled overridden on; the shared row says off
+    vi.mocked(readTuningSettings).mockResolvedValue({ ...TUNING_DEFAULTS, enabled: true })
+    const { update } = settingsRow(JSON.stringify({ enabled: false }))
+    const res = await buildApp().inject({
+      method: 'PATCH',
+      url: '/db-tuning/settings',
+      payload: { watch_days: 3 }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(update).toHaveBeenCalledWith({
+      db_tuning: JSON.stringify({ ...TUNING_DEFAULTS, enabled: false, watch_days: 3 })
+    })
+  })
+
+  it('PATCH settings reads an unset, unparseable or invalid stored value as the defaults', async () => {
+    for (const stored of [null, '', '{not json', '[1]', JSON.stringify({ watch_days: 99 })]) {
+      const { update } = settingsRow(stored)
+      const res = await buildApp().inject({
+        method: 'PATCH',
+        url: '/db-tuning/settings',
+        payload: { regression_pct: 30 }
+      })
+      expect(res.statusCode).toBe(200)
+      expect(update).toHaveBeenCalledWith({
+        db_tuning: JSON.stringify({ ...TUNING_DEFAULTS, regression_pct: 30 })
+      })
+    }
   })
 
   it('GET overview rolls up counts by status and kind with the observers', async () => {

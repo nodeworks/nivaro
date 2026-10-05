@@ -16,6 +16,7 @@ import { listTuningObservers } from '../services/db-tuning/observers/registry.js
 import { prove } from '../services/db-tuning/proof.js'
 import {
   bustTuningSettings,
+  readStoredTuningSettings,
   readTuningSettings,
   validateTuningSettings
 } from '../services/db-tuning/settings.js'
@@ -241,10 +242,10 @@ export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
   app.get('/settings', async () => ({ data: await readTuningSettings() }))
 
   app.patch<{ Body: Record<string, unknown> | null }>('/settings', async (req, reply) => {
-    const merged = { ...(await readTuningSettings()), ...(req.body ?? {}) }
+    const body = req.body ?? {}
     // the validator stops at the first bad key; ask it one key at a time to name them all
     const problems: string[] = []
-    for (const [k, v] of Object.entries(merged)) {
+    for (const [k, v] of Object.entries(body)) {
       try {
         validateTuningSettings({ [k]: v })
       } catch (err) {
@@ -252,7 +253,8 @@ export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
       }
     }
     if (problems.length) return reply.code(400).send({ error: problems.join('; '), problems })
-    const next = validateTuningSettings(merged)
+    // onto the shared row as stored: the effective settings carry this instance's overrides
+    const next = validateTuningSettings({ ...(await readStoredTuningSettings()), ...body })
     await db('nivaro_settings')
       .where('id', 1)
       .update({ db_tuning: JSON.stringify(next) })

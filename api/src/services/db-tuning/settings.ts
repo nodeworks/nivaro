@@ -85,6 +85,37 @@ export async function readTuningSettings(): Promise<TuningSettings> {
   return value
 }
 
+/**
+ * The shared row's `db_tuning` exactly as stored — no instance override overlaid — keeping only
+ * known keys whose value is valid (a bad one reads as its default). What a settings change is
+ * merged onto, so an override on this instance is never copied into the shared row.
+ */
+export async function readStoredTuningSettings(): Promise<Partial<TuningSettings>> {
+  const row = (await db('nivaro_settings').where('id', 1).first('db_tuning')) as
+    | { db_tuning?: unknown }
+    | undefined
+  let parsed: unknown = row?.db_tuning ?? null
+  if (typeof parsed === 'string') {
+    try {
+      parsed = parsed ? JSON.parse(parsed) : null
+    } catch {
+      parsed = null
+    }
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!(k in TUNING_DEFAULTS)) continue
+    try {
+      validateTuningSettings({ [k]: v })
+      out[k] = v
+    } catch {
+      // an invalid stored value reads as its default
+    }
+  }
+  return out as Partial<TuningSettings>
+}
+
 export function bustTuningSettings(): void {
   cache = null
 }

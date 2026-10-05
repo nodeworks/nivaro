@@ -84,6 +84,7 @@ function mockClient(
       return { data: rows.find((r) => cmd._path.endsWith(`/${r.id}`)) }
     if (cmd._method === 'POST' && posts[cmd._path]) return posts[cmd._path](cmd._body)
     if (cmd._method === 'POST') return { data: {} }
+    if (cmd._method === 'PATCH' && cmd._path === '/db-tuning/settings') return { data: {} }
     throw new Error(`unexpected ${cmd._method} ${cmd._path}`)
   })
   return { client: { request } as unknown as NivaroClient, request }
@@ -207,6 +208,25 @@ describe('DbTuningView', () => {
         /re-observed tonight/
       )
     )
+  })
+
+  it('Save sends only the settings changed on the page (never the effective rest)', async () => {
+    const { client, request } = mockClient([])
+    renderView(client)
+    const input = await waitFor(() => {
+      const el = document.querySelector('[data-tuning-setting="watch_days"]')
+      expect(el).not.toBeNull()
+      return el as HTMLInputElement
+    })
+    fireEvent.change(input, { target: { value: '3' } })
+    fireEvent.click(document.querySelector('[data-tuning-settings-save]') as HTMLElement)
+    await waitFor(() =>
+      expect(
+        request.mock.calls.map(([c]) => c as Cmd).filter((c) => c._method === 'PATCH')
+      ).toHaveLength(1)
+    )
+    const sent = request.mock.calls.map(([c]) => c as Cmd).find((c) => c._method === 'PATCH')
+    expect(sent?._body).toEqual({ watch_days: 3 })
   })
 
   it('dismiss without a note is blocked before any request', async () => {
