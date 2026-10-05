@@ -1051,6 +1051,20 @@ describe('rollbackProposal', () => {
     expect(m.rows.get('x')?.status).toBe('failed')
     expect(String(m.rows.get('x')?.rollback_reason)).toMatch(/rollback refused: the index changed/)
   })
+  it('rolls back a rewrite whose live text is what Apply ran (the CREATE OR ALTER header)', async () => {
+    m.rows.set('x', { ...procRow({ status: 'watching' }) })
+    // sys.sql_modules keeps the text Apply sent, header rewritten
+    m.procBody.mockImplementation(async () => 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 2')
+    const out = await rollbackProposal('x', { userId: null, reason: 'r', app: null })
+    expect(out.status).toBe('rolled_back')
+    expect(m.runLongSql).toHaveBeenCalledWith('CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 1')
+  })
+  it('applies a rewrite against a live body stored under a rewritten header', async () => {
+    m.rows.set('x', { ...procRow() })
+    m.procBody.mockImplementation(async () => 'CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 1')
+    const out = await applyProposal('x', { userId: 'u', dbaOk: false, app: {} as never })
+    expect(out.status).toBe('watching')
+  })
   it('a proc edited since the apply is not clobbered: failed + 409 STALE, nothing runs', async () => {
     m.rows.set('x', { ...procRow({ status: 'watching' }) })
     m.procBody.mockImplementation(async () => 'CREATE PROCEDURE [dbo].[p] AS SELECT 3')

@@ -276,9 +276,28 @@ export function judgeTiming(
   }
 }
 
-/** Whitespace-insensitive identity of a body. */
-export const bodyHash = (body: string): string =>
-  createHash('sha1').update(body.replace(/\s+/g, ' ').trim()).digest('hex')
+const HEADER_NAME = String.raw`(?:\[[^\]]+\]|[A-Za-z_][\w#@$]*)`
+/** Leading comments, then `CREATE [OR ALTER] | ALTER PROC[EDURE] [schema.]name`. */
+const PROC_HEADER = new RegExp(
+  String.raw`^((?:\s|--[^\n]*\n|\/\*[\s\S]*?\*\/)*)(?:CREATE(?:\s+OR\s+ALTER)?|ALTER)\s+PROC(?:EDURE)?\s+(?:(${HEADER_NAME})\s*\.\s*)?(${HEADER_NAME})(?=[\s(;]|$)`,
+  'i'
+)
+const unquote = (part: string): string => part.replace(/^\[|\]$/g, '').toLowerCase()
+
+/**
+ * Whitespace-insensitive identity of a body, header included only as the procedure it names:
+ * `CREATE PROC dbo.x`, `ALTER PROCEDURE [x]` and the `CREATE OR ALTER PROCEDURE [dbo].[x]` Apply
+ * runs (and SQL Server then stores) all hash the same, so what was proposed still matches what
+ * is live after an apply. Every hasher in database tuning goes through this.
+ */
+export const bodyHash = (body: string): string => {
+  const normal = body.replace(
+    PROC_HEADER,
+    (_all, lead: string, schema: string | undefined, name: string) =>
+      `${lead}CREATE PROCEDURE ${schema ? unquote(schema) : 'dbo'}.${unquote(name)}`
+  )
+  return createHash('sha1').update(normal.replace(/\s+/g, ' ').trim()).digest('hex')
+}
 
 type Runner = (sql: string) => Promise<Array<Record<string, unknown>>>
 

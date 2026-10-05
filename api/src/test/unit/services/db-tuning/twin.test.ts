@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../../db/index.js'
 import {
+  bodyHash,
   execStatement,
   judgeTiming,
   provability,
@@ -125,6 +126,22 @@ describe('renameProcHeader / execStatement', () => {
       renameProcHeader('ALTER PROC [rpt_spend]\nAS\nSELECT 1', 'rpt_spend', 'rpt_spend__tune')
     ).toMatch(/^CREATE OR ALTER PROCEDURE \[dbo\]\.\[rpt_spend__tune\]\nAS/)
     expect(renameProcHeader('SELECT 1', 'rpt_spend', 'x')).toBeNull()
+  })
+  it('bodyHash reads past the header: the body Apply runs hashes as the body it was proposed as', () => {
+    const body = '-- spend report\nCREATE PROCEDURE dbo.rpt_spend @Zone INT AS SELECT 1'
+    const ran = renameProcHeader(body, 'rpt_spend', 'rpt_spend') ?? ''
+    expect(ran).toMatch(/CREATE OR ALTER PROCEDURE \[dbo\]\.\[rpt_spend\]/)
+    expect(bodyHash(ran)).toBe(bodyHash(body))
+    for (const header of [
+      'create proc rpt_spend',
+      'ALTER PROCEDURE [dbo].[RPT_SPEND]',
+      'CREATE OR ALTER PROC [rpt_spend]',
+      'CREATE   PROCEDURE\n dbo . rpt_spend'
+    ])
+      expect(bodyHash(`-- spend report\n${header} @Zone INT AS SELECT 1`)).toBe(bodyHash(body))
+    // the body itself still counts
+    expect(bodyHash(`${body} WHERE 1 = 0`)).not.toBe(bodyHash(body))
+    expect(bodyHash(body.replace('rpt_spend', 'rpt_other'))).not.toBe(bodyHash(body))
   })
   it('binds params as named literals', () => {
     expect(execStatement('rpt_spend', { Zone: "Zone 1's", N: 3, B: true, X: null })).toBe(
