@@ -10,6 +10,7 @@ export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
+export * from './sections/db-tuning.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
 export * from './sections/extensions-system.js'
@@ -126,6 +127,7 @@ import {
   timeTravelDocs,
   trashDocs
 } from './sections/data-safety.js'
+import { dbTuning } from './sections/db-tuning.js'
 import { detailSheets } from './sections/detail-sheets.js'
 import {
   devexCdcStream,
@@ -812,6 +814,7 @@ export const navSections: NavGroup[] = [
       sessionReplayDocs,
       obsHealthDashboard,
       dbHealthDocs,
+      dbTuning,
       opsConsoleDocs,
       deploysVersionsDocs,
       instanceOverridesDocs,
