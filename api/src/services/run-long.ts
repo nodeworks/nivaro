@@ -43,6 +43,12 @@ export interface RunLongOptions {
 export interface LongConnection {
   /** Run one batch on the pinned connection; resolves with its rows. */
   run<T = Record<string, unknown>>(sql: string, timeoutMs?: number): Promise<T[]>
+  /**
+   * The session can no longer be trusted (a SET … OFF failed, a ROLLBACK did not run): close
+   * it when `fn` returns instead of handing it back to the pool. The server rolls back whatever
+   * it still holds; the pool sees it disconnected and destroys it. No-op on other dialects.
+   */
+  discard(): void
 }
 
 interface TediousColumn {
@@ -116,28 +122,68 @@ export async function withLongConnection<R>(
         async run<T>(sql: string) {
           const res = await trx.raw(sql)
           return (Array.isArray(res) ? res : (res?.rows ?? [])) as T[]
-        }
+        },
+        discard() {}
       })
     )
   }
 
   const client = clientOf(knex)
   const driver = client._driver()
-  const conn = (await client.acquireConnection()) as { execSqlBatch(r: unknown): void }
+  const conn = (await client.acquireConnection()) as TediousConnection
+  let discarded = false
   try {
     return await fn({
       run: <T>(sql: string, timeoutMs?: number) =>
-        execBatch<T>(driver, conn, sql, timeoutMs ?? fallback)
+        execBatch<T>(driver, conn, sql, timeoutMs ?? fallback),
+      discard: () => {
+        discarded = true
+      }
     })
   } finally {
-    // A batch that threw between BEGIN TRAN and COMMIT would hand the pool a
-    // connection still inside a transaction, holding its locks for the next
-    // caller. Never let that leave this function.
-    await execBatch(driver, conn, 'IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION', 30_000).catch(
-      () => undefined
-    )
+    if (discarded) {
+      await closeConnection(conn)
+    } else {
+      // A batch that threw between BEGIN TRAN and COMMIT would hand the pool a
+      // connection still inside a transaction, holding its locks for the next
+      // caller. Never let that leave this function.
+      await execBatch(driver, conn, 'IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION', 30_000).catch(
+        () => undefined
+      )
+    }
     await client.releaseConnection(conn)
   }
+}
+
+interface TediousConnection {
+  execSqlBatch(r: unknown): void
+  close(): void
+  once(ev: 'end', h: () => void): unknown
+  closed?: boolean
+  connected?: boolean
+}
+
+/**
+ * Close the socket now, so the server ends the session (and its transaction, locks and SET
+ * state) at once, and mark it disconnected: knex's pool validation then destroys it rather
+ * than handing it to the next caller.
+ */
+async function closeConnection(conn: TediousConnection): Promise<void> {
+  conn.connected = false
+  if (conn.closed) return
+  await new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, 5_000)
+    conn.once('end', () => {
+      clearTimeout(timer)
+      resolve()
+    })
+    try {
+      conn.close()
+    } catch {
+      clearTimeout(timer)
+      resolve()
+    }
+  })
 }
 
 /** One statement with its own request timeout. Resolves with its rows. */

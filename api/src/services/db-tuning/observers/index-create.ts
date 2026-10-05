@@ -103,7 +103,13 @@ interface Merged {
   include: Set<string>
   estimate: number
   live?: Suggestion['live']
+  /** The best DMV row's improvement_measure; absent when SQL Server never asked. */
+  dmvImprovement?: number
 }
+
+/** SQL Server's improvement_measure for a missing-index row (impact is a percentage). */
+export const dmvImprovement = (m: MissingIndex): number =>
+  m.avg_cost * m.avg_impact * (m.seeks + m.scans)
 
 const lower = (cols: string[]) => cols.map((c) => c.toLowerCase())
 /** True when `keys` equals, or is a leading prefix of, `existing` (case-insensitive). */
@@ -119,7 +125,7 @@ export function observeIndexCreate(ev: IndexCreateEvidence): Candidate[] {
     source: string,
     reason: string,
     estimate: number,
-    extra: { live?: Suggestion['live']; include?: string[] } = {}
+    extra: { live?: Suggestion['live']; include?: string[]; dmvImprovement?: number } = {}
   ) => {
     if (!IDENT.test(table) || /^nivaro_/i.test(table)) return
     if (columns.length === 0 || columns.length > 2 || !columns.every((c) => IDENT.test(c))) return
@@ -137,6 +143,8 @@ export function observeIndexCreate(ev: IndexCreateEvidence): Candidate[] {
     cur.reasons.push(reason)
     cur.estimate = Math.max(cur.estimate, estimate)
     if (extra.live) cur.live = extra.live
+    if (extra.dmvImprovement != null)
+      cur.dmvImprovement = Math.max(cur.dmvImprovement ?? 0, extra.dmvImprovement)
     for (const c of extra.include ?? []) cur.include.add(c)
     merged.set(key, cur)
   }
@@ -156,7 +164,7 @@ export function observeIndexCreate(ev: IndexCreateEvidence): Candidate[] {
       'dmv',
       `SQL Server missing-index: ${uses} uses, ${m.avg_impact.toFixed(0)}% estimated impact`,
       est,
-      { include: m.include }
+      { include: m.include, dmvImprovement: dmvImprovement(m) }
     )
   }
   for (const p of ev.planMissing)
@@ -189,7 +197,8 @@ export function observeIndexCreate(ev: IndexCreateEvidence): Candidate[] {
         sources: [...m.sources],
         reasons: m.reasons,
         live: m.live ?? null,
-        requested_include: [...m.include]
+        requested_include: [...m.include],
+        ...(m.dmvImprovement != null ? { dmv_improvement: Math.round(m.dmvImprovement) } : {})
       },
       estimate_ms_per_day: Math.round(m.estimate),
       risk: KIND_RISK.index_create,

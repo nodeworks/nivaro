@@ -90,6 +90,25 @@ describe('observeIndexCreate', () => {
     })
     expect(out[0].estimate_ms_per_day).toBeGreaterThan(0)
     expect(out[0].evidence.sources as string[]).toEqual(expect.arrayContaining(['config', 'dmv']))
+    // improvement_measure = avg_total_user_cost × avg_user_impact × (seeks + scans)
+    expect(out[0].evidence.dmv_improvement).toBe(12.5 * 80 * 400)
+  })
+  it('carries no DMV improvement on a candidate SQL Server never asked for', () => {
+    const out = observeIndexCreate({
+      ...base,
+      config: [
+        {
+          table: 'workflows',
+          column: 'owner',
+          rows: 85000,
+          reasons: ['M2O foreign key'],
+          create_sql: ''
+        }
+      ],
+      missing: []
+    })
+    expect(out).toHaveLength(1)
+    expect(out[0].evidence).not.toHaveProperty('dmv_improvement')
   })
   it('never proposes three or more key columns', () => {
     const out = observeIndexCreate({

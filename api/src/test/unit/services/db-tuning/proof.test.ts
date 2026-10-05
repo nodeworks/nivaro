@@ -329,37 +329,210 @@ describe('prove — proc_rewrite catalog reads', () => {
   })
 })
 
+describe('prove — every branch passes and fails', () => {
+  const noTwin = async () => passing
+  const index = (
+    hypothetical: Awaited<ReturnType<ProofDeps['hypotheticalCosts']>>,
+    evidence: Record<string, unknown> = idx.evidence
+  ) =>
+    prove(
+      { ...idx, evidence },
+      {
+        procTimeoutMs: 1,
+        deps: {
+          statementsTouching: async () => [
+            { text: 'select', execution_count: 1, avg_elapsed_ms: 5, total_elapsed_ms: 5 }
+          ],
+          hypotheticalCosts: async () => hypothetical,
+          indexExists: async () => false,
+          twin: noTwin
+        }
+      }
+    )
+
+  it('hypothetical fails below a 20% drop', async () => {
+    const r = await index([{ before: 10, after: 9 }])
+    expect(r).toMatchObject({ passed: false, method: 'hypothetical' })
+    expect(r.detail).toMatch(/−10%/)
+  })
+  it('hypothetical fails when one statement gets more than 1% worse', async () => {
+    const r = await index([
+      { before: 10, after: 5 },
+      { before: 10, after: 10.2 }
+    ])
+    expect(r).toMatchObject({ passed: false, method: 'hypothetical' })
+    expect(r.detail).toMatch(/one got worse/)
+  })
+  it('hypothetical fails, naming the error, when the plan run failed part-way', async () => {
+    const r = await index({ error: 'SET AUTOPILOT OFF failed' })
+    expect(r).toMatchObject({ passed: false, method: 'hypothetical' })
+    expect(r.detail).toBe('hypothetical plan failed: SET AUTOPILOT OFF failed')
+  })
+  it('dmv-estimate fails below an improvement measure of 10, live reads or not', async () => {
+    const r = await index(null, {
+      sources: ['dmv', 'config'],
+      dmv_improvement: 9,
+      live: { filter: 40, sort: 0 }
+    })
+    expect(r).toMatchObject({ passed: false, method: 'dmv-estimate' })
+    expect(r.detail).toMatch(/is 9 \(needs ≥ 10\)/)
+  })
+  it('dmv-estimate passes a candidate SQL Server never asked for on observed reads', async () => {
+    const live = await index(null, { sources: ['config'], live: { filter: 3, sort: 1 } })
+    expect(live).toMatchObject({ passed: true, method: 'dmv-estimate' })
+    const plan = await index(null, { sources: ['plan'], live: null })
+    expect(plan).toMatchObject({ passed: true, method: 'dmv-estimate' })
+  })
+  it('dmv-estimate fails a config-only candidate with no observed traffic', async () => {
+    const r = await index(null, { sources: ['config'], live: null })
+    expect(r).toEqual({
+      passed: false,
+      method: 'dmv-estimate',
+      before: {},
+      after: {},
+      detail: 'no observed traffic'
+    })
+  })
+
+  const drop = (evidence: Record<string, unknown>): Candidate => ({
+    ...idx,
+    kind: 'index_drop',
+    target: 'workflows.idx_workflows_owner',
+    evidence,
+    apply: { type: 'sql', statements: ['DROP INDEX [idx_workflows_owner] ON [workflows]'] },
+    undo: { type: 'sql', statements: ['CREATE NONCLUSTERED INDEX …'] }
+  })
+  const dropDeps = (exists: boolean): Partial<ProofDeps> => ({ indexExists: async () => exists })
+  it('index_drop passes on zero reads over 30+ days, or a strict prefix', async () => {
+    const unused = await prove(drop({ reads: 0, uptime_days: 31, covered_by: null }), {
+      procTimeoutMs: 1,
+      deps: dropDeps(true)
+    })
+    expect(unused).toMatchObject({ passed: true, method: 'usage-stats' })
+    const prefix = await prove(drop({ reads: 400, uptime_days: 31, covered_by: 'idx_wide' }), {
+      procTimeoutMs: 1,
+      deps: dropDeps(true)
+    })
+    expect(prefix).toMatchObject({ passed: true, detail: 'strict prefix of idx_wide' })
+  })
+  it('index_drop fails with the actual reads when the index is read', async () => {
+    const r = await prove(drop({ reads: 5, uptime_days: 31, covered_by: null }), {
+      procTimeoutMs: 1,
+      deps: dropDeps(true)
+    })
+    expect(r).toMatchObject({ passed: false, method: 'usage-stats' })
+    expect(r.detail).toBe('5 reads over 31 days of uptime (needs 0 reads over ≥ 30 days)')
+  })
+  it('index_drop fails when the index no longer exists', async () => {
+    const r = await prove(drop({ reads: 0, uptime_days: 31, covered_by: null }), {
+      procTimeoutMs: 1,
+      deps: dropDeps(false)
+    })
+    expect(r).toMatchObject({ passed: false, detail: 'index no longer exists' })
+  })
+
+  const cache = (sources: number, estimate: number): Candidate => ({
+    ...idx,
+    kind: 'query_cache',
+    target: 'spend',
+    evidence: { freshness: { sources } },
+    estimate_ms_per_day: estimate,
+    apply: {
+      type: 'query_patch',
+      id: 1,
+      slug: 'spend',
+      patch: { cache_ttl: 600, warm_daily: false }
+    },
+    undo: { type: 'query_patch', id: 1, slug: 'spend', patch: { cache_ttl: 0, warm_daily: false } }
+  })
+  it('query_cache passes on resolved freshness and a ≥ 5 s/day saving', async () => {
+    const r = await prove(cache(2, 6000), { procTimeoutMs: 1 })
+    expect(r).toMatchObject({ passed: true, method: 'freshness' })
+  })
+  it('query_cache fails on unresolved freshness or a small saving', async () => {
+    expect((await prove(cache(0, 60_000), { procTimeoutMs: 1 })).passed).toBe(false)
+    expect((await prove(cache(2, 4999), { procTimeoutMs: 1 })).passed).toBe(false)
+  })
+  it('rollup_store fails when reads cost less than 3× the upkeep', async () => {
+    const c: Candidate = {
+      ...idx,
+      kind: 'rollup_store',
+      target: 'c.f',
+      evidence: { reads_per_day: 100, writes_per_day: 50, per_read_ms: 40, per_recalc_ms: 60 },
+      apply: { type: 'field_patch', collection: 'c', field: 'f', patch: { computed_store: true } },
+      undo: { type: 'field_patch', collection: 'c', field: 'f', patch: { computed_store: false } }
+    }
+    expect(await prove(c, { procTimeoutMs: 1 })).toMatchObject({
+      passed: false,
+      method: 'cost-model'
+    })
+  })
+  it('refuses, naming the error, when an evidence read throws', async () => {
+    const r = await prove(idx, {
+      procTimeoutMs: 1,
+      deps: {
+        indexExists: async () => false,
+        statementsTouching: async () => {
+          throw new Error('plan cache unreadable')
+        }
+      }
+    })
+    expect(r).toEqual({
+      passed: false,
+      method: 'refused',
+      before: {},
+      after: {},
+      detail: 'proof could not run: plan cache unreadable'
+    })
+  })
+})
+
 describe('hypotheticalCosts', () => {
   const PLAN = (cost: number) => [
     { 'Microsoft SQL Server 2005 XML Showplan': `<StmtSimple StatementSubTreeCost="${cost}" />` }
   ]
-  function fakeConnection(opts: { failOn?: RegExp; afterCost?: number } = {}) {
+  /**
+   * A session that behaves like SQL Server's modes: under SHOWPLAN_XML / AUTOPILOT a statement
+   * (a ROLLBACK, the closing @@TRANCOUNT read) is only planned, never executed. `failOn` throws
+   * before the statement takes effect, so a failing OFF leaves the mode on.
+   */
+  function fakeConnection(opts: { failOn?: RegExp; afterCost?: number; stuckTran?: boolean } = {}) {
     const sent: string[] = []
+    const timeouts = new Map<string, number | undefined>()
+    const discard = vi.fn()
     let showplan = false
     let autopilot = false
+    let tran = 0
     vi.mocked(withLongConnection).mockImplementation((async (fn: (c: unknown) => unknown) =>
       fn({
-        run: async (sql: string) => {
+        discard,
+        run: async (sql: string, timeoutMs?: number) => {
           sent.push(sql)
+          timeouts.set(sql, timeoutMs)
           if (opts.failOn?.test(sql)) throw new Error('boom')
           if (sql === 'SET SHOWPLAN_XML ON') showplan = true
           else if (sql === 'SET SHOWPLAN_XML OFF') showplan = false
           else if (sql === 'SET AUTOPILOT ON') autopilot = true
           else if (sql === 'SET AUTOPILOT OFF') autopilot = false
-          else if (/^SELECT/.test(sql)) {
-            if (showplan) return PLAN(10)
-            if (autopilot) return PLAN(opts.afterCost ?? 4)
+          else if (showplan || autopilot) {
+            if (/^SELECT \d|^SELECT \*/.test(sql))
+              return PLAN(showplan ? 10 : (opts.afterCost ?? 4))
+            return PLAN(0.1)
+          } else if (sql === 'BEGIN TRAN') tran++
+          else if (/ROLLBACK/.test(sql)) tran = opts.stuckTran ? tran : 0
+          else if (sql === 'SELECT @@TRANCOUNT AS n') return [{ n: tran }]
+          else if (/^SELECT/.test(sql))
             throw new Error('a statement ran outside SHOWPLAN / AUTOPILOT')
-          }
           return []
         }
       })) as never)
-    return sent
+    return { sent, timeouts, discard }
   }
   afterEach(() => vi.mocked(withLongConnection).mockReset())
+  const one = ['SELECT 1 FROM [workflows]']
 
   it('plans before, creates the hypothetical index in a transaction, plans after, rolls back', async () => {
-    const sent = fakeConnection()
+    const { sent, timeouts, discard } = fakeConnection()
     const r = await hypotheticalCosts(
       'workflows',
       ['project_type'],
@@ -374,28 +547,58 @@ describe('hypotheticalCosts', () => {
     expect(at(/^BEGIN TRAN$/)).toBeLessThan(
       at(/CREATE NONCLUSTERED INDEX \[hyp_workflows_project_type\]/)
     )
-    expect(sent.find((s) => /CREATE NONCLUSTERED/.test(s))).toMatch(/WITH STATISTICS_ONLY = -1$/)
+    const create = sent.find((s) => /CREATE NONCLUSTERED/.test(s)) ?? ''
+    expect(create).toMatch(/WITH STATISTICS_ONLY = -1$/)
+    expect(timeouts.get(create)).toBe(15_000)
     expect(at(/DBCC AUTOPILOT/)).toBeLessThan(at(/^SET AUTOPILOT ON$/))
     expect(at(/^SET AUTOPILOT OFF$/)).toBeLessThan(at(/ROLLBACK/))
-    expect(sent.at(-1)).toBe('SET LOCK_TIMEOUT -1')
+    expect(sent.slice(-2)).toEqual(['SET LOCK_TIMEOUT -1', 'SELECT @@TRANCOUNT AS n'])
+    expect(discard).not.toHaveBeenCalled()
   })
-  it('rolls back when DBCC AUTOPILOT fails, and returns null', async () => {
-    const sent = fakeConnection({ failOn: /DBCC AUTOPILOT/ })
-    const r = await hypotheticalCosts('workflows', ['project_type'], ['SELECT 1 FROM [workflows]'])
-    expect(r).toBeNull()
+  it('is unavailable (null) when SQL Server refuses the hypothetical index, rolled back cleanly', async () => {
+    for (const failOn of [/DBCC AUTOPILOT/, /CREATE NONCLUSTERED/]) {
+      const { sent, discard } = fakeConnection({ failOn })
+      expect(await hypotheticalCosts('workflows', ['project_type'], one)).toBeNull()
+      expect(sent).toContain('IF @@TRANCOUNT > 0 ROLLBACK')
+      expect(sent).not.toContain('SET AUTOPILOT ON')
+      expect(discard).not.toHaveBeenCalled()
+    }
+  })
+  it('discards the connection when SET AUTOPILOT OFF fails (the ROLLBACK was only planned)', async () => {
+    const { sent, discard } = fakeConnection({ failOn: /^SET AUTOPILOT OFF$/ })
+    const r = await hypotheticalCosts('workflows', ['project_type'], one)
+    expect(r).toEqual({ error: 'boom' })
     expect(sent).toContain('IF @@TRANCOUNT > 0 ROLLBACK')
-    expect(sent).not.toContain('SET AUTOPILOT ON')
+    expect(discard).toHaveBeenCalledOnce()
   })
-  it('switches AUTOPILOT off before rolling back when an after-plan cannot be read', async () => {
-    const sent = fakeConnection({ afterCost: Number.NaN })
-    const r = await hypotheticalCosts('workflows', ['project_type'], ['SELECT 1 FROM [workflows]'])
-    expect(r).toBeNull()
+  it('discards the connection when SET SHOWPLAN_XML OFF fails, before any transaction', async () => {
+    const { sent, discard } = fakeConnection({ failOn: /^SET SHOWPLAN_XML OFF$/ })
+    expect(await hypotheticalCosts('workflows', ['project_type'], one)).toEqual({ error: 'boom' })
+    expect(sent).not.toContain('BEGIN TRAN')
+    expect(discard).toHaveBeenCalledOnce()
+  })
+  it('discards the connection when the ROLLBACK fails', async () => {
+    const { discard } = fakeConnection({ failOn: /ROLLBACK/ })
+    expect(await hypotheticalCosts('workflows', ['project_type'], one)).toEqual({ error: 'boom' })
+    expect(discard).toHaveBeenCalledOnce()
+  })
+  it('discards the connection when @@TRANCOUNT does not read 0 afterwards', async () => {
+    const { discard } = fakeConnection({ stuckTran: true })
+    const r = await hypotheticalCosts('workflows', ['project_type'], one)
+    expect(r).toEqual({ error: 'the session did not come back clean after the hypothetical plan' })
+    expect(discard).toHaveBeenCalledOnce()
+  })
+  it('fails with an error, AUTOPILOT off before the ROLLBACK, when an after-plan has no cost', async () => {
+    const { sent, discard } = fakeConnection({ afterCost: Number.NaN })
+    const r = await hypotheticalCosts('workflows', ['project_type'], one)
+    expect(r).toEqual({ error: 'an estimated plan came back without a cost' })
     const off = sent.indexOf('SET AUTOPILOT OFF')
     expect(off).toBeGreaterThan(-1)
     expect(sent.indexOf('IF @@TRANCOUNT > 0 ROLLBACK')).toBeGreaterThan(off)
+    expect(discard).toHaveBeenCalledOnce()
   })
   it('skips a statement that does not compile before the index is created', async () => {
-    const sent = fakeConnection({ failOn: /@p0/ })
+    const { sent, discard } = fakeConnection({ failOn: /@p0/ })
     const r = await hypotheticalCosts(
       'workflows',
       ['project_type'],
@@ -403,11 +606,80 @@ describe('hypotheticalCosts', () => {
     )
     expect(r).toEqual([{ before: 10, after: 4 }])
     expect(sent.filter((s) => /@p0/.test(s))).toHaveLength(1)
+    expect(discard).not.toHaveBeenCalled()
   })
   it('never opens a connection for non-identifiers or writes only', async () => {
     fakeConnection()
     expect(await hypotheticalCosts('a]b', ['c'], ['SELECT 1'])).toBeNull()
     expect(await hypotheticalCosts('t', ['c'], ['DELETE FROM [t] WHERE [c] = 1'])).toBeNull()
     expect(withLongConnection).not.toHaveBeenCalled()
+  })
+})
+
+describe('withLongConnection — discard', () => {
+  /** A tedious-shaped connection and a knex-shaped client around it. */
+  function fakeKnex() {
+    const sent: string[] = []
+    const events: string[] = []
+    let onEnd: (() => void) | undefined
+    const conn = {
+      connected: true,
+      closed: false,
+      execSqlBatch(req: { sql: string; handlers: Record<string, () => void> }) {
+        sent.push(req.sql)
+        queueMicrotask(() => req.handlers.requestCompleted?.())
+      },
+      once(_ev: 'end', h: () => void) {
+        onEnd = h
+      },
+      close() {
+        events.push('close')
+        conn.closed = true
+        queueMicrotask(() => onEnd?.())
+      }
+    }
+    class Request {
+      handlers: Record<string, () => void> = {}
+      constructor(public sql: string) {}
+      on(ev: string, h: () => void) {
+        this.handlers[ev] = h
+      }
+      once(ev: string, h: () => void) {
+        this.handlers[ev] = h
+      }
+    }
+    const client = {
+      config: { client: 'mssql' },
+      _driver: () => ({ Request }),
+      acquireConnection: async () => conn,
+      releaseConnection: async (c: typeof conn) => {
+        events.push(`release connected=${c.connected}`)
+      }
+    }
+    return { knex: { client } as never, conn, sent, events }
+  }
+  it('closes a discarded connection before releasing it, marked disconnected, no ROLLBACK sent', async () => {
+    const { withLongConnection: real } = await vi.importActual<
+      typeof import('../../../../services/run-long.js')
+    >('../../../../services/run-long.js')
+    const { knex, sent, events } = fakeKnex()
+    await real(
+      async (c) => {
+        await c.run('SET AUTOPILOT ON')
+        c.discard()
+      },
+      { knex }
+    )
+    expect(sent).toEqual(['SET AUTOPILOT ON'])
+    expect(events).toEqual(['close', 'release connected=false'])
+  })
+  it('rolls back and releases a connection that was not discarded', async () => {
+    const { withLongConnection: real } = await vi.importActual<
+      typeof import('../../../../services/run-long.js')
+    >('../../../../services/run-long.js')
+    const { knex, sent, events } = fakeKnex()
+    await real(async (c) => c.run('SELECT 1'), { knex })
+    expect(sent).toEqual(['SELECT 1', 'IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION'])
+    expect(events).toEqual(['release connected=true'])
   })
 })

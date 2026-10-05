@@ -15,13 +15,20 @@ import { type Candidate, IDENT, type ProofResult } from './types.js'
  * by its resolved freshness. Nothing here writes a real object.
  */
 
+/**
+ * Per-statement estimated costs without and with the hypothetical index; null when the path is
+ * unavailable (nothing planned, or SQL Server refused the hypothetical index) — the caller falls
+ * back to the DMV estimate; `error` when it failed part-way, which fails the proof.
+ */
+export type HypotheticalCosts = Array<{ before: number; after: number }> | null | { error: string }
+
 export interface ProofDeps {
   statementsTouching: (table: string, column: string, top?: number) => Promise<StatementStat[]>
   hypotheticalCosts: (
     table: string,
     columns: string[],
     statements: string[]
-  ) => Promise<Array<{ before: number; after: number }> | null>
+  ) => Promise<HypotheticalCosts>
   indexExists: (table: string, name: string) => Promise<boolean>
   twin: typeof proveProcedureRewrite
   /** Each callee's sys.sql_modules definition (null when not found), keyed `schema.name` as asked. */
@@ -49,21 +56,28 @@ function costOf(rows: Array<Record<string, unknown>>): number | null {
 
 const READS = /^\s*(?:SELECT|WITH)\b/i
 
+/** The hypothetical CREATE holds a schema lock on the table while it samples statistics. */
+const HYPOTHETICAL_CREATE_MS = 15_000
+
 /**
  * Hypothetical index on ONE pinned connection. Each statement's estimated plan is read first
  * (SHOWPLAN_XML, which executes nothing); then, inside a transaction, the index is created with
  * STATISTICS_ONLY, DBCC AUTOPILOT points the optimizer at it, SET AUTOPILOT ON plans each
- * statement again, and everything is rolled back in `finally`. SET SHOWPLAN_XML / AUTOPILOT
- * must be alone in their batch, hence the separate `run` calls; AUTOPILOT is switched off before
- * the ROLLBACK, which it would otherwise only plan. Only plain reads are planned. Any failure
- * (permissions, dialect, an after-plan that cannot be read) → null → the caller falls back to
- * the DMV estimate.
+ * statement again, and everything is rolled back. SET SHOWPLAN_XML / AUTOPILOT must be alone in
+ * their batch, hence the separate `run` calls; AUTOPILOT is switched off before the ROLLBACK,
+ * which it would otherwise only plan. Only plain reads are planned.
+ *
+ * A session left in a plan mode would answer the next pool caller with plans instead of rows,
+ * and an open transaction would hold the schema lock: so any failure while a mode is on, of a
+ * mode's OFF, of the ROLLBACK, or a closing `SELECT @@TRANCOUNT` that does not read 0 discards
+ * the connection and returns `error`. SQL Server refusing the hypothetical index itself (CREATE
+ * or DBCC, cleanly rolled back) is "unavailable" → null.
  */
 export async function hypotheticalCosts(
   table: string,
   columns: string[],
   statements: string[]
-): Promise<Array<{ before: number; after: number }> | null> {
+): Promise<HypotheticalCosts> {
   if (!isMssqlDb() || !IDENT.test(table)) return null
   if (!columns.length || !columns.every((c) => IDENT.test(c))) return null
   // SHOWPLAN and AUTOPILOT execute nothing; a statement that cannot write needs no such trust.
@@ -74,58 +88,87 @@ export async function hypotheticalCosts(
   try {
     return await withLongConnection(
       async (conn) => {
-        const estimated = async (sql: string): Promise<number | null> => {
-          await conn.run('SET SHOWPLAN_XML ON')
+        /** `body` under SET <mode> ON; anything that throws here leaves the mode unknown. */
+        const inMode = async <T>(mode: string, body: () => Promise<T>): Promise<T> => {
+          await conn.run(`SET ${mode} ON`)
           try {
-            // a parameterised statement (@p0 undeclared) does not compile: that one is skipped
-            return costOf(await conn.run<Record<string, unknown>>(sql))
-          } catch {
-            return null
+            return await body()
           } finally {
-            await conn.run('SET SHOWPLAN_XML OFF')
+            await conn.run(`SET ${mode} OFF`)
           }
         }
-        const before: Array<number | null> = []
-        for (const s of reads) before.push(await estimated(s))
-        if (!before.some((b) => b != null)) return null
-        // CREATE INDEX takes a schema lock: never queue behind a long reader, holding others up.
-        await conn.run('SET LOCK_TIMEOUT 5000')
+        const plan = async (sql: string) => costOf(await conn.run<Record<string, unknown>>(sql))
+
+        const planned = async (): Promise<Array<{ before: number; after: number }> | null> => {
+          const before: Array<number | null> = []
+          for (const s of reads)
+            before.push(
+              // a parameterised statement (@p0 undeclared) does not compile: that one is skipped
+              await inMode('SHOWPLAN_XML', () => plan(s).catch(() => null))
+            )
+          if (!before.some((b) => b != null)) return null
+          // CREATE INDEX takes a schema lock: never queue behind a long reader, holding others up.
+          await conn.run('SET LOCK_TIMEOUT 5000')
+          let failure: unknown = null
+          let out: Array<{ before: number; after: number }> | null = null
+          try {
+            await conn.run('BEGIN TRAN')
+            const created = await conn
+              .run(
+                `CREATE NONCLUSTERED INDEX [${name}] ON [${table}] (${cols}) WITH STATISTICS_ONLY = -1`,
+                HYPOTHETICAL_CREATE_MS
+              )
+              .then(() =>
+                conn.run(
+                  `DECLARE @d int = DB_ID(), @o int = OBJECT_ID('[${table}]');
+                   DECLARE @i int = (SELECT index_id FROM sys.indexes WHERE object_id = @o AND name = '${name}');
+                   DBCC AUTOPILOT(0, @d, @o, @i) WITH NO_INFOMSGS`
+                )
+              )
+              .then(
+                () => true,
+                () => false
+              )
+            if (created)
+              out = await inMode('AUTOPILOT', async () => {
+                const pairs: Array<{ before: number; after: number }> = []
+                for (let i = 0; i < reads.length; i++) {
+                  const b = before[i]
+                  if (b == null) continue
+                  const a = await plan(reads[i])
+                  if (a == null) throw new Error('an estimated plan came back without a cost')
+                  pairs.push({ before: b, after: a })
+                }
+                return pairs
+              })
+          } catch (err) {
+            failure = err
+          }
+          for (const sql of ['IF @@TRANCOUNT > 0 ROLLBACK', 'SET LOCK_TIMEOUT -1'])
+            await conn.run(sql).catch((err) => {
+              failure ??= err
+            })
+          if (failure != null) throw failure
+          return out?.length ? out : null
+        }
+
+        let result: Array<{ before: number; after: number }> | null = null
         try {
-          await conn.run('BEGIN TRAN')
-          try {
-            await conn.run(
-              `CREATE NONCLUSTERED INDEX [${name}] ON [${table}] (${cols}) WITH STATISTICS_ONLY = -1`
-            )
-            await conn.run(
-              `DECLARE @d int = DB_ID(), @o int = OBJECT_ID('[${table}]');
-               DECLARE @i int = (SELECT index_id FROM sys.indexes WHERE object_id = @o AND name = '${name}');
-               DBCC AUTOPILOT(0, @d, @o, @i) WITH NO_INFOMSGS`
-            )
-            await conn.run('SET AUTOPILOT ON')
-            const out: Array<{ before: number; after: number }> = []
-            try {
-              for (let i = 0; i < reads.length; i++) {
-                const b = before[i]
-                if (b == null) continue
-                // an error here may have ended the transaction (and the index): trust nothing
-                const a = costOf(await conn.run<Record<string, unknown>>(reads[i]))
-                if (a == null) return null
-                out.push({ before: b, after: a })
-              }
-            } finally {
-              await conn.run('SET AUTOPILOT OFF')
-            }
-            return out.length ? out : null
-          } finally {
-            await conn.run('IF @@TRANCOUNT > 0 ROLLBACK').catch(() => undefined)
-          }
-        } finally {
-          await conn.run('SET LOCK_TIMEOUT -1').catch(() => undefined)
+          result = await planned()
+          // in a plan mode this comes back as a plan, not n; with a transaction open, n > 0
+          const check = await conn.run<{ n: unknown }>('SELECT @@TRANCOUNT AS n')
+          if (check.length !== 1 || Number(check[0].n) !== 0)
+            throw new Error('the session did not come back clean after the hypothetical plan')
+        } catch (err) {
+          conn.discard()
+          return { error: errText(err) }
         }
+        return result
       },
       { timeoutMs: 60_000 }
     )
   } catch {
+    // no connection at all: nothing ran
     return null
   }
 }
@@ -274,11 +317,62 @@ async function procPreflight(
   return null
 }
 
+/** SQL Server's improvement_measure below this is noise (the conventional floor). */
+export const MIN_DMV_IMPROVEMENT = 10
+
+/**
+ * The index proof when no hypothetical plan could be read. A candidate SQL Server asked for
+ * stands on its improvement_measure; one it never asked for needs observed read traffic on the
+ * column (live read shapes, or a captured slow plan that wanted it). Config alone (an FK nobody
+ * was seen reading by) proves nothing.
+ */
+function dmvEstimate(ev: Record<string, unknown>): ProofResult {
+  const result = (passed: boolean, detail: string): ProofResult => ({
+    passed,
+    method: 'dmv-estimate',
+    before: {},
+    after: {},
+    detail
+  })
+  const improvement = ev.dmv_improvement
+  if (typeof improvement === 'number' && Number.isFinite(improvement)) {
+    const passed = improvement >= MIN_DMV_IMPROVEMENT
+    return result(
+      passed,
+      `hypothetical plan unavailable; SQL Server's improvement measure is ${improvement}${passed ? '' : ` (needs ≥ ${MIN_DMV_IMPROVEMENT})`}`
+    )
+  }
+  const live = ev.live as { filter?: number; sort?: number } | null | undefined
+  const liveReads = (live?.filter ?? 0) + (live?.sort ?? 0)
+  const sources = Array.isArray(ev.sources) ? (ev.sources as string[]) : []
+  if (liveReads > 0)
+    return result(
+      true,
+      `hypothetical plan unavailable; ${liveReads} live reads filter or sort by it`
+    )
+  if (sources.includes('plan'))
+    return result(true, 'hypothetical plan unavailable; a captured slow plan asked for this index')
+  return result(false, 'no observed traffic')
+}
+
 export async function prove(
   c: Candidate,
   opts: { procTimeoutMs: number; deps?: Partial<ProofDeps> }
 ): Promise<ProofResult> {
   const deps: ProofDeps = { ...defaultDeps, ...opts.deps }
+  try {
+    return await proveKind(c, opts.procTimeoutMs, deps)
+  } catch (err) {
+    // an evidence read that throws proves nothing
+    return refused(`proof could not run: ${errText(err)}`)
+  }
+}
+
+async function proveKind(
+  c: Candidate,
+  procTimeoutMs: number,
+  deps: ProofDeps
+): Promise<ProofResult> {
   switch (c.kind) {
     case 'index_create': {
       const [table, colList] = c.target.split('.')
@@ -304,6 +398,14 @@ export async function prove(
             stmts.map((s) => s.text)
           )
         : null
+      if (costs && 'error' in costs)
+        return {
+          passed: false,
+          method: 'hypothetical',
+          before: {},
+          after: {},
+          detail: `hypothetical plan failed: ${costs.error}`
+        }
       if (costs?.length) {
         const best = costs.reduce(
           (a, x) => Math.max(a, x.before > 0 ? 1 - x.after / x.before : 0),
@@ -318,20 +420,20 @@ export async function prove(
           detail: `best statement −${Math.round(best * 100)}% estimated cost over ${costs.length} statement(s)${worse ? '; one got worse' : ''}`
         }
       }
-      const sources = (c.evidence.sources as string[] | undefined) ?? []
-      const live = c.evidence.live as { filter: number; sort: number } | null | undefined
-      const passed = sources.includes('dmv') || Boolean(live && live.filter + live.sort > 0)
-      return {
-        passed,
-        method: 'dmv-estimate',
-        before: {},
-        after: {},
-        detail: passed
-          ? 'hypothetical plan unavailable; SQL Server asked for this index or live reads filter by it'
-          : 'no measurable evidence'
-      }
+      return dmvEstimate(c.evidence)
     }
     case 'index_drop': {
+      const [table, index] = c.target.split('.')
+      if (!IDENT.test(table ?? '') || !IDENT.test(index ?? ''))
+        return refused('not a plain table and index name')
+      if (!(await deps.indexExists(table, index)))
+        return {
+          passed: false,
+          method: 'usage-stats',
+          before: {},
+          after: {},
+          detail: 'index no longer exists'
+        }
       const ev = c.evidence as { reads?: number; uptime_days?: number; covered_by?: string | null }
       const passed =
         Boolean(ev.covered_by) ||
@@ -343,7 +445,7 @@ export async function prove(
         after: {},
         detail: ev.covered_by
           ? `strict prefix of ${ev.covered_by}`
-          : `zero reads over ${ev.uptime_days} days of uptime`
+          : `${ev.reads ?? 'unknown'} reads over ${ev.uptime_days ?? 'unknown'} days of uptime${passed ? '' : ` (needs 0 reads over ≥ ${MIN_UPTIME_DAYS} days)`}`
       }
     }
     case 'proc_rewrite': {
@@ -360,7 +462,7 @@ export async function prove(
         oldBody,
         newBody,
         paramSets: sets,
-        timeoutMs: opts.procTimeoutMs
+        timeoutMs: procTimeoutMs
       })
       // A junction rewrite that changes rows means the original fans out: not ours to fix.
       const applied = [c.evidence.transformers, c.evidence.applied].flatMap((x) =>
