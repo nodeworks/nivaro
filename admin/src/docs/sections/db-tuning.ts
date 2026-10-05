@@ -41,7 +41,7 @@ export const dbTuning: DocSection = {
         [
           'Cache a query',
           'Saved queries that run uncached, take 1 s or more and run at least 10 times a day.',
-          'Sets `cache_ttl`, and `warm_daily` when the first run of the day is the slow one; the undo restores both.'
+          'Sets `cache_ttl`, and `warm_daily` when its slowest run is more than twice its average; the undo restores both.'
         ]
       ]
     },
@@ -58,7 +58,7 @@ export const dbTuning: DocSection = {
     { type: 'h2', id: 'db-tuning-proofs', text: 'How each proposal is proven' },
     {
       type: 'p',
-      text: 'Every candidate is proven by the method its kind allows before it is listed. A passed proof lists it as Proposed; a failed one lists it under Rejected by proof with the proof kept, so the reason is visible. Proofs never write a real object.'
+      text: 'Every candidate is proven by the method its kind allows before it is listed. A passed proof lists it as Proposed; a failed one lists it under Rejected by proof with the proof kept, so the reason is visible. Proofs never change a real object; the twin and hypothetical index are temporary.'
     },
     {
       type: 'table',
@@ -71,12 +71,12 @@ export const dbTuning: DocSection = {
         ],
         [
           'Index (drop)',
-          'Usage stats: zero reads over at least 30 days of uptime, or a strict prefix of a live index.',
+          'Usage stats, read live when the proof runs: zero reads over at least 30 days of uptime, or a strict prefix of an index that still exists.',
           'The same statements regress, by the same rule'
         ],
         [
           'Procedure rewrite',
-          'Twin: the rewrite is deployed as `<proc>__tune` and both bodies run with every recorded parameter set in A B B A order (old, new, new, old). Rows must be identical (canonicalised, compared as a multiset), the new median at most 75% of the old, and no set slower (every new run of a set slower than every old run of it). When the old body’s two runs disagree, the procedure is nondeterministic and the proof refuses.',
+          'Twin: the rewrite is deployed as `<proc>__tune_<8 hex>`, a name of its own per proof, and both bodies run with every recorded parameter set in A B B A order (old, new, new, old). Rows must be identical (canonicalised, compared as a multiset), the new median at most 75% of the old, and no set slower (every new run of a set slower than every old run of it). When the old body’s two runs disagree, the procedure is nondeterministic and the proof refuses. `proc_timeout_minutes` bounds the whole proof.',
           '20 of the trailing 24 samples of the procedure’s average elapsed time are over the threshold, or the nightly re-diff finds different rows'
         ],
         [
@@ -101,9 +101,9 @@ export const dbTuning: DocSection = {
       items: [
         'A body, the current one or the rewrite, that writes a real table (INSERT, UPDATE, DELETE, MERGE, TRUNCATE, BULK INSERT or SELECT INTO anything but a #temp table or table variable), runs DDL on anything but a #temp table, or runs GRANT, DENY, REVOKE, DBCC, BACKUP, RESTORE, KILL, SHUTDOWN or RECONFIGURE.',
         'Dynamic SQL (`sp_executesql`, `EXEC(@sql)`, `EXEC @proc`), a call to itself, a linked server (four-part names, OPENQUERY, OPENROWSET, OPENDATASOURCE), an EXEC into another database, or a call to an `sp_` / `xp_` system procedure.',
-        'Each procedure either body EXECs is read from sys.sql_modules and judged by the same rules, one level deep: a callee that calls further is refused, not followed. A real procedure already named `<proc>__tune` is refused too.',
-        'Every EXEC in a proof runs inside `BEGIN TRAN … ROLLBACK`, a backstop for a write the rules missed. The twin is dropped when the proof ends. A process killed mid-proof leaves it behind for the boot sweep, which drops `__tune` twins older than max(30, proof timeout + 5) minutes; a younger one may belong to a proof running on another process. The readiness check fails on a twin older than a day.',
-        'A proof that could not run (a catalog read threw) judged nothing: a standing proposal stays Proposed. A refusal on policy rejects it.'
+        'Each procedure either body EXECs is read from sys.sql_modules and judged by the same rules, one level deep: a callee that calls further is refused, not followed. A real procedure already holding the twin’s name is refused too.',
+        'Every EXEC in a proof runs inside `BEGIN TRAN … ROLLBACK`, a backstop for a write the rules missed. The twin is dropped when the proof ends. A process killed mid-proof leaves it behind for the boot sweep, which drops twins (`…__tune` and `…__tune_<hex>`) older than max(30, proof timeout + 5) minutes; a younger one may belong to a proof running on another process. The readiness check fails on a twin older than a day.',
+        'A proof that could not run (a catalog read threw, or it ran out of its time budget) judged nothing: a standing proposal stays Proposed. A refusal on policy rejects it.'
       ]
     },
     {
@@ -114,15 +114,15 @@ export const dbTuning: DocSection = {
     {
       type: 'ul',
       items: [
-        'Apply is two clicks and sends only the proposal id; the change itself comes from the proposal row. Only a Proposed row applies. A Stale or Rejected-by-proof row needs Re-prove first, and a procedure rewrite needs a passed twin proof whatever its status says.',
-        'Before anything runs, Apply re-reads the live object: an index that now exists or whose definition changed, a procedure body edited since the proof, a query whose cache settings changed. Any of these moves the row to Stale.',
+        'Apply is two clicks and sends only the proposal id; the change itself comes from the proposal row. Only a Proposed row applies. A Stale or Rejected-by-proof row needs Re-prove first, and a procedure rewrite needs a passed twin proof whatever its status says. Re-prove reads the live object first: one that changed since the proposal keeps the row Stale (409 `TUNING_STALE`) and is not proved; the nightly run proposes against what is live.',
+        'Before anything runs, Apply re-reads the live object: an index that now exists or whose definition changed, a procedure body edited since the proof, a query whose cache settings changed. Any of these moves the row to Stale. An index drop is refused (409 `TUNING_NOT_APPLICABLE`) when the live index is unique or backs a primary key, a unique constraint or a foreign key.',
         'Every index statement is parsed into a fixed shape, its names re-checked against sys.*, and run as the canonical rendering, never as stored. A created index may not be UNIQUE, filtered or on a named filegroup, and may set only ONLINE, SORT_IN_TEMPDB, DATA_COMPRESSION, FILLFACTOR and MAXDOP. An index drop’s undo may restore the full recorded definition.',
         'The watch baseline is read before the change runs: CREATE INDEX recompiles the table’s plans and CREATE OR ALTER resets the procedure’s stats, so a figure read afterwards is mostly empty. If the change fails part-way, whatever landed is undone at once and the row ends Failed with the reason.',
         'The hourly watch samples every watched change against its baseline. A regression rolls the change back and tells whoever applied it in their Notifications inbox. A change past its watch window becomes Applied.',
-        'A rewritten procedure is re-diffed every night at 07:55 UTC: the old body is deployed as the twin and run against the live rewrite on one recorded parameter set, a different one each night. Different rows roll the rewrite back.',
+        'A rewritten procedure is re-diffed every night at 07:55 UTC: the old body is deployed as the twin and run against the live rewrite on one recorded parameter set, a different one each night. Different rows roll the rewrite back. When the live procedure’s own two runs disagree (the data moved between them), the re-check is nondeterministic: it is listed in the watch run, never rolled back.',
         'Roll back by hand from Watching or Applied. The undo is refused, and the row left Failed for a person, when the live object changed since the apply (a procedure edited since, an index dropped or rebuilt).',
         'The watch also ends an apply or rollback that died with its process: a row stuck in applying for more than 30 minutes whose job run is no longer running is marked Failed, without running the undo, so a person reads the row and its undo first.',
-        'Dismiss needs a note and works on Proposed, Stale, Rejected-by-proof and Failed rows. A dismissed or rolled-back change is not proposed again for 90 days. A Proposed row whose evidence has not been seen for 14 days closes as dismissed.',
+        'Dismiss needs a note and works on Proposed, Stale, Rejected-by-proof and Failed rows. A dismissed or rolled-back change is not proposed again for 90 days. A change rejected by proof is not proved again for 7 days. An AI rewrite counts as one attempt per procedure body, whatever the model answers. A Proposed row whose evidence has not been seen for 14 days closes as dismissed.',
         'Apply, rollback, dismiss, re-prove and settings changes each write an activity row, which the incident timeline shows. Apply and rollback also appear in Background Jobs as runs of kind tuning.'
       ]
     },
@@ -134,7 +134,7 @@ export const dbTuning: DocSection = {
     { type: 'h2', id: 'db-tuning-settings', text: 'Settings' },
     {
       type: 'p',
-      text: 'The Settings card is on the Database tuning page itself, not under Settings. Values are stored in `nivaro_settings.db_tuning`; a save that holds a bad value names every bad key. Database tuning is off by default.'
+      text: 'The Settings card is on the Database tuning page itself, not under Settings. Values are stored in `nivaro_settings.db_tuning`; a save that holds a bad value names every bad key. A save sends only the fields changed on the card and merges them onto the stored value, so an instance override (Settings → Instance) is never copied into the shared row. Database tuning is off by default.'
     },
     {
       type: 'table',
@@ -150,7 +150,7 @@ export const dbTuning: DocSection = {
           'ai_rewrites',
           'on',
           '',
-          'Ask the AI for a procedure rewrite when no mechanical transformer applies (at most 5 a night). The answer must keep the procedure name and the exact parameter list.'
+          'Ask the AI for a procedure rewrite when no mechanical transformer applies (at most 5 a night). The answer must keep the procedure name and the exact parameter list. The calls are logged in AI calls under the feature `db-tune`.'
         ],
         [
           'min_estimate_ms_per_day',
@@ -169,7 +169,7 @@ export const dbTuning: DocSection = {
           'proc_timeout_minutes',
           '10',
           '1–30',
-          'The timeout for each procedure run in a twin proof.'
+          'The time budget of one twin proof, every set and run together. A proof that runs out drops its twin and judges nothing: a standing proposal stays as it was.'
         ],
         [
           'ai_daily_budget_usd',
@@ -183,17 +183,17 @@ export const dbTuning: DocSection = {
     {
       type: 'ul',
       items: [
-        '`db-tuning-observe`, nightly at 03:35 (a heavy job): every observer reads its evidence (at most 10 minutes each, 60 minutes for the run), candidates are deduplicated, ones dismissed or rolled back lately are skipped, and the 20 biggest estimates are proved. The rest carry over to the next night.',
+        '`db-tuning-observe`, nightly at 03:35 (a heavy job): every observer reads its evidence (at most 10 minutes each, 60 minutes for the run), candidates are deduplicated, ones dismissed or rolled back lately, rejected by proof in the last 7 days, or on a target with a change in flight are skipped, and the 20 biggest estimates are proved. The rest carry over to the next night.',
         '`db-tuning-watch`, hourly at :55.',
         'Both are always registered and return at once while database tuning is off. Scheduled ticks also need a process that ticks (`CRON_TICKS`); Run now in Background Jobs always works, and both have a dry run.',
-        'Run the observer from the page: a real run starts in the background and the page follows it until it finishes. Dry run lists what it would prove and changes nothing.',
+        'Run the observer from the page: a real run starts in the background and the page follows it until it finishes. One observe run at a time per database: a run is refused (409 `TUNING_RUNNING` from the page) while another, on any process, has been running for less than 70 minutes. Dry run lists what it would prove and changes nothing.',
         'The readiness check `db-tuning` (Operations) fails on a leftover twin older than a day, and warns on an observe run older than 48 hours, a change still watching a day past its window, an apply or rollback that died, or a failed apply or rollback.'
       ]
     },
     { type: 'h2', id: 'db-tuning-param-sets', text: 'Recorded parameter sets' },
     {
       type: 'p',
-      text: 'A procedure proof replays real calls. Every saved-query execute (`POST /custom-queries/:slug/execute`) and every procedure execute (`POST /procedures/:name/execute`) records the parameters the call actually bound in `nivaro_tuning_param_sets`, the newest 10 per target, with values under credential-looking names masked. A procedure also gets the sets of the saved queries that EXEC it. A procedure with no recorded sets is not proposed.'
+      text: 'A procedure proof replays real calls. Every saved-query execute (`POST /custom-queries/:slug/execute`) and every procedure execute (`POST /procedures/:name/execute`) records the parameters the call actually bound in `nivaro_tuning_param_sets`, the newest 10 per target, with values under credential-looking names masked. A procedure also gets the sets of the saved queries that EXEC it, when every name in a set is one of the procedure’s own parameters (a saved query records its own names). A procedure with no recorded sets is not proposed.'
     },
     { type: 'h2', id: 'db-tuning-extensions', text: 'Observers from extensions' },
     {
