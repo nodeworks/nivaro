@@ -9,6 +9,7 @@ import {
   applySenderName,
   brandContextFor,
   brandTemplateContext,
+  type MailBrand,
   type MailBrandingLookup,
   resolveMailBranding
 } from './mail-branding.js'
@@ -71,9 +72,10 @@ async function getTemplateOverride(name: string): Promise<string | null> {
  *  roots, so an override keeps the branded chrome unless it replaces it. */
 export async function renderMailTemplate(
   template: string,
-  data?: Record<string, unknown>
+  data?: Record<string, unknown>,
+  opts?: { brand?: MailBrand }
 ): Promise<string> {
-  const ctx = await withBrand(data, {})
+  const ctx = await withBrand(data, {}, opts?.brand)
   const override = await getTemplateOverride(template)
   if (override !== null) {
     return engine.parseAndRender(override, ctx)
@@ -88,9 +90,11 @@ export async function renderMailTemplate(
  *  supply an unescaped `brand` of its own. */
 async function withBrand(
   data: Record<string, unknown> | undefined,
-  lookup: MailBrandingLookup
+  lookup: MailBrandingLookup,
+  brand?: MailBrand
 ): Promise<Record<string, unknown>> {
-  return { ...(data ?? {}), ...(await brandContextFor(lookup)) }
+  const ctx = brand ? brandTemplateContext(brand) : await brandContextFor(lookup)
+  return { ...(data ?? {}), ...ctx }
 }
 
 /** Wrap a bare HTML fragment in the branded `message` chrome — the same wrap

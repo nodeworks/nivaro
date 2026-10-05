@@ -27,15 +27,21 @@ describe('base.liquid — mail branding per workspace (#1463)', () => {
   })
 
   it('a workspace brand lands in the header, the accent rule, the footer name and the footer line', async () => {
-    const ctx = brandTemplateContext({
+    const brand = {
       logo: 'https://cdn.example.com/acme.png',
       color: '#ff6600',
       sender_name: 'Acme <Ops>',
       from_name: 'Acme <Ops>',
       footer: 'Acme Inc · 1 Main St · "quoted"',
       workspace_id: 'ABCDEF01-0000-4000-8000-000000000001'
-    })
-    const html = await renderMailTemplate('message', { ...ctx, html: '<p>Hello</p>' })
+    }
+    // A brand in template DATA is ignored by design (payloads cannot style the
+    // chrome); code hands one in through the typed option instead.
+    const html = await renderMailTemplate(
+      'message',
+      { ...brandTemplateContext(brand), html: '<p>Hello</p>' },
+      { brand }
+    )
     expect(html).toContain('<title>Acme &lt;Ops&gt;</title>')
     expect(html).toMatch(/<img id="brand-logo" src="https:\/\/cdn\.example\.com\/acme\.png"/)
     expect(html).toMatch(/id="brand-rule"[^>]*bgcolor="#ff6600"/)
