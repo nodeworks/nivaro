@@ -113,7 +113,8 @@ export function normalizeMailColor(v: unknown): string | null {
 export function normalizeMailLogo(v: unknown): string | null {
   const s = String(v ?? '').trim()
   if (!s || s.length > 1000) return null
-  if (/^https?:\/\/\S+$/i.test(s)) return s
+  // Attribute-safe by construction: no whitespace, quotes, angle brackets or backticks.
+  if (/^https?:\/\/[^\s"'<>`]+$/i.test(s)) return s
   if (/^data:image\/(png|jpe?g|gif|webp|svg\+xml);base64,[a-z0-9+/=]+$/i.test(s)) return s
   return null
 }
@@ -262,7 +263,7 @@ export async function resolveMailBranding(lookup: MailBrandingLookup = {}): Prom
 export function brandTemplateContext(brand: MailBrand): Record<string, unknown> {
   return {
     brand: {
-      logo: brand.logo,
+      logo: brand.logo ? escapeHtml(brand.logo) : null,
       color: brand.color,
       sender_name: escapeHtml(brand.sender_name),
       footer: brand.footer ? escapeHtml(brand.footer) : null,

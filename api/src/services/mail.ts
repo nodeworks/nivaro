@@ -81,17 +81,16 @@ export async function renderMailTemplate(
   return engine.renderFile(template, ctx)
 }
 
-/** Mail branding (#1463): base.liquid reads `brand` off the context. A caller
- *  that already put one there keeps it; otherwise it resolves from the lookup
- *  (explicit workspace → record's workspace → recipient's → instance), with
- *  the harness's render scope honoured when the lookup names no workspace. */
+/** Mail branding (#1463): base.liquid reads `brand` off the context. It is
+ *  always resolved here (explicit workspace → record's workspace →
+ *  recipient's → instance, with the harness's render scope honoured when the
+ *  lookup names no workspace) and spread LAST, so template data can never
+ *  supply an unescaped `brand` of its own. */
 async function withBrand(
   data: Record<string, unknown> | undefined,
   lookup: MailBrandingLookup
 ): Promise<Record<string, unknown>> {
-  const base = data ?? {}
-  if (base.brand && typeof base.brand === 'object') return base
-  return { ...base, ...(await brandContextFor(lookup)) }
+  return { ...(data ?? {}), ...(await brandContextFor(lookup)) }
 }
 
 /** Wrap a bare HTML fragment in the branded `message` chrome — the same wrap
@@ -632,7 +631,9 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
   // Mail branding (#1463): the workspace chrome the base layout renders, and
   // the From display name when the workspace names a sender.
   const brand = await resolveMailBranding(brandLookupFor(opts))
-  const renderData = { ...brandTemplateContext(brand), ...(opts.data ?? {}), ...whyCtx }
+  // The resolved brand is spread LAST so caller data can never smuggle an
+  // unescaped `brand` object into the chrome.
+  const renderData = { ...(opts.data ?? {}), ...whyCtx, ...brandTemplateContext(brand) }
   let html: string
   try {
     html = await engine.renderFile(opts.template, renderData)
