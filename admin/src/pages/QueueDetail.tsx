@@ -146,7 +146,15 @@ export function QueueDetailPage() {
               )}
             </div>
 
-            <QueueWorklist queueId={id!} realtime={realtime} />
+            <QueueWorklist
+              queueId={id!}
+              realtime={realtime}
+              onAsk={(q) =>
+                navigate(
+                  `/ask?q=${encodeURIComponent(`What is stuck in the "${q.name}" queue and why?`)}`
+                )
+              }
+            />
           </div>
         </ItemEditAuthContext.Provider>
       </NavigationContext.Provider>

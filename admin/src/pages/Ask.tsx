@@ -3,7 +3,7 @@ import { AiFeedbackButtons, AiMarkdown, NavigationContext, NivaroProvider } from
 import { useMutation } from '@tanstack/react-query'
 import { Loader2, Mic, Send, Sparkles, Volume2, VolumeX, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router'
+import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -157,6 +157,7 @@ function AskPageInner() {
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [input, setInput] = useState('')
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [searchParams, setSearchParams] = useSearchParams()
 
   // ── Voice: dictation in, optional spoken replies out ──────────────────────
   const [listening, setListening] = useState(false)
@@ -287,6 +288,25 @@ function AskPageInner() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' })
+  }, [])
+
+  // `?q=` seeds and sends one question (the queue page's "Ask about this
+  // queue", #1276), then leaves the URL — a reload must not re-ask it.
+  const seededRef = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: consume the param once on mount
+  useEffect(() => {
+    const q = searchParams.get('q')?.trim()
+    if (!q || seededRef.current) return
+    seededRef.current = true
+    setSearchParams(
+      (prev) => {
+        const next = new URLSearchParams(prev)
+        next.delete('q')
+        return next
+      },
+      { replace: true }
+    )
+    submit(q)
   }, [])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: scroll on new turns
