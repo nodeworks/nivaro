@@ -1,7 +1,15 @@
+{%- comment -%}
+  Mail branding (#1463): `brand` is put on the context by services/mail.ts
+  (workspace chrome → instance branding → these literal defaults), already
+  escaped and validated. Child templates that override the brand blocks keep
+  working — the defaults below only fill what they leave alone.
+{%- endcomment -%}
+{%- assign brand_name = brand.sender_name | default: 'Nivaro' -%}
+{%- assign brand_color = brand.color | default: '#00ceff' -%}
 <!doctype html>
 <html lang="en">
 <head>
-  <title>Nivaro</title>
+  <title>{{ brand_name }}</title>
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -35,7 +43,7 @@
 </head>
 <body style="margin:0;padding:0;background-color:#eef2f6;" bgcolor="#eef2f6">
 
-<div style="display:none;font-size:1px;color:#eef2f6;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{% block preheader %}Nivaro{% endblock %}&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;</div>
+<div style="display:none;font-size:1px;color:#eef2f6;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">{% block preheader %}{{ brand_name }}{% endblock %}&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;&#847;</div>
 
 <table id="page-bg" role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%" bgcolor="#eef2f6" style="background-color:#eef2f6;">
   <tr>
@@ -50,17 +58,17 @@
             <table role="presentation" border="0" cellpadding="0" cellspacing="0" width="100%">
               <tr>
                 <td valign="middle">
-                  {% block brand %}<span style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;color:#ffffff;letter-spacing:0.2px;">Nivaro</span>{% endblock %}
+                  {% block brand %}{% if brand.logo %}<img id="brand-logo" src="{{ brand.logo }}" alt="{{ brand_name }}" height="32" style="display:block;height:32px;max-height:32px;width:auto;max-width:220px;border:0;">{% else %}<span style="font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:15px;font-weight:700;color:#ffffff;letter-spacing:0.2px;">{{ brand_name }}</span>{% endif %}{% endblock %}
                 </td>
                 <td align="right" valign="middle">
-                  {% block brandmark %}<span style="display:inline-block;width:10px;height:10px;background-color:#00ceff;border-radius:50%;font-size:0;line-height:0;">&nbsp;</span>{% endblock %}
+                  {% block brandmark %}<span style="display:inline-block;width:10px;height:10px;background-color:{{ brand_color }};border-radius:50%;font-size:0;line-height:0;">&nbsp;</span>{% endblock %}
                 </td>
               </tr>
             </table>
           </td>
         </tr>
         <tr>
-          <td height="4" bgcolor="#00ceff" style="background-color:#00ceff;font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
+          <td id="brand-rule" height="4" bgcolor="{{ brand_color }}" style="background-color:{{ brand_color }};font-size:0;line-height:0;mso-line-height-rule:exactly;">&nbsp;</td>
         </tr>
 
         <!-- ─── Body content ─── -->
@@ -74,7 +82,7 @@
         <tr>
           <td id="card-ftr" class="ftr-pad" style="background-color:#f4f7fa;border-top:1px solid #dde3ea;padding:18px 36px;" bgcolor="#f4f7fa">
             <p class="ftr-text" style="margin:0;font-family:-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:12px;color:#64748b;line-height:20px;">
-              Sent by <strong style="color:#334155;">{% block brandname %}Nivaro{% endblock %}</strong> &mdash; This is an automated notification. Please do not reply to this email.{% block footer %}{% endblock %}{% if why %}<br><span style="display:block;margin-top:6px;">You&rsquo;re getting this because {{ why }}.{% if rules_url %} <a href="{{ rules_url }}" style="color:#334155;text-decoration:underline;">Change how you&rsquo;re notified</a>{% endif %}</span>{% endif %}
+              Sent by <strong style="color:#334155;">{% block brandname %}{{ brand_name }}{% endblock %}</strong> &mdash; This is an automated notification. Please do not reply to this email.{% block footer %}{% endblock %}{% if brand.footer %}<br><span id="brand-footer" style="display:block;margin-top:6px;">{{ brand.footer }}</span>{% endif %}{% if why %}<br><span style="display:block;margin-top:6px;">You&rsquo;re getting this because {{ why }}.{% if rules_url %} <a href="{{ rules_url }}" style="color:#334155;text-decoration:underline;">Change how you&rsquo;re notified</a>{% endif %}</span>{% endif %}
             </p>
           </td>
         </tr>

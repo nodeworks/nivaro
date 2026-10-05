@@ -6,6 +6,11 @@ import { rawRows } from '../db/raw-rows.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import { logActivity } from '../services/activity.js'
+import {
+  bustMailBrandingCache,
+  normalizeMailColor,
+  normalizeMailLogo
+} from '../services/mail-branding.js'
 import { getUsage, type WorkspaceQuotas } from '../services/quotas.js'
 
 interface Workspace {
@@ -15,8 +20,51 @@ interface Workspace {
   icon: string | null
   color: string | null
   quotas: string | null
+  mail_logo: string | null
+  mail_color: string | null
+  mail_sender_name: string | null
+  mail_footer: string | null
   created_at: Date
   updated_at: Date
+}
+
+/** Mail branding fields (#1463) as a request body carries them. */
+interface MailBrandingBody {
+  mail_logo?: string | null
+  mail_color?: string | null
+  mail_sender_name?: string | null
+  mail_footer?: string | null
+}
+
+/** Validate the mail branding fields present in a body into column writes.
+ *  Returns an error sentence for a value the chrome could not use. */
+function mailBrandingUpdate(
+  body: MailBrandingBody
+): { update: Record<string, string | null> } | { error: string } {
+  const update: Record<string, string | null> = {}
+  const text = (v: unknown, max: number) => {
+    const s = String(v ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    return s ? s.slice(0, max) : null
+  }
+  if (body.mail_logo !== undefined) {
+    const raw = String(body.mail_logo ?? '').trim()
+    const logo = raw ? normalizeMailLogo(raw) : null
+    if (raw && !logo)
+      return { error: 'Mail logo must be a public http(s) URL or an image data URI (≤1000 chars)' }
+    update.mail_logo = logo
+  }
+  if (body.mail_color !== undefined) {
+    const raw = String(body.mail_color ?? '').trim()
+    const color = raw ? normalizeMailColor(raw) : null
+    if (raw && !color) return { error: 'Mail colour must be a #rrggbb value' }
+    update.mail_color = color
+  }
+  if (body.mail_sender_name !== undefined)
+    update.mail_sender_name = text(body.mail_sender_name, 200)
+  if (body.mail_footer !== undefined) update.mail_footer = text(body.mail_footer, 2000)
+  return { update }
 }
 
 interface WorkspaceTemplateRow {
@@ -346,6 +394,12 @@ async function replayTemplate(
 // ─── Routes ───────────────────────────────────────────────────────────────────
 
 export async function workspacesRoutes(app: FastifyInstance) {
+  // Mail branding (#1463) is cached per workspace for 60s — any successful
+  // write on this router drops the cache so the next email wears the new chrome.
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.method !== 'GET' && reply.statusCode < 400) bustMailBrandingCache()
+  })
+
   // ── Workspace templates — registered BEFORE /:id routes ───────────────────
 
   app.get('/templates', { preHandler: requireAdmin }, async (_req, reply) => {
@@ -459,7 +513,9 @@ export async function workspacesRoutes(app: FastifyInstance) {
       icon?: string
       color?: string
       template_id?: number
-    }
+    } & MailBrandingBody
+    const branding = mailBrandingUpdate(body)
+    if ('error' in branding) return reply.code(400).send({ error: branding.error })
     const id = randomUUID()
     await db('nivaro_workspaces').insert({
       id,
@@ -467,6 +523,7 @@ export async function workspacesRoutes(app: FastifyInstance) {
       slug: body.slug,
       icon: body.icon ?? null,
       color: body.color ?? null,
+      ...branding.update,
       created_at: new Date(),
       updated_at: new Date()
     })
@@ -503,8 +560,10 @@ export async function workspacesRoutes(app: FastifyInstance) {
       icon?: string
       color?: string
       quotas?: WorkspaceQuotas | null
-    }
-    const update: Record<string, unknown> = { updated_at: new Date() }
+    } & MailBrandingBody
+    const branding = mailBrandingUpdate(body)
+    if ('error' in branding) return reply.code(400).send({ error: branding.error })
+    const update: Record<string, unknown> = { updated_at: new Date(), ...branding.update }
     if (body.name !== undefined) update.name = body.name
     if (body.slug !== undefined) update.slug = body.slug
     if (body.icon !== undefined) update.icon = body.icon

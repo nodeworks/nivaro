@@ -196,6 +196,11 @@ export async function settingsRoutes(app: FastifyInstance) {
       const { bustMaintenanceCache } = await import('../services/security.js')
       reply.raw.once('finish', () => bustMaintenanceCache())
     }
+    // Mail branding (#1463): project_name / project_color are the instance fallback.
+    {
+      const { bustMailBrandingCache } = await import('../services/mail-branding.js')
+      reply.raw.once('finish', () => bustMailBrandingCache())
+    }
     const allowed = allowedSettingsKeys
     const body = req.body as Record<string, unknown>
     const patch = Object.fromEntries(Object.entries(body).filter(([k]) => allowed.includes(k)))

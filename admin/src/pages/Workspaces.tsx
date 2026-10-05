@@ -1,5 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Building2, Check, ChevronsUpDown, Gauge, LayoutTemplate, Plus, Trash2 } from 'lucide-react'
+import {
+  Building2,
+  Check,
+  ChevronsUpDown,
+  Gauge,
+  LayoutTemplate,
+  Mail,
+  Plus,
+  Trash2
+} from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -436,6 +445,195 @@ function QuotasCard({
   )
 }
 
+// ─── Mail branding (#1463) ────────────────────────────────────────────────────
+
+export interface MailBrandingBody {
+  mail_logo: string | null
+  mail_color: string | null
+  mail_sender_name: string | null
+  mail_footer: string | null
+}
+
+function MailBrandingCard({
+  ws,
+  onSave,
+  saving
+}: {
+  ws: Workspace
+  onSave: (body: MailBrandingBody) => void
+  saving: boolean
+}) {
+  const [logo, setLogo] = useState(ws.mail_logo ?? '')
+  const [color, setColor] = useState(ws.mail_color ?? '')
+  const [senderName, setSenderName] = useState(ws.mail_sender_name ?? '')
+  const [footer, setFooter] = useState(ws.mail_footer ?? '')
+  const [previewOpen, setPreviewOpen] = useState(false)
+
+  const dirty =
+    logo !== (ws.mail_logo ?? '') ||
+    color !== (ws.mail_color ?? '') ||
+    senderName !== (ws.mail_sender_name ?? '') ||
+    footer !== (ws.mail_footer ?? '')
+  const branded = !!(ws.mail_logo || ws.mail_color || ws.mail_sender_name || ws.mail_footer)
+
+  // The preview renders what is SAVED — the server resolves the chrome from
+  // the row — so it re-fetches on every save (the key carries the values).
+  const previewKey = [ws.id, ws.mail_logo, ws.mail_color, ws.mail_sender_name, ws.mail_footer]
+    .map((v) => v ?? '')
+    .join('|')
+  const { data: preview, isFetching: previewLoading } = useQuery({
+    queryKey: ['mail-branding-preview', previewKey],
+    queryFn: () =>
+      api
+        .post<{ data: { html: string } }>('/mail-types/branding-preview', { workspace_id: ws.id })
+        .then((r) => r.data.data),
+    enabled: previewOpen
+  })
+
+  return (
+    <div className='mb-7 rounded-lg border border-slate-200 p-5 dark:border-border' data-ws-mail>
+      <p className='mb-1 flex items-center gap-1.5 text-[13px] font-medium text-slate-700 dark:text-foreground'>
+        <Mail className='h-3.5 w-3.5 text-slate-400' /> Mail branding
+        {branded && (
+          <span className='ml-1 rounded-full bg-nvr-cyan/10 px-1.5 py-px text-[10px] font-semibold uppercase tracking-wide text-nvr-navy dark:bg-nvr-cyan/15 dark:text-nvr-cyan'>
+            custom
+          </span>
+        )}
+      </p>
+      <p className='mb-4 text-[12px] text-slate-500 dark:text-muted-foreground'>
+        The chrome around every email about this workspace&rsquo;s records — or to people working in
+        it. Anything left blank keeps the instance branding from Settings.
+      </p>
+      <div className='space-y-3'>
+        <div className='space-y-1'>
+          <Label htmlFor='ws-mail-logo' className='text-[12px] font-medium'>
+            Logo URL
+          </Label>
+          <Input
+            id='ws-mail-logo'
+            value={logo}
+            onChange={(e) => setLogo(e.target.value)}
+            placeholder='https://…/logo.png'
+            className='h-8 font-mono text-[12px]'
+            data-ws-mail-logo
+          />
+          <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+            A public https URL (or a small image data URI) — mail clients cannot sign in to fetch an
+            uploaded file. Shown 32px tall in the header instead of the name.
+          </p>
+        </div>
+        <div className='space-y-1'>
+          <Label htmlFor='ws-mail-color' className='text-[12px] font-medium'>
+            Accent colour
+          </Label>
+          <div className='flex items-center gap-2.5'>
+            <input
+              id='ws-mail-color'
+              type='color'
+              value={color || ws.color || '#00ceff'}
+              onChange={(e) => setColor(e.target.value)}
+              className='h-8 w-10 cursor-pointer rounded border border-input bg-background p-0.5'
+              data-ws-mail-color
+            />
+            <Input
+              value={color}
+              onChange={(e) => setColor(e.target.value)}
+              placeholder='#rrggbb — blank = instance colour'
+              className='h-8 w-56 font-mono text-[12px]'
+            />
+            {color && (
+              <Button variant='ghost' size='sm' onClick={() => setColor('')}>
+                Clear
+              </Button>
+            )}
+          </div>
+        </div>
+        <div className='space-y-1'>
+          <Label htmlFor='ws-mail-sender' className='text-[12px] font-medium'>
+            Sender name
+          </Label>
+          <Input
+            id='ws-mail-sender'
+            value={senderName}
+            onChange={(e) => setSenderName(e.target.value)}
+            placeholder='Acme Operations'
+            maxLength={200}
+            className='h-8 text-[13px]'
+            data-ws-mail-sender
+          />
+          <p className='text-[11px] text-slate-400 dark:text-muted-foreground'>
+            The From display name and the &ldquo;Sent by&rdquo; line. The From address itself never
+            changes.
+          </p>
+        </div>
+        <div className='space-y-1'>
+          <Label htmlFor='ws-mail-footer' className='text-[12px] font-medium'>
+            Footer text
+          </Label>
+          <textarea
+            id='ws-mail-footer'
+            value={footer}
+            onChange={(e) => setFooter(e.target.value)}
+            placeholder='Acme Inc · 1 Main Street · Reply to this address for help…'
+            maxLength={2000}
+            rows={2}
+            className='w-full rounded-md border border-input bg-background px-3 py-1.5 text-[12.5px] text-slate-700 outline-none focus:border-slate-400 dark:text-foreground'
+            data-ws-mail-footer
+          />
+        </div>
+      </div>
+      <div className='mt-4 flex items-center gap-2'>
+        <Button
+          size='sm'
+          variant='outline'
+          disabled={saving || !dirty}
+          onClick={() =>
+            onSave({
+              mail_logo: logo.trim() || null,
+              mail_color: color.trim() || null,
+              mail_sender_name: senderName.trim() || null,
+              mail_footer: footer.trim() || null
+            })
+          }
+          data-ws-mail-save
+        >
+          {saving ? 'Saving…' : 'Save mail branding'}
+        </Button>
+        <Button
+          size='sm'
+          variant='ghost'
+          onClick={() => setPreviewOpen((v) => !v)}
+          data-ws-mail-preview
+        >
+          {previewOpen ? 'Hide preview' : 'Preview'}
+        </Button>
+        {previewOpen && dirty && (
+          <span className='text-[11px] text-amber-700 dark:text-amber-300'>
+            Preview shows the saved values — save to see these edits.
+          </span>
+        )}
+      </div>
+      {previewOpen && (
+        <div className='mt-4 overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-background'>
+          {preview?.html ? (
+            <iframe
+              title='Mail branding preview'
+              srcDoc={preview.html}
+              sandbox=''
+              className='h-[420px] w-full bg-white'
+              data-ws-mail-preview-frame
+            />
+          ) : (
+            <p className='px-4 py-8 text-center text-[12px] text-slate-400'>
+              {previewLoading ? 'Rendering…' : 'No preview yet.'}
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ─── Templates section ────────────────────────────────────────────────────────
 
 function TemplatesSection({ ws }: { ws: Workspace }) {
@@ -601,6 +799,7 @@ function WorkspaceDetail({
   onDelete,
   onSave,
   onSaveQuotas,
+  onSaveMail,
   switching,
   deleting,
   saving
@@ -612,6 +811,7 @@ function WorkspaceDetail({
   onDelete: () => void
   onSave: (data: { name: string; slug: string; color: string }) => void
   onSaveQuotas: (quotas: WorkspaceQuotas) => void
+  onSaveMail: (body: MailBrandingBody) => void
   switching: boolean
   deleting: boolean
   saving: boolean
@@ -692,6 +892,15 @@ function WorkspaceDetail({
         )}
 
         <UsageCard workspaceId={ws.id} />
+
+        {isAdmin && (
+          <MailBrandingCard
+            key={`${ws.id}:${ws.mail_logo ?? ''}:${ws.mail_color ?? ''}:${ws.mail_sender_name ?? ''}:${ws.mail_footer ?? ''}`}
+            ws={ws}
+            onSave={onSaveMail}
+            saving={saving}
+          />
+        )}
 
         {isAdmin && (
           <QuotasCard
@@ -847,7 +1056,12 @@ export function WorkspacesPage() {
       body
     }: {
       id: string
-      body: { name?: string; slug?: string; color?: string; quotas?: WorkspaceQuotas }
+      body: {
+        name?: string
+        slug?: string
+        color?: string
+        quotas?: WorkspaceQuotas
+      } & Partial<MailBrandingBody>
     }) => api.patch(`/workspaces/${id}`, body),
     onSuccess: (_, vars) => {
       qc.invalidateQueries({ queryKey: ['workspaces'] })
@@ -966,6 +1180,7 @@ export function WorkspacesPage() {
               onDelete={() => deleteMut.mutate(selectedWs.id)}
               onSave={(body) => updateMut.mutate({ id: selectedWs.id, body })}
               onSaveQuotas={(quotas) => updateMut.mutate({ id: selectedWs.id, body: { quotas } })}
+              onSaveMail={(body) => updateMut.mutate({ id: selectedWs.id, body })}
               switching={switchMut.isPending}
               deleting={deleteMut.isPending}
               saving={updateMut.isPending}
