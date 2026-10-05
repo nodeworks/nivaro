@@ -37,6 +37,7 @@ import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
 import { BrowserPushCard } from './profile/BrowserPushCard'
 import { DelegationCard } from './profile/DelegationCard'
+import { MailSuppressedPill } from './profile/MailSuppressedPill'
 import { TeamLoadCard } from './profile/PersonExtras'
 
 export { DelegationCard }
@@ -1419,6 +1420,7 @@ function OwnProfile({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const ownAuth = useItemEditAuth()
   const isOwn = true
   const targetId = 'me'
 
@@ -1595,6 +1597,7 @@ function OwnProfile({
                   Out of office
                 </span>
               )}
+              <MailSuppressedPill email={view.email} canClear={ownAuth.isAdmin} />
             </div>
             {isOwn && me && (
               // The same status the chat panel's Online tab sets — one editor,

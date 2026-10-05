@@ -115,6 +115,7 @@ import { legalHoldRoutes } from './legal-holds.js'
 import { lineageRoutes } from './lineage.js'
 import { mailRoutes } from './mail.js'
 import { mailLogReadRoutes, mailLogRoutes } from './mail-log.js'
+import { mailSuppressionRoutes } from './mail-suppressions.js'
 import { mailTemplateRoutes } from './mail-templates.js'
 import { mailTypeRoutes } from './mail-types.js'
 import { meNotificationRoutes } from './me-notifications.js'
@@ -353,6 +354,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(notificationBenchRoutes, { prefix: '/notification-bench' })
   await app.register(notificationTemplateRoutes, { prefix: '/notification-templates' })
   await app.register(mailLogReadRoutes, { prefix: '/mail-log' })
+  await app.register(mailSuppressionRoutes, { prefix: '/mail-suppressions' })
   await app.register(sequenceRoutes, { prefix: '/sequences' })
   await app.register(sqlScratchpadRoutes, { prefix: '/sql-scratchpad' })
   await app.register(collectionSnapshotRoutes, { prefix: '/collection-snapshots' })

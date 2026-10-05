@@ -19,6 +19,7 @@ import {
   type FieldDrilldownConfig,
   fieldDrilldownConfig,
   useDrilldown,
+  useItemEditAuth,
   useNavigation,
   useOptionalNivaroClient
 } from '../../context'
@@ -26,6 +27,7 @@ import { get, post } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
+import { MailSuppressedPill } from '../profile/MailSuppressedPill'
 import { UserAvatar } from '../UserAvatar'
 import {
   DropdownMenu,
@@ -797,7 +799,8 @@ function UserCardPopover({
   profileUrl,
   online,
   cardId,
-  onAction
+  onAction,
+  open = false
 }: {
   cardId?: string
   user: UserCardData | null | undefined
@@ -809,7 +812,10 @@ function UserCardPopover({
   online?: boolean
   /** Close the hosting popover — every footer action calls it. */
   onAction?: () => void
+  /** Whether the card is showing — lazy reads (the bounce mark) wait for it. */
+  open?: boolean
 }) {
+  const { isAdmin } = useItemEditAuth()
   const managerName = user?.manager_name?.trim() || null
   // Local-time chip (#175): "6:12 PM for Jane" — only when their timezone pref
   // is set AND differs from the viewer's, so same-office teams see no noise.
@@ -893,6 +899,12 @@ function UserCardPopover({
               <UserCheck className='h-2.5 w-2.5' /> Out of office
             </span>
           )}
+          <MailSuppressedPill
+            email={user?.email}
+            enabled={open}
+            canClear={isAdmin}
+            className='mt-1'
+          />
         </div>
       </div>
 
@@ -1122,6 +1134,7 @@ export function UserChip({
         online={online}
         cardId={chipId}
         onAction={() => setOpen(false)}
+        open={open}
       />
     </Popover>
   )

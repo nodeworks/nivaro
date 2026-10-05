@@ -297,6 +297,11 @@ export {
   useScopeDimensions
 } from './components/pipeline/teamScopes'
 export { BrowserPushCard } from './components/profile/BrowserPushCard'
+export {
+  MailSuppressedPill,
+  type MailSuppression,
+  useMailSuppression
+} from './components/profile/MailSuppressedPill'
 export { PersonHeader } from './components/profile/PersonHeader'
 export { PersonProfile, type PersonProfileTab } from './components/profile/PersonProfile'
 export { SectionCard as ProfileSectionCard } from './components/profile/primitives'

@@ -5,6 +5,7 @@ import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
+import { filterSuppressed, recordBouncesFromError } from './mail-suppressions.js'
 import type { NotifyCategory } from './notification-channels.js'
 import { overlaySettings } from './settings-overrides.js'
 import { noteChannel, noteChannelRedirect } from './traffic-taps/channels.js'
@@ -639,6 +640,20 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
     const id = await logMail(afterDigest, opts.subject, 'dropped', { template: opts.template })
     return { status: 'dropped', log_id: id }
   }
+  // Bounce handling (#1299): a suppressed address is never sent to again —
+  // each one gets its own 'dropped' row naming the bounce reason.
+  const sup = await filterSuppressed(routed.to)
+  let suppressedLogId: number | null = null
+  for (const d of sup.dropped) {
+    suppressedLogId = await logMail(d.address, opts.subject, 'dropped', {
+      template: opts.template,
+      error: `suppressed: ${d.reason}`,
+      collection: opts.collection,
+      item: opts.item
+    })
+  }
+  if (sup.kept.length === 0) return { status: 'dropped', log_id: suppressedLogId }
+  routed.to = sup.kept
   const sendStarted = Date.now()
   try {
     await buildTransporter(smtp).sendMail({
@@ -665,6 +680,8 @@ export async function sendMail(opts: MailOptions): Promise<MailResult> {
       item: opts.item,
       ms: Date.now() - sendStarted
     })
+    // A hard bounce marks the address (#1299); the send's error still surfaces.
+    await recordBouncesFromError(err, routed.to).catch(() => undefined)
     throw err
   }
 }
@@ -752,6 +769,20 @@ export async function sendRawMail(opts: {
     const id = await logMail(afterDigest, opts.subject, 'dropped', { template: logTemplate })
     return { status: 'dropped', log_id: id }
   }
+  // Bounce handling (#1299): suppressed addresses never send; one 'dropped'
+  // row per address names the bounce reason.
+  const sup = await filterSuppressed(routed.to)
+  let suppressedLogId: number | null = null
+  for (const d of sup.dropped) {
+    suppressedLogId = await logMail(d.address, opts.subject, 'dropped', {
+      template: logTemplate,
+      error: `suppressed: ${d.reason}`,
+      collection: opts.collection,
+      item: opts.item
+    })
+  }
+  if (sup.kept.length === 0) return { status: 'dropped', log_id: suppressedLogId }
+  routed.to = sup.kept
   const {
     title: _title,
     wrap: _wrap,
@@ -790,6 +821,8 @@ export async function sendRawMail(opts: {
       item: opts.item,
       ms: Date.now() - sendStarted
     })
+    // A hard bounce marks the address (#1299); the send's error still surfaces.
+    await recordBouncesFromError(err, routed.to).catch(() => undefined)
     throw err
   }
 }
