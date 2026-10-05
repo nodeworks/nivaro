@@ -22,7 +22,9 @@ vi.mock('../../../services/db-tuning/apply.js', async (orig) => {
     ...m,
     applyProposal: vi.fn(),
     rollbackProposal: vi.fn(),
-    dismissProposal: vi.fn()
+    dismissProposal: vi.fn(),
+    readLiveState: vi.fn(async () => ({})),
+    revalidate: vi.fn(() => null)
   }
 })
 vi.mock('../../../services/db-tuning/ledger.js', () => ({
@@ -50,6 +52,8 @@ import { logActivity } from '../../../services/activity.js'
 import {
   applyProposal,
   dismissProposal,
+  readLiveState,
+  revalidate,
   rollbackProposal,
   TuningRefusal
 } from '../../../services/db-tuning/apply.js'
@@ -235,6 +239,25 @@ describe('db-tuning routes', () => {
     )
   })
 
+  it('reprove reads the live object first: a changed one stays stale and is not proved', async () => {
+    const app = buildApp()
+    for (const status of ['stale', 'proposed', 'rejected_by_proof']) {
+      vi.mocked(updateProposal).mockClear()
+      vi.mocked(getProposal).mockResolvedValue(row({ status, kind: 'proc_rewrite' }) as never)
+      vi.mocked(revalidate).mockReturnValueOnce('the procedure body changed since the proof ran')
+      const res = await app.inject({ method: 'POST', url: '/db-tuning/proposals/p1/reprove' })
+      expect(res.statusCode).toBe(409)
+      expect(res.json()).toMatchObject({
+        code: 'TUNING_STALE',
+        error: 'the object changed since this was proposed; it will be re-observed tonight',
+        reason: 'the procedure body changed since the proof ran'
+      })
+      if (status === 'stale') expect(updateProposal).not.toHaveBeenCalled()
+      else expect(updateProposal).toHaveBeenCalledWith('p1', { status: 'stale' })
+    }
+    expect(readLiveState).toHaveBeenCalledWith(expect.objectContaining({ id: 'p1' }))
+    expect(prove).not.toHaveBeenCalled()
+  })
   it('reprove refuses a row that is not open, and a failed proof lands as rejected_by_proof', async () => {
     const app = buildApp()
     vi.mocked(getProposal).mockResolvedValue(row({ status: 'watching' }) as never)

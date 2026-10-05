@@ -188,6 +188,27 @@ describe('DbTuningView', () => {
     await waitFor(() => expect(postsTo(request, '/db-tuning/proposals/p1/reprove')).toHaveLength(1))
   })
 
+  it('a re-prove of a changed object says it stays stale', async () => {
+    const rows = [proposal({ status: 'stale' })]
+    const { client, request } = mockClient(rows, {
+      '/db-tuning/proposals/p1/reprove': () => {
+        throw apiError(409, {
+          error: 'the object changed since this was proposed; it will be re-observed tonight',
+          code: 'TUNING_STALE'
+        })
+      }
+    })
+    renderView(client)
+    await openRow('Index orders on customer_id')
+    fireEvent.click(document.querySelector('[data-tuning-action="reprove"]') as HTMLElement)
+    await waitFor(() => expect(postsTo(request, '/db-tuning/proposals/p1/reprove')).toHaveLength(1))
+    await waitFor(() =>
+      expect(document.querySelector('[data-tuning-stale]')?.textContent).toMatch(
+        /re-observed tonight/
+      )
+    )
+  })
+
   it('dismiss without a note is blocked before any request', async () => {
     const { client, request } = mockClient([proposal()])
     renderView(client)

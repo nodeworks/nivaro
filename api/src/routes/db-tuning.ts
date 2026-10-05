@@ -5,6 +5,8 @@ import { logActivity } from '../services/activity.js'
 import {
   applyProposal,
   dismissProposal,
+  readLiveState,
+  revalidate,
   rollbackProposal,
   TuningRefusal
 } from '../services/db-tuning/apply.js'
@@ -166,6 +168,18 @@ export async function dbTuningRoutes(app: FastifyInstance): Promise<void> {
       return reply
         .code(409)
         .send({ error: `proposal is ${row.status}`, code: 'TUNING_NOT_APPLICABLE' })
+    // The proof compares against the live object (a proc's twin EXECs the live procedure), so a
+    // changed object would be judged against the wrong side: it stays stale until the nightly
+    // observe proposes against what is live now.
+    const changed = revalidate(row, await readLiveState(row))
+    if (changed) {
+      if (row.status !== 'stale') await updateProposal(row.id, { status: 'stale' })
+      return reply.code(409).send({
+        error: 'the object changed since this was proposed; it will be re-observed tonight',
+        code: 'TUNING_STALE',
+        reason: changed
+      })
+    }
     const settings = await readTuningSettings()
     // the row does not keep its change_key, so the candidate carries none: the proof never reads it
     const proof = await prove(

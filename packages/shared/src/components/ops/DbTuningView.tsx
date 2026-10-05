@@ -372,8 +372,8 @@ function ProposalRowView({
         setMode('confirm-dba')
         return
       }
-      if (action === 'apply' && code === 'TUNING_STALE') {
-        // the API moved the row to stale: refetch it in place so Re-prove shows on this row
+      if ((action === 'apply' || action === 'reprove') && code === 'TUNING_STALE') {
+        // the API moved the row to stale (or kept it there): refetch it in place
         setMode('idle')
         setStale(errText(e))
         void qc.invalidateQueries({ queryKey: SUMMARY_KEY })
@@ -460,7 +460,8 @@ function ProposalRowView({
           )}
           {stale && (
             <p data-tuning-stale className={`rounded px-2 py-1 ${PILL.amber}`}>
-              The database moved since this was proved — {stale}. Re-prove it before applying.
+              The database moved since this was proved — {stale}. Re-prove checks the live object
+              again; a changed object is proposed afresh by the nightly run.
             </p>
           )}
 
