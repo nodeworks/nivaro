@@ -181,9 +181,16 @@ export function provability(name: string, body: string): string | null {
     return 'uses dynamic SQL'
   if (FOUR_PART.test(code)) return 'references a linked server'
   if (/\bOPEN(?:QUERY|ROWSET|DATASOURCE)\s*\(/i.test(code)) return 'references a linked server'
-  const callee = String.raw`${EXEC}\s+(?:@\w+\s*=\s*)?(?:\[?\w+\]?\.)?\[?`
+  const target = String.raw`${EXEC}\s+(?:@\w+\s*=\s*)?`
+  // db.schema.name (or db..name): another database's procedure — no sys.sql_modules lookup here
+  // can judge it, and a ROLLBACK cannot undo its mail or OS side effects.
+  const crossDb = new RegExp(String.raw`${target}(${PART}\.${PART}?\.${PART})`, 'i').exec(code)
+  if (crossDb) return `calls a procedure in another database ${bare(crossDb[1])}`
+  const callee = String.raw`${target}(?:\[?\w+\]?\.)?\[?`
   if (new RegExp(`${callee}${escapeRe(name)}\\]?(?![\\w])`, 'i').test(code)) return 'calls itself'
-  const sys = new RegExp(String.raw`${callee}((?:sp|xp)_\w+)`, 'i').exec(code)
+  const sys = new RegExp(String.raw`${target}(?:\[?\w*\]?\.){0,2}\[?((?:sp|xp)_\w+)`, 'i').exec(
+    code
+  )
   if (sys) return `calls system procedure ${sys[1]}`
   return null
 }

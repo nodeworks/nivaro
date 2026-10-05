@@ -90,6 +90,17 @@ describe('provability', () => {
     expect(proc('EXEC xy')).toBeNull()
     expect(proc('EXEC sp_rename t, u')).toMatch(/system procedure sp_rename/)
   })
+  it('refuses EXEC of a procedure in another database, keeps a 2-part callee', () => {
+    expect(proc("EXEC master.dbo.xp_cmdshell 'dir'")).toMatch(
+      /another database master\.dbo\.xp_cmdshell/
+    )
+    expect(proc("EXEC master..xp_cmdshell 'dir'")).toMatch(/another database master\.\.xp_cmdshell/)
+    expect(proc("EXEC [master].[dbo].[xp_cmdshell] 'dir'")).toMatch(/another database/)
+    expect(proc("EXEC msdb.dbo.sp_send_dbmail @recipients = 'a@b.c'")).toMatch(/another database/)
+    expect(proc('EXEC @rc = otherdb.dbo.writer')).toMatch(/another database otherdb\.dbo\.writer/)
+    expect(proc('EXEC dbo.xp_cmdshell')).toMatch(/system procedure xp_cmdshell/)
+    expect(proc('EXEC dbo.helper @a = 1')).toBeNull()
+  })
   it('refuses dynamic SQL, self-reference and linked servers', () => {
     expect(provability('x', "CREATE PROC x AS EXEC sp_executesql N'select 1'")).toMatch(/dynamic/)
     expect(provability('x', 'CREATE PROC x AS EXEC x')).toMatch(/itself/)
