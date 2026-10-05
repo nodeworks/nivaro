@@ -1,9 +1,60 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
+import { db } from '../../../../db/index.js'
 import {
+  aiBudgetAllows,
   aiRewriteCandidate,
   extractSqlBlock,
   sameSignature
 } from '../../../../services/db-tuning/rewrites/ai.js'
+
+const reply = (text: string) => ({
+  messages: { create: async () => ({ content: [{ type: 'text', text }] }) }
+})
+const run = (client: unknown) =>
+  aiRewriteCandidate({
+    proc: 'p',
+    body: 'CREATE PROC p @A INT AS SELECT 1',
+    planOps: [],
+    hotLines: [],
+    client: client as never,
+    model: 'm'
+  })
+
+describe('ai rewrite hardening', () => {
+  it('fails the budget closed when the spend cannot be read', async () => {
+    vi.mocked(db).mockImplementation((() => {
+      throw new Error('db down')
+    }) as never)
+    expect(await aiBudgetAllows(5)).toBe(false)
+  })
+  it('compares every parameter in full', () => {
+    const h = (p: string) => `CREATE PROC p ${p} AS SELECT 1`
+    expect(sameSignature(h('@A INT = NULL'), h('@A INT = 5'))).toBe(false)
+    expect(sameSignature(h('@A INT OUTPUT'), h('@A INT'))).toBe(false)
+    expect(sameSignature(h('@A DECIMAL(10,2)'), h('@A DECIMAL(10,4)'))).toBe(false)
+    expect(sameSignature(h('@A DECIMAL(10,2), @B INT'), h('@B INT,@A decimal( 10 , 2 )'))).toBe(
+      true
+    )
+    expect(sameSignature(h('@A INT'), 'CREATE PROC [dbo].[p]\n  @A  [INT]\nAS SELECT 1')).toBe(true)
+  })
+  it('returns null when the client throws', async () => {
+    const client = {
+      messages: {
+        create: async () => {
+          throw new Error('boom')
+        }
+      }
+    }
+    expect(await run(client)).toBeNull()
+  })
+  it('returns null when the procedure name differs', async () => {
+    expect(await run(reply('```sql\nCREATE PROC other @A INT AS SELECT 2\n```'))).toBeNull()
+  })
+  it('treats an empty block as no block and accepts a tsql tag', () => {
+    expect(extractSqlBlock('```sql\n\n```')).toBeNull()
+    expect(extractSqlBlock('```tsql\nSELECT 1\n```')).toBe('SELECT 1')
+  })
+})
 
 describe('ai rewrite', () => {
   it('extracts the fenced sql block', () => {

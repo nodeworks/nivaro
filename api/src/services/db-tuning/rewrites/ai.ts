@@ -1,14 +1,37 @@
 import { db } from '../../../db/index.js'
 
 export function extractSqlBlock(text: string): string | null {
-  const m = text.match(/```sql\s*\n([\s\S]*?)```/i) ?? text.match(/```\s*\n([\s\S]*?)```/)
-  return m ? m[1].trim() : null
+  const m = text.match(/```t?sql\s*\n([\s\S]*?)```/i) ?? text.match(/```\s*\n([\s\S]*?)```/)
+  return m ? m[1].trim() || null : null
 }
 
+/** Each parameter's full normalised text (name, type, default, OUTPUT/READONLY), sorted. */
 function params(body: string): string[] {
   const head = body.split(/\bAS\b\s*(BEGIN|SET|SELECT|DECLARE|IF|WITH|;)/i)[0] ?? body
-  return [...head.matchAll(/@(\w+)\s+([\w()\s,]+?)(?=\s*(=|,|\bAS\b|\bOUTPUT\b|$))/gi)]
-    .map((m) => `${m[1].toLowerCase()}:${m[2].replace(/\s+/g, '').toLowerCase()}`)
+  const at = head.indexOf('@')
+  if (at < 0) return []
+  const parts: string[] = []
+  let depth = 0
+  let cur = ''
+  for (const ch of head.slice(at)) {
+    if (ch === '(') depth++
+    else if (ch === ')') depth--
+    if (ch === ',' && depth === 0) {
+      parts.push(cur)
+      cur = ''
+    } else cur += ch
+  }
+  parts.push(cur)
+  return parts
+    .map((p) =>
+      p
+        .replace(/[[\]]/g, '')
+        .replace(/\s+/g, ' ')
+        .replace(/\s*([=(),])\s*/g, '$1')
+        .trim()
+        .toLowerCase()
+    )
+    .filter((p) => p.startsWith('@'))
     .sort()
 }
 
@@ -16,7 +39,7 @@ export function sameSignature(a: string, b: string): boolean {
   return JSON.stringify(params(a)) === JSON.stringify(params(b))
 }
 
-/** The last 24 h of AI spend against the tuner's budget; true when the call log is absent. */
+/** The last 24 h of AI spend against the tuner's budget; false when the spend cannot be read. */
 export async function aiBudgetAllows(limitUsd: number): Promise<boolean> {
   try {
     const row = (await db('nivaro_ai_calls')
@@ -25,7 +48,7 @@ export async function aiBudgetAllows(limitUsd: number): Promise<boolean> {
       .first()) as { usd: number | string | null } | undefined
     return Number(row?.usd ?? 0) <= limitUsd
   } catch {
-    return true
+    return false
   }
 }
 
@@ -45,15 +68,6 @@ export async function aiRewriteCandidate(args: {
   client?: MinimalClient
   model?: string
 }): Promise<{ body: string; notes: string[] } | null> {
-  let client = args.client
-  let model = args.model
-  if (!client) {
-    const { getAiClient, getAiModelSettings } = await import('../../ai-client.js')
-    const settings = await getAiModelSettings()
-    model = model ?? settings.chatModel
-    client = ((await getAiClient({ model })) as unknown as MinimalClient | null) ?? undefined
-  }
-  if (!client || !model) return null
   const prompt = `You are rewriting one SQL Server stored procedure for performance in a production system.
 
 RULES — every one is checked by a machine proof after you answer:
@@ -72,6 +86,15 @@ ${args.planOps.slice(0, 20).join('\n') || '(none captured)'}
 STATEMENTS THAT COST THE MOST:
 ${args.hotLines.slice(0, 10).join('\n') || '(none captured)'}`
   try {
+    let client = args.client
+    let model = args.model
+    if (!client) {
+      const { getAiClient, getAiModelSettings } = await import('../../ai-client.js')
+      const settings = await getAiModelSettings()
+      model = model ?? settings.chatModel
+      client = ((await getAiClient({ model })) as unknown as MinimalClient | null) ?? undefined
+    }
+    if (!client || !model) return null
     const message = await client.messages.create({
       model,
       max_tokens: 6000,
