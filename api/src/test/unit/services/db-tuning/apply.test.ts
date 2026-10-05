@@ -24,6 +24,10 @@ const m = vi.hoisted(() => ({
   indexes: {} as Record<string, Record<string, IndexInfo>>,
   parentIds: [] as Array<{ id: unknown }>,
   mssql: true,
+  /** proposal-row writes whose status is listed here throw (a DB hiccup mid-apply) */
+  failStatus: new Set<string>(),
+  /** sys.indexes reads answered in order before falling back to m.indexes */
+  indexReads: [] as Array<IndexInfo | null>,
   runLongSql: vi.fn(async (_sql: string): Promise<unknown[]> => []),
   hasColumn: vi.fn(async (_t: string, _c: string) => true),
   schemaTable: vi.fn(async (_t: string, _cb: unknown) => undefined),
@@ -79,6 +83,10 @@ vi.mock('../../../../db/index.js', () => {
       async update(patch: Record<string, unknown>) {
         const p = Object.fromEntries(Object.entries(patch).map(([k, v]) => [k, iso(v)]))
         if (table === 'nivaro_tuning_proposals') {
+          if (m.failStatus.has(String(p.status))) throw new Error('connection reset')
+          // transition() JSON-encodes objects the way the ledger does; read them back as objects
+          for (const [k, v] of Object.entries(p))
+            if (typeof v === 'string' && v.startsWith('{')) p[k] = JSON.parse(v)
           const row = m.rows.get(String(where.id))
           if (!row || !matchesIn(row)) return 0
           Object.assign(row, p)
@@ -105,6 +113,10 @@ vi.mock('../../../../db/index.js', () => {
     const table = String(b[0])
     if (/sys\.columns/.test(sql)) return (m.columns[table] ?? []).map((name) => ({ name }))
     if (/sys\.indexes/.test(sql)) {
+      if (m.indexReads.length) {
+        const next = m.indexReads.shift()
+        return next ? [next] : []
+      }
       const ix = m.indexes[table]?.[String(b[1])]
       return ix ? [ix] : []
     }
@@ -417,8 +429,14 @@ const procRow = (over: Partial<ProposalRow> = {}) =>
     risk: 'review',
     apply: { type: 'proc_body', proc: 'p', body: PROC_NEW, hash: bodyHash(PROC_NEW) },
     undo: { type: 'proc_body', proc: 'p', body: PROC_OLD, hash: bodyHash(PROC_OLD) },
+    proof: { passed: true, method: 'twin', before: {}, after: {}, detail: '' },
     ...over
   })
+const PLAIN_NC: IndexInfo = {
+  type_desc: 'NONCLUSTERED',
+  is_primary_key: false,
+  is_unique_constraint: false
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -429,6 +447,8 @@ beforeEach(() => {
   m.indexes = { workflows: {} }
   m.parentIds = [{ id: 1 }, { id: 2 }]
   m.mssql = true
+  m.failStatus.clear()
+  m.indexReads = []
   m.runLongSql.mockImplementation(async () => [])
   m.procBody.mockImplementation(async () => null)
   m.indexDef.mockImplementation(async () => null)
@@ -634,6 +654,62 @@ describe('executeSpec', () => {
   })
 })
 
+describe('index_create apply grammar', () => {
+  const create = (sql: string) => row({ apply: { type: 'sql', statements: [sql] } })
+  it.each([
+    'CREATE UNIQUE NONCLUSTERED INDEX idx ON [workflows] ([project_type])',
+    'CREATE NONCLUSTERED INDEX idx ON [workflows] ([project_type]) WHERE ([project_type] IS NOT NULL)',
+    'CREATE NONCLUSTERED INDEX idx ON [workflows] ([project_type]) ON [PRIMARY]',
+    'CREATE NONCLUSTERED INDEX idx ON [workflows] ([project_type]) WITH (IGNORE_DUP_KEY = ON)',
+    'CREATE NONCLUSTERED INDEX idx ON [workflows] ([project_type]) WITH (ALLOW_ROW_LOCKS = OFF)',
+    'CREATE NONCLUSTERED INDEX idx ON [workflows] ([project_type]) WITH (ALLOW_PAGE_LOCKS = OFF)'
+  ])('an index_create apply refuses %s', (sql) => {
+    expect(specsProblem(create(sql))).toMatch(/index_create may not/)
+  })
+  it('allows build and storage options on a create', () => {
+    expect(
+      specsProblem(
+        create(
+          'CREATE NONCLUSTERED INDEX idx ON [workflows] ([project_type]) WITH (ONLINE = ON, SORT_IN_TEMPDB = ON, DATA_COMPRESSION = PAGE, FILLFACTOR = 90, MAXDOP = 4)'
+        )
+      )
+    ).toBeNull()
+  })
+  it('the full grammar stays for restoring a dropped definition (index_drop undo)', () => {
+    const drop = row({
+      kind: 'index_drop',
+      target: 'workflows.ix_u',
+      apply: { type: 'sql', statements: ['DROP INDEX [ix_u] ON [workflows]'] },
+      undo: {
+        type: 'sql',
+        statements: [
+          "CREATE UNIQUE NONCLUSTERED INDEX [ix_u] ON [workflows] ([status]) WHERE ([status] = N'open') WITH (IGNORE_DUP_KEY = ON) ON [PRIMARY]"
+        ]
+      }
+    })
+    expect(specsProblem(drop)).toBeNull()
+  })
+  it("index_drop revalidate keeps literal case: a filter on N'Open' is not N'open'", () => {
+    const drop = row({
+      kind: 'index_drop',
+      target: 'workflows.ix_f',
+      apply: { type: 'sql', statements: ['DROP INDEX [ix_f] ON [workflows]'] },
+      undo: {
+        type: 'sql',
+        statements: ["CREATE NONCLUSTERED INDEX [ix_f] ON [workflows] ([a]) WHERE ([s] = N'open')"]
+      }
+    })
+    const def = (lit: string) =>
+      `CREATE NONCLUSTERED INDEX [IX_F] ON [Workflows] ([A]) WHERE ([S] = N'${lit}')`
+    expect(
+      revalidate(drop, { ...live, indexExists: true, indexDefinition: def('open') })
+    ).toBeNull()
+    expect(revalidate(drop, { ...live, indexExists: true, indexDefinition: def('Open') })).toMatch(
+      /definition changed/
+    )
+  })
+})
+
 describe('applyProposal', () => {
   const app = {} as never
 
@@ -650,11 +726,45 @@ describe('applyProposal', () => {
     expect(err.message).not.toMatch(/reprove/)
     expect(m.startJobRun).not.toHaveBeenCalled()
   })
-  it('refuses a replicated target without dba_ok — recorded or live', async () => {
+  it('a proc rewrite applies only on a passed twin proof', async () => {
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    for (const proof of [
+      null,
+      { passed: false, method: 'twin' as const, before: {}, after: {}, detail: '' },
+      { passed: true, method: 'cost-model' as const, before: {}, after: {}, detail: '' }
+    ]) {
+      m.rows.set('x', { ...procRow({ proof }) })
+      expect((await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))).code).toBe(
+        'TUNING_NOT_APPLICABLE'
+      )
+    }
+    expect(m.runLongSql).not.toHaveBeenCalled()
+  })
+  it('an extension CREATE UNIQUE … WITH (IGNORE_DUP_KEY = ON) → 400 TUNING_INVALID, nothing runs', async () => {
+    m.rows.set('x', {
+      ...row({
+        apply: {
+          type: 'sql',
+          statements: [
+            'CREATE UNIQUE NONCLUSTERED INDEX idx ON [workflows] ([project_type]) WITH (IGNORE_DUP_KEY = ON)'
+          ]
+        }
+      })
+    })
+    const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+    expect(err.code).toBe('TUNING_INVALID')
+    expect(err.status).toBe(400)
+    expect(m.rows.get('x')?.status).toBe('proposed')
+    expect(m.runLongSql).not.toHaveBeenCalled()
+  })
+  it('refuses a replicated target without dba_ok — recorded or live; the body names the statement', async () => {
     m.rows.set('x', { ...row({ replicated: true }) })
-    expect((await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))).code).toBe(
-      'TUNING_REPLICATED'
-    )
+    const recorded = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+    expect(recorded.code).toBe('TUNING_REPLICATED')
+    expect(recorded.detail).toEqual({
+      target: 'workflows.project_type',
+      statements: ['CREATE NONCLUSTERED INDEX [idx] ON [workflows] ([project_type])']
+    })
     m.rows.set('y', { ...row({ id: 'y' }) })
     m.replicatedArticle.mockImplementation(async () => true)
     expect((await refusal(applyProposal('y', { userId: 'u', dbaOk: false, app }))).code).toBe(
@@ -663,6 +773,31 @@ describe('applyProposal', () => {
     expect(m.runLongSql).not.toHaveBeenCalled()
     await applyProposal('y', { userId: 'u', dbaOk: true, app })
     expect(m.rows.get('y')?.status).toBe('watching')
+  })
+  it("a stored rollup on a replicated collection's table is refused live (its column add is DDL)", async () => {
+    m.rows.set('x', {
+      ...row({
+        kind: 'rollup_store',
+        target: 'orders.total',
+        apply: {
+          type: 'field_patch',
+          collection: 'orders',
+          field: 'total',
+          patch: { computed_store: true }
+        },
+        undo: {
+          type: 'field_patch',
+          collection: 'orders',
+          field: 'total',
+          patch: { computed_store: false }
+        }
+      })
+    })
+    m.replicatedArticle.mockImplementation(async (t: string) => t === 'orders')
+    const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+    expect(err.code).toBe('TUNING_REPLICATED')
+    expect(err.detail?.target).toBe('orders.total')
+    expect(m.schemaTable).not.toHaveBeenCalled()
   })
   it('stale proc hash → status stale, 409 TUNING_STALE, nothing runs', async () => {
     m.rows.set('x', { ...procRow() })
@@ -677,11 +812,7 @@ describe('applyProposal', () => {
   })
   it('an index that appeared since the proposal → stale', async () => {
     m.rows.set('x', { ...row({}) })
-    m.indexes.workflows.idx = {
-      type_desc: 'NONCLUSTERED',
-      is_primary_key: false,
-      is_unique_constraint: false
-    }
+    m.indexes.workflows.idx = PLAIN_NC
     expect((await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))).code).toBe(
       'TUNING_STALE'
     )
@@ -703,7 +834,7 @@ describe('applyProposal', () => {
     )
     expect(m.rows.get('x')?.status).toBe('proposed')
   })
-  it('success → watching, baseline captured AFTER the change, watch window, job run, activity', async () => {
+  it('success → watching, baseline captured BEFORE the change, watch window, job run, activity', async () => {
     m.rows.set('x', {
       ...row({
         proof: {
@@ -724,7 +855,7 @@ describe('applyProposal', () => {
     const until = new Date(String(out.watch_until)).getTime()
     expect(until - before).toBeGreaterThanOrEqual(7 * 86_400_000 - 1000)
     expect(until - before).toBeLessThan(7 * 86_400_000 + 60_000)
-    expect(m.captureBaseline.mock.invocationCallOrder[0]).toBeGreaterThan(
+    expect(m.captureBaseline.mock.invocationCallOrder[0]).toBeLessThan(
       m.runLongSql.mock.invocationCallOrder[0]
     )
     expect(m.startJobRun).toHaveBeenCalledWith(
@@ -741,7 +872,7 @@ describe('applyProposal', () => {
       })
     )
   })
-  it('a failed apply → failed with the error, undo attempted at once and its outcome recorded', async () => {
+  it('a failed apply → failed with the error, undo run at once and its outcome recorded', async () => {
     m.rows.set('x', { ...procRow() })
     m.procBody.mockImplementation(async () => PROC_OLD)
     m.runLongSql.mockImplementationOnce(async () => {
@@ -756,30 +887,86 @@ describe('applyProposal', () => {
     expect(m.runLongSql.mock.calls[1][0]).toBe('CREATE OR ALTER PROCEDURE [dbo].[p] AS SELECT 1')
     expect(m.run.fail).toHaveBeenCalled()
   })
-  it('a failed apply whose undo also fails records both', async () => {
+  it('a failed apply whose undo also fails records both errors', async () => {
+    m.rows.set('x', { ...procRow() })
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.runLongSql
+      .mockImplementationOnce(async () => {
+        throw new Error('lock timeout')
+      })
+      .mockImplementationOnce(async () => {
+        throw new Error('deadlock victim')
+      })
+    await expect(applyProposal('x', { userId: 'u', dbaOk: false, app })).rejects.toThrow(
+      /lock timeout/
+    )
+    const reason = String(m.rows.get('x')?.rollback_reason)
+    expect(reason).toMatch(/apply failed: lock timeout/)
+    expect(reason).toMatch(/undo failed: deadlock victim/)
+    expect(m.rows.get('x')?.status).toBe('failed')
+  })
+  it('an undo the catalog refuses is recorded as not run', async () => {
     m.rows.set('x', { ...row({}) })
     m.runLongSql.mockImplementation(async () => {
       throw new Error('lock timeout')
     })
     await expect(applyProposal('x', { userId: 'u', dbaOk: false, app })).rejects.toThrow(/lock/)
-    // the index never landed, so the DROP is refused by the catalog re-check
-    expect(String(m.rows.get('x')?.rollback_reason)).toMatch(/undo not run|undo failed/)
+    // the CREATE never landed, so the DROP is refused by the catalog re-check
+    expect(String(m.rows.get('x')?.rollback_reason)).toMatch(
+      /undo not run: index idx does not exist/
+    )
+    expect(m.runLongSql).toHaveBeenCalledTimes(1)
+  })
+  it("a refusal before the first write runs no undo (it would drop a stranger's index)", async () => {
+    m.rows.set('x', { ...row({}) })
+    // absent when revalidated, taken by someone else by the time the statement is checked
+    m.indexReads = [null, PLAIN_NC, PLAIN_NC]
+    const err = await refusal(applyProposal('x', { userId: 'u', dbaOk: false, app }))
+    expect(err.message).toMatch(/already exists/)
+    expect(m.runLongSql).not.toHaveBeenCalled()
     expect(m.rows.get('x')?.status).toBe('failed')
+    expect(String(m.rows.get('x')?.rollback_reason)).toMatch(/nothing ran, no undo/)
+  })
+  it('a post-change write that throws still ends terminal: failed, change undone', async () => {
+    m.rows.set('x', { ...procRow() })
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.failStatus.add('watching')
+    await expect(applyProposal('x', { userId: 'u', dbaOk: false, app })).rejects.toThrow(
+      /connection reset/
+    )
+    expect(m.rows.get('x')?.status).toBe('failed')
+    expect(String(m.rows.get('x')?.rollback_reason)).toMatch(/connection reset; undo ran/)
+    expect(m.run.fail).toHaveBeenCalled()
+  })
+  it('a baseline read that throws does not stop the apply (metric null)', async () => {
+    m.rows.set('x', { ...row({}) })
+    m.captureBaseline.mockImplementation(async () => {
+      throw new Error('dmv denied')
+    })
+    const out = await applyProposal('x', { userId: 'u', dbaOk: false, app })
+    expect(out.status).toBe('watching')
+    expect(out.watch_baseline?.before).toEqual({ metric: null })
   })
   it('loses a race to another apply cleanly', async () => {
     m.rows.set('x', { ...row({}) })
-    m.startJobRun.mockImplementation(async () => {
-      return m.run
-    })
-    const first = applyProposal('x', { userId: 'u', dbaOk: false, app })
-    const second = applyProposal('x', { userId: 'u', dbaOk: false, app })
-    const results = await Promise.allSettled([first, second])
+    const results = await Promise.allSettled([
+      applyProposal('x', { userId: 'u', dbaOk: false, app }),
+      applyProposal('x', { userId: 'u', dbaOk: false, app })
+    ])
     expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1)
     expect(m.runLongSql).toHaveBeenCalledTimes(1)
+    expect(m.run.complete).toHaveBeenCalledWith(expect.stringMatching(/skipped/))
   })
 })
 
 describe('rollbackProposal', () => {
+  const CREATED = 'CREATE NONCLUSTERED INDEX [idx] ON [workflows] ([project_type])'
+  const watchingIndex = () => {
+    m.rows.set('x', { ...row({ status: 'watching', applied_by: 'u1' }) })
+    m.indexes.workflows.idx = PLAIN_NC
+    m.indexDef.mockImplementation(async () => CREATED)
+  }
+
   it('rolls back only a watching or applied row', async () => {
     m.rows.set('x', { ...row({}) })
     expect(
@@ -787,12 +974,7 @@ describe('rollbackProposal', () => {
     ).toBe('TUNING_NOT_APPLICABLE')
   })
   it('runs the undo → rolled_back with the reason, job run and activity', async () => {
-    m.rows.set('x', { ...row({ status: 'watching', applied_by: 'u1' }) })
-    m.indexes.workflows.idx = {
-      type_desc: 'NONCLUSTERED',
-      is_primary_key: false,
-      is_unique_constraint: false
-    }
+    watchingIndex()
     const out = await rollbackProposal('x', { userId: 'u2', reason: 'by admin', app: null })
     expect(out.status).toBe('rolled_back')
     expect(out.rollback_reason).toBe('by admin')
@@ -802,6 +984,32 @@ describe('rollbackProposal', () => {
     expect(m.logActivity).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'tuning-rollback', item: 'x', user: 'u2' })
     )
+  })
+  it('two rollbacks at once (admin + watcher): one wins, one undo runs, the row ends rolled_back', async () => {
+    watchingIndex()
+    const results = await Promise.allSettled([
+      rollbackProposal('x', { userId: 'u2', reason: 'by admin', app: null }),
+      rollbackProposal('x', { userId: null, reason: 'regressed', app: null })
+    ])
+    const lost = results.filter((r) => r.status === 'rejected')
+    expect(lost).toHaveLength(1)
+    expect((lost[0] as PromiseRejectedResult).reason).toMatchObject({
+      code: 'TUNING_NOT_APPLICABLE'
+    })
+    expect(m.runLongSql).toHaveBeenCalledTimes(1)
+    expect(m.rows.get('x')?.status).toBe('rolled_back')
+  })
+  it('a same-named index rebuilt differently since the apply is not dropped', async () => {
+    watchingIndex()
+    m.indexDef.mockImplementation(
+      async () => 'CREATE NONCLUSTERED INDEX [idx] ON [workflows] ([project_type], [status])'
+    )
+    expect(
+      (await refusal(rollbackProposal('x', { userId: null, reason: 'r', app: null }))).code
+    ).toBe('TUNING_STALE')
+    expect(m.runLongSql).not.toHaveBeenCalled()
+    expect(m.rows.get('x')?.status).toBe('failed')
+    expect(String(m.rows.get('x')?.rollback_reason)).toMatch(/rollback refused: the index changed/)
   })
   it('a proc edited since the apply is not clobbered: failed + 409 STALE, nothing runs', async () => {
     m.rows.set('x', { ...procRow({ status: 'watching' }) })
@@ -826,6 +1034,14 @@ describe('rollbackProposal', () => {
     expect(String(m.rows.get('x')?.rollback_reason)).toMatch(/rollback failed: deadlock/)
     expect(m.run.fail).toHaveBeenCalled()
   })
+  it('a final write that throws still leaves the row terminal (failed)', async () => {
+    watchingIndex()
+    m.failStatus.add('rolled_back')
+    await expect(rollbackProposal('x', { userId: null, reason: 'r', app: null })).rejects.toThrow(
+      /connection reset/
+    )
+    expect(m.rows.get('x')?.status).toBe('failed')
+  })
 })
 
 describe('dismissProposal', () => {
@@ -845,10 +1061,17 @@ describe('dismissProposal', () => {
       })
     )
   })
+  it('a failed row can be dismissed once a person has looked', async () => {
+    m.rows.set('x', { ...row({ status: 'failed' }) })
+    await dismissProposal('x', { userId: 'u', note: 'checked by hand' })
+    expect(m.rows.get('x')?.status).toBe('dismissed')
+  })
   it('refuses an in-flight row', async () => {
-    m.rows.set('x', { ...row({ status: 'watching' }) })
-    expect((await refusal(dismissProposal('x', { userId: 'u', note: '' }))).code).toBe(
-      'TUNING_NOT_APPLICABLE'
-    )
+    for (const status of ['watching', 'applying', 'applied'] as const) {
+      m.rows.set('x', { ...row({ status }) })
+      expect((await refusal(dismissProposal('x', { userId: 'u', note: '' }))).code).toBe(
+        'TUNING_NOT_APPLICABLE'
+      )
+    }
   })
 })

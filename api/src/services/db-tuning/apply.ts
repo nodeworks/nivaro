@@ -14,7 +14,7 @@ import {
 } from '../rollups.js'
 import { runLongSql } from '../run-long.js'
 import { indexDefinition, isMssqlDb, procedureBody } from './dmv.js'
-import { getProposal, updateProposal } from './ledger.js'
+import { getProposal } from './ledger.js'
 import { readTuningSettings } from './settings.js'
 import { bodyHash, renameProcHeader } from './twin.js'
 import {
@@ -38,7 +38,9 @@ export class TuningRefusal extends Error {
   constructor(
     public code: 'TUNING_STALE' | 'TUNING_REPLICATED' | 'TUNING_NOT_APPLICABLE' | 'TUNING_INVALID',
     message: string,
-    public status: 400 | 409 = 409
+    public status: 400 | 409 = 409,
+    /** Extra fields for the response body (a replicated refusal carries target + statements). */
+    public detail?: Record<string, unknown>
   ) {
     super(message)
   }
@@ -51,13 +53,24 @@ export interface LiveState {
   queryRow: { cache_ttl: number; warm_daily: boolean } | null
   /** index_create: the table and every key column are in sys.columns. */
   columnsExist?: boolean | null
-  /** index_drop: the live index rebuilt as a CREATE (dmv `indexDefinition`); null = unrebuildable. */
+  /** The live index rebuilt as a CREATE (dmv `indexDefinition`); null = absent or unrebuildable. */
   indexDefinition?: string | null
 }
 
 const T = 'nivaro_tuning_proposals'
 const APPLY_FROM: readonly TuningStatus[] = ['proposed']
 const ROLLBACK_FROM: readonly TuningStatus[] = ['watching', 'applied']
+/** The transient status an apply or a rollback holds while it runs (the claim). */
+const CLAIMED: readonly TuningStatus[] = ['applying']
+const DISMISS_FROM: readonly TuningStatus[] = [...OPEN_STATUSES, 'failed']
+/** WITH options an index_create may carry: build-time knobs and storage, never semantics. */
+const CREATE_OPTIONS = new Set([
+  'ONLINE',
+  'SORT_IN_TEMPDB',
+  'DATA_COMPRESSION',
+  'FILLFACTOR',
+  'MAXDOP'
+])
 const MAX_TTL_SECONDS = 86_400
 const BACKFILL_PROGRESS_EVERY = 500
 
@@ -70,10 +83,10 @@ const invalid = (message: string) => new TuningRefusal('TUNING_INVALID', message
 
 type Tok = { k: 'name' | 'word' | 'num' | 'str' | 'op'; v: string }
 
-// `[ident]` · bare word · number · '…' literal ('' escapes) · operator. Anything else — a dot,
-// a comment, a variable, a stray bracket — fails the tokenizer and the statement with it.
+// `[ident]` · [N]'…' literal ('' escapes) · bare word · number · operator. Anything else — a
+// dot, a comment, a variable, a stray bracket — fails the tokenizer and the statement with it.
 const TOKEN =
-  /\s*(?:\[([A-Za-z_][A-Za-z0-9_]*)\]|([A-Za-z_][A-Za-z0-9_]*)|(-?\d+(?:\.\d+)?)|('(?:[^']|'')*')|(<>|!=|<=|>=|[=<>(),;]))/y
+  /\s*(?:\[([A-Za-z_][A-Za-z0-9_]*)\]|(N?'(?:[^']|'')*')|([A-Za-z_][A-Za-z0-9_]*)|(-?\d+(?:\.\d+)?)|(<>|!=|<=|>=|[=<>(),;]))/y
 
 function tokenize(sql: string): Tok[] | null {
   const re = new RegExp(TOKEN.source, 'y')
@@ -85,9 +98,9 @@ function tokenize(sql: string): Tok[] | null {
     if (!m) return null
     at = re.lastIndex
     if (m[1]) out.push({ k: 'name', v: m[1] })
-    else if (m[2]) out.push({ k: 'word', v: m[2] })
-    else if (m[3]) out.push({ k: 'num', v: m[3] })
-    else if (m[4]) out.push({ k: 'str', v: m[4] })
+    else if (m[2]) out.push({ k: 'str', v: m[2] })
+    else if (m[3]) out.push({ k: 'word', v: m[3] })
+    else if (m[4]) out.push({ k: 'num', v: m[4] })
     else out.push({ k: 'op', v: m[5] })
   }
   return out
@@ -298,10 +311,39 @@ export function renderIndexStatement(s: IndexStatement): string {
   ].join('')
 }
 
-/** Case-folded canonical form, for comparing two definitions of one index. */
+/** Canonical form for comparing two definitions of one index: names and keywords case-folded,
+ *  string literals kept exactly. */
 const canonIndex = (sql: string): string | null => {
   const s = parseIndexStatement(sql)
-  return s ? renderIndexStatement(s).toLowerCase() : null
+  if (!s) return null
+  return renderIndexStatement(s).replace(/'(?:[^']|'')*'|[^']+/g, (part) =>
+    part.startsWith("'") ? part : part.toLowerCase()
+  )
+}
+
+/** Same index by shape — name, table, keys (with direction), includes, uniqueness, filter.
+ *  Build-time options (ONLINE, MAXDOP …) are not stored, so they are not compared. */
+const sameIndexShape = (a: IndexStatement, b: IndexStatement): boolean => {
+  const fold = (s: string) => s.toLowerCase()
+  const keys = (s: IndexStatement) => s.keys.map((k) => `${fold(k.column)}${k.desc ? ' desc' : ''}`)
+  return (
+    fold(a.name) === fold(b.name) &&
+    fold(a.table) === fold(b.table) &&
+    keys(a).join(',') === keys(b).join(',') &&
+    a.include.map(fold).join(',') === b.include.map(fold).join(',') &&
+    a.unique === b.unique &&
+    (a.filter ?? '') === (b.filter ?? '')
+  )
+}
+
+/** What a created index may be: plain, unfiltered, default filegroup, build/storage options. */
+function createApplyProblem(s: IndexStatement): string | null {
+  if (s.unique) return 'an index_create may not be UNIQUE (it would change what inserts accept)'
+  if (s.filter) return 'an index_create may not be filtered'
+  if (s.fileGroup) return 'an index_create may not name a filegroup'
+  const bad = s.options.map((o) => o.split(' ')[0]).filter((k) => !CREATE_OPTIONS.has(k))
+  if (bad.length) return `an index_create may not set ${bad.join(', ')}`
+  return null
 }
 
 // ─── Shape checks (pure) ────────────────────────────────────────────────────────────────
@@ -335,6 +377,8 @@ export function specsProblem(row: ProposalRow): string | null {
         return 'the undo does not reverse the apply on the same index'
       if (create && a.keys.map((k) => k.column.toLowerCase()).join(',') !== tail)
         return 'the index keys are not the target columns'
+      // The full grammar is for restoring a recorded definition (an index_drop's undo) only.
+      if (create) return createApplyProblem(a)
       if (!create && a.name.toLowerCase() !== tail) return 'the dropped index is not the target'
       return null
     }
@@ -402,9 +446,17 @@ export function revalidate(row: ProposalRow, live: LiveState): string | null {
 /** Pure: why running the undo now would clobber something other than our own change, or null. */
 export function undoProblem(row: ProposalRow, live: LiveState): string | null {
   switch (row.kind) {
-    case 'index_create':
+    case 'index_create': {
       if (live.indexExists == null) return 'the live index catalog could not be read'
-      return live.indexExists ? null : 'the index the apply created no longer exists'
+      if (!live.indexExists) return 'the index the apply created no longer exists'
+      // a same-named index someone rebuilt differently since is not ours to drop
+      const created =
+        row.apply.type === 'sql' ? parseIndexStatement(row.apply.statements[0] ?? '') : null
+      const now = live.indexDefinition ? parseIndexStatement(live.indexDefinition) : null
+      return created && now && sameIndexShape(created, now)
+        ? null
+        : 'the index changed since the apply'
+    }
     case 'index_drop':
       if (live.indexExists == null) return 'the live index catalog could not be read'
       return live.indexExists ? 'an index of that name exists again' : null
@@ -447,7 +499,11 @@ async function indexRow(table: string, name: string): Promise<Record<string, unk
   return rows[0] ?? null
 }
 
-/** The live state `revalidate` / `undoProblem` judge. Catalog read errors throw — nothing runs. */
+/**
+ * The live state `revalidate` / `undoProblem` judge. A sys.indexes / sys.columns read error
+ * throws (nothing runs); the dmv readers (`indexDefinition`, `procedureBody`) answer null on an
+ * error, which reads as "changed" — stale on apply, refused on rollback: the safe side.
+ */
 export async function readLiveState(row: ProposalRow): Promise<LiveState> {
   const live: LiveState = { indexExists: null, procHash: null, fieldStore: null, queryRow: null }
   switch (row.kind) {
@@ -459,9 +515,8 @@ export async function readLiveState(row: ProposalRow): Promise<LiveState> {
       if (row.kind === 'index_create') {
         const cols = await tableColumns(s.table)
         live.columnsExist = cols.size > 0 && s.keys.every((k) => cols.has(k.column.toLowerCase()))
-      } else {
-        live.indexDefinition = live.indexExists ? await indexDefinition(s.table, s.name) : null
       }
+      live.indexDefinition = live.indexExists ? await indexDefinition(s.table, s.name) : null
       return live
     }
     case 'proc_rewrite': {
@@ -498,13 +553,35 @@ export async function readLiveState(row: ProposalRow): Promise<LiveState> {
   }
 }
 
-/** Recorded on the row, or a replication article now (the publication may postdate the proof). */
+/**
+ * Recorded on the row, or a replication article now (the publication may postdate the proof).
+ * A stored rollup counts: its column add is DDL on the collection's table.
+ */
 async function replicatedNow(row: ProposalRow): Promise<boolean> {
   if (row.replicated) return true
   if (row.kind === 'index_create' || row.kind === 'index_drop')
     return isReplicatedArticle(row.target.split('.')[0])
   if (row.kind === 'proc_rewrite') return isReplicatedProcedure(row.target)
+  if (row.kind === 'rollup_store' && row.apply.type === 'field_patch')
+    return isReplicatedArticle(row.apply.collection)
   return false
+}
+
+/** What the DBA is asked to let forward to subscribers — the replicated refusal carries it. */
+function statementsOf(spec: ApplySpec): string[] {
+  switch (spec.type) {
+    case 'sql':
+      return spec.statements.map((s) => {
+        const p = parseIndexStatement(s)
+        return p ? renderIndexStatement(p) : s
+      })
+    case 'proc_body':
+      return [renameProcHeader(spec.body, spec.proc, spec.proc) ?? spec.body]
+    case 'field_patch':
+      return [`ALTER TABLE [${spec.collection}] ADD [${spec.field}] (stored rollup column)`]
+    case 'query_patch':
+      return []
+  }
 }
 
 /** The catalog half of the statement check: every name exists (or, for a create, is free). */
@@ -552,10 +629,18 @@ function addRollupColumn(t: Knex.AlterTableBuilder, field: string, type: string)
   col.nullable()
 }
 
-/** Runs one spec; returns a one-line outcome. Refuses (TuningRefusal) before running anything. */
+/**
+ * Runs one spec; returns a one-line outcome. Every refusal (TuningRefusal) comes before the
+ * first write; `ctx.began` fires immediately before that first write, so a caller knows
+ * whether anything may need undoing.
+ */
 export async function executeSpec(
   spec: ApplySpec,
-  ctx: { userId: string | null; progress?: (blob: Record<string, unknown>) => void }
+  ctx: {
+    userId: string | null
+    progress?: (blob: Record<string, unknown>) => void
+    began?: () => void
+  }
 ): Promise<string> {
   switch (spec.type) {
     case 'sql': {
@@ -569,6 +654,7 @@ export async function executeSpec(
         const problem = await catalogProblem(s)
         if (problem) throw invalid(problem)
         const sql = renderIndexStatement(s)
+        ctx.began?.()
         await runLongSql(sql)
         ran.push(sql)
       }
@@ -584,6 +670,7 @@ export async function executeSpec(
       if (!sql) throw invalid(`the body is not a CREATE/ALTER PROCEDURE of ${spec.proc}`)
       if ((await procedureBody(spec.proc)) == null)
         throw invalid(`procedure ${spec.proc} does not exist`)
+      ctx.began?.()
       await runLongSql(sql)
       return `CREATE OR ALTER PROCEDURE [dbo].[${spec.proc}] (body ${spec.hash.slice(0, 8)})`
     }
@@ -599,6 +686,7 @@ export async function executeSpec(
         | undefined
       const cfg = f?.computed_type === 'rollup' ? parseRollupFormula(f.computed_formula) : null
       if (!cfg) throw invalid(`${collection}.${field} is not a rollup field`)
+      ctx.began?.()
       if (!patch.computed_store) {
         await db('nivaro_fields').where(where).update({ computed_store: 0 })
         clearMetadataCache(collection)
@@ -633,6 +721,7 @@ export async function executeSpec(
       const ttl = patch.cache_ttl
       if (!Number.isInteger(id) || !Number.isInteger(ttl) || ttl < 0 || ttl > MAX_TTL_SECONDS)
         throw invalid('bad query patch')
+      ctx.began?.()
       const n = await db('nivaro_custom_queries')
         .where({ id, slug })
         .update({ cache_ttl: ttl, warm_daily: patch.warm_daily === true, updated_at: new Date() })
@@ -646,16 +735,22 @@ export async function executeSpec(
 
 // ─── Apply / roll back / dismiss ────────────────────────────────────────────────────────
 
-/** Move a row only while it is still in one of `from` — two clicks cannot both win. */
+/**
+ * Move a row only while it is still in one of `from` — two clicks (or a click and the watcher)
+ * cannot both win. Objects are JSON-encoded as `updateProposal` does.
+ */
 async function transition(
   id: string,
   from: readonly TuningStatus[],
   patch: Record<string, unknown>
 ): Promise<boolean> {
+  const out: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(patch))
+    out[k] = v && typeof v === 'object' && !(v instanceof Date) ? JSON.stringify(v) : v
   const n = await db(T)
     .where({ id })
     .whereIn('status', [...from])
-    .update(patch)
+    .update(out)
   return Number(n) > 0
 }
 
@@ -664,6 +759,38 @@ const numericOnly = (o: Record<string, unknown> | undefined): Record<string, num
     string,
     number | null
   >
+
+/**
+ * Claim the row for one apply or rollback: a job run first, then one conditional UPDATE that
+ * sets `applying` + `run_id` together. A stuck claim is found by `run_id` → the job run's
+ * `started_at`. The loser's run completes as skipped.
+ */
+async function claim(
+  row: ProposalRow,
+  from: readonly TuningStatus[],
+  job: 'apply' | 'rollback',
+  userId: string | null
+) {
+  const run = await startJobRun('tuning', `tuning:${job}:${row.id}`, {
+    label: `Tuning ${job === 'apply' ? '' : 'rollback '}— ${row.title}`.slice(0, 200),
+    triggeredBy: userId
+  })
+  if (!(await transition(row.id, from, { status: 'applying', run_id: run.id }))) {
+    await run.complete('skipped — another apply or rollback holds this proposal')
+    throw new TuningRefusal(
+      'TUNING_NOT_APPLICABLE',
+      'another apply or rollback holds this proposal'
+    )
+  }
+  return run
+}
+
+const undoOutcome = (row: ProposalRow, userId: string | null): Promise<string> =>
+  executeSpec(row.undo, { userId }).then(
+    (o) => `undo ran: ${o}`,
+    (e: unknown) =>
+      e instanceof TuningRefusal ? `undo not run: ${e.message}` : `undo failed: ${errText(e)}`
+  )
 
 export async function applyProposal(
   id: string,
@@ -678,12 +805,20 @@ export async function applyProposal(
       `proposal is ${row.status}${reprove ? ' — reprove first' : ''}`
     )
   }
+  // belt and braces: a rewrite ships only on a passed twin proof, whatever set the status
+  if (row.kind === 'proc_rewrite' && !(row.proof?.passed && row.proof.method === 'twin'))
+    throw new TuningRefusal(
+      'TUNING_NOT_APPLICABLE',
+      'a procedure rewrite needs a passed twin proof'
+    )
   const shape = specsProblem(row)
   if (shape) throw invalid(shape)
   if (!opts.dbaOk && (await replicatedNow(row)))
     throw new TuningRefusal(
       'TUNING_REPLICATED',
-      "target is a replication article — the statement forwards to subscribers; apply only with the DBA's go"
+      "target is a replication article — the statement forwards to subscribers; apply only with the DBA's go",
+      409,
+      { target: row.target, statements: statementsOf(row.apply) }
     )
   const problem = revalidate(row, await readLiveState(row))
   if (problem) {
@@ -691,29 +826,40 @@ export async function applyProposal(
     throw new TuningRefusal('TUNING_STALE', problem)
   }
   const settings = await readTuningSettings()
-  if (!(await transition(id, APPLY_FROM, { status: 'applying' })))
-    throw new TuningRefusal('TUNING_NOT_APPLICABLE', 'proposal is already being applied')
-  const run = await startJobRun('tuning', `tuning:apply:${id}`, {
-    label: `Tuning — ${row.title}`.slice(0, 200),
-    triggeredBy: opts.userId
-  })
-  await updateProposal(id, { run_id: run.id })
+  const run = await claim(row, APPLY_FROM, 'apply', opts.userId)
 
+  // From the claim on, the row always ends terminal: watching, or failed with the reason.
+  let executed = false
   let outcome: string
   try {
+    // Before the change: CREATE INDEX recompiles the table's plans and CREATE OR ALTER resets
+    // the procedure's stats, so a figure read afterwards is mostly empty.
+    const baseline = await captureBaseline(row).catch(() => ({ metric: null }))
     outcome = await executeSpec(row.apply, {
       userId: opts.userId,
-      progress: (blob) => run.progress(blob)
+      progress: (blob) => run.progress(blob),
+      began: () => {
+        executed = true
+      }
     })
+    const now = new Date()
+    const moved = await transition(id, CLAIMED, {
+      status: 'watching',
+      applied_at: now,
+      applied_by: opts.userId,
+      watch_until: new Date(now.getTime() + settings.watch_days * 86_400_000),
+      watch_baseline: { before: baseline, after: numericOnly(row.proof?.after) }
+    })
+    if (!moved) throw new Error('the proposal left the applying state while the change ran')
   } catch (err) {
-    // Whatever part of the change landed comes off at once; the row says what the undo did.
-    const undo = await executeSpec(row.undo, { userId: opts.userId }).then(
-      (o) => `undo ran: ${o}`,
-      (e: unknown) =>
-        e instanceof TuningRefusal ? `undo not run: ${e.message}` : `undo failed: ${errText(e)}`
-    )
+    // A refusal before the first write changed nothing: no undo (it could drop a stranger's
+    // index). Otherwise whatever part of the change landed comes off at once.
+    const undo = executed ? await undoOutcome(row, opts.userId) : 'nothing ran, no undo'
     const reason = `apply failed: ${errText(err)}; ${undo}`
-    await updateProposal(id, { status: 'failed', rollback_reason: reason.slice(0, 500) })
+    await transition(id, CLAIMED, {
+      status: 'failed',
+      rollback_reason: reason.slice(0, 500)
+    }).catch(() => false)
     await run.fail(err)
     await logActivity({
       action: 'tuning-apply-failed',
@@ -724,17 +870,6 @@ export async function applyProposal(
     })
     throw err
   }
-
-  // The watch judges later samples against the figure measured once the change is live.
-  const baseline = await captureBaseline(row).catch(() => ({ metric: null }))
-  const now = new Date()
-  await updateProposal(id, {
-    status: 'watching',
-    applied_at: now,
-    applied_by: opts.userId,
-    watch_until: new Date(now.getTime() + settings.watch_days * 86_400_000),
-    watch_baseline: { before: baseline, after: numericOnly(row.proof?.after) }
-  })
   await run.complete(outcome)
   await logActivity({
     action: 'tuning-apply',
@@ -751,9 +886,9 @@ export async function applyProposal(
 }
 
 /**
- * Run the undo of a watching/applied row. `app` is the watcher's handle for the applier's
- * notice; a rollback the live object no longer allows (a proc edited since, an index gone)
- * is refused and left `failed` for a person.
+ * Run the undo of a watching/applied row under the same claim as Apply. `app` is the watcher's
+ * handle for the applier's notice. A rollback the live object no longer allows (a proc edited
+ * since, an index gone or rebuilt) is refused and the row left `failed` for a person.
  */
 export async function rollbackProposal(
   id: string,
@@ -763,38 +898,35 @@ export async function rollbackProposal(
   if (!row) throw new TuningRefusal('TUNING_NOT_APPLICABLE', 'proposal not found', 400)
   if (!ROLLBACK_FROM.includes(row.status))
     throw new TuningRefusal('TUNING_NOT_APPLICABLE', `proposal is ${row.status}`)
-  const refuse = async (refusal: TuningRefusal): Promise<never> => {
-    await transition(id, ROLLBACK_FROM, {
-      status: 'failed',
-      rollback_reason: `rollback refused: ${refusal.message}`.slice(0, 500)
-    })
-    await logActivity({
-      action: 'tuning-rollback-failed',
-      user: opts.userId,
-      collection: T,
-      item: id,
-      comment: `Rollback refused: ${row.title} — ${refusal.message}`.slice(0, 1000)
-    })
-    throw refusal
-  }
-  const shape = specsProblem(row)
-  if (shape) return refuse(invalid(shape))
-  const problem = undoProblem(row, await readLiveState(row))
-  if (problem) return refuse(new TuningRefusal('TUNING_STALE', problem))
+  const run = await claim(row, ROLLBACK_FROM, 'rollback', opts.userId)
 
-  const run = await startJobRun('tuning', `tuning:rollback:${id}`, {
-    label: `Tuning rollback — ${row.title}`.slice(0, 200),
-    triggeredBy: opts.userId
-  })
+  let executed = false
   let outcome: string
   try {
+    const shape = specsProblem(row)
+    if (shape) throw invalid(shape)
+    const problem = undoProblem(row, await readLiveState(row))
+    if (problem) throw new TuningRefusal('TUNING_STALE', problem)
     outcome = await executeSpec(row.undo, {
       userId: opts.userId,
-      progress: (blob) => run.progress(blob)
+      progress: (blob) => run.progress(blob),
+      began: () => {
+        executed = true
+      }
     })
+    const moved = await transition(id, CLAIMED, {
+      status: 'rolled_back',
+      rolled_back_at: new Date(),
+      rollback_reason: opts.reason.slice(0, 500)
+    })
+    if (!moved) throw new Error('the proposal left the applying state while the undo ran')
   } catch (err) {
-    const reason = `rollback failed: ${errText(err)}`
-    await transition(id, ROLLBACK_FROM, { status: 'failed', rollback_reason: reason.slice(0, 500) })
+    const what = executed || !(err instanceof TuningRefusal) ? 'failed' : 'refused'
+    const reason = `rollback ${what}: ${errText(err)}`
+    await transition(id, CLAIMED, {
+      status: 'failed',
+      rollback_reason: reason.slice(0, 500)
+    }).catch(() => false)
     await run.fail(err)
     await logActivity({
       action: 'tuning-rollback-failed',
@@ -805,11 +937,6 @@ export async function rollbackProposal(
     })
     throw err
   }
-  await transition(id, ROLLBACK_FROM, {
-    status: 'rolled_back',
-    rolled_back_at: new Date(),
-    rollback_reason: opts.reason.slice(0, 500)
-  })
   await run.complete(outcome)
   await logActivity({
     action: 'tuning-rollback',
@@ -821,16 +948,17 @@ export async function rollbackProposal(
   return (await getProposal(id)) as ProposalRow
 }
 
+/** Dismiss an open row — or a failed one, once a person has looked at it. */
 export async function dismissProposal(
   id: string,
   opts: { userId: string | null; note: string }
 ): Promise<void> {
   const row = await getProposal(id)
   if (!row) throw new TuningRefusal('TUNING_NOT_APPLICABLE', 'proposal not found', 400)
-  if (!OPEN_STATUSES.includes(row.status))
+  if (!DISMISS_FROM.includes(row.status))
     throw new TuningRefusal('TUNING_NOT_APPLICABLE', `proposal is ${row.status}`)
   const note = opts.note.trim().slice(0, 500)
-  const moved = await transition(id, OPEN_STATUSES, {
+  const moved = await transition(id, DISMISS_FROM, {
     status: 'dismissed',
     dismissed_at: new Date(),
     dismissed_by: opts.userId,

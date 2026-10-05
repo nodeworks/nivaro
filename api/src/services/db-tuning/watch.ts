@@ -6,12 +6,21 @@ import type { ProposalRow } from './types.js'
 
 /**
  * The metric readers the post-apply watch stands on: one figure per kind, lower is better.
- * Apply stores `captureBaseline` once the change has landed; the hourly watcher samples
+ * Apply stores `captureBaseline` just before the change runs; the hourly watcher samples
  * `measure` against it.
  */
 
-/** The one metric each kind is judged by (lower is better); null when nothing measures it. */
+/** The one metric each kind is judged by (lower is better); null when nothing measures it —
+ *  including when a read throws. */
 export async function measure(row: ProposalRow): Promise<number | null> {
+  try {
+    return await measureKind(row)
+  } catch {
+    return null
+  }
+}
+
+async function measureKind(row: ProposalRow): Promise<number | null> {
   switch (row.kind) {
     case 'index_create':
     case 'index_drop': {
