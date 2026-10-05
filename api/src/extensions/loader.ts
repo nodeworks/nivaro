@@ -19,6 +19,7 @@ import { type ChainTable, chainFields } from '../services/chain-columns.js'
 import { beginChainRoot } from '../services/chain-roots.js'
 import { registerConfigSeed } from '../services/config-seeds.js'
 import { registerDigestSection } from '../services/daily-digest.js'
+import { registerTuningObserver } from '../services/db-tuning/observers/registry.js'
 import {
   publishExtensionEvent,
   registerExtensionEventHandler
@@ -859,6 +860,13 @@ export function registrationMembers(
         registerOpsTask(def, extId)
       }
     },
+    tuning: {
+      registerObserver: (def) => {
+        note('tuning')
+        own('tuning_observers', `${def.id} · ${def.kind}`)
+        registerTuningObserver(def, extId)
+      }
+    },
     seeds: {
       register: (def) => {
         note('seeds')
@@ -1058,6 +1066,7 @@ async function loadExtension(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'tuning'
     | 'seeds'
     | 'schema'
     | 'integrations'
@@ -1267,6 +1276,7 @@ export async function loadExtensions(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'tuning'
     | 'seeds'
     | 'schema'
     | 'integrations'
@@ -1419,6 +1429,7 @@ export async function loadCloudExtensions(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'tuning'
     | 'seeds'
     | 'schema'
     | 'integrations'
@@ -1605,6 +1616,7 @@ export async function scanNewExtensions(
     | 'approvalBrief'
     | 'readiness'
     | 'tasks'
+    | 'tuning'
     | 'seeds'
     | 'schema'
     | 'integrations'

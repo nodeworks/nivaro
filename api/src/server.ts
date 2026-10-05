@@ -1677,6 +1677,37 @@ export async function buildServer() {
         }
       )
 
+      // #996 — database tuning: nightly observe (proposals + proofs; nothing applies).
+      // Registered always; the run returns at once while db_tuning.enabled is off. A killed
+      // proof leaves its `<proc>__tune` twin behind, so boot sweeps them first —
+      // fire-and-forget: the sweep must never fail or hold up boot.
+      void import('./services/db-tuning/twin.js')
+        .then(({ sweepTwinLeftovers }) => sweepTwinLeftovers())
+        .then((dropped) => {
+          if (dropped.length)
+            app.log.warn(`db-tuning: dropped leftover twin procedure(s) ${dropped.join(', ')}`)
+        })
+        .catch((err) => app.log.warn({ err }, 'db-tuning: twin sweep failed'))
+      app.cron.schedule(
+        'db-tuning-observe',
+        '35 3 * * *',
+        async () => {
+          const { observeSummary, runObserve } = await import('./services/db-tuning/observe-run.js')
+          const report = await runObserve({ trigger: 'schedule' })
+          app.log.info(`db-tuning-observe: ${observeSummary(report)}`)
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            'Nightly 03:35 — reads the workload evidence (missing and unused indexes, slow procedures, rollup and query-cache traffic, extension observers), proves the biggest candidates and writes them to Database Tuning as proposals or proof rejections. Nothing applies. Returns at once while db_tuning.enabled is off. Dry run lists what it would prove.',
+          dryRun: async () => {
+            const { runObserve } = await import('./services/db-tuning/observe-run.js')
+            return runObserve({ dryRun: true })
+          }
+        }
+      )
+
       // Integration obligation notifications: tell the record's owners and
       // the API's owner when a row the sweep below writes (or a writer
       // stamps directly, e.g. `failed`) is still unmet — module-level app

@@ -26,6 +26,11 @@ const ext = defineExtension({
       execute: async () => ({ summary: 'closed them' })
     })
     ctx.schema.step('watermarks', { description: 'a table', up: async () => {} })
+    ctx.tuning.registerObserver({
+      id: 'demo:hot-index',
+      kind: 'index_create',
+      observe: async () => []
+    })
     ctx.seeds.register({
       key: 'demo:statuses',
       collection: 'statuses',
@@ -70,6 +75,7 @@ describe('test context', () => {
     expect(ctx.registered.signals.map((s) => s.id)).toEqual(['demo:stuck'])
     expect(ctx.registered.seeds.map((s) => s.key)).toEqual(['demo:statuses'])
     expect(ctx.registered.schemaSteps.map((s) => s.id)).toEqual(['watermarks'])
+    expect(ctx.registered.tuningObservers.map((o) => o.id)).toEqual(['demo:hot-index'])
 
     await ctx.runHooks('orders', 'create', 'after', { keys: [1], result: { id: 1, owner: 'u1' } })
     expect(ctx.calls.notifications).toEqual([

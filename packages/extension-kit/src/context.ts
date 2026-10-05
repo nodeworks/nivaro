@@ -38,6 +38,7 @@ import type {
   RelatedNoteProvider,
   SchemaStepDef,
   StorageAdapter,
+  TuningObserverDef,
   ValidatorDef
 } from './registrations.js'
 import type { IntegrationSignal, SignalActionHandler, TrafficNodeDef } from './signals.js'
@@ -223,6 +224,8 @@ export interface ExtensionContext {
   /** Operational tasks — repairs, backfills, migrations — run from the admin
    *  console (dry run by default, one at a time, every run recorded). */
   tasks: { register(def: OpsTaskDef): void }
+  /** Database tuning observers (#996). */
+  tuning: { registerObserver(def: TuningObserverDef): void }
   /** Checked-in rows of a configuration collection, applied by a task —
    *  never at boot — with a drift report as its dry run. */
   seeds: { register(def: ConfigSeedDef): void }

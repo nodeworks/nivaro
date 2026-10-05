@@ -25,6 +25,7 @@ export type JobRunKind =
   | 'bulk'
   | 'task'
   | 'ai'
+  | 'tuning'
 
 /**
  * How a run started (#1050 / #1051): `schedule` = the clock fired it; `run-now` = someone

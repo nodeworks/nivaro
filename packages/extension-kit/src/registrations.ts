@@ -548,3 +548,52 @@ export interface SchemaStepDef {
    */
   check?(db: Knex): Promise<SchemaCheckResult | boolean>
 }
+
+// ─── Database tuning ────────────────────────────────────────────────────────
+
+/** Mirrors the API's tuning kinds (`api/src/services/db-tuning/types.ts`). */
+export type TuningKind =
+  | 'index_create'
+  | 'index_drop'
+  | 'proc_rewrite'
+  | 'rollup_store'
+  | 'query_cache'
+
+/** The exact change Apply runs, or Undo reverses. */
+export type TuningApplySpec =
+  | { type: 'sql'; statements: string[] }
+  | { type: 'proc_body'; proc: string; body: string; hash: string }
+  | { type: 'field_patch'; collection: string; field: string; patch: { computed_store: boolean } }
+  | {
+      type: 'query_patch'
+      id: number
+      slug: string
+      patch: { cache_ttl: number; warm_daily: boolean }
+    }
+
+export interface TuningCandidate {
+  kind: TuningKind
+  target: string
+  /** Part of the fingerprint beside kind+target: index columns, new body hash, config patch. */
+  change_key: string
+  title: string
+  evidence: Record<string, unknown>
+  estimate_ms_per_day: number
+  risk: 'reversible' | 'review'
+  apply: TuningApplySpec
+  undo: TuningApplySpec
+  replicated?: boolean
+}
+
+/**
+ * A database-tuning observer an extension contributes (#996). Its candidates go through the
+ * same proof and ledger as core's; an extension can never mark one proven or apply it. A
+ * throwing observer is logged and skipped. Registered with `ctx.tuning.registerObserver`.
+ */
+export interface TuningObserverDef {
+  /** `<extension>:<name>`. */
+  id: string
+  /** Every candidate it returns is stamped with this kind (and that kind's risk). */
+  kind: TuningKind
+  observe(): Promise<TuningCandidate[]>
+}

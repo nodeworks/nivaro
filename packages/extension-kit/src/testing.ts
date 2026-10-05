@@ -56,6 +56,7 @@ import type {
   RelatedNoteProvider,
   SchemaStepDef,
   StorageAdapter,
+  TuningObserverDef,
   ValidatorDef
 } from './registrations.js'
 import type { IntegrationSignal, SignalActionHandler, TrafficNodeDef } from './signals.js'
@@ -416,6 +417,7 @@ export interface TestContext extends ExtensionContext {
     digestSections: DigestSectionProvider[]
     readinessChecks: ReadinessCheck[]
     tasks: OpsTaskDef[]
+    tuningObservers: TuningObserverDef[]
     seeds: ConfigSeedDef[]
     schemaSteps: SchemaStepDef[]
     obligationKinds: ObligationKindDef[]
@@ -526,6 +528,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     digestSections: [],
     readinessChecks: [],
     tasks: [],
+    tuningObservers: [],
     seeds: [],
     schemaSteps: [],
     obligationKinds: [],
@@ -702,6 +705,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     digest: { registerSection: (fn) => registered.digestSections.push(fn) },
     readiness: { registerCheck: (c) => registered.readinessChecks.push(c) },
     tasks: { register: (d) => registered.tasks.push(d) },
+    tuning: { registerObserver: (d) => registered.tuningObservers.push(d) },
     seeds: { register: (d) => registered.seeds.push(d) },
     schema: { step: (id, d) => registered.schemaSteps.push({ id, ...d }) },
     chain: {
