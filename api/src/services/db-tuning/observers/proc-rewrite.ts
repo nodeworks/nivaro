@@ -1,7 +1,7 @@
 import { db } from '../../../db/index.js'
 import { capturedPlanFor } from '../../custom-query-plans.js'
 import { isReplicatedProcedure } from '../../replication.js'
-import { type ProcStat, procedureBody, procedureStats } from '../dmv.js'
+import { type ProcStat, procedureBody, procedureParameters, procedureStats } from '../dmv.js'
 import { paramSetsFor } from '../param-sets.js'
 import { applyTransformers } from '../rewrites/index.js'
 import { bodyHash, isTwinName, provability } from '../twin.js'
@@ -108,6 +108,25 @@ export function buildProcCandidate(
   }
 }
 
+/**
+ * A wrapping query records its own parameters (`{fy: 2026}` for `EXEC dbo.rpt @FiscalYear =
+ * :fy`), and the twin binds a set by name. Only a set whose every key (less any `@`) is one of
+ * the procedure's sys.parameters replays the call production makes; any other would fail with
+ * error 8145 (or replay a different call), so it is not inherited. Unreadable parameters → none.
+ */
+async function inheritable(
+  proc: string,
+  sets: Array<Record<string, unknown>>
+): Promise<Array<Record<string, unknown>>> {
+  if (!sets.length) return []
+  const params = await procedureParameters(proc)
+  if (!params) return []
+  const bare = (k: string) => k.replace(/^@/, '')
+  return sets
+    .filter((set) => Object.keys(set).every((k) => params.has(bare(k).toLowerCase())))
+    .map((set) => Object.fromEntries(Object.entries(set).map(([k, v]) => [bare(k), v])))
+}
+
 export async function loadProcEvidence(): Promise<ProcEvidence> {
   // catalog names only: anything outside IDENT is never read, matched or proposed
   const stats = (await procedureStats()).filter(
@@ -128,7 +147,7 @@ export async function loadProcEvidence(): Promise<ProcEvidence> {
     const exec = new RegExp(String.raw`\bEXEC(UTE)?\s+(\[?dbo\]?\.)?\[?${s.name}\]?(?![\w])`, 'i')
     const wrappers = queries.filter((q) => exec.test(q.sql_text ?? ''))
     const viaQuery = (await Promise.all(wrappers.map((q) => paramSetsFor('query', q.slug)))).flat()
-    const sets = [...own, ...viaQuery].slice(0, MAX_PARAM_SETS)
+    const sets = [...own, ...(await inheritable(s.name, viaQuery))].slice(0, MAX_PARAM_SETS)
     if (sets.length) paramSets.set(s.name, sets)
     const ops = wrappers
       .flatMap((q) => capturedPlanFor(Number(q.id))?.plan.operators ?? [])

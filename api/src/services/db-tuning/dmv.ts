@@ -409,6 +409,21 @@ export async function procedureBody(name: string): Promise<string | null> {
   return (rows[0]?.definition as string | undefined) ?? null
 }
 
+/** A procedure's parameter names without the `@`, lower-cased (default schema); null on error. */
+export async function procedureParameters(name: string): Promise<Set<string> | null> {
+  if (!isMssqlDb() || !IDENT.test(name)) return null
+  const rows = await db
+    .raw(
+      `SELECT pa.name FROM sys.parameters pa JOIN sys.procedures p ON p.object_id = pa.object_id
+        WHERE p.name = ? AND p.is_ms_shipped = 0 AND SCHEMA_NAME(p.schema_id) = SCHEMA_NAME()
+          AND pa.name <> ''`,
+      [name]
+    )
+    .then((r: unknown) => (Array.isArray(r) ? rowsOf(r) : null))
+    .catch(() => null)
+  return rows ? new Set(rows.map((r) => String(r.name).replace(/^@/, '').toLowerCase())) : null
+}
+
 export interface StatementStat {
   text: string
   execution_count: number
