@@ -27,6 +27,7 @@ import {
   FileSearch,
   FileText,
   FlaskConical,
+  Gauge,
   GitBranch,
   GitCompare,
   Globe,
@@ -511,6 +512,13 @@ export const navCategories: NavCategory[] = [
         to: '/db-health',
         section: 'Health',
         keywords: 'database pool indexes deadlocks'
+      },
+      {
+        icon: Gauge,
+        label: 'Database tuning',
+        to: '/db-tuning',
+        section: 'Health',
+        keywords: 'index proposals procedure rewrite cache rollup'
       },
       { icon: Waypoints, label: 'Traffic Map', to: '/traffic-map', section: 'Health' },
       { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Health', keywords: 'sockets' },

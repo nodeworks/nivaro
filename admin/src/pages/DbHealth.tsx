@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Database, RefreshCw } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { PlanViewer } from '@/components/plan-viewer'
 import { Button } from '@/components/ui/button'
@@ -194,6 +195,15 @@ function RedisMemoryByPrefix() {
 
 export function DbHealthPage() {
   const qc = useQueryClient()
+  const tuning = useQuery({
+    queryKey: ['db-tuning-summary-strip'],
+    queryFn: () =>
+      api
+        .get<{ data?: { by_status?: Record<string, number> } }>('/db-tuning')
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const proposedCount = tuning.data?.by_status?.proposed ?? 0
   const runtime = useOps<Record<string, unknown>>('/ops-runtime/runtime')
   const roster = useOps<Array<Record<string, unknown>>>('/ops-runtime/roster')
   const caches = useOps<Array<{ name: string; description: string }>>('/ops-runtime/caches')
@@ -367,6 +377,16 @@ export function DbHealthPage() {
       </div>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-8 dark:bg-background'>
+        {proposedCount > 0 && (
+          <Link
+            to='/db-tuning'
+            data-tuning-strip-link
+            className='mb-5 block rounded border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-2 text-[12px] text-foreground'
+          >
+            {proposedCount} tuning {proposedCount === 1 ? 'proposal' : 'proposals'} waiting →
+            Database tuning
+          </Link>
+        )}
         <div className='grid gap-5 xl:grid-cols-2'>
           <Panel title='This process' sub='Memory, event-loop lag, connection pool (#234 · #114)'>
             {rt ? (
