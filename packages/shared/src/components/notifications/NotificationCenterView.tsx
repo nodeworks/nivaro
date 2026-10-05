@@ -2,9 +2,13 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import {
   AlarmClock,
   Bell,
+  Check,
   CheckCheck,
+  ChevronDown,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
+  History,
   Search,
   Trash2
 } from 'lucide-react'
@@ -23,7 +27,17 @@ import {
   runNotificationTarget
 } from '../../lib/notification-target'
 import { cn, formatRelative } from '../../lib/utils'
+import { hasSnapshotView } from '../NotificationBell'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { AsItWasSheet } from './AsItWasSheet'
+import {
+  bundleAsNotification,
+  bundleHeadline,
+  bundleLocally,
+  categoryChipLabel,
+  laneTone,
+  type NotificationBundle
+} from './bundles'
 import { DeliveryChips } from './DeliveryChips'
 import { NotificationActions } from './NotificationActions'
 import { NotificationDetailBits } from './NotificationDetailBits'
@@ -81,6 +95,8 @@ interface NotificationRow {
   delivery?: NotificationDeliveryRecord | null
   detail?: NotificationDetailRecord | null
   why?: NotificationWhy | null
+  /** #1385 — the record's revision current when the row was written. */
+  revision_id?: number | null
 }
 
 const STATUS_TABS: Array<{ key: StatusFilter; label: string }> = [
@@ -160,6 +176,11 @@ export function NotificationCenterView({
   const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
   const [collectionFilter, setCollectionFilter] = useState('')
+  // #1256 — rows about one record fold into a bundle (default on).
+  const [groupByRecord, setGroupByRecord] = useState(true)
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  // #1385 — the "as it was" sheet for one row.
+  const [asItWas, setAsItWas] = useState<NotificationRow | null>(null)
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -188,21 +209,34 @@ export function NotificationCenterView({
       page,
       search,
       collectionFilter,
-      app ?? null
+      app ?? null,
+      groupByRecord
     ],
     queryFn: () =>
-      client.request<{ data: NotificationRow[]; total: number }>(
-        get('/notifications', {
-          page,
-          limit: PAGE_SIZE,
-          status: status === 'snoozed' || status === 'sent' ? 'all' : status,
-          snoozed: status === 'snoozed' ? 'true' : undefined,
-          lane: lane === 'all' ? undefined : lane,
-          search: search || undefined,
-          collection: collectionFilter || undefined,
-          app
-        })
-      ),
+      client
+        .request<{
+          data: NotificationRow[]
+          bundles?: NotificationBundle<NotificationRow>[]
+          total: number
+        }>(
+          get('/notifications', {
+            page,
+            limit: PAGE_SIZE,
+            status: status === 'snoozed' || status === 'sent' ? 'all' : status,
+            snoozed: status === 'snoozed' ? 'true' : undefined,
+            lane: lane === 'all' ? undefined : lane,
+            search: search || undefined,
+            collection: collectionFilter || undefined,
+            app,
+            bundle: groupByRecord ? 'record' : undefined
+          })
+        )
+        .then((r) => {
+          // An older server answers rows only — the same fold runs here.
+          if (!groupByRecord || r.bundles) return r
+          const local = bundleLocally(r.data ?? [])
+          return { ...r, data: local.rows, bundles: local.bundles }
+        }),
     placeholderData: keepPreviousData,
     enabled: status !== 'sent'
   })
@@ -222,6 +256,7 @@ export function NotificationCenterView({
   })
 
   const notifications = data?.data ?? []
+  const bundles = data?.bundles ?? []
   const total = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
   const invalidate = () => {
@@ -229,6 +264,11 @@ export function NotificationCenterView({
     void qc.invalidateQueries({ queryKey: ['notification-count'] })
   }
 
+  const markBundleMut = useMutation({
+    mutationFn: (ids: number[]) => client.request(post('/notifications/mark-read', { ids })),
+    onSuccess: invalidate,
+    onError: () => onError?.('Failed to mark the bundle read')
+  })
   const markAllMut = useMutation({
     mutationFn: () => client.request(post('/notifications/mark-all-read')),
     onSuccess: () => {
@@ -282,6 +322,329 @@ export function NotificationCenterView({
       invalidate()
     }
     runNotificationTarget(resolveNotificationTargetFor(n, routes), onNavigate)
+  }
+
+  /** One inbox row: subject, message, chips, detail bits, inline actions,
+   *  snooze and delete. `indent` = a row inside an expanded record bundle. */
+  const renderRow = (n: NotificationRow, indent = false) => {
+    const unread = !n.read
+    const target = resolveNotificationTargetFor(n, routes)
+    return (
+      <div
+        className={cn(
+          'group relative flex items-start gap-3 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40',
+          indent ? 'bg-slate-50/50 pl-8 pr-4 dark:bg-muted/30' : 'px-4'
+        )}
+        data-notification-row={n.id}
+        data-nvr-lane-row={n.lane ?? ''}
+      >
+        <span
+          className={cn(
+            'mt-2 h-2 w-2 shrink-0 rounded-full',
+            unread ? (n.lane === 'critical' ? 'bg-red-500' : 'bg-nvr-cyan') : 'bg-transparent'
+          )}
+        />
+        <div className='min-w-0 flex-1'>
+          <button
+            type='button'
+            onClick={() => void handleRowClick(n)}
+            className='block w-full text-left'
+          >
+            <div className='flex items-baseline gap-2'>
+              {n.lane === 'critical' && (
+                <span className='shrink-0 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
+                  Critical
+                </span>
+              )}
+              {n.lane === 'needs_you' && unread && (
+                <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-nvr-navy dark:text-nvr-cyan'>
+                  Needs you
+                </span>
+              )}
+              <span
+                className={cn(
+                  'truncate text-[13px]',
+                  unread
+                    ? 'font-medium text-slate-900 dark:text-slate-100'
+                    : 'font-normal text-slate-600 dark:text-slate-400'
+                )}
+              >
+                {n.subject ?? n.title ?? '—'}
+              </span>
+              <span className='shrink-0 text-[10.5px] text-slate-400'>
+                {formatRelative(n.created_at ?? new Date())}
+              </span>
+            </div>
+            {n.message && (
+              <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
+                {n.message.replace(/<[^>]+>/g, '')}
+              </p>
+            )}
+          </button>
+          <div className='mt-1 flex flex-wrap items-center gap-2'>
+            {n.sender_name && (
+              <span className='text-[11px] text-slate-400'>From {n.sender_name}</span>
+            )}
+            {target && (
+              <button
+                type='button'
+                onClick={() => runNotificationTarget(target, onNavigate)}
+                className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+              >
+                {target.type === 'chat'
+                  ? 'Open chat'
+                  : target.type === 'external'
+                    ? 'Open in app ↗'
+                    : n.target_label && n.kind !== 'record'
+                      ? `${n.target_label}${n.item ? ` #${n.item}` : ''}`
+                      : n.collection === '__chat__'
+                        ? 'Chat'
+                        : n.collection
+                          ? `${n.collection}${n.item ? ` #${n.item}` : ''}`
+                          : 'Open'}
+              </button>
+            )}
+            <DeliveryChips delivery={n.delivery} mailLogUrl={mailLogUrl} onNavigate={onNavigate} />
+            {hasSnapshotView(n) && (
+              <button
+                type='button'
+                data-notification-as-it-was={n.id}
+                data-tip='The record as it was when you were told'
+                onClick={() => setAsItWas(n)}
+                className='inline-flex items-center gap-1 rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-medium text-slate-500 hover:bg-slate-50 hover:text-slate-700 dark:border-border dark:text-slate-400 dark:hover:bg-muted dark:hover:text-slate-200'
+              >
+                <History className='h-3 w-3' />
+                as it was
+              </button>
+            )}
+          </div>
+          <NotificationDetailBits
+            detail={n.detail}
+            why={n.why}
+            delivery={n.delivery}
+            subscriptionsPath={subscriptionsPath}
+            onNavigate={onNavigate}
+            className='mt-1'
+          />
+          {n.actions && n.actions.length > 0 && (
+            <NotificationActions
+              actions={unread ? n.actions : n.actions.filter((a) => !!a.input)}
+              notificationId={n.id}
+              size='sm'
+              onError={onError}
+              onDone={() => onNotice?.('Done')}
+              className='mt-1.5'
+            />
+          )}
+        </div>
+        <div className='relative shrink-0'>
+          {n.snoozed_until && new Date(n.snoozed_until) > new Date() ? (
+            <button
+              type='button'
+              onClick={() => snoozeMut.mutate({ id: n.id, until: null })}
+              className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300'
+              data-tip='Click to wake now'
+            >
+              <AlarmClock className='h-3 w-3' />
+              {n.snooze_until_change
+                ? 'Until it changes'
+                : `Until ${new Date(n.snoozed_until).toLocaleString([], {
+                    month: 'short',
+                    day: 'numeric',
+                    hour: 'numeric',
+                    minute: '2-digit'
+                  })}`}
+            </button>
+          ) : (
+            <button
+              type='button'
+              onClick={() => setSnoozeMenuId(snoozeMenuId === n.id ? null : n.id)}
+              className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-amber-50 hover:text-amber-500 group-hover:opacity-100 dark:hover:bg-amber-400/10'
+              aria-label='Snooze notification'
+            >
+              <AlarmClock className='h-3.5 w-3.5' />
+            </button>
+          )}
+          {snoozeMenuId === n.id && (
+            <div className='absolute right-0 top-8 z-20 w-[180px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
+              {snoozePresets().map((pset) => (
+                <button
+                  key={pset.label}
+                  type='button'
+                  disabled={snoozeMut.isPending}
+                  onClick={() => snoozeMut.mutate({ id: n.id, until: pset.until })}
+                  className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-foreground'
+                >
+                  {pset.label}
+                </button>
+              ))}
+              {n.collection && n.item != null && (
+                <button
+                  type='button'
+                  disabled={snoozeMut.isPending}
+                  onClick={() => snoozeMut.mutate({ id: n.id, until: null, untilChange: true })}
+                  className='block w-full border-t border-slate-100 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:border-border dark:text-foreground'
+                  data-snooze-until-change
+                >
+                  Until the record changes
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+        <div className='shrink-0'>
+          {confirmDeleteId === n.id ? (
+            <div className='flex items-center gap-1.5'>
+              <button
+                type='button'
+                onClick={() => setConfirmDeleteId(null)}
+                className='h-6 rounded-md border border-slate-200 px-2 text-[11px] dark:border-border'
+              >
+                Cancel
+              </button>
+              <button
+                type='button'
+                disabled={deleteMut.isPending}
+                onClick={() => deleteMut.mutate(n.id)}
+                className='h-6 rounded-md bg-red-500 px-2 text-[11px] text-white hover:bg-red-600'
+              >
+                {deleteMut.isPending ? 'Deleting…' : 'Delete'}
+              </button>
+            </div>
+          ) : (
+            <button
+              type='button'
+              onClick={() => setConfirmDeleteId(n.id)}
+              className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-400 group-hover:opacity-100'
+              aria-label='Delete notification'
+            >
+              <Trash2 className='h-3.5 w-3.5' />
+            </button>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  /** #1256 — a record bundle: "N things on <record>", category chips, the
+   *  most urgent lane's colour; expand lists the rows, open goes to the
+   *  record, the check marks the whole bundle read. */
+  const renderBundle = (b: NotificationBundle<NotificationRow>) => {
+    const key = `${b.collection}:${b.item}`
+    const isOpen = expanded.has(key)
+    const tone = laneTone(b.lane)
+    const target = resolveNotificationTargetFor(bundleAsNotification(b), routes)
+    const unreadIds = b.rows.filter((n) => !n.read).map((n) => n.id)
+    const toggle = () =>
+      setExpanded((s) => {
+        const next = new Set(s)
+        if (next.has(key)) next.delete(key)
+        else next.add(key)
+        return next
+      })
+    return (
+      <div
+        key={`bundle:${key}`}
+        data-notification-bundle={key}
+        data-notification-bundle-count={b.count}
+        data-notification-bundle-lane={b.lane}
+      >
+        <div className='group flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40'>
+          <button
+            type='button'
+            aria-expanded={isOpen}
+            aria-label={isOpen ? 'Collapse' : 'Expand'}
+            data-notification-bundle-expand={key}
+            onClick={toggle}
+            className='mt-1 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+          >
+            <ChevronDown
+              className={cn('h-3.5 w-3.5 transition-transform', !isOpen && '-rotate-90')}
+            />
+          </button>
+          <span
+            className={cn(
+              'mt-2 h-2 w-2 shrink-0 rounded-full',
+              b.unread > 0 ? tone.dot : 'bg-transparent'
+            )}
+          />
+          <div className='min-w-0 flex-1'>
+            <button type='button' onClick={toggle} className='block w-full text-left'>
+              <div className='flex items-baseline gap-2'>
+                {b.lane === 'critical' && b.unread > 0 && (
+                  <span
+                    className={cn(
+                      'shrink-0 rounded px-1 text-[9.5px] font-bold uppercase tracking-wide',
+                      tone.chip
+                    )}
+                  >
+                    Critical
+                  </span>
+                )}
+                <span
+                  className={cn(
+                    'truncate text-[13px]',
+                    b.unread > 0
+                      ? cn('font-medium', tone.text)
+                      : 'font-normal text-slate-600 dark:text-slate-400'
+                  )}
+                >
+                  {bundleHeadline(b)}
+                </span>
+                <span className='shrink-0 text-[10.5px] text-slate-400'>
+                  {b.newest ? formatRelative(b.newest) : ''}
+                </span>
+              </div>
+            </button>
+            <div className='mt-1 flex flex-wrap items-center gap-1.5'>
+              {b.categories.map((c) => (
+                <span
+                  key={c}
+                  className='rounded bg-slate-100 px-1.5 py-px text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+                  data-notification-bundle-category={c}
+                >
+                  {categoryChipLabel(c)}
+                </span>
+              ))}
+              {target && (
+                <button
+                  type='button'
+                  onClick={() => runNotificationTarget(target, onNavigate)}
+                  className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                >
+                  <ExternalLink className='h-3 w-3' />
+                  Open {b.label}
+                </button>
+              )}
+              {b.unread > 0 && b.unread < b.count && (
+                <span className='text-[10.5px] text-slate-400'>{b.unread} unread</span>
+              )}
+            </div>
+          </div>
+          {unreadIds.length > 0 && (
+            <button
+              type='button'
+              data-notification-bundle-read={key}
+              onClick={() => markBundleMut.mutate(unreadIds)}
+              className='inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+            >
+              <Check className='h-3 w-3' />
+              Mark read
+            </button>
+          )}
+        </div>
+        {isOpen && (
+          <div
+            className='divide-y divide-slate-100 border-t border-slate-100 dark:divide-border dark:border-border'
+            data-notification-bundle-rows={key}
+          >
+            {b.rows.map((n) => (
+              <Fragment key={n.id}>{renderRow(n, true)}</Fragment>
+            ))}
+          </div>
+        )}
+      </div>
+    )
   }
 
   const laneCount = (k: LaneFilter) =>
@@ -386,6 +749,19 @@ export function NotificationCenterView({
               ...collections.map((c) => ({ value: c, label: c }))
             ]}
           />
+          <label
+            className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-500 dark:text-slate-400'
+            data-tip='Fold every notification about one record into a single entry'
+          >
+            <input
+              type='checkbox'
+              checked={groupByRecord}
+              onChange={(e) => setGroupByRecord(e.target.checked)}
+              className='h-3.5 w-3.5'
+              data-notification-group-by-record
+            />
+            Group by record
+          </label>
         </div>
       </header>
 
@@ -489,7 +865,7 @@ export function NotificationCenterView({
           </div>
         ) : isLoading ? (
           <p className='px-8 py-10 text-[13px] text-slate-400'>Loading…</p>
-        ) : notifications.length === 0 ? (
+        ) : notifications.length === 0 && bundles.length === 0 ? (
           <div className='flex flex-col items-center justify-center py-24 text-center'>
             <Bell className='h-10 w-10 text-slate-200 dark:text-slate-700' />
             <p className='mt-3 text-[14px] font-medium text-slate-500'>You're all caught up</p>
@@ -499,8 +875,8 @@ export function NotificationCenterView({
           </div>
         ) : (
           <div className='mx-8 my-6 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+            {bundles.map(renderBundle)}
             {notifications.map((n, ni) => {
-              const unread = !n.read
               const bucketOf = (ts: string | Date | null | undefined) => {
                 if (!ts) return 'Older'
                 const d = new Date(ts)
@@ -519,197 +895,10 @@ export function NotificationCenterView({
                     {bucket}
                   </div>
                 ) : null
-              const target = resolveNotificationTargetFor(n, routes)
               return (
                 <Fragment key={n.id}>
                   {header}
-                  <div
-                    className='group relative flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                    data-nvr-lane-row={n.lane ?? ''}
-                  >
-                    <span
-                      className={cn(
-                        'mt-2 h-2 w-2 shrink-0 rounded-full',
-                        unread
-                          ? n.lane === 'critical'
-                            ? 'bg-red-500'
-                            : 'bg-nvr-cyan'
-                          : 'bg-transparent'
-                      )}
-                    />
-                    <div className='min-w-0 flex-1'>
-                      <button
-                        type='button'
-                        onClick={() => void handleRowClick(n)}
-                        className='block w-full text-left'
-                      >
-                        <div className='flex items-baseline gap-2'>
-                          {n.lane === 'critical' && (
-                            <span className='shrink-0 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
-                              Critical
-                            </span>
-                          )}
-                          {n.lane === 'needs_you' && unread && (
-                            <span className='shrink-0 rounded bg-nvr-cyan/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-nvr-navy dark:text-nvr-cyan'>
-                              Needs you
-                            </span>
-                          )}
-                          <span
-                            className={cn(
-                              'truncate text-[13px]',
-                              unread
-                                ? 'font-medium text-slate-900 dark:text-slate-100'
-                                : 'font-normal text-slate-600 dark:text-slate-400'
-                            )}
-                          >
-                            {n.subject ?? n.title ?? '—'}
-                          </span>
-                          <span className='shrink-0 text-[10.5px] text-slate-400'>
-                            {formatRelative(n.created_at ?? new Date())}
-                          </span>
-                        </div>
-                        {n.message && (
-                          <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
-                            {n.message.replace(/<[^>]+>/g, '')}
-                          </p>
-                        )}
-                      </button>
-                      <div className='mt-1 flex flex-wrap items-center gap-2'>
-                        {n.sender_name && (
-                          <span className='text-[11px] text-slate-400'>From {n.sender_name}</span>
-                        )}
-                        {target && (
-                          <button
-                            type='button'
-                            onClick={() => runNotificationTarget(target, onNavigate)}
-                            className='inline-flex items-center gap-1 rounded-full bg-nvr-cyan/10 px-2 py-0.5 text-[10px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 dark:bg-nvr-cyan/15 dark:text-nvr-cyan'
-                          >
-                            {target.type === 'chat'
-                              ? 'Open chat'
-                              : target.type === 'external'
-                                ? 'Open in app ↗'
-                                : n.target_label && n.kind !== 'record'
-                                  ? `${n.target_label}${n.item ? ` #${n.item}` : ''}`
-                                  : n.collection === '__chat__'
-                                    ? 'Chat'
-                                    : n.collection
-                                      ? `${n.collection}${n.item ? ` #${n.item}` : ''}`
-                                      : 'Open'}
-                          </button>
-                        )}
-                        <DeliveryChips
-                          delivery={n.delivery}
-                          mailLogUrl={mailLogUrl}
-                          onNavigate={onNavigate}
-                        />
-                      </div>
-                      <NotificationDetailBits
-                        detail={n.detail}
-                        why={n.why}
-                        delivery={n.delivery}
-                        subscriptionsPath={subscriptionsPath}
-                        onNavigate={onNavigate}
-                        className='mt-1'
-                      />
-                      {n.actions && n.actions.length > 0 && (
-                        <NotificationActions
-                          actions={unread ? n.actions : n.actions.filter((a) => !!a.input)}
-                          notificationId={n.id}
-                          size='sm'
-                          onError={onError}
-                          onDone={() => onNotice?.('Done')}
-                          className='mt-1.5'
-                        />
-                      )}
-                    </div>
-                    <div className='relative shrink-0'>
-                      {n.snoozed_until && new Date(n.snoozed_until) > new Date() ? (
-                        <button
-                          type='button'
-                          onClick={() => snoozeMut.mutate({ id: n.id, until: null })}
-                          className='inline-flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10.5px] font-medium text-amber-700 hover:bg-amber-100 dark:bg-amber-400/10 dark:text-amber-300'
-                          data-tip='Click to wake now'
-                        >
-                          <AlarmClock className='h-3 w-3' />
-                          {n.snooze_until_change
-                            ? 'Until it changes'
-                            : `Until ${new Date(n.snoozed_until).toLocaleString([], {
-                                month: 'short',
-                                day: 'numeric',
-                                hour: 'numeric',
-                                minute: '2-digit'
-                              })}`}
-                        </button>
-                      ) : (
-                        <button
-                          type='button'
-                          onClick={() => setSnoozeMenuId(snoozeMenuId === n.id ? null : n.id)}
-                          className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-amber-50 hover:text-amber-500 group-hover:opacity-100 dark:hover:bg-amber-400/10'
-                          aria-label='Snooze notification'
-                        >
-                          <AlarmClock className='h-3.5 w-3.5' />
-                        </button>
-                      )}
-                      {snoozeMenuId === n.id && (
-                        <div className='absolute right-0 top-8 z-20 w-[180px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
-                          {snoozePresets().map((pset) => (
-                            <button
-                              key={pset.label}
-                              type='button'
-                              disabled={snoozeMut.isPending}
-                              onClick={() => snoozeMut.mutate({ id: n.id, until: pset.until })}
-                              className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-foreground'
-                            >
-                              {pset.label}
-                            </button>
-                          ))}
-                          {n.collection && n.item != null && (
-                            <button
-                              type='button'
-                              disabled={snoozeMut.isPending}
-                              onClick={() =>
-                                snoozeMut.mutate({ id: n.id, until: null, untilChange: true })
-                              }
-                              className='block w-full border-t border-slate-100 px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:border-border dark:text-foreground'
-                              data-snooze-until-change
-                            >
-                              Until the record changes
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                    <div className='shrink-0'>
-                      {confirmDeleteId === n.id ? (
-                        <div className='flex items-center gap-1.5'>
-                          <button
-                            type='button'
-                            onClick={() => setConfirmDeleteId(null)}
-                            className='h-6 rounded-md border border-slate-200 px-2 text-[11px] dark:border-border'
-                          >
-                            Cancel
-                          </button>
-                          <button
-                            type='button'
-                            disabled={deleteMut.isPending}
-                            onClick={() => deleteMut.mutate(n.id)}
-                            className='h-6 rounded-md bg-red-500 px-2 text-[11px] text-white hover:bg-red-600'
-                          >
-                            {deleteMut.isPending ? 'Deleting…' : 'Delete'}
-                          </button>
-                        </div>
-                      ) : (
-                        <button
-                          type='button'
-                          onClick={() => setConfirmDeleteId(n.id)}
-                          className='rounded p-1.5 text-slate-300 opacity-0 transition-all hover:bg-red-50 hover:text-red-400 group-hover:opacity-100'
-                          aria-label='Delete notification'
-                        >
-                          <Trash2 className='h-3.5 w-3.5' />
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                  {renderRow(n)}
                 </Fragment>
               )
             })}
@@ -743,6 +932,11 @@ export function NotificationCenterView({
           </div>
         )}
       </div>
+      <AsItWasSheet
+        notificationId={asItWas?.id ?? null}
+        title={asItWas?.subject ?? asItWas?.title ?? null}
+        onClose={() => setAsItWas(null)}
+      />
     </div>
   )
 }

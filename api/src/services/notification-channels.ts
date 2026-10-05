@@ -6,6 +6,7 @@ import { emitNotification } from '../plugins/socketio.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { sendMail } from './mail.js'
+import { snapshotRevisionFor } from './notification-snapshot.js'
 import {
   actionsFor,
   deriveTarget,
@@ -803,8 +804,13 @@ export async function notifyUser(
 
   try {
     if (channels.inapp) {
+      // #1385 — the record's revision current right now, so "as it was" can
+      // open what the person saw. Column-probed: null on a tenant behind
+      // migration 393, and the key is then left off the insert entirely.
+      const revisionId = await snapshotRevisionFor(target)
       const [notif] = await db('nivaro_notifications')
         .insert({
+          ...(revisionId != null ? { revision_id: revisionId } : {}),
           recipient: userId,
           subject: opts.subject.slice(0, 255),
           status: 'inbox',

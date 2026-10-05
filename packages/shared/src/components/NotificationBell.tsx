@@ -1,15 +1,15 @@
 import {
-  listNotifications,
   markAllNotificationsRead,
   markNotificationRead,
   markNotificationsRead,
   readUnreadNotificationCount
 } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, CheckCheck, ExternalLink } from 'lucide-react'
+import { Bell, Check, CheckCheck, ChevronDown, ExternalLink, History } from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
+import { get } from '../lib/commands'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -23,6 +23,15 @@ import {
 } from '../lib/notification-target'
 import { useTabAttention } from '../lib/tab-attention'
 import { formatRelative } from '../lib/utils'
+import { AsItWasSheet } from './notifications/AsItWasSheet'
+import {
+  bundleAsNotification,
+  bundleHeadline,
+  bundleLocally,
+  categoryChipLabel,
+  laneTone,
+  type NotificationBundle
+} from './notifications/bundles'
 import { DeliveryChips } from './notifications/DeliveryChips'
 import { NotificationActions } from './notifications/NotificationActions'
 import { NotificationDetailBits } from './notifications/NotificationDetailBits'
@@ -48,9 +57,25 @@ export interface BellNotification {
   delivery?: NotificationDeliveryRecord | null
   detail?: NotificationDetailRecord | null
   why?: NotificationWhy | null
+  /** #1385 — the record's revision current when the row was written. */
+  revision_id?: number | null
 }
 
 export type BellLaneTab = 'attention' | 'fyi' | 'all'
+
+/** A record-kind row offers "as it was" — the snapshot from send time. */
+export function hasSnapshotView(n: {
+  kind?: string | null
+  target?: NotificationTargetSpec | null
+  collection?: string | null
+  item?: string | null
+}): boolean {
+  const kind = n.target?.kind ?? n.kind ?? (n.collection && n.item ? 'record' : null)
+  if (kind !== 'record') return false
+  const collection = n.target?.collection ?? n.collection
+  const id = n.target?.id ?? n.item
+  return !!collection && id != null && id !== '' && !/^(nivaro|directus)_|^__/i.test(collection)
+}
 
 export interface NotificationBellProps {
   /** Where each notification kind lands in the host app. */
@@ -151,21 +176,36 @@ export function NotificationBell({
   // glance at another tab says whether to come back.
   useTabAttention(attention + extraBadge, { enabled: tabBadge })
 
-  const { data: notifications = [] } = useQuery({
+  // #1256 — the server folds rows that name the same record into bundles
+  // (`bundle=record`); an older server answers rows only and the same rule
+  // runs here so the panel reads the same either way.
+  const { data: page } = useQuery({
     queryKey: ['notifications', 'bell', app ?? null, tab],
     queryFn: () =>
       client
-        .request(
-          listNotifications({
+        .request<{ data: BellNotification[]; bundles?: NotificationBundle<BellNotification>[] }>(
+          get('/notifications', {
             limit: 60,
             app,
+            bundle: 'record',
             ...(tab === 'attention' ? { lane: 'attention', status: 'inbox' } : {}),
             ...(tab === 'fyi' ? { lane: 'fyi', status: 'inbox' } : {})
           })
         )
-        .then((r) => (r.data ?? []) as unknown as BellNotification[]),
+        .then((r) => {
+          const rows = r.data ?? []
+          if (r.bundles) return { rows, bundles: r.bundles }
+          return bundleLocally(rows)
+        }),
     enabled: open
   })
+  const notifications = page?.rows ?? []
+  const bundles = page?.bundles ?? []
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  // The snapshot sheet lives OUTSIDE the panel: opening it closes the panel
+  // (a sheet under the panel's z-index would paint behind it) and the sheet
+  // keeps its own state.
+  const [asItWas, setAsItWas] = useState<BellNotification | null>(null)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: invalidate is stable per client/qc; re-subscribing on every render would leak listeners
   useEffect(() => subscribe?.(invalidate), [subscribe])
@@ -242,6 +282,247 @@ export function NotificationBell({
       setOpen(false)
       runNotificationTarget(target, onNavigate)
     }
+  }
+
+  const navigateAndClose = (p: string) => {
+    setOpen(false)
+    onNavigate(p)
+  }
+
+  /** One notification row + its action strip and detail bits. `hasRecord`
+   *  rows open their target on click; `indent` is the bundle expand list. */
+  const renderRow = (n: BellNotification, hasRecord: boolean, indent = false) => (
+    <Fragment key={n.id}>
+      <button
+        type='button'
+        onClick={() => {
+          if (!n.read) markRead.mutate(n.id)
+          openTarget(n)
+        }}
+        className={`flex w-full items-start gap-2.5 py-2 pr-3 text-left transition-colors ${
+          indent ? 'pl-7' : 'pl-3'
+        } ${hasRecord ? 'hover:bg-slate-50 dark:hover:bg-muted' : 'cursor-default'}`}
+        data-notification-row={n.id}
+      >
+        <span
+          className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
+            n.read ? 'bg-transparent' : n.lane === 'critical' ? 'bg-red-500' : 'bg-nvr-cyan'
+          }`}
+        />
+        <span className='min-w-0 flex-1'>
+          <span
+            className={`block truncate text-[12.5px] ${
+              n.read
+                ? 'font-normal text-slate-600 dark:text-slate-400'
+                : 'font-medium text-slate-900 dark:text-slate-100'
+            }`}
+          >
+            {n.lane === 'critical' && !n.read && (
+              <span className='mr-1 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
+                Critical
+              </span>
+            )}
+            {n.title}
+          </span>
+          {n.message && (
+            <span className='mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500'>
+              {n.message.replace(/<[^>]+>/g, '')}
+            </span>
+          )}
+          <span className='mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-slate-400'>
+            {formatRelative(n.created_at)}
+            <DeliveryChips
+              delivery={n.delivery}
+              mailLogUrl={mailLogUrl}
+              onNavigate={navigateAndClose}
+            />
+            {hasSnapshotView(n) && (
+              // biome-ignore lint/a11y/useSemanticElements: nested inside the row's <button> — a real <button> is invalid there
+              <span
+                role='button'
+                tabIndex={-1}
+                data-notification-as-it-was={n.id}
+                data-tip='The record as it was when you were told'
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setOpen(false)
+                  setAsItWas(n)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault()
+                    e.stopPropagation()
+                    setOpen(false)
+                    setAsItWas(n)
+                  }
+                }}
+                className='inline-flex items-center gap-0.5 rounded px-1 text-[10.5px] text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+              >
+                <History className='h-3 w-3' />
+                as it was
+              </span>
+            )}
+          </span>
+        </span>
+        {!hasRecord && !n.read && (
+          // biome-ignore lint/a11y/useSemanticElements: nested inside the row's <button> — a real <button> is invalid there
+          <span
+            role='button'
+            tabIndex={-1}
+            title='Mark read'
+            onClick={(e) => {
+              e.stopPropagation()
+              markRead.mutate(n.id)
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                e.stopPropagation()
+                markRead.mutate(n.id)
+              }
+            }}
+            className='mt-0.5 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+          >
+            <Check className='h-3 w-3' />
+          </span>
+        )}
+      </button>
+      {n.actions && n.actions.length > 0 && !n.read && (
+        <NotificationActions
+          actions={n.actions}
+          notificationId={n.id}
+          onError={onActionError}
+          className={`pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
+        />
+      )}
+      <NotificationDetailBits
+        detail={n.detail}
+        why={n.why}
+        delivery={n.delivery}
+        subscriptionsPath={subscriptionsPath}
+        onNavigate={navigateAndClose}
+        className={`-mt-1 pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}
+      />
+    </Fragment>
+  )
+
+  /** #1256 — a record bundle: "N things on <record>", category chips, the
+   *  most urgent lane's colour; expand lists the rows, open goes to the
+   *  record, the check marks the whole bundle read. */
+  const renderBundle = (b: NotificationBundle<BellNotification>) => {
+    const key = `${b.collection}:${b.item}`
+    const isOpen = expanded.has(key)
+    const tone = laneTone(b.lane)
+    const target = resolveNotificationTargetFor(bundleAsNotification(b), routes)
+    const unreadIds = b.rows.filter((n) => !n.read).map((n) => n.id)
+    return (
+      <div
+        key={`bundle:${key}`}
+        className='border-b border-slate-50 last:border-b-0 dark:border-border/50'
+        data-notification-bundle={key}
+        data-notification-bundle-count={b.count}
+        data-notification-bundle-lane={b.lane}
+      >
+        <div className='flex items-start gap-2 px-3 py-2'>
+          <button
+            type='button'
+            aria-expanded={isOpen}
+            aria-label={isOpen ? 'Collapse' : 'Expand'}
+            data-notification-bundle-expand={key}
+            onClick={() =>
+              setExpanded((s) => {
+                const next = new Set(s)
+                if (next.has(key)) next.delete(key)
+                else next.add(key)
+                return next
+              })
+            }
+            className='mt-0.5 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+          >
+            <ChevronDown
+              className={`h-3.5 w-3.5 transition-transform ${isOpen ? '' : '-rotate-90'}`}
+            />
+          </button>
+          <button
+            type='button'
+            onClick={() => {
+              if (target) {
+                setOpen(false)
+                runNotificationTarget(target, onNavigate)
+              } else {
+                setExpanded((s) => new Set(s).add(key))
+              }
+            }}
+            className='min-w-0 flex-1 text-left'
+          >
+            <span className='flex items-center gap-1.5'>
+              <span
+                className={`h-2 w-2 shrink-0 rounded-full ${b.unread > 0 ? tone.dot : 'bg-transparent'}`}
+              />
+              <span
+                className={`truncate text-[12.5px] ${b.unread > 0 ? `font-medium ${tone.text}` : 'font-normal text-slate-600 dark:text-slate-400'}`}
+              >
+                {bundleHeadline(b)}
+              </span>
+            </span>
+            <span className='mt-1 flex flex-wrap items-center gap-1 pl-3.5 text-[10.5px] text-slate-400'>
+              {b.lane === 'critical' && b.unread > 0 && (
+                <span
+                  className={`rounded px-1 text-[9.5px] font-bold uppercase tracking-wide ${tone.chip}`}
+                >
+                  Critical
+                </span>
+              )}
+              {b.categories.map((c) => (
+                <span
+                  key={c}
+                  className='rounded bg-slate-100 px-1 py-px text-[9.5px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+                  data-notification-bundle-category={c}
+                >
+                  {categoryChipLabel(c)}
+                </span>
+              ))}
+              <span>{b.newest ? formatRelative(b.newest) : ''}</span>
+              {b.unread > 0 && b.unread < b.count && <span>· {b.unread} unread</span>}
+            </span>
+          </button>
+          <span className='flex shrink-0 items-center gap-0.5'>
+            {target && (
+              <button
+                type='button'
+                title='Open record'
+                onClick={() => {
+                  setOpen(false)
+                  runNotificationTarget(target, onNavigate)
+                }}
+                className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+              >
+                <ExternalLink className='h-3 w-3' />
+              </button>
+            )}
+            {unreadIds.length > 0 && (
+              <button
+                type='button'
+                title='Mark all read'
+                data-notification-bundle-read={key}
+                onClick={() => markGroup.mutate(unreadIds)}
+                className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+              >
+                <Check className='h-3 w-3' />
+              </button>
+            )}
+          </span>
+        </div>
+        {isOpen && (
+          <div
+            className='border-t border-slate-50 bg-slate-50/50 dark:border-border/50 dark:bg-muted/30'
+            data-notification-bundle-rows={key}
+          >
+            {b.rows.map((n) => renderRow(n, true, true))}
+          </div>
+        )}
+      </div>
+    )
   }
 
   const TABS: Array<{ key: BellLaneTab; label: string; count: number | null }> = [
@@ -339,7 +620,7 @@ export function NotificationBell({
               )}
             </div>
             <div className='max-h-96 overflow-y-auto'>
-              {groups.length === 0 ? (
+              {groups.length === 0 && bundles.length === 0 ? (
                 <p className='px-3 py-6 text-center text-[12px] text-slate-400'>
                   {tab === 'attention'
                     ? 'Nothing needs you right now.'
@@ -348,152 +629,67 @@ export function NotificationBell({
                       : 'No notifications'}
                 </p>
               ) : (
-                groups.map((g) => {
-                  const unreadIds = g.rows.filter((n) => !n.read).map((n) => n.id)
-                  // The group's target = its newest row's (rows share collection + item).
-                  const target = resolveNotificationTargetFor(g.rows[0], routes)
-                  const hasRecord = !!target
-                  // Header label: the target's kind for non-record rows, the
-                  // collection · item for record rows, nothing for rows about
-                  // nowhere in particular (broadcasts).
-                  const first = g.rows[0]
-                  const groupLabel =
-                    first?.target_label && first?.kind !== 'record'
-                      ? `${first.target_label}${g.item ? ` · ${g.item}` : ''}`
-                      : String(g.collection) === '__chat__'
-                        ? 'Chat'
-                        : g.collection
-                          ? `${String(g.collection).replace(/_/g, ' ')}${g.item ? ` · ${g.item}` : ''}`
-                          : null
-                  return (
-                    <div
-                      key={g.key}
-                      className='border-b border-slate-50 last:border-b-0 dark:border-border/50'
-                    >
-                      {hasRecord && groupLabel && (
-                        <div className='flex items-center gap-1.5 px-3 pt-2'>
-                          <span className='truncate text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
-                            {groupLabel}
-                            {g.rows.length > 1 ? ` · ${g.rows.length}` : ''}
-                          </span>
-                          <span className='ml-auto flex items-center gap-0.5'>
-                            <button
-                              type='button'
-                              title='Open record'
-                              onClick={() => {
-                                if (unreadIds.length) markGroup.mutate(unreadIds)
-                                setOpen(false)
-                                runNotificationTarget(target, onNavigate)
-                              }}
-                              className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
-                            >
-                              <ExternalLink className='h-3 w-3' />
-                            </button>
-                            {unreadIds.length > 0 && (
+                [
+                  ...bundles.map(renderBundle),
+                  ...groups.map((g) => {
+                    const unreadIds = g.rows.filter((n) => !n.read).map((n) => n.id)
+                    // The group's target = its newest row's (rows share collection + item).
+                    const target = resolveNotificationTargetFor(g.rows[0], routes)
+                    const hasRecord = !!target
+                    // Header label: the target's kind for non-record rows, the
+                    // collection · item for record rows, nothing for rows about
+                    // nowhere in particular (broadcasts).
+                    const first = g.rows[0]
+                    const groupLabel =
+                      first?.target_label && first?.kind !== 'record'
+                        ? `${first.target_label}${g.item ? ` · ${g.item}` : ''}`
+                        : String(g.collection) === '__chat__'
+                          ? 'Chat'
+                          : g.collection
+                            ? `${String(g.collection).replace(/_/g, ' ')}${g.item ? ` · ${g.item}` : ''}`
+                            : null
+                    return (
+                      <div
+                        key={g.key}
+                        className='border-b border-slate-50 last:border-b-0 dark:border-border/50'
+                      >
+                        {hasRecord && groupLabel && (
+                          <div className='flex items-center gap-1.5 px-3 pt-2'>
+                            <span className='truncate text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+                              {groupLabel}
+                              {g.rows.length > 1 ? ` · ${g.rows.length}` : ''}
+                            </span>
+                            <span className='ml-auto flex items-center gap-0.5'>
                               <button
                                 type='button'
-                                title='Mark read'
-                                onClick={() => markGroup.mutate(unreadIds)}
+                                title='Open record'
+                                onClick={() => {
+                                  if (unreadIds.length) markGroup.mutate(unreadIds)
+                                  setOpen(false)
+                                  runNotificationTarget(target, onNavigate)
+                                }}
                                 className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
                               >
-                                <Check className='h-3 w-3' />
+                                <ExternalLink className='h-3 w-3' />
                               </button>
-                            )}
-                          </span>
-                        </div>
-                      )}
-                      {g.rows.map((n) => (
-                        <Fragment key={n.id}>
-                          <button
-                            type='button'
-                            onClick={() => {
-                              if (!n.read) markRead.mutate(n.id)
-                              openTarget(n)
-                            }}
-                            className={`flex w-full items-start gap-2.5 px-3 py-2 text-left transition-colors ${
-                              hasRecord ? 'hover:bg-slate-50 dark:hover:bg-muted' : 'cursor-default'
-                            }`}
-                          >
-                            <span
-                              className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${
-                                n.read
-                                  ? 'bg-transparent'
-                                  : n.lane === 'critical'
-                                    ? 'bg-red-500'
-                                    : 'bg-nvr-cyan'
-                              }`}
-                            />
-                            <span className='min-w-0 flex-1'>
-                              <span
-                                className={`block truncate text-[12.5px] ${
-                                  n.read
-                                    ? 'font-normal text-slate-600 dark:text-slate-400'
-                                    : 'font-medium text-slate-900 dark:text-slate-100'
-                                }`}
-                              >
-                                {n.lane === 'critical' && !n.read && (
-                                  <span className='mr-1 rounded bg-red-500/10 px-1 text-[9.5px] font-bold uppercase tracking-wide text-red-600 dark:text-red-400'>
-                                    Critical
-                                  </span>
-                                )}
-                                {n.title}
-                              </span>
-                              {n.message && (
-                                <span className='mt-0.5 line-clamp-2 text-[11px] leading-snug text-slate-500'>
-                                  {n.message.replace(/<[^>]+>/g, '')}
-                                </span>
+                              {unreadIds.length > 0 && (
+                                <button
+                                  type='button'
+                                  title='Mark read'
+                                  onClick={() => markGroup.mutate(unreadIds)}
+                                  className='rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
+                                >
+                                  <Check className='h-3 w-3' />
+                                </button>
                               )}
-                              <span className='mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[10.5px] text-slate-400'>
-                                {formatRelative(n.created_at)}
-                                <DeliveryChips
-                                  delivery={n.delivery}
-                                  mailLogUrl={mailLogUrl}
-                                  onNavigate={(p) => {
-                                    setOpen(false)
-                                    onNavigate(p)
-                                  }}
-                                />
-                              </span>
                             </span>
-                            {!hasRecord && !n.read && (
-                              <span
-                                role='button'
-                                tabIndex={-1}
-                                title='Mark read'
-                                onClick={(e) => {
-                                  e.stopPropagation()
-                                  markRead.mutate(n.id)
-                                }}
-                                className='mt-0.5 rounded p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-muted dark:hover:text-slate-200'
-                              >
-                                <Check className='h-3 w-3' />
-                              </span>
-                            )}
-                          </button>
-                          {n.actions && n.actions.length > 0 && !n.read && (
-                            <NotificationActions
-                              actions={n.actions}
-                              notificationId={n.id}
-                              onError={onActionError}
-                              className='px-3 pb-2 pl-[30px]'
-                            />
-                          )}
-                          <NotificationDetailBits
-                            detail={n.detail}
-                            why={n.why}
-                            delivery={n.delivery}
-                            subscriptionsPath={subscriptionsPath}
-                            onNavigate={(p) => {
-                              setOpen(false)
-                              onNavigate(p)
-                            }}
-                            className='px-3 pb-2 pl-[30px] -mt-1'
-                          />
-                        </Fragment>
-                      ))}
-                    </div>
-                  )
-                })
+                          </div>
+                        )}
+                        {g.rows.map((n) => renderRow(n, hasRecord))}
+                      </div>
+                    )
+                  })
+                ]
               )}
             </div>
             {allPath && (
@@ -511,6 +707,11 @@ export function NotificationBell({
           </div>,
           document.body
         )}
+      <AsItWasSheet
+        notificationId={asItWas?.id ?? null}
+        title={asItWas?.title ?? null}
+        onClose={() => setAsItWas(null)}
+      />
     </div>
   )
 }

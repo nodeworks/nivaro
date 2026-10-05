@@ -523,6 +523,16 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&category=workflow`
       code: `PATCH /api/users/me/preferences
 { "notification_prefs": { "matrix": { "workflow": { "inapp": true, "push": false, "email": "daily" } } } }`
     },
+    { type: 'h3', text: 'Record bundles in the bell' },
+    {
+      type: 'p',
+      text: 'Unread rows that name the same record fold into one bell entry — "3 things on REQ-1042" — with the categories as chips and the most urgent lane colouring the row. The chevron expands the rows (each keeps its own actions), clicking the bundle opens the record, and the check marks the whole bundle read in one call. The Notifications page does the same behind "Group by record" (on by default). `GET /api/notifications?bundle=record` returns `bundles` ([{collection, item, label, count, unread, lane, categories, newest, url, ids, rows}]) beside `data`, which then holds only the rows that stayed single; a lone row about a record is never bundled. `total`, `/count` and `/unread-count` are unchanged — a bundle presents rows, it does not reduce them.'
+    },
+    { type: 'h3', text: 'As it was — what they saw when notified' },
+    {
+      type: 'p',
+      text: 'A notification about a record remembers the record\'s revision current at send time (`revision_id`, stamped by notifyUser). "As it was" on a bell or inbox row opens a sheet with the record as it stood then beside the record now; fields that changed since are marked with an amber dot and listed first. Older rows (or a purged revision) fall back to the newest revision written before the notification; a record with no revision from that time says "No snapshot from that time" and shows the current values. `GET /api/notifications/:id/as-it-was` answers `{snapshot, current, changed_fields, fields, labels, revision_id, at}` for the caller\'s own row; `current` is read as the caller, so a record they can no longer open answers 403/404 and the snapshot is never shown without it. Scalar and link fields only — related sets are not compared.'
+    },
     { type: 'h3', text: 'Sending a notification (user to user)' },
     {
       type: 'p',

@@ -2,10 +2,12 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { clearUntilChange, snoozeUntilChange, UNTIL_CHANGE } from '../services/notification-snooze.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
+import { getFields, getRelations } from '../services/collections.js'
+import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
+import { bundleNotifications } from '../services/notification-bundles.js'
 import {
   classifyNotification,
   laneFromRow,
@@ -17,6 +19,12 @@ import {
   parseDelivery,
   parseDetail
 } from '../services/notification-channels.js'
+import { changedFields, pickSnapshotRevision } from '../services/notification-snapshot.js'
+import {
+  clearUntilChange,
+  snoozeUntilChange,
+  UNTIL_CHANGE
+} from '../services/notification-snooze.js'
 import {
   actionsFor,
   deriveTarget,
@@ -24,6 +32,8 @@ import {
   parseStoredTarget,
   resolveTargetUrl
 } from '../services/notification-target.js'
+import { getLabels } from '../services/queues.js'
+import { resolveFriendlyIds } from '../services/workflow-transitions.js'
 
 // Actual schema (migration 003 + renamed in 012):
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),
@@ -69,20 +79,24 @@ function serialize(row: Record<string, unknown>) {
     id: null
   }
   return {
-    id: row.id,
+    id: Number(row.id),
     user: row.recipient,
     title: row.subject,
     message: row.message,
     type: 'notification',
     read: row.status !== 'inbox',
     read_at: row.read_at ?? null,
-    collection: row.collection,
-    item: row.item,
+    collection: (row.collection as string | null) ?? null,
+    item: row.item != null && row.item !== '' ? String(row.item) : null,
     sender: row.sender ?? null,
     data: null,
     snoozed_until: row.snoozed_until ?? null,
     snooze_until_change: row.snooze_until_change === true || row.snooze_until_change === 1,
-    created_at: row.timestamp,
+    // #1385 — the record's revision current when the row was written (NULL on
+    // older rows; "as it was" falls back to the newest revision before the
+    // timestamp).
+    revision_id: row.revision_id != null ? Number(row.revision_id) : null,
+    created_at: (row.timestamp as Date | string | null) ?? null,
     target,
     kind: target?.kind ?? null,
     target_label: describeTarget(target),
@@ -229,7 +243,167 @@ export async function notificationsRoutes(app: FastifyInstance) {
         sender_name: r.sender ? (senderNames.get(String(r.sender).toUpperCase()) ?? null) : null
       }))
     )
+    // #1256 — `bundle=record`: rows of this page that name the same record
+    // fold into one entry (label = the record's friendly id, lane = the most
+    // urgent of its rows); bundled rows leave `data`. The page's `total` and
+    // the lane counts are untouched — a bundle is a presentation of rows, not
+    // fewer of them.
+    if ((req.query as { bundle?: string }).bundle === 'record') {
+      const { rows: singles, bundles } = bundleNotifications(data)
+      const byCollection = new Map<string, Set<string>>()
+      for (const b of bundles) {
+        const set = byCollection.get(b.collection) ?? new Set<string>()
+        set.add(b.item)
+        byCollection.set(b.collection, set)
+      }
+      const labels = new Map<string, string>()
+      for (const [collection, items] of byCollection) {
+        const resolved = await resolveFriendlyIds(collection, [...items]).catch(
+          () => new Map<string, string>()
+        )
+        for (const [id, label] of resolved) labels.set(`${collection}:${id}`, label)
+      }
+      for (const b of bundles) {
+        b.label = labels.get(`${b.collection}:${b.item}`) ?? b.item
+        b.url = await resolveTargetUrl(
+          { kind: 'record', collection: b.collection, id: b.item },
+          { recipientUserId: userId, app }
+        ).catch(() => null)
+      }
+      return reply.send({ data: singles, bundles, total, page, limit })
+    }
     return reply.send({ data, total, page, limit })
+  })
+
+  /**
+   * #1385 — what the record looked like when this notification was sent:
+   * the stamped revision's snapshot (else the newest revision before the
+   * row's timestamp) beside the record as the caller may read it NOW, with
+   * the fields that moved since. Own rows only; the current read goes
+   * through readOne so RBAC / row filters / scopes apply — a record the
+   * caller can no longer open answers 403/404, never a snapshot of it.
+   */
+  app.get('/:id/as-it-was', async (req, reply) => {
+    const userId = req.user!.id
+    const nid = Number((req.params as { id: string }).id)
+    if (!Number.isFinite(nid)) return reply.code(400).send({ error: 'Bad notification id' })
+    const row = (await db('nivaro_notifications').where({ id: nid, recipient: userId }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return reply.code(404).send({ error: 'Notification not found' })
+    const target =
+      parseStoredTarget(row.target) ??
+      deriveTarget({
+        collection: row.collection as string | null,
+        item: row.item as string | null,
+        subject: row.subject as string | null
+      })
+    const collection = target?.collection ?? (row.collection as string | null)
+    const item = target?.id != null ? String(target.id) : (row.item as string | null)
+    if (!collection || !item || /^(nivaro|directus)_/i.test(collection)) {
+      return reply.code(400).send({ error: 'This notification is not about a record' })
+    }
+    let current: Record<string, unknown>
+    try {
+      current = (await readOne(
+        req.user!,
+        collection,
+        item,
+        req.workspaceId ?? undefined
+      )) as Record<string, unknown>
+    } catch (err) {
+      if (err instanceof ForbiddenError) return reply.code(403).send({ error: 'Forbidden' })
+      if (err instanceof ItemNotFoundError)
+        return reply.code(404).send({ error: 'Record not found' })
+      throw err
+    }
+    const revisionIdRaw = row.revision_id
+    const snapshot = await pickSnapshotRevision({
+      collection,
+      item,
+      revisionId: revisionIdRaw != null && revisionIdRaw !== '' ? Number(revisionIdRaw) : null,
+      before: (row.timestamp as Date | string | null) ?? null
+    })
+    // Field metadata the sheet renders with: scalar + M2O fields the caller
+    // can see on the current row (aliases, hidden and system columns left
+    // out). A snapshot key the current row lacks is withheld — the current
+    // read is the permission boundary.
+    const [fields, relations] = await Promise.all([
+      getFields(collection).catch(() => []),
+      getRelations(collection).catch(() => [])
+    ])
+    const aliasNames = new Set(
+      relations
+        .filter((r) => r.one_collection === collection && r.one_field)
+        .map((r) => String(r.one_field))
+    )
+    const m2oTarget = new Map<string, string>()
+    for (const r of relations) {
+      if (r.many_collection === collection && r.one_collection && !r.junction_field)
+        m2oTarget.set(r.many_field, r.one_collection)
+    }
+    const isAlias = (f: (typeof fields)[number]) =>
+      f.type === 'alias' ||
+      aliasNames.has(f.field) ||
+      /m2m|o2m|m2a|list-/.test(String(f.interface ?? '')) ||
+      (f.special ?? []).some((s) => /^(m2m|o2m|m2a|alias)$/.test(s))
+    const describe = fields
+      .filter((f) => f.field !== 'id' && !f.hidden && !isAlias(f) && f.field in current)
+      .sort((a, b) => (a.sort ?? 0) - (b.sort ?? 0))
+      .map((f) => ({
+        field: f.field,
+        label: (f as unknown as { label?: string | null }).label ?? null,
+        type: f.type ?? null,
+        interface: f.interface ?? null,
+        format: ((f.options ?? {}) as { format?: string }).format ?? null,
+        m2o: m2oTarget.get(f.field) ?? null
+      }))
+    const allowed = new Set(describe.map((f) => f.field))
+    const currentOut: Record<string, unknown> = {}
+    const snapshotOut: Record<string, unknown> | null = snapshot ? {} : null
+    for (const key of allowed) {
+      currentOut[key] = current[key]
+      if (snapshotOut && snapshot) snapshotOut[key] = snapshot.data[key]
+    }
+    // M2O labels for both sides in one batched read per target collection.
+    const wanted = new Map<string, Set<string>>()
+    for (const f of describe) {
+      if (!f.m2o) continue
+      for (const v of [currentOut[f.field], snapshotOut?.[f.field]]) {
+        if (v == null || v === '' || typeof v === 'object') continue
+        const set = wanted.get(f.m2o) ?? new Set<string>()
+        set.add(String(v))
+        wanted.set(f.m2o, set)
+      }
+    }
+    const resolved: Record<string, string> =
+      wanted.size > 0 ? await getLabels(wanted).catch(() => ({}) as Record<string, string>) : {}
+    const labels: Record<string, { snapshot: string | null; current: string | null }> = {}
+    for (const f of describe) {
+      if (!f.m2o) continue
+      const pick = (v: unknown) =>
+        v == null || v === '' || typeof v === 'object'
+          ? null
+          : (resolved[`${f.m2o}:${String(v)}`] ?? null)
+      labels[f.field] = {
+        snapshot: pick(snapshotOut?.[f.field]),
+        current: pick(currentOut[f.field])
+      }
+    }
+    return reply.send({
+      data: {
+        collection,
+        item,
+        revision_id: snapshot?.revision_id ?? null,
+        at: snapshot?.at ?? (snapshot ? row.timestamp : null),
+        notified_at: row.timestamp ?? null,
+        snapshot: snapshotOut,
+        current: currentOut,
+        changed_fields: snapshotOut ? changedFields(snapshotOut, currentOut) : [],
+        fields: describe,
+        labels
+      }
+    })
   })
 
   // Unread count + lane split. `attention` is what the badge shows: Critical
