@@ -1,14 +1,29 @@
+import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
 import { cacheStats } from '../query-cache-stats.js'
 import { computeRollupTotal, parseRollupFormula } from '../rollups.js'
 import { procedureStats, statementsTouching } from './dmv.js'
-import type { ProposalRow } from './types.js'
+import { getProposal, listProposals, updateProposal } from './ledger.js'
+import { readTuningSettings, type TuningSettings } from './settings.js'
+import { proveProcedureRewrite } from './twin.js'
+import type { ProofResult, ProposalRow, WatchSample } from './types.js'
 
 /**
- * The metric readers the post-apply watch stands on: one figure per kind, lower is better.
- * Apply stores `captureBaseline` just before the change runs; the hourly watcher samples
- * `measure` against it.
+ * The post-apply watch. Apply stores `captureBaseline` just before the change runs; the hourly
+ * watcher samples `measure` against it, rolls a regression back and finishes a change whose
+ * window passed. It also ends a claim whose apply or rollback died with its process.
  */
+
+const T = 'nivaro_tuning_proposals'
+/** Fewer judged samples than this never regress (one bad hour is not a regression). */
+export const MIN_SAMPLES = 20
+const SAMPLE_CAP = 400
+/** A claim older than this whose job run is over belongs to an apply/rollback that died. */
+export const STUCK_CLAIM_MS = 30 * 60_000
+/** The hour (UTC) the watcher re-diffs one parameter set of each watched rewrite. */
+const RECHECK_UTC_HOUR = 7
+
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** The one metric each kind is judged by (lower is better); null when nothing measures it —
  *  including when a read throws. */
@@ -66,4 +81,281 @@ async function measureKind(row: ProposalRow): Promise<number | null> {
 
 export async function captureBaseline(row: ProposalRow): Promise<Record<string, number | null>> {
   return { metric: await measure(row) }
+}
+
+/** Pure: worse than the baseline by more than pct on at least 20 samples AND on ≥ 80% of them. */
+export function judgeRegression(
+  samples: WatchSample[],
+  baseline: number | null,
+  pct: number
+): { regressed: boolean; reason: string } {
+  const vals = samples
+    .map((s) => s.value)
+    .filter((v): v is number => v != null && Number.isFinite(v))
+  if (baseline == null || baseline <= 0) return { regressed: false, reason: 'no baseline' }
+  if (vals.length < MIN_SAMPLES)
+    return { regressed: false, reason: `${vals.length} of ${MIN_SAMPLES} samples` }
+  const limit = baseline * (1 + pct / 100)
+  const bad = vals.filter((v) => v > limit).length
+  const regressed = bad >= MIN_SAMPLES && bad / vals.length >= 0.8
+  return {
+    regressed,
+    reason: `${bad} of ${vals.length} samples above ${Math.round(limit)} (baseline ${Math.round(baseline)}, +${pct}%)`
+  }
+}
+
+// ─── Stuck claims ───────────────────────────────────────────────────────────────────────
+
+export interface ClaimRun {
+  status: string
+  started_at: Date | string | null
+}
+
+/**
+ * Pure: an `applying` claim is stuck when its job run is over (a restart marks it interrupted)
+ * and started more than 30 minutes ago. A claim with no run record (bookkeeping degraded) is
+ * timed from when the watcher first saw it. A running run is never stuck: a long backfill or
+ * index build is still working.
+ */
+export function isStuckClaim(
+  run: ClaimRun | null,
+  firstSeenAt: number | null,
+  now: number
+): boolean {
+  if (run?.status === 'running') return false
+  const started = run?.started_at ? new Date(run.started_at).getTime() : Number.NaN
+  if (run && Number.isFinite(started)) return now - started > STUCK_CLAIM_MS
+  return firstSeenAt != null && now - firstSeenAt > STUCK_CLAIM_MS
+}
+
+/** First sighting of a claim with no run record, by proposal id (this process). */
+const runlessSince = new Map<string, number>()
+
+/** The `applying` rows whose apply or rollback is no longer running, with which one it was. */
+export async function stuckClaims(
+  now = Date.now()
+): Promise<Array<{ row: ProposalRow; job: 'apply' | 'rollback' }>> {
+  const rows = await listProposals({ status: ['applying'] })
+  const claimed = new Set(rows.map((r) => r.id))
+  for (const id of runlessSince.keys()) if (!claimed.has(id)) runlessSince.delete(id)
+  const ids = rows.map((r) => r.run_id).filter((id): id is number => id != null)
+  const runs = ids.length
+    ? ((await db('nivaro_job_runs')
+        .whereIn('id', ids)
+        .select('id', 'job_id', 'status', 'started_at')) as Array<Record<string, unknown>>)
+    : []
+  const byId = new Map(runs.map((r) => [Number(r.id), r]))
+  const out: Array<{ row: ProposalRow; job: 'apply' | 'rollback' }> = []
+  for (const row of rows) {
+    const run = row.run_id == null ? undefined : byId.get(row.run_id)
+    if (!run && !runlessSince.has(row.id)) runlessSince.set(row.id, now)
+    const claimRun = run
+      ? { status: String(run.status), started_at: run.started_at as Date | string | null }
+      : null
+    if (!isStuckClaim(claimRun, runlessSince.get(row.id) ?? null, now)) continue
+    const job = String(run?.job_id ?? '').startsWith('tuning:rollback:') ? 'rollback' : 'apply'
+    out.push({ row, job })
+  }
+  return out
+}
+
+// ─── The hourly watch ───────────────────────────────────────────────────────────────────
+
+export interface WatchReport {
+  checked: number
+  rolled_back: number
+  finished: number
+  /** Claims ended as failed because their apply/rollback died. */
+  stuck: number
+  dry_run: boolean
+  /** One line per row the run acted on (or, dry, would act on). */
+  actions: string[]
+}
+
+const NO_PROOF: ProofResult = {
+  passed: true,
+  method: 'usage-stats',
+  before: {},
+  after: {},
+  detail: ''
+}
+
+/**
+ * The nightly re-diff of a watched rewrite: the twin is the PREVIOUS body and "old" EXECs the
+ * live procedure (the rewrite), one recorded parameter set per night in turn. The row diff is
+ * symmetric, which is all it needs; the timing verdict is ignored (the old body is the slow one).
+ */
+async function recheckRewrite(row: ProposalRow, settings: TuningSettings): Promise<string | null> {
+  if (row.apply.type !== 'proc_body' || row.undo.type !== 'proc_body') return null
+  const sets =
+    (row.evidence.parameter_set_values as Array<Record<string, unknown>> | undefined) ?? []
+  const today = Math.floor(Date.now() / 86_400_000)
+  const re = await proveProcedureRewrite({
+    proc: row.apply.proc,
+    oldBody: row.apply.body,
+    newBody: row.undo.body,
+    paramSets: sets.length ? [sets[today % sets.length]] : [],
+    timeoutMs: settings.proc_timeout_minutes * 60_000
+  }).catch(() => null)
+  return re?.rows_diff?.length ? 'nightly re-check: rows differ from the previous body' : null
+}
+
+/** Why this row must roll back now, or null. */
+async function regression(
+  row: ProposalRow,
+  value: number | null,
+  samples: WatchSample[],
+  settings: TuningSettings,
+  dryRun: boolean
+): Promise<string | null> {
+  // a stored rollup that disagrees with the live figure is wrong data, not slow data: at once
+  if (row.kind === 'rollup_store' && value != null && value > 0)
+    return `${value} sampled row(s) drifted from the live rollup`
+  // the re-diff deploys a twin, so a dry run does not run it
+  if (row.kind === 'proc_rewrite' && !dryRun && new Date().getUTCHours() === RECHECK_UTC_HOUR) {
+    const differs = await recheckRewrite(row, settings)
+    if (differs) return differs
+  }
+  const baseline = row.watch_baseline?.before?.metric ?? null
+  const judged = judgeRegression(samples, baseline, settings.regression_pct)
+  return judged.regressed ? `regressed: ${judged.reason}` : null
+}
+
+async function notifyApplier(
+  app: FastifyInstance | null,
+  row: ProposalRow,
+  subject: string,
+  message: string
+): Promise<void> {
+  if (!app || !row.applied_by) return
+  try {
+    const { notifyUser } = await import('../notification-channels.js')
+    await notifyUser(app, row.applied_by, {
+      subject: subject.slice(0, 200),
+      message: message.slice(0, 1000),
+      category: 'system',
+      always_inbox: true,
+      target: { kind: 'external', url: `/db-tuning?proposal=${row.id}` },
+      source: { kind: 'db-tuning', label: 'Database tuning', id: row.id }
+    })
+  } catch {
+    // the notice is decoration; the row and its activity entry carry the outcome
+  }
+}
+
+const ROLLBACK_LABEL = {
+  rolled_back: 'rolled back',
+  failed: 'rollback failed',
+  lost: 'rollback held by another claim'
+} as const
+
+/** Roll back as the system. A claim lost to an admin's click is theirs to finish. */
+async function autoRollback(
+  app: FastifyInstance | null,
+  row: ProposalRow,
+  reason: string
+): Promise<'rolled_back' | 'failed' | 'lost'> {
+  const { rollbackProposal } = await import('./apply.js')
+  try {
+    await rollbackProposal(row.id, { userId: null, reason, app })
+  } catch (err) {
+    const after = await getProposal(row.id).catch(() => null)
+    if (after?.status !== 'failed') return 'lost'
+    await notifyApplier(
+      app,
+      row,
+      `Tuning change needs a person: ${row.title}`,
+      `The watch tried to roll this change back (${reason}) and could not: ${errText(err)}. The row is failed; its undo is on the proposal.`
+    )
+    return 'failed'
+  }
+  await notifyApplier(
+    app,
+    row,
+    `Tuning change rolled back: ${row.title}`,
+    `The watch rolled this change back automatically — ${reason}.`
+  )
+  return 'rolled_back'
+}
+
+/**
+ * Hourly: end dead claims, then sample every watching row, roll back on regression and finish
+ * the ones past their window. Returns at once while database tuning is off. A dry run measures
+ * and judges, and writes nothing.
+ */
+export async function runWatch(
+  app: FastifyInstance | null,
+  opts: { dryRun?: boolean } = {}
+): Promise<WatchReport> {
+  const dryRun = opts.dryRun === true
+  const out: WatchReport = {
+    checked: 0,
+    rolled_back: 0,
+    finished: 0,
+    stuck: 0,
+    dry_run: dryRun,
+    actions: []
+  }
+  const settings = await readTuningSettings()
+  if (!settings.enabled) return out
+
+  // No undo here: the process that died may have run part of the change, and a person reads
+  // the failed row (and its undo) before anything else runs.
+  for (const { row, job } of await stuckClaims()) {
+    const detail = `${job} did not finish (process restart?)`
+    if (dryRun) {
+      out.stuck++
+      out.actions.push(`would mark failed: ${row.title} — ${detail}`)
+      continue
+    }
+    const n = await db(T)
+      .where({ id: row.id, status: 'applying', run_id: row.run_id })
+      .update({ status: 'failed', rollback_reason: detail })
+    if (!Number(n)) continue
+    out.stuck++
+    out.actions.push(`marked failed: ${row.title} — ${detail}`)
+  }
+
+  for (const row of await listProposals({ status: ['watching'] })) {
+    out.checked++
+    try {
+      const value = await measure(row)
+      const sample: WatchSample = { at: new Date().toISOString(), value }
+      const samples = [...(row.proof?.watch ?? []), sample].slice(-SAMPLE_CAP)
+      if (!dryRun)
+        await updateProposal(row.id, { proof: { ...(row.proof ?? NO_PROOF), watch: samples } })
+      const reason = await regression(row, value, samples, settings, dryRun)
+      if (reason) {
+        if (dryRun) {
+          out.rolled_back++
+          out.actions.push(`would roll back: ${row.title} — ${reason}`)
+          continue
+        }
+        const result = await autoRollback(app, row, reason)
+        if (result === 'rolled_back') out.rolled_back++
+        out.actions.push(`${ROLLBACK_LABEL[result]}: ${row.title} — ${reason}`)
+        continue
+      }
+      if (!row.watch_until || new Date(row.watch_until).getTime() >= Date.now()) continue
+      if (dryRun) {
+        out.finished++
+        out.actions.push(`would finish: ${row.title}`)
+        continue
+      }
+      // only from watching: an admin's rollback may hold the row by now
+      const n = await db(T).where({ id: row.id, status: 'watching' }).update({ status: 'applied' })
+      if (Number(n)) {
+        out.finished++
+        out.actions.push(`finished: ${row.title}`)
+      }
+    } catch (err) {
+      out.actions.push(`watch failed: ${row.title} — ${errText(err)}`)
+    }
+  }
+  return out
+}
+
+export function watchSummary(r: WatchReport): string {
+  const head = `${r.checked} checked, ${r.rolled_back} rolled back, ${r.finished} finished, ${r.stuck} stuck claim(s) failed`
+  return r.actions.length ? `${head} — ${r.actions.slice(0, 10).join('; ')}` : head
 }

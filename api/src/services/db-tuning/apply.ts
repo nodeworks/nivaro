@@ -853,8 +853,20 @@ export async function applyProposal(
     if (!moved) throw new Error('the proposal left the applying state while the change ran')
   } catch (err) {
     // A refusal before the first write changed nothing: no undo (it could drop a stranger's
-    // index). Otherwise whatever part of the change landed comes off at once.
-    const undo = executed ? await undoOutcome(row, opts.userId) : 'nothing ran, no undo'
+    // index). Otherwise whatever part of the change landed comes off at once — unless the row
+    // left the claim meanwhile (a watching write that landed before it threw, or the watch
+    // ending a claim it judged dead): the row then speaks for the change, not this catch.
+    const held = executed
+      ? await getProposal(id).then(
+          (r) => r?.status ?? null,
+          () => null
+        )
+      : null
+    const undo = !executed
+      ? 'nothing ran, no undo'
+      : held === 'applying'
+        ? await undoOutcome(row, opts.userId)
+        : `the row is ${held ?? 'unreadable'}, no undo`
     const reason = `apply failed: ${errText(err)}; ${undo}`
     await transition(id, CLAIMED, {
       status: 'failed',

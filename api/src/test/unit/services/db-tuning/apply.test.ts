@@ -13,6 +13,7 @@ import {
 } from '../../../../services/db-tuning/apply.js'
 import { bodyHash } from '../../../../services/db-tuning/twin.js'
 import type { ProposalRow } from '../../../../services/db-tuning/types.js'
+import { createIndexSql, indexName } from '../../../../services/index-advisor.js'
 
 type IndexInfo = { type_desc: string; is_primary_key: boolean; is_unique_constraint: boolean }
 
@@ -26,6 +27,8 @@ const m = vi.hoisted(() => ({
   mssql: true,
   /** proposal-row writes whose status is listed here throw (a DB hiccup mid-apply) */
   failStatus: new Set<string>(),
+  /** proposal-row writes whose status is listed here land, then throw (the reply was lost) */
+  commitThenFail: new Set<string>(),
   /** sys.indexes reads answered in order before falling back to m.indexes */
   indexReads: [] as Array<IndexInfo | null>,
   runLongSql: vi.fn(async (_sql: string): Promise<unknown[]> => []),
@@ -90,6 +93,7 @@ vi.mock('../../../../db/index.js', () => {
           const row = m.rows.get(String(where.id))
           if (!row || !matchesIn(row)) return 0
           Object.assign(row, p)
+          if (m.commitThenFail.has(String(p.status))) throw new Error('connection reset')
           return 1
         }
         if (table === 'nivaro_fields') {
@@ -363,7 +367,17 @@ describe('parseIndexStatement', () => {
 
 describe('specsProblem', () => {
   it('passes the observer shapes', () => {
-    expect(specsProblem(row({}))).toBeNull()
+    expect(
+      specsProblem(
+        row({
+          apply: { type: 'sql', statements: [createIndexSql('workflows', 'project_type')] },
+          undo: {
+            type: 'sql',
+            statements: [`DROP INDEX [${indexName('workflows', 'project_type')}] ON [workflows]`]
+          }
+        })
+      )
+    ).toBeNull()
   })
   it('refuses an index statement on another table than the target', () => {
     expect(
@@ -448,6 +462,7 @@ beforeEach(() => {
   m.parentIds = [{ id: 1 }, { id: 2 }]
   m.mssql = true
   m.failStatus.clear()
+  m.commitThenFail.clear()
   m.indexReads = []
   m.runLongSql.mockImplementation(async () => [])
   m.procBody.mockImplementation(async () => null)
@@ -937,6 +952,31 @@ describe('applyProposal', () => {
     expect(m.rows.get('x')?.status).toBe('failed')
     expect(String(m.rows.get('x')?.rollback_reason)).toMatch(/connection reset; undo ran/)
     expect(m.run.fail).toHaveBeenCalled()
+  })
+  it('a watching write that committed before it threw is not undone', async () => {
+    m.rows.set('x', { ...procRow() })
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.commitThenFail.add('watching')
+    await expect(applyProposal('x', { userId: 'u', dbaOk: false, app })).rejects.toThrow(
+      /connection reset/
+    )
+    // the row says watching: the change stays, and so does the row
+    expect(m.rows.get('x')?.status).toBe('watching')
+    expect(m.runLongSql).toHaveBeenCalledTimes(1)
+  })
+  it('a claim the watch already ended as failed is not undone by the apply that wakes up', async () => {
+    m.rows.set('x', { ...procRow() })
+    m.procBody.mockImplementation(async () => PROC_OLD)
+    m.runLongSql.mockImplementation(async () => {
+      const r = m.rows.get('x')
+      if (r) Object.assign(r, { status: 'failed', rollback_reason: 'apply did not finish' })
+      return []
+    })
+    await expect(applyProposal('x', { userId: 'u', dbaOk: false, app })).rejects.toThrow(
+      /left the applying state/
+    )
+    expect(m.runLongSql).toHaveBeenCalledTimes(1)
+    expect(m.rows.get('x')?.rollback_reason).toBe('apply did not finish')
   })
   it('a baseline read that throws does not stop the apply (metric null)', async () => {
     m.rows.set('x', { ...row({}) })
