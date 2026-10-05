@@ -310,6 +310,19 @@ describe('measured write gaps', () => {
     expect(f).toMatchObject({ medianGapMin: 24 * 60, nightly: true, gapAssumed: false })
     expect(proposeTtl(f)).toBe(6 * 3600)
   })
+  it('a nightly burst (a write a minute for 10 min, then quiet) is nightly', () => {
+    const burst = Array.from({ length: 7 }, (_, d) =>
+      Array.from({ length: 10 }, (_, m) => at(d * 24 * 60 + m))
+    ).flat()
+    const f = freshnessFromWrites([burst])
+    expect(f).toMatchObject({ medianGapMin: 1, nightly: true })
+    expect(proposeTtl(f)).toBe(6 * 3600)
+  })
+  it('a table written every 5 min all day is not nightly', () => {
+    const f = freshnessFromWrites([every(5, 7 * 24 * 12)])
+    expect(f).toMatchObject({ medianGapMin: 5, nightly: false })
+    expect(proposeTtl(f)).toBe(150)
+  })
   it('the busiest source sets the gap', () => {
     expect(freshnessFromWrites([every(24 * 60, 7), every(10, 1000)]).nightly).toBe(false)
   })

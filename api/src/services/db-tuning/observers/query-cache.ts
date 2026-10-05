@@ -6,7 +6,7 @@ import { type Candidate, KIND_RISK } from '../types.js'
 /**
  * Query-cache observer: a saved query that runs uncached, takes a second or more and runs often
  * is proposed a TTL sized to how often its sources are written — measured from the activity log
- * over the last 7 days: 6 h when the median gap is 20 h or more (nightly-fed), else half the gap.
+ * over the last 7 days: 6 h when the window is mostly quiet (nightly-fed), else half the median gap.
  * A source with no activity rows (a table no hook writes through) cannot be measured: the query
  * is labelled `gap_assumed` and its TTL capped at 5 min. A query whose sources cannot be resolved
  * is never proposed. When the first run of the day is the slow one, the warmer is turned on too.
@@ -39,6 +39,8 @@ const H = 3600
 const MIN_TTL = 60
 export const ASSUMED_GAP_TTL = 5 * 60
 export const NIGHTLY_GAP_MIN = 20 * 60
+const QUIET_GAP_MIN = 6 * 60
+const NIGHTLY_QUIET_SHARE = 0.8
 const DAY_MS = 86_400_000
 const WINDOW_DAYS = 7
 const WINDOW_MIN = WINDOW_DAYS * 24 * 60
@@ -53,29 +55,47 @@ export function proposeTtl(f: QueryFreshnessShape): number {
   return f.gapAssumed ? Math.min(ttl, ASSUMED_GAP_TTL) : ttl
 }
 
-/** Median gap in minutes between distinct write minutes; null with fewer than two. */
-export function medianGapMinutes(stamps: Array<Date | string>): number | null {
+/** Gaps in minutes between consecutive distinct write minutes, in time order. */
+function writeGaps(stamps: Array<Date | string>): number[] {
   const minutes = [
     ...new Set(
       stamps.map((s) => Math.floor(new Date(s).getTime() / 60_000)).filter(Number.isFinite)
     )
   ].sort((a, b) => a - b)
-  if (minutes.length < 2) return null
-  const gaps = minutes
-    .slice(1)
-    .map((m, i) => m - minutes[i])
-    .sort((a, b) => a - b)
-  const mid = gaps.length >> 1
-  return gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2
+  return minutes.slice(1).map((m, i) => m - minutes[i])
+}
+
+const median = (xs: number[]): number | null => {
+  if (!xs.length) return null
+  const sorted = [...xs].sort((a, b) => a - b)
+  const mid = sorted.length >> 1
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2
+}
+
+/** Median gap in minutes between distinct write minutes; null with fewer than two. */
+export function medianGapMinutes(stamps: Array<Date | string>): number | null {
+  return median(writeGaps(stamps))
+}
+
+/**
+ * Nightly = the window is mostly quiet: gaps of 6 h or more add up to at least 80% of it, and one
+ * of them lasts 20 h or more. A nightly burst (a write a minute for ten minutes) has a 1-minute
+ * median, so the median alone never finds it. Only gaps between writes count, not the stretch
+ * before the first write or after the last.
+ */
+function isNightly(gaps: number[]): boolean {
+  const quiet = gaps.filter((g) => g >= QUIET_GAP_MIN).reduce((a, g) => a + g, 0)
+  return quiet / WINDOW_MIN >= NIGHTLY_QUIET_SHARE && gaps.some((g) => g >= NIGHTLY_GAP_MIN)
 }
 
 /** A query's freshness from each source's write stamps (any source's write makes it stale). */
 export function freshnessFromWrites(perSource: Array<Array<Date | string>>): QueryFreshnessShape {
   const gapAssumed = perSource.some((w) => w.length === 0)
   const all = perSource.flat()
+  const gaps = writeGaps(all)
   // a single write minute in the whole window: written about once a week
-  const medianGapMin = all.length ? (medianGapMinutes(all) ?? WINDOW_MIN) : null
-  const nightly = medianGapMin != null && medianGapMin >= NIGHTLY_GAP_MIN
+  const medianGapMin = all.length ? (median(gaps) ?? WINDOW_MIN) : null
+  const nightly = isNightly(gaps)
   return { sources: perSource.length, nightly, medianGapMin, gapAssumed }
 }
 
