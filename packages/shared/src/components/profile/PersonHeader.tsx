@@ -6,6 +6,7 @@ import { canViewAs, viewAs } from '../../lib/view-as'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { UserAvatar } from '../UserAvatar'
 import { BestTimeChip } from './BestTime'
+import { MailSuppressedPill } from './MailSuppressedPill'
 import { NotifyButton } from './PersonExtras'
 import { PersonChip, Pill, personInitials } from './primitives'
 import type { PersonProfile } from './types'
@@ -86,6 +87,7 @@ export function PersonHeader({
                 Out of office{oooUntil ? ` until ${oooUntil}` : ''}
               </Pill>
             )}
+            <MailSuppressedPill email={p.email} canClear={isAdmin} />
             {isAdmin && p.admin?.account_kind && (
               <Pill tone='violet' testId='account-kind'>
                 {p.admin.account_kind}

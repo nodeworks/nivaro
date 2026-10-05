@@ -81,7 +81,9 @@ export async function mailLogRoutes(app: FastifyInstance): Promise<void> {
       const matches = types.filter((t) => t.template === template)
       return matches.length === 1 ? matches[0].label : null
     }
-    return { data: aggregateMailStats(rows, { days, labelFor }) }
+    const { countSuppressions } = await import('../services/mail-suppressions.js')
+    const suppressedCount = await countSuppressions()
+    return { data: aggregateMailStats(rows, { days, labelFor, suppressedCount }) }
   })
 
   app.get<{

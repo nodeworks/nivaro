@@ -42,6 +42,8 @@ interface MailStats {
     error: string | null
     since: string | null
   }
+  /** Addresses currently suppressed after a hard bounce (#1299). */
+  suppressed_count?: number
 }
 
 const STATUS_COLOR: Record<keyof StatusCounts, string> = {
@@ -56,11 +58,14 @@ const num = (n: number) => n.toLocaleString()
 export function MailDeliveryBoard({
   days,
   onOpenTemplate,
-  onOpenStatus
+  onOpenStatus,
+  onOpenSuppressed
 }: {
   days: number
   onOpenTemplate: (template: string) => void
   onOpenStatus: (status: keyof StatusCounts) => void
+  /** Opens the suppressed-addresses list (#1299). */
+  onOpenSuppressed?: () => void
 }) {
   const { data, isLoading } = useQuery<{ data: MailStats }>({
     queryKey: ['mail-log-stats', days],
@@ -122,7 +127,7 @@ export function MailDeliveryBoard({
         </div>
       )}
       {/* Stat strip */}
-      <div className='grid grid-cols-5 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
+      <div className='grid grid-cols-6 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border'>
         {(['sent', 'failed', 'dropped', 'deferred'] as const).map((k) => (
           <button
             key={k}
@@ -163,6 +168,29 @@ export function MailDeliveryBoard({
           </p>
           <p className='text-[11px] text-slate-400'>sent ÷ (sent + failed)</p>
         </div>
+        <button
+          type='button'
+          data-mail-suppressed-tile={s.suppressed_count ?? 0}
+          onClick={() => onOpenSuppressed?.()}
+          disabled={!onOpenSuppressed}
+          className='bg-white px-4 py-3 text-left hover:bg-slate-50 disabled:cursor-default disabled:hover:bg-white dark:bg-card dark:hover:bg-muted/40 dark:disabled:hover:bg-card'
+          title='Open the suppressed-addresses list'
+        >
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>
+            Suppressed
+          </p>
+          <p
+            className={cn(
+              'mt-1 text-[20px] font-semibold tabular-nums',
+              (s.suppressed_count ?? 0) > 0
+                ? 'text-rose-700 dark:text-rose-400'
+                : 'text-slate-900 dark:text-foreground'
+            )}
+          >
+            {num(s.suppressed_count ?? 0)}
+          </p>
+          <p className='text-[11px] text-slate-400'>addresses bouncing hard</p>
+        </button>
       </div>
 
       {/* Per-day chart */}

@@ -493,6 +493,11 @@ DELETE /api/notification-templates/:key       # revert`
       type: 'p',
       text: 'A red banner at the top of the board means the RELAY is failing, not the addresses: the newest 20 send attempts are judged as one, and when at least 80% failed with one normalised error class the banner names it and when the streak began. Mixed failure classes are bounces and never raise it. The readiness check `mail-relay` makes the same judgement (skip under 8 attempts, pass, fail); `GET /api/mail-log/relay` returns it as JSON.'
     },
+    { type: 'h2', id: 'mail-bounces', text: 'Bounced addresses' },
+    {
+      type: 'p',
+      text: 'A hard bounce — the relay refused the ADDRESS (5xx on RCPT/DATA with the address rejected, a 550/551/553/554 head, or "user unknown" / "mailbox unavailable" / "no such user" / "does not exist" in the reply) — marks the address in `nivaro_mail_suppressions` (address, reason, first/last seen, count). From then on every sender drops it: each dropped address gets its own mail-log row with status dropped and error "suppressed: <reason>", and a send with nothing left returns dropped without touching the relay. Soft refusals (4xx, greylisting, a dead relay) never suppress. The first time an address is marked, every administrator is told once (system category), and so is the person\'s manager when the address belongs to a user; a repeat bounce never pages anyone again. The person\'s profile header and their contact card show a rose "Email bouncing · since <date>" pill; Mail Log → Suppressed addresses lists, searches and clears the marks (activity `mail-suppression-clear`), and the Delivery board counts them. `GET /api/mail-suppressions` (admin), `DELETE /api/mail-suppressions/:id` (admin), `GET /api/mail-suppressions/check?address=` (signed in).'
+    },
     { type: 'h2', id: 'mail-harness-links', text: 'Where links land' },
     {
       type: 'p',

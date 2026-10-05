@@ -44,6 +44,9 @@ export interface MailStats {
   failures: Array<{ error: string; count: number; last_at: string; recipients: string[] }>
   bounces: Array<{ email: string; failures: number; last_error: string | null; last_at: string }>
   relay: RelayHealth
+  /** Addresses currently suppressed after a hard bounce (#1299) — a table
+   *  count the route supplies, not a window figure. */
+  suppressed_count: number
 }
 
 export const UNTEMPLATED = '(untemplated)'
@@ -155,7 +158,12 @@ export function normalizeError(error: string | null | undefined): string {
 
 export function aggregateMailStats(
   rows: MailLogRow[],
-  opts: { days: number; now?: Date; labelFor?: (template: string) => string | null }
+  opts: {
+    days: number
+    now?: Date
+    labelFor?: (template: string) => string | null
+    suppressedCount?: number
+  }
 ): MailStats {
   const now = opts.now ?? new Date()
   const totals = zero()
@@ -225,6 +233,7 @@ export function aggregateMailStats(
   return {
     days: opts.days,
     relay: relayHealth(rows),
+    suppressed_count: Math.max(0, Number(opts.suppressedCount ?? 0) || 0),
     totals: {
       ...totals,
       total: totals.sent + totals.failed + totals.dropped + totals.deferred,
