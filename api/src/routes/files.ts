@@ -256,6 +256,35 @@ export async function filesRoutes(app: FastifyInstance) {
     return reply.send({ data: Object.fromEntries(counts) })
   })
 
+  // #1288 — what carried each of a record's files: the addendum that attached
+  // it, the push whose payload named it, the email it rode, the layout that
+  // generated it. Gated on reading the record (RBAC / row filter / scopes)
+  // through readOne; the file ids are what the form already shows.
+  app.post('/usage/on-record', async (req, reply) => {
+    const body = (req.body ?? {}) as { collection?: unknown; item?: unknown; file_ids?: unknown }
+    const collection = typeof body.collection === 'string' ? body.collection : ''
+    const item = body.item != null ? String(body.item) : ''
+    const ids = (Array.isArray(body.file_ids) ? body.file_ids : [])
+      .map(String)
+      .filter(Boolean)
+      .slice(0, 200)
+    if (!collection || !item || ids.length === 0) {
+      return reply.code(400).send({ error: 'collection, item and file_ids[] are required' })
+    }
+    if (/^(nivaro|directus)_/i.test(collection)) {
+      return reply.code(400).send({ error: 'Business collections only' })
+    }
+    try {
+      const { readOne } = await import('../services/items.js')
+      await readOne(req.user!, collection, item, req.workspaceId ?? undefined, ['id'])
+    } catch {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    const { fileUsageOnRecord } = await import('../services/file-usage.js')
+    const data = await fileUsageOnRecord(collection, item, ids)
+    return reply.send({ data })
+  })
+
   app.get('/usage/orphans', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as { limit?: string; offset?: string }
     const result = await findOrphanFiles({
