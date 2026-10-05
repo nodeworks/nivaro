@@ -263,6 +263,22 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
     }
   },
   {
+    name: 'queue_summary',
+    description:
+      'Summarise one of the queues listed in your instructions under "Queues you may ask about" — only queues the asker may read answer. Returns the totals (total, unowned, SLA warnings/breaches, at-risk), the by-state breakdown, the oldest records in their state, the SLA-breached records with hours over and owners, the unowned records, and the at-risk rules firing most; every record carries its friendly id and a link. Runs as the asker, so the figures match what they see on the queue page. Prefer queue_name when the user names a queue; use queue_id when the catalogue gives it or a name was ambiguous.',
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        queue_id: { type: 'string', description: 'The queue id from the catalogue.' },
+        queue_name: { type: 'string', description: 'The queue name (case-insensitive).' },
+        limit: {
+          type: 'number',
+          description: 'Records per list (oldest / breached / unowned); default 10, max 25.'
+        }
+      }
+    }
+  },
+  {
     name: 'traffic_snapshot',
     description:
       'Administrators only. Who is calling the API and what they hit: per entity (collection, widget, page, query, GraphQL operation) request and error counts with the top callers, plus the busiest callers overall. hours 0 = the live Traffic Map (last 15 minutes); 1-24 = the request log over that many hours ("today" ≈ 24). Use entity to narrow to one collection or operation, e.g. "forecasts".',
@@ -1297,6 +1313,19 @@ export async function executeChatTool(
       return trafficSnapshotTool(input)
     }
 
+    case 'queue_summary': {
+      const { summarizeQueue } = await import('./ai-queue-summary.js')
+      const queueId = typeof input.queue_id === 'string' ? input.queue_id : undefined
+      const queueName = typeof input.queue_name === 'string' ? input.queue_name : undefined
+      const limit = typeof input.limit === 'number' ? input.limit : undefined
+      const summary = await summarizeQueue(user, { id: queueId, name: queueName }, { limit })
+      const s = summary.stats
+      return {
+        result: summary,
+        summary: `${summary.queue.name}: ${s.total} records · ${s.unowned} unowned · ${s.sla_breached} SLA breached · ${s.at_risk} at risk${summary.truncated ? ' (lists truncated)' : ''}`
+      }
+    }
+
     case 'run_custom_query': {
       const slug = String(input.slug ?? '').trim()
       if (!slug) throw new Error('slug is required')
@@ -1402,6 +1431,7 @@ Rules:
 - Prefer aggregate for counts/totals/breakdowns; query_items for record lists. When someone names a place, vendor, title or id, query_items with "search" finds it across the collection's text columns in one call — semantic_search only covers indexed records and is a last resort.
 - When someone asks whether or why an external system was or was not told about a record ("why didn't X get this", "did the partner receive it"), call integration_status with the record's collection and id — it returns the real reason from the ledger; never guess from the record's own fields.
 - For "what happened to this record across systems", "what did the import / the partner do to it", "why did that push fire", call record_event_path — it walks the real chain of writes, transitions, flows and partner calls. For "why can't I (or Beth) see this record" call explain_access. For "what is wrong with this record" or "how clean is this collection's data" call record_integrity. A saved query listed below answers its question in one call — run_custom_query with its slug beats rebuilding the figure from rows.
+- For "what is stuck in / what is in / how is the X queue" call queue_summary with the queue's name or id from the queues listed below — ONE call returns the totals, the by-state breakdown, the SLA breaches, the oldest and unowned records and the at-risk reasons. Lead with what needs attention (breaches, unowned, the oldest), name records by the friendly id the tool returns, and never rebuild a queue from query_items.
 - Two things that are not directly linked usually meet on a THIRD collection: read the relations list_collections reports and look for the collection that carries a link to both (a request record that names a vendor and a site, a junction between two tables), then filter through it with dotted paths. Say which path you used.
 - The readable collections are listed below — do not call list_collections without a collection name. Call it WITH a name once per collection you have not inspected, then query. When several calls do not depend on each other, make them in the same turn.
 - A record's workflow/pipeline state is not a column: filter with {"$state": {"_in": [keys]}} using the pipeline_states keys list_collections reports. Relations are filtered with dotted paths ("project.name").
@@ -1422,11 +1452,17 @@ export async function buildChatSystemPrompt(
   opts: { playbooks?: string } = {}
 ): Promise<string> {
   const { userTimeZone, timeInstructions } = await import('./user-time.js')
-  const [readable, settings, queries, zone] = await Promise.all([
+  // Lazy so this module's import graph stays small (the queue service pulls
+  // in the SLA routes); a failure here only drops the queue list.
+  const queueLines = import('./ai-queue-summary.js')
+    .then((m) => m.queueCatalogue(user))
+    .catch(() => [] as string[])
+  const [readable, settings, queries, zone, queues] = await Promise.all([
     readableCollections(user),
     settingsRow(),
     savedQueryCatalogue(user),
-    userTimeZone(user as { preferences?: unknown })
+    userTimeZone(user as { preferences?: unknown }),
+    queueLines
   ])
   const guide = settings?.ai_chat_guide?.trim()
   const lines = readable.map((c) =>
@@ -1449,6 +1485,13 @@ ${lines.join(', ')}${
 
 Saved queries you may run (run_custom_query with the slug; * = required parameter):
 ${queries.join('\n')}`
+    : ''
+}${
+  queues.length
+    ? `
+
+Queues you may ask about (queue_summary with queue_name or queue_id; id: name — source collections):
+${queues.join('\n')}`
     : ''
 }`
 }

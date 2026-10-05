@@ -35,6 +35,7 @@ import {
   Rows4,
   Save,
   SlidersHorizontal,
+  Sparkles,
   Star
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -113,6 +114,10 @@ export interface QueueWorklistProps {
    *  everywhere; a list hides them only when every collection the queue can
    *  create in is on it (the header covers those, not the rest). */
   hideCreateActions?: boolean | string[]
+  /** Hosts with an Ask AI page pass this: the toolbar gains "Ask about this
+   *  queue" (#1276), which hands the queue over so the host can open Ask AI
+   *  with the question seeded. Absent = no button. */
+  onAsk?: (queue: { id: string; name: string }) => void
 }
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -582,7 +587,8 @@ export function QueueWorklist({
   queueId,
   realtime,
   renderError,
-  hideCreateActions = false
+  hideCreateActions = false,
+  onAsk
 }: QueueWorklistProps) {
   const qc = useQueryClient()
   const client = useNivaroClient()
@@ -3377,6 +3383,18 @@ export function QueueWorklist({
                   </Command>
                 </PopoverContent>
               </Popover>
+            )}
+            {onAsk && queue && (
+              <button
+                type='button'
+                onClick={() => onAsk({ id: queue.id, name: queue.name })}
+                data-tip='Open Ask AI with a question about this queue'
+                className='flex h-8 items-center gap-1 rounded-md border border-slate-200 px-2.5 text-[12px] font-medium text-slate-600 hover:bg-slate-50 dark:border-slate-700 dark:text-slate-300 dark:hover:bg-slate-800'
+                data-queue-ask
+              >
+                <Sparkles className='h-3.5 w-3.5 text-nvr-cyan' />
+                Ask about this queue
+              </button>
             )}
             <button
               type='button'
