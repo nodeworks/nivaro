@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, randomBytes } from 'node:crypto'
 import { performance } from 'node:perf_hooks'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
@@ -8,7 +8,7 @@ import { IDENT, type ProofResult } from './types.js'
 
 /**
  * The twin proof for a procedure rewrite. The candidate body is deployed as
- * `<proc>__tune`, old and new run with every recorded parameter set in
+ * `<proc>__tune_<8 hex>` (a name of its own per proof), old and new run with every recorded parameter set in
  * A B B A order (old, new, new, old) so a database moving underneath cannot
  * favour one side, rows are canonicalised and multiset-compared, and timing
  * is judged: new median ≤ 75% of old AND no set slower. Every EXEC runs inside
@@ -18,7 +18,18 @@ import { IDENT, type ProofResult } from './types.js'
  */
 
 export const TWIN_SUFFIX = '__tune'
-export const twinName = (proc: string): string => `${proc}${TWIN_SUFFIX}`
+/** `__tune` (the first form) or `__tune_<8 hex>` at the end of a name. */
+const TWIN_NAME = /__tune(?:_[0-9a-f]{8})?$/
+export const isTwinName = (name: string): boolean => TWIN_NAME.test(name)
+/** Matches every twin form (`_` is a LIKE wildcard, hence the brackets); filter by isTwinName. */
+export const TWIN_LIKE = '%[_][_]tune%'
+const TWIN_TAIL = TWIN_SUFFIX.length + 9
+/**
+ * A twin name of its own per proof: two proofs of one procedure (two processes, a reprove
+ * beside the nightly run) never deploy, run or drop each other's twin. At most 128 characters.
+ */
+export const twinName = (proc: string): string =>
+  `${proc.slice(0, 128 - TWIN_TAIL)}${TWIN_SUFFIX}_${randomBytes(4).toString('hex')}`
 
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 
@@ -417,6 +428,8 @@ export async function proveProcedureRewrite(args: {
   newBody: string
   paramSets: Array<Record<string, unknown>>
   timeoutMs: number
+  /** The twin's name (the one the caller checked is free); a fresh one when absent. */
+  twin?: string
   runner?: Runner
 }): Promise<ProofResult> {
   const refuse = (detail: string): ProofResult => ({
@@ -435,7 +448,8 @@ export async function proveProcedureRewrite(args: {
   if (oldRefused) return refuse(`current body ${oldRefused}`)
   const refused = provability(args.proc, args.newBody)
   if (refused) return refuse(`rewrite ${refused}`)
-  const twin = twinName(args.proc)
+  const twin = args.twin ?? twinName(args.proc)
+  if (!IDENT.test(twin) || !isTwinName(twin)) return refuse('not a twin procedure name')
   const twinBody = renameProcHeader(args.newBody, args.proc, twin)
   if (!twinBody) return refuse('no CREATE PROCEDURE header')
   const sets = args.paramSets.length ? args.paramSets : [{}]
@@ -479,18 +493,17 @@ export const sweepMinAgeMinutes = (procTimeoutMinutes: number): number =>
 export async function sweepTwinLeftovers(procTimeoutMinutes: number): Promise<string[]> {
   if (!isMssql(db)) return []
   const minAge = sweepMinAgeMinutes(procTimeoutMinutes)
-  // `_` is a LIKE wildcard: '%__tune' would also match a real `retune` procedure.
   // modify_date is server-local time, hence GETDATE().
   const rows = (await db
     .raw(
       `SELECT p.name FROM sys.procedures p
-       WHERE p.name LIKE '%[_][_]tune' AND p.is_ms_shipped = 0 AND SCHEMA_NAME(p.schema_id) = 'dbo'
+       WHERE p.name LIKE '${TWIN_LIKE}' AND p.is_ms_shipped = 0 AND SCHEMA_NAME(p.schema_id) = 'dbo'
          AND p.modify_date < DATEADD(minute, -${minAge}, GETDATE())`
     )
     .catch(() => [])) as Array<{ name: string }>
   const dropped: string[] = []
   for (const r of Array.isArray(rows) ? rows : []) {
-    if (!IDENT.test(r.name) || !r.name.endsWith(TWIN_SUFFIX)) continue
+    if (!IDENT.test(r.name) || !isTwinName(r.name)) continue
     const ok = await db
       .raw(`DROP PROCEDURE IF EXISTS [dbo].[${r.name}]`)
       .then(() => true)

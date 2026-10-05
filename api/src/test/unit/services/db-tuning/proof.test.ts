@@ -171,7 +171,8 @@ describe('prove — proc_rewrite', () => {
       oldBody: OLD,
       newBody: NEW,
       paramSets: [{ Zone: 'A' }],
-      timeoutMs: 5000
+      timeoutMs: 5000,
+      twin: expect.stringMatching(/^rpt__tune_[0-9a-f]{8}$/)
     })
   })
   it('refuses a rewrite that calls a procedure which writes', async () => {
@@ -235,9 +236,10 @@ describe('prove — proc_rewrite', () => {
       }
     })
     const r = await prove(proc(), { procTimeoutMs: 1, deps })
-    expect(asked).toEqual(['rpt__tune'])
+    expect(asked).toHaveLength(1)
+    expect(asked[0]).toMatch(/^rpt__tune_[0-9a-f]{8}$/)
     expect(r).toMatchObject({ passed: false, method: 'refused' })
-    expect(r.detail).toBe('a procedure named rpt__tune already exists')
+    expect(r.detail).toBe(`a procedure named ${asked[0]} already exists`)
     expect(twin).not.toHaveBeenCalled()
   })
   it('names a junction fan-out when a junction rewrite changes rows', async () => {
@@ -322,14 +324,20 @@ describe('prove — proc_rewrite catalog reads', () => {
     expect(calls).toEqual([
       [true, ['helper', 'dbo']],
       [true, ['lookup', 'dbo']],
-      [false, ['rpt__tune']]
+      [false, [expect.stringMatching(/^rpt__tune_[0-9a-f]{8}$/)]]
     ])
+    // the twin that runs is the name just checked
+    expect(twin).toHaveBeenCalledWith(
+      expect.objectContaining({ twin: (calls[2][1] as string[])[0] })
+    )
   })
   it('refuses when the twin-name check itself fails', async () => {
     vi.mocked(db.raw).mockImplementation((() => Promise.reject(new Error('denied'))) as never)
     const twin = vi.fn(async () => passing)
     const r = await prove(proc(), { procTimeoutMs: 1, deps: { twin } })
-    expect(r.detail).toBe('error: could not check for an existing rpt__tune: denied')
+    expect(r.detail).toMatch(
+      /^error: could not check for an existing rpt__tune_[0-9a-f]{8}: denied$/
+    )
     expect(twin).not.toHaveBeenCalled()
   })
 })

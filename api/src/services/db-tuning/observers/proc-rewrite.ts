@@ -4,7 +4,7 @@ import { isReplicatedProcedure } from '../../replication.js'
 import { type ProcStat, procedureBody, procedureStats } from '../dmv.js'
 import { paramSetsFor } from '../param-sets.js'
 import { applyTransformers } from '../rewrites/index.js'
-import { bodyHash, provability, TWIN_SUFFIX } from '../twin.js'
+import { bodyHash, isTwinName, provability } from '../twin.js'
 import { type Candidate, IDENT, KIND_RISK } from '../types.js'
 
 /**
@@ -43,7 +43,7 @@ const PROC_EXCLUDED_TRANSFORMERS = ['temp-table-guard']
 export function selectProcCandidates(ev: ProcEvidence): ProcSelection[] {
   const out: ProcSelection[] = []
   for (const s of ev.stats) {
-    if (s.name.endsWith(TWIN_SUFFIX)) continue
+    if (isTwinName(s.name)) continue
     const perWeek = (s.execution_count / s.cached_days) * 7
     if (s.avg_elapsed_ms < MIN_AVG_MS || perWeek < MIN_RUNS_PER_WEEK) continue
     const body = ev.bodies.get(s.name)
@@ -104,7 +104,7 @@ export function buildProcCandidate(
 export async function loadProcEvidence(): Promise<ProcEvidence> {
   // catalog names only: anything outside IDENT is never read, matched or proposed
   const stats = (await procedureStats()).filter(
-    (s) => s.avg_elapsed_ms >= MIN_AVG_MS && IDENT.test(s.name) && !s.name.endsWith(TWIN_SUFFIX)
+    (s) => s.avg_elapsed_ms >= MIN_AVG_MS && IDENT.test(s.name) && !isTwinName(s.name)
   )
   const bodies = new Map<string, string>()
   const paramSets = new Map<string, Array<Record<string, unknown>>>()

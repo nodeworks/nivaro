@@ -3,11 +3,12 @@ import { db } from '../../db/index.js'
 import { type ReadinessResult, registerReadinessCheck } from '../readiness.js'
 import { listProposals } from './ledger.js'
 import { readTuningSettings } from './settings.js'
+import { isTwinName, TWIN_LIKE } from './twin.js'
 import { stuckClaims } from './watch.js'
 
 /**
  * Readiness `db-tuning`: the loop is running and nothing it touched is waiting on a person.
- * Fails on a leftover `<proc>__tune` twin older than a day (a proof died and the boot sweep
+ * Fails on a leftover `<proc>__tune_<hex>` twin older than a day (a proof died and the boot sweep
  * could not drop it); warns on a stale observe run, a change watched past its window (the
  * watch is not ticking), a dead claim, or a failed apply/rollback.
  */
@@ -21,14 +22,16 @@ const MAX_BLOCKERS = 20
 
 async function staleTwins(): Promise<string[]> {
   if (!isMssql(db)) return []
-  // `_` is a LIKE wildcard: bracket it, as the boot sweep does. modify_date is server-local.
+  // The boot sweep's pattern and name check. modify_date is server-local.
   const rows = (await db.raw(
     `SELECT p.name FROM sys.procedures p
-     WHERE p.name LIKE '%[_][_]tune' AND p.is_ms_shipped = 0
+     WHERE p.name LIKE '${TWIN_LIKE}' AND p.is_ms_shipped = 0
        AND SCHEMA_NAME(p.schema_id) = 'dbo'
        AND p.modify_date < DATEADD(minute, -${TWIN_STALE_MINUTES}, GETDATE())`
   )) as unknown
-  return (Array.isArray(rows) ? (rows as Array<{ name: string }>) : []).map((r) => r.name)
+  return (Array.isArray(rows) ? (rows as Array<{ name: string }>) : [])
+    .map((r) => r.name)
+    .filter(isTwinName)
 }
 
 async function lastObserveAt(): Promise<number | null> {
@@ -92,7 +95,7 @@ export function registerTuningReadiness(): void {
     label: 'Database tuning changes are healthy',
     group: 'Operations',
     description:
-      'Passes while database tuning is off. Fails on a leftover <proc>__tune twin procedure older than a day. Warns when the nightly observe run is older than 48 h, a change is still watching a day past its window, an apply or rollback died mid-run, or a change failed to apply or roll back — each needs a person.',
+      'Passes while database tuning is off. Fails on a leftover <proc>__tune_<hex> twin procedure older than a day. Warns when the nightly observe run is older than 48 h, a change is still watching a day past its window, an apply or rollback died mid-run, or a change failed to apply or roll back — each needs a person.',
     run: () => tuningReadiness()
   })
 }

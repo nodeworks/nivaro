@@ -3,12 +3,14 @@ import { db } from '../../../../db/index.js'
 import {
   bodyHash,
   execStatement,
+  isTwinName,
   judgeTiming,
   provability,
   proveProcedureRewrite,
   renameProcHeader,
   sweepMinAgeMinutes,
-  sweepTwinLeftovers
+  sweepTwinLeftovers,
+  twinName
 } from '../../../../services/db-tuning/twin.js'
 
 vi.mock('../../../../db/dialect.js', () => ({ isMssql: () => true }))
@@ -223,13 +225,53 @@ describe('proveProcedureRewrite with an injected runner', () => {
     })
     expect(proof.passed).toBe(true)
     expect(proof.method).toBe('twin')
-    expect(r.calls[0]).toMatch(/CREATE OR ALTER PROCEDURE \[dbo\]\.\[rpt_spend__tune\]/)
+    expect(r.calls[0]).toMatch(/CREATE OR ALTER PROCEDURE \[dbo\]\.\[rpt_spend__tune_[0-9a-f]{8}\]/)
     expect(r.calls.at(-1)).toMatch(
-      /^IF @@TRANCOUNT > 0 ROLLBACK;\nDROP PROCEDURE IF EXISTS \[dbo\]\.\[rpt_spend__tune\]$/
+      /^IF @@TRANCOUNT > 0 ROLLBACK;\nDROP PROCEDURE IF EXISTS \[dbo\]\.\[rpt_spend__tune_[0-9a-f]{8}\]$/
     )
     const execs = r.calls.filter(isExec)
     expect(execs.map((c) => c.includes('__tune'))).toEqual([false, true, true, false]) // A B B A
     for (const e of execs) expect(e).toMatch(/^BEGIN TRAN;\nEXEC .*;\nIF @@TRANCOUNT > 0 ROLLBACK$/)
+  })
+  it('two proofs of one procedure deploy, run and drop twins of their own', async () => {
+    const twinsOf = (calls: string[]) =>
+      new Set(calls.flatMap((c) => c.match(/rpt_spend__tune_[0-9a-f]{8}/g) ?? []))
+    const a = runner(
+      () => [{ id: 1 }],
+      () => 1
+    )
+    const b = runner(
+      () => [{ id: 1 }],
+      () => 1
+    )
+    await Promise.all([
+      proveProcedureRewrite({ ...base, paramSets: [{}], runner: a.run }),
+      proveProcedureRewrite({ ...base, paramSets: [{}], runner: b.run })
+    ])
+    const [ta, tb] = [twinsOf(a.calls), twinsOf(b.calls)]
+    expect(ta.size).toBe(1)
+    expect(tb.size).toBe(1)
+    expect([...ta][0]).not.toBe([...tb][0])
+  })
+  it('uses the twin name it is handed, and refuses one that is not a twin name', async () => {
+    const r = runner(
+      () => [{ id: 1 }],
+      () => 0
+    )
+    await proveProcedureRewrite({
+      ...base,
+      paramSets: [{}],
+      twin: 'rpt_spend__tune_0a1b2c3d',
+      runner: r.run
+    })
+    expect(r.calls[0]).toMatch(/\[dbo\]\.\[rpt_spend__tune_0a1b2c3d\]/)
+    const bad = await proveProcedureRewrite({
+      ...base,
+      paramSets: [{}],
+      twin: 'rpt_spend',
+      runner: r.run
+    })
+    expect(bad).toMatchObject({ passed: false, method: 'refused' })
   })
   it('rejects a twin whose rows differ, naming the differing rows', async () => {
     const r = runner(
@@ -347,7 +389,7 @@ describe('proveProcedureRewrite with an injected runner', () => {
     expect(proof.passed).toBe(false)
     expect(proof.detail).toMatch(/proof run failed: deploy refused/)
     expect(calls).toHaveLength(2)
-    expect(calls[1]).toMatch(/DROP PROCEDURE IF EXISTS \[dbo\]\.\[rpt_spend__tune\]/)
+    expect(calls[1]).toMatch(/DROP PROCEDURE IF EXISTS \[dbo\]\.\[rpt_spend__tune_[0-9a-f]{8}\]/)
   })
   it('retries a failed drop once and reports it when the retry fails too', async () => {
     const calls: string[] = []
@@ -359,7 +401,7 @@ describe('proveProcedureRewrite with an injected runner', () => {
     const proof = await proveProcedureRewrite({ ...base, paramSets: [{}], runner: run })
     expect(calls.filter((c) => c.includes('DROP PROCEDURE'))).toHaveLength(2)
     expect(proof.detail).toMatch(
-      /twin drop failed \(connection lost\) — \[dbo\]\.\[rpt_spend__tune\] is left for the boot sweep/
+      /twin drop failed \(connection lost\) — \[dbo\]\.\[rpt_spend__tune_[0-9a-f]{8}\] is left for the boot sweep/
     )
   })
   it('a body that leaves a transaction open still loses its twin and its writes', async () => {
@@ -383,7 +425,7 @@ describe('proveProcedureRewrite with an injected runner', () => {
         } else if (stmt.startsWith('DROP PROCEDURE')) {
           server.twin = false
           server.dropInTran = server.tran > 0
-        } else if (stmt.startsWith('EXEC [dbo].[rpt_spend__tune]')) {
+        } else if (stmt.startsWith('EXEC [dbo].[rpt_spend__tune_')) {
           server.tran++
           throw new Error('Transaction count after EXECUTE indicates a mismatching number')
         }
@@ -405,21 +447,50 @@ describe('proveProcedureRewrite with an injected runner', () => {
   })
 })
 
+describe('twinName', () => {
+  it('is unique per proof, a plain identifier, and at most 128 characters', () => {
+    const a = twinName('rpt_spend')
+    const b = twinName('rpt_spend')
+    expect(a).toMatch(/^rpt_spend__tune_[0-9a-f]{8}$/)
+    expect(a).not.toBe(b)
+    expect(isTwinName(a)).toBe(true)
+    const long = twinName('p'.repeat(128))
+    expect(long.length).toBeLessThanOrEqual(128)
+    expect(long).toMatch(/^p+__tune_[0-9a-f]{8}$/)
+  })
+  it('recognises a twin by its suffix only', () => {
+    expect(isTwinName('rpt__tune')).toBe(true)
+    expect(isTwinName('rpt__tune_0a1b2c3d')).toBe(true)
+    expect(isTwinName('retune')).toBe(false)
+    expect(isTwinName('rpt__tuner')).toBe(false)
+    expect(isTwinName('rpt__tune_report')).toBe(false)
+  })
+})
+
 describe('sweepTwinLeftovers', () => {
   afterEach(() => vi.mocked(db.raw).mockReset())
 
-  it('drops only dbo twins whose names really end in __tune', async () => {
+  it('drops only dbo twins whose names really end in a twin suffix', async () => {
     const raw = vi.mocked(db.raw)
     raw.mockImplementation(((sql: string) =>
       Promise.resolve(
         sql.startsWith('SELECT')
-          ? [{ name: 'rpt_spend__tune' }, { name: 'retune' }, { name: 'bad]name__tune' }]
+          ? [
+              { name: 'rpt_spend__tune' },
+              { name: 'rpt_spend__tune_0a1b2c3d' },
+              { name: 'retune' },
+              { name: 'rpt__tuner' },
+              { name: 'bad]name__tune' }
+            ]
           : []
       )) as unknown as typeof db.raw)
-    expect(await sweepTwinLeftovers(10)).toEqual(['rpt_spend__tune'])
+    expect(await sweepTwinLeftovers(10)).toEqual(['rpt_spend__tune', 'rpt_spend__tune_0a1b2c3d'])
     const sqls = raw.mock.calls.map((c) => String(c[0]))
-    expect(sqls[0]).toMatch(/LIKE '%\[_\]\[_\]tune'/)
-    expect(sqls.slice(1)).toEqual(['DROP PROCEDURE IF EXISTS [dbo].[rpt_spend__tune]'])
+    expect(sqls[0]).toMatch(/LIKE '%\[_\]\[_\]tune%'/)
+    expect(sqls.slice(1)).toEqual([
+      'DROP PROCEDURE IF EXISTS [dbo].[rpt_spend__tune]',
+      'DROP PROCEDURE IF EXISTS [dbo].[rpt_spend__tune_0a1b2c3d]'
+    ])
   })
   it('leaves a twin a live proof elsewhere may still be running (server-local modify_date)', async () => {
     const raw = vi.mocked(db.raw)

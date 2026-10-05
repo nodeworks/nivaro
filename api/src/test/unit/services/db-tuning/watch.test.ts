@@ -7,6 +7,7 @@ const m = vi.hoisted(() => ({
   runs: [] as Array<Record<string, unknown>>,
   collRows: [] as Array<Record<string, unknown>>,
   twins: [] as Array<{ name: string }>,
+  rawSql: [] as string[],
   rawError: null as string | null,
   mssql: true,
   settings: { enabled: true, regression_pct: 25, watch_days: 7, proc_timeout_minutes: 10 },
@@ -72,7 +73,8 @@ vi.mock('../../../../db/index.js', () => {
     }
     return q
   }
-  const raw = async () => {
+  const raw = async (sql: string) => {
+    m.rawSql.push(sql)
     if (m.rawError) throw new Error(m.rawError)
     return m.twins
   }
@@ -95,8 +97,8 @@ vi.mock('../../../../services/db-tuning/settings.js', () => ({
 }))
 vi.mock('../../../../services/db-tuning/apply.js', () => ({ rollbackProposal: m.rollback }))
 vi.mock('../../../../services/notification-channels.js', () => ({ notifyUser: m.notifyUser }))
-vi.mock('../../../../services/db-tuning/twin.js', () => ({
-  TWIN_SUFFIX: '__tune',
+vi.mock('../../../../services/db-tuning/twin.js', async (orig) => ({
+  ...(await orig<typeof import('../../../../services/db-tuning/twin.js')>()),
   proveProcedureRewrite: m.prove
 }))
 vi.mock('../../../../services/db-tuning/dmv.js', () => ({
@@ -230,6 +232,7 @@ beforeEach(() => {
   m.runs = []
   m.collRows = []
   m.twins = []
+  m.rawSql = []
   m.rawError = null
   m.mssql = true
   m.updates = []
@@ -638,6 +641,15 @@ describe('tuning readiness', () => {
     const r = await tuningReadiness()
     expect(r.status).toBe('fail')
     expect(r.blockers?.join('\n')).toMatch(/spend_by_zone__tune/)
+  })
+  it('matches every twin name form, and only twin names', async () => {
+    m.runs = healthyRun()
+    m.twins = [{ name: 'spend_by_zone__tune_0a1b2c3d' }, { name: 'spend__tuner' }]
+    const r = await tuningReadiness()
+    expect(r.status).toBe('fail')
+    expect(r.blockers?.join('\n')).toMatch(/spend_by_zone__tune_0a1b2c3d/)
+    expect(r.blockers?.join('\n')).not.toMatch(/spend__tuner/)
+    expect(m.rawSql.some((sql) => sql.includes("LIKE '%[_][_]tune%'"))).toBe(true)
   })
   it('warns when the observe run is older than 48 h, or has never run', async () => {
     m.runs = [{ ...healthyRun()[0], started_at: new Date(NOW - 49 * 3_600_000).toISOString() }]

@@ -277,6 +277,7 @@ const JUNCTION_NOTE =
  */
 async function procPreflight(
   proc: string,
+  twin: string,
   oldBody: string,
   newBody: string,
   deps: ProofDeps
@@ -312,7 +313,6 @@ async function procPreflight(
       if (!deeper) return why('calls a procedure the proof cannot name')
       if (deeper.length) return why(`calls ${deeper[0]} (only one level of callees is checked)`)
     }
-  const twin = twinName(proc)
   try {
     if (await deps.procExists(twin)) return refused(`a procedure named ${twin} already exists`)
   } catch (err) {
@@ -457,7 +457,9 @@ async function proveKind(
         return refused('not a procedure body change')
       const { proc, body: newBody } = c.apply
       const oldBody = c.undo.body
-      const pre = await procPreflight(proc, oldBody, newBody, deps)
+      // one name per proof, checked free here and handed to the twin
+      const twin = twinName(proc)
+      const pre = await procPreflight(proc, twin, oldBody, newBody, deps)
       if (pre) return pre
       const sets =
         (c.evidence.parameter_set_values as Array<Record<string, unknown>> | undefined) ?? []
@@ -466,7 +468,8 @@ async function proveKind(
         oldBody,
         newBody,
         paramSets: sets,
-        timeoutMs: procTimeoutMs
+        timeoutMs: procTimeoutMs,
+        twin
       })
       // A junction rewrite that changes rows means the original fans out: not ours to fix.
       const applied = [c.evidence.transformers, c.evidence.applied].flatMap((x) =>

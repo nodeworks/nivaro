@@ -58,6 +58,13 @@ describe('selectProcCandidates', () => {
       paramSets: new Map([['rpt__tune', [{}]]])
     }
     expect(selectProcCandidates({ ...ev, stats: [stat('rpt__tune', 2500, 40)] })).toEqual([])
+    const named = 'rpt__tune_0a1b2c3d'
+    const fresh = {
+      ...base,
+      bodies: new Map([[named, READ]]),
+      paramSets: new Map([[named, [{}]]])
+    }
+    expect(selectProcCandidates({ ...fresh, stats: [stat(named, 2500, 40)] })).toEqual([])
   })
   it('orders by total time and flags replicated procs', () => {
     const ev = {

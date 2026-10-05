@@ -417,7 +417,7 @@ export interface StatementStat {
 }
 
 /** Plan-cache statements that read `table` and name `column` (knex quotes both in brackets).
- *  Proof-twin statements (`…__tune`) are left out. */
+ *  Proof-twin statements (`…__tune…`) are left out. */
 export async function statementsTouching(
   table: string,
   column: string,

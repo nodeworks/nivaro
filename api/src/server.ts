@@ -1679,7 +1679,7 @@ export async function buildServer() {
 
       // #996 — database tuning: nightly observe (proposals + proofs; nothing applies).
       // Registered always; the run returns at once while db_tuning.enabled is off. A killed
-      // proof leaves its `<proc>__tune` twin behind, so boot sweeps the ones older than any
+      // proof leaves its `<proc>__tune_<hex>` twin behind, so boot sweeps the ones older than any
       // live proof — fire-and-forget: the sweep must never fail or hold up boot.
       void Promise.all([
         import('./services/db-tuning/twin.js'),
