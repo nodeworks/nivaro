@@ -58,6 +58,7 @@ import { dashboardLinkRoutes } from './dashboard-links.js'
 import { dashboardsRoutes } from './dashboards.js'
 import { dataModelReadRoutes, dataModelRoutes } from './data-model.js'
 import { dataQualityRoutes } from './data-quality.js'
+import { dbTuningRoutes } from './db-tuning.js'
 import { deadLettersRoutes } from './dead-letters.js'
 import { delegationRoutes } from './delegation.js'
 import { devToolsRoutes } from './dev-tools.js'
@@ -333,6 +334,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(integrationContractRoutes, { prefix: '/integration-contracts' })
   await app.register(rumRoutes, { prefix: '/rum' })
   await app.register(indexAdvisorRoutes, { prefix: '/index-advisor' })
+  await app.register(dbTuningRoutes, { prefix: '/db-tuning' })
   await app.register(securityRoutes, { prefix: '/security' })
   await app.register(securitySelfRoutes, { prefix: '/security' })
   await app.register(configHealthRoutes, { prefix: '/config-health' })
