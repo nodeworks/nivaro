@@ -374,6 +374,20 @@ export interface NotificationItem {
 
 export interface NotificationPage {
   data: NotificationItem[]
+  /** Present with `bundle: 'record'` — rows about one record, folded. */
+  bundles?: Array<{
+    collection: string
+    item: string
+    label: string
+    count: number
+    unread: number
+    lane: 'critical' | 'needs_you' | 'fyi'
+    categories: string[]
+    newest: string | null
+    url: string | null
+    ids: number[]
+    rows: NotificationItem[]
+  }>
   total: number
   page: number
   limit: number
@@ -389,6 +403,9 @@ export function listNotifications(query?: {
   /** 'critical' | 'needs_you' | 'fyi' | 'attention' (= critical + needs_you). */
   lane?: string
   category?: string
+  /** 'record' folds rows that name the same record into `bundles` on the page;
+   *  bundled rows leave `data`. */
+  bundle?: 'record'
 }): Command<NotificationPage> {
   const params: Record<string, unknown> = {}
   if (query?.page != null) params.page = query.page
@@ -397,6 +414,7 @@ export function listNotifications(query?: {
   if (query?.app) params.app = query.app
   if (query?.lane) params.lane = query.lane
   if (query?.category) params.category = query.category
+  if (query?.bundle) params.bundle = query.bundle
   return cmd('GET', '/notifications', params)
 }
 

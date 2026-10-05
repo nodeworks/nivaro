@@ -226,9 +226,18 @@ export type {
   BellNotification,
   NotificationBellProps
 } from './components/NotificationBell'
-export { NotificationBell } from './components/NotificationBell'
+export { hasSnapshotView, NotificationBell } from './components/NotificationBell'
 export type { NotificationSourcesCardProps } from './components/NotificationSourcesCard'
 export { NotificationSourcesCard } from './components/NotificationSourcesCard'
+export { AsItWasSheet } from './components/notifications/AsItWasSheet'
+export type { AsItWasField, AsItWasPayload } from './components/notifications/as-it-was'
+export type { NotificationBundle } from './components/notifications/bundles'
+export {
+  bundleAsNotification,
+  bundleHeadline,
+  bundleLocally,
+  categoryChipLabel
+} from './components/notifications/bundles'
 export type { DeliveryChipsProps } from './components/notifications/DeliveryChips'
 export { DeliveryChips, describeDelivery } from './components/notifications/DeliveryChips'
 export type { NotificationActionsProps } from './components/notifications/NotificationActions'
