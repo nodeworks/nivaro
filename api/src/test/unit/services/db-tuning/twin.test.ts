@@ -6,6 +6,7 @@ import {
   provability,
   proveProcedureRewrite,
   renameProcHeader,
+  sweepMinAgeMinutes,
   sweepTwinLeftovers
 } from '../../../../services/db-tuning/twin.js'
 
@@ -398,9 +399,26 @@ describe('sweepTwinLeftovers', () => {
           ? [{ name: 'rpt_spend__tune' }, { name: 'retune' }, { name: 'bad]name__tune' }]
           : []
       )) as unknown as typeof db.raw)
-    expect(await sweepTwinLeftovers()).toEqual(['rpt_spend__tune'])
+    expect(await sweepTwinLeftovers(10)).toEqual(['rpt_spend__tune'])
     const sqls = raw.mock.calls.map((c) => String(c[0]))
     expect(sqls[0]).toMatch(/LIKE '%\[_\]\[_\]tune'/)
     expect(sqls.slice(1)).toEqual(['DROP PROCEDURE IF EXISTS [dbo].[rpt_spend__tune]'])
+  })
+  it('leaves a twin a live proof elsewhere may still be running (server-local modify_date)', async () => {
+    const raw = vi.mocked(db.raw)
+    raw.mockImplementation((() => Promise.resolve([])) as unknown as typeof db.raw)
+    await sweepTwinLeftovers(10)
+    expect(String(raw.mock.calls[0]?.[0])).toMatch(
+      /p\.modify_date < DATEADD\(minute, -30, GETDATE\(\)\)/
+    )
+    raw.mockClear()
+    await sweepTwinLeftovers(60)
+    expect(String(raw.mock.calls[0]?.[0])).toMatch(/DATEADD\(minute, -65, GETDATE\(\)\)/)
+  })
+  it('the minimum age is max(30, timeout + 5) and never NaN', () => {
+    expect(sweepMinAgeMinutes(10)).toBe(30)
+    expect(sweepMinAgeMinutes(25)).toBe(30)
+    expect(sweepMinAgeMinutes(26)).toBe(31)
+    expect(sweepMinAgeMinutes(Number.NaN)).toBe(30)
   })
 })

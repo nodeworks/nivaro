@@ -448,14 +448,25 @@ export async function proveProcedureRewrite(args: {
   }))
 }
 
-/** Boot sweep: a killed proof leaves its twin behind. */
-export async function sweepTwinLeftovers(): Promise<string[]> {
+/** How old a twin must be before the sweep may drop it: past any proof still running. */
+export const sweepMinAgeMinutes = (procTimeoutMinutes: number): number =>
+  Math.max(30, Math.ceil(Number.isFinite(procTimeoutMinutes) ? procTimeoutMinutes : 0) + 5)
+
+/**
+ * Boot sweep: a killed proof leaves its twin behind. A twin younger than the proof timeout may
+ * belong to a proof running on another process (a second replica, a dev boot against the shared
+ * database), so it stays.
+ */
+export async function sweepTwinLeftovers(procTimeoutMinutes: number): Promise<string[]> {
   if (!isMssql(db)) return []
+  const minAge = sweepMinAgeMinutes(procTimeoutMinutes)
   // `_` is a LIKE wildcard: '%__tune' would also match a real `retune` procedure.
+  // modify_date is server-local time, hence GETDATE().
   const rows = (await db
     .raw(
       `SELECT p.name FROM sys.procedures p
-       WHERE p.name LIKE '%[_][_]tune' AND p.is_ms_shipped = 0 AND SCHEMA_NAME(p.schema_id) = 'dbo'`
+       WHERE p.name LIKE '%[_][_]tune' AND p.is_ms_shipped = 0 AND SCHEMA_NAME(p.schema_id) = 'dbo'
+         AND p.modify_date < DATEADD(minute, -${minAge}, GETDATE())`
     )
     .catch(() => [])) as Array<{ name: string }>
   const dropped: string[] = []

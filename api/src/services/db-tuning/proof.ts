@@ -4,7 +4,7 @@ import { statementsTouching as dmvStatements, isMssqlDb, type StatementStat } fr
 import { MIN_UPTIME_DAYS } from './observers/index-drop.js'
 import { MIN_SAVING_MS } from './observers/query-cache.js'
 import { codeOnly, provability, proveProcedureRewrite, twinName } from './twin.js'
-import { type Candidate, IDENT, type ProofResult } from './types.js'
+import { type Candidate, IDENT, PROOF_ERROR_PREFIX, type ProofResult } from './types.js'
 
 /**
  * Proof dispatch: every candidate is proven by the method its kind allows before it is proposed.
@@ -263,6 +263,10 @@ const refused = (detail: string): ProofResult => ({
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** A read that threw: the proof judged nothing, so the ledger keeps a proposed row as it is. */
+const errorRefusal = (what: string, err: unknown): ProofResult =>
+  refused(`${PROOF_ERROR_PREFIX}${what}: ${errText(err)}`)
+
 const JUNCTION_NOTE =
   'the original multiplies rows through a junction; a correctness question for a person, not a tuning change'
 
@@ -295,7 +299,7 @@ async function procPreflight(
   try {
     bodies = all.length ? await deps.calleeBodies(all) : new Map()
   } catch (err) {
-    return refused(`could not read the procedures it calls: ${errText(err)}`)
+    return errorRefusal('could not read the procedures it calls', err)
   }
   for (const s of sides)
     for (const callee of s.callees ?? []) {
@@ -312,7 +316,7 @@ async function procPreflight(
   try {
     if (await deps.procExists(twin)) return refused(`a procedure named ${twin} already exists`)
   } catch (err) {
-    return refused(`could not check for an existing ${twin}: ${errText(err)}`)
+    return errorRefusal(`could not check for an existing ${twin}`, err)
   }
   return null
 }
@@ -364,7 +368,7 @@ export async function prove(
     return await proveKind(c, opts.procTimeoutMs, deps)
   } catch (err) {
     // an evidence read that throws proves nothing
-    return refused(`proof could not run: ${errText(err)}`)
+    return errorRefusal('proof could not run', err)
   }
 }
 

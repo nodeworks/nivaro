@@ -1,5 +1,12 @@
 import type { TuningObserverDef } from '@nivaro/extension-kit'
-import { type Candidate, KIND_RISK, TUNING_KINDS } from '../types.js'
+import { OBSERVER_TIMEOUT_MS, withTimeout } from '../deadline.js'
+import {
+  type ApplySpec,
+  type Candidate,
+  KIND_RISK,
+  TUNING_KINDS,
+  type TuningKind
+} from '../types.js'
 
 /**
  * Observers extensions contribute through `ctx.tuning.registerObserver` (#996). Their
@@ -29,11 +36,20 @@ export function unregisterTuningObservers(): void {
   registry.clear()
 }
 
-const isSpec = (v: unknown): boolean =>
-  !!v && typeof v === 'object' && typeof (v as { type?: unknown }).type === 'string'
+/** The only change shape each kind may carry — an index candidate never ships a proc body. */
+export const SPEC_FOR_KIND: Record<TuningKind, ApplySpec['type']> = {
+  index_create: 'sql',
+  index_drop: 'sql',
+  proc_rewrite: 'proc_body',
+  rollup_store: 'field_patch',
+  query_cache: 'query_patch'
+}
 
-/** Enough shape to fingerprint, prove and store; anything else is dropped. */
-function wellFormed(c: unknown): c is Candidate {
+const isSpec = (v: unknown, type: ApplySpec['type']): boolean =>
+  !!v && typeof v === 'object' && (v as { type?: unknown }).type === type
+
+/** Enough shape to fingerprint, prove and store, with apply/undo of the kind's type. */
+function wellFormed(c: unknown, kind: TuningKind): c is Candidate {
   const x = c as Partial<Candidate> | null
   return (
     !!x &&
@@ -41,18 +57,29 @@ function wellFormed(c: unknown): c is Candidate {
     typeof x.change_key === 'string' &&
     typeof x.title === 'string' &&
     Number.isFinite(x.estimate_ms_per_day) &&
-    isSpec(x.apply) &&
-    isSpec(x.undo)
+    isSpec(x.apply, SPEC_FOR_KIND[kind]) &&
+    isSpec(x.undo, SPEC_FOR_KIND[kind])
   )
 }
 
-export async function runExtensionObservers(): Promise<Candidate[]> {
+/** Each observer gets `timeoutMs()` at its start (the run passes what its wall budget leaves). */
+export async function runExtensionObservers(
+  timeoutMs: () => number = () => OBSERVER_TIMEOUT_MS
+): Promise<Candidate[]> {
   const out: Candidate[] = []
   for (const { def } of registry.values()) {
+    const ms = timeoutMs()
+    if (ms <= 0) {
+      console.warn(`[db-tuning] observer ${def.id} skipped: the run's time budget is spent`)
+      continue
+    }
     try {
-      const cands = await def.observe()
+      const cands = await withTimeout(def.observe(), ms, `observer ${def.id}`)
       for (const c of Array.isArray(cands) ? cands : []) {
-        if (!wellFormed(c)) continue
+        if (!wellFormed(c, def.kind)) {
+          console.warn(`[db-tuning] observer ${def.id}: a malformed candidate was dropped`)
+          continue
+        }
         out.push({
           ...c,
           kind: def.kind,

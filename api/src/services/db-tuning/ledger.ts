@@ -3,6 +3,7 @@ import { db } from '../../db/index.js'
 import {
   type ApplySpec,
   type Candidate,
+  isErrorRefusal,
   OPEN_STATUSES,
   type ProofResult,
   type ProposalRow,
@@ -118,19 +119,39 @@ export async function isQuiet(fingerprint: string): Promise<boolean> {
   return upsertDecision({ open: null, recent }, new Date()) === 'quiet'
 }
 
+type OpenRow = { id: string; status: TuningStatus }
+
+/** The open or in-flight row for a fingerprint, else its newest closed twin. */
+async function ledgerLookup(
+  fingerprint: string
+): Promise<{ open: OpenRow | null; recent: { status: TuningStatus; at: Date } | null }> {
+  const open = (await db(T)
+    .where({ fingerprint })
+    .whereIn('status', [...OPEN_STATUSES, ...IN_FLIGHT_STATUSES])
+    .first('id', 'status')) as OpenRow | undefined
+  return { open: open ?? null, recent: open ? null : await findRecentTwin(fingerprint) }
+}
+
+/** What `upsertProposal` would do with this fingerprint — the run asks before spending a proof. */
+export async function ledgerDecision(fingerprint: string): Promise<'insert' | 'update' | 'quiet'> {
+  const { open, recent } = await ledgerLookup(fingerprint)
+  return upsertDecision({ open: open ? { status: open.status } : null, recent }, new Date())
+}
+
 export async function upsertProposal(
   c: Candidate,
   proof: ProofResult,
   runId: number | null
-): Promise<{ id: string | null; action: 'inserted' | 'updated' | 'quiet' }> {
+): Promise<{ id: string | null; action: 'inserted' | 'updated' | 'quiet' | 'kept' }> {
   const fingerprint = fingerprintOf(c)
   const now = new Date()
-  const open = (await db(T)
-    .where({ fingerprint })
-    .whereIn('status', [...OPEN_STATUSES, ...IN_FLIGHT_STATUSES])
-    .first('id', 'status')) as { id: string; status: TuningStatus } | undefined
-  const recent = open ? null : await findRecentTwin(fingerprint)
+  const { open, recent } = await ledgerLookup(fingerprint)
   const decision = upsertDecision({ open: open ? { status: open.status } : null, recent }, now)
+  // a proof that errored judged nothing: a standing proposal stays as it was, only seen again
+  if (decision === 'update' && open?.status === 'proposed' && isErrorRefusal(proof)) {
+    await db(T).where({ id: open.id }).update({ last_seen: now, run_id: runId })
+    return { id: open.id, action: 'kept' }
+  }
   const status: TuningStatus = proof.passed ? 'proposed' : 'rejected_by_proof'
   const common = {
     title: c.title.slice(0, 300),
@@ -189,6 +210,26 @@ export async function updateProposal(
   for (const [k, v] of Object.entries(patch))
     out[k] = v && typeof v === 'object' && !(v instanceof Date) ? JSON.stringify(v) : v
   await db(T).where({ id }).update(out)
+}
+
+const TOUCH_CHUNK = 500
+
+/**
+ * Tonight's observers saw these fingerprints: their open rows stay alive even when the proof
+ * budget or the wall clock carried them over, so `closeUnseen` never reads them as gone.
+ */
+export async function touchSeen(fingerprints: string[]): Promise<number> {
+  const fps = [...new Set(fingerprints)]
+  const now = new Date()
+  let n = 0
+  for (let i = 0; i < fps.length; i += TOUCH_CHUNK)
+    n += Number(
+      await db(T)
+        .whereIn('fingerprint', fps.slice(i, i + TOUCH_CHUNK))
+        .whereIn('status', [...OPEN_STATUSES])
+        .update({ last_seen: now })
+    )
+  return n
 }
 
 /** A proposed row whose evidence has not been seen for `days` closes as dismissed. */

@@ -1,12 +1,14 @@
 import { db } from '../../db/index.js'
 import { type JobRunHandle, startJobRun } from '../job-runs.js'
-import { closeUnseen, fingerprintOf, isQuiet, upsertProposal } from './ledger.js'
+import { OBSERVER_TIMEOUT_MS, withTimeout } from './deadline.js'
+import { closeUnseen, fingerprintOf, ledgerDecision, touchSeen, upsertProposal } from './ledger.js'
 import { loadIndexCreateEvidence, observeIndexCreate } from './observers/index-create.js'
 import { loadIndexDropEvidence, observeIndexDrop } from './observers/index-drop.js'
 import {
   buildProcCandidate,
   loadProcEvidence,
   mechanicalProcRewrite,
+  type ProcEvidence,
   selectProcCandidates
 } from './observers/proc-rewrite.js'
 import { loadQueryCacheEvidence, observeQueryCache } from './observers/query-cache.js'
@@ -20,17 +22,24 @@ import type { Candidate } from './types.js'
 
 /**
  * The nightly observe run (#996): every observer reads its evidence, candidates are deduped by
- * fingerprint, quiet ones (dismissed or rolled back lately) are left alone, and the biggest
- * estimates are proved and written to the ledger — passed as `proposed`, failed as
- * `rejected_by_proof` with the proof kept. Nothing here applies a change.
+ * fingerprint, quiet ones (dismissed or rolled back lately, or already in flight) are left
+ * alone, and the biggest estimates are proved and written to the ledger — passed as
+ * `proposed`, failed as `rejected_by_proof` with the proof kept. Nothing here applies a change.
+ *
+ * The counts reconcile: candidates = duplicates + quiet + below_floor + carried_over + proved
+ * (a dry run proves nothing; its by_kind holds what it would have proved).
  */
 
 export interface ObserveReport {
   skipped?: string
   candidates: number
+  duplicates: number
+  below_floor: number
   proved: number
   proposed: number
   rejected: number
+  /** Proofs that errored on a standing proposal, which stays as it was. */
+  kept: number
   quiet: number
   carried_over: number
   closed_unseen: number
@@ -41,31 +50,47 @@ export interface ObserveReport {
 export const OBSERVE_JOB_ID = 'db-tuning-observe'
 export const PROOF_BUDGET = 20
 export const AI_BUDGET = 5
-const WALL_MS = 60 * 60_000
+export const WALL_MS = 60 * 60_000
 const CLOSE_UNSEEN_DAYS = 14
 let running = false
 export const isObserveRunning = (): boolean => running
+
+/** Total order: biggest estimate first, then kind, target, change_key — the chosen set is stable. */
+function byEstimate(a: Candidate, b: Candidate): number {
+  if (a.estimate_ms_per_day !== b.estimate_ms_per_day)
+    return b.estimate_ms_per_day - a.estimate_ms_per_day
+  for (const k of ['kind', 'target', 'change_key'] as const)
+    if (a[k] !== b[k]) return a[k] < b[k] ? -1 : 1
+  return 0
+}
 
 /** Biggest estimates first, up to `budget`; a proc rewrite's estimate is a lower bound, so the floor never drops one. */
 export function selectForProof(
   cands: Candidate[],
   budget: number,
   floor: number
-): { chosen: Candidate[]; carried: number } {
+): { chosen: Candidate[]; carried: number; below_floor: number } {
   const eligible = cands.filter((c) => c.kind === 'proc_rewrite' || c.estimate_ms_per_day >= floor)
-  const sorted = [...eligible].sort((a, b) => b.estimate_ms_per_day - a.estimate_ms_per_day)
-  return { chosen: sorted.slice(0, budget), carried: Math.max(0, sorted.length - budget) }
+  const sorted = [...eligible].sort(byEstimate)
+  return {
+    chosen: sorted.slice(0, budget),
+    carried: Math.max(0, sorted.length - budget),
+    below_floor: cands.length - eligible.length
+  }
 }
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
-async function procCandidates(aiAllowed: boolean): Promise<Candidate[]> {
-  const sels = selectProcCandidates(await loadProcEvidence())
+async function procCandidates(
+  ev: ProcEvidence,
+  aiAllowed: boolean,
+  remaining: () => number
+): Promise<Candidate[]> {
   const out: Candidate[] = []
   let aiUsed = 0
-  for (const sel of sels) {
+  for (const sel of selectProcCandidates(ev)) {
     let rewritten = mechanicalProcRewrite(sel.body)
-    if (!rewritten && aiAllowed && aiUsed < AI_BUDGET) {
+    if (!rewritten && aiAllowed && aiUsed < AI_BUDGET && remaining() > 0) {
       aiUsed++
       const ai = await aiRewriteCandidate({
         proc: sel.proc,
@@ -84,9 +109,19 @@ async function procCandidates(aiAllowed: boolean): Promise<Candidate[]> {
   return out
 }
 
-/** Every observer, core then extensions; one that throws is logged and the rest still run. */
-async function gatherCandidates(aiAllowed: boolean): Promise<Candidate[]> {
+/**
+ * Every observer, core then extensions. Each evidence read gets at most 10 minutes of what the
+ * wall budget leaves; one that throws or runs out of time is logged and the rest still run.
+ */
+async function gatherCandidates(aiAllowed: boolean, remaining: () => number): Promise<Candidate[]> {
   const out: Candidate[] = []
+  const slot = () => Math.min(OBSERVER_TIMEOUT_MS, remaining())
+  const timed = <T>(label: string, load: () => Promise<T>): Promise<T> => {
+    const ms = slot()
+    return ms > 0
+      ? withTimeout(load(), ms, `${label} evidence`)
+      : Promise.reject(new Error("the run's time budget is spent"))
+  }
   const safe = async (label: string, fn: () => Promise<Candidate[]>) => {
     try {
       out.push(...(await fn()))
@@ -94,12 +129,22 @@ async function gatherCandidates(aiAllowed: boolean): Promise<Candidate[]> {
       console.warn(`[db-tuning] ${label} observer failed: ${errText(err)}`)
     }
   }
-  await safe('index_create', async () => observeIndexCreate(await loadIndexCreateEvidence()))
-  await safe('index_drop', async () => observeIndexDrop(await loadIndexDropEvidence()))
-  await safe('rollup_store', async () => observeRollupStore(await loadRollupEvidence()))
-  await safe('query_cache', async () => observeQueryCache(await loadQueryCacheEvidence()))
-  await safe('proc_rewrite', () => procCandidates(aiAllowed))
-  await safe('extensions', runExtensionObservers)
+  await safe('index_create', async () =>
+    observeIndexCreate(await timed('index_create', loadIndexCreateEvidence))
+  )
+  await safe('index_drop', async () =>
+    observeIndexDrop(await timed('index_drop', loadIndexDropEvidence))
+  )
+  await safe('rollup_store', async () =>
+    observeRollupStore(await timed('rollup_store', loadRollupEvidence))
+  )
+  await safe('query_cache', async () =>
+    observeQueryCache(await timed('query_cache', loadQueryCacheEvidence))
+  )
+  await safe('proc_rewrite', async () =>
+    procCandidates(await timed('proc_rewrite', loadProcEvidence), aiAllowed, remaining)
+  )
+  await safe('extensions', () => runExtensionObservers(slot))
   return out
 }
 
@@ -126,11 +171,15 @@ export async function runObserve(
   opts: { dryRun?: boolean; trigger?: 'schedule' | 'run-now'; userId?: string | null } = {}
 ): Promise<ObserveReport> {
   const t0 = Date.now()
+  const remaining = () => t0 + WALL_MS - Date.now()
   const empty: ObserveReport = {
     candidates: 0,
+    duplicates: 0,
+    below_floor: 0,
     proved: 0,
     proposed: 0,
     rejected: 0,
+    kept: 0,
     quiet: 0,
     carried_over: 0,
     closed_unseen: 0,
@@ -153,22 +202,26 @@ export async function runObserve(
     const runId = dryRun ? null : (run?.id ?? (await cronRunId()))
     const aiAllowed =
       !dryRun && settings.ai_rewrites && (await aiBudgetAllows(settings.ai_daily_budget_usd))
-    const cands = await gatherCandidates(aiAllowed)
-    // one candidate per fingerprint; quiet ones never reach a proof
+    const cands = await gatherCandidates(aiAllowed, remaining)
+    // one candidate per fingerprint; quiet and in-flight ones never take a proof slot
     const seen = new Set<string>()
     const fresh: Candidate[] = []
+    let duplicates = 0
     let quiet = 0
     for (const c of cands) {
       const fp = fingerprintOf(c)
-      if (seen.has(fp)) continue
+      if (seen.has(fp)) {
+        duplicates++
+        continue
+      }
       seen.add(fp)
-      if (await isQuiet(fp)) {
+      if ((await ledgerDecision(fp)) === 'quiet') {
         quiet++
         continue
       }
       fresh.push(c)
     }
-    const { chosen, carried } = selectForProof(
+    const { chosen, carried, below_floor } = selectForProof(
       fresh,
       PROOF_BUDGET,
       settings.min_estimate_ms_per_day
@@ -176,12 +229,14 @@ export async function runObserve(
     const report: ObserveReport = {
       ...empty,
       candidates: cands.length,
+      duplicates,
+      below_floor,
       quiet,
       carried_over: carried
     }
     for (const c of chosen) {
       // past the wall budget the rest carry to tomorrow night
-      if (Date.now() - t0 > WALL_MS) {
+      if (remaining() <= 0) {
         report.carried_over++
         continue
       }
@@ -200,10 +255,15 @@ export async function runObserve(
       const r = await upsertProposal(c, proof, runId)
       run?.progress({ proved: report.proved, total: chosen.length, current: c.target })
       if (r.action === 'quiet') report.quiet++
+      else if (r.action === 'kept') report.kept++
       else if (proof.passed) report.proposed++
       else report.rejected++
     }
-    if (!dryRun) report.closed_unseen = await closeUnseen(CLOSE_UNSEEN_DAYS)
+    if (!dryRun) {
+      // carried-over and unproved candidates were still seen tonight: their rows stay open
+      await touchSeen([...seen])
+      report.closed_unseen = await closeUnseen(CLOSE_UNSEEN_DAYS)
+    }
     report.ms = Date.now() - t0
     await run?.complete(observeSummary(report))
     return report
@@ -217,5 +277,5 @@ export async function runObserve(
 
 export function observeSummary(r: ObserveReport): string {
   if (r.skipped) return `skipped: ${r.skipped}`
-  return `${r.proposed} proposed, ${r.rejected} rejected by proof, ${r.quiet} quiet, ${r.carried_over} carried, ${r.closed_unseen} closed unseen`
+  return `${r.proposed} proposed, ${r.rejected} rejected by proof, ${r.kept} kept after a proof error, ${r.quiet} quiet, ${r.carried_over} carried, ${r.closed_unseen} closed unseen`
 }

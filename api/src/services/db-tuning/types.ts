@@ -75,6 +75,13 @@ export interface ProofResult {
   watch?: WatchSample[]
 }
 
+/** A `refused` proof whose detail starts with this failed on an error, not on policy. */
+export const PROOF_ERROR_PREFIX = 'error: '
+
+/** The proof could not run (a catalog or evidence read threw) — it judged nothing. */
+export const isErrorRefusal = (p: Pick<ProofResult, 'method' | 'detail'>): boolean =>
+  p.method === 'refused' && p.detail.startsWith(PROOF_ERROR_PREFIX)
+
 export interface ProposalRow {
   id: string
   kind: TuningKind
@@ -93,7 +100,10 @@ export interface ProposalRow {
   applied_at: string | null
   applied_by: string | null
   watch_until: string | null
-  watch_baseline: { before: Record<string, number | null>; after: Record<string, number | null> } | null
+  watch_baseline: {
+    before: Record<string, number | null>
+    after: Record<string, number | null>
+  } | null
   rolled_back_at: string | null
   rollback_reason: string | null
   dismissed_at: string | null

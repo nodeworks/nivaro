@@ -1,10 +1,13 @@
 // api/src/test/unit/services/db-tuning/observe-run.test.ts
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { OBSERVER_TIMEOUT_MS } from '../../../../services/db-tuning/deadline.js'
+import { fingerprintOf } from '../../../../services/db-tuning/ledger.js'
 import {
   AI_BUDGET,
   PROOF_BUDGET,
   runObserve,
-  selectForProof
+  selectForProof,
+  WALL_MS
 } from '../../../../services/db-tuning/observe-run.js'
 import {
   listTuningObservers,
@@ -25,9 +28,11 @@ const m = vi.hoisted(() => ({
     ai_daily_budget_usd: 2
   },
   startJobRun: vi.fn(),
-  isQuiet: vi.fn(async (_fp: string) => false),
+  decision: vi.fn(async (_fp: string): Promise<'insert' | 'update' | 'quiet'> => 'insert'),
   upsertProposal: vi.fn(),
+  touchSeen: vi.fn(async (_fps: string[]) => 0),
   closeUnseen: vi.fn(async () => 0),
+  loadIndexCreate: vi.fn(async (): Promise<unknown> => ({})),
   prove: vi.fn(),
   aiBudgetAllows: vi.fn(async () => true),
   aiRewriteCandidate: vi.fn(),
@@ -52,8 +57,9 @@ vi.mock('../../../../services/db-tuning/settings.js', () => ({
 vi.mock('../../../../services/job-runs.js', () => ({ startJobRun: m.startJobRun }))
 vi.mock('../../../../services/db-tuning/ledger.js', async (orig) => ({
   ...(await orig<typeof import('../../../../services/db-tuning/ledger.js')>()),
-  isQuiet: m.isQuiet,
+  ledgerDecision: m.decision,
   upsertProposal: m.upsertProposal,
+  touchSeen: m.touchSeen,
   closeUnseen: m.closeUnseen
 }))
 vi.mock('../../../../services/db-tuning/proof.js', () => ({ prove: m.prove }))
@@ -62,7 +68,7 @@ vi.mock('../../../../services/db-tuning/rewrites/ai.js', () => ({
   aiRewriteCandidate: m.aiRewriteCandidate
 }))
 vi.mock('../../../../services/db-tuning/observers/index-create.js', () => ({
-  loadIndexCreateEvidence: async () => ({}),
+  loadIndexCreateEvidence: m.loadIndexCreate,
   observeIndexCreate: m.indexCreate
 }))
 vi.mock('../../../../services/db-tuning/observers/index-drop.js', () => ({
@@ -124,6 +130,13 @@ describe('selectForProof', () => {
   })
 })
 
+const body = {
+  type: 'proc_body' as const,
+  proc: 'rpt',
+  body: 'CREATE PROC rpt AS SELECT 1',
+  hash: 'h'
+}
+
 describe('tuning observer registry', () => {
   afterEach(() => unregisterTuningObservers())
   it('refuses a malformed id, a missing observe() and an unknown kind', () => {
@@ -157,7 +170,7 @@ describe('tuning observer registry', () => {
         id: 'x:ok',
         kind: 'proc_rewrite',
         observe: async () => [
-          { ...c('index_create', 10), risk: 'reversible' as const },
+          { ...c('index_create', 10), risk: 'reversible' as const, apply: body, undo: body },
           { bad: true } as never
         ]
       },
@@ -171,6 +184,49 @@ describe('tuning observer registry', () => {
       evidence: { observer: 'x:ok' }
     })
     expect(warn).toHaveBeenCalledWith(expect.stringContaining('x:boom'))
+    warn.mockRestore()
+  })
+  it("drops a candidate whose apply or undo is not its kind's shape", async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const sql = { type: 'sql' as const, statements: ['DROP TABLE t'] }
+    registerTuningObserver(
+      {
+        id: 'x:mix',
+        kind: 'proc_rewrite',
+        observe: async () => [
+          { ...c('proc_rewrite', 1), apply: sql, undo: body },
+          { ...c('proc_rewrite', 2), apply: body, undo: sql },
+          { ...c('proc_rewrite', 3), apply: body, undo: body }
+        ]
+      },
+      'x'
+    )
+    registerTuningObserver(
+      {
+        id: 'x:idx',
+        kind: 'index_create',
+        observe: async () => [{ ...c('index_create', 4), apply: body, undo: sql }]
+      },
+      'x'
+    )
+    const out = await runExtensionObservers()
+    expect(out.map((x) => x.estimate_ms_per_day)).toEqual([3])
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('malformed'))
+    warn.mockRestore()
+  })
+  it('an observer past its time slot is skipped; a spent budget calls nothing', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const hang = vi.fn(() => new Promise<never>(() => {}))
+    registerTuningObserver({ id: 'x:hang', kind: 'index_create', observe: hang }, 'x')
+    registerTuningObserver(
+      { id: 'x:fine', kind: 'index_create', observe: async () => [c('index_create', 7)] },
+      'x'
+    )
+    expect(await runExtensionObservers(() => 5)).toHaveLength(1)
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('x:hang'))
+    hang.mockClear()
+    expect(await runExtensionObservers(() => 0)).toEqual([])
+    expect(hang).not.toHaveBeenCalled()
     warn.mockRestore()
   })
 })
@@ -197,7 +253,10 @@ describe('runObserve', () => {
     m.startJobRun.mockReset().mockImplementation(async () => handle())
     m.upsertProposal.mockReset().mockImplementation(async () => ({ id: 'p', action: 'inserted' }))
     m.prove.mockReset().mockImplementation(async () => pass())
-    m.isQuiet.mockReset().mockImplementation(async () => false)
+    m.decision.mockReset().mockImplementation(async () => 'insert')
+    m.touchSeen.mockReset().mockImplementation(async () => 0)
+    m.closeUnseen.mockReset().mockImplementation(async () => 0)
+    m.loadIndexCreate.mockReset().mockImplementation(async () => ({}))
     m.aiBudgetAllows.mockReset().mockImplementation(async () => true)
     m.aiRewriteCandidate.mockReset().mockImplementation(async () => null)
     m.mechanical.mockReset().mockImplementation(() => null)
@@ -236,19 +295,169 @@ describe('runObserve', () => {
     expect(m.startJobRun).not.toHaveBeenCalled()
   })
 
-  it('proves at most PROOF_BUDGET, carries the rest, and skips quiet fingerprints', async () => {
+  it('proves at most PROOF_BUDGET, carries the rest, and skips quiet or in-flight fingerprints', async () => {
     const many = Array.from({ length: PROOF_BUDGET + 3 }, (_, i) => ({
       ...c('index_create', 1000 + i),
       target: `t${i}`
     }))
     m.indexCreate.mockImplementation(() => many)
-    m.isQuiet.mockImplementation(async () => false)
-    m.isQuiet.mockImplementationOnce(async () => true)
+    m.decision.mockImplementationOnce(async () => 'quiet')
     const r = await runObserve({ trigger: 'schedule' })
     expect(m.prove).toHaveBeenCalledTimes(PROOF_BUDGET)
     expect(r.quiet).toBe(1)
     expect(r.carried_over).toBe(2)
     expect(r.proposed).toBe(PROOF_BUDGET)
+  })
+
+  it('25 candidates over a budget of 20: all 25 stay seen before closeUnseen runs', async () => {
+    const many = Array.from({ length: 25 }, (_, i) => ({
+      ...c('index_create', 1000 + i),
+      target: `t${i}`
+    }))
+    m.indexCreate.mockImplementation(() => many)
+    const r = await runObserve({ trigger: 'schedule' })
+    expect(r.carried_over).toBe(5)
+    expect(m.touchSeen).toHaveBeenCalledOnce()
+    const touched = m.touchSeen.mock.calls[0][0]
+    expect(new Set(touched)).toEqual(new Set(many.map((x) => fingerprintOf(x))))
+    expect(m.touchSeen.mock.invocationCallOrder[0]).toBeLessThan(
+      m.closeUnseen.mock.invocationCallOrder[0]
+    )
+  })
+
+  it('a dry run touches nothing', async () => {
+    m.indexCreate.mockImplementation(() => [c('index_create', 9000)])
+    await runObserve({ dryRun: true })
+    expect(m.touchSeen).not.toHaveBeenCalled()
+  })
+
+  it('the counts reconcile: duplicates, quiet, below the floor, carried, proved', async () => {
+    const big = Array.from({ length: PROOF_BUDGET + 1 }, (_, i) => ({
+      ...c('index_create', 1000 + i),
+      target: `t${i}`
+    }))
+    m.indexCreate.mockImplementation(() => [
+      ...big,
+      big[0],
+      c('index_drop', 10),
+      c('rollup_store', 5000)
+    ])
+    m.decision.mockImplementation(async (fp) =>
+      fp === fingerprintOf(c('rollup_store', 5000)) ? 'quiet' : 'insert'
+    )
+    const r = await runObserve({ trigger: 'schedule' })
+    expect(r).toMatchObject({
+      candidates: 24,
+      duplicates: 1,
+      quiet: 1,
+      below_floor: 1,
+      carried_over: 1,
+      proved: PROOF_BUDGET
+    })
+    expect(r.duplicates + r.quiet + r.below_floor + r.carried_over + r.proved).toBe(r.candidates)
+  })
+
+  it('an errored proof on a standing proposal counts as kept, not rejected', async () => {
+    m.indexCreate.mockImplementation(() => [c('index_create', 9000)])
+    m.prove.mockImplementation(async () => ({
+      ...pass(),
+      passed: false,
+      method: 'refused',
+      detail: 'error: proof could not run: x'
+    }))
+    m.upsertProposal.mockImplementation(async () => ({ id: 'p', action: 'kept' }))
+    const r = await runObserve({ trigger: 'schedule' })
+    expect(r).toMatchObject({ kept: 1, rejected: 0, proposed: 0 })
+  })
+
+  it('a second run while one is proving is refused as already running', async () => {
+    m.indexCreate.mockImplementation(() => [c('index_create', 9000)])
+    let release: (p: ProofResult) => void = () => {}
+    m.prove.mockImplementation(
+      () =>
+        new Promise<ProofResult>((res) => {
+          release = res
+        })
+    )
+    const first = runObserve({ trigger: 'schedule' })
+    await vi.waitFor(() => expect(m.prove).toHaveBeenCalled())
+    expect((await runObserve({ trigger: 'run-now' })).skipped).toBe('already running')
+    // a dry run neither takes nor waits for the lock
+    expect((await runObserve({ dryRun: true })).skipped).toBeUndefined()
+    release(pass())
+    expect((await first).proposed).toBe(1)
+    m.prove.mockImplementation(async () => pass())
+    expect((await runObserve({ trigger: 'schedule' })).skipped).toBeUndefined()
+  })
+
+  it('past the 60-minute wall the remaining chosen candidates carry over', async () => {
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    m.indexCreate.mockImplementation(() => [
+      c('index_create', 9000),
+      c('query_cache', 8000),
+      c('rollup_store', 7000)
+    ])
+    m.prove.mockImplementation(async () => {
+      now += WALL_MS + 1
+      return pass()
+    })
+    const r = await runObserve({ trigger: 'schedule' })
+    expect(m.prove).toHaveBeenCalledOnce()
+    expect(r).toMatchObject({ proved: 1, carried_over: 2 })
+    expect(m.touchSeen.mock.calls[0][0]).toHaveLength(3)
+  })
+
+  it('an observer whose evidence read hangs is cut off at 10 minutes and the rest still run', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    try {
+      m.loadIndexCreate.mockImplementation(() => new Promise(() => {}))
+      const sel = {
+        proc: 'rpt',
+        body: 'CREATE PROC rpt AS SELECT 1',
+        stat: {
+          name: 'rpt',
+          execution_count: 70,
+          avg_elapsed_ms: 3000,
+          total_elapsed_ms: 210000,
+          cached_days: 7
+        },
+        paramSets: [{}],
+        planOps: [],
+        replicated: false
+      }
+      m.procSelections.mockImplementation(() => [sel])
+      m.mechanical.mockImplementation(() => ({
+        body: 'CREATE PROC rpt AS SELECT 2',
+        notes: [],
+        applied: ['x']
+      }))
+      const p = runObserve({ trigger: 'schedule' })
+      await vi.advanceTimersByTimeAsync(OBSERVER_TIMEOUT_MS)
+      const r = await p
+      expect(console.warn).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /index_create observer failed: index_create evidence took longer than 600 s/
+        )
+      )
+      expect(r.by_kind).toEqual({ proc_rewrite: 1 })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('ties break on kind, target and change_key, whatever order the observers gave', () => {
+    const a = { ...c('index_create', 500), target: 'b' }
+    const b = { ...c('index_create', 500), target: 'a' }
+    const q = { ...c('query_cache', 500), target: 'a' }
+    expect(selectForProof([q, a, b], 2, 0).chosen.map((x) => `${x.kind}:${x.target}`)).toEqual([
+      'index_create:a',
+      'index_create:b'
+    ])
+    expect(selectForProof([b, q, a], 2, 0).chosen.map((x) => `${x.kind}:${x.target}`)).toEqual([
+      'index_create:a',
+      'index_create:b'
+    ])
   })
 
   it('a rows_diff proof is stored as a rejection, with the proof', async () => {

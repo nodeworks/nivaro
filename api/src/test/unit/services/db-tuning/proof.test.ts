@@ -7,7 +7,11 @@ import {
   prove,
   subtreeCost
 } from '../../../../services/db-tuning/proof.js'
-import type { Candidate, ProofResult } from '../../../../services/db-tuning/types.js'
+import {
+  type Candidate,
+  isErrorRefusal,
+  type ProofResult
+} from '../../../../services/db-tuning/types.js'
 import { withLongConnection } from '../../../../services/run-long.js'
 
 vi.mock('../../../../db/dialect.js', () => ({ isMssql: () => true }))
@@ -218,7 +222,8 @@ describe('prove — proc_rewrite', () => {
     })
     const r = await prove(withNew(CALLER), { procTimeoutMs: 1, deps })
     expect(r.method).toBe('refused')
-    expect(r.detail).toMatch(/VIEW DEFINITION denied/)
+    expect(r.detail).toBe('error: could not read the procedures it calls: VIEW DEFINITION denied')
+    expect(isErrorRefusal(r)).toBe(true)
     expect(twin).not.toHaveBeenCalled()
   })
   it('refuses when a real procedure already holds the twin name', async () => {
@@ -324,7 +329,7 @@ describe('prove — proc_rewrite catalog reads', () => {
     vi.mocked(db.raw).mockImplementation((() => Promise.reject(new Error('denied'))) as never)
     const twin = vi.fn(async () => passing)
     const r = await prove(proc(), { procTimeoutMs: 1, deps: { twin } })
-    expect(r.detail).toBe('could not check for an existing rpt__tune: denied')
+    expect(r.detail).toBe('error: could not check for an existing rpt__tune: denied')
     expect(twin).not.toHaveBeenCalled()
   })
 })
@@ -482,7 +487,7 @@ describe('prove — every branch passes and fails', () => {
       method: 'refused',
       before: {},
       after: {},
-      detail: 'proof could not run: plan cache unreadable'
+      detail: 'error: proof could not run: plan cache unreadable'
     })
   })
 })

@@ -583,6 +583,7 @@ export interface TuningCandidate {
   apply: TuningApplySpec
   undo: TuningApplySpec
   replicated?: boolean
+  dialect_note?: string | null
 }
 
 /**

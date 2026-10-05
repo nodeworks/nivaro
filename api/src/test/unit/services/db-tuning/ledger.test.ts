@@ -2,7 +2,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../../db/index.js'
 import {
   fingerprintOf,
+  ledgerDecision,
   parseRow,
+  touchSeen,
   upsertDecision,
   upsertProposal
 } from '../../../../services/db-tuning/ledger.js'
@@ -147,6 +149,58 @@ describe('upsertProposal', () => {
     expect(update).toHaveBeenCalledOnce()
     expect(update.mock.calls[0][0]).toMatchObject({ status: 'rejected_by_proof' })
     expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('an errored proof keeps a proposed row proposed and only bumps last_seen', async () => {
+    const { insert, update } = stub([{ id: 'abc', status: 'proposed' }])
+    const errored: ProofResult = {
+      ...proof(false),
+      method: 'refused',
+      detail: 'error: proof could not run: timeout'
+    }
+    const r = await upsertProposal(cand, errored, 9)
+    expect(r).toEqual({ id: 'abc', action: 'kept' })
+    expect(update).toHaveBeenCalledOnce()
+    expect(update.mock.calls[0][0]).toEqual({ last_seen: expect.any(Date), run_id: 9 })
+    expect(insert).not.toHaveBeenCalled()
+  })
+
+  it('a policy refusal still rejects a proposed row', async () => {
+    const { update } = stub([{ id: 'abc', status: 'proposed' }])
+    const policy: ProofResult = { ...proof(false), method: 'refused', detail: 'rewrite writes' }
+    expect((await upsertProposal(cand, policy, null)).action).toBe('updated')
+    expect(update.mock.calls[0][0]).toMatchObject({ status: 'rejected_by_proof' })
+  })
+
+  it('an errored proof on a new fingerprint is still stored, as rejected_by_proof', async () => {
+    const { insert } = stub([undefined, undefined])
+    const errored: ProofResult = { ...proof(false), method: 'refused', detail: 'error: x' }
+    expect((await upsertProposal(cand, errored, null)).action).toBe('inserted')
+    expect(insert.mock.calls[0][0]).toMatchObject({ status: 'rejected_by_proof' })
+  })
+
+  it('ledgerDecision is quiet for an in-flight row and for a young dismissed twin', async () => {
+    stub([{ id: 'abc', status: 'applying' }])
+    expect(await ledgerDecision('f')).toBe('quiet')
+    stub([undefined, { status: 'dismissed', dismissed_at: new Date(), rolled_back_at: null }])
+    expect(await ledgerDecision('f')).toBe('quiet')
+    stub([{ id: 'abc', status: 'proposed' }])
+    expect(await ledgerDecision('f')).toBe('update')
+  })
+
+  it('touchSeen bumps last_seen on open rows only, in chunks', async () => {
+    const whereIn = vi.fn()
+    const update = vi.fn().mockResolvedValue(2)
+    const builder: Record<string, unknown> = { update }
+    builder.whereIn = whereIn.mockImplementation(() => builder)
+    vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(builder)
+    const fps = Array.from({ length: 501 }, (_, i) => `f${i}`)
+    expect(await touchSeen([...fps, 'f0'])).toBe(4)
+    expect(update).toHaveBeenCalledTimes(2)
+    expect(update.mock.calls[0][0]).toEqual({ last_seen: expect.any(Date) })
+    expect(whereIn.mock.calls[0]).toEqual(['fingerprint', fps.slice(0, 500)])
+    expect(whereIn.mock.calls[1]).toEqual(['status', ['proposed', 'stale', 'rejected_by_proof']])
+    expect(whereIn.mock.calls[2]).toEqual(['fingerprint', ['f500']])
   })
 
   it('stays quiet for a watching row', async () => {
