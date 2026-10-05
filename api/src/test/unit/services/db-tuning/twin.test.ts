@@ -12,6 +12,7 @@ import {
   sweepTwinLeftovers,
   twinName
 } from '../../../../services/db-tuning/twin.js'
+import { isErrorRefusal } from '../../../../services/db-tuning/types.js'
 
 vi.mock('../../../../db/dialect.js', () => ({ isMssql: () => true }))
 
@@ -232,6 +233,60 @@ describe('proveProcedureRewrite with an injected runner', () => {
     const execs = r.calls.filter(isExec)
     expect(execs.map((c) => c.includes('__tune'))).toEqual([false, true, true, false]) // A B B A
     for (const e of execs) expect(e).toMatch(/^BEGIN TRAN;\nEXEC .*;\nIF @@TRANCOUNT > 0 ROLLBACK$/)
+  })
+  it('the timeout bounds the whole proof: past it the twin is dropped and the proof errors', async () => {
+    let now = 1_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const calls: Array<{ sql: string; timeoutMs?: number; at: number }> = []
+      const run = async (sql: string, timeoutMs?: number) => {
+        calls.push({ sql, timeoutMs, at: now })
+        if (isExec(sql)) now += 400 // every run of every set takes 400 ms
+        return [{ id: 1 }]
+      }
+      const proof = await proveProcedureRewrite({
+        ...base,
+        timeoutMs: 1000,
+        paramSets: [{ Zone: 'A' }, { Zone: 'B' }, { Zone: 'C' }],
+        runner: run
+      })
+      expect(proof).toMatchObject({
+        passed: false,
+        method: 'refused',
+        detail: 'error: proof budget exceeded'
+      })
+      expect(isErrorRefusal(proof)).toBe(true)
+      // three runs fit in 1000 ms; the fourth is never sent
+      expect(calls.filter((c) => isExec(c.sql))).toHaveLength(3)
+      expect(calls.at(-1)?.sql).toMatch(/DROP PROCEDURE IF EXISTS/)
+      // no single run may outlast what is left of the proof's budget
+      for (const c of calls.filter((x) => isExec(x.sql)))
+        expect(c.timeoutMs).toBe(1000 - (c.at - 1_000_000))
+    } finally {
+      clock.mockRestore()
+    }
+  })
+  it('a run the driver times out on once the budget is spent is a budget refusal too', async () => {
+    let now = 0
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      const run = async (sql: string) => {
+        if (!isExec(sql)) return []
+        now += 1000
+        throw Object.assign(new Error('Timeout: Request failed to complete in 1000ms'), {
+          code: 'ETIMEOUT'
+        })
+      }
+      const proof = await proveProcedureRewrite({
+        ...base,
+        timeoutMs: 1000,
+        paramSets: [{}],
+        runner: run
+      })
+      expect(proof.detail).toBe('error: proof budget exceeded')
+    } finally {
+      clock.mockRestore()
+    }
   })
   it('two proofs of one procedure deploy, run and drop twins of their own', async () => {
     const twinsOf = (calls: string[]) =>

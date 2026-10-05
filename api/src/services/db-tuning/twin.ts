@@ -4,7 +4,7 @@ import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { withLongConnection } from '../run-long.js'
 import { canonRows, multisetDiff } from './canon.js'
-import { IDENT, type ProofResult } from './types.js'
+import { IDENT, PROOF_ERROR_PREFIX, type ProofResult } from './types.js'
 
 /**
  * The twin proof for a procedure rewrite. The candidate body is deployed as
@@ -13,8 +13,9 @@ import { IDENT, type ProofResult } from './types.js'
  * favour one side, rows are canonicalised and multiset-compared, and timing
  * is judged: new median ≤ 75% of old AND no set slower. Every EXEC runs inside
  * a transaction that is rolled back, so a side effect the refusal list missed
- * never persists. The twin is dropped in `finally`; a boot sweep drops what a
- * killed process left behind.
+ * never persists. The proof timeout bounds the whole proof, not one EXEC. The
+ * twin is dropped in `finally`; a boot sweep drops what a killed process left
+ * behind.
  */
 
 export const TWIN_SUFFIX = '__tune'
@@ -310,12 +311,23 @@ export const bodyHash = (body: string): string => {
   return createHash('sha1').update(normal.replace(/\s+/g, ' ').trim()).digest('hex')
 }
 
-type Runner = (sql: string) => Promise<Array<Record<string, unknown>>>
+/** Runs one batch; `timeoutMs` is that batch's driver timeout. */
+type Runner = (sql: string, timeoutMs?: number) => Promise<Array<Record<string, unknown>>>
 
 const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** Even a runner that throws synchronously reports through the promise. */
-const attempt = (run: Runner, sql: string) => Promise.resolve().then(() => run(sql))
+const attempt = (run: Runner, sql: string, timeoutMs?: number) =>
+  Promise.resolve().then(() => run(sql, timeoutMs))
+
+/** The drop runs whatever budget is left: a twin must never outlive its proof. */
+const DROP_TIMEOUT_MS = 30_000
+
+class BudgetSpent extends Error {}
+const BUDGET_SLACK_MS = 1000
+
+const isDriverTimeout = (err: unknown): boolean =>
+  (err as { code?: unknown } | null)?.code === 'ETIMEOUT' || /\btimeout\b/i.test(errText(err))
 
 /** A body that opens a transaction and never closes it cannot leave a write behind. */
 const rolledBack = (stmt: string): string => `BEGIN TRAN;\n${stmt};\nIF @@TRANCOUNT > 0 ROLLBACK`
@@ -327,27 +339,40 @@ const mergeDiffs = (
   removed: [...new Set(ds.flatMap((d) => d.removed))].slice(0, 20)
 })
 
+/**
+ * `deadline` (a Date.now() instant) bounds the whole proof — the deploy, every set's four runs
+ * — so a proof of many slow sets cannot run for hours: each batch's timeout is what the budget
+ * has left, and a proof that runs out errors (judging nothing) after dropping its twin.
+ */
 async function proveWith(
   run: Runner,
   retryDrop: Runner,
   proc: string,
   twin: string,
   twinBody: string,
-  sets: Array<Record<string, unknown>>
+  sets: Array<Record<string, unknown>>,
+  deadline: number
 ): Promise<ProofResult> {
   const oldMs: number[][] = []
   const newMs: number[][] = []
   const diffs: NonNullable<ProofResult['rows_diff']> = []
   let unstable: { set: number; added: string[]; removed: string[] } | null = null
   let failure: string | null = null
+  let budgetSpent = false
   let dropError: string | null = null
+  const left = (): number => {
+    const ms = deadline - Date.now()
+    if (ms <= 0) throw new BudgetSpent()
+    return ms
+  }
   const timed = async (sql: string) => {
+    const budget = left()
     const t0 = performance.now()
-    const rows = await attempt(run, rolledBack(sql))
+    const rows = await attempt(run, rolledBack(sql), budget)
     return { rows, ms: performance.now() - t0 }
   }
   try {
-    await attempt(run, twinBody)
+    await attempt(run, twinBody, left())
     for (let i = 0; i < sets.length; i++) {
       const o = execStatement(proc, sets[i])
       const n = execStatement(twin, sets[i])
@@ -367,15 +392,20 @@ async function proveWith(
       if (d.added.length || d.removed.length) diffs.push({ set: i + 1, ...d })
     }
   } catch (err) {
+    // a batch the driver cut off at the budget's end (its timeout was what was left, give or
+    // take a timer tick) is the budget, not the body
+    budgetSpent =
+      err instanceof BudgetSpent ||
+      (deadline - Date.now() < BUDGET_SLACK_MS && isDriverTimeout(err))
     failure = errText(err)
   } finally {
     // An open transaction would swallow the DROP when the connection rolls back on release.
     const drop = `IF @@TRANCOUNT > 0 ROLLBACK;\nDROP PROCEDURE IF EXISTS [dbo].[${twin}]`
     try {
-      await attempt(run, drop)
+      await attempt(run, drop, DROP_TIMEOUT_MS)
     } catch {
       // The pinned connection may be dead: once more on a fresh one.
-      await attempt(retryDrop, drop).catch((err) => {
+      await attempt(retryDrop, drop, DROP_TIMEOUT_MS).catch((err) => {
         dropError = errText(err)
       })
     }
@@ -384,6 +414,15 @@ async function proveWith(
     dropError
       ? `${detail}; twin drop failed (${dropError}) — [dbo].[${twin}] is left for the boot sweep`
       : detail
+  // an error refusal: a standing proposal is kept, not rejected on a proof that never finished
+  if (budgetSpent)
+    return {
+      passed: false,
+      method: 'refused',
+      before: { sets: sets.length, sets_run: oldMs.length },
+      after: {},
+      detail: withDrop(`${PROOF_ERROR_PREFIX}proof budget exceeded`)
+    }
   if (failure !== null)
     return {
       passed: false,
@@ -453,9 +492,12 @@ export async function proveProcedureRewrite(args: {
   const twinBody = renameProcHeader(args.newBody, args.proc, twin)
   if (!twinBody) return refuse('no CREATE PROCEDURE header')
   const sets = args.paramSets.length ? args.paramSets : [{}]
+  // `timeoutMs` is the budget of the whole proof, every set and run, not of one EXEC.
+  const deadline = Date.now() + args.timeoutMs
   // An injected runner (tests, scripts) retries its own drop; the pinned connection retries
   // on a fresh pooled one.
-  if (args.runner) return proveWith(args.runner, args.runner, args.proc, twin, twinBody, sets)
+  if (args.runner)
+    return proveWith(args.runner, args.runner, args.proc, twin, twinBody, sets, deadline)
   const pooled: Runner = async (sql) => {
     await db.raw(sql)
     return []
@@ -464,12 +506,13 @@ export async function proveProcedureRewrite(args: {
   return withLongConnection(
     (c) =>
       proveWith(
-        (sql) => c.run<Record<string, unknown>>(sql, args.timeoutMs),
+        (sql, ms) => c.run<Record<string, unknown>>(sql, ms ?? args.timeoutMs),
         pooled,
         args.proc,
         twin,
         twinBody,
-        sets
+        sets,
+        deadline
       ),
     { timeoutMs: args.timeoutMs }
   ).catch((err) => ({
