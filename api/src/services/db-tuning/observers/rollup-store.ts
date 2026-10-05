@@ -1,5 +1,5 @@
 import { db } from '../../../db/index.js'
-import { computeRollupTotal, parseRollupFormula } from '../../rollups.js'
+import { computeRollupTotal, type NormalizedRollup, parseRollupFormula } from '../../rollups.js'
 import { type Candidate, IDENT, KIND_RISK } from '../types.js'
 
 /**
@@ -63,6 +63,26 @@ export function observeRollupStore(ev: RollupEvidence): Candidate[] {
   return out
 }
 
+/**
+ * The parsed config of a rollup that may be proposed for storing, or null: already stored, not an
+ * identifier, a system collection, or a recursive (tree) rollup — the stored path recalcs on a
+ * direct child's write, so descendant writes would leave a stored tree total stale.
+ */
+export function storableRollup(r: {
+  collection: string
+  field: string
+  computed_formula: string | null
+  computed_store: unknown
+}): NormalizedRollup | null {
+  if (r.computed_store) return null
+  if (!IDENT.test(r.collection) || !IDENT.test(r.field)) return null
+  if (/^nivaro_/i.test(r.collection)) return null
+  const cfg = parseRollupFormula(r.computed_formula)
+  if (!cfg?.sources.length) return null
+  if (cfg.sources.some((s) => s.recursive)) return null
+  return cfg
+}
+
 const countOf = (row: { n: number | string } | undefined): number => Number(row?.n ?? 0) || 0
 
 export async function loadRollupEvidence(): Promise<RollupEvidence> {
@@ -78,10 +98,8 @@ export async function loadRollupEvidence(): Promise<RollupEvidence> {
   const since = new Date(Date.now() - 7 * 86_400_000)
   const fields: RollupField[] = []
   for (const r of rows) {
-    if (r.computed_store) continue
-    if (!IDENT.test(r.collection) || !IDENT.test(r.field)) continue
-    const cfg = parseRollupFormula(r.computed_formula)
-    if (!cfg?.sources.length) continue
+    const cfg = storableRollup(r)
+    if (!cfg) continue
     const children = [...new Set(cfg.sources.map((s) => s.related_collection))]
     // reads: list reads of the collection in the last 7 days that asked for this field (or all)
     const reads = (await db('nivaro_api_logs')
@@ -111,8 +129,17 @@ export async function loadRollupEvidence(): Promise<RollupEvidence> {
       .limit(SAMPLE_ROWS)
       .catch(() => [])) as Array<{ id: unknown }>
     if (!sample.length) continue
+    // a compute that throws would time as fast and understate the read cost: skip the field
     const t0 = Date.now()
-    for (const s of sample) await computeRollupTotal(cfg, s.id, r.collection).catch(() => null)
+    let failed = false
+    for (const s of sample) {
+      failed = await computeRollupTotal(cfg, s.id, r.collection).then(
+        () => false,
+        () => true
+      )
+      if (failed) break
+    }
+    if (failed) continue
     const perRecalcMs = (Date.now() - t0) / sample.length
     fields.push({
       collection: r.collection,

@@ -372,9 +372,12 @@ export async function procedureStats(): Promise<ProcStat[]> {
   const rows = rowsOf(
     await db
       .raw(`
-    SELECT OBJECT_NAME(ps.object_id) AS name, ps.execution_count,
+    SELECT p.name AS name, ps.execution_count,
            ps.total_elapsed_time/1000 AS total_ms, ps.cached_time
-    FROM sys.dm_exec_procedure_stats ps WHERE ps.database_id = DB_ID()`)
+    FROM sys.dm_exec_procedure_stats ps
+    JOIN sys.procedures p ON p.object_id = ps.object_id
+    WHERE ps.database_id = DB_ID() AND p.is_ms_shipped = 0
+      AND SCHEMA_NAME(p.schema_id) = SCHEMA_NAME()`)
       .catch(() => [])
   )
   return rows
@@ -398,7 +401,7 @@ export async function procedureBody(name: string): Promise<string | null> {
   const rows = rowsOf(
     await db
       .raw(
-        'SELECT m.definition FROM sys.procedures p JOIN sys.sql_modules m ON m.object_id = p.object_id WHERE p.name = ? AND p.is_ms_shipped = 0',
+        'SELECT m.definition FROM sys.procedures p JOIN sys.sql_modules m ON m.object_id = p.object_id WHERE p.name = ? AND p.is_ms_shipped = 0 AND SCHEMA_NAME(p.schema_id) = SCHEMA_NAME()',
         [name]
       )
       .catch(() => [])

@@ -6,10 +6,16 @@ import {
   selectProcCandidates
 } from '../../../../services/db-tuning/observers/proc-rewrite.js'
 import {
+  ASSUMED_GAP_TTL,
+  freshnessFromWrites,
+  medianGapMinutes,
   observeQueryCache,
   proposeTtl
 } from '../../../../services/db-tuning/observers/query-cache.js'
-import { observeRollupStore } from '../../../../services/db-tuning/observers/rollup-store.js'
+import {
+  observeRollupStore,
+  storableRollup
+} from '../../../../services/db-tuning/observers/rollup-store.js'
 import { applyTransformers } from '../../../../services/db-tuning/rewrites/index.js'
 
 const stat = (name: string, avg: number, runs: number) => ({
@@ -170,7 +176,9 @@ describe('query cache', () => {
   it('nightly-fed sources → 6 h; live sources → half the median gap, floor 5 min, cap 24 h', () => {
     expect(proposeTtl({ sources: 2, nightly: true, medianGapMin: null })).toBe(6 * 3600)
     expect(proposeTtl({ sources: 2, nightly: false, medianGapMin: 30 })).toBe(15 * 60)
-    expect(proposeTtl({ sources: 2, nightly: false, medianGapMin: 2 })).toBe(5 * 60)
+    // fix round 1: the floor is 1 min (was 5) so a source written every couple of minutes is never
+    // served older than its write gap
+    expect(proposeTtl({ sources: 2, nightly: false, medianGapMin: 2 })).toBe(60)
     expect(proposeTtl({ sources: 1, nightly: false, medianGapMin: 10_000 })).toBe(24 * 3600)
   })
   it('proposes a TTL for a slow uncached query with resolvable freshness', () => {
@@ -222,5 +230,87 @@ describe('query cache', () => {
         ]
       })
     ).toEqual([])
+  })
+})
+
+describe('storableRollup', () => {
+  const src = {
+    related_collection: 'lines',
+    fk_field: 'parent',
+    aggregate: 'sum',
+    value_field: 'amount'
+  }
+  const row = (over: Record<string, unknown> = {}, cfg: Record<string, unknown> = src) => ({
+    collection: 'orders',
+    field: 'total',
+    computed_formula: JSON.stringify(cfg),
+    computed_store: false,
+    ...over
+  })
+  it('accepts a flat, unstored rollup on a user collection', () => {
+    expect(storableRollup(row())?.sources).toHaveLength(1)
+  })
+  it('skips a recursive (tree) rollup — the stored path cannot keep descendant totals current', () => {
+    const tree = {
+      related_collection: 'orders',
+      fk_field: 'parent',
+      aggregate: 'sum',
+      value_field: 'amount',
+      recursive: true
+    }
+    expect(storableRollup(row({}, tree))).toBeNull()
+    expect(storableRollup(row({}, { sources: [src, tree] }))).toBeNull()
+  })
+  it('skips system collections, stored fields and non-identifiers', () => {
+    expect(storableRollup(row({ collection: 'nivaro_users' }))).toBeNull()
+    expect(storableRollup(row({ collection: 'NIVARO_files' }))).toBeNull()
+    expect(storableRollup(row({ computed_store: true }))).toBeNull()
+    expect(storableRollup(row({ field: 'total; DROP' }))).toBeNull()
+  })
+})
+
+describe('measured write gaps', () => {
+  const at = (min: number) => new Date(Date.UTC(2026, 9, 1) + min * 60_000)
+  const every = (gapMin: number, n: number) => Array.from({ length: n }, (_, i) => at(i * gapMin))
+  it('takes the median gap between distinct write minutes', () => {
+    expect(medianGapMinutes([at(0), at(0), at(1), at(3), at(10)])).toBe(2)
+    expect(medianGapMinutes([at(0)])).toBeNull()
+  })
+  it('a source written every minute never gets more than 2 min', () => {
+    const f = freshnessFromWrites([every(1, 500)])
+    expect(f).toMatchObject({ medianGapMin: 1, nightly: false, gapAssumed: false })
+    expect(proposeTtl(f)).toBeLessThanOrEqual(120)
+  })
+  it('an unmeasured source is gap_assumed and capped at 5 min', () => {
+    const f = freshnessFromWrites([every(24 * 60, 7), []])
+    expect(f.gapAssumed).toBe(true)
+    expect(proposeTtl(f)).toBeLessThanOrEqual(ASSUMED_GAP_TTL)
+    expect(proposeTtl(freshnessFromWrites([[]]))).toBe(ASSUMED_GAP_TTL)
+    const out = observeQueryCache({
+      rows: [
+        {
+          id: 1,
+          slug: 'q',
+          cache_ttl: 0,
+          warm_daily: false,
+          runs: 7000,
+          avg_exec_ms: 4000,
+          uncached_runs: 7000,
+          sinceDays: 7,
+          freshness: freshnessFromWrites([[]]),
+          firstRunSlowest: false
+        }
+      ]
+    })
+    expect(out[0].evidence.gap_assumed).toBe(true)
+    expect(out[0].apply).toMatchObject({ patch: { cache_ttl: ASSUMED_GAP_TTL } })
+  })
+  it('a source written once a day is nightly (6 h)', () => {
+    const f = freshnessFromWrites([every(24 * 60, 7)])
+    expect(f).toMatchObject({ medianGapMin: 24 * 60, nightly: true, gapAssumed: false })
+    expect(proposeTtl(f)).toBe(6 * 3600)
+  })
+  it('the busiest source sets the gap', () => {
+    expect(freshnessFromWrites([every(24 * 60, 7), every(10, 1000)]).nightly).toBe(false)
   })
 })

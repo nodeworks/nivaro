@@ -5,15 +5,19 @@ import { type Candidate, KIND_RISK } from '../types.js'
 
 /**
  * Query-cache observer: a saved query that runs uncached, takes a second or more and runs often
- * is proposed a TTL sized to how fresh its sources are — 6 h for nightly-fed sources, half the
- * gap between writes for live ones. A query whose sources cannot be resolved is never proposed.
- * When the first run of the day is the slow one, the proposal also turns on the daily warmer.
+ * is proposed a TTL sized to how often its sources are written — measured from the activity log
+ * over the last 7 days: 6 h when the median gap is 20 h or more (nightly-fed), else half the gap.
+ * A source with no activity rows (a table no hook writes through) cannot be measured: the query
+ * is labelled `gap_assumed` and its TTL capped at 5 min. A query whose sources cannot be resolved
+ * is never proposed. When the first run of the day is the slow one, the warmer is turned on too.
  */
 
 export interface QueryFreshnessShape {
   sources: number
   nightly: boolean
   medianGapMin: number | null
+  /** Some source had no activity rows to measure: the TTL is capped at ASSUMED_GAP_TTL. */
+  gapAssumed?: boolean
 }
 export interface QueryCacheRow {
   id: number
@@ -32,9 +36,47 @@ export interface QueryCacheEvidence {
 }
 
 const H = 3600
+const MIN_TTL = 60
+export const ASSUMED_GAP_TTL = 5 * 60
+export const NIGHTLY_GAP_MIN = 20 * 60
+const DAY_MS = 86_400_000
+const WINDOW_DAYS = 7
+const WINDOW_MIN = WINDOW_DAYS * 24 * 60
+/** Newest activity rows read per source; a busier table's median comes from its recent writes. */
+const MAX_WRITES_PER_SOURCE = 5000
+
 export function proposeTtl(f: QueryFreshnessShape): number {
-  if (f.nightly || f.medianGapMin == null) return 6 * H
-  return Math.min(24 * H, Math.max(5 * 60, Math.round((f.medianGapMin * 60) / 2)))
+  const ttl =
+    f.nightly || f.medianGapMin == null
+      ? 6 * H
+      : Math.min(24 * H, Math.max(MIN_TTL, Math.round((f.medianGapMin * 60) / 2)))
+  return f.gapAssumed ? Math.min(ttl, ASSUMED_GAP_TTL) : ttl
+}
+
+/** Median gap in minutes between distinct write minutes; null with fewer than two. */
+export function medianGapMinutes(stamps: Array<Date | string>): number | null {
+  const minutes = [
+    ...new Set(
+      stamps.map((s) => Math.floor(new Date(s).getTime() / 60_000)).filter(Number.isFinite)
+    )
+  ].sort((a, b) => a - b)
+  if (minutes.length < 2) return null
+  const gaps = minutes
+    .slice(1)
+    .map((m, i) => m - minutes[i])
+    .sort((a, b) => a - b)
+  const mid = gaps.length >> 1
+  return gaps.length % 2 ? gaps[mid] : (gaps[mid - 1] + gaps[mid]) / 2
+}
+
+/** A query's freshness from each source's write stamps (any source's write makes it stale). */
+export function freshnessFromWrites(perSource: Array<Array<Date | string>>): QueryFreshnessShape {
+  const gapAssumed = perSource.some((w) => w.length === 0)
+  const all = perSource.flat()
+  // a single write minute in the whole window: written about once a week
+  const medianGapMin = all.length ? (medianGapMinutes(all) ?? WINDOW_MIN) : null
+  const nightly = medianGapMin != null && medianGapMin >= NIGHTLY_GAP_MIN
+  return { sources: perSource.length, nightly, medianGapMin, gapAssumed }
 }
 
 export const MIN_EXEC_MS = 1000
@@ -60,6 +102,7 @@ export function observeQueryCache(ev: QueryCacheEvidence): Candidate[] {
         runs_per_day: Math.round(perDay),
         avg_exec_ms: Math.round(r.avg_exec_ms),
         freshness: r.freshness,
+        gap_assumed: r.freshness.gapAssumed === true,
         first_run_slowest: r.firstRunSlowest
       },
       estimate_ms_per_day: Math.round(saving),
@@ -81,18 +124,16 @@ export function observeQueryCache(ev: QueryCacheEvidence): Candidate[] {
   return out
 }
 
-/** The nightly feed lands before 06:00 Eastern, about 10–11 UTC. */
-const NIGHTLY_CUTOFF_UTC_HOUR = 11
-const DAY_MS = 86_400_000
-
-/** Nightly = every source's newest write is unknown, older than a day, or before the cutoff. */
-function isNightly(changedAt: Array<string | null>): boolean {
-  return changedAt.every((at) => {
-    if (!at) return true
-    const t = new Date(at)
-    if (Number.isNaN(t.getTime())) return true
-    return Date.now() - t.getTime() > DAY_MS || t.getUTCHours() < NIGHTLY_CUTOFF_UTC_HOUR
-  })
+async function writeStamps(table: string, since: Date): Promise<Array<Date | string>> {
+  const rows = (await db('nivaro_activity')
+    .where('collection', table)
+    .whereIn('action', ['create', 'update', 'delete'])
+    .where('timestamp', '>', since)
+    .orderBy('timestamp', 'desc')
+    .limit(MAX_WRITES_PER_SOURCE)
+    .select('timestamp')
+    .catch(() => [])) as Array<{ timestamp: Date | string }>
+  return rows.map((r) => r.timestamp)
 }
 
 export async function loadQueryCacheEvidence(): Promise<QueryCacheEvidence> {
@@ -103,6 +144,17 @@ export async function loadQueryCacheEvidence(): Promise<QueryCacheEvidence> {
     .where('enabled', true)
     .select('id', 'slug', 'sql_text', 'cache_ttl', 'warm_daily', 'freshness_sources')
     .catch(() => [])) as Array<Record<string, unknown>>
+  const since = new Date(Date.now() - WINDOW_DAYS * DAY_MS)
+  const stampsByTable = new Map<string, Promise<Array<Date | string>>>()
+  const stampsFor = (table: string) => {
+    const key = table.toLowerCase()
+    let hit = stampsByTable.get(key)
+    if (!hit) {
+      hit = writeStamps(table, since)
+      stampsByTable.set(key, hit)
+    }
+    return hit
+  }
   const rows: QueryCacheRow[] = []
   for (const q of queries) {
     const s = bySlug.get(String(q.slug))
@@ -114,11 +166,8 @@ export async function loadQueryCacheEvidence(): Promise<QueryCacheEvidence> {
         sql_text: q.sql_text as string,
         freshness_sources: q.freshness_sources as string | null
       })
-      if (f.sources.length) {
-        const nightly = isNightly(f.sources.map((x) => x.changed_at))
-        // no per-source write history yet: a live source is assumed to move about hourly
-        freshness = { sources: f.sources.length, nightly, medianGapMin: nightly ? null : 60 }
-      }
+      if (f.sources.length)
+        freshness = freshnessFromWrites(await Promise.all(f.sources.map((x) => stampsFor(x.table))))
     } catch {
       freshness = null
     }
