@@ -1,11 +1,13 @@
 import { describe, expect, it, vi } from 'vitest'
 import { db } from '../../../../db/index.js'
+import { featureFromRoute } from '../../../../services/ai-log.js'
 import {
   aiBudgetAllows,
   aiRewriteCandidate,
   extractSqlBlock,
   sameSignature
 } from '../../../../services/db-tuning/rewrites/ai.js'
+import { currentTraceMeta } from '../../../../services/request-trace.js'
 
 const reply = (text: string) => ({
   messages: { create: async () => ({ content: [{ type: 'text', text }] }) }
@@ -53,6 +55,25 @@ describe('ai rewrite hardening', () => {
   it('treats an empty block as no block and accepts a tsql tag', () => {
     expect(extractSqlBlock('```sql\n\n```')).toBeNull()
     expect(extractSqlBlock('```tsql\nSELECT 1\n```')).toBe('SELECT 1')
+  })
+})
+
+describe('ai rewrite attribution', () => {
+  it('every call is logged under the db-tune feature, cron or request', async () => {
+    const seen: string[] = []
+    const client = {
+      messages: {
+        create: async () => {
+          // what the AI call log (ai-log loggedCreate) reads at call time
+          seen.push(featureFromRoute(currentTraceMeta()?.urlHint ?? null))
+          return {
+            content: [{ type: 'text', text: '```sql\nCREATE PROC p @A INT AS SELECT 2\n```' }]
+          }
+        }
+      }
+    }
+    await run(client)
+    expect(seen).toEqual(['db-tune'])
   })
 })
 

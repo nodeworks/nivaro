@@ -52,6 +52,9 @@ export async function aiBudgetAllows(limitUsd: number): Promise<boolean> {
   }
 }
 
+/** ai-log's featureFromRoute reads this as feature `db-tune` (spec §2). */
+const AI_FEATURE_ROUTE = '/db-tune'
+
 interface MinimalClient {
   messages: {
     create(
@@ -95,11 +98,16 @@ ${args.hotLines.slice(0, 10).join('\n') || '(none captured)'}`
       client = ((await getAiClient({ model })) as unknown as MinimalClient | null) ?? undefined
     }
     if (!client || !model) return null
-    const message = await client.messages.create({
-      model,
-      max_tokens: 6000,
-      messages: [{ role: 'user', content: prompt }]
-    })
+    const { runInTrace } = await import('../../request-trace.js')
+    const ai = client
+    // the AI call log reads the feature from the trace's route: a cron has none, so give it one
+    const message = await runInTrace(AI_FEATURE_ROUTE, null, () =>
+      ai.messages.create({
+        model,
+        max_tokens: 6000,
+        messages: [{ role: 'user', content: prompt }]
+      })
+    )
     const text = message.content.map((b) => (b.type === 'text' ? (b.text ?? '') : '')).join('')
     const body = extractSqlBlock(text)
     if (!body) return null
