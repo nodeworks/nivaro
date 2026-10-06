@@ -130,6 +130,103 @@ describe('quality store tables', () => {
     expect(JSON.parse(run.totals)).toEqual({ green: 0, amber: 1, red: 0, error: 0 })
   })
 
+  async function twoRedChecks() {
+    const s = await import('../../../services/quality/store.js')
+    const { diffRows } = await import('../../../services/quality/diff.js')
+    const db = (await fresh({
+      nivaro_quality_runs: [
+        { id: 'R', target: 'T', status: 'done', verified_at: new Date('2026-10-06T05:00:00Z') }
+      ]
+    })) as any
+    const base = [{ key: 'k', values: { v: 1 } }]
+    const cur = [{ key: 'k', values: { v: 2 } }]
+    for (const id of ['a.one', 'b.two']) {
+      const diff = diffRows({}, base, cur, [])
+      await s.saveSide(db, 'R', id, 'baseline', { rows: base, durationMs: 1 })
+      await s.saveSide(db, 'R', id, 'current', { rows: cur, durationMs: 1 })
+      await s.saveDiff(db, 'R', id, diff.rows)
+      await s.saveResult(
+        db,
+        'R',
+        { id, area: 'counts', label: id, description: '' },
+        { diff, durationMs: 1 }
+      )
+      await db('nivaro_quality_known').insert({
+        check_id: id,
+        match: '{"key":"k"}',
+        reason: 'known'
+      })
+    }
+    await db('nivaro_quality_runs').where({ id: 'R' }).update({ totals: 'before' })
+    // Calls the store makes go through this proxy; `onSide(check)` runs when a
+    // check's stored side is read — between one check's save and the next.
+    let onSide: (check: string) => void = () => {}
+    const app = new Proxy(db, {
+      apply: (t, _this, args: unknown[]) => {
+        const b = t(...args)
+        if (args[0] === 'nivaro_quality_rows') {
+          const where = b.where
+          b.where = (w: Record<string, unknown>) => {
+            if (w?.side === 'baseline') onSide(String(w.check_id))
+            return where(w)
+          }
+        }
+        return b
+      }
+    })
+    const statusOf = (id: string) =>
+      (db.state.tables.nivaro_quality_results as Array<Record<string, unknown>>).find(
+        (r) => r.check_id === id
+      )?.status
+    return { s, db, app, statusOf, setHook: (f: (c: string) => void) => (onSide = f) }
+  }
+
+  it('stops a re-diff when the run starts verifying mid-loop', async () => {
+    const { s, db, app, statusOf, setHook } = await twoRedChecks()
+    setHook((check) => {
+      if (check === 'b.two') db.state.tables.nivaro_quality_runs[0].status = 'verifying'
+    })
+    expect(await s.rediffRun(app, 'R')).toEqual({
+      rediffed: false,
+      reason: 'the run is being verified'
+    })
+    expect(statusOf('a.one')).toBe('amber')
+    expect(statusOf('b.two')).toBe('red')
+    expect((await s.loadDiff(db, 'R', 'b.two'))?.[0].expected).toBe(false)
+    expect(db.state.tables.nivaro_quality_runs[0].totals).toBe('before')
+  })
+
+  it('stops a re-diff when the run was verified again mid-loop', async () => {
+    const { s, db, app, statusOf, setHook } = await twoRedChecks()
+    setHook((check) => {
+      if (check === 'b.two')
+        db.state.tables.nivaro_quality_runs[0].verified_at = new Date('2026-10-06T06:00:00Z')
+    })
+    expect((await s.rediffRun(app, 'R')).rediffed).toBe(false)
+    expect(statusOf('b.two')).toBe('red')
+    expect(db.state.tables.nivaro_quality_runs[0].totals).toBe('before')
+  })
+
+  it('re-diffs every check when nothing moves, and never a run without results', async () => {
+    const { s, db, app, statusOf } = await twoRedChecks()
+    expect(await s.rediffRun(app, 'R')).toEqual({ rediffed: true })
+    expect([statusOf('a.one'), statusOf('b.two')]).toEqual(['amber', 'amber'])
+    expect(JSON.parse(db.state.tables.nivaro_quality_runs[0].totals)).toEqual({
+      green: 0,
+      amber: 2,
+      red: 0,
+      error: 0
+    })
+    await db('nivaro_quality_runs').insert({ id: 'E', target: 'T', status: 'captured' })
+    expect((await s.rediffRun(app, 'E')).rediffed).toBe(false)
+    expect(
+      db.state.tables.nivaro_quality_runs.find((r: any) => r.id === 'E').totals
+    ).toBeUndefined()
+    // A run already verifying is left alone from the start.
+    db.state.tables.nivaro_quality_runs[0].status = 'verifying'
+    expect((await s.rediffRun(app, 'R')).rediffed).toBe(false)
+  })
+
   it('prunes all but the newest runs of a target', async () => {
     const s = await import('../../../services/quality/store.js')
     const runs = Array.from({ length: 5 }, (_, i) => ({

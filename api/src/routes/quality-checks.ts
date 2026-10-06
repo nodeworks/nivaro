@@ -25,6 +25,8 @@ const KNOWN = 'nivaro_quality_known'
 
 const RUN_ID = /^[0-9a-f-]{36}$/i // SQL Server hands uuids back upper-case
 const CHECK_ID = /^[a-z][a-z0-9_.-]{1,80}$/
+/** A key glob becomes a RegExp run against every row of a check, in the request. */
+const MAX_KEY_WILDCARDS = 4
 const AREA_ORDER = [
   'owners',
   'states',
@@ -92,6 +94,11 @@ export function parseKnownMatch(
   if (m.key != null) {
     if (typeof m.key !== 'string' || m.key.length < 1 || m.key.length > 300)
       return { ok: false, error: 'match.key must be 1–300 characters' }
+    if ((m.key.match(/\*/g)?.length ?? 0) > MAX_KEY_WILDCARDS)
+      return {
+        ok: false,
+        error: `match.key may use * at most ${MAX_KEY_WILDCARDS} times`
+      }
     match.key = m.key
   }
   if (m.cluster != null) {
@@ -127,25 +134,27 @@ function parseReason(raw: unknown): string | null {
   return reason.length >= 3 && reason.length <= 1000 ? reason : null
 }
 
-/** A run whose results are being written right now is left to its runner. */
-async function rediffIfSettled(run: string): Promise<boolean> {
-  const r = await getRun(db, run)
-  if (!r || r.status === 'verifying') return false
-  await rediffRun(db, run)
-  return true
-}
-
-/** The latest run of every target that has a result for the check, re-diffed. */
-async function rediffLatestFor(checkId: string): Promise<void> {
+/**
+ * The latest finished run of every target that has a result for the check,
+ * re-diffed. true only when at least one run was re-diffed and none stopped
+ * (a run being verified picks the change up from its own known differences).
+ */
+async function rediffLatestFor(checkId: string): Promise<boolean> {
   const runs = [
     ...new Set((await db(RESULTS).where({ check_id: checkId }).pluck('run')) as string[])
   ]
-  if (runs.length === 0) return
+  if (runs.length === 0) return false
   const targets = [...new Set((await db(RUNS).whereIn('id', runs).pluck('target')) as string[])]
+  let any = false
+  let all = true
   for (const target of targets) {
-    const latest = await latestRunForTarget(db, target)
-    if (latest) await rediffIfSettled(latest.id)
+    const latest = await latestRunForTarget(db, target, 'done')
+    if (!latest) continue
+    const r = await rediffRun(db, latest.id)
+    any = true
+    if (!r.rediffed) all = false
   }
+  return any && all
 }
 
 const show = (v: QualityValue | undefined) => (v === null || v === undefined ? '—' : String(v))
@@ -322,8 +331,8 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
         comment: reason,
         req
       })
-      if (run) await rediffIfSettled(run)
-      return { data: { id } }
+      const rediffed = run ? (await rediffRun(db, run)).rediffed : false
+      return { data: { id, rediffed } }
     }
   )
 
@@ -359,8 +368,8 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
         comment: typeof patch.reason === 'string' ? patch.reason : undefined,
         req
       })
-      await rediffLatestFor(existing.check_id)
-      return { data: { id } }
+      const rediffed = await rediffLatestFor(existing.check_id)
+      return { data: { id, rediffed } }
     }
   )
 
@@ -380,8 +389,8 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
       comment: existing.reason,
       req
     })
-    await rediffLatestFor(existing.check_id)
-    return { data: { id } }
+    const rediffed = await rediffLatestFor(existing.check_id)
+    return { data: { id, rediffed } }
   })
 
   app.post<{ Body: { target?: unknown; runbook?: { extension?: unknown; key?: unknown } } }>(

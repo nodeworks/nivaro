@@ -197,6 +197,7 @@ describe('quality-check routes', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(typeof res.json().data.id).toBe('number')
+    expect(res.json().data.rediffed).toBe(true)
     expect(result()).toMatchObject({ status: 'amber', amber_count: 1, red_count: 0 })
     expect(logActivity).toHaveBeenCalledWith(
       expect.objectContaining({ action: 'quality-known-create', comment: 'teams' })
@@ -208,11 +209,48 @@ describe('quality-check routes', () => {
     expect(detail.json().data.result.rows[0]).toMatchObject({ key: 'w:1', expected: true })
     expect(detail.json().data.known).toHaveLength(1)
 
-    // Removing it turns the run red again.
+    // Removing it turns the latest FINISHED run red again — a newer run that is
+    // still capturing (no results yet) is not the one re-diffed.
+    h.db.state.tables.nivaro_quality_runs.push({
+      id: '99999999-2222-3333-4444-555555555555',
+      target: 'EFP_Staging',
+      status: 'capturing',
+      started_at: new Date('2026-10-07T02:00:00Z')
+    })
     const id = res.json().data.id
     const del = await app.inject({ method: 'DELETE', url: `/quality-checks/known/${id}` })
     expect(del.statusCode).toBe(200)
+    expect(del.json().data).toEqual({ id, rediffed: true })
     expect(result()).toMatchObject({ status: 'red', amber_count: 0, red_count: 1 })
+    const capturing = h.db.state.tables.nivaro_quality_runs.find(
+      (r: Record<string, unknown>) => r.status === 'capturing'
+    )
+    expect(capturing.totals).toBeUndefined()
+  })
+
+  it('leaves a run being verified to its runner and says so', async () => {
+    h.db.state.tables.nivaro_quality_runs[0].status = 'verifying'
+    const app = buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/known',
+      payload: { check_id: CHECK, match: { key: 'w:1' }, reason: 'teams', run: RUN }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.rediffed).toBe(false)
+    expect(result()).toMatchObject({ status: 'red' })
+    const patch = await app.inject({
+      method: 'PATCH',
+      url: `/quality-checks/known/${res.json().data.id}`,
+      payload: { reason: 'teams again' }
+    })
+    expect(patch.json().data.rediffed).toBe(false)
+    const noRun = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/known',
+      payload: { check_id: CHECK, match: { field: 'o' }, reason: 'teams' }
+    })
+    expect(noRun.json().data.rediffed).toBe(false)
   })
 
   it('refuses a known difference with no condition', async () => {
@@ -235,11 +273,29 @@ describe('quality-check routes', () => {
         match: { cluster: Object.fromEntries([1, 2, 3, 4, 5, 6, 7].map((n) => [`k${n}`, 'v'])) },
         reason: 'teams'
       },
-      { check_id: CHECK, match: { field: 'x'.repeat(101) }, reason: 'teams' }
+      { check_id: CHECK, match: { field: 'x'.repeat(101) }, reason: 'teams' },
+      { check_id: CHECK, match: { key: 'a*b*c*d*e*f' }, reason: 'teams' }
     ]) {
       const res = await app.inject({ method: 'POST', url: '/quality-checks/known', payload })
       expect(res.statusCode).toBe(400)
     }
+  })
+
+  it('accepts up to four wildcards in a key and names the limit beyond it', async () => {
+    const app = buildApp()
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/known',
+      payload: { check_id: CHECK, match: { key: 'w:*:*:*:*' }, reason: 'teams' }
+    })
+    expect(ok.statusCode).toBe(200)
+    const no = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/known',
+      payload: { check_id: CHECK, match: { key: '*:*:*:*:*' }, reason: 'teams' }
+    })
+    expect(no.statusCode).toBe(400)
+    expect(no.json().error).toBe('match.key may use * at most 4 times')
   })
 
   it('downloads every non-matching row as CSV', async () => {

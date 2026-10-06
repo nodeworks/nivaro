@@ -136,10 +136,11 @@ export async function loadDiff(app: Knex, run: string, checkId: string): Promise
 
 export async function latestRunForTarget(
   app: Knex,
-  target: string
+  target: string,
+  status?: string
 ): Promise<{ id: string; status: string } | null> {
   const row = (await app(RUNS)
-    .where({ target })
+    .where(status === undefined ? { target } : { target, status })
     .orderBy('started_at', 'desc')
     .first('id', 'status')) as { id: string; status: string } | undefined
   return row ? { id: row.id, status: row.status } : null
@@ -253,7 +254,29 @@ export async function recordKnownHits(
  * stored reason stands in for it; the stored reason of an unexpected row stands
  * in for `explain()`.
  */
-export async function rediffRun(app: Knex, run: string): Promise<void> {
+export async function rediffRun(
+  app: Knex,
+  run: string
+): Promise<{ rediffed: boolean; reason?: string }> {
+  // Optimistic guard: a verify stage of the same run may start while this
+  // re-diff decodes sides. The run's status and verified_at are taken now and
+  // re-read before every write; any change stops the re-diff where it stands,
+  // so the runner's fresh results are never overwritten from stale sides.
+  const stampOf = (r: RunRow | null) => {
+    if (!r) return null
+    const t = r.verified_at == null ? null : new Date(r.verified_at as Date).getTime()
+    return { status: r.status, verified: Number.isNaN(t) ? null : t }
+  }
+  const start = stampOf(await getRun(app, run))
+  if (!start) return { rediffed: false, reason: 'no such run' }
+  if (start.status === 'verifying') return { rediffed: false, reason: 'the run is being verified' }
+  const moved = async (): Promise<string | null> => {
+    const now = stampOf(await getRun(app, run))
+    if (!now) return 'the run was removed'
+    if (now.status === 'verifying') return 'the run is being verified'
+    if (now.verified !== start.verified) return 'the run was verified again'
+    return null
+  }
   const results = (await app(RESULTS).where({ run }).select('*')) as Array<{
     check_id: string
     area: string
@@ -263,6 +286,7 @@ export async function rediffRun(app: Knex, run: string): Promise<void> {
     tolerance: string | null
     duration_ms: number | null
   }>
+  if (results.length === 0) return { rediffed: false, reason: 'the run has no results' }
   const known = await loadKnown(app)
   for (const res of results) {
     const base = await loadSide(app, run, res.check_id, 'baseline')
@@ -288,6 +312,8 @@ export async function rediffRun(app: Knex, run: string): Promise<void> {
       cur.rows,
       known.filter((k) => k.check_id === res.check_id)
     )
+    const stop = await moved()
+    if (stop) return { rediffed: false, reason: stop }
     await saveDiff(app, run, res.check_id, diff.rows)
     await saveResult(
       app,
@@ -302,8 +328,11 @@ export async function rediffRun(app: Knex, run: string): Promise<void> {
       { diff, durationMs: res.duration_ms ?? 0 }
     )
   }
+  const stop = await moved()
+  if (stop) return { rediffed: false, reason: stop }
   const statuses = (await app(RESULTS).where({ run }).pluck('status')) as string[]
   await setRunStatus(app, run, { totals: totalsOf(statuses) })
+  return { rediffed: true }
 }
 
 export async function setRunStatus(
