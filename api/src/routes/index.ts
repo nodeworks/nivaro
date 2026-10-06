@@ -151,6 +151,7 @@ import { profileFieldsRoutes } from './profile-fields.js'
 import { promotionRoutes } from './promotion.js'
 import { provenanceTraceRoutes } from './provenance-trace.js'
 import { pushRoutes } from './push.js'
+import { qualityCheckRoutes } from './quality-checks.js'
 import { queuesRoutes } from './queues.js'
 import { readinessRoutes } from './readiness.js'
 import { realtimeRoutes, recordViewersRoutes } from './realtime.js'
@@ -296,6 +297,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(envPresenceRoutes, { prefix: '/environments' })
   await app.register(releaseRunsRoutes, { prefix: '/release' })
   await app.register(runbookRoutes, { prefix: '/runbooks' })
+  await app.register(qualityCheckRoutes, { prefix: '/quality-checks' })
   await app.register(integrationEventsRoutes, { prefix: '/integration-events' })
   await app.register(inboundMappingsRoutes, { prefix: '/inbound-mappings' })
   await app.register(inboundRoutes, { prefix: '/inbound' })
