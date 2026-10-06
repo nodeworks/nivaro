@@ -178,8 +178,9 @@ export async function canReadTaskRecord(
   if (!collection || !item) return true
   try {
     const { readOne } = await import('./items.js')
-    await readOne(user, collection, item, workspaceId, ['id'])
-    return true
+    // readOne answers NULL (no throw) for a row the caller's row filter or
+    // scopes hide — only a returned row is readable.
+    return !!(await readOne(user, collection, item, workspaceId, ['id']))
   } catch {
     return false
   }

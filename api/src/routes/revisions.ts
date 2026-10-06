@@ -13,6 +13,7 @@ import { updateOne } from '../services/items.js'
 import { isMachineAccount } from '../services/machine-accounts.js'
 import { originOfRow } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
+import { o2mParentVisibleTo, recordVisibleTo } from '../services/revision-access.js'
 import { getRevision, listRevisions } from '../services/revisions.js'
 
 // Candidate child item ids for a parent's O2M history: rows currently linked
@@ -44,6 +45,10 @@ export async function revisionsRoutes(app: FastifyInstance) {
     const q = req.query as { collection?: string; item?: string; latest_only?: string }
     if (!q.collection || !q.item) {
       return reply.code(400).send({ error: 'collection and item are required' })
+    }
+    // A record's history is the record — same gates as opening it.
+    if (!(await recordVisibleTo(req, q.collection, q.item))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
     if (q.latest_only === '1') {
       // Collision-detection baseline: just the newest revision id, one cheap
@@ -84,8 +89,8 @@ export async function revisionsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Search value must be at least 2 characters' })
     }
     if (q.item) {
-      if (!(await can(req.user!, 'read', collection))) {
-        return reply.code(403).send({ error: 'Forbidden' })
+      if (!(await recordVisibleTo(req, collection, q.item))) {
+        return reply.code(404).send({ error: 'Not found' })
       }
     } else if (!req.isAdmin) {
       return reply
@@ -182,8 +187,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(many_field)) {
       return reply.code(400).send({ error: 'Invalid many_field' })
     }
-    if (!(await can(req.user!, 'read', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    // Child rows: read on the child collection AND the parent record visible.
+    if (!(await o2mParentVisibleTo(req, collection, many_field, String(parent_id)))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
     const itemIds = await o2mCandidateItemIds(collection, many_field, String(parent_id))
     if (!itemIds.length) return reply.send({ data: [], truncated: false })
@@ -254,8 +260,8 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(many_field)) {
       return reply.code(400).send({ error: 'Invalid many_field' })
     }
-    if (!(await can(req.user!, 'read', collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await o2mParentVisibleTo(req, collection, many_field, String(parent_id)))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
     const currentIds = (await db(collection)
       .where({ [many_field]: String(parent_id) })
@@ -377,8 +383,8 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!q.collection || !q.item || fields.length === 0) {
       return reply.code(400).send({ error: 'collection, item and fields are required' })
     }
-    if (!(await can(req.user!, 'read', q.collection))) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await recordVisibleTo(req, q.collection, q.item))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
     const rows = (await db('nivaro_revisions as r')
       .join('nivaro_activity as a', 'r.activity', 'a.id')
@@ -502,6 +508,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
     if (!(await can(req.user!, 'update', collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
+    if (!(await o2mParentVisibleTo(req, collection, many_field, String(parent_id)))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
 
     let restoredRows: Array<Record<string, unknown>>
 
@@ -580,6 +589,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const revision = await getRevision(Number(id))
     if (!revision) return reply.code(404).send({ error: 'Not found' })
+    if (!(await recordVisibleTo(req, revision.collection, revision.item))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
     return reply.send({ data: revision })
   })
 
@@ -618,6 +630,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
     }
     if (!(await can(req.user!, 'update', activity.collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
+    }
+    if (!(await recordVisibleTo(req, activity.collection, activity.item))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
 
     // Remove the id from the update payload
@@ -688,6 +703,9 @@ export async function revisionsRoutes(app: FastifyInstance) {
     }
     if (!(await can(req.user!, 'update', activity.collection))) {
       return reply.code(403).send({ error: 'Forbidden' })
+    }
+    if (!(await recordVisibleTo(req, activity.collection, activity.item))) {
+      return reply.code(404).send({ error: 'Not found' })
     }
     if (!(field in revisionData)) {
       return reply

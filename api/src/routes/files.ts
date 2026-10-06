@@ -276,7 +276,10 @@ export async function filesRoutes(app: FastifyInstance) {
     }
     try {
       const { readOne } = await import('../services/items.js')
-      await readOne(req.user!, collection, item, req.workspaceId ?? undefined, ['id'])
+      // readOne answers NULL (no throw) for a row the caller cannot see.
+      if (!(await readOne(req.user!, collection, item, req.workspaceId ?? undefined, ['id']))) {
+        return reply.code(404).send({ error: 'Not found' })
+      }
     } catch {
       return reply.code(404).send({ error: 'Not found' })
     }
