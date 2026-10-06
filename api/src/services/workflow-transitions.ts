@@ -298,6 +298,27 @@ export interface SkipEvaluation {
 
 const NO_OWNERS_REASON = 'No owners resolve for this record'
 
+/**
+ * A skip rule's field value on the subject record: a plain column straight
+ * off the row; a dotted relation path or an M2M alias through
+ * resolveRecordValue. An array (M2M ids) compares by membership for eq/neq
+ * in evalFilterOp's callers, so it is returned as is. Never throws.
+ */
+export async function skipFieldValue(
+  collection: string,
+  record: Record<string, unknown>,
+  field: string,
+  itemId: string,
+  database: typeof db
+): Promise<unknown> {
+  if (field in record) return record[field]
+  try {
+    return await resolveRecordValue(collection, record, field, itemId, database)
+  } catch {
+    return undefined
+  }
+}
+
 export async function evaluateSkipCriteriaDetailed(
   stateId: string,
   record: Record<string, unknown>,
@@ -353,22 +374,26 @@ export async function evaluateSkipCriteriaDetailed(
           reason: owners.length === 0 ? NO_OWNERS_REASON : null
         })
       } else if (cond.type === 'field_compare') {
-        const matched = evalFilterOp(cond.op as SkipOp, record[cond.field as string], cond.value)
+        // A field picked through a relation ('workflow_type.type') or an M2M
+        // alias is resolved like lookup_compare's record_field — reading the
+        // raw row alone made every dotted rule silently never fire.
+        const v = await skipFieldValue(collection, record, String(cond.field), itemId, database)
+        const matched = evalFilterOp(cond.op as SkipOp, v, cond.value)
         results.push({
           matched,
           reason: matched
-            ? `${humanizeField(cond.field)} (${fmtVal(record[cond.field as string])}) ${opPhrase(cond.op)} ${fmtVal(cond.value)}`
+            ? `${humanizeField(cond.field)} (${fmtVal(v)}) ${opPhrase(cond.op)} ${fmtVal(cond.value)}`
             : null
         })
       } else if (cond.type === 'field_empty') {
-        const v = record[cond.field as string]
+        const v = await skipFieldValue(collection, record, String(cond.field), itemId, database)
         const matched = v == null || v === ''
         results.push({
           matched,
           reason: matched ? `${humanizeField(cond.field)} is empty` : null
         })
       } else if (cond.type === 'field_nonempty') {
-        const v = record[cond.field as string]
+        const v = await skipFieldValue(collection, record, String(cond.field), itemId, database)
         const matched = v != null && v !== ''
         results.push({
           matched,

@@ -379,8 +379,7 @@ async function fetchOwnerGroupRows(states: string[], database: typeof db): Promi
   // Chunks each come back ordered; restore the global order the plain read gave.
   if (states.length > 1000)
     out.sort(
-      (a, b) =>
-        (a.sort ?? 0) - (b.sort ?? 0) || Number(!!a.is_default) - Number(!!b.is_default)
+      (a, b) => (a.sort ?? 0) - (b.sort ?? 0) || Number(!!a.is_default) - Number(!!b.is_default)
     )
   return out
 }
@@ -1225,12 +1224,19 @@ export async function evaluateSkipCriteria(
         const owners = await resolveStateOwners(stateId, instanceId, collection, itemId, database)
         results.push(owners.length === 0)
       } else if (cond.type === 'field_compare') {
-        results.push(evalFilterOp(cond.op, record[cond.field], cond.value))
+        // Dotted relation paths / M2M aliases resolve like the detailed
+        // evaluator (workflow-transitions skipFieldValue) — lazy import, the
+        // transitions module imports this one.
+        const { skipFieldValue } = await import('./workflow-transitions.js')
+        const v = await skipFieldValue(collection, record, cond.field, itemId, database)
+        results.push(evalFilterOp(cond.op, v, cond.value))
       } else if (cond.type === 'field_empty') {
-        const v = record[cond.field]
+        const { skipFieldValue } = await import('./workflow-transitions.js')
+        const v = await skipFieldValue(collection, record, cond.field, itemId, database)
         results.push(v == null || v === '')
       } else if (cond.type === 'field_nonempty') {
-        const v = record[cond.field]
+        const { skipFieldValue } = await import('./workflow-transitions.js')
+        const v = await skipFieldValue(collection, record, cond.field, itemId, database)
         results.push(v != null && v !== '')
       }
     }
