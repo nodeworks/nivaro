@@ -32,6 +32,7 @@ import {
   parseStoredTarget,
   resolveTargetUrl
 } from '../services/notification-target.js'
+import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { type RecordHeadline, recordHeadlines } from '../services/record-headline.js'
 
@@ -259,8 +260,13 @@ export async function notificationsRoutes(app: FastifyInstance) {
       // The headline is never a bare id: friendly id → display label → the
       // trash snapshot of a record deleted since (flagged, no Open link —
       // the record page would 404) → "<Singular> #<id>".
+      // Resolved only for collections the caller may read TODAY: a subscriber
+      // whose access was revoked since keeps their old rows, but learns
+      // nothing new about the record (not its label, not whether it still
+      // exists) — the headline stays the bare collection word + id.
       const headlines = new Map<string, RecordHeadline>()
       for (const [collection, items] of byCollection) {
+        if (!(await can(req.user!, 'read', collection).catch(() => false))) continue
         const resolved = await recordHeadlines(collection, [...items]).catch(
           () => new Map<string, RecordHeadline>()
         )
