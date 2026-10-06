@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import type { ApiKeyScope } from '../middleware/authenticate.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -16,7 +17,12 @@ interface ApiKeyBody {
   is_active?: boolean
   /** Writes are rehearsed and nothing is stored. */
   sandbox?: boolean
+  /** #1462 — mail the monthly usage statement (migration 401). */
+  usage_statement?: boolean
+  usage_contact?: string | null
 }
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 
 function toJsonStr(val: unknown): string | null {
   if (val === undefined || val === null) return null
@@ -43,7 +49,9 @@ function sanitize(row: Record<string, unknown>) {
       []
     ),
     ip_allowlist: parseJson<string[]>(rest.ip_allowlist, []),
-    sandbox: rest.sandbox === true || rest.sandbox === 1
+    sandbox: rest.sandbox === true || rest.sandbox === 1,
+    usage_statement: rest.usage_statement === true || rest.usage_statement === 1,
+    usage_contact: (rest.usage_contact as string | null | undefined) ?? null
   }
 }
 
@@ -166,6 +174,18 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     }
     if (body.is_active !== undefined) updates.is_active = body.is_active
     if (body.sandbox !== undefined) updates.sandbox = body.sandbox === true
+    if (body.usage_contact !== undefined) {
+      const contact = typeof body.usage_contact === 'string' ? body.usage_contact.trim() : ''
+      if (contact && (contact.length > 320 || !EMAIL_RE.test(contact)))
+        return reply.code(400).send({ error: 'usage_contact must be an email address' })
+      updates.usage_contact = contact || null
+    }
+    if (body.usage_statement !== undefined) updates.usage_statement = body.usage_statement === true
+    if (
+      ('usage_contact' in updates || 'usage_statement' in updates) &&
+      !(await hasColumn('nivaro_api_keys', 'usage_statement'))
+    )
+      return reply.code(409).send({ error: 'Usage statements need migration 401' })
 
     if (Object.keys(updates).length > 0) {
       await db('nivaro_api_keys').where({ id }).update(updates)

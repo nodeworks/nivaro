@@ -386,6 +386,17 @@ POST   /api/inbound-mappings/:id/fixtures/run             // { rules?, children?
       code: `"response_template": "{\\"accepted\\": {{ created }}, \\"orderId\\": {{ record.id | jsonify }}, \\"errors\\": {{ errors | map: 'message' | jsonify }}}",
 "response_status": { "success": 201, "rejected": 400 }`
     },
+    { type: 'h3', id: 'integration-events-inbound-versions', text: 'Versions' },
+    {
+      type: 'p',
+      text: "Every save of a mapping — its settings, rules, child sets, fixtures, response template and status map — is kept as a version (an unchanged re-save adds none; the newest 30 are kept). The editor's Version history lists them with who saved and when; pick one to see what changed since (rules by target field, fixtures by their own id), and Restore puts it back. A restore keeps the mapping's id and every fixture's id, and records the state it replaces as a version first, so it can be undone. Deleting a mapping deletes its versions."
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/inbound-mappings/:id/versions
+GET  /api/inbound-mappings/:id/versions/:vid/diff?against=current|<vid>
+POST /api/inbound-mappings/:id/versions/:vid/restore`
+    },
     { type: 'h2', id: 'integration-events-replay-inbound', text: 'Replaying an inbound request' },
     {
       type: 'p',

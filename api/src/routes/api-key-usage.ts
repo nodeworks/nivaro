@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { currentMonth, keyUsage, usageToCsv } from '../services/api-key-usage.js'
 
 // ─── Per-key usage analytics (#605) ──────────────────────────────────────────
 // Registered at the same /api-keys prefix as the CRUD routes (second-plugin
@@ -11,11 +12,31 @@ const WINDOW_DAYS = 30
 const TOP_ROUTES = 10
 
 export async function apiKeyUsageRoutes(app: FastifyInstance) {
-  // GET /api-keys/:id/usage — last-30d daily request/error series + top routes
+  // GET /api-keys/:id/usage — last-30d daily request/error series + top routes.
+  // With ?month=YYYY-MM (#1462) it answers the monthly usage report instead —
+  // by day and route family, error rate, rate-limit refusals, GraphQL
+  // operations — and ?format=csv downloads that report as one flat CSV.
   app.get('/:id/usage', { preHandler: requireAdmin }, async (req, reply) => {
     const id = Number((req.params as { id: string }).id)
     if (!Number.isInteger(id) || id <= 0) {
       return reply.code(400).send({ error: 'Invalid API key id' })
+    }
+    const q = (req.query ?? {}) as { month?: string; format?: string }
+    if (q.month !== undefined || q.format === 'csv') {
+      const month = (q.month ?? currentMonth()).trim()
+      const report = await keyUsage(id, month)
+      if (!report) {
+        const exists = await db('nivaro_api_keys').where({ id }).first('id')
+        return exists
+          ? reply.code(400).send({ error: 'month must be YYYY-MM' })
+          : reply.code(404).send({ error: 'API key not found' })
+      }
+      if (q.format === 'csv') {
+        const safe = report.key.name.replace(/[^A-Za-z0-9_-]+/g, '-').replace(/^-|-$/g, '') || 'key'
+        reply.header('content-disposition', `attachment; filename="usage-${safe}-${month}.csv"`)
+        return reply.type('text/csv; charset=utf-8').send(usageToCsv(report))
+      }
+      return reply.send({ data: report })
     }
     const key = (await db('nivaro_api_keys').where({ id }).first('id', 'name', 'is_active')) as
       | { id: number; name: string; is_active: boolean }

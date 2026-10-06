@@ -700,9 +700,20 @@ server.listen(port, () => console.log('nivaro mock api on http://localhost:' + p
     return reply.type('text/plain; charset=utf-8').send(script)
   })
 
-  app.get('/openapi.json', async (_req, reply) => {
+  // ?role=<id> (#1283) narrows the spec to what that role can read and write,
+  // with row-filter and User Scope notes on each operation.
+  app.get<{ Querystring: { role?: string } }>('/openapi.json', async (req, reply) => {
     const { collections, fieldsByCollection, projectName } = await loadSchema()
-    return reply.send(generateOpenApi(collections, fieldsByCollection, projectName))
+    const spec = generateOpenApi(collections, fieldsByCollection, projectName)
+    const roleId = req.query.role?.trim()
+    if (!roleId) return reply.send(spec)
+    const { narrowOpenApiForRole, roleAccessFor } = await import('../services/openapi-role.js')
+    const access = await roleAccessFor(
+      roleId,
+      collections.map((c) => c.collection)
+    )
+    if (!access) return reply.code(404).send({ error: 'Role not found' })
+    return reply.send(narrowOpenApiForRole(spec, access))
   })
 
   app.get('/postman.json', async (_req, reply) => {

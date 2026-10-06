@@ -1640,6 +1640,26 @@ export async function buildServer() {
         })
       }
 
+      // #1462 — monthly API usage statements, per key that opted in.
+      app.cron.schedule(
+        'api-key-usage-statements',
+        '10 7 1 * *',
+        async () => {
+          const { runUsageStatements } = await import('./services/api-key-usage-statements.js')
+          const r = await runUsageStatements()
+          if (r.sent || r.failures.length)
+            app.log.info(
+              `api-key-usage-statements: ${r.sent} sent for ${r.month}, ${r.failures.length} failed`
+            )
+        },
+        {
+          dryRun: async () => {
+            const { runUsageStatements } = await import('./services/api-key-usage-statements.js')
+            return runUsageStatements({ dryRun: true })
+          }
+        }
+      )
+
       // Managers (#1034, #1037): the Monday "Your team this week" summary
       // section, and the hourly check of each manager's own team alert lines.
       {
