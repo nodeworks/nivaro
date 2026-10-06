@@ -17,6 +17,7 @@
  * them, so a listed transition can still be refused.
  */
 import { db, dbRead } from '../db/index.js'
+import { excludeBranchChildren } from './branch-instances.js'
 import { selectInChunks } from './db-batch.js'
 import { pickInstance } from './record-state.js'
 import { isAdminRole } from './user-scopes.js'
@@ -150,8 +151,11 @@ export async function loadCurrentInstances(
   )) as InstanceRow[]
   if (instances.length === 0) return out
 
+  // A parallel branch is its own instance on the record — never "the" one.
+  const own = await excludeBranchChildren(instances, dbRead)
+
   const byItem = new Map<string, InstanceRow[]>()
-  for (const i of instances) {
+  for (const i of own) {
     const k = itemKey(i.item)
     const list = byItem.get(k)
     if (list) list.push(i)

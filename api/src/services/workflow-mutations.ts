@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
+import { findRecordInstance } from './branch-instances.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { parseJson } from './pipeline-engine.js'
@@ -162,9 +163,7 @@ export async function executeWorkflowTransition(opts: {
   const { collection, item, transitionId } = opts
   if (!transitionId) throw new WorkflowMutationError(400, 'transition_id is required')
 
-  const instance = (await db<WorkflowInstance>('nivaro_workflow_instances')
-    .where({ collection, item })
-    .first()) as WorkflowInstance | undefined
+  const instance = await findRecordInstance<WorkflowInstance>(collection, item)
   if (!instance) throw new WorkflowMutationError(404, 'No pipeline instance for this item')
 
   if (instance.completed_at) {

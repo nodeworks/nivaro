@@ -22,6 +22,18 @@ vi.mock('../../../services/queue-materialization.js', () => ({
 vi.mock('../../../services/collections.js', () => ({ getCollection: vi.fn(async () => undefined) }))
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// The record's instance through the same table mock (branch exclusion has its
+// own unit test in services/branch-instances.test.ts).
+vi.mock('../../../services/branch-instances.js', () => ({
+  findRecordInstance: async (collection: string, item: string) => {
+    const { db } = await import('../../../db/index.js')
+    return (db as unknown as (t: string) => { where: (w: unknown) => { first: () => unknown } })(
+      'nivaro_workflow_instances'
+    )
+      .where({ collection, item })
+      .first()
+  }
+}))
 
 import { db } from '../../../db/index.js'
 import { pipelinesRoutes } from '../../../routes/pipelines.js'

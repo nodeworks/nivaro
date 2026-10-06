@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { findRecordInstance } from './branch-instances.js'
 import { selectInChunks } from './db-batch.js'
 import {
   coerceBool as engineCoerceBool,
@@ -196,10 +197,8 @@ export async function computeStateChain(
   const binding = (await db('nivaro_workflow_bindings').where({ collection }).first()) as
     | { template: string }
     | undefined
-  const instance = (await db<WorkflowInstance>('nivaro_workflow_instances')
-    .where({ collection, item })
-    .orderBy('started_at', 'desc')
-    .first()) as WorkflowInstance | undefined
+  // Never a parallel-branch child (they share the record and start later).
+  const instance = await findRecordInstance<WorkflowInstance>(collection, item)
   const templateId = binding?.template ?? instance?.template
   if (!templateId) return null
 

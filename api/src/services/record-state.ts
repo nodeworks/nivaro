@@ -85,6 +85,8 @@ export function stateKeysFromOps(value: unknown): { include: string[]; exclude: 
 }
 
 type StateInstanceRow = InstanceRow & {
+  collection: string
+  template: string
   key: string
   label: string
   external_label: string | null
@@ -119,6 +121,8 @@ export async function attachRecordState(
       .select(
         'i.id',
         'i.item',
+        'i.collection',
+        'i.template',
         'i.completed_at',
         'i.started_at',
         's.key',
@@ -129,8 +133,13 @@ export async function attachRecordState(
       )
   )) as StateInstanceRow[]
 
+  // A parallel branch is its own instance on the record — never its state.
+  // (Dynamic import: branch-instances reuses pickInstance from this module.)
+  const { excludeBranchChildren } = await import('./branch-instances.js')
+  const own = await excludeBranchChildren(instances, dbRead)
+
   const byItem = new Map<string, StateInstanceRow[]>()
-  for (const i of instances) {
+  for (const i of own) {
     const key = itemKey(i.item)
     const list = byItem.get(key)
     if (list) list.push(i)

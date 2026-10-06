@@ -9,6 +9,7 @@ import {
   GraphQLString
 } from 'graphql'
 import { db } from '../db/index.js'
+import { findRecordInstance } from '../services/branch-instances.js'
 import { chainFields } from '../services/chain-columns.js'
 import { can } from '../services/permissions.js'
 import {
@@ -262,9 +263,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     },
     resolve: async (_src, args, ctx) => {
       requireUser(ctx)
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection: args.collection, item: args.item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
       if (!instance) return null
       return buildInstancePayload(instance, ctx.user?.role, ctx.isAdmin ?? false)
     }
@@ -327,9 +326,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     },
     resolve: async (_src, args, ctx) => {
       requireUser(ctx)
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection: args.collection, item: args.item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
       if (!instance) return null
 
       const payload = await buildInstancePayload(instance, ctx.user?.role, ctx.isAdmin ?? false)
@@ -375,9 +372,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
     },
     resolve: async (_src, args, ctx) => {
       requireUser(ctx)
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection: args.collection, item: args.item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
       if (!instance?.current_state) return { byState: [] }
 
       const state = await db<WorkflowState>('nivaro_workflow_states')
@@ -416,9 +411,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
         .first()
       if (!binding) return { byState: [] }
 
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection: args.collection, item: args.item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
 
       const states = await db<WorkflowState>('nivaro_workflow_states')
         .where({ template: binding.template })
@@ -457,9 +450,7 @@ export const domainQueryFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
         .first()
       if (!state) return null
 
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection: args.collection, item: args.item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(args.collection, args.item)
 
       const owners = await resolveStateOwners(
         args.state_id,
@@ -752,9 +743,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       const user = requireUser(ctx)
       const { collection, item } = args
 
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection, item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
       if (!instance) throw new Error('No workflow instance for this item')
       if (instance.completed_at) throw new Error('Workflow is already completed')
 
@@ -936,9 +925,7 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
       const user = requireUser(ctx)
       const { collection, item } = args
 
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection, item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
       if (!instance) throw new Error('No pipeline instance for this item')
       if (instance.completed_at) throw new Error('Pipeline is already completed')
 

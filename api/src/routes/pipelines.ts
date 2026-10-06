@@ -6,6 +6,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
+import { findRecordInstance } from '../services/branch-instances.js'
 import {
   type BranchLane,
   type BranchLanes,
@@ -2006,9 +2007,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
       .first()
-    const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-      .where({ collection, item })
-      .first()
+    const instance = await findRecordInstance<WorkflowInstance>(collection, item)
     if (!binding && !instance) {
       return reply.send({ data: null })
     }
@@ -2117,17 +2116,8 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
     // A parallel branch is its own instance on the SAME record (the split
     // engine in routes/workflows.ts); the panel shows the PARENT and draws
-    // the branches as lanes, so a branch child must never be picked here.
-    const instance = await db<WorkflowInstance>('nivaro_workflow_instances as wi')
-      .where({ 'wi.collection': collection, 'wi.item': item })
-      .whereNotExists(
-        db('nivaro_workflow_history as bh')
-          .whereRaw('bh.instance = wi.id')
-          .where('bh.comment', 'like', '%"action":"branch"%')
-          .select(db.raw('1'))
-      )
-      .select('wi.*')
-      .first()
+    // the branches as lanes, so a branch child is never picked here.
+    const instance = await findRecordInstance<WorkflowInstance>(collection, item)
 
     // No binding and no instance — nothing to show
     if (!binding && !instance) return reply.send({ data: null })
@@ -2353,9 +2343,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
 
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection, item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
       if (!instance) return reply.code(404).send({ error: 'No pipeline instance for this item' })
 
       const transition = await db<WorkflowTransition>('nivaro_workflow_transitions')
@@ -2525,13 +2513,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       // the OPEN one is the one this record is actually running, tie-broken
       // by newest id when more than one is open. Same ordering the
       // instance-state views use elsewhere.
-      const inst = (await db('nivaro_workflow_instances')
-        .where({ collection, item: String(item) })
-        .orderByRaw('CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END')
-        .orderBy('id', 'desc')
-        .first('id', 'template', 'current_state')) as
-        | { id: string; template: string; current_state: string | null }
-        | undefined
+      const inst = await findRecordInstance<
+        WorkflowInstance & { id: string; template: string; current_state: string | null }
+      >(collection, item)
       if (!inst) return reply.code(404).send({ error: 'No pipeline instance for this record' })
 
       // Scoped to the RECORD'S OWN template — a transition id from an
@@ -3346,9 +3330,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   app.get('/instance/:collection/:item/owners', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
 
-    const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-      .where({ collection, item })
-      .first()
+    const instance = await findRecordInstance<WorkflowInstance>(collection, item)
     if (!instance) return reply.send({ data: [] })
 
     // Return the raw manually-assigned instance owners so the UI has io.id for deletion.
@@ -3377,9 +3359,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const body = req.body as { user: string; state?: string | null }
       if (!body.user) return reply.code(400).send({ error: 'user is required' })
 
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection, item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
       if (!instance) return reply.code(404).send({ error: 'No pipeline instance for this item' })
 
       // Authorization: caller must be admin or have update permission on this collection.
@@ -3591,9 +3571,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
       if (!state) return reply.code(404).send({ error: 'State not found' })
 
-      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
-        .where({ collection, item })
-        .first()
+      const instance = await findRecordInstance<WorkflowInstance>(collection, item)
 
       const owners = await resolveStateOwners(stateId, instance?.id ?? null, collection, item, db)
       return reply.send({ data: { state: formatState(state), owners } })
