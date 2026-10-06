@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { excludeStartRows } from './instance-start.js'
 import { sendRawMail } from './mail.js'
 import { htmlToPdf } from './pdf-layout.js'
 
@@ -202,11 +203,15 @@ async function gatherOpsFacts(): Promise<Record<string, unknown>> {
   const twoWeeksAgo = new Date(now - 14 * 86_400_000)
 
   const [thisWeek, lastWeek] = await Promise.all([
-    db('nivaro_workflow_history').where('timestamp', '>=', weekAgo).count({ n: '*' }),
-    db('nivaro_workflow_history')
-      .where('timestamp', '>=', twoWeeksAgo)
-      .where('timestamp', '<', weekAgo)
-      .count({ n: '*' })
+    // #1219: a pipeline start is history, not a transition.
+    excludeStartRows(db('nivaro_workflow_history').where('timestamp', '>=', weekAgo)).count({
+      n: '*'
+    }),
+    excludeStartRows(
+      db('nivaro_workflow_history')
+        .where('timestamp', '>=', twoWeeksAgo)
+        .where('timestamp', '<', weekAgo)
+    ).count({ n: '*' })
   ])
 
   // Latest queue snapshots vs 7 days ago

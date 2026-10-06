@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { excludeStartRows } from '../services/instance-start.js'
 import { can } from '../services/permissions.js'
 
 /**
@@ -384,12 +385,13 @@ export async function commandCenterRoutes(app: FastifyInstance) {
           const yStart = new Date(todayStart.getTime() - 86_400_000)
           const yCut = new Date(now.getTime() - 86_400_000)
           const [today, yesterday] = await Promise.all([
-            db('nivaro_workflow_history')
-              .where('timestamp', '>', todayStart)
+            // #1219: a pipeline start is history, not a transition.
+            excludeStartRows(db('nivaro_workflow_history').where('timestamp', '>', todayStart))
               .count('* as n')
               .first(),
-            db('nivaro_workflow_history')
-              .whereBetween('timestamp', [yStart, yCut])
+            excludeStartRows(
+              db('nivaro_workflow_history').whereBetween('timestamp', [yStart, yCut])
+            )
               .count('* as n')
               .first()
           ])

@@ -3,6 +3,8 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
+import { writeStartHistory } from './instance-start.js'
+import { originFields } from './note-authorship.js'
 import { parseJson } from './pipeline-engine.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
@@ -80,15 +82,24 @@ export async function startWorkflowInstance(opts: {
     .first()) as WorkflowState | undefined
 
   const instanceId = randomUUID()
+  const startedAt = new Date()
   await db('nivaro_workflow_instances').insert({
     id: instanceId,
     template: binding.template,
     collection,
     item,
     current_state: initialState?.id ?? null,
-    started_at: new Date(),
+    started_at: startedAt,
     completed_at: null
   })
+  // #1219: the start is the instance's first history row.
+  if (initialState)
+    await writeStartHistory({
+      instanceId,
+      stateId: String(initialState.id),
+      userId: opts.actor?.id ?? null,
+      timestamp: startedAt
+    })
 
   // Resolve skip criteria — may advance past the initial state
   let finalState: WorkflowState | undefined = initialState
@@ -118,7 +129,8 @@ export async function startWorkflowInstance(opts: {
         to_state: finalStateId,
         user: opts.actor?.id ?? null,
         comment: 'Auto-advanced via skip criteria',
-        timestamp: new Date()
+        timestamp: new Date(),
+        ...(await originFields('nivaro_workflow_history', 'machine'))
       })
     }
   }

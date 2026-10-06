@@ -154,6 +154,8 @@ export async function listRevisions(collection: string, item: string): Promise<R
         'h.timestamp',
         'h.comment',
         'h.user as user_id',
+        'h.from_state',
+        'h.transition',
         'fs.label as from_label',
         'ts.label as to_label',
         't.label as transition_label',
@@ -168,22 +170,29 @@ export async function listRevisions(collection: string, item: string): Promise<R
       .catch(() => []) as Promise<Record<string, unknown>[]>
   ])
 
+  // #1219: an instance start is a history row (no from_state, no transition).
+  // It reads 'started it in <state>'; the older 'pipeline-start' activity row
+  // for the same record would say the same thing twice, so it drops out.
+  const isStart = (r: Record<string, unknown>) => r.from_state == null && r.transition == null
+  const hasStartRow = (transitionRows as Record<string, unknown>[]).some(isStart)
   const all = [
     ...(revRows as Record<string, unknown>[]),
-    ...(activityRows as Record<string, unknown>[]).map((r) =>
-      r.action === 'pipeline-start'
-        ? {
-            ...r,
-            event: {
-              kind: 'start',
-              from_label: null,
-              to_label: null,
-              transition_label: null,
-              source: null
+    ...(activityRows as Record<string, unknown>[])
+      .filter((r) => !(hasStartRow && r.action === 'pipeline-start'))
+      .map((r) =>
+        r.action === 'pipeline-start'
+          ? {
+              ...r,
+              event: {
+                kind: 'start',
+                from_label: null,
+                to_label: null,
+                transition_label: null,
+                source: null
+              }
             }
-          }
-        : r
-    ),
+          : r
+      ),
     ...(transitionRows as Record<string, unknown>[]).map((r) => ({
       id: null,
       activity: null,
@@ -196,15 +205,16 @@ export async function listRevisions(collection: string, item: string): Promise<R
       action: 'transition',
       // 'auto: <label>' is the engine's stamp on an automatic move — the
       // event carries that fact, so the comment shows only what a person said.
-      comment: /^auto:\s/i.test(String(r.comment ?? ''))
-        ? null
-        : ((r.comment as string | null) ?? null),
+      comment:
+        isStart(r) || /^auto:\s/i.test(String(r.comment ?? ''))
+          ? null
+          : ((r.comment as string | null) ?? null),
       user_id: (r.user_id as string | null) ?? null,
       first_name: r.first_name,
       last_name: r.last_name,
       user_email: r.user_email,
       event: {
-        kind: 'transition',
+        kind: isStart(r) ? 'start' : 'transition',
         history_id: Number(r.history_id),
         from_label: (r.from_label as string | null) ?? null,
         to_label: (r.to_label as string | null) ?? null,

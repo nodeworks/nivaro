@@ -5,6 +5,7 @@ import { syncStateField } from '../services/workflow-transitions.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chainFields } from '../services/chain-columns.js'
+import { writeStartHistory } from '../services/instance-start.js'
 import { can } from '../services/permissions.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 
@@ -408,14 +409,14 @@ export async function workflowsRoutes(app: FastifyInstance) {
         started_at: now,
         completed_at: coerceBool(state.is_terminal) ? now : null
       })
-      await db('nivaro_workflow_history').insert({
-        ...(await chainFields('nivaro_workflow_history')),
-        instance: childId,
-        transition: null,
-        from_state: null,
-        to_state: state.id,
-        user: req.user?.id ?? null,
+      // A branch child starts in its branch state; the JSON comment is what the
+      // join engine reads back, so it stays.
+      await writeStartHistory({
+        instanceId: childId,
+        stateId: String(state.id),
+        userId: req.user?.id ?? null,
         comment: JSON.stringify({ action: 'branch', parent: id }),
+        origin: 'machine',
         timestamp: now
       })
     }

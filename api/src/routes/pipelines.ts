@@ -10,6 +10,7 @@ import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { writeStartHistory } from '../services/instance-start.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
@@ -711,15 +712,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           current_state: initial.id,
           started_at: new Date()
         })
-        await db('nivaro_workflow_history').insert({
-          ...(await chainFields('nivaro_workflow_history')),
-          instance: instId,
-          from_state: null,
-          to_state: initial.id,
-          user: req.user?.id ?? null,
+        await writeStartHistory({
+          instanceId: instId,
+          stateId: String(initial.id),
+          userId: req.user?.id ?? null,
           comment: 'bulk-start (missing instance)',
-          timestamp: new Date(),
-          ...(await originFields('nivaro_workflow_history', 'machine'))
+          origin: 'machine'
         })
         started++
       } catch {
@@ -2103,6 +2101,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .leftJoin('nivaro_workflow_transitions as tr', 'h.transition', 'tr.id')
       .where('h.instance', instance.id)
       .orderBy('h.timestamp', 'desc')
+      // A start row (#1219) and a skip-advance written in the same tick share
+      // a timestamp — the id keeps the start oldest.
+      .orderBy('h.id', 'desc')
       .select(
         'h.id',
         'h.transition',
@@ -2166,15 +2167,24 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .first()
 
     const instanceId = randomUUID()
+    const startedAt = new Date()
     await db('nivaro_workflow_instances').insert({
       id: instanceId,
       template: binding.template,
       collection,
       item,
       current_state: initialState?.id ?? null,
-      started_at: new Date(),
+      started_at: startedAt,
       completed_at: null
     })
+    // #1219: the start is the instance's first history row.
+    if (initialState)
+      await writeStartHistory({
+        instanceId,
+        stateId: String(initialState.id),
+        userId: req.user?.id ?? null,
+        timestamp: startedAt
+      })
 
     // Resolve skip criteria — may advance past initial state
     let finalState = initialState

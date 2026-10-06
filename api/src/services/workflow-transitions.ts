@@ -24,6 +24,8 @@ import { getLabels } from './queues.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
+export { isStartRow, writeStartHistory } from './instance-start.js'
+
 // ─── Shared workflow transition engine ───────────────────────────────────────
 // Houses the transition mutation chain (instance update, history, materialized
 // queue sync, bound state-field mirror incl. state_field_map, activity) so the

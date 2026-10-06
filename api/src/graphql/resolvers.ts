@@ -10,6 +10,8 @@ import {
 } from 'graphql'
 import { db } from '../db/index.js'
 import { chainFields } from '../services/chain-columns.js'
+import { writeStartHistory } from '../services/instance-start.js'
+import { originFields } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import {
   buildInstancePayload,
@@ -678,15 +680,24 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .first()
 
       const instanceId = randomUUID()
+      const startedAt = new Date()
       await db('nivaro_workflow_instances').insert({
         id: instanceId,
         template: binding.template,
         collection,
         item,
         current_state: initialState?.id ?? null,
-        started_at: new Date(),
+        started_at: startedAt,
         completed_at: null
       })
+      // #1219: the start is the instance's first history row.
+      if (initialState)
+        await writeStartHistory({
+          instanceId,
+          stateId: String(initialState.id),
+          userId: user.id,
+          timestamp: startedAt
+        })
 
       let finalState = initialState
       if (initialState) {
@@ -714,7 +725,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             to_state: finalId,
             user: user.id,
             comment: 'Auto-advanced via skip criteria',
-            timestamp: new Date()
+            timestamp: new Date(),
+            ...(await originFields('nivaro_workflow_history', 'machine'))
           })
         }
       }
@@ -862,15 +874,24 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .first()
 
       const instanceId = randomUUID()
+      const startedAt = new Date()
       await db('nivaro_workflow_instances').insert({
         id: instanceId,
         template: binding.template,
         collection,
         item,
         current_state: initialState?.id ?? null,
-        started_at: new Date(),
+        started_at: startedAt,
         completed_at: null
       })
+      // #1219: the start is the instance's first history row.
+      if (initialState)
+        await writeStartHistory({
+          instanceId,
+          stateId: String(initialState.id),
+          userId: user.id,
+          timestamp: startedAt
+        })
 
       let finalState = initialState
       if (initialState) {
@@ -898,7 +919,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             to_state: finalId,
             user: user.id,
             comment: 'Auto-advanced via skip criteria',
-            timestamp: new Date()
+            timestamp: new Date(),
+            ...(await originFields('nivaro_workflow_history', 'machine'))
           })
         }
       }
