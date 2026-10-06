@@ -207,6 +207,17 @@ describe('quality store tables', () => {
     expect(db.state.tables.nivaro_quality_runs[0].totals).toBe('before')
   })
 
+  it('keeps legacy links on re-diffed rows', async () => {
+    const { s, db, app } = await twoRedChecks()
+    const stored = (await s.loadDiff(db, 'R', 'a.one')) ?? []
+    stored[0].legacy = 'https://legacy/k'
+    await s.saveDiff(db, 'R', 'a.one', stored)
+    expect((await s.rediffRun(app, 'R')).rediffed).toBe(true)
+    const rows = (await s.loadDiff(db, 'R', 'a.one')) ?? []
+    expect(rows.find((r) => r.key === stored[0].key)?.legacy).toBe('https://legacy/k')
+    expect((await s.loadDiff(db, 'R', 'b.two'))?.[0].legacy).toBeUndefined()
+  })
+
   it('re-diffs every check when nothing moves, and never a run without results', async () => {
     const { s, db, app, statusOf } = await twoRedChecks()
     expect(await s.rediffRun(app, 'R')).toEqual({ rediffed: true })

@@ -21,7 +21,7 @@ import type { QualityCheck, QualityCheckContext, QualityRow } from '@nivaro/exte
 import knex, { type Knex } from 'knex'
 import { config } from '../config.js'
 import { closeDb, db } from '../db/index.js'
-import { type DiffResult, diffRows } from '../services/quality/diff.js'
+import { type DiffResult, type DiffRow, diffRows } from '../services/quality/diff.js'
 import { loadQualityChecks } from '../services/quality/load-checks.js'
 import {
   createRun,
@@ -84,6 +84,22 @@ export async function runOneCheck(
 }
 
 /** The stored baseline of THIS run, or the error that stands in for it. Never another run's. */
+/** Sets row.legacy from a check's legacyLink; a throwing link leaves that row unset. */
+export function attachLegacyLinks(
+  check: { legacyLink?: (key: string) => string | undefined },
+  rows: DiffRow[]
+): void {
+  if (!check.legacyLink) return
+  for (const row of rows) {
+    try {
+      const url = check.legacyLink(row.key)
+      if (url) row.legacy = url
+    } catch {
+      // leave it unset
+    }
+  }
+}
+
 export function pickBaseline(side: {
   rows: QualityRow[] | null
   error: string | null
@@ -368,6 +384,7 @@ async function runCurrent(
         }
       }
       if (diff && !error) {
+        attachLegacyLinks(check, diff.rows)
         await saveDiff(app, run, check.id, diff.rows)
         await saveResult(app, run, meta, { diff, durationMs: out.durationMs })
         diffed.push(check.id)

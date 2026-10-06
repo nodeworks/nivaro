@@ -20,6 +20,8 @@ export interface DiffRow {
   reason: string | null
   expected: boolean
   known_id: number | null
+  /** Link to the same record in legacy production Directus, from the check's legacyLink. */
+  legacy?: string
 }
 
 export interface DiffResult {

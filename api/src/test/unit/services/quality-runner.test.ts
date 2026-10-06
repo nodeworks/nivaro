@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { runOneCheck } from '../../../scripts/quality-checks.js'
+import { attachLegacyLinks, runOneCheck } from '../../../scripts/quality-checks.js'
 
 const ctx = { db: {} as never, database: 'T', log: () => {} }
 
@@ -210,5 +210,26 @@ describe('fix round 1', () => {
     expect(pickRun(verified, { target: 'U', requested: 'R1', rerun: false })).toEqual({
       error: 'no quality run R1 for U'
     })
+  })
+})
+
+describe('attachLegacyLinks', () => {
+  const mk = (key: string) =>
+    ({ key, status: 'mismatch', fields: [], base: null, cur: null }) as never as {
+      key: string
+      legacy?: string
+    }
+  it('sets legacy from legacyLink and survives a throwing one', () => {
+    const rows = [mk('a'), mk('boom'), mk('none')]
+    attachLegacyLinks(
+      {
+        legacyLink: (k) => {
+          if (k === 'boom') throw new Error('x')
+          return k === 'none' ? undefined : `https://legacy/${k}`
+        }
+      },
+      rows as never
+    )
+    expect(rows.map((r) => r.legacy)).toEqual(['https://legacy/a', undefined, undefined])
   })
 })

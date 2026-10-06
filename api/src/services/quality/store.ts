@@ -300,6 +300,8 @@ export async function rediffRun(
       if (p.expected && p.known_id === null) builtIn.set(p.key, p.reason)
       else if (!p.expected) explained.set(p.key, p.reason)
     }
+    const legacyOf = new Map<string, string>()
+    for (const p of previous) if (p.legacy) legacyOf.set(p.key, p.legacy)
     const keyOf = (b: QualityRow | null, c: QualityRow | null) => (b ?? c)?.key ?? ''
     const tolerance = parseJson<{ abs?: number; pct?: number }>(res.tolerance) ?? undefined
     const diff = diffRows(
@@ -312,6 +314,10 @@ export async function rediffRun(
       cur.rows,
       known.filter((k) => k.check_id === res.check_id)
     )
+    for (const row of diff.rows) {
+      const link = legacyOf.get(row.key)
+      if (link) row.legacy = link
+    }
     const stop = await moved()
     if (stop) return { rediffed: false, reason: stop }
     await saveDiff(app, run, res.check_id, diff.rows)
