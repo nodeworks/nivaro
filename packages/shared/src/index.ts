@@ -296,7 +296,9 @@ export {
   PipelineEditorView,
   PipelineSimulatorCard
 } from './components/pipeline/PipelineEditorView'
+export { SkipReportCard, TemplateLintCard } from './components/pipeline/PipelineHealthCards'
 export { TeamScopeEditor } from './components/pipeline/TeamScopeEditor'
+export { TeamSuggestionsPanel } from './components/pipeline/TeamSuggestions'
 export { type TeamRow, TeamsView } from './components/pipeline/TeamsView'
 export type { ScopeDimensionLite, TeamScopeMap, TeamTier } from './components/pipeline/teamScopes'
 export {

@@ -59,6 +59,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
+import { SkipReportCard, TemplateLintCard } from './PipelineHealthCards'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
 import { PipelineStateOwners } from './PipelineStateOwners'
 import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from './relations'
@@ -2758,6 +2759,8 @@ export type PipelineEditorSection =
   | 'replay'
   | 'migration'
   | 'coverage'
+  | 'lint'
+  | 'skip-report'
   | 'ai-review'
   | 'versions'
 
@@ -4113,8 +4116,14 @@ export function PipelineEditorView({
         {/* Instance migration */}
         {!hiddenSet.has('migration') && <InstanceMigrationCard templateId={templateId} />}
 
+        {/* Reachability lint (#1241) */}
+        {!hiddenSet.has('lint') && <TemplateLintCard templateId={templateId} />}
+
         {/* Owner gaps */}
         {!hiddenSet.has('coverage') && <OwnerGapsCard templateId={templateId} states={states} />}
+
+        {/* Skip criteria in practice (#716) */}
+        {!hiddenSet.has('skip-report') && <SkipReportCard templateId={templateId} />}
 
         {/* AI config reviewer (#361) */}
         {!hiddenSet.has('ai-review') && <AiReviewCard templateId={templateId} />}
