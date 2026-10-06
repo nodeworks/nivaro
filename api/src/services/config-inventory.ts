@@ -145,6 +145,7 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_custom_actions',
   'nivaro_mail_templates',
   'nivaro_inbound_mappings',
+  'nivaro_inbound_mapping_versions',
   'nivaro_export_presets',
   'nivaro_import_mappings',
   'nivaro_bulk_recipes',
