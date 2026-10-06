@@ -318,6 +318,45 @@ export const apiItems: DocSection = {
       type: 'p',
       text: 'A field name the collection does not have answers 400 with code `UNKNOWN_FIELD` and the names in `fields`.'
     },
+    { type: 'h3', text: 'Links to several collections' },
+    {
+      type: 'p',
+      text: 'A relation whose links point at different collections row by row (a contact that is either a person or an outside email address) answers one entry per link: the link id, the collection it names, the linked id, and the linked record under `item`. `fields=contacts.*` or `contacts.item.*` reads the whole linked record; `contacts.item.email` (or the shorthand `contacts.email`) reads only the fields named; asking only for `contacts.id,contacts.collection` skips the linked record. People answer the directory fields only (never a redacted account); every other collection is read as the caller, and a record the caller may not read, or a collection the relation does not allow, answers `item: null`. One read per linked collection per page, never one per link. The same works on a single record and through a relation (`request.contacts.*`).'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/items/requests/32842?fields=id,contacts.item.email
+
+{
+  "data": {
+    "id": 32842,
+    "contacts": [
+      { "id": 52295, "collection": "directus_users", "item_id": "7A0411F3-…", "item": { "id": "7A0411F3-…", "email": "pat@example.com" } },
+      { "id": 52296, "collection": "additional_emails", "item_id": "5", "item": { "id": 5, "email": "ops@example.com" } }
+    ]
+  }
+}`
+    },
+    { type: 'h3', text: 'Several reads in one request' },
+    {
+      type: 'p',
+      text: '`POST /api/items/batch-read` carries up to 20 reads. Each is a list read (no `id`) or a single-record read, with the query keys the GET routes take (`fields`, `filter`, `sort`, `limit`, `offset`, `page`, `search`, `after`, `count`, `conditions`) as strings or structured values. Every read runs as the caller exactly as its own GET would and answers its own status — a forbidden collection is 403, a missing record 404, a bad filter 400 — so one refused read never fails the others. A list read answers its rows in `data` and its paging facts in `meta`. Writes never batch. SDK: `readMany([...])`; a host can let `NivaroProvider batchReads` gather the record reads its components fire in the same moment into one batch.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/items/batch-read
+{ "reads": [
+  { "key": "regions", "collection": "regions", "query": { "fields": "id,short_name", "limit": 5 } },
+  { "key": "order", "collection": "orders", "id": 41, "query": { "fields": "id,number" } },
+  { "key": "gone", "collection": "orders", "id": 999999 }
+] }
+
+{ "results": [
+  { "key": "regions", "status": 200, "data": [ ... ], "meta": { "total": 31, "limit": 5, "offset": 0 } },
+  { "key": "order", "status": 200, "data": { "id": 41, "number": "SO-1041" } },
+  { "key": "gone", "status": 404, "error": "Not found", "code": "NOT_FOUND" }
+] }`
+    },
     { type: 'h3', text: 'Walking a large collection (`after`)' },
     {
       type: 'p',

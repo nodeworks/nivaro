@@ -15,6 +15,12 @@ import {
   resolveAutoIdTokensDetailed,
   validateAutoIdPattern
 } from '../services/auto-ids.js'
+import {
+  BATCH_READ_MAX,
+  type BatchReadInput,
+  batchReadRefusal,
+  parseBatchRead
+} from '../services/batch-read.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { chainFields } from '../services/chain-columns.js'
 import { idempotencyPreHandler } from '../services/idempotency.js'
@@ -82,6 +88,74 @@ export async function itemsRoutes(app: FastifyInstance) {
   // Idempotency-Key on any write here: a repeat of the same request returns
   // the first answer instead of writing twice. Runs after authentication.
   app.addHook('preHandler', idempotencyPreHandler('items'))
+
+  // #1304: several reads in one round trip. Each runs through readItems /
+  // readOne as the caller and answers its own status; the batch itself only
+  // fails on a malformed body. Static path — matched before /:collection.
+  app.post('/batch-read', async (req, reply) => {
+    const body = (req.body ?? {}) as { reads?: unknown }
+    if (!Array.isArray(body.reads) || body.reads.length === 0)
+      return reply.code(400).send({ error: 'reads must be a non-empty array', code: 'BAD_REQUEST' })
+    if (body.reads.length > BATCH_READ_MAX)
+      return reply.code(400).send({
+        error: `At most ${BATCH_READ_MAX} reads per batch`,
+        code: 'BATCH_READ_LIMIT'
+      })
+    const reads = body.reads as BatchReadInput[]
+    const results: Array<Record<string, unknown>> = new Array(reads.length)
+    const runOne = async (input: BatchReadInput, index: number) => {
+      const parsed = parseBatchRead(input ?? {}, index)
+      if (!parsed.ok) {
+        const key = input?.key == null || input.key === '' ? String(index) : String(input.key)
+        results[index] = { key, status: 400, error: parsed.error, code: 'BAD_REQUEST' }
+        return
+      }
+      const r = parsed.read
+      try {
+        if (r.id !== null) {
+          const item = await readOne(
+            req.user!,
+            r.collection,
+            r.id,
+            req.workspaceId ?? undefined,
+            r.query.fields
+          )
+          results[index] = item
+            ? { key: r.key, status: 200, data: item }
+            : { key: r.key, status: 404, error: 'Not found', code: 'NOT_FOUND' }
+          return
+        }
+        // readItems reads `conditions` (and nothing else of ours) off its request.
+        const subReq = Object.create(req) as typeof req
+        Object.defineProperty(subReq, 'query', {
+          value: r.conditions ? { conditions: r.conditions } : {}
+        })
+        const result = (await readItems(
+          req.user!,
+          r.collection,
+          r.query,
+          subReq,
+          req.workspaceId ?? undefined
+        )) as Record<string, unknown>
+        const { data, ...meta } = result
+        results[index] = { key: r.key, status: 200, data, meta }
+      } catch (err) {
+        results[index] = { key: r.key, ...batchReadRefusal(err) }
+        if (results[index].status === 500) req.log.warn({ err }, 'batch-read: a read failed')
+      }
+    }
+    // Four at a time: a batch must not take the whole pool.
+    let next = 0
+    await Promise.all(
+      Array.from({ length: Math.min(4, reads.length) }, async () => {
+        while (next < reads.length) {
+          const i = next++
+          await runOne(reads[i], i)
+        }
+      })
+    )
+    return reply.send({ results })
+  })
 
   app.get('/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
