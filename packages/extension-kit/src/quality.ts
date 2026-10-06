@@ -11,6 +11,8 @@ export interface QualityRow {
   values: Record<string, QualityValue>
   /** Grouping dimensions for mismatch clusters, e.g. { state: 'Waiting on PO', zone: 'Zone 1' }. */
   cluster?: Record<string, string>
+  /** Facts carried for expected()/explain(): stored with the row, never compared and never grouped. */
+  context?: Record<string, string>
 }
 
 export interface QualityCheckContext {
