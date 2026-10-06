@@ -18,6 +18,7 @@ import {
   resolveStateOwners,
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
+import { type LintState, type LintTransition, lintTemplate } from '../services/pipeline-lint.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
@@ -352,6 +353,31 @@ function validateRequirements(value: unknown): string | null {
   return null
 }
 
+// ─── Template lint (#1241) ───────────────────────────────────────────────────
+async function loadTemplateLint(templateId: string) {
+  const tpl = (await db('nivaro_workflow_templates')
+    .where({ id: templateId })
+    .first('id', 'name')) as { id: string; name: string } | undefined
+  if (!tpl) return null
+  const [states, transitions] = await Promise.all([
+    db('nivaro_workflow_states')
+      .where({ template: templateId })
+      .orderBy('sort')
+      .select('id', 'key', 'label', 'is_initial', 'is_terminal', 'sort') as Promise<LintState[]>,
+    db('nivaro_workflow_transitions')
+      .where({ template: templateId })
+      .select(
+        'id',
+        'from_state',
+        'to_state',
+        'label',
+        'condition_rules',
+        'auto_trigger'
+      ) as Promise<LintTransition[]>
+  ])
+  return { template_id: tpl.id, template_name: tpl.name, ...lintTemplate(states, transitions) }
+}
+
 // ─── Routes ──────────────────────────────────────────────────────────────────
 let ownerFilterCheckRegistered = false
 
@@ -417,6 +443,36 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           const { repairStateMirror } = await import('../services/state-mirror.js')
           const r = await repairStateMirror()
           return { detail: `${r.repaired} state column(s) rewritten from their instance.` }
+        }
+      }
+    })
+    registerReadinessCheck({
+      id: 'pipeline-template-lint',
+      label: 'Every pipeline template can reach all its states',
+      group: 'Configuration',
+      description:
+        'A pure check over each template: states nothing enters, transitions that can never fire (from an unreachable state, or with conditions that contradict each other), non-terminal dead ends, and unconditioned automatic transitions that make a state’s manual buttons unreachable.',
+      run: async () => {
+        const templates = (await db('nivaro_workflow_templates').select('id', 'name')) as Array<{
+          id: string
+          name: string
+        }>
+        const results = await Promise.all(templates.map((t) => loadTemplateLint(String(t.id))))
+        const bad = results.filter((r): r is NonNullable<typeof r> => !!r && r.warnings > 0)
+        if (bad.length === 0)
+          return {
+            status: 'pass',
+            detail: `${templates.length} template(s) — every state is reachable and every transition can fire.`
+          }
+        return {
+          status: 'warn',
+          detail: `${bad.reduce((n, r) => n + r.warnings, 0)} finding(s) across ${bad.length} template(s).`,
+          blockers: bad.flatMap((r) =>
+            r.findings
+              .filter((f) => f.severity === 'warn')
+              .slice(0, 6)
+              .map((f) => `${r.template_name}: ${f.message}`)
+          )
         }
       }
     })
@@ -562,6 +618,31 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       }
       await logActivity({ action: 'pipeline-ai-review', user: req.user?.id, item: tid, req })
       return reply.send({ data: { structural, critique } })
+    }
+  )
+
+  // Template reachability lint (#1241) — states nothing reaches, transitions
+  // that can never fire, dead ends, autos that shadow manual exits.
+  app.get('/:id/lint', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const r = await loadTemplateLint(id)
+    if (!r) return reply.code(404).send({ error: 'Template not found' })
+    return reply.send({ data: r })
+  })
+
+  // Skip-criteria firing report (#716): 90-day entered-vs-skipped per state
+  // from history + which criterion would fire now over the newest open records.
+  app.get<{ Params: { id: string }; Querystring: { days?: string; sample?: string } }>(
+    '/:id/skip-report',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { buildSkipReport } = await import('../services/pipeline-skip-report.js')
+      const r = await buildSkipReport(req.params.id, {
+        days: req.query.days ? Number(req.query.days) : undefined,
+        sample: req.query.sample ? Number(req.query.sample) : undefined
+      })
+      if (!r) return reply.code(404).send({ error: 'Template has no states' })
+      return reply.send({ data: r })
     }
   )
 

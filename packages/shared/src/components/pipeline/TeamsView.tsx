@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Plus, Users2, X } from 'lucide-react'
+import { Loader2, Plus, Sparkles, Users2, X } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
@@ -10,6 +10,7 @@ import { Input } from '../ui/input'
 import { Textarea } from '../ui/textarea'
 import { MemberPickerCombobox } from './OwnerMatrix'
 import { TeamScopeEditor } from './TeamScopeEditor'
+import { TeamSuggestionsPanel } from './TeamSuggestions'
 import type { TeamScopeMap } from './teamScopes'
 
 /**
@@ -753,6 +754,7 @@ export function TeamsView({
   const qc = useQueryClient()
   const [selectedId, setSelectedId] = useState<number | null>(initialTeamId)
   const [creating, setCreating] = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
 
   const { data: groups = [], isLoading } = useQuery<TeamRow[]>({
     queryKey: ['user-groups'],
@@ -780,10 +782,27 @@ export function TeamsView({
               className='h-7 w-full gap-1.5 text-[12px]'
               onClick={() => {
                 setCreating(true)
+                setSuggesting(false)
                 setSelectedId(null)
               }}
             >
               <Plus className='h-3.5 w-3.5' /> New team
+            </Button>
+            <Button
+              size='sm'
+              variant='ghost'
+              className={cn(
+                'mt-1 h-7 w-full gap-1.5 text-[12px]',
+                suggesting && 'bg-accent text-accent-foreground'
+              )}
+              onClick={() => {
+                setSuggesting(true)
+                setCreating(false)
+                setSelectedId(null)
+              }}
+              data-team-suggestions-open
+            >
+              <Sparkles className='h-3.5 w-3.5' /> Suggested teams
             </Button>
           </div>
         )}
@@ -800,6 +819,7 @@ export function TeamsView({
                 onClick={() => {
                   setSelectedId(g.id)
                   setCreating(false)
+                  setSuggesting(false)
                 }}
                 className={cn(
                   'block w-full border-b border-slate-100 px-4 py-2.5 text-left dark:border-border/60',
@@ -828,7 +848,15 @@ export function TeamsView({
       </aside>
 
       <div className='min-h-0 flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
-        {creating && canManage ? (
+        {suggesting && canManage ? (
+          <TeamSuggestionsPanel
+            onApplied={(id) => {
+              setSuggesting(false)
+              setSelectedId(id)
+              invalidate()
+            }}
+          />
+        ) : creating && canManage ? (
           <CreateTeamForm
             onCreated={(id) => {
               setCreating(false)

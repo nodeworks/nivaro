@@ -61,6 +61,7 @@ import {
   aiChatDocs,
   fieldImpactDocs,
   formsV2Docs,
+  pipelineHealthDocs,
   pipelineSimulatorDocs,
   scheduledReportsDocs,
   slaScheduleDocs,
@@ -476,6 +477,7 @@ export const navSections: NavGroup[] = [
     items: [
       flowMapReplayDocs,
       pipelineSimulatorDocs,
+      pipelineHealthDocs,
       pipelineOverview,
       pipelineDimensions,
       pipelineOwnerMatrix,
