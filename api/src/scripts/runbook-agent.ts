@@ -506,7 +506,9 @@ async function startRun(run: HostRunRow, decl: HostDecl, runbooks: string[]): Pr
   const log = join(agentDir(), `${run.id}.log`)
   const env = childEnv({
     NIVARO_RUNBOOK_RUN: run.id,
-    NIVARO_RUNBOOK_EXIT_FILE: exitPath(run.id)
+    // Never name a child variable *_FILE: config.ts reads X_FILE as "load
+    // setting X from this file" and exits when the file is missing.
+    NIVARO_RUNBOOK_EXIT_PATH: exitPath(run.id)
   })
   if (decl.target_env && run.target) env[decl.target_env] = run.target
   const fd = openSync(log, 'a')
@@ -518,7 +520,7 @@ async function startRun(run: HostRunRow, decl: HostDecl, runbooks: string[]): Pr
       'sh',
       [
         '-c',
-        '"$@"; code=$?; echo $code > "$NIVARO_RUNBOOK_EXIT_FILE"; exit $code',
+        '"$@"; code=$?; echo $code > "$NIVARO_RUNBOOK_EXIT_PATH"; exit $code',
         'runbook',
         file,
         ...args
