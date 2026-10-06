@@ -6595,7 +6595,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-schema","label":"Schema steps"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-scaffold","label":"Starting a new extension"},{"id":"ext-overview-deprecations","label":"Deprecated context members"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"},{"id":"ext-overview-runbooks","label":"Runbooks"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-schema","label":"Schema steps"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-scaffold","label":"Starting a new extension"},{"id":"ext-overview-deprecations","label":"Deprecated context members"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"},{"id":"ext-overview-runbooks","label":"Runbooks"},{"id":"ext-overview-host-runbooks","label":"Host runbooks"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6744,6 +6744,35 @@ Authorization: Bearer &lt;admin-token&gt;
   ],
   async register(ctx) { … }
 }</code></pre>
+          <h3 class="doc-h3" id="ext-overview-host-runbooks">Host runbooks</h3>
+          <p class="doc-p">A runbook declared with <code class="doc-code">runs_on: 'host'</code> runs on another machine — the one that can reach what it needs (the database server, a file share). Every instance lists it, local or deployed. Starting it QUEUES the run; the host agent on that machine claims it, runs it, and streams its output back every second while the console shows the phases, the live log and an estimate.</p>
+          <ul class="doc-ul">
+            <li>Install the agent on the host with cron: <code class="doc-code">* * * * * bash -lc 'cd &lt;checkout&gt;/api &amp;&amp; npx tsx src/scripts/runbook-agent.ts --once'</code> (or <code class="doc-code">pnpm --filter @nivaro/api run runbook:agent -- --once</code>). Each tick checks in, then claims the oldest queued run for a runbook the extensions on that checkout declare. RUNBOOK_AGENT_HOST overrides the host name. The console says when no agent is checking in.</li>
+            <li><code class="doc-code">command</code> (an argv starting with bash, sh, node, npx or tsx and naming a file inside the extension) runs instead of <code class="doc-code">npx tsx &lt;script&gt;</code>; <code class="doc-code">--events</code> is not appended. <code class="doc-code">phases</code> ([{key, label}]) draws the track before any event arrives and offers "start from phase", passed through <code class="doc-code">resume_flag</code>.</li>
+            <li>The same rules as local runbooks: a real run needs a finished dry run of the target from the last 24 hours and the target typed back; one queued or running run per runbook; Cancel takes a queued run out of the queue and stops a running one (SIGTERM to its process group, SIGKILL 30 seconds later).</li>
+            <li>Exit 75, or a <code class="doc-code">### REFUSED: &lt;reason&gt;</code> line, records the run as refused (a lock, another job, an unreachable database) rather than done. A run whose agent stops reporting for 3 minutes reads as lost; the next tick re-attaches while the process still runs, and records its exit status (kept in a file beside the agent's lock) when it has finished.</li>
+            <li>A wrapped runbook's own step events can be printed as <code class="doc-code">@@sub {…}</code> lines: they show as the progress of the phase that is running, never as phases of their own.</li>
+            <li>Estimates: every successful phase and sub-step is timed into nivaro_runbook_step_timings. A phase's typical time is the median of its last 7 passes in the same mode; the console shows how long a full run (or a run from any phase) usually takes, and during a run the elapsed time, the current phase and sub-step, the share done, the ETA, and a stall warning when the run has been quiet longer than that phase ever was (10 minutes without history).</li>
+            <li><code class="doc-code">history_dirs</code> ([{path, mode}], relative to the repository root) feed the estimates from runs started outside the console, such as a nightly cron: one directory per run with a <code class="doc-code">summary.txt</code> of <code class="doc-code">=== &lt;n&gt;-&lt;phase&gt; END … exit=0 elapsed=&lt;m&gt;m&lt;s&gt;s ===</code> lines and per phase a <code class="doc-code">&lt;n&gt;-&lt;phase&gt;.log</code> whose <code class="doc-code">─── &lt;step&gt; done in &lt;m&gt;m&lt;ss&gt;s ───</code> lines are its sub-steps. A run directory holding <code class="doc-code">.nivaro-runbook-run</code> is skipped (the console already timed it).</li>
+          </ul>
+          <pre class="doc-pre"><code>runbooks: [
+  {
+    key: 'rebuild',
+    label: 'Rebuild the rehearsal database',
+    runs_on: 'host',
+    command: ['bash', 'extensions/my-extension/scripts/rebuild.sh', 'nightly'],
+    dry_args: ['--dry'],
+    go_args: [],
+    resume_flag: '--from',
+    target_env: 'TARGET',
+    refuse_targets: ['production'],
+    phases: [
+      { key: 'clone', label: 'Clone production' },
+      { key: 'convert', label: 'Conversions' }
+    ],
+    history_dirs: [{ path: 'logs/nightly', mode: 'go' }]
+  }
+]</code></pre>
           <!-- /SYNC:ext-overview -->
         </div>
 
