@@ -10,6 +10,7 @@ import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
@@ -2150,6 +2151,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Start pipeline instance for an item
   app.post('/instance/:collection/:item/start', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    // Starting a pipeline changes the record: update permission + the caller
+    // can see it (row filter, User Scopes). Invisible = 404.
+    try {
+      await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item)
+    } catch (err) {
+      if (err instanceof InstanceAccessError)
+        return reply.code(err.statusCode).send({ error: err.message })
+      throw err
+    }
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2254,6 +2264,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const body = req.body as { transition_id: string; comment?: string; reviewed?: boolean }
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
+      // Moving a pipeline changes the record: update permission + visibility.
+      try {
+        await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item)
+      } catch (err) {
+        if (err instanceof InstanceAccessError)
+          return reply.code(err.statusCode).send({ error: err.message })
+        throw err
+      }
 
       const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })

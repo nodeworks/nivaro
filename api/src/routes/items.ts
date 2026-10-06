@@ -18,6 +18,7 @@ import {
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { chainFields } from '../services/chain-columns.js'
 import { idempotencyPreHandler } from '../services/idempotency.js'
+import { instanceAccessAllowed } from '../services/instance-guard.js'
 import {
   CollectionNotFoundError,
   createOne,
@@ -361,8 +362,22 @@ export async function itemsRoutes(app: FastifyInstance) {
     const errors: Array<{ item: string; error: string }> = []
     for (const item of ids) {
       try {
+        // Per record: update permission + the caller can see it. A record
+        // outside the caller's scope fails like a missing one.
+        if (
+          !(await instanceAccessAllowed(req.user, req.isAdmin ?? false, collection, String(item)))
+        ) {
+          failed++
+          errors.push({ item: String(item), error: 'NOT_FOUND' })
+          continue
+        }
         const instance = await db('nivaro_workflow_instances').where({ collection, item }).first()
         if (!instance || instance.completed_at) {
+          failed++
+          continue
+        }
+        // The transition must belong to this record's own template.
+        if (String(instance.template).toUpperCase() !== String(transition.template).toUpperCase()) {
           failed++
           continue
         }

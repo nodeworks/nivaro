@@ -10,6 +10,7 @@ import {
 } from 'graphql'
 import { db } from '../db/index.js'
 import { chainFields } from '../services/chain-columns.js'
+import { assertInstanceAccess } from '../services/instance-guard.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { originFields } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
@@ -666,6 +667,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
       if (!binding) throw new Error('No workflow bound to this collection')
@@ -763,6 +766,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })
@@ -860,6 +865,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
       if (!binding) throw new Error('No pipeline bound to this collection')
@@ -957,6 +964,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })

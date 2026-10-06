@@ -1,8 +1,10 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
+import { assertInstanceAccess, InstanceAccessError } from './instance-guard.js'
 import { writeStartHistory } from './instance-start.js'
 import { originFields } from './note-authorship.js'
 import { parseJson } from './pipeline-engine.js'
@@ -53,6 +55,19 @@ export interface WorkflowActor {
   id?: string | null
   role?: string | null
   isAdmin?: boolean
+  /** The full user row — the start/advance gate reads the record AS them. */
+  user?: User | null
+}
+
+/** The shared start/advance gate (instance-guard), as a WorkflowMutationError. */
+async function guardRecord(actor: WorkflowActor | undefined, collection: string, item: string) {
+  try {
+    await assertInstanceAccess(actor?.user ?? null, actor?.isAdmin ?? false, collection, item)
+  } catch (err) {
+    if (err instanceof InstanceAccessError)
+      throw new WorkflowMutationError(err.statusCode, err.message)
+    throw err
+  }
 }
 
 /**
@@ -66,6 +81,7 @@ export async function startWorkflowInstance(opts: {
   actor?: WorkflowActor
 }): Promise<WorkflowInstance | undefined> {
   const { collection, item } = opts
+  await guardRecord(opts.actor, collection, item)
 
   const binding = (await db('nivaro_workflow_bindings').where({ collection }).first()) as
     | WorkflowBindingRow
@@ -173,6 +189,7 @@ export async function executeWorkflowTransition(opts: {
 }): Promise<{ instance: WorkflowInstance | undefined; newState: WorkflowState | null }> {
   const { collection, item, transitionId } = opts
   if (!transitionId) throw new WorkflowMutationError(400, 'transition_id is required')
+  await guardRecord(opts.actor, collection, item)
 
   const instance = (await db<WorkflowInstance>('nivaro_workflow_instances')
     .where({ collection, item })

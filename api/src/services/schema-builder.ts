@@ -1759,7 +1759,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         const instance = await startWorkflowInstance({
           collection,
           item,
-          actor: { id: ctx.user.id, role: ctx.user.role, isAdmin: ctx.isAdmin ?? false }
+          actor: {
+            id: ctx.user.id,
+            role: ctx.user.role,
+            isAdmin: ctx.isAdmin ?? false,
+            user: ctx.user
+          }
         })
         return instance ?? null
       } catch (e) {
@@ -1793,7 +1798,12 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           item: args.item,
           transitionId: args.transition_id,
           comment: args.comment ?? null,
-          actor: { id: ctx.user.id, role: ctx.user.role, isAdmin: ctx.isAdmin ?? false }
+          actor: {
+            id: ctx.user.id,
+            role: ctx.user.role,
+            isAdmin: ctx.isAdmin ?? false,
+            user: ctx.user
+          }
         })
         return result.instance ?? null
       } catch (e) {
