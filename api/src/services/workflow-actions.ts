@@ -422,6 +422,13 @@ async function resolveExternalApiId(ref: number | string): Promise<number | null
 
 export class TransitionBlockedError extends Error {
   statusCode = 422
+  /** What kind of failure blocked it (integration-remediation classifyError) —
+   *  the auto-transition memory keys its retry policy on it (#1217). */
+  errorClass: string | null
+  constructor(message: string, errorClass: string | null = null) {
+    super(message)
+    this.errorClass = errorClass
+  }
 }
 
 const XML_ENTITY_MAP: Record<string, string> = {
@@ -647,7 +654,12 @@ export async function runTransitionActions(opts: {
    *  (migration 350). Default: 'transition' when a person drove it, else
    *  'auto-transition'. A targeted re-run passes 'resend'. */
   requestedVia?: RequestedVia
-}): Promise<{ blockedError: string | null; skippedReason?: string | null }> {
+}): Promise<{
+  blockedError: string | null
+  /** classifyError of the failure that blocked (null when nothing blocked). */
+  blockedClass?: string | null
+  skippedReason?: string | null
+}> {
   const all = parseActions(opts.transition.actions)
   const actions =
     opts.onlyIndex != null
@@ -1073,8 +1085,19 @@ export async function runTransitionActions(opts: {
         // state and surfaces the error. on_failure writebacks (a status column
         // = 'error') already landed, which is what the form banner keys off.
         await journalTick(`blocked: ${error ?? 'unknown error'}`)
+        let blockedClass: string | null = null
+        try {
+          blockedClass = (await import('./integration-remediation.js')).classifyError(
+            httpStatus,
+            responseBody,
+            error
+          )
+        } catch {
+          blockedClass = null
+        }
         return {
-          blockedError: `${opts.transition.label}: submission failed — ${error ?? 'unknown error'}`
+          blockedError: `${opts.transition.label}: submission failed — ${error ?? 'unknown error'}`,
+          blockedClass
         }
       }
     } else {

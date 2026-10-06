@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertTriangle,
   ArrowRight,
   Check,
   ChevronDown,
@@ -132,6 +133,74 @@ interface PipelinePanelData {
   all_transitions: PipelineTransition[]
   history: PipelineHistoryEntry[]
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
+  /** Automatic transitions the engine stopped re-firing (#1217): their push
+   *  was refused and nothing they would send has changed since. */
+  auto_held?: HeldAutoTransition[]
+}
+interface HeldAutoTransition {
+  transition_id: string
+  transition_label: string | null
+  error_class: string | null
+  error: string | null
+  attempts: number
+  first_failed_at: string
+  last_failed_at: string
+  retry_at: string | null
+}
+
+const ERROR_CLASS_TEXT: Record<string, string> = {
+  validation: 'the partner refused what we sent',
+  not_found: 'the partner could not find what we referred to',
+  auth: 'the partner refused our credentials',
+  transient: 'the partner could not be reached',
+  rate_limited: 'the partner asked us to slow down',
+  unknown: 'the partner refused it'
+}
+
+/** "in 25 min" / "in 2h" / "on the next check" for a ladder retry time. */
+function retryWhen(iso: string): string {
+  const mins = Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000)
+  if (!Number.isFinite(mins) || mins <= 0) return 'on the next check'
+  if (mins < 60) return `in ${mins} min`
+  return `in ${Math.round(mins / 60)}h`
+}
+
+/** The "needs a person" strip for held automatic transitions (#1217). */
+function AutoHeldNotice({ held }: { held: HeldAutoTransition[] }) {
+  if (held.length === 0) return null
+  return (
+    <div
+      className='space-y-2 border-b border-amber-100 bg-amber-50 px-5 py-3 dark:border-amber-500/20 dark:bg-amber-500/10'
+      data-pipeline-auto-held
+    >
+      {held.map((h) => {
+        const label = h.transition_label ?? 'An automatic move'
+        const why = ERROR_CLASS_TEXT[h.error_class ?? 'unknown'] ?? ERROR_CLASS_TEXT.unknown
+        return (
+          <div key={h.transition_id} className='text-[12px] text-amber-800 dark:text-amber-300'>
+            <p className='font-medium'>
+              Needs a person: {label} stopped retrying — {why}.
+            </p>
+            {h.error && (
+              <p
+                className='mt-0.5 line-clamp-2 break-words text-[11px] text-amber-700/90 dark:text-amber-300/80'
+                data-tip={h.error}
+              >
+                {h.error}
+              </p>
+            )}
+            <p className='mt-1 text-[11px] text-amber-700 dark:text-amber-400'>
+              {h.retry_at
+                ? `It tries the same push again ${retryWhen(h.retry_at)}. `
+                : 'It will not send the same push again on its own. '}
+              Fix the record so what it sends changes, retry the push, or move the record by hand.
+              {h.attempts > 1 ? ` ${h.attempts} attempts so far.` : ''}
+            </p>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 interface RequirementsDialogState {
   payload: TransitionRequirementsPayload
@@ -1878,6 +1947,18 @@ function PipelinePanelInner({
               </span>
             )}
             {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
+            {(data?.auto_held?.length ?? 0) > 0 && (
+              <span
+                className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'
+                data-tip={(data?.auto_held ?? [])
+                  .map((h) => `${h.transition_label ?? 'Automatic move'}: ${h.error ?? 'refused'}`)
+                  .join('\n')}
+                data-pipeline-auto-held-pill
+              >
+                <AlertTriangle className='h-3 w-3 shrink-0' />
+                Needs a person
+              </span>
+            )}
             {addendumPending && (
               <span className='flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
                 <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0' />
@@ -1935,6 +2016,7 @@ function PipelinePanelInner({
         )}
         {expanded && (
           <div className='border-t border-slate-100 dark:border-border/60'>
+            <AutoHeldNotice held={data?.auto_held ?? []} />
             {addendumPending && (
               <div className='flex items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/10'>
                 <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />

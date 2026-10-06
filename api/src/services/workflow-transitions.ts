@@ -4,6 +4,12 @@ import { emitTrigger } from '../flows/registry.js'
 import { logActivity } from './activity.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
+import {
+  autoTransitionHeld,
+  blockingPayloadHash,
+  clearAutoFailures,
+  recordAutoFailure
+} from './auto-transition-memory.js'
 import { ensureAutoWatch } from './auto-watch.js'
 import { currentChain, withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
@@ -64,6 +70,8 @@ export interface WorkflowTransition {
   requirements: string | null
   /** A plain sentence for mail / notifications; NULL = the label (migration 352). */
   notify_text?: string | null
+  /** Only the current step's owner (or an admin) may run it (migration 397). */
+  require_owner?: boolean | number | null
 }
 
 export interface WorkflowInstance {
@@ -1041,7 +1049,7 @@ export async function applyTransition(opts: {
     const targetStateObj = (await db<WorkflowState>('nivaro_workflow_states')
       .where({ id: newState })
       .first()) as WorkflowState | undefined
-    const { blockedError } = await runTransitionActions({
+    const { blockedError, blockedClass } = await runTransitionActions({
       transition,
       instance,
       // The full row, matching the 'post' phase call below — a blocking
@@ -1052,7 +1060,7 @@ export async function applyTransition(opts: {
       phase: 'blocking',
       requestedVia: opts.source === 'auto' || !opts.userId ? 'auto-transition' : 'transition'
     })
-    if (blockedError) throw new TransitionBlockedError(blockedError)
+    if (blockedError) throw new TransitionBlockedError(blockedError, blockedClass ?? null)
   }
   const newStateObj =
     resolvedTarget ??
@@ -1065,6 +1073,9 @@ export async function applyTransition(opts: {
       current_state: newState,
       completed_at: newStateObj && coerceBool(newStateObj.is_terminal) ? new Date() : null
     })
+  // #1217: the record moved — whatever auto transition was held on this
+  // instance belongs to a state it has left.
+  await clearAutoFailures({ instanceId: String(instance.id) })
 
   const historyRet = (await db('nivaro_workflow_history')
     .insert({
@@ -1290,17 +1301,44 @@ export async function runAutoTransitions(collection: string, item: string): Prom
       const fired = candidates.find((c) => evaluateConditionRules(c.condition_rules, record))
       if (!fired) return
 
-      const res: ApplyTransitionResult = await withChainStep(
-        prevHistory ? `history:${prevHistory}` : (currentChain()?.parent ?? 'auto'),
-        () =>
-          applyTransition({
-            instance,
-            transition: fired,
-            userId: null,
-            comment: `auto: ${fired.label}`,
-            source: 'auto'
-          })
-      )
+      // #1217: a transition whose blocking action failed with the same
+      // payload it would send now is left alone — re-sending identical bytes
+      // to a partner that refused them only adds failed submissions. The
+      // first match stays the only candidate (sort order is the template's
+      // priority); a held one means nothing fires this round.
+      if (
+        await autoTransitionHeld({ id: String(instance.id), collection, item: String(item) }, fired)
+      ) {
+        return
+      }
+
+      let res: ApplyTransitionResult
+      try {
+        res = await withChainStep(
+          prevHistory ? `history:${prevHistory}` : (currentChain()?.parent ?? 'auto'),
+          () =>
+            applyTransition({
+              instance,
+              transition: fired,
+              userId: null,
+              comment: `auto: ${fired.label}`,
+              source: 'auto'
+            })
+        )
+      } catch (err) {
+        if (!(err instanceof TransitionBlockedError)) throw err
+        // Remember the refusal with what the blocking actions would send NOW —
+        // after the on_failure writebacks landed — so the next evaluation
+        // compares like for like.
+        await recordAutoFailure({
+          instance: { id: String(instance.id), collection, item: String(item) },
+          transition: { id: String(fired.id), label: fired.label },
+          errorClass: err.errorClass,
+          error: err.message,
+          payloadHash: await blockingPayloadHash(fired, { collection, item: String(item) })
+        })
+        return
+      }
       prevHistory = res.history_id
       await logActivity({
         action: 'pipeline-transition',
