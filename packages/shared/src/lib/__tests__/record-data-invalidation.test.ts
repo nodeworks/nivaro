@@ -16,6 +16,7 @@ describe('invalidateRecordData', () => {
       ['item', 'inventory_requests', '32842'],
       ['child-summary', 'inventory_requests', '32842'],
       ['last-touch', 'inventory_requests', '32842'],
+      ['sla-breach', 'inventory_requests', '32842'],
       ['comments', 'inventory_requests', '32842'],
       ['comments-related', 'inventory_requests', '32842']
     ])

@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -32,7 +32,12 @@ import {
 import { type LintState, type LintTransition, lintTemplate } from '../services/pipeline-lint.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
 import { registerReadinessCheck } from '../services/readiness.js'
-import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
+import {
+  checkTransitionOwner,
+  compileAccessGates,
+  TRANSITION_OWNER_REQUIRED,
+  visibleIds
+} from '../services/record-access.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import {
   evaluateTransitionRequirements,
@@ -494,6 +499,41 @@ async function loadBranchLanes(
 interface BranchOwner {
   id: string
   name: string
+}
+
+/**
+ * Read gate for the per-record pipeline reads (instance, owners, approval
+ * brief): the caller must be able to read the record as themselves (the same
+ * check the start/move paths use, with action 'read'). Sends the 403/404 and
+ * returns false when refused. An invisible record is a 404.
+ */
+async function recordReadGate(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  collection: string,
+  item: string
+): Promise<boolean> {
+  try {
+    await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item, undefined, 'read')
+    return true
+  } catch (err) {
+    if (err instanceof InstanceAccessError) {
+      reply.code(err.statusCode).send({ error: err.message })
+      return false
+    }
+    throw err
+  }
+}
+
+/** Batch twin: keeps only the ids the caller can read (row filter + User
+ *  Scopes, one set-based pass). System collections pass through unchanged. */
+async function readableIds(req: FastifyRequest, collection: string, ids: string[]) {
+  if (req.isAdmin || ids.length === 0) return ids
+  if (collection.startsWith('nivaro_') || collection.startsWith('directus_')) return ids
+  if (!req.user) return []
+  const gates = await compileAccessGates(req.user, collection)
+  const ok = await visibleIds(gates, ids)
+  return ids.filter((i) => ok.has(i))
 }
 
 export async function pipelinesRoutes(app: FastifyInstance) {
@@ -1990,6 +2030,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return
       const brief = await buildApprovalBrief(collection, String(item))
       return reply.send({ data: brief })
     }
@@ -2223,6 +2264,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Get pipeline state for a specific item
   app.get('/instance/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await recordReadGate(req, reply, collection, String(item)))) return
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -3482,7 +3524,11 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     async (req, reply) => {
       const { collection } = req.params as { collection: string }
       const { ids } = (req.body ?? {}) as { ids?: Array<string | number> }
-      const idList = (ids ?? []).map(String).filter(Boolean).slice(0, 500)
+      const idList = await readableIds(
+        req,
+        collection,
+        (ids ?? []).map(String).filter(Boolean).slice(0, 500)
+      )
       if (!idList.length) return reply.send({ data: {} })
       const instances = (await db('nivaro_workflow_instances')
         .where({ collection })
@@ -3538,6 +3584,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
 
   app.get('/instance/:collection/:item/owners', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await recordReadGate(req, reply, collection, String(item)))) return
 
     const instance = await findRecordInstance<WorkflowInstance>(collection, item)
     if (!instance) return reply.send({ data: [] })
@@ -3565,6 +3612,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return
       const body = req.body as { user: string; state?: string | null }
       if (!body.user) return reply.code(400).send({ error: 'user is required' })
 
@@ -3776,6 +3824,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         item: string
         stateId: string
       }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return
 
       const state = await db<WorkflowState>('nivaro_workflow_states').where({ id: stateId }).first()
       if (!state) return reply.code(404).send({ error: 'State not found' })
@@ -3794,6 +3843,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     { preHandler: requireAuth },
     async (req, reply) => {
       const { collection, item } = req.params as { collection: string; item: string }
+      if (!(await recordReadGate(req, reply, collection, String(item)))) return
       // Path relevance + skip prediction + owners live in services/pipeline-chain.ts
       // (shared with the transition emails).
       const { computeStateChain } = await import('../services/pipeline-chain.js')
