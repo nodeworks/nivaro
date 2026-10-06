@@ -155,6 +155,7 @@ const ConfigDiffPage = lazy(() =>
   import('@/pages/ConfigDiff').then((m) => ({ default: m.ConfigDiffPage }))
 )
 const EnvironmentsPage = lazy(() => import('@/pages/Environments'))
+const QualityChecksPage = lazy(() => import('@/pages/QualityChecks'))
 const ReadinessPage = lazy(() => import('@/pages/Readiness'))
 const DataIntegrityPage = lazy(() => import('@/pages/DataIntegrity'))
 const AnnouncementsPage = lazy(() => import('@/pages/Announcements'))
@@ -543,6 +544,7 @@ export default function App() {
                   <Route path='content-promotion' element={<ContentPromotionPage />} />
                   <Route path='config-diff' element={<ConfigDiffPage />} />
                   <Route path='environments' element={<EnvironmentsPage />} />
+                  <Route path='quality-checks' element={<QualityChecksPage />} />
                   <Route path='readiness' element={<ReadinessPage />} />
                   <Route path='data-integrity' element={<DataIntegrityPage />} />
                   <Route path='announcements' element={<AnnouncementsPage />} />

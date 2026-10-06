@@ -17,6 +17,7 @@ import {
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { EnvPresencePanel } from '@/components/env-presence-panel'
+import { QualityChecksCard } from '@/components/quality-checks-card'
 import { ReleaseCard } from '@/components/release-card'
 import { RunbooksCard } from '@/components/runbooks-card'
 import { Button } from '@/components/ui/button'
@@ -125,6 +126,7 @@ export default function Environments() {
       </header>
       <ReleaseCard />
       <RunbooksCard />
+      <QualityChecksCard />
 
       <div className='flex flex-1 min-h-0 overflow-hidden'>
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
