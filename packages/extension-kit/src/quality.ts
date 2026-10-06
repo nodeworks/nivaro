@@ -16,7 +16,7 @@ export interface QualityRow {
 }
 
 export interface QualityCheckContext {
-  /** Knex bound to the database being checked (EFP_Staging). */
+  /** Knex bound to the database being checked (the rebuilt copy). */
   db: Knex
   /** That database's name. */
   database: string

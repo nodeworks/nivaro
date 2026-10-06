@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const h = vi.hoisted(() => ({
   db: null as any,
-  user: { id: 'ADMIN-1', isAdmin: true }
+  user: { id: 'ADMIN-1', isAdmin: true },
+  rerun: new Map<string, string>([['acme-ops', 'checks-rerun']])
 }))
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -25,30 +26,31 @@ vi.mock('../../../db/index.js', () => ({
   })
 }))
 vi.mock('../../../extensions/loader.js', () => ({
+  extensionQualityRerun: h.rerun,
   extensionRunbooks: new Map([
     [
-      'efp-ops',
+      'acme-ops',
       [
         {
-          key: 'quality-rerun',
+          key: 'checks-rerun',
           label: 'Re-run quality checks',
           runs_on: 'host',
-          command: ['bash', 'extensions/efp-ops/scripts/quality-rerun.sh'],
+          command: ['bash', 'extensions/acme-ops/scripts/checks-rerun.sh'],
           dry_args: [],
           go_args: [],
           target_env: 'TARGET',
-          refuse_targets: ['EFP', 'EFP_Development'],
+          refuse_targets: ['Prod_DB', 'App_DB'],
           skip_dry_gate: true
         },
         {
           key: 'staging-rebuild',
           label: 'Rebuild',
           runs_on: 'host',
-          command: ['bash', 'extensions/efp-ops/scripts/golive-cron.sh'],
+          command: ['bash', 'extensions/acme-ops/scripts/rebuild.sh'],
           dry_args: ['--dry'],
           go_args: [],
           target_env: 'TARGET',
-          refuse_targets: ['EFP', 'EFP_Development']
+          refuse_targets: ['Prod_DB', 'App_DB']
         }
       ]
     ]
@@ -56,7 +58,7 @@ vi.mock('../../../extensions/loader.js', () => ({
 }))
 
 import { createTestDb } from '@nivaro/extension-kit'
-import { qualityCheckRoutes } from '../../../routes/quality-checks.js'
+import { qualityCheckRoutes, resetQualityTablesProbe } from '../../../routes/quality-checks.js'
 import { logActivity } from '../../../services/activity.js'
 import { encodeRows } from '../../../services/quality/store.js'
 
@@ -69,7 +71,7 @@ function seed(extra: Record<string, Record<string, unknown>[]> = {}) {
       nivaro_quality_runs: [
         {
           id: RUN,
-          target: 'EFP_Staging',
+          target: 'Mirror_DB',
           status: 'done',
           started_at: new Date('2026-10-06T02:00:00Z'),
           captured_at: new Date('2026-10-06T02:10:00Z'),
@@ -160,6 +162,9 @@ const result = () =>
 
 beforeEach(() => {
   h.user.isAdmin = true
+  h.rerun.clear()
+  h.rerun.set('acme-ops', 'checks-rerun')
+  resetQualityTablesProbe()
   vi.mocked(logActivity).mockClear()
   seed()
 })
@@ -173,7 +178,7 @@ describe('quality-check routes', () => {
 
   it('lists runs and a run with its results in area order', async () => {
     const app = buildApp()
-    const list = await app.inject({ method: 'GET', url: '/quality-checks/runs?target=EFP_Staging' })
+    const list = await app.inject({ method: 'GET', url: '/quality-checks/runs?target=Mirror_DB' })
     expect(list.statusCode).toBe(200)
     expect(list.json().data).toHaveLength(1)
     expect(list.json().data[0].totals).toEqual({ green: 0, amber: 0, red: 1, error: 0 })
@@ -213,7 +218,7 @@ describe('quality-check routes', () => {
     // still capturing (no results yet) is not the one re-diffed.
     h.db.state.tables.nivaro_quality_runs.push({
       id: '99999999-2222-3333-4444-555555555555',
-      target: 'EFP_Staging',
+      target: 'Mirror_DB',
       status: 'capturing',
       started_at: new Date('2026-10-07T02:00:00Z')
     })
@@ -230,6 +235,7 @@ describe('quality-check routes', () => {
 
   it('leaves a run being verified to its runner and says so', async () => {
     h.db.state.tables.nivaro_quality_runs[0].status = 'verifying'
+    h.db.state.tables.nivaro_quality_runs[0].verify_started_at = new Date()
     const app = buildApp()
     const res = await app.inject({
       method: 'POST',
@@ -325,10 +331,10 @@ describe('quality-check routes', () => {
       nivaro_runbook_queue: [
         {
           id: 'Q1',
-          extension: 'efp-ops',
+          extension: 'acme-ops',
           runbook: 'staging-rebuild',
           mode: 'go',
-          target: 'EFP_Staging',
+          target: 'Mirror_DB',
           status: 'queued',
           requested_at: new Date()
         }
@@ -337,7 +343,7 @@ describe('quality-check routes', () => {
     const res = await buildApp().inject({
       method: 'POST',
       url: '/quality-checks/rerun',
-      payload: { target: 'EFP_Staging', runbook: { extension: 'efp-ops', key: 'quality-rerun' } }
+      payload: { target: 'Mirror_DB', runbook: { extension: 'acme-ops', key: 'checks-rerun' } }
     })
     expect(res.statusCode).toBe(409)
     expect(res.json()).toEqual({
@@ -351,16 +357,16 @@ describe('quality-check routes', () => {
     const res = await buildApp().inject({
       method: 'POST',
       url: '/quality-checks/rerun',
-      payload: { target: 'EFP_Staging', runbook: { extension: 'efp-ops', key: 'quality-rerun' } }
+      payload: { target: 'Mirror_DB', runbook: { extension: 'acme-ops', key: 'checks-rerun' } }
     })
     expect(res.statusCode).toBe(201)
     const rows = h.db.state.tables.nivaro_runbook_queue as Record<string, unknown>[]
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({
-      extension: 'efp-ops',
-      runbook: 'quality-rerun',
+      extension: 'acme-ops',
+      runbook: 'checks-rerun',
       mode: 'go',
-      target: 'EFP_Staging',
+      target: 'Mirror_DB',
       status: 'queued',
       requested_by: 'ADMIN-1'
     })
@@ -371,16 +377,172 @@ describe('quality-check routes', () => {
     const prod = await app.inject({
       method: 'POST',
       url: '/quality-checks/rerun',
-      payload: { target: 'EFP', runbook: { extension: 'efp-ops', key: 'quality-rerun' } }
+      payload: { target: 'Prod_DB', runbook: { extension: 'acme-ops', key: 'checks-rerun' } }
     })
     expect(prod.statusCode).toBe(400)
-    // A runbook without skip_dry_gate (a rebuild) is never queued from here.
-    const rebuild = await app.inject({
+    expect(h.db.state.tables.nivaro_runbook_queue).toHaveLength(0)
+  })
+
+  it('serves the declared re-run runbook and the targets, newest first', async () => {
+    h.db.state.tables.nivaro_quality_runs.push(
+      { id: 'b', target: 'MIRROR_DB', status: 'done', started_at: new Date('2026-10-01') },
+      { id: 'c', target: 'Other_DB', status: 'done', started_at: new Date('2026-10-07') }
+    )
+    const res = await buildApp().inject({ method: 'GET', url: '/quality-checks/config' })
+    expect(res.statusCode).toBe(200)
+    expect(res.json()).toEqual({
+      data: {
+        rerun: { extension: 'acme-ops', key: 'checks-rerun' },
+        targets: ['Other_DB', 'Mirror_DB']
+      },
+      available: true
+    })
+  })
+
+  it('queues only the declared runbook, whatever the body names', async () => {
+    const res = await buildApp().inject({
       method: 'POST',
       url: '/quality-checks/rerun',
-      payload: { target: 'EFP_Staging', runbook: { extension: 'efp-ops', key: 'staging-rebuild' } }
+      payload: { target: 'Mirror_DB', runbook: { extension: 'acme-ops', key: 'staging-rebuild' } }
     })
-    expect(rebuild.statusCode).toBe(400)
+    expect(res.statusCode).toBe(201)
+    expect(h.db.state.tables.nivaro_runbook_queue[0]).toMatchObject({ runbook: 'checks-rerun' })
+  })
+
+  it('refuses a re-run when no runbook is declared, or the declared one may write', async () => {
+    h.rerun.clear()
+    const app = buildApp()
+    const none = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/rerun',
+      payload: { target: 'Mirror_DB' }
+    })
+    expect(none.statusCode).toBe(404)
+    const cfg = await app.inject({ method: 'GET', url: '/quality-checks/config' })
+    expect(cfg.json().data.rerun).toBeNull()
+    h.rerun.set('acme-ops', 'staging-rebuild')
+    const writes = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/rerun',
+      payload: { target: 'Mirror_DB' }
+    })
+    expect(writes.statusCode).toBe(400)
+    expect(writes.json().error).toBe(
+      'The declared re-run runbook must run on the host and declare skip_dry_gate'
+    )
     expect(h.db.state.tables.nivaro_runbook_queue).toHaveLength(0)
+  })
+
+  it('compares the busy target case-insensitively', async () => {
+    seed({
+      nivaro_runbook_queue: [
+        {
+          id: 'Q1',
+          extension: 'acme-ops',
+          runbook: 'staging-rebuild',
+          mode: 'go',
+          target: 'MIRROR_DB',
+          status: 'running',
+          requested_at: new Date()
+        }
+      ]
+    })
+    const res = await buildApp().inject({
+      method: 'POST',
+      url: '/quality-checks/rerun',
+      payload: { target: 'Mirror_DB' }
+    })
+    expect(res.statusCode).toBe(409)
+  })
+
+  it('re-diffs only the check a known difference belongs to', async () => {
+    // A second red check whose stored sides an existing entry would turn amber.
+    const OTHER = 'counts.workflows'
+    const rows = h.db.state.tables.nivaro_quality_rows as Record<string, unknown>[]
+    rows.push(
+      {
+        id: 3,
+        run: RUN,
+        check_id: OTHER,
+        side: 'baseline',
+        rows_gz: encodeRows([{ key: 'n', values: { c: 1 } }]),
+        row_count: 1,
+        error: null
+      },
+      {
+        id: 4,
+        run: RUN,
+        check_id: OTHER,
+        side: 'current',
+        rows_gz: encodeRows([{ key: 'n', values: { c: 2 } }]),
+        row_count: 1,
+        error: null
+      }
+    )
+    const other = () =>
+      (h.db.state.tables.nivaro_quality_results as Record<string, unknown>[]).find(
+        (r) => r.check_id === OTHER
+      )
+    Object.assign(other()!, { status: 'red', red_count: 1, matched: 0 })
+    h.db.state.tables.nivaro_quality_known.push({
+      id: 50,
+      check_id: OTHER,
+      match: '{"key":"n"}',
+      reason: 'other'
+    })
+    const app = buildApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/known',
+      payload: { check_id: CHECK, match: { key_exact: 'w:1' }, reason: 'teams', run: RUN }
+    })
+    expect(res.json().data.rediffed).toBe(true)
+    expect(result()).toMatchObject({ status: 'amber' })
+    expect(other()).toMatchObject({ status: 'red' })
+    const run = h.db.state.tables.nivaro_quality_runs[0]
+    expect(JSON.parse(run.totals)).toEqual({ green: 0, amber: 1, red: 1, error: 0 })
+    // Editing the other check's entry re-diffs that check only.
+    await app.inject({
+      method: 'PATCH',
+      url: '/quality-checks/known/50',
+      payload: { reason: 'other again' }
+    })
+    expect(other()).toMatchObject({ status: 'amber' })
+  })
+
+  it('rejects a prototype name in a cluster', async () => {
+    const res = await buildApp().inject({
+      method: 'POST',
+      url: '/quality-checks/known',
+      payload: JSON.stringify({
+        check_id: CHECK,
+        match: JSON.parse('{"cluster":{"__proto__":"x"}}'),
+        reason: 'teams'
+      }),
+      headers: { 'content-type': 'application/json' }
+    })
+    expect(res.statusCode).toBe(400)
+  })
+
+  it('answers empty when the quality tables are not there (migration 404 not run)', async () => {
+    h.db = createTestDb({ tables: { nivaro_runbook_queue: [] } })
+    const app = buildApp()
+    const runs = await app.inject({ method: 'GET', url: '/quality-checks/runs' })
+    expect(runs.statusCode).toBe(200)
+    expect(runs.json()).toEqual({ data: [], available: false })
+    const known = await app.inject({ method: 'GET', url: '/quality-checks/known' })
+    expect(known.json()).toEqual({ data: [], available: false })
+    const cfg = await app.inject({ method: 'GET', url: '/quality-checks/config' })
+    expect(cfg.json()).toMatchObject({ data: { targets: [] }, available: false })
+    const one = await app.inject({ method: 'GET', url: `/quality-checks/runs/${RUN}` })
+    expect(one.statusCode).toBe(404)
+    expect(one.json().available).toBe(false)
+    const post = await app.inject({
+      method: 'POST',
+      url: '/quality-checks/known',
+      payload: { check_id: CHECK, match: { key: 'w:1' }, reason: 'teams' }
+    })
+    expect(post.statusCode).toBe(409)
+    expect(post.json().error).toBe('Not set up on this database (migration 404)')
   })
 })

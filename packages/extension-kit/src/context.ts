@@ -429,8 +429,12 @@ export interface ExtensionDefinition {
   /** Operator runbooks the admin Runbooks console runs (#720). */
   runbooks?: ExtensionRunbookDecl[]
   /** Staging quality checks: path of the checks module (a QualityCheckModule),
-   *  relative to the API root, e.g. 'extensions/efp-ops/scripts/quality/index.ts'. */
+   *  relative to the API root, e.g. 'extensions/my-ext/scripts/quality/index.ts'. */
   quality_checks?: string
+  /** Key of this extension's own host runbook that re-runs its quality checks
+   *  (declared in `runbooks` with runs_on 'host' and skip_dry_gate). The
+   *  quality console's Re-run button queues exactly this runbook. */
+  quality_rerun?: string
   /** Which build this is (a commit sha, a release id), shown on GET
    *  /api/extensions so a deploy can check the expected build is mounted.
    *  Omit it to use the `.release-sha` file beside the extension (#1089). */

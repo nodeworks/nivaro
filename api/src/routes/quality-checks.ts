@@ -1,11 +1,11 @@
-import type { QualityValue } from '@nivaro/extension-kit'
+import type { ExtensionRunbookDecl, QualityValue } from '@nivaro/extension-kit'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { extensionRunbooks } from '../extensions/loader.js'
+import { extensionQualityRerun, extensionRunbooks } from '../extensions/loader.js'
 import { csvCell } from '../lib/csv-cell.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import type { DiffRow, KnownDifference } from '../services/quality/diff.js'
+import { type DiffRow, type KnownMatch, parseKnownMatch } from '../services/quality/diff.js'
 import { getRun, latestRunForTarget, loadDiff, rediffRun } from '../services/quality/store.js'
 import { hostRunRefusal } from '../services/runbook-admission.js'
 import { hostQueueAvailable, listHostRuns, QUEUE, queueHostRun } from '../services/runbook-queue.js'
@@ -25,8 +25,7 @@ const KNOWN = 'nivaro_quality_known'
 
 const RUN_ID = /^[0-9a-f-]{36}$/i // SQL Server hands uuids back upper-case
 const CHECK_ID = /^[a-z][a-z0-9_.-]{1,80}$/
-/** A key glob becomes a RegExp run against every row of a check, in the request. */
-const MAX_KEY_WILDCARDS = 4
+const NOT_SET_UP = 'Not set up on this database (migration 404)'
 const AREA_ORDER = [
   'owners',
   'states',
@@ -45,6 +44,7 @@ const RUN_COLUMNS = [
   'started_at',
   'captured_at',
   'verified_at',
+  'verify_started_at',
   'totals',
   'runbook_run',
   'error'
@@ -81,51 +81,54 @@ const areaRank = (a: unknown) => {
   return i < 0 ? AREA_ORDER.length : i
 }
 
-type Match = KnownDifference['match']
+type Match = KnownMatch
 
-/** A known difference's match: at least one condition, every part bounded. */
-export function parseKnownMatch(
-  raw: unknown
-): { ok: true; match: Match } | { ok: false; error: string } {
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
-    return { ok: false, error: 'match must be an object' }
-  const m = raw as Record<string, unknown>
-  const match: Match = {}
-  if (m.key != null) {
-    if (typeof m.key !== 'string' || m.key.length < 1 || m.key.length > 300)
-      return { ok: false, error: 'match.key must be 1–300 characters' }
-    if ((m.key.match(/\*/g)?.length ?? 0) > MAX_KEY_WILDCARDS)
-      return {
-        ok: false,
-        error: `match.key may use * at most ${MAX_KEY_WILDCARDS} times`
-      }
-    match.key = m.key
+let tablesKnown = false
+let missedAt = 0
+
+/**
+ * Does this database have the quality tables (migration 404)? A hit is kept
+ * for good; a miss is asked again after a minute.
+ */
+async function qualityTablesAvailable(): Promise<boolean> {
+  if (tablesKnown) return true
+  if (missedAt && Date.now() - missedAt < 60_000) return false
+  try {
+    tablesKnown = await db.schema.hasTable(RUNS)
+  } catch {
+    tablesKnown = false
   }
-  if (m.cluster != null) {
-    if (typeof m.cluster !== 'object' || Array.isArray(m.cluster))
-      return { ok: false, error: 'match.cluster must be an object' }
-    const entries = Object.entries(m.cluster as Record<string, unknown>)
-    if (entries.length < 1 || entries.length > 6)
-      return { ok: false, error: 'match.cluster must have 1–6 entries' }
-    const cluster: Record<string, string> = {}
-    for (const [k, v] of entries) {
-      if (k.length < 1 || k.length > 200 || typeof v !== 'string' || v.length > 200)
-        return {
-          ok: false,
-          error: 'match.cluster names and values must be text of 200 characters at most'
-        }
-      cluster[k] = v
+  if (!tablesKnown) missedAt = Date.now()
+  return tablesKnown
+}
+
+/** Tests only: forget the probe. */
+export function resetQualityTablesProbe(): void {
+  tablesKnown = false
+  missedAt = 0
+}
+
+type DeclaredRerun =
+  | { ok: true; extension: string; decl: ExtensionRunbookDecl }
+  | { ok: false; status: number; error: string }
+
+/**
+ * The runbook an extension declared (`quality_rerun`) to re-run its checks.
+ * Only a host runbook that declares skip_dry_gate qualifies: this console
+ * queues it without a dry run and without typed confirmation.
+ */
+function declaredRerun(): DeclaredRerun {
+  const [first] = [...extensionQualityRerun].sort(([a], [b]) => a.localeCompare(b))
+  if (!first) return { ok: false, status: 404, error: 'No quality re-run runbook is declared' }
+  const [extension, key] = first
+  const decl = (extensionRunbooks.get(extension) ?? []).find((d) => d.key === key)
+  if (decl?.runs_on !== 'host' || decl.skip_dry_gate !== true)
+    return {
+      ok: false,
+      status: 400,
+      error: 'The declared re-run runbook must run on the host and declare skip_dry_gate'
     }
-    match.cluster = cluster
-  }
-  if (m.field != null) {
-    if (typeof m.field !== 'string' || m.field.length < 1 || m.field.length > 100)
-      return { ok: false, error: 'match.field must be 1–100 characters' }
-    match.field = m.field
-  }
-  if (match.key === undefined && match.cluster === undefined && match.field === undefined)
-    return { ok: false, error: 'match needs at least one condition: key, cluster or field' }
-  return { ok: true, match }
+  return { ok: true, extension, decl }
 }
 
 function parseReason(raw: unknown): string | null {
@@ -136,12 +139,17 @@ function parseReason(raw: unknown): string | null {
 
 /**
  * The latest finished run of every target that has a result for the check,
- * re-diffed. true only when at least one run was re-diffed and none stopped
- * (a run being verified picks the change up from its own known differences).
+ * re-diffed — that check only; every check when the entry names none. true
+ * only when at least one run was re-diffed and none stopped (a run being
+ * verified picks the change up from its own known differences).
  */
-async function rediffLatestFor(checkId: string): Promise<boolean> {
+async function rediffLatestFor(checkId: string | null): Promise<boolean> {
   const runs = [
-    ...new Set((await db(RESULTS).where({ check_id: checkId }).pluck('run')) as string[])
+    ...new Set(
+      (await (checkId
+        ? db(RESULTS).where({ check_id: checkId }).pluck('run')
+        : db(RESULTS).pluck('run'))) as string[]
+    )
   ]
   if (runs.length === 0) return false
   const targets = [...new Set((await db(RUNS).whereIn('id', runs).pluck('target')) as string[])]
@@ -150,7 +158,7 @@ async function rediffLatestFor(checkId: string): Promise<boolean> {
   for (const target of targets) {
     const latest = await latestRunForTarget(db, target, 'done')
     if (!latest) continue
-    const r = await rediffRun(db, latest.id)
+    const r = await rediffRun(db, latest.id, checkId ? { checkIds: [checkId] } : {})
     any = true
     if (!r.rediffed) all = false
   }
@@ -190,15 +198,38 @@ function yyyymmdd(d: unknown): string {
 export async function qualityCheckRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAdmin)
 
+  app.get('/config', async () => {
+    const r = declaredRerun()
+    const rerun = r.ok ? { extension: r.extension, key: r.decl.key } : null
+    if (!(await qualityTablesAvailable())) return { data: { rerun, targets: [] }, available: false }
+    // Targets the runs name, newest first; one entry per name whatever its case.
+    const names = (await db(RUNS)
+      .orderBy('started_at', 'desc')
+      .limit(500)
+      .pluck('target')) as string[]
+    const seen = new Set<string>()
+    const targets: string[] = []
+    for (const t of names) {
+      const k = String(t).toLowerCase()
+      if (seen.has(k)) continue
+      seen.add(k)
+      targets.push(String(t))
+    }
+    return { data: { rerun, targets }, available: true }
+  })
+
   app.get<{ Querystring: { target?: string } }>('/runs', async (req) => {
+    if (!(await qualityTablesAvailable())) return { data: [], available: false }
     const q = db(RUNS).orderBy('started_at', 'desc').limit(30).select(RUN_COLUMNS)
     if (typeof req.query.target === 'string' && req.query.target)
       q.where({ target: req.query.target })
     const rows = (await q) as Record<string, unknown>[]
-    return { data: rows.map(formatRun) }
+    return { data: rows.map(formatRun), available: true }
   })
 
   app.get<{ Params: { id: string } }>('/runs/:id', async (req, reply) => {
+    if (!(await qualityTablesAvailable()))
+      return reply.code(404).send({ error: NOT_SET_UP, available: false })
     if (!RUN_ID.test(req.params.id)) return reply.code(404).send({ error: 'No such run' })
     const run = (await db(RUNS)
       .where({ id: req.params.id })
@@ -217,6 +248,8 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string; checkId: string } }>(
     '/runs/:id/checks/:checkId',
     async (req, reply) => {
+      if (!(await qualityTablesAvailable()))
+        return reply.code(404).send({ error: NOT_SET_UP, available: false })
       const { id, checkId } = req.params
       if (!RUN_ID.test(id) || !CHECK_ID.test(checkId))
         return reply.code(404).send({ error: 'No such check' })
@@ -242,6 +275,8 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
   app.get<{ Params: { id: string; checkId: string } }>(
     '/runs/:id/checks/:checkId/csv',
     async (req, reply) => {
+      if (!(await qualityTablesAvailable()))
+        return reply.code(404).send({ error: NOT_SET_UP, available: false })
       const { id, checkId } = req.params
       if (!RUN_ID.test(id) || !CHECK_ID.test(checkId))
         return reply.code(404).send({ error: 'No such check' })
@@ -291,11 +326,16 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
     }))
   }
 
-  app.get('/known', async () => ({ data: await listKnown() }))
+  app.get('/known', async () => {
+    if (!(await qualityTablesAvailable())) return { data: [], available: false }
+    return { data: await listKnown(), available: true }
+  })
 
   app.post<{ Body: { check_id?: unknown; match?: unknown; reason?: unknown; run?: unknown } }>(
     '/known',
     async (req, reply) => {
+      if (!(await qualityTablesAvailable()))
+        return reply.code(409).send({ error: NOT_SET_UP, available: false })
       const body = req.body ?? {}
       if (typeof body.check_id !== 'string' || !CHECK_ID.test(body.check_id))
         return reply.code(400).send({ error: 'check_id is not a check id' })
@@ -331,7 +371,9 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
         comment: reason,
         req
       })
-      const rediffed = run ? (await rediffRun(db, run)).rediffed : false
+      const rediffed = run
+        ? (await rediffRun(db, run, { checkIds: [body.check_id] })).rediffed
+        : false
       return { data: { id, rediffed } }
     }
   )
@@ -339,6 +381,8 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
   app.patch<{ Params: { id: string }; Body: { reason?: unknown; match?: unknown } }>(
     '/known/:id',
     async (req, reply) => {
+      if (!(await qualityTablesAvailable()))
+        return reply.code(409).send({ error: NOT_SET_UP, available: false })
       const id = Number(req.params.id)
       if (!Number.isInteger(id) || id < 1) return reply.code(404).send({ error: 'Not found' })
       const existing = (await db(KNOWN).where({ id }).first('id', 'check_id')) as
@@ -374,10 +418,12 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
   )
 
   app.delete<{ Params: { id: string } }>('/known/:id', async (req, reply) => {
+    if (!(await qualityTablesAvailable()))
+      return reply.code(409).send({ error: NOT_SET_UP, available: false })
     const id = Number(req.params.id)
     if (!Number.isInteger(id) || id < 1) return reply.code(404).send({ error: 'Not found' })
     const existing = (await db(KNOWN).where({ id }).first('id', 'check_id', 'reason')) as
-      | { id: number; check_id: string; reason: string }
+      | { id: number; check_id: string | null; reason: string }
       | undefined
     if (!existing) return reply.code(404).send({ error: 'Not found' })
     await db(KNOWN).where({ id }).del()
@@ -393,65 +439,58 @@ export async function qualityCheckRoutes(app: FastifyInstance) {
     return { data: { id, rediffed } }
   })
 
-  app.post<{ Body: { target?: unknown; runbook?: { extension?: unknown; key?: unknown } } }>(
-    '/rerun',
-    async (req, reply) => {
-      const body = req.body ?? {}
-      const extension = typeof body.runbook?.extension === 'string' ? body.runbook.extension : ''
-      const key = typeof body.runbook?.key === 'string' ? body.runbook.key : ''
-      const decl = (extensionRunbooks.get(extension) ?? []).find(
-        (d) => d.key === key && d.runs_on === 'host'
-      )
-      if (!decl) return reply.code(404).send({ error: 'No such runbook' })
-      // Only a runbook that declares it writes nothing may be queued from here:
-      // this route asks for no typed confirmation.
-      if (decl.skip_dry_gate !== true)
-        return reply.code(400).send({ error: 'Only a read-only check runbook can be re-run here' })
-      if (!(await hostQueueAvailable()))
-        return reply
-          .code(409)
-          .send({ error: 'The runbook queue is not set up on this database (migration 403)' })
-      const t = validateTarget(decl, body.target)
-      if (!t.ok) return reply.code(400).send({ error: t.error })
-      const target = t.target
-      const busyQuery = db(QUEUE).whereIn('status', ['queued', 'running'])
-      if (target === null) busyQuery.whereNull('target')
-      else busyQuery.where({ target })
-      const busy = await busyQuery.first('id')
-      if (busy)
-        return reply.code(409).send({
-          error: 'A rebuild is running — re-run after it finishes',
-          code: 'QUALITY_RERUN_BUSY'
-        })
-      // The same admission the host agent applies to the row it claims.
-      const prior = (await listHostRuns(200)) as unknown as RunbookSummary[]
-      const refusal = hostRunRefusal(
-        decl,
-        { extension, runbook: key, mode: 'go', target, from_step: null },
-        prior
-      )
-      if (refusal) return reply.code(400).send({ error: refusal })
-      const user = req.user!.id
-      const argv = runbookArgv(decl, 'go')
-      const run = await queueHostRun({
-        extension,
-        runbook: key,
-        mode: 'go',
-        target,
-        args: [argv.file, ...argv.args],
-        from: null,
-        resumeOf: null,
-        user
+  // Queues the one runbook an extension declared as its quality re-run; the
+  // body names only the target.
+  app.post<{ Body: { target?: unknown } }>('/rerun', async (req, reply) => {
+    const body = req.body ?? {}
+    const declared = declaredRerun()
+    if (!declared.ok) return reply.code(declared.status).send({ error: declared.error })
+    const { extension, decl } = declared
+    const key = decl.key
+    if (!(await hostQueueAvailable()))
+      return reply
+        .code(409)
+        .send({ error: 'The runbook queue is not set up on this database (migration 403)' })
+    const t = validateTarget(decl, body.target)
+    if (!t.ok) return reply.code(400).send({ error: t.error })
+    const target = t.target
+    const active = (await db(QUEUE)
+      .whereIn('status', ['queued', 'running'])
+      .select('id', 'target')) as Array<{ id: string; target: string | null }>
+    const busy = active.some((r) => (r.target ?? '').toLowerCase() === (target ?? '').toLowerCase())
+    if (busy)
+      return reply.code(409).send({
+        error: 'A rebuild is running — re-run after it finishes',
+        code: 'QUALITY_RERUN_BUSY'
       })
-      await logActivity({
-        action: 'runbook-run-queue',
-        user,
-        collection: 'runbooks',
-        item: run.id,
-        comment: `${extension}:${key} go${target ? ` → ${target}` : ''} (quality re-run)`,
-        req
-      })
-      return reply.code(201).send({ data: { run } })
-    }
-  )
+    // The same admission the host agent applies to the row it claims.
+    const prior = (await listHostRuns(200)) as unknown as RunbookSummary[]
+    const refusal = hostRunRefusal(
+      decl,
+      { extension, runbook: key, mode: 'go', target, from_step: null },
+      prior
+    )
+    if (refusal) return reply.code(400).send({ error: refusal })
+    const user = req.user!.id
+    const argv = runbookArgv(decl, 'go')
+    const run = await queueHostRun({
+      extension,
+      runbook: key,
+      mode: 'go',
+      target,
+      args: [argv.file, ...argv.args],
+      from: null,
+      resumeOf: null,
+      user
+    })
+    await logActivity({
+      action: 'runbook-run-queue',
+      user,
+      collection: 'runbooks',
+      item: run.id,
+      comment: `${extension}:${key} go${target ? ` → ${target}` : ''} (quality re-run)`,
+      req
+    })
+    return reply.code(201).send({ data: { run } })
+  })
 }

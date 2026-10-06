@@ -113,6 +113,9 @@ export const extensionRunbooks = new Map<string, ExtensionRunbookDecl[]>()
 
 export { normalizeRunbooks } from './runbook-decls.js'
 
+/** The runbook key each loaded extension declared as its quality re-run (`quality_rerun`). */
+export const extensionQualityRerun = new Map<string, string>()
+
 /** The declared environment of every loaded extension, by extension id. */
 export const extensionEnvDecls = new Map<string, ExtensionEnvDecl[]>()
 
@@ -1218,6 +1221,10 @@ async function loadExtension(
     const runbooks = normalizeRunbookDecls(extId, ext.runbooks)
     if (runbooks.length > 0) extensionRunbooks.set(extId, runbooks)
     else extensionRunbooks.delete(extId)
+    const rerunKey = ext.quality_rerun
+    if (typeof rerunKey === 'string' && runbooks.some((r) => r.key === rerunKey))
+      extensionQualityRerun.set(extId, rerunKey)
+    else extensionQualityRerun.delete(extId)
     const envDecls = normalizeEnvDecls(ext.env)
     if (envDecls.length > 0) extensionEnvDecls.set(extId, envDecls)
     else extensionEnvDecls.delete(extId)
