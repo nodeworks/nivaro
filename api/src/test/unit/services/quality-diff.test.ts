@@ -87,3 +87,76 @@ describe('diffRows', () => {
     expect(d.clusters[0]).toEqual({ cluster: { s: 'A' }, red: 2, amber: 0 })
   })
 })
+
+describe('star matcher (linear)', () => {
+  it('collapses runs of * and matches parts in order', async () => {
+    const { compileGlob } = await import('../../../services/quality/diff.js')
+    expect(compileGlob('a**b')('ab')).toBe(true)
+    expect(compileGlob('a**b')('aXYb')).toBe(true)
+    expect(compileGlob('*a*b*')('xaxbx')).toBe(true)
+    expect(compileGlob('*a*b*')('ba')).toBe(false)
+    // head and tail may not overlap
+    expect(compileGlob('ab*ba')('aba')).toBe(false)
+    expect(compileGlob('ab*ba')('abba')).toBe(true)
+    expect(compileGlob('*')('')).toBe(true)
+    expect(compileGlob('w:1')('w:1')).toBe(true)
+    expect(compileGlob('w:1')('w:12')).toBe(false)
+    // regex metacharacters are plain text
+    expect(compileGlob('a.b')('aXb')).toBe(false)
+    expect(compileGlob('(a)+*')('(a)+x')).toBe(true)
+  })
+  it('stays fast on a pattern that backtracks as a regular expression', async () => {
+    const { compileGlob } = await import('../../../services/quality/diff.js')
+    const key = 'a'.repeat(150)
+    const fn = compileGlob('****#')
+    const fn2 = compileGlob('*a*a*a*#')
+    const started = Date.now()
+    for (let i = 0; i < 2000; i++) {
+      expect(fn(key)).toBe(false)
+      expect(fn2(key)).toBe(false)
+    }
+    expect(Date.now() - started).toBeLessThan(1000)
+  })
+  it('key_exact matches the key literally, * included', () => {
+    const known = [{ id: 3, check_id: 'x', match: { key_exact: 'w:*' }, reason: 'literal' }]
+    const d = diffRows(
+      {},
+      [r('w:*', { v: 1 }), r('w:1', { v: 1 })],
+      [r('w:*', { v: 2 }), r('w:1', { v: 2 })],
+      known
+    )
+    expect(d.rows.find((x) => x.key === 'w:*')?.known_id).toBe(3)
+    expect(d.rows.find((x) => x.key === 'w:1')?.known_id).toBeNull()
+  })
+})
+
+describe('parseKnownMatch', () => {
+  it('rejects prototype keys in a cluster and builds a prototype-free object', async () => {
+    const { parseKnownMatch } = await import('../../../services/quality/diff.js')
+    for (const k of ['__proto__', 'constructor', 'prototype']) {
+      const raw = JSON.parse(`{"cluster":{"${k}":"x"}}`)
+      expect(parseKnownMatch(raw)).toEqual({
+        ok: false,
+        error: 'match.cluster may not use the name __proto__, constructor or prototype'
+      })
+    }
+    const ok = parseKnownMatch({ cluster: { zone: 'Z1' } })
+    expect(ok.ok).toBe(true)
+    if (ok.ok) {
+      expect(Object.getPrototypeOf(ok.match.cluster)).toBeNull()
+      expect(ok.match.cluster?.zone).toBe('Z1')
+    }
+  })
+  it('accepts key_exact (any characters) but not together with key', async () => {
+    const { parseKnownMatch } = await import('../../../services/quality/diff.js')
+    expect(parseKnownMatch({ key_exact: 'a*b*c*d*e*f' })).toEqual({
+      ok: true,
+      match: { key_exact: 'a*b*c*d*e*f' }
+    })
+    expect(parseKnownMatch({ key: 'a', key_exact: 'a' })).toEqual({
+      ok: false,
+      error: 'match takes key or key_exact, not both'
+    })
+    expect(parseKnownMatch({ key_exact: '' }).ok).toBe(false)
+  })
+})

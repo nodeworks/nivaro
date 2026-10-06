@@ -1,9 +1,21 @@
 import type { QualityCheck, QualityRow, QualityValue } from '@nivaro/extension-kit'
 
+/**
+ * A known difference's condition. `key` is a glob where `*` stands for any
+ * run of characters; a literal `*` in a key cannot be escaped, so a row that
+ * must be named exactly (the "Mark as expected" row action) uses `key_exact`.
+ */
+export interface KnownMatch {
+  key?: string
+  key_exact?: string
+  cluster?: Record<string, string>
+  field?: string
+}
+
 export interface KnownDifference {
   id: number
   check_id: string
-  match: { key?: string; cluster?: Record<string, string>; field?: string }
+  match: KnownMatch
   reason: string
 }
 
@@ -88,12 +100,105 @@ export function sameValue(a: QualityValue, b: QualityValue, tol?: Tol): boolean 
   return String(a).trim() === String(b).trim()
 }
 
+/**
+ * Compiles a `*` glob into a linear matcher: runs of `*` collapse to one, the
+ * text must start with the part before the first `*` and end with the part
+ * after the last, and the parts between are found in order with indexOf. No
+ * regular expression, so no backtracking however the pattern is written.
+ */
+export function compileGlob(pattern: string): (text: string) => boolean {
+  const collapsed = pattern.replace(/\*+/g, '*')
+  if (!collapsed.includes('*')) return (text) => text === collapsed
+  const parts = collapsed.split('*')
+  const head = parts[0]
+  const tail = parts[parts.length - 1]
+  const middle = parts.slice(1, -1).filter((p) => p !== '')
+  return (text) => {
+    if (text.length < head.length + tail.length) return false
+    if (!text.startsWith(head) || !text.endsWith(tail)) return false
+    const end = text.length - tail.length
+    let pos = head.length
+    for (const part of middle) {
+      const at = text.indexOf(part, pos)
+      if (at < 0 || at + part.length > end) return false
+      pos = at + part.length
+    }
+    return true
+  }
+}
+
 export function globMatch(pattern: string, text: string): boolean {
-  const re = pattern
-    .split('*')
-    .map((p) => p.replace(/[.+?^${}()|[\]\\]/g, '\\$&'))
-    .join('.*')
-  return new RegExp(`^${re}$`).test(text)
+  return compileGlob(pattern)(text)
+}
+
+/** A key glob may use `*` this many times at most. */
+export const MAX_KEY_WILDCARDS = 4
+const RESERVED_NAMES = new Set(['__proto__', 'constructor', 'prototype'])
+
+/**
+ * A known difference's match: at least one condition, every part bounded.
+ * The one validator — the routes use it on input and loadKnown re-applies it
+ * to every stored entry.
+ */
+export function parseKnownMatch(
+  raw: unknown
+): { ok: true; match: KnownMatch } | { ok: false; error: string } {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw))
+    return { ok: false, error: 'match must be an object' }
+  const m = raw as Record<string, unknown>
+  const match: KnownMatch = {}
+  if (m.key != null && m.key_exact != null)
+    return { ok: false, error: 'match takes key or key_exact, not both' }
+  if (m.key != null) {
+    if (typeof m.key !== 'string' || m.key.length < 1 || m.key.length > 300)
+      return { ok: false, error: 'match.key must be 1–300 characters' }
+    if ((m.key.match(/\*/g)?.length ?? 0) > MAX_KEY_WILDCARDS)
+      return {
+        ok: false,
+        error: `match.key may use * at most ${MAX_KEY_WILDCARDS} times`
+      }
+    match.key = m.key
+  }
+  if (m.key_exact != null) {
+    if (typeof m.key_exact !== 'string' || m.key_exact.length < 1 || m.key_exact.length > 300)
+      return { ok: false, error: 'match.key_exact must be 1–300 characters' }
+    match.key_exact = m.key_exact
+  }
+  if (m.cluster != null) {
+    if (typeof m.cluster !== 'object' || Array.isArray(m.cluster))
+      return { ok: false, error: 'match.cluster must be an object' }
+    const entries = Object.entries(m.cluster as Record<string, unknown>)
+    if (entries.length < 1 || entries.length > 6)
+      return { ok: false, error: 'match.cluster must have 1–6 entries' }
+    const cluster = Object.create(null) as Record<string, string>
+    for (const [k, v] of entries) {
+      if (RESERVED_NAMES.has(k))
+        return {
+          ok: false,
+          error: 'match.cluster may not use the name __proto__, constructor or prototype'
+        }
+      if (k.length < 1 || k.length > 200 || typeof v !== 'string' || v.length > 200)
+        return {
+          ok: false,
+          error: 'match.cluster names and values must be text of 200 characters at most'
+        }
+      cluster[k] = v
+    }
+    match.cluster = cluster
+  }
+  if (m.field != null) {
+    if (typeof m.field !== 'string' || m.field.length < 1 || m.field.length > 100)
+      return { ok: false, error: 'match.field must be 1–100 characters' }
+    match.field = m.field
+  }
+  if (
+    match.key === undefined &&
+    match.key_exact === undefined &&
+    match.cluster === undefined &&
+    match.field === undefined
+  )
+    return { ok: false, error: 'match needs at least one condition: key, cluster or field' }
+  return { ok: true, match }
 }
 
 const show = (v: QualityValue | undefined): string => (isBlank(v) ? '—' : String(v))
@@ -102,7 +207,9 @@ function clusterMatches(
   want: Record<string, string>,
   ...have: Array<Record<string, string> | undefined>
 ): boolean {
-  return have.some((h) => h && Object.entries(want).every(([k, v]) => h[k] === v))
+  return have.some(
+    (h) => h && Object.entries(want).every(([k, v]) => Object.hasOwn(h, k) && h[k] === v)
+  )
 }
 
 export function diffRows(
@@ -115,6 +222,11 @@ export function diffRows(
   const cMap = new Map(current.map((r) => [r.key, r]))
   const keys = [...new Set([...bMap.keys(), ...cMap.keys()])].sort()
 
+  // Each entry's key glob is compiled once, not once per row.
+  const entries = known.map((k) => ({
+    k,
+    key: k.match.key !== undefined ? compileGlob(k.match.key) : null
+  }))
   const rows: DiffRow[] = []
   const knownHits = new Map<number, number>()
   let matched = 0
@@ -151,13 +263,14 @@ export function diffRows(
     let expected = reason !== null
     let knownId: number | null = null
     if (!expected) {
-      const hit = known.find((k) => {
+      const hit = entries.find(({ k, key: keyMatches }) => {
         const m = k.match
-        if (m.key !== undefined && !globMatch(m.key, key)) return false
+        if (keyMatches && !keyMatches(key)) return false
+        if (m.key_exact !== undefined && m.key_exact !== key) return false
         if (m.cluster && !clusterMatches(m.cluster, b?.cluster, c?.cluster)) return false
         if (m.field !== undefined && !fields.includes(m.field)) return false
         return true
-      })
+      })?.k
       if (hit) {
         expected = true
         reason = hit.reason
