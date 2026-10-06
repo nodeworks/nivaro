@@ -4,13 +4,16 @@ import { type ReactNode, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import {
-  QUALITY_TARGET,
+  isStaleVerifying,
+  pickTarget,
   type QualityRun,
   type QualityStatus,
+  RUN_ID_SHAPE,
   runTotals,
   STATUS_TEXT,
   StatusDot,
-  TotalsLine
+  TotalsLine,
+  useQualityConfig
 } from '@/components/quality-checks-card'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet'
@@ -19,7 +22,7 @@ import { api } from '@/lib/api'
 import { cn, formatDateTime, formatRelative } from '@/lib/utils'
 
 /**
- * /quality-checks — after every EFP_Staging rebuild, production figures
+ * /quality-checks — after every rebuild of a target, production figures
  * (captured right after the clone) are compared with the converted database.
  * This page reads those results: per-area check list, the rows that differ,
  * clusters of differences, and the known differences an admin marked as
@@ -64,6 +67,7 @@ interface Cluster {
 }
 interface KnownMatch {
   key?: string
+  key_exact?: string
   cluster?: Record<string, string>
   field?: string
 }
@@ -80,11 +84,6 @@ interface Known {
   stale: boolean
 }
 type ApiError = { response?: { data?: { error?: string } } }
-
-const RERUN_BODY = {
-  target: QUALITY_TARGET,
-  runbook: { extension: 'efp-ops', key: 'quality-rerun' }
-}
 
 const AREA_LABELS: Record<string, string> = {
   owners: 'Owners',
@@ -106,6 +105,11 @@ const RUN_STATUS_LABEL: Record<QualityRun['status'], string> = {
 }
 
 const errText = (e: unknown, fallback: string) => (e as ApiError).response?.data?.error ?? fallback
+/** A run's status as the page names it; a run stuck verifying says so. */
+const runStatusLabel = (r: QualityRun) =>
+  isStaleVerifying(r) ? 'stopped while verifying' : (RUN_STATUS_LABEL[r.status] ?? r.status)
+const isLive = (r: QualityRun) =>
+  r.status !== 'done' && r.status !== 'error' && !isStaleVerifying(r)
 const fmt = (n: number) => n.toLocaleString('en-US')
 
 /** Pure: milliseconds as `850ms`, `12s`, `3m 04s`, `6h 31m`. */
@@ -123,6 +127,7 @@ export function fmtMs(ms?: number | null): string {
 export function matchSummary(m: KnownMatch): string {
   const parts: string[] = []
   if (m.key) parts.push(`key ${m.key}`)
+  if (m.key_exact) parts.push(`key = ${m.key_exact}`)
   if (m.cluster)
     parts.push(
       Object.entries(m.cluster)
@@ -188,17 +193,25 @@ export default function QualityChecksPage() {
   const qc = useQueryClient()
   const tab = params.get('tab') === 'known' ? 'known' : 'checks'
 
+  const cfgQ = useQualityConfig()
+  const cfg = cfgQ.data
+  const targets = cfg?.targets ?? []
+  const target = pickTarget(targets, params.get('target'))
+
   const runsQ = useQuery({
-    queryKey: ['quality-runs', QUALITY_TARGET],
+    queryKey: ['quality-runs', target],
+    enabled: !!target,
     queryFn: () =>
       api
-        .get<{ data: QualityRun[] }>('/quality-checks/runs', { params: { target: QUALITY_TARGET } })
+        .get<{ data: QualityRun[] }>('/quality-checks/runs', { params: { target } })
         .then((r) => r.data.data),
-    refetchInterval: (x) =>
-      x.state.data?.some((r) => r.status !== 'done' && r.status !== 'error') ? 10_000 : 60_000
+    refetchInterval: (x) => (x.state.data?.some(isLive) ? 10_000 : 60_000)
   })
   const runs = runsQ.data ?? []
-  const runId = params.get('run') ?? runs[0]?.id ?? null
+  // Only a uuid from the address bar reaches a request path.
+  const askedRun = params.get('run')
+  const runId = (askedRun && RUN_ID_SHAPE.test(askedRun) ? askedRun : null) ?? runs[0]?.id ?? null
+  const runPath = runId ? encodeURIComponent(runId) : ''
 
   const runQ = useQuery({
     queryKey: ['quality-run', runId],
@@ -206,7 +219,7 @@ export default function QualityChecksPage() {
     queryFn: () =>
       api
         .get<{ data: { run: QualityRun; results: ResultSummary[] } }>(
-          `/quality-checks/runs/${runId}`
+          `/quality-checks/runs/${runPath}`
         )
         .then((r) => r.data.data)
   })
@@ -218,15 +231,18 @@ export default function QualityChecksPage() {
     queryKey: ['quality-rebuild-active'],
     queryFn: () =>
       api
-        .get<{ runbooks?: Array<{ active: unknown }> }>('/runbooks')
+        .get<{ runbooks?: Array<{ active: { target?: string | null } | null }> }>('/runbooks')
         .then((r) => r.data)
         .catch(() => ({ runbooks: [] })),
     staleTime: 15_000
   })
-  const rebuildActive = !!runbooksQ.data?.runbooks?.some((r) => r.active)
+  // Only a queued or running job against THIS target holds off a re-run.
+  const rebuildActive = !!runbooksQ.data?.runbooks?.some(
+    (r) => r.active && (r.active.target ?? '').toLowerCase() === (target ?? '').toLowerCase()
+  )
 
   const rerun = useMutation({
-    mutationFn: () => api.post('/quality-checks/rerun', RERUN_BODY),
+    mutationFn: () => api.post('/quality-checks/rerun', { target }),
     onSuccess: () => {
       toast.success('Re-run queued — the host agent picks it up within a minute')
       for (const key of ['runbooks', 'quality-rebuild-active', 'quality-runs'])
@@ -262,17 +278,25 @@ export default function QualityChecksPage() {
               Quality checks
             </h1>
             <p className='mt-0.5 max-w-[72ch] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Production figures captured right after each {QUALITY_TARGET} clone, compared with the
-              converted database. Red means a difference nobody has explained yet; amber means it is
-              expected.
+              Production figures captured right after each clone{target ? ` of ${target}` : ''},
+              compared with the converted database. Red means a difference nobody has explained yet;
+              amber means it is expected.
             </p>
           </div>
           <Button
             size='sm'
             variant='outline'
-            data-quality-rerun
-            disabled={rerun.isPending || rebuildActive || runs.length === 0}
-            title={rebuildActive ? 'A rebuild is running — re-run after it finishes' : undefined}
+            data-checks-rerun
+            disabled={
+              rerun.isPending || rebuildActive || runs.length === 0 || !cfg?.rerun || !target
+            }
+            title={
+              !cfg?.rerun
+                ? 'No extension declares a runbook that re-runs these checks'
+                : rebuildActive
+                  ? 'A rebuild is running — re-run after it finishes'
+                  : undefined
+            }
             onClick={() => rerun.mutate()}
           >
             <RotateCw className={cn('h-3.5 w-3.5', rerun.isPending && 'animate-spin')} /> Re-run
@@ -281,6 +305,21 @@ export default function QualityChecksPage() {
         </div>
         {runs.length > 0 && (
           <div className='mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-[12px]'>
+            {targets.length > 1 && (
+              <SimpleSelect
+                value={target ?? ''}
+                onChange={(v) => {
+                  const next = new URLSearchParams(params)
+                  next.set('target', v)
+                  next.delete('run')
+                  setParams(next, { replace: true })
+                }}
+                ariaLabel='Target'
+                className='h-8 w-[200px] text-[12px]'
+                triggerProps={{ 'data-quality-target': target ?? '' }}
+                options={targets.map((t) => ({ value: t, label: t }))}
+              />
+            )}
             <SimpleSelect
               value={runId ?? ''}
               onChange={(v) => setParam('run', v)}
@@ -289,7 +328,7 @@ export default function QualityChecksPage() {
               triggerProps={{ 'data-quality-run': runId ?? '' }}
               options={runs.map((r) => ({
                 value: r.id,
-                label: `${formatDateTime(r.started_at)} · ${RUN_STATUS_LABEL[r.status] ?? r.status}`
+                label: `${formatDateTime(r.started_at)} · ${runStatusLabel(r)}`
               }))}
             />
             <TotalsLine totals={totals} />
@@ -306,6 +345,15 @@ export default function QualityChecksPage() {
             )}
             <RedSparkline runs={runs} />
           </div>
+        )}
+        {run && isStaleVerifying(run) && (
+          <p
+            data-quality-stale-run
+            className='mt-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-500/30 dark:bg-amber-400/10 dark:text-amber-200'
+          >
+            This run started verifying over two hours ago and never finished — its runner was
+            stopped. Re-run the checks to finish it.
+          </p>
         )}
         {run?.status === 'error' && run.error && (
           <p className='mt-2 rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-[12px] text-rose-800 dark:border-rose-500/30 dark:bg-rose-400/10 dark:text-rose-200'>
@@ -338,16 +386,23 @@ export default function QualityChecksPage() {
       </header>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 px-6 py-5 dark:bg-background'>
-        {runsQ.isLoading ? (
+        {cfgQ.isLoading || (!!target && runsQ.isLoading) ? (
           <p className='text-[12px] text-slate-400'>Loading…</p>
-        ) : runsQ.isError ? (
+        ) : cfg && !cfg.available ? (
+          <p
+            data-quality-not-set-up
+            className='text-[12.5px] text-slate-500 dark:text-muted-foreground'
+          >
+            Not set up on this database (migration 404).
+          </p>
+        ) : cfgQ.isError || runsQ.isError ? (
           <p className='text-[12.5px] text-rose-600 dark:text-rose-400'>
-            {errText(runsQ.error, 'Could not load quality runs')}
+            {errText(cfgQ.error ?? runsQ.error, 'Could not load quality runs')}
           </p>
         ) : tab === 'known' ? (
           <KnownTab results={results} runs={runs} />
         ) : runs.length === 0 ? (
-          <EmptyState />
+          <EmptyState target={target} />
         ) : (
           <ChecksTab
             key={runId ?? 'none'}
@@ -371,15 +426,15 @@ export default function QualityChecksPage() {
   )
 }
 
-function EmptyState() {
+function EmptyState({ target }: { target: string | null }) {
   return (
     <div className='rounded-lg border border-dashed border-slate-300 bg-white px-6 py-10 text-center dark:border-border dark:bg-card'>
       <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
         No quality run yet
       </p>
       <p className='mx-auto mt-1 max-w-[52ch] text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-        Checks run inside a real rebuild: run Rebuild {QUALITY_TARGET} from the Runbooks card on
-        Environments. A dry run does not clone, so it has nothing to compare.
+        Checks run inside a real rebuild{target ? ` of ${target}` : ''}: start it from the Runbooks
+        card on Environments. A dry run does not clone, so it has nothing to compare.
       </p>
     </div>
   )
@@ -408,9 +463,11 @@ function ChecksTab({
   if (results.length === 0)
     return (
       <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-        {run && run.status !== 'done' && run.status !== 'error'
-          ? `This run is ${RUN_STATUS_LABEL[run.status]} — results appear once the converted database is checked.`
-          : 'This run has no check results.'}
+        {run && isStaleVerifying(run)
+          ? 'This run stopped while verifying and has no check results.'
+          : run && isLive(run)
+            ? `This run is ${RUN_STATUS_LABEL[run.status]} — results appear once the converted database is checked.`
+            : 'This run has no check results.'}
       </p>
     )
 
@@ -607,7 +664,9 @@ function CheckSheet({
             result: ResultSummary & { rows: DiffRow[]; clusters: Cluster[] }
             known: Known[]
           }
-        }>(`/quality-checks/runs/${runId}/checks/${encodeURIComponent(checkId)}`)
+        }>(
+          `/quality-checks/runs/${encodeURIComponent(runId)}/checks/${encodeURIComponent(checkId)}`
+        )
         .then((r) => r.data.data)
   })
   const result = q.data?.result
@@ -661,7 +720,7 @@ function CheckSheet({
               {head.baseline_only > 0 && <span>{fmt(head.baseline_only)} only in production</span>}
               {head.current_only > 0 && <span>{fmt(head.current_only)} only in staging</span>}
               <a
-                href={`/api/quality-checks/runs/${runId}/checks/${encodeURIComponent(checkId)}/csv`}
+                href={`/api/quality-checks/runs/${encodeURIComponent(runId)}/checks/${encodeURIComponent(checkId)}/csv`}
                 data-quality-csv
                 className='ml-auto inline-flex items-center gap-1 text-nvr-navy underline-offset-2 hover:underline dark:text-nvr-cyan'
               >
@@ -886,7 +945,7 @@ function MismatchTable({
                     <MarkExpectedForm
                       runId={runId}
                       checkId={checkId}
-                      match={{ key: r.key }}
+                      match={{ key_exact: r.key }}
                       subject={r.label ?? r.key}
                       onDone={() => setMarking(null)}
                     />

@@ -15,12 +15,58 @@ export interface QualityRun {
   started_at: string
   captured_at: string | null
   verified_at: string | null
+  verify_started_at?: string | null
   totals: Partial<Record<QualityStatus, number>> | null
   runbook_run: string | null
   error: string | null
 }
 
-export const QUALITY_TARGET = 'EFP_Staging'
+/** What GET /quality-checks/config answers. */
+export interface QualityConfig {
+  /** The host runbook an extension declared to re-run its checks, if any. */
+  rerun: { extension: string; key: string } | null
+  /** Databases the runs name, newest first. */
+  targets: string[]
+}
+
+/** Accepted as `?run=`: a run id is a uuid, nothing else reaches a request path. */
+export const RUN_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/** A run left 'verifying' over two hours has lost its runner (mirrors the server). */
+const STALE_VERIFY_MS = 2 * 60 * 60 * 1000
+
+/** Pure: a run still 'verifying' more than two hours after its verify began. */
+export function isStaleVerifying(
+  run: Pick<QualityRun, 'status' | 'verify_started_at' | 'captured_at' | 'started_at'>,
+  now = Date.now()
+): boolean {
+  if (run.status !== 'verifying') return false
+  const since = run.verify_started_at ?? run.captured_at ?? run.started_at
+  const t = since ? Date.parse(since) : Number.NaN
+  return !Number.isNaN(t) && now - t > STALE_VERIFY_MS
+}
+
+/** The quality console's config; `available` false = the tables are not on this database. */
+export function useQualityConfig() {
+  return useQuery({
+    queryKey: ['quality-config'],
+    queryFn: () =>
+      api
+        .get<{ data: QualityConfig; available?: boolean }>('/quality-checks/config')
+        .then((r) => ({ ...r.data.data, available: r.data.available !== false })),
+    staleTime: 60_000,
+    retry: false
+  })
+}
+
+/** Pure: the target the page shows — the asked one if the runs name it (any case), else the newest. */
+export function pickTarget(targets: string[], asked: string | null): string | null {
+  if (asked) {
+    const hit = targets.find((t) => t.toLowerCase() === asked.toLowerCase())
+    if (hit) return hit
+  }
+  return targets[0] ?? null
+}
 
 export const STATUS_TEXT: Record<QualityStatus, string> = {
   green: 'text-emerald-600 dark:text-emerald-400',
@@ -78,22 +124,27 @@ export function TotalsLine({ totals }: { totals: Record<QualityStatus, number> }
 }
 
 /**
- * Environments → Quality checks: the latest quality run of the EFP_Staging
- * rebuild in one line, with a link to the full page. Renders nothing when
- * the quality routes are not available on this instance.
+ * Environments → Quality checks: the latest quality run of the newest
+ * target in one line, with a link to the full page. Renders nothing when
+ * the quality routes are not available here or the tables are not set up.
  */
 export function QualityChecksCard() {
+  const cfg = useQualityConfig()
+  const target = cfg.data ? pickTarget(cfg.data.targets, null) : null
   const q = useQuery({
-    queryKey: ['quality-runs', QUALITY_TARGET],
+    queryKey: ['quality-runs', target],
+    enabled: !!target,
     queryFn: () =>
       api
-        .get<{ data: QualityRun[] }>('/quality-checks/runs', { params: { target: QUALITY_TARGET } })
+        .get<{ data: QualityRun[] }>('/quality-checks/runs', { params: { target } })
         .then((r) => r.data.data),
     refetchInterval: 60_000,
     retry: false
   })
-  if (q.isLoading || q.isError) return null
+  if (cfg.isLoading || cfg.isError || !cfg.data?.available) return null
+  if (target && (q.isLoading || q.isError)) return null
   const latest = q.data?.[0] ?? null
+  const stale = !!latest && isStaleVerifying(latest)
   const totals = runTotals(latest)
   const when = latest?.verified_at ?? latest?.captured_at ?? latest?.started_at
   return (
@@ -115,7 +166,7 @@ export function QualityChecksCard() {
       </div>
       {!latest ? (
         <p className='mt-1 text-[12px] text-slate-500 dark:text-muted-foreground'>
-          No quality run yet — run Rebuild {QUALITY_TARGET}
+          No quality run yet — they run inside a real rebuild
         </p>
       ) : latest.status === 'done' ? (
         <p className='mt-1 flex flex-wrap items-center gap-x-1.5 text-[12px] text-slate-600 dark:text-slate-300'>
@@ -125,6 +176,11 @@ export function QualityChecksCard() {
           <span>Checked {when ? formatRelative(when) : '—'}</span>
           <span className='text-slate-300 dark:text-slate-600'>·</span>
           <TotalsLine totals={totals} />
+        </p>
+      ) : stale ? (
+        <p className='mt-1 text-[12px] text-amber-700 dark:text-amber-300' data-quality-card-stale>
+          The last check stopped without finishing (started {formatRelative(latest.started_at)}) —
+          re-run it from the quality checks page
         </p>
       ) : latest.status === 'error' ? (
         <p className='mt-1 text-[12px] text-rose-600 dark:text-rose-400'>
