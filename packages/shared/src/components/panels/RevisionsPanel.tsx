@@ -53,6 +53,8 @@ interface Revision {
     to_label: string | null
     transition_label: string | null
     source: string | null
+    /** #645 — the out-of-office owner a delegate's move stood in for. */
+    on_behalf_of?: { id: string; name: string | null } | null
   } | null
 }
 
@@ -725,7 +727,12 @@ function revisionSentence(rev: Revision, humanCount: number, systemCount: number
 function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean }) {
   const ev = revision.event
   const auto = ev?.source === 'auto' || (!revision.user_id && ev?.kind === 'transition')
-  const who = auto ? 'Automatic rule' : revisionUserName(revision)
+  const behalf = !auto && ev?.on_behalf_of?.name ? ev.on_behalf_of.name : null
+  const who = auto
+    ? 'Automatic rule'
+    : behalf
+      ? `${revisionUserName(revision)}, for ${behalf}`
+      : revisionUserName(revision)
   let sentence: React.ReactNode
   if (ev?.kind === 'transition') {
     sentence = (
@@ -776,7 +783,11 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
     ? new Date(revision.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : '—'
   return (
-    <div className='relative pl-9' data-revision-event={ev?.kind ?? revision.action ?? ''}>
+    <div
+      className='relative pl-9'
+      data-revision-event={ev?.kind ?? revision.action ?? ''}
+      data-revision-on-behalf={behalf ? ev?.on_behalf_of?.id : undefined}
+    >
       <span
         className={cn(
           'absolute left-[11px] top-[18px] h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-card',

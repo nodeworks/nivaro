@@ -1,6 +1,8 @@
 import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
+import { hasColumn } from '../lib/column-probe.js'
+import { actingForLabel, resolveOnBehalfOf } from './acting-for.js'
 import { logActivity } from './activity.js'
 import { buildApprovalBrief } from './approval-brief.js'
 import { buildApprovalChain } from './approval-chain.js'
@@ -424,6 +426,8 @@ async function buildTransitionEventPayload(args: {
   source: string
   comment: string | null
   userId: string | null
+  /** #645 — the out-of-office owner the actor stood in for (history.on_behalf_of). */
+  onBehalfOf?: string | null
   enteredPrevAt: Date | null
   /** Harness replay: the moment the move happened (chain + stamp as of then). */
   asOf?: Date | null
@@ -459,7 +463,7 @@ async function buildTransitionEventPayload(args: {
   // up, and what changed since the record entered the state it just left.
   // Best-effort — a transition never fails because an email block could not
   // be assembled.
-  const [recordCard, approvalChain, brief, actor, latestComment] = await Promise.all([
+  const [recordCard, approvalChain, brief, actor, latestComment, principal] = await Promise.all([
     buildRecordCard(subject.collection, subject.itemId).catch(() => null),
     buildApprovalChain(instance.id, {
       asOfStateId: newStateObj?.id ?? null,
@@ -476,18 +480,37 @@ async function buildTransitionEventPayload(args: {
       : Promise.resolve(undefined),
     // The newest people comment on the subject record — the emails end with
     // it so a reader gets the latest human context without opening the record.
-    latestPeopleComment(subject.collection, subject.itemId).catch(() => null)
+    latestPeopleComment(subject.collection, subject.itemId).catch(() => null),
+    args.onBehalfOf
+      ? (db('nivaro_users')
+          .where({ id: args.onBehalfOf })
+          .first('first_name', 'last_name', 'email')
+          .catch(() => undefined) as Promise<
+          { first_name: string | null; last_name: string | null; email: string } | undefined
+        >)
+      : Promise.resolve(undefined)
   ])
-  const actorName = actor
+  const actorSelfName = actor
     ? [actor.first_name, actor.last_name].filter(Boolean).join(' ') || actor.email
     : null
+  const principalName = principal
+    ? [principal.first_name, principal.last_name].filter(Boolean).join(' ') || principal.email
+    : null
+  // "Kim Lee, for Beth Ross" when a delegate stood in for an out-of-office
+  // owner (#645) — every template that prints actor_name reads it that way.
+  const actorName = actingForLabel(actorSelfName, principalName)
   return {
     record_card: recordCard,
     approval_chain: approvalChain,
     brief,
     latest_comment: latestComment,
     actor_name: actorName,
+    actor_self_name: actorSelfName,
     actor_email: actor?.email ?? null,
+    on_behalf_of:
+      args.onBehalfOf && principal
+        ? { id: args.onBehalfOf, name: principalName, email: principal.email ?? null }
+        : null,
     collection: instance.collection,
     item: instance.item,
     subject_collection: subject.collection,
@@ -563,6 +586,7 @@ export async function buildTransitionPayloadFromHistory(
         from_state: string | null
         to_state: string
         user: string | null
+        on_behalf_of?: string | null
         comment: string | null
         timestamp: Date
       }
@@ -598,6 +622,7 @@ export async function buildTransitionPayloadFromHistory(
     source: 'harness',
     comment: h.comment,
     userId: h.user,
+    onBehalfOf: h.on_behalf_of ?? null,
     enteredPrevAt: prevEntry ? new Date(prevEntry.timestamp) : null,
     asOf: new Date(h.timestamp)
   })
@@ -1002,13 +1027,48 @@ export interface ApplyTransitionResult {
  * condition rules) is the CALLER's responsibility — the manual endpoint applies
  * user-facing gates; the auto engine applies condition rules only.
  */
-export async function applyTransition(opts: {
+export async function applyTransition(opts: ApplyTransitionOpts): Promise<ApplyTransitionResult> {
+  const key = flightKey(opts.instance.collection, opts.instance.item)
+  transitionsInFlight.set(key, (transitionsInFlight.get(key) ?? 0) + 1)
+  try {
+    return await applyTransitionInner(opts)
+  } finally {
+    const left = (transitionsInFlight.get(key) ?? 1) - 1
+    if (left > 0) transitionsInFlight.set(key, left)
+    else transitionsInFlight.delete(key)
+  }
+}
+
+interface ApplyTransitionOpts {
   instance: WorkflowInstance
   transition: WorkflowTransition
   userId?: string | null
   comment?: string | null
   source?: 'manual' | 'auto'
-}): Promise<ApplyTransitionResult> {
+}
+
+// ─── Records mid-transition (#818) ───────────────────────────────────────────
+// A transition's actions write onto the record THROUGH THE ITEMS SERVICE, so
+// the record's own after-hooks fire — including the auto-transition hook
+// (hooks/workflow-auto.ts). Left alone, a blocking action's writeback would
+// evaluate auto transitions against the state the record is LEAVING while the
+// transition is still deciding, and a post action's writeback would race the
+// caller's own runAutoTransitions and could fire the same auto transition
+// twice. While a record is in flight its hook-driven re-evaluation is skipped;
+// whoever applied the transition re-evaluates once it has landed (the manual
+// endpoint chains runAutoTransitions, runAutoTransitions re-reads after each
+// hop). Per process — the writes and their hooks run in the same process.
+const transitionsInFlight = new Map<string, number>()
+
+function flightKey(collection: string, item: string | number): string {
+  return `${collection}:${String(item).toUpperCase()}`
+}
+
+export function isTransitionInFlight(collection: string, item: string | number): boolean {
+  return (transitionsInFlight.get(flightKey(collection, item)) ?? 0) > 0
+}
+
+async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTransitionResult> {
   const { instance, transition } = opts
   const previousState = instance.current_state
 
@@ -1059,6 +1119,23 @@ export async function applyTransition(opts: {
     (await db<WorkflowState>('nivaro_workflow_states').where({ id: newState }).first()) ??
     null
 
+  // #645 — a delegate moving a record for an out-of-office owner of the step
+  // they are leaving. Resolved before the instance moves (the step's owners
+  // are the CURRENT state's); stamped only once migration 395 has run —
+  // otherwise the comment keeps carrying "(as delegate for …)".
+  const onBehalfOf =
+    opts.source === 'auto'
+      ? null
+      : await resolveOnBehalfOf({
+          actorId: opts.userId ?? null,
+          stateId: previousState,
+          instanceId: instance.id,
+          collection: instance.collection,
+          item: instance.item
+        })
+  const behalfStored =
+    onBehalfOf != null && (await hasColumn('nivaro_workflow_history', 'on_behalf_of'))
+
   await db('nivaro_workflow_instances')
     .where({ id: instance.id })
     .update({
@@ -1073,7 +1150,10 @@ export async function applyTransition(opts: {
       from_state: previousState,
       to_state: newState,
       user: opts.userId ?? null,
-      comment: await annotateDelegateComment(opts.userId ?? null, opts.comment ?? null),
+      ...(behalfStored ? { on_behalf_of: onBehalfOf } : {}),
+      comment: behalfStored
+        ? (opts.comment ?? null)
+        : await annotateDelegateComment(opts.userId ?? null, opts.comment ?? null),
       timestamp: new Date(),
       // #518: an auto transition (or one no person drove) is the machine's
       // entry, whatever its comment happens to say.
@@ -1161,6 +1241,7 @@ export async function applyTransition(opts: {
       source: opts.source ?? 'manual',
       comment: opts.comment ?? null,
       userId: opts.userId ?? null,
+      onBehalfOf: behalfStored ? onBehalfOf : null,
       enteredPrevAt
     })
     withChainStep(historyStep, () =>
@@ -1265,6 +1346,9 @@ export async function applyTransition(opts: {
  * supported). Chains until nothing more fires (cap 5). Never throws.
  */
 export async function runAutoTransitions(collection: string, item: string): Promise<void> {
+  // Mid-transition (a transition action's writeback fired this through the
+  // record's after-hook): the transition's caller re-evaluates once it lands.
+  if (isTransitionInFlight(collection, item)) return
   try {
     // Each hop hangs under the history row of the hop before it, so a chain
     // of auto transitions reads as a chain, not as siblings.

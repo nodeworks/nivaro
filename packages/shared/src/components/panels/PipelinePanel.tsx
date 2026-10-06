@@ -80,6 +80,15 @@ interface PipelineHistoryEntry {
   transition_text?: string | null
   /** person | machine | import | integration — who kind of actor moved it. */
   origin?: string | null
+  /** #645 — a delegate's move: the out-of-office owner they stood in for. */
+  on_behalf_of?: string | null
+  on_behalf_of_name?: string | null
+}
+
+/** "Kim Lee, for Beth Ross" when a delegate moved it for an out-of-office owner. */
+function withBehalf(name: string | null | undefined, h: PipelineHistoryEntry): string {
+  const base = name || 'System'
+  return h.on_behalf_of_name ? `${base}, for ${h.on_behalf_of_name}` : base
 }
 
 /** A move nobody made by hand: the engine, an import, or an integration. */
@@ -402,7 +411,7 @@ function StateTrack({
     )
   }
   function entryName(h: PipelineHistoryEntry) {
-    return [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email || 'System'
+    return withBehalf([h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email, h)
   }
 
   // States a recorded forward hop jumped OVER. The engine skipped them at the
@@ -619,7 +628,7 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
         const machine = isMachineEntry(h)
         const userName = machine
           ? machineHeadline(h)
-          : [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email
+          : withBehalf([h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email, h)
         // The engine's own stamp ("auto: <rule>") is not a note anyone wrote.
         const note = h.comment && !machine ? h.comment : null
         const detail = machine ? machineDetail(h) : null
@@ -637,7 +646,10 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
                 <StateBadge label={h.to_state_label} color={h.to_state_color} small />
               </div>
               {note && <p className='mt-1 text-slate-500 italic'>"{note}"</p>}
-              <p className='mt-0.5 text-slate-400'>
+              <p
+                className='mt-0.5 text-slate-400'
+                data-history-on-behalf={h.on_behalf_of_name ? (h.on_behalf_of ?? '') : undefined}
+              >
                 {machine && <Zap className='mr-1 inline h-3 w-3' aria-hidden />}
                 {userName}
                 {detail ? ` · ${detail}` : ''} · {formatRelative(h.timestamp)}

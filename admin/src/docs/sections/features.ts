@@ -1346,6 +1346,11 @@ export const userDelegation: DocSection = {
     {
       type: 'p',
       text: 'When the pipeline engine resolves owners for a state, it applies delegation as the final step. Each resolved owner who is out of office with an active, non-expired delegate is replaced by the delegate. The result is de-duplicated, so two owners delegating to the same person collapse to a single entry.'
+    },
+    { type: 'h3', text: 'Acting for an owner' },
+    {
+      type: 'p',
+      text: 'When a delegate moves a record for an out-of-office owner of the step it is leaving — and is not an owner of that step in their own right — the history row records whose signature they stood in for (`on_behalf_of`). The pipeline panel, the record timeline, the revision history and the transition emails read it as "Kim Lee, for Beth Ross". An automatic transition never acts for anyone.'
     }
   ]
 }

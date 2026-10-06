@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
@@ -2095,12 +2096,25 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       })
       .map(formatTransition)
 
-    // Get history with joined state labels
-    const history = await db('nivaro_workflow_history as h')
+    // Get history with joined state labels. #645: a delegate's move names the
+    // out-of-office owner it stood in for (migration 395 — probed, so a
+    // tenant behind it still answers).
+    const behalfCol = await hasColumn('nivaro_workflow_history', 'on_behalf_of')
+    const historyQ = db('nivaro_workflow_history as h')
       .leftJoin('nivaro_workflow_states as fs', 'h.from_state', 'fs.id')
       .leftJoin('nivaro_workflow_states as ts', 'h.to_state', 'ts.id')
       .leftJoin('nivaro_users as u', 'h.user', 'u.id')
       .leftJoin('nivaro_workflow_transitions as tr', 'h.transition', 'tr.id')
+    if (behalfCol)
+      historyQ
+        .leftJoin('nivaro_users as ob', 'h.on_behalf_of', 'ob.id')
+        .select(
+          'h.on_behalf_of',
+          'ob.first_name as on_behalf_of_first_name',
+          'ob.last_name as on_behalf_of_last_name',
+          'ob.email as on_behalf_of_email'
+        )
+    const historyRows = await historyQ
       .where('h.instance', instance.id)
       .orderBy('h.timestamp', 'desc')
       .select(
@@ -2124,6 +2138,18 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         'u.last_name',
         'u.email as user_email'
       )
+    const history = (historyRows as Array<Record<string, unknown>>).map((h) => {
+      const {
+        on_behalf_of_first_name: bf,
+        on_behalf_of_last_name: bl,
+        on_behalf_of_email: be,
+        ...rest
+      } = h
+      const behalfName = h.on_behalf_of
+        ? [bf, bl].filter(Boolean).join(' ') || (be as string | null) || null
+        : null
+      return { ...rest, on_behalf_of: h.on_behalf_of ?? null, on_behalf_of_name: behalfName }
+    })
 
     const currentStateObj = states.find((s) => s.id === currentState)
 

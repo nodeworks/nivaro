@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
 
@@ -15,6 +16,8 @@ interface TimelineEvent {
   type: 'activity' | 'revision' | 'workflow' | 'comment' | 'task' | 'addendum'
   timestamp: string
   user: { id: string; name: string } | null
+  /** #645 — a workflow move a delegate made for an out-of-office owner. */
+  on_behalf_of?: { id: string; name: string } | null
   title: string
   detail: string | null
 }
@@ -69,6 +72,7 @@ export async function timelineRoutes(app: FastifyInstance) {
         .catch(() => [])
     ])
 
+    const behalfCol = await hasColumn('nivaro_workflow_history', 'on_behalf_of')
     const history =
       instances.length > 0
         ? await db('nivaro_workflow_history as h')
@@ -87,7 +91,8 @@ export async function timelineRoutes(app: FastifyInstance) {
               'h.comment',
               'fs.label as from_label',
               'ts.label as to_label',
-              'ts.color as to_color'
+              'ts.color as to_color',
+              ...(behalfCol ? ['h.on_behalf_of'] : [])
             )
         : []
 
@@ -131,6 +136,7 @@ export async function timelineRoutes(app: FastifyInstance) {
         type: 'workflow',
         timestamp: new Date(h.timestamp as string).toISOString(),
         user: h.user ? { id: String(h.user), name: '' } : null,
+        on_behalf_of: h.on_behalf_of ? { id: String(h.on_behalf_of), name: '' } : null,
         title: h.from_label
           ? `${String(h.from_label)} → ${String(h.to_label ?? '?')}`
           : `Started in ${String(h.to_label ?? '?')}`,
@@ -179,7 +185,9 @@ export async function timelineRoutes(app: FastifyInstance) {
     }
 
     // Resolve user names in one batch
-    const userIds = [...new Set(events.map((e) => e.user?.id).filter(Boolean))] as string[]
+    const userIds = [
+      ...new Set(events.flatMap((e) => [e.user?.id, e.on_behalf_of?.id]).filter(Boolean))
+    ] as string[]
     if (userIds.length > 0) {
       const users = (await db('nivaro_users')
         .whereIn('id', userIds)
@@ -192,6 +200,8 @@ export async function timelineRoutes(app: FastifyInstance) {
       )
       for (const e of events) {
         if (e.user) e.user.name = nameById.get(e.user.id) ?? e.user.id.slice(0, 8)
+        if (e.on_behalf_of)
+          e.on_behalf_of.name = nameById.get(e.on_behalf_of.id) ?? e.on_behalf_of.id.slice(0, 8)
       }
     }
 

@@ -90,6 +90,20 @@ export const userWorkflows: DocSection = {
     {
       type: 'note',
       text: 'Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.'
+    },
+    { type: 'h3', text: 'What transition actions write' },
+    {
+      type: 'p',
+      text: "A transition action's writes — the record a `create_record` action makes (and its junction rows and link-back field), the `on_success` / `on_failure` values written back onto the record, and `on_success_children` values on child rows — go through the items service like any other save. Auto ids, field rules, the created record's own pipeline auto-start, revisions, stored rollups, the integrity check and subscriptions all see them."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Who: the person who made the transition is named on the activity row, writing with the administrator role (the transition was the authorized act). An automatic transition writes as the system — no person on the row.',
+        "Reason: every such write carries the change reason `transition-action: <transition label>` and is recorded as a machine write, so it never shows up as a person's note in the Notes thread.",
+        'A writeback the items service refuses (a validation rule, an unregistered table) still lands, written directly, so an `on_failure` status is never lost. A record `create_record` cannot create through the items service is the action failing: its `on_failure` writeback runs.',
+        'While a transition is being applied, a writeback onto that record does not re-run its automatic transitions from inside the transition; they are evaluated once the transition has landed.'
+      ]
     }
   ]
 }

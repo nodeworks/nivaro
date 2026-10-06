@@ -1,5 +1,12 @@
 import { Liquid } from 'liquidjs'
 import { db } from '../db/index.js'
+import {
+  type ActionWritePath,
+  actionWriteReason,
+  actionWriter,
+  createAsAction,
+  updateAsAction
+} from './action-writes.js'
 import { logActivity } from './activity.js'
 import { chainFields } from './chain-columns.js'
 import { changeSignature, type PushWhen, payloadSignature, shouldPush } from './erp-push-gate.js'
@@ -382,13 +389,41 @@ async function buildContext(
   return out
 }
 
+/** Who an action's writes run as, and the reason they carry (#818). The
+ *  writer is resolved once per action run, on first use. */
+interface ActionWriteCtx {
+  writer: () => Promise<import('../types.js').User | null>
+  reason: string
+}
+
+function actionWriteCtx(userId: string | null, label: string | null | undefined): ActionWriteCtx {
+  let pending: Promise<import('../types.js').User | null> | null = null
+  return {
+    writer: () => {
+      pending ??= actionWriter(userId).catch(() => null)
+      return pending
+    },
+    reason: actionWriteReason(label)
+  }
+}
+
+/**
+ * on_success / on_failure: render the `set` templates and write them onto the
+ * transitioning record through the items service (raw fallback — see
+ * services/action-writes.ts). The write's own after-hooks would re-run the
+ * record's auto transitions mid-transition; applyTransition holds the record
+ * "in flight" (workflow-transitions.ts) so that re-entry is skipped, and the
+ * caller re-evaluates auto transitions once the transition has landed. Never
+ * throws — an on_failure writeback must land even when the action failed.
+ */
 async function applyWriteback(
   collection: string,
   itemId: string,
   set: Record<string, string> | undefined,
-  scope: Record<string, unknown>
-): Promise<void> {
-  if (!set) return
+  scope: Record<string, unknown>,
+  w: ActionWriteCtx
+): Promise<ActionWritePath | null> {
+  if (!set) return null
   const patch: Record<string, unknown> = {}
   for (const [field, template] of Object.entries(set)) {
     if (!IDENTIFIER_RE.test(field)) continue
@@ -399,12 +434,8 @@ async function applyWriteback(
       /* skip unrenderable */
     }
   }
-  if (Object.keys(patch).length === 0) return
-  try {
-    await db(collection).where({ id: itemId }).update(patch)
-  } catch (err) {
-    console.error({ err, collection, itemId }, 'transition action writeback failed')
-  }
+  if (Object.keys(patch).length === 0) return null
+  return updateAsAction(await w.writer(), collection, itemId, patch, w.reason)
 }
 
 async function resolveExternalApiId(ref: number | string): Promise<number | null> {
@@ -664,6 +695,7 @@ export async function runTransitionActions(opts: {
     by: opts.userId ?? null,
     via: opts.requestedVia ?? (opts.userId ? 'transition' : 'auto-transition')
   }
+  const writes = actionWriteCtx(opts.userId ?? null, opts.transition.label)
 
   // Action journal (#327): write-ahead intent for the chain. If the process
   // dies mid-chain the row stays 'running' — boot recovery flags it as
@@ -779,7 +811,15 @@ export async function runTransitionActions(opts: {
         )
         continue
       }
-      await runCreateRecordAction(action, collection, item, record, opts.newStateObj, responses)
+      await runCreateRecordAction(
+        action,
+        collection,
+        item,
+        record,
+        opts.newStateObj,
+        responses,
+        writes
+      )
       await journalTick()
       continue
     }
@@ -874,10 +914,16 @@ export async function runTransitionActions(opts: {
           .update({ obligation_id: obligationId })
           .catch(() => {})
       }
-      await applyWriteback(collection, item, action.on_failure?.set, {
-        ...scope,
-        error: String(err)
-      })
+      await applyWriteback(
+        collection,
+        item,
+        action.on_failure?.set,
+        {
+          ...scope,
+          error: String(err)
+        },
+        writes
+      )
       continue
     }
 
@@ -1067,7 +1113,7 @@ export async function runTransitionActions(opts: {
 
     const postScope = { ...scope, response: responseBody, responses, error }
     if (status === 'failed') {
-      await applyWriteback(collection, item, action.on_failure?.set, postScope)
+      await applyWriteback(collection, item, action.on_failure?.set, postScope, writes)
       if (action.blocking === true) {
         // Abort the transition: the caller keeps the record in its current
         // state and surfaces the error. on_failure writebacks (a status column
@@ -1078,8 +1124,8 @@ export async function runTransitionActions(opts: {
         }
       }
     } else {
-      await applyWriteback(collection, item, action.on_success?.set, postScope)
-      await applyChildWritebacks(action.on_success_children, item, postScope)
+      await applyWriteback(collection, item, action.on_success?.set, postScope, writes)
+      await applyChildWritebacks(action.on_success_children, item, postScope, writes)
     }
     await journalTick()
   }
@@ -1092,11 +1138,21 @@ export async function runTransitionActions(opts: {
   return { blockedError: null, skippedReason }
 }
 
-/** Render + apply per-child-row writebacks (see on_success_children). */
+/**
+ * Render + apply per-child-row writebacks (see on_success_children). Each
+ * matching child row is written through the items service (#818) — a line's
+ * own revision, the parent's stored rollups, its integrity check — instead of
+ * one blanket UPDATE. The rows are picked by the same filter the old UPDATE
+ * used (fk, only_empty, junction_filter); a refused row falls back to the raw
+ * write. Never throws.
+ */
+const CHILD_WRITEBACK_CAP = 1000
+
 async function applyChildWritebacks(
   entries: TransitionActionDef['on_success_children'],
   itemId: string,
-  scope: Record<string, unknown>
+  scope: Record<string, unknown>,
+  w: ActionWriteCtx
 ): Promise<void> {
   for (const e of entries ?? []) {
     if (
@@ -1125,7 +1181,21 @@ async function applyChildWritebacks(
             .where(jf.field, jf.value as never)
         )
       }
-      const n = await q.update({ [e.field]: rendered })
+      const rows = (await q.orderBy('id').limit(CHILD_WRITEBACK_CAP).select('id')) as Array<{
+        id: string | number
+      }>
+      const writer = await w.writer()
+      let n = 0
+      for (const r of rows) {
+        const path = await updateAsAction(
+          writer,
+          e.collection,
+          r.id,
+          { [e.field]: rendered },
+          w.reason
+        )
+        if (path !== 'failed') n++
+      }
       if (n > 0)
         console.info(`[transition-action] child writeback: ${e.collection}.${e.field} on ${n} rows`)
     } catch (err) {
@@ -1155,7 +1225,17 @@ export async function runCreateRecordForRecord(
     return
   }
   if (record.id == null) return
-  await runCreateRecordAction(action, collection, itemId, record, null, [])
+  // A rule fires inside another write's after-hook — no person drove it here,
+  // so its writes run as the system (activity names no user, origin machine).
+  await runCreateRecordAction(
+    action,
+    collection,
+    itemId,
+    record,
+    null,
+    [],
+    actionWriteCtx(null, 'automation rule')
+  )
 }
 
 async function runCreateRecordAction(
@@ -1164,7 +1244,8 @@ async function runCreateRecordAction(
   item: string,
   record: Record<string, unknown>,
   newStateObj: { key: string; label: string } | null,
-  responses: unknown[]
+  responses: unknown[],
+  w: ActionWriteCtx
 ): Promise<void> {
   const target = action.target_collection
   if (!target || !IDENTIFIER_RE.test(target) || /^nivaro_/i.test(target)) return
@@ -1200,13 +1281,23 @@ async function runCreateRecordAction(
         if (IDENTIFIER_RE.test(k) && v !== undefined && v !== null && v !== '') row[k] = v
       }
       if (Object.keys(row).length === 0) return
-      await db(target).insert(row)
-      // MSSQL/tedious returns row-count on bare insert — insert-then-select
-      // (same pattern as the relation POST route).
-      const created = (await db(target).orderBy('id', 'desc').first('id')) as
-        | { id: unknown }
-        | undefined
-      targetId = created?.id ?? null
+      // Through the items service (#818): auto ids, field rules, the target's
+      // own pipeline auto-start, activity + revision, stored rollups. A create
+      // the service refuses throws into the catch below — the action failed
+      // and its on_failure writeback runs; it is never slipped in raw past
+      // the rule that refused it. No administrator role at all = the old raw
+      // insert (a fresh instance mid-setup).
+      const writer = await w.writer()
+      if (writer) {
+        targetId = await createAsAction(writer, target, row, w.reason)
+      } else {
+        await db(target).insert(row)
+        // MSSQL/tedious returns row-count on bare insert — insert-then-select.
+        const created = (await db(target).orderBy('id', 'desc').first('id')) as
+          | { id: unknown }
+          | undefined
+        targetId = created?.id ?? null
+      }
       if (targetId == null) return
 
       // M2M junction rows for the new record
@@ -1225,47 +1316,56 @@ async function runCreateRecordAction(
           if (!Array.isArray(ids)) continue
           for (const rid of ids) {
             if (rid === null || rid === undefined || rid === '') continue
-            await db(cfg.junction_collection).insert({
-              [cfg.parent_field]: targetId,
-              [cfg.related_field]: rid
-            })
+            const link = { [cfg.parent_field]: targetId, [cfg.related_field]: rid }
+            // Junction rows through the items service too — a junction write
+            // recomputes the new record's auto-id prefix and its rollups. An
+            // unregistered junction (or a refusal) keeps the raw insert.
+            let viaItems = false
+            if (writer) {
+              try {
+                await createAsAction(writer, cfg.junction_collection, link, w.reason)
+                viaItems = true
+              } catch {
+                viaItems = false
+              }
+            }
+            if (!viaItems) await db(cfg.junction_collection).insert(link)
           }
         } catch (err) {
           console.error({ err, alias }, 'create_record m2m insert failed')
         }
       }
 
-      await logActivity({
-        action: 'create',
-        collection: target,
-        item: String(targetId),
-        user: null,
-        comment: `created by transition action from ${collection}/${item}`
-      })
-    }
-
-    // Link the created/found record back onto the transitioning record
-    if (action.link_field && IDENTIFIER_RE.test(action.link_field)) {
-      const before = (await db(collection).where({ id: item }).first()) as
-        | Record<string, unknown>
-        | undefined
-      await db(collection)
-        .where({ id: item })
-        .update({ [action.link_field]: targetId })
-      // A raw write never reaches the rollup hooks — but the record just became
-      // a contributor to the NEW parent (the record's amount feeds the
-      // created parent's stored rollup). Recalc as if the FK had been set
-      // through the items service.
-      if (before) {
-        const { recalcAffectedRollups } = await import('./rollups.js')
-        await recalcAffectedRollups(
-          collection,
-          { ...before, [action.link_field]: targetId },
-          before
-        )
+      // The items service logged the create (with its revision). The raw
+      // fallback still needs the breadcrumb.
+      if (!writer) {
+        await logActivity({
+          action: 'create',
+          collection: target,
+          item: String(targetId),
+          user: null,
+          comment: `created by transition action from ${collection}/${item}`
+        })
       }
     }
 
+    // Link the created/found record back onto the transitioning record
+    // The record just became a contributor to the NEW parent (its amount
+    // feeds the created parent's stored rollup) — the items service write
+    // recalcs that, and the raw fallback recalcs it explicitly.
+    if (action.link_field && IDENTIFIER_RE.test(action.link_field)) {
+      await updateAsAction(
+        await w.writer(),
+        collection,
+        item,
+        { [action.link_field]: targetId },
+        w.reason
+      )
+    }
+
+    // Stays raw on purpose: nivaro_record_links is a system table with no
+    // items-service collection behind it (the /record-links routes write it
+    // the same way), so there are no hooks, revisions or rollups to reach.
     if (action.record_link && targetId != null) {
       try {
         const { LINK_TYPES } = await import('../routes/record-links.js')
@@ -1293,17 +1393,29 @@ async function runCreateRecordAction(
     }
 
     responses.push({ created_id: targetId })
-    await applyWriteback(collection, item, action.on_success?.set, {
-      ...scope,
-      created_id: targetId,
-      responses
-    })
+    await applyWriteback(
+      collection,
+      item,
+      action.on_success?.set,
+      {
+        ...scope,
+        created_id: targetId,
+        responses
+      },
+      w
+    )
   } catch (err) {
     console.error({ err, collection, item, target }, 'create_record transition action failed')
-    await applyWriteback(collection, item, action.on_failure?.set, {
-      ...scope,
-      error: String(err)
-    })
+    await applyWriteback(
+      collection,
+      item,
+      action.on_failure?.set,
+      {
+        ...scope,
+        error: String(err)
+      },
+      w
+    )
   }
 }
 

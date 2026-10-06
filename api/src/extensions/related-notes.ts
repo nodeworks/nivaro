@@ -180,6 +180,8 @@ export const relatedNoteRegistry = new RelatedNoteRegistry()
 // natural-key upsert turned into an update (services/items.ts createOne).
 relatedNoteRegistry.registerMachineMarkers('core', {
   exact: ['Natural-key upsert (create matched an existing record)'],
+  // Writes a transition action made (services/action-writes.ts, #818).
+  prefixes: ['transition-action:'],
   labels: {
     'natural-key upsert (create matched an existing record)': 'Matched an existing record on import'
   }

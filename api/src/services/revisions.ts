@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { noteDerivedWrite } from './request-trace.js'
 
 export interface Revision {
@@ -26,6 +27,8 @@ export interface Revision {
     to_label: string | null
     transition_label: string | null
     source: string | null
+    /** #645 — the out-of-office owner the actor stood in for. */
+    on_behalf_of?: { id: string; name: string | null } | null
   } | null
 }
 
@@ -88,6 +91,7 @@ function hydrateRevision(row: Record<string, unknown>): Revision {
 }
 
 export async function listRevisions(collection: string, item: string): Promise<Revision[]> {
+  const behalfCol = await hasColumn('nivaro_workflow_history', 'on_behalf_of').catch(() => false)
   const [revRows, activityRows, transitionRows] = await Promise.all([
     db('nivaro_revisions as r')
       .leftJoin('nivaro_activity as a', 'r.activity', 'a.id')
@@ -149,6 +153,15 @@ export async function listRevisions(collection: string, item: string): Promise<R
       .leftJoin('nivaro_workflow_states as ts', 'ts.id', 'h.to_state')
       .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
       .leftJoin('nivaro_users as u', 'h.user', 'u.id')
+      .modify((q) => {
+        if (behalfCol)
+          q.leftJoin('nivaro_users as ob', 'h.on_behalf_of', 'ob.id').select(
+            'h.on_behalf_of',
+            'ob.first_name as behalf_first_name',
+            'ob.last_name as behalf_last_name',
+            'ob.email as behalf_email'
+          )
+      })
       .select(
         'h.id as history_id',
         'h.timestamp',
@@ -209,7 +222,15 @@ export async function listRevisions(collection: string, item: string): Promise<R
         from_label: (r.from_label as string | null) ?? null,
         to_label: (r.to_label as string | null) ?? null,
         transition_label: (r.transition_label as string | null) ?? null,
-        source: r.user_id ? 'manual' : 'auto'
+        source: r.user_id ? 'manual' : 'auto',
+        on_behalf_of: r.on_behalf_of
+          ? {
+              id: String(r.on_behalf_of),
+              name:
+                [r.behalf_first_name, r.behalf_last_name].filter(Boolean).join(' ') ||
+                ((r.behalf_email as string | null) ?? null)
+            }
+          : null
       }
     }))
   ]
