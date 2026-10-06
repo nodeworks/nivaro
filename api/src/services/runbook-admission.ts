@@ -29,6 +29,9 @@ export function hostRunRefusal(
   now = Date.now()
 ): string | null {
   if (run.mode !== 'dry' && run.mode !== 'go') return `unknown mode ${String(run.mode)}`
+  // A read-only runbook declares no dry run: its "dry" run would be a real one.
+  if (run.mode === 'dry' && !needsDryRun(decl))
+    return 'this runbook has no dry run — it only reads its target'
   const t = validateTarget(decl, run.target)
   if (!t.ok) return t.error
   if (decl.target_env && !t.target) return `${decl.target_env} is required`

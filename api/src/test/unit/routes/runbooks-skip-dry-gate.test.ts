@@ -20,18 +20,18 @@ vi.mock('../../../db/index.js', () => ({
 vi.mock('../../../extensions/loader.js', () => {
   const host = {
     runs_on: 'host',
-    command: ['bash', 'extensions/efp-ops/scripts/job.sh'],
+    command: ['bash', 'extensions/acme-ops/scripts/job.sh'],
     dry_args: ['--dry'],
     go_args: [],
     target_env: 'TARGET',
-    refuse_targets: ['EFP']
+    refuse_targets: ['Prod_DB']
   }
   return {
     extensionRunbooks: new Map([
       [
-        'efp-ops',
+        'acme-ops',
         [
-          { ...host, key: 'quality-rerun', label: 'Re-run', skip_dry_gate: true },
+          { ...host, key: 'checks-rerun', label: 'Re-run', skip_dry_gate: true },
           { ...host, key: 'staging-rebuild', label: 'Rebuild' }
         ]
       ]
@@ -51,8 +51,8 @@ function buildApp() {
 const go = (key: string, extra: Record<string, unknown> = {}) =>
   buildApp().inject({
     method: 'POST',
-    url: `/runbooks/efp-ops/${key}/runs`,
-    payload: { mode: 'go', target: 'EFP_Staging', ...extra }
+    url: `/runbooks/acme-ops/${key}/runs`,
+    payload: { mode: 'go', target: 'Mirror_DB', ...extra }
   })
 
 beforeEach(() => {
@@ -63,18 +63,33 @@ beforeEach(() => {
 
 describe('runbooks route — skip_dry_gate', () => {
   it('does not ask a skip_dry_gate runbook for a dry run, but still asks for confirm', async () => {
-    const res = await go('quality-rerun')
+    const res = await go('checks-rerun')
     expect(res.statusCode).toBe(400)
-    expect(res.json().error).toBe('type EFP_Staging to confirm')
-    const ok = await go('quality-rerun', { confirm: 'EFP_Staging' })
+    expect(res.json().error).toBe('type Mirror_DB to confirm')
+    const ok = await go('checks-rerun', { confirm: 'Mirror_DB' })
     expect(ok.statusCode).toBe(201)
     expect(h.db.state.tables.nivaro_runbook_queue).toHaveLength(1)
   })
 
   it('still refuses a real run of any other runbook without a dry run', async () => {
-    const res = await go('staging-rebuild', { confirm: 'EFP_Staging' })
+    const res = await go('staging-rebuild', { confirm: 'Mirror_DB' })
     expect(res.statusCode).toBe(409)
     expect(res.json().error).toMatch(/dry run/)
     expect(h.db.state.tables.nivaro_runbook_queue).toHaveLength(0)
   })
+
+  it('refuses a dry run of a skip_dry_gate runbook (it has none: it would run for real)', async () => {
+    const res = await go('checks-rerun', { mode: 'dry' })
+    expect(res.statusCode).toBe(400)
+    expect(res.json().error).toBe('this runbook has no dry run — it only reads its target')
+    expect(h.db.state.tables.nivaro_runbook_queue).toHaveLength(0)
+  })
+
+  it('lists skip_dry_gate on every runbook', async () => {
+    const res = await buildApp().inject({ method: 'GET', url: '/runbooks' })
+    const list = res.json().runbooks as Array<{ key: string; skip_dry_gate: boolean }>
+    expect(list.find((r) => r.key === 'checks-rerun')?.skip_dry_gate).toBe(true)
+    expect(list.find((r) => r.key === 'staging-rebuild')?.skip_dry_gate).toBe(false)
+  })
 })
+

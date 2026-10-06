@@ -100,6 +100,8 @@ export async function runbookRoutes(app: FastifyInstance) {
           target_env: d.target_env ?? null,
           refuse_targets: d.refuse_targets ?? [],
           resumable: !!d.resume_flag,
+          // Read-only: no dry run, and a real run needs none first.
+          skip_dry_gate: d.skip_dry_gate === true,
           // A host runbook that a queued or running run already holds.
           active:
             d.runs_on === 'host'
@@ -146,6 +148,10 @@ export async function runbookRoutes(app: FastifyInstance) {
         .send({ error: 'The runbook queue is not set up on this database (migration 403)' })
     const mode = req.body?.mode === 'go' ? 'go' : req.body?.mode === 'dry' ? 'dry' : null
     if (!mode) return reply.code(400).send({ error: 'mode must be dry or go' })
+    if (mode === 'dry' && !needsDryRun(decl))
+      return reply
+        .code(400)
+        .send({ error: 'this runbook has no dry run — it only reads its target' })
     const t = validateTarget(decl, req.body?.target)
     if (!t.ok) return reply.code(400).send({ error: t.error })
     let from: string | undefined
