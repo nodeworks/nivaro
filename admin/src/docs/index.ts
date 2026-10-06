@@ -31,6 +31,7 @@ export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
 export * from './sections/platform.js'
 export * from './sections/platform-additions.js'
+export * from './sections/quality-checks.js'
 export * from './sections/queues.js'
 export * from './sections/record-insights.js'
 export * from './sections/record-integrations.js'
@@ -318,6 +319,7 @@ import {
   recordToolkit,
   reportingAdditions
 } from './sections/platform-additions.js'
+import { qualityChecksDocs } from './sections/quality-checks.js'
 import { queuesGuide } from './sections/queues.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
@@ -584,7 +586,8 @@ export const navSections: NavGroup[] = [
       extPluginSlots,
       extPluginBuildGuide,
       extPluginIntegrationTypes,
-      eventsAndFlags
+      eventsAndFlags,
+      qualityChecksDocs
     ]
   },
   {
