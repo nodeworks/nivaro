@@ -15,6 +15,10 @@
  *   5. The caller can READ the record as themselves — readOne narrows by the
  *      row filter and User Scopes and answers null for an invisible row; an
  *      invisible record is a 404, never a 403 (no existence leak).
+ *   6. For `update`, the record also passes what updateOne itself would judge:
+ *      the role's UPDATE row filter (it can be narrower than the read one) and
+ *      a subtree permission that denies update. Visible-but-not-changeable is
+ *      a 403 — the caller can already see the record exists.
  */
 import type { User } from '../types.js'
 import { ADDENDUM_COLLECTION, resolvePipelineSubject } from './pipeline-subject.js'
@@ -30,13 +34,29 @@ export class InstanceAccessError extends Error {
 export interface GuardDeps {
   can: (user: User, action: 'read' | 'update', collection: string) => Promise<boolean>
   readOne: (user: User, collection: string, id: string) => Promise<unknown>
+  /** updateOne's own row-level gates: update row filter + tree permission. */
+  updatable: (user: User, collection: string, id: string) => Promise<boolean>
   subject: (collection: string, item: string) => Promise<{ collection: string; itemId: string }>
 }
 
 async function defaultDeps(): Promise<GuardDeps> {
-  const [{ can }, items] = await Promise.all([import('./permissions.js'), import('./items.js')])
+  const [{ can, getRowFilter, applyRowFilter }, items, { getTreePermission }, { db }] =
+    await Promise.all([
+      import('./permissions.js'),
+      import('./items.js'),
+      import('./tree-permissions.js'),
+      import('../db/index.js')
+    ])
   return {
     can: (u, a, c) => can(u, a, c),
+    updatable: async (u, c, id) => {
+      if ((await getTreePermission(u, 'update', c, id)) === false) return false
+      const rowFilter = await getRowFilter(u, 'update', c)
+      if (!rowFilter) return true
+      const q = db(c).where({ id }).select('id')
+      applyRowFilter(q, rowFilter, u)
+      return (await q.first()) != null
+    },
     readOne: async (u, c, id) => {
       try {
         return await items.readOne(u, c, id, undefined, ['id'])
@@ -79,6 +99,8 @@ export async function assertInstanceAccess(
   if (!(await d.can(user, action, target.collection))) throw new InstanceAccessError(403, FORBIDDEN)
   const row = await d.readOne(user, target.collection, target.itemId)
   if (row == null) throw new InstanceAccessError(404, NOT_FOUND)
+  if (action === 'update' && !(await d.updatable(user, target.collection, target.itemId)))
+    throw new InstanceAccessError(403, FORBIDDEN)
 }
 
 /** Boolean form for loops (bulk transitions): true = allowed. */

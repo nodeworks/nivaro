@@ -15,6 +15,7 @@ function deps(over: Partial<GuardDeps> = {}): GuardDeps {
   return {
     can: vi.fn(async () => true),
     readOne: vi.fn(async () => ({ id: '1' })),
+    updatable: vi.fn(async () => true),
     subject: vi.fn(async (c, i) => ({ collection: c, itemId: i })),
     ...over
   }
@@ -76,5 +77,17 @@ describe('assertInstanceAccess', () => {
     const d = deps()
     await assertInstanceAccess(user, false, 'workflows', '1', d, 'read')
     expect(d.can).toHaveBeenCalledWith(user, 'read', 'workflows')
+  })
+
+  it('refuses a visible record the update row filter or a tree rule excludes (403)', async () => {
+    const d = deps({ updatable: vi.fn(async () => false) })
+    expect(await status(assertInstanceAccess(user, false, 'workflows', '1', d))).toBe(403)
+    expect(d.updatable).toHaveBeenCalledWith(user, 'workflows', '1')
+  })
+
+  it('skips the update gates for read-only callers', async () => {
+    const d = deps({ updatable: vi.fn(async () => false) })
+    expect(await status(assertInstanceAccess(user, false, 'workflows', '1', d, 'read'))).toBe('ok')
+    expect(d.updatable).not.toHaveBeenCalled()
   })
 })
