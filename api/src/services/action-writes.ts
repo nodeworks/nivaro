@@ -30,6 +30,8 @@ import type { User } from '../types.js'
 /** The change reason every action write carries — registered as a machine
  *  marker (extensions/related-notes.ts) so it never reads as a person's note,
  *  and read as origin `machine` by note-authorship. */
+// efp-ops' LinX after-hook matches this exact prefix on ctx.changeReason to
+// avoid pushing a transition's write-back a second time — rename both together.
 export const ACTION_WRITE_PREFIX = 'transition-action:'
 
 export function actionWriteReason(label: string | null | undefined): string {
