@@ -1,10 +1,52 @@
 {
-  "generated_at": "2026-10-06T18:20:02.017Z",
+  "generated_at": "2026-10-06T21:15:50.003Z",
   "releases": [
+    {
+      "version": "0.2.20",
+      "tag": "v0.2.20",
+      "date": "2026-10-06T17:15:38-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync SDK README and www docs with the October sections",
+              "hash": "a1738743"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "runbook agent: re-check every gate before running a claimed row",
+              "hash": "5bf3335e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "config-inventory: inbound mapping versions are config",
+              "hash": "4cb4f67e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "host runbooks queued from any instance, run by a host agent, with live estimates",
+              "hash": "11c37692"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.2.19",
       "tag": "v0.2.19",
-      "date": "2026-10-06T14:19:50-04:00",
+      "date": "2026-10-06T14:20:02-04:00",
       "sections": [
         {
           "label": "Other",
