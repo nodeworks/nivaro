@@ -33,6 +33,31 @@ console.log(typesTs);  // raw TypeScript code`
       type: 'note',
       text: 'The `nivaro` CLI is installed with `@nivaro/sdk` (its `bin`). `nivaro types` exits 0 when the file was written, 1 on usage errors, 2 when the request failed — wire it into a `postinstall` or a pre-commit step and the types can never drift from the instance.'
     },
+    { type: 'h3', id: 'ts-codegen-graphql', text: 'Typed GraphQL client' },
+    {
+      type: 'p',
+      text: "`nivaro types --graphql` introspects the live GraphQL schema and writes one standalone file: types for every object, input filter, enum and union, and `createGraphQLClient()` with `list`, `byId`, `create`, `update`, `delete`, `aggregated` and `metadata` per collection. The result of each call is typed from the fields you select — ask for `{ id: true, vendor: { name: true } }` and the result has exactly those. Any token works, not only an admin one: a refused token fails the command (exit 2), and the helpers written are the ones the token's role may use. `graphql(document, variables)` runs anything the helpers do not cover. The file needs no dependency and no DOM library."
+    },
+    {
+      type: 'pre',
+      code: `npx nivaro types --graphql --url https://nivaro.example.com --token <token> --out src/nivaro-gql.ts
+
+import { createGraphQLClient } from './nivaro-gql'
+const cms = createGraphQLClient({ url: 'https://nivaro.example.com', token })
+const rows = await cms.workflows.list(
+  { filter: { workflow_type: { _eq: 2 } }, limit: 20, sort: ['-id'] },
+  { id: true, workflow_id: true, project: { name: true } }
+)
+rows[0].project?.name   // string | null — typed from the selection
+const counts = await cms.workflows.aggregated({ groupBy: ['workflow_type'] }, { group: true, countAll: true })
+const raw = await cms.graphql<{ workflows_metadata: { total: number } }>(
+  'query { workflows_metadata { total } }'
+)`
+    },
+    {
+      type: 'note',
+      text: "Without a selection a helper fetches every plain field of the type. A polymorphic (union) field takes a raw string of inline fragments: `{ item: '... on vendors { id name }' }`. Errors in a GraphQL answer throw `GraphQLRequestError` with the server's messages."
+    },
     {
       type: 'h3',
       id: 'ts-codegen-example',

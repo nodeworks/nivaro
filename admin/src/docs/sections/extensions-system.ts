@@ -144,6 +144,22 @@ export default defineExtension({
         'In the monorepo the kit is a workspace package; a mounted extension resolves it from the image. Released with `pnpm kit:release`.'
       ]
     },
+    { type: 'h3', id: 'ext-overview-scaffold', text: 'Starting a new extension' },
+    {
+      type: 'p',
+      text: '`nivaro ext init <id>` (the CLI that ships with `@nivaro/sdk`) writes `api/extensions/<id>/` with an `index.ts` on `defineExtension` — one setting, one hook, one scheduled job with a description, and one route behind `requireAuth` — a passing test on `createTestContext()`, and a README naming the context members it uses. The id must be kebab-case and the directory must not exist yet; `--dir` writes somewhere else. Restart the API and the extension appears on the Extensions page.'
+    },
+    {
+      type: 'pre',
+      code: `npx nivaro ext init acme-orders            # → api/extensions/acme-orders/
+cd api && npx vitest run extensions/acme-orders
+npx tsc -p extensions/tsconfig.json`
+    },
+    { type: 'h3', id: 'ext-overview-deprecations', text: 'Deprecated context members' },
+    {
+      type: 'p',
+      text: 'A context member on its way out is listed in the kit as data — `KIT_DEPRECATIONS`, each entry naming the member, its replacement and the kit version it leaves in — because a `@deprecated` tag is invisible at runtime. The loader watches every listed member on the context it hands `register()`: the first use per extension per boot logs a warning, the Extensions registry sheet lists the members in use under "Deprecated members in use" with a use count, and the readiness check "Extensions avoid deprecated kit members" warns while any loaded extension still reads one. In a test, `createTestContext().calls.deprecations` holds one sentence per read. Nothing is deprecated today.'
+    },
     { type: 'h3', id: 'ext-overview-testing', text: 'Testing an extension' },
     {
       type: 'p',

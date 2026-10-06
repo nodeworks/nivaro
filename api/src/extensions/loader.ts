@@ -54,12 +54,16 @@ import { relatedNoteRegistry } from './related-notes.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
-import type {
-  ExtensionContext,
-  ExtensionDefinition,
-  ExtensionEnvDecl,
-  ExtensionRunbookDecl,
-  ExtensionSettingDecl
+import {
+  deprecationMessage,
+  type ExtensionContext,
+  type ExtensionDefinition,
+  type ExtensionEnvDecl,
+  type ExtensionRunbookDecl,
+  type ExtensionSettingDecl,
+  KIT_DEPRECATIONS,
+  type KitDeprecation,
+  watchDeprecatedMembers
 } from '@nivaro/extension-kit'
 import { runLongSql } from '../services/run-long.js'
 import { registerExtensionSignal, registerExtensionSignalAction } from './signal-registration.js'
@@ -977,6 +981,86 @@ export function getExtensionRegistrations(extId: string): Record<string, string[
   return Object.fromEntries(extensionRegistrations.get(extId) ?? [])
 }
 
+// ── Deprecated kit members (#1303) ───────────────────────────────────────────
+// The kit lists the ctx members on their way out (KIT_DEPRECATIONS — a JSDoc
+// tag is invisible at runtime). The context handed to register() watches
+// them: the first use per extension per boot logs a warning; every use is
+// counted for the registry sheet and the readiness check.
+export interface DeprecatedMemberUse {
+  member: string
+  replacement: string
+  removed_in: string
+  note: string | null
+  message: string
+  first_used_at: string
+  uses: number
+}
+export const deprecatedMemberUses = new Map<string, Map<string, DeprecatedMemberUse>>()
+
+export function withDeprecationWarnings<T extends object>(
+  extId: string,
+  ctx: T,
+  logger?: { warn: (...args: unknown[]) => void },
+  deprecations: readonly KitDeprecation[] = KIT_DEPRECATIONS
+): T {
+  deprecatedMemberUses.delete(extId)
+  return watchDeprecatedMembers(ctx, deprecations, (d) => {
+    let uses = deprecatedMemberUses.get(extId)
+    if (!uses) {
+      uses = new Map()
+      deprecatedMemberUses.set(extId, uses)
+    }
+    const seen = uses.get(d.member)
+    if (seen) {
+      seen.uses++
+      return
+    }
+    const message = deprecationMessage(extId, d)
+    uses.set(d.member, {
+      member: d.member,
+      replacement: d.replacement,
+      removed_in: d.removedIn,
+      note: d.note ?? null,
+      message,
+      first_used_at: new Date().toISOString(),
+      uses: 1
+    })
+    try {
+      if (logger) logger.warn({ extension: extId, member: d.member }, message)
+      else console.warn(`[extensions] ${message}`)
+    } catch {
+      // a logger failure must never break the extension using the member
+    }
+  })
+}
+
+export function describeDeprecatedUses(extId: string): DeprecatedMemberUse[] {
+  return [...(deprecatedMemberUses.get(extId)?.values() ?? [])]
+}
+
+/** The readiness verdict over every extension's recorded uses. */
+export function deprecatedMembersReadiness(deprecatedCount: number): {
+  status: 'pass' | 'warn' | 'skip'
+  detail: string
+  blockers?: string[]
+} {
+  if (deprecatedCount === 0)
+    return { status: 'skip', detail: 'The extension kit deprecates no context member.' }
+  const blockers: string[] = []
+  for (const uses of deprecatedMemberUses.values())
+    for (const u of uses.values()) blockers.push(u.message)
+  return blockers.length === 0
+    ? {
+        status: 'pass',
+        detail: `${deprecatedCount} deprecated member(s); no loaded extension has used one since boot.`
+      }
+    : {
+        status: 'warn',
+        detail: `${blockers.length} use(s) of a deprecated kit member since boot.`,
+        blockers
+      }
+}
+
 /** `<id>.next` / `<id>.prev` hold staged and previous builds (#76) — never
  *  extensions of their own. */
 function isParkedBuildDir(name: string): boolean {
@@ -1156,7 +1240,7 @@ async function loadExtension(
       ...registrationMembers(extId, ctx, { note, own, cronPrefix: `ext:${extId}:` })
     }
 
-    await ext.register(scopedCtx)
+    await ext.register(withDeprecationWarnings(extId, scopedCtx, scopedCtx.logger))
     // Schema steps the extension declared run now, in order, under the
     // migration lock (#826) — a failure is recorded, logged and does not
     // stop the extension loading: its readiness check says what is wrong.
@@ -1493,7 +1577,7 @@ export async function loadCloudExtensions(
         })
       }
 
-      await ext.register(scopedCtx)
+      await ext.register(withDeprecationWarnings(extId, scopedCtx, ctx.logger))
       await runSchemaSteps(extId, ctx.database, { logger: ctx.logger })
 
       // Load optional manifest.json for UI bundle support
@@ -1678,6 +1762,14 @@ export function registerExtensionSettingsReadiness(): void {
     }
   })
   registerReadinessCheck({
+    id: 'extension-deprecated-members',
+    label: 'Extensions avoid deprecated kit members',
+    description:
+      'No loaded extension reads a context member the extension kit has deprecated — each one leaves the kit in a named version.',
+    group: 'Configuration',
+    run: async () => deprecatedMembersReadiness(KIT_DEPRECATIONS.length)
+  })
+  registerReadinessCheck({
     id: 'extension-route-gates',
     label: 'Extension routes carry a gate',
     description:
@@ -1813,6 +1905,7 @@ export async function describeExtensionRegistry(
     routes: extensionRoutes.get(extId) ?? [],
     schema_steps: await runSchemaChecks(extId),
     observed_capabilities: getObservedCapabilities(extId),
+    deprecated_members: describeDeprecatedUses(extId),
     health_check: extensionHealthChecks.has(extId),
     staged: await stagedBuildStatus(extId)
   }
