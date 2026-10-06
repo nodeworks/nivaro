@@ -59,6 +59,8 @@ export function invalidateRecordData(
   })
   void qc.invalidateQueries({ queryKey: ['child-summary', collection, itemId] })
   void qc.invalidateQueries({ queryKey: ['last-touch', collection, itemId] })
+  // A transition moves the record to another step's SLA clock.
+  void qc.invalidateQueries({ queryKey: ['sla-breach', collection, itemId] })
   invalidateRecordNotes(qc, collection, itemId)
 }
 

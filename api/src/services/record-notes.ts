@@ -765,7 +765,8 @@ export async function loadRecordNotes(
       .map((a) => ({
         id: `reason:${a.id}`,
         source: 'change_reason' as const,
-        label: 'Change reason',
+        // An SLA clock adjustment (#1239) is an activity note too.
+        label: String(a.action ?? '').startsWith('sla-override') ? 'SLA clock' : 'Change reason',
         text: String(a.comment ?? ''),
         user: (a.user as string) ?? null,
         created_at: a.timestamp as string,

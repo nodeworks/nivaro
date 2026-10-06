@@ -136,6 +136,24 @@ export const slaScheduleDocs: DocSection = {
         'Applies to every SLA consumer — status endpoints, queue SLA columns, breach notifications, escalation ladders and My Work.',
         'Applies only to rules with "business hours only" enabled; other rules use wall-clock hours.'
       ]
+    },
+    { type: 'h2', id: 'sla-record-override', text: "Adjusting one record's clock" },
+    {
+      type: 'p',
+      text: "The owner of a record's current step — or an admin — can extend or shorten that record's SLA clock with \"Adjust clock\" (on the pipeline panel's SLA line, and on the record's SLA banner). A reason is required. The rule itself does not change: the new duration applies to this record only, and only while it stays in this step — leaving the step ends it, and coming back starts the rule's own clock again."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every SLA reader honours it: the record banner, queue SLA columns and sorts, My Work, breach notifications and escalation ladders.',
+        'The adjustment is written as a note on the record ("SLA clock") and the banner shows who set it, when and why. "Back to the rule" removes it.',
+        'Only one adjustment is active per stay; a new one replaces the old.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `POST   /api/sla/override/:collection/:item   { "duration_hours": 48, "reason": "Waiting on the vendor quote" }
+DELETE /api/sla/override/:collection/:item   ?reason=…   — back to the rule's duration`
     }
   ]
 }

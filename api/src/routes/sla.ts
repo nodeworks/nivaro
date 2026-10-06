@@ -1,10 +1,11 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
+import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
 
 interface SlaRule {
   id: number
@@ -45,7 +46,17 @@ function formatRule(row: SlaRule): SlaRule & { escalation_ladder?: unknown } {
 // Schedule-aware business hours — settings-driven (days/hours/holidays).
 // Re-exported for queue-materialization-read's sync per-row math.
 import { businessHoursElapsed, getSlaSchedule } from '../services/business-hours.js'
+import {
+  hoursText,
+  loadActiveOverrides,
+  pickOverride,
+  SLA_OVERRIDES_TABLE,
+  type SlaOverrideRow,
+  slaOverridesReady,
+  validateOverrideInput
+} from '../services/sla-overrides.js'
 import { resolveRecordZones } from '../services/sla-zones.js'
+
 export { businessHoursElapsed }
 
 /** Batched per-record zone lookup for instance rows spanning collections
@@ -129,7 +140,15 @@ async function computeStatus(collection: string, item: string) {
     elapsedHours = (now.getTime() - enteredAt.getTime()) / (1000 * 60 * 60)
   }
 
-  const pctUsed = (elapsedHours / rule.duration_hours) * 100
+  // Per-record override (#1239) for THIS state-entry episode replaces the
+  // rule's duration; the warning threshold stays the rule's.
+  const override = pickOverride(
+    (await loadActiveOverrides(collection, [String(item)])).get(String(item)),
+    { instanceId: String(instance.id), stateKey, enteredAt }
+  )
+  const totalHours = override ? Number(override.duration_hours) : rule.duration_hours
+
+  const pctUsed = (elapsedHours / totalHours) * 100
   const status =
     pctUsed >= 100 ? 'breached' : pctUsed >= rule.warning_threshold_pct ? 'warning' : 'on_track'
 
@@ -139,11 +158,35 @@ async function computeStatus(collection: string, item: string) {
     sla_rule: formatRule(rule),
     entered_at: enteredAt,
     elapsed_hours: elapsedHours,
-    total_hours: rule.duration_hours,
+    total_hours: totalHours,
     pct_used: pctUsed,
     timezone: recordZone,
+    instance_id: String(instance.id),
+    override: override ? await describeOverride(override, rule.duration_hours) : null,
     collection,
     item
+  }
+}
+
+/** The banner's view of an override: hours, the rule's own hours, why, who. */
+async function describeOverride(o: SlaOverrideRow, ruleHours: number) {
+  const who = o.set_by
+    ? ((await db('nivaro_users')
+        .where({ id: o.set_by })
+        .first('first_name', 'last_name', 'email')
+        .catch(() => undefined)) as
+        | { first_name: string | null; last_name: string | null; email: string | null }
+        | undefined)
+    : undefined
+  const name = who ? `${who.first_name ?? ''} ${who.last_name ?? ''}`.trim() || who.email : null
+  return {
+    id: o.id,
+    duration_hours: Number(o.duration_hours),
+    rule_duration_hours: ruleHours,
+    reason: o.reason,
+    set_by: o.set_by,
+    set_by_name: name ?? null,
+    set_at: o.set_at
   }
 }
 
@@ -165,6 +208,11 @@ export interface SlaBatchEntry {
    * the record follows the instance-wide sla_timezone; only set when the
    * matched rule counts business hours (a calendar SLA has no clock zone). */
   timezone: string | null
+  /** A per-record override (#1239) replaced the rule's duration for this
+   * state-entry episode — duration_hours is the override, rule_duration_hours
+   * the rule's own. Absent when no override applies. */
+  overridden?: boolean
+  rule_duration_hours?: number | null
 }
 
 function round1(n: number): number {
@@ -268,6 +316,15 @@ export async function computeStatusBatch(
         candidates.map((i) => String(i.item))
       )
     : new Map<string, string>()
+  // Per-record overrides (#1239): one batched read, only when some record
+  // has a rule at all (an override only ever replaces a rule's duration).
+  const overrideMap =
+    rules.length > 0
+      ? await loadActiveOverrides(
+          collection,
+          candidates.map((i) => String(i.item))
+        )
+      : new Map<string, SlaOverrideRow[]>()
   for (const inst of candidates) {
     const stateKey = keyOf(inst.current_state)
     const rule = ruleFor(inst.template, stateKey)
@@ -287,7 +344,19 @@ export async function computeStatusBatch(
         )
       : (now.getTime() - entered.getTime()) / (1000 * 60 * 60)
 
-    const pctUsed = rule ? (elapsedHours / rule.duration_hours) * 100 : null
+    const override = rule
+      ? pickOverride(overrideMap.get(String(inst.item)), {
+          instanceId: String(inst.id),
+          stateKey,
+          enteredAt: entered
+        })
+      : null
+    const durationHours = rule
+      ? override
+        ? Number(override.duration_hours)
+        : rule.duration_hours
+      : null
+    const pctUsed = durationHours ? (elapsedHours / durationHours) * 100 : null
     const status: SlaBatchEntry['status'] =
       pctUsed === null
         ? null
@@ -300,13 +369,14 @@ export async function computeStatusBatch(
     out[String(inst.item)] = {
       state_key: stateKey ?? String(inst.current_state),
       elapsed_hours: round1(elapsedHours),
-      duration_hours: rule?.duration_hours ?? null,
+      duration_hours: durationHours,
       warning_threshold_pct: rule?.warning_threshold_pct ?? null,
       business_hours_only: !!rule?.business_hours_only,
       status,
-      remaining_hours: rule ? round1(rule.duration_hours - elapsedHours) : null,
+      remaining_hours: durationHours != null ? round1(durationHours - elapsedHours) : null,
       entered_at: entered,
-      timezone: rule?.business_hours_only ? recordZone : null
+      timezone: rule?.business_hours_only ? recordZone : null,
+      ...(override ? { overridden: true, rule_duration_hours: rule?.duration_hours ?? null } : {})
     }
   }
 
@@ -362,6 +432,46 @@ export async function computeEnteredStateAtBatch(
   }
 
   return out
+}
+
+/**
+ * Who may move a record's SLA clock: an admin, or someone who can act on the
+ * record AND owns its current step (record-access canActOn — sees it, may
+ * update it, is available, resolves as an owner of the current state).
+ */
+async function canAdjustClock(
+  req: FastifyRequest,
+  collection: string,
+  item: string
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  if (req.isAdmin) return { ok: true }
+  if (!req.user) return { ok: false, reason: 'Sign in to adjust the SLA clock' }
+  try {
+    const { canActOn } = await import('../services/record-access.js')
+    // canActOn reads availability columns (status, out-of-office…) off the
+    // full user row; the request user keeps any API-key scope narrowing.
+    const full = (await db('nivaro_users').where({ id: req.user.id }).first()) ?? {}
+    const verdict = await canActOn({ ...full, ...req.user } as never, collection, String(item))
+    if (verdict.can_act && verdict.is_owner === true) return { ok: true }
+    return {
+      ok: false,
+      reason: verdict.can_act
+        ? `Only the owner of ${verdict.state ?? 'the current step'} or an admin can adjust this clock`
+        : verdict.summary
+    }
+  } catch {
+    return { ok: false, reason: 'You cannot adjust the SLA clock on this record' }
+  }
+}
+
+/** Materialized queue caches hold each row's SLA duration — refresh this one. */
+async function resyncQueueRow(collection: string, item: string): Promise<void> {
+  try {
+    const { syncMaterializedQueueItem } = await import('../services/queue-materialization.js')
+    await syncMaterializedQueueItem(collection, item)
+  } catch {
+    /* a queue cache refresh never fails the override */
+  }
 }
 
 export async function slaRoutes(app: FastifyInstance) {
@@ -779,19 +889,10 @@ export async function slaRoutes(app: FastifyInstance) {
     if (!collection || !item)
       return reply.code(400).send({ error: 'collection and item are required' })
     // Acking silences the escalation ladder — only someone who can actually
-    // SEE the record may do it. readOne is the full gate (RBAC, row filters,
-    // user scopes, tree permissions), so a record the caller can't open can't
-    // be quietly un-escalated either.
-    // readOne returns NULL for rows the caller cannot see (it does not throw
-    // for row-filter/scope misses) — both the throw AND the null are denials.
-    try {
-      const { readOne } = await import('../services/items.js')
-      const visible = await readOne(req.user!, collection, item, undefined, ['id'])
-      if (!visible) {
-        return reply.code(403).send({ error: 'You cannot acknowledge a record you cannot read' })
-      }
-    } catch {
-      return reply.code(403).send({ error: 'You cannot acknowledge a record you cannot read' })
+    // SEE the record may do it (RBAC, row filters, User Scopes, tree
+    // permissions); a record outside that answers like one that isn't there.
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
     }
     const status = await computeStatus(collection, item)
     if (!status || status.status !== 'breached' || !status.sla_rule) {
@@ -837,7 +938,10 @@ export async function slaRoutes(app: FastifyInstance) {
       (g) => g.parentCollection === q.collection && g.aliasField === q.field
     )
     if (!grid) return reply.send({ data: null })
-    if (!(await can(req.user!, 'read', grid.childCollection))) {
+    if (
+      !(await can(req.user!, 'read', grid.childCollection)) ||
+      !(await canSeeRecord(req.user!, q.collection, String(q.parent_id), { isAdmin: req.isAdmin }))
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     const aging = await lineAgingFor(grid, String(q.parent_id))
@@ -850,9 +954,112 @@ export async function slaRoutes(app: FastifyInstance) {
     })
   })
 
+  // ── Per-record SLA override (#1239) ────────────────────────────────────
+  // POST /sla/override/:collection/:item {duration_hours, reason} — the
+  // current step's owner (or an admin) extends or shortens THIS record's clock
+  // in its current state. Rules are untouched; the override ends when the
+  // record leaves the state. Written as an activity note on the record.
+  app.post('/override/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
+    }
+    const input = validateOverrideInput((req.body ?? {}) as Record<string, unknown>)
+    if ('error' in input) return reply.code(400).send({ error: input.error })
+    if (!(await slaOverridesReady())) {
+      return reply.code(503).send({ error: 'SLA overrides are not available until migrations run' })
+    }
+    const gate = await canAdjustClock(req, collection, item)
+    if (!gate.ok)
+      return reply.code(403).send({ error: gate.reason, code: 'SLA_OVERRIDE_FORBIDDEN' })
+    const status = await computeStatus(collection, item)
+    if (!status || status.status === 'none' || !status.sla_rule || !('instance_id' in status)) {
+      return reply
+        .code(409)
+        .send({ error: 'This record has no SLA clock in its current state', code: 'NO_SLA_RULE' })
+    }
+    const now = new Date()
+    // One override per episode — a new one replaces the old.
+    await db(SLA_OVERRIDES_TABLE)
+      .where({ collection, item: String(item) })
+      .whereNull('cleared_at')
+      .update({ cleared_at: now, cleared_by: req.user!.id })
+    await db(SLA_OVERRIDES_TABLE).insert({
+      collection,
+      item: String(item),
+      state_key: status.state_key,
+      instance_id: status.instance_id,
+      entered_at: status.entered_at,
+      duration_hours: input.hours,
+      rule_duration_hours: status.sla_rule.duration_hours,
+      reason: input.reason,
+      set_by: req.user!.id,
+      set_at: now
+    })
+    const ruleHours = Number(status.sla_rule.duration_hours)
+    await logActivity({
+      action: 'sla-override',
+      user: req.user?.id,
+      collection,
+      item: String(item),
+      comment: `SLA clock for "${status.sla_rule.name}" set to ${hoursText(input.hours)} (rule: ${hoursText(ruleHours)}). ${input.reason}`,
+      req
+    })
+    void resyncQueueRow(collection, String(item))
+    return reply.send({ data: await computeStatus(collection, item) })
+  })
+
+  // DELETE /sla/override/:collection/:item — back to the rule's own clock.
+  app.delete('/override/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
+    const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
+    }
+    if (!(await slaOverridesReady())) return reply.code(404).send({ error: 'No override' })
+    const gate = await canAdjustClock(req, collection, item)
+    if (!gate.ok)
+      return reply.code(403).send({ error: gate.reason, code: 'SLA_OVERRIDE_FORBIDDEN' })
+    const active = (await db(SLA_OVERRIDES_TABLE)
+      .where({ collection, item: String(item) })
+      .whereNull('cleared_at')
+      .orderBy('set_at', 'desc')
+      .first()) as SlaOverrideRow | undefined
+    if (!active) return reply.code(404).send({ error: 'This record has no SLA override' })
+    await db(SLA_OVERRIDES_TABLE)
+      .where({ collection, item: String(item) })
+      .whereNull('cleared_at')
+      .update({ cleared_at: new Date(), cleared_by: req.user!.id })
+    const reason = String(
+      ((req.body ?? {}) as { reason?: string }).reason ??
+        (req.query as { reason?: string }).reason ??
+        ''
+    )
+      .trim()
+      .slice(0, 1000)
+    const ruleHours = Number(active.rule_duration_hours)
+    await logActivity({
+      action: 'sla-override-clear',
+      user: req.user?.id,
+      collection,
+      item: String(item),
+      comment: `SLA clock back to the rule's ${Number.isFinite(ruleHours) ? hoursText(ruleHours) : 'duration'} (was ${hoursText(Number(active.duration_hours))}).${reason ? ` ${reason}` : ''}`,
+      req
+    })
+    void resyncQueueRow(collection, String(item))
+    return reply.send({ data: await computeStatus(collection, item) })
+  })
+
   app.get('/status/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
+    }
     const result = await computeStatus(collection, item)
+    // Who may adjust this record's clock — asked only when a rule applies.
+    const canAdjust =
+      result?.status && result.status !== 'none' && (await slaOverridesReady())
+        ? (await canAdjustClock(req, collection, item)).ok
+        : false
     if (result?.status === 'breached' && result.sla_rule) {
       // Escalation context for the record banner: is this episode acked, and
       // does the rule ladder at all.
@@ -869,13 +1076,14 @@ export async function slaRoutes(app: FastifyInstance) {
         )) as { acked_at: Date; acked_by_name: string } | undefined
       return reply.send({
         ...result,
+        can_adjust: canAdjust,
         acknowledged: ack ? { at: ack.acked_at, by: ack.acked_by_name } : null,
         has_ladder: Array.isArray(
           (result.sla_rule as { escalation_ladder?: unknown }).escalation_ladder
         )
       })
     }
-    return reply.send(result)
+    return reply.send({ ...result, can_adjust: canAdjust })
   })
 
   // GET /sla/status?collection=X&items=id1,id2,id3 — batch status
@@ -891,7 +1099,13 @@ export async function slaRoutes(app: FastifyInstance) {
       .map((s) => s.trim())
       .filter(Boolean)
 
-    const results = await Promise.all(ids.map((id) => computeStatus(collection, id)))
+    // Records the caller cannot see are simply left out.
+    const visible = await visibleRecordIds(req.user!, collection, ids.slice(0, BATCH_CAP), {
+      isAdmin: req.isAdmin
+    })
+    const results = await Promise.all(
+      ids.filter((id) => visible.has(id)).map((id) => computeStatus(collection, id))
+    )
     return reply.send({ data: results })
   })
 
@@ -909,10 +1123,16 @@ export async function slaRoutes(app: FastifyInstance) {
     const allowed = await can(req.user!, 'read', body.collection)
     if (!allowed) return reply.code(403).send({ error: 'Forbidden' })
 
-    const ids = body.ids
+    const requested = body.ids
       .slice(0, BATCH_CAP)
       .map((v) => String(v))
       .filter(Boolean)
+    // Row filters / User Scopes: ids the caller cannot see are omitted, as if
+    // they had no SLA at all.
+    const visible = await visibleRecordIds(req.user!, body.collection, requested, {
+      isAdmin: req.isAdmin
+    })
+    const ids = requested.filter((id) => visible.has(id))
 
     const data = await computeStatusBatch(body.collection, ids)
     return reply.send({ data })

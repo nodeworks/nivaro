@@ -33,6 +33,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { SlaClockLine } from './SlaClock'
 import {
   TransitionRequirementsDialog,
   type TransitionRequirementsPayload
@@ -2090,7 +2091,11 @@ function PipelinePanelInner({
                     />
                   </div>
                 )}
-                <div className='px-5 py-4'>
+                <div className='space-y-3 px-5 py-4'>
+                  {/* This step's SLA clock + Adjust clock (#1239); null without a rule. */}
+                  {!instance.completed_at && (
+                    <SlaClockLine collection={collection} itemId={String(item)} />
+                  )}
                   <OwnersSection
                     collection={collection}
                     item={item}

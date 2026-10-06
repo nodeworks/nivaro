@@ -59,6 +59,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
+import { OwnerMatrixVersionsCard } from './OwnerMatrixVersionsCard'
 import { SkipReportCard, TemplateLintCard } from './PipelineHealthCards'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
 import { PipelineStateOwners } from './PipelineStateOwners'
@@ -2763,6 +2764,7 @@ export type PipelineEditorSection =
   | 'skip-report'
   | 'ai-review'
   | 'versions'
+  | 'matrix-versions'
 
 export function PipelineEditorView({
   templateId,
@@ -4130,6 +4132,9 @@ export function PipelineEditorView({
 
         {/* Config versions */}
         {!hiddenSet.has('versions') && <PipelineVersionsCard templateId={templateId} />}
+
+        {/* Owner matrix versions (#833) */}
+        {!hiddenSet.has('matrix-versions') && <OwnerMatrixVersionsCard templateId={templateId} />}
       </div>
     </>
   )
