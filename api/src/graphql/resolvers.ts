@@ -10,6 +10,9 @@ import {
 } from 'graphql'
 import { db } from '../db/index.js'
 import { chainFields } from '../services/chain-columns.js'
+import { assertInstanceAccess } from '../services/instance-guard.js'
+import { writeStartHistory } from '../services/instance-start.js'
+import { originFields } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import {
   buildInstancePayload,
@@ -664,6 +667,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
       if (!binding) throw new Error('No workflow bound to this collection')
@@ -678,15 +683,24 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .first()
 
       const instanceId = randomUUID()
+      const startedAt = new Date()
       await db('nivaro_workflow_instances').insert({
         id: instanceId,
         template: binding.template,
         collection,
         item,
         current_state: initialState?.id ?? null,
-        started_at: new Date(),
+        started_at: startedAt,
         completed_at: null
       })
+      // #1219: the start is the instance's first history row.
+      if (initialState)
+        await writeStartHistory({
+          instanceId,
+          stateId: String(initialState.id),
+          userId: user.id,
+          timestamp: startedAt
+        })
 
       let finalState = initialState
       if (initialState) {
@@ -714,7 +728,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             to_state: finalId,
             user: user.id,
             comment: 'Auto-advanced via skip criteria',
-            timestamp: new Date()
+            timestamp: new Date(),
+            ...(await originFields('nivaro_workflow_history', 'machine'))
           })
         }
       }
@@ -751,6 +766,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })
@@ -848,6 +865,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const binding = await db('nivaro_workflow_bindings').where({ collection }).first()
       if (!binding) throw new Error('No pipeline bound to this collection')
@@ -862,15 +881,24 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .first()
 
       const instanceId = randomUUID()
+      const startedAt = new Date()
       await db('nivaro_workflow_instances').insert({
         id: instanceId,
         template: binding.template,
         collection,
         item,
         current_state: initialState?.id ?? null,
-        started_at: new Date(),
+        started_at: startedAt,
         completed_at: null
       })
+      // #1219: the start is the instance's first history row.
+      if (initialState)
+        await writeStartHistory({
+          instanceId,
+          stateId: String(initialState.id),
+          userId: user.id,
+          timestamp: startedAt
+        })
 
       let finalState = initialState
       if (initialState) {
@@ -898,7 +926,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
             to_state: finalId,
             user: user.id,
             comment: 'Auto-advanced via skip criteria',
-            timestamp: new Date()
+            timestamp: new Date(),
+            ...(await originFields('nivaro_workflow_history', 'machine'))
           })
         }
       }
@@ -935,6 +964,8 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
     resolve: async (_src, args, ctx) => {
       const user = requireUser(ctx)
       const { collection, item } = args
+      // Start/advance gate: update permission + the caller can see the record.
+      await assertInstanceAccess(user, ctx.isAdmin ?? false, collection, String(item))
 
       const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })

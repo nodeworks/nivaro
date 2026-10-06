@@ -71,6 +71,25 @@ vi.mock('../../../services/queue-materialization.js', () => ({
 }))
 vi.mock('../../../services/collections.js', () => ({ getCollection: vi.fn(async () => undefined) }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// The start/advance gate (instance-guard) is unit-tested on its own; here it
+// allows unless a test sets `guard.deny`.
+const guard = vi.hoisted(() => ({ deny: null as null | 403 | 404 }))
+vi.mock('../../../services/instance-guard.js', () => {
+  class InstanceAccessError extends Error {
+    statusCode: number
+    constructor(statusCode: number, message: string) {
+      super(message)
+      this.statusCode = statusCode
+    }
+  }
+  return {
+    InstanceAccessError,
+    assertInstanceAccess: vi.fn(async () => {
+      if (guard.deny) throw new InstanceAccessError(guard.deny, 'Record not found')
+    }),
+    instanceAccessAllowed: vi.fn(async () => !guard.deny)
+  }
+})
 
 import { db } from '../../../db/index.js'
 import { itemsRoutes } from '../../../routes/items.js'
@@ -192,6 +211,53 @@ function installDb(fx: DbFixture = {}) {
 afterEach(() => {
   vi.clearAllMocks()
   asCreator()
+  guard.deny = null
+})
+
+// ─── Record access gate (instance-guard) ───────────────────────────────────
+
+describe('start / transition refuse a record the caller cannot change or see', () => {
+  it('transition answers the gate status and writes nothing', async () => {
+    asApprover()
+    const historyInsert = vi.fn(() => [1])
+    installDb({ historyInsert })
+    guard.deny = 404
+    const app = buildPipelinesApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pipelines/instance/workflows/wf-1/transition',
+      payload: { transition_id: 'tx-approve' }
+    })
+    expect(res.statusCode).toBe(404)
+    expect(historyInsert).not.toHaveBeenCalled()
+  })
+
+  it('start answers 403 without permission and creates nothing', async () => {
+    installDb()
+    guard.deny = 403
+    const app = buildPipelinesApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/pipelines/instance/workflows/wf-9/start'
+    })
+    expect(res.statusCode).toBe(403)
+  })
+
+  it('bulk transition counts a hidden record as failed and moves nothing', async () => {
+    asApprover()
+    const instanceUpdate = vi.fn(() => Promise.resolve(1))
+    installDb({ instanceUpdate })
+    guard.deny = 404
+    const app = buildItemsApp()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/items/workflows/bulk-transition',
+      payload: { ids: ['wf-1'], transition_id: 'tx-approve' }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().failed).toBe(1)
+    expect(instanceUpdate).not.toHaveBeenCalled()
+  })
 })
 
 // ─── Single-item transition ────────────────────────────────────────────────

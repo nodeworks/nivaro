@@ -205,6 +205,7 @@ export async function historyFor(
          JOIN nivaro_workflow_states st ON st.id = h.to_state
          LEFT JOIN nivaro_workflow_states sf ON sf.id = h.from_state
          WHERE h.[timestamp] >= ? AND h.[timestamp] < ?
+           AND NOT (h.from_state IS NULL AND h.[transition] IS NULL)
            AND h.[user] IN (${chunk.map(() => '?').join(',')})`,
         [from, to, ...chunk]
       )

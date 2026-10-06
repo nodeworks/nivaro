@@ -186,6 +186,8 @@ export async function loadChainSteps(
           'h.id',
           'h.timestamp',
           'h.comment',
+          'h.from_state',
+          'h.transition',
           'h.chain_parent',
           'i.collection',
           'i.item',
@@ -206,7 +208,11 @@ export async function loadChainSteps(
         at: iso(h.timestamp),
         who: whoOf(h),
         record: h.collection ? { collection: String(h.collection), item: String(h.item) } : null,
-        summary: `${h.transition_label ?? 'Moved'} → ${h.to_label ?? '?'}`,
+        // #1219: a start row (no from_state, no transition) reads as the start.
+        summary:
+          h.from_state === null && h.transition === null
+            ? `Started in ${h.to_label ?? '?'}`
+            : `${h.transition_label ?? 'Moved'} → ${h.to_label ?? '?'}`,
         detail: {
           type: 'transition',
           from: (h.from_label as string | null) ?? null,

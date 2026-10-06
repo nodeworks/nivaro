@@ -55,6 +55,25 @@ vi.mock('../../../services/queue-materialization.js', () => ({
 }))
 vi.mock('../../../services/collections.js', () => ({ getCollection: vi.fn(async () => undefined) }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// The start/advance gate (instance-guard) is unit-tested on its own; here it
+// allows unless a test sets `guard.deny`.
+const guard = vi.hoisted(() => ({ deny: null as null | 403 | 404 }))
+vi.mock('../../../services/instance-guard.js', () => {
+  class InstanceAccessError extends Error {
+    statusCode: number
+    constructor(statusCode: number, message: string) {
+      super(message)
+      this.statusCode = statusCode
+    }
+  }
+  return {
+    InstanceAccessError,
+    assertInstanceAccess: vi.fn(async () => {
+      if (guard.deny) throw new InstanceAccessError(guard.deny, 'Record not found')
+    }),
+    instanceAccessAllowed: vi.fn(async () => !guard.deny)
+  }
+})
 
 import { db } from '../../../db/index.js'
 import { pipelinesRoutes } from '../../../routes/pipelines.js'

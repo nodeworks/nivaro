@@ -37,7 +37,7 @@ async function loadAllStats(): Promise<Map<string, StateDurationStats>> {
     FROM (
       SELECT instance, to_state, timestamp,
              DATEDIFF(minute, timestamp,
-               LEAD(timestamp) OVER (PARTITION BY instance ORDER BY timestamp)) / 60.0 AS hrs
+               LEAD(timestamp) OVER (PARTITION BY instance ORDER BY timestamp, id)) / 60.0 AS hrs
       FROM nivaro_workflow_history
       WHERE to_state IS NOT NULL
     ) h

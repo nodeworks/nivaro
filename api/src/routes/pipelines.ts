@@ -12,6 +12,8 @@ import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
+import { writeStartHistory } from '../services/instance-start.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
@@ -803,15 +805,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           current_state: initial.id,
           started_at: new Date()
         })
-        await db('nivaro_workflow_history').insert({
-          ...(await chainFields('nivaro_workflow_history')),
-          instance: instId,
-          from_state: null,
-          to_state: initial.id,
-          user: req.user?.id ?? null,
+        await writeStartHistory({
+          instanceId: instId,
+          stateId: String(initial.id),
+          userId: req.user?.id ?? null,
           comment: 'bulk-start (missing instance)',
-          timestamp: new Date(),
-          ...(await originFields('nivaro_workflow_history', 'machine'))
+          origin: 'machine'
         })
         started++
       } catch {
@@ -2237,6 +2236,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     const historyRows = await historyQ
       .where('h.instance', instance.id)
       .orderBy('h.timestamp', 'desc')
+      // A start row (#1219) and a skip-advance written in the same tick share
+      // a timestamp — the id keeps the start oldest.
+      .orderBy('h.id', 'desc')
       .select(
         'h.id',
         'h.transition',
@@ -2298,6 +2300,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Start pipeline instance for an item
   app.post('/instance/:collection/:item/start', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    // Starting a pipeline changes the record: update permission + the caller
+    // can see it (row filter, User Scopes). Invisible = 404.
+    try {
+      await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item)
+    } catch (err) {
+      if (err instanceof InstanceAccessError)
+        return reply.code(err.statusCode).send({ error: err.message })
+      throw err
+    }
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2315,15 +2326,24 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .first()
 
     const instanceId = randomUUID()
+    const startedAt = new Date()
     await db('nivaro_workflow_instances').insert({
       id: instanceId,
       template: binding.template,
       collection,
       item,
       current_state: initialState?.id ?? null,
-      started_at: new Date(),
+      started_at: startedAt,
       completed_at: null
     })
+    // #1219: the start is the instance's first history row.
+    if (initialState)
+      await writeStartHistory({
+        instanceId,
+        stateId: String(initialState.id),
+        userId: req.user?.id ?? null,
+        timestamp: startedAt
+      })
 
     // Resolve skip criteria — may advance past initial state
     let finalState = initialState
@@ -2393,6 +2413,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const body = req.body as { transition_id: string; comment?: string; reviewed?: boolean }
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
+      // Moving a pipeline changes the record: update permission + visibility.
+      try {
+        await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item)
+      } catch (err) {
+        if (err instanceof InstanceAccessError)
+          return reply.code(err.statusCode).send({ error: err.message })
+        throw err
+      }
 
       const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
         .where({ collection, item })

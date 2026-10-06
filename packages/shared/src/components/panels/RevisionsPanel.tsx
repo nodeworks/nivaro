@@ -751,6 +751,14 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
         {ev.transition_label && <span className='text-slate-400'> · {ev.transition_label}</span>}
       </>
     )
+  } else if (ev?.kind === 'start' && ev.to_label) {
+    // #1219: a start history row names the state the record started in.
+    sentence = (
+      <>
+        started it in{' '}
+        <span className='font-medium text-slate-700 dark:text-slate-200'>{ev.to_label}</span>
+      </>
+    )
   } else if (ev?.kind === 'start') {
     sentence = (
       <>

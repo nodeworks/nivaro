@@ -82,7 +82,11 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
        SELECT h.[user] AS usr, h.[timestamp] AS ts,
               LAG(h.[timestamp]) OVER (PARTITION BY h.instance ORDER BY h.[timestamp], h.id) AS prev_ts,
               sf.sort AS from_sort, st.sort AS to_sort,
-              st.is_terminal AS to_terminal, st.[key] AS to_key
+              st.is_terminal AS to_terminal, st.[key] AS to_key,
+              -- #1219: a start row (no from_state, no transition) is not a
+              -- transition; it stays in the window so LAG measures the first
+              -- move from the start, but it is never counted.
+              CASE WHEN h.from_state IS NULL AND h.[transition] IS NULL THEN 1 ELSE 0 END AS is_start
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances i ON i.id = h.instance AND i.collection = ?
        JOIN nivaro_workflow_states st ON st.id = h.to_state
@@ -94,7 +98,7 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
        SUM(CASE WHEN from_sort IS NOT NULL AND from_sort > to_sort THEN 1 ELSE 0 END) AS send_backs,
        AVG(CASE WHEN prev_ts IS NOT NULL THEN DATEDIFF(minute, prev_ts, ts) / 60.0 END) AS avg_hours
      FROM hist
-     WHERE ts >= ? AND ts < ? AND usr IS NOT NULL ${userFilter}
+     WHERE ts >= ? AND ts < ? AND usr IS NOT NULL AND is_start = 0 ${userFilter}
      GROUP BY usr, ${expr}
      ORDER BY usr, bucket`,
     bind as any
@@ -113,7 +117,8 @@ export async function aggregateThroughput(params: ThroughputParams): Promise<{
       `SELECT COUNT(*) AS n
        FROM nivaro_workflow_history h
        JOIN nivaro_workflow_instances i ON i.id = h.instance AND i.collection = ?
-       WHERE h.[timestamp] >= ? AND h.[timestamp] < ? AND h.[user] IS NULL`,
+       WHERE h.[timestamp] >= ? AND h.[timestamp] < ? AND h.[user] IS NULL
+         AND NOT (h.from_state IS NULL AND h.[transition] IS NULL)`,
       [params.collection, params.from, params.toExclusive]
     )
   )

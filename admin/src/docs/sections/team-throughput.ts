@@ -22,6 +22,10 @@ export const teamThroughputGuide: DocSection = {
     {
       type: 'note',
       text: 'Computed live from `nivaro_workflow_history` — fully retroactive, including imported legacy history. Per-owner backlog trends (My Items sparklines) accumulate daily from the snapshot cron and are not retroactive.'
+    },
+    {
+      type: 'note',
+      text: 'Every pipeline instance begins with a start entry in its history (no previous state, no transition): "started in <state>". It is never counted as a transition, completion or send-back, but it is where time in the first state is measured from — so avg time to action, SLA clocks and the record\'s Time in step bar read the first state from history like every other state. Instances started before this existed get their start entry from `pnpm --filter @nivaro/api run backfill:start-history -- --execute` (dry run without the flag).'
     }
   ]
 }
