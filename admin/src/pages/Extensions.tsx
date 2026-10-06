@@ -1254,6 +1254,15 @@ type RegistryData = {
     app_version: string | null
   }>
   observed_capabilities: string[]
+  deprecated_members?: Array<{
+    member: string
+    replacement: string
+    removed_in: string
+    note: string | null
+    message: string
+    first_used_at: string
+    uses: number
+  }>
   health_check: boolean
   staged: { next_present: boolean; prev_present: boolean; live_entry: string | null }
 }
@@ -1320,7 +1329,8 @@ function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => vo
     ? data.hooks.length +
       data.crons.length +
       Object.values(data.registrations).reduce((n, l) => n + l.length, 0) +
-      data.settings.length
+      data.settings.length +
+      (data.deprecated_members?.length ?? 0)
     : 0
   return (
     <div className='fixed inset-0 z-[120] flex justify-end bg-black/30' onClick={onClose}>
@@ -1345,6 +1355,34 @@ function ExtensionRegistrySheet({ id, onClose }: { id: string; onClose: () => vo
           </p>
         ) : (
           <div className='mt-4 space-y-4 text-[12px]'>
+            <Section title='Deprecated members in use' count={data.deprecated_members?.length ?? 0}>
+              {data.deprecated_members?.map((d) => (
+                <li
+                  key={d.member}
+                  className='rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 dark:border-amber-500/30 dark:bg-amber-500/10'
+                  data-ext-deprecated={d.member}
+                >
+                  <div className='flex flex-wrap items-baseline gap-x-2'>
+                    <span className='font-mono text-[11px] text-amber-900 dark:text-amber-200'>
+                      ctx.{d.member}
+                    </span>
+                    <span className='text-[10.5px] text-amber-800 dark:text-amber-300'>
+                      leaves the kit in {d.removed_in}
+                    </span>
+                    <span
+                      className='ml-auto text-[10.5px] tabular-nums text-amber-800 dark:text-amber-300'
+                      data-tip={`First used ${formatRelative(d.first_used_at)}`}
+                    >
+                      {d.uses.toLocaleString()} use{d.uses === 1 ? '' : 's'} since boot
+                    </span>
+                  </div>
+                  <p className='mt-0.5 text-[11px] text-amber-900 dark:text-amber-100'>
+                    Use <span className='font-mono'>{d.replacement}</span> instead.
+                    {d.note ? ` ${d.note}` : ''}
+                  </p>
+                </li>
+              ))}
+            </Section>
             <Section title='Hooks' count={data.hooks.length}>
               {data.hooks.map((h, i) => {
                 // Same order as the registry lists them, so index pairs them.

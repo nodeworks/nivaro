@@ -18,6 +18,12 @@ import type {
   ExtensionEventHandler,
   ExtensionSettingValue
 } from './context.js'
+import {
+  deprecationMessage,
+  KIT_DEPRECATIONS,
+  type KitDeprecation,
+  watchDeprecatedMembers
+} from './deprecations.js'
 import type { FlowOpRegistration, FlowTriggerRegistration } from './flows.js'
 import type { ExtensionHookContext, ExtensionHookHandler, HookAction, HookTiming } from './hooks.js'
 import type { ImportProcessorDef } from './imports.js'
@@ -353,6 +359,8 @@ export interface TestContextOptions {
   ) => CallResult | Promise<CallResult>
   /** What `mail.renderTemplate` returns; default the template name. */
   renderTemplate?: (name: string, data: Record<string, unknown>) => string
+  /** Deprecated members to watch; defaults to the kit's own list. */
+  deprecations?: readonly KitDeprecation[]
 }
 
 export interface TestContext extends ExtensionContext {
@@ -379,6 +387,8 @@ export interface TestContext extends ExtensionContext {
     obligationsResolved: Array<{ id: number | null; patch: ObligationResolvePatch }>
     longSql: Array<{ sql: string; opts?: { timeoutMs?: number } }>
     log: Array<{ level: 'info' | 'warn' | 'error' | 'debug'; args: unknown[] }>
+    /** One sentence per read of a deprecated context member (#1303). */
+    deprecations: string[]
   }
   /** Everything the extension registered, by kind. */
   registered: {
@@ -503,7 +513,8 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     obligationsOpened: [],
     obligationsResolved: [],
     longSql: [],
-    log: []
+    log: [],
+    deprecations: []
   }
   const registered: TestContext['registered'] = {
     hooks: [],
@@ -851,5 +862,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
       )
     }
   }
-  return ctx
+  return watchDeprecatedMembers(ctx, opts.deprecations ?? KIT_DEPRECATIONS, (d) => {
+    calls.deprecations.push(deprecationMessage('extension', d))
+  })
 }

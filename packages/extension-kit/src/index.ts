@@ -8,6 +8,12 @@
 
 export { databaseKey, hasColumn, resetColumnProbes } from './column-probe.js'
 export type * from './context.js'
+export {
+  deprecationMessage,
+  KIT_DEPRECATIONS,
+  type KitDeprecation,
+  watchDeprecatedMembers
+} from './deprecations.js'
 export type * from './flows.js'
 export type * from './hooks.js'
 export type * from './imports.js'
