@@ -52,6 +52,7 @@ import { fileURLToPath } from 'node:url'
 import type { ExtensionRunbookDecl } from '@nivaro/extension-kit'
 import { normalizeRunbooks } from '../extensions/runbook-decls.js'
 import { childEnv } from '../services/release-runs.js'
+import { hostRunRefusal } from '../services/runbook-admission.js'
 import {
   historyRunFinished,
   parsePhaseSummary,
@@ -69,6 +70,7 @@ import {
   hostOutcome,
   hostQueueAvailable,
   LineBatcher,
+  listHostRuns,
   maxHostSeq,
   parseEvents,
   pickClaimable,
@@ -81,7 +83,12 @@ import {
   timingsRecorded,
   updateHostRun
 } from '../services/runbook-queue.js'
-import { runbookArgv, runtime, type StepEvent } from '../services/runbook-runs.js'
+import {
+  type RunbookSummary,
+  runbookArgv,
+  runtime,
+  type StepEvent
+} from '../services/runbook-runs.js'
 import { NIVARO_VERSION } from '../version.js'
 
 const HOST = (process.env.RUNBOOK_AGENT_HOST || hostname()).slice(0, 200)
@@ -670,7 +677,21 @@ async function tick(): Promise<void> {
       if (!next) break
       rows.splice(rows.indexOf(next), 1)
       if (!(await claimHostRun(next.id, HOST))) continue
-      await startRun(next, decls.get(`${next.extension}:${next.runbook}`) as HostDecl, runbooks)
+      const decl = decls.get(`${next.extension}:${next.runbook}`) as HostDecl
+      // The routes gate a run before it is queued; the agent gates it again,
+      // because it executes whatever row it claims.
+      const prior = (await listHostRuns(200)) as unknown as RunbookSummary[]
+      const refusal = hostRunRefusal(decl, next, prior)
+      if (refusal) {
+        say(`refused ${next.id}: ${refusal}`)
+        await updateHostRun(next.id, {
+          status: 'refused',
+          summary: `Refused by the host agent: ${refusal}`,
+          finished_at: new Date()
+        } as Partial<HostRunRow>).catch(() => {})
+        continue
+      }
+      await startRun(next, decl, runbooks)
       return
     }
   } catch (err) {
