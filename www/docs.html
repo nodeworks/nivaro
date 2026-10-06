@@ -900,6 +900,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <h1 class="doc-h1" id="files">Files</h1>
           <p class="doc-p">The file manager lets you upload, browse, and delete files. Uploaded files are stored on local disk and metadata is tracked in <code class="doc-code">nivaro_files</code>.</p>
           <p class="doc-p">The Unused scope lists files no record references (every foreign key into nivaro_files is checked live). "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).</p>
+          <p class="doc-p">On a record form every file chip carries a "used in" glyph with a count. Opening it lists what carried that file on this record: the addendum that attached it, the integration push whose payload named it, the email it rode, and the layout that generated it (a PDF stamped generated_by_layout). A match on the file's uuid reads as certain; one found only by its download name — an email body or a push payload that spells out the filename — is marked "by name". A file nothing carried says so. API: POST /api/files/usage/on-record {collection, item, file_ids} (read permission on the record; 200 ids per call).</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>POST /api/files</td><td>Upload a file (multipart/form-data). Returns nivaro_files metadata.</td></tr>
@@ -1241,6 +1242,8 @@ const article = await nivaro.request(readItem('articles', '123'))
           <p class="doc-p">Admins can create, edit, and delete workspaces via the Workspaces page in the sidebar. Each workspace needs a unique slug. The default workspace cannot be deleted.</p>
           <h3 class="doc-h3">Workspace color</h3>
           <p class="doc-p">Each workspace can carry an accent color (the color picker in the workspace form). While a workspace with a color is active, the whole admin re-tints to it — buttons, highlights, and tinted surfaces all follow, and the switcher dot shows the same color — so you can always tell at a glance which workspace you are in. Workspaces without a color fall back to the instance project color, then the default cyan.</p>
+          <h3 class="doc-h3">Mail branding</h3>
+          <p class="doc-p">The Mail branding card on a workspace sets the email chrome its notifications wear: a logo URL (a public address a mail client can fetch), an accent colour, the sender name (the From display name and the "Sent by" footer line — the From address itself never changes) and a footer line. Blank fields keep the instance branding from Settings → Project. An email is branded by the workspace of the record it is about, else the recipient's current workspace. Preview renders the saved values; the Mail Templates → Send a real one harness can render any email type as any workspace.</p>
           <!-- /SYNC:workspaces-guide -->
         </div>
 
@@ -1853,9 +1856,19 @@ x-workspace: ws-uuid-here</code></pre>
             <li>review_when (child_fields): {"field": "&lt;record field or one M2O hop, e.g. warehouse.ordering_system&gt;", "in": [..]} (or a list — any match) on the transitioning record brings the dialog back with EVERY row, filled or not, when e.g. the last partner push failed ("push_status": ["error"]) — so a line can be corrected before trying again; "review_message" sets the banner text. The dialog's own re-submit sends reviewed: true, which skips review_when (incomplete rows still block), so it asks once per attempt.</li>
             <li>Repeat guard: the same manual transition on the same record is refused with 409 <code class="doc-code">TRANSITION_DUPLICATE</code> when it is made again within 10 seconds, so a double click or a retried request never runs the side effects twice. The answer cites the first history row. Settings → Content changes the window; 0 turns the guard off. <code class="doc-code">TRANSITION_GUARD_SECONDS</code> sets the default per instance.</li>
             <li>auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).</li>
+            <li>Failure memory (auto transitions): when an automatic transition's blocking push fails, the engine remembers the error class and a hash of what the blocking actions would send, and stops firing that transition while the hash is unchanged — a refused order is not re-sent on every write and every hourly sweep. The record shows "Needs a person" on the pipeline panel and a row under "Automatic moves waiting on a person" in the Integrations console. It fires again when what it would send changes (a record edit), when a person retries the push, re-runs the action or moves the record by hand, or — for transient, rate-limited and credential failures — on the remediation ladder (1, 5, 30, 120, 120 minutes, then held). The memory never blocks a manual transition. GET /api/pipelines/instance/:collection/:item returns the held transitions as auto_held.</li>
+            <li>require_owner: only the people who own the record's current step — a delegate covering for an out-of-office owner included — and administrators may run the transition. REST and GraphQL refuse anyone else with 403 code TRANSITION_OWNER_REQUIRED, and the transition is left out of available_transitions for them. Off by default; the "Only the step's owner" switch in the transition form, an "Owner only" badge on the route row.</li>
             <li>Related-row conditions: field "&lt;childCollection&gt;:&lt;fkField&gt;" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.&lt;field&gt;" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the request total: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.total_amount"}}. An unresolved $record token or unknown hop fails the filter closed.</li>
           </ul>
           <div class="doc-note">Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.</div>
+          <h3 class="doc-h3">What transition actions write</h3>
+          <p class="doc-p">A transition action's writes — the record a <code class="doc-code">create_record</code> action makes (and its junction rows and link-back field), the <code class="doc-code">on_success</code> / <code class="doc-code">on_failure</code> values written back onto the record, and <code class="doc-code">on_success_children</code> values on child rows — go through the items service like any other save. Auto ids, field rules, the created record's own pipeline auto-start, revisions, stored rollups, the integrity check and subscriptions all see them.</p>
+          <ul class="doc-ul">
+            <li>Who: the person who made the transition is named on the activity row, writing with the administrator role (the transition was the authorized act). An automatic transition writes as the system — no person on the row.</li>
+            <li>Reason: every such write carries the change reason <code class="doc-code">transition-action: &lt;transition label&gt;</code> and is recorded as a machine write, so it never shows up as a person's note in the Notes thread.</li>
+            <li>A writeback the items service refuses (a validation rule, an unregistered table) still lands, written directly, so an <code class="doc-code">on_failure</code> status is never lost. A record <code class="doc-code">create_record</code> cannot create through the items service is the action failing: its <code class="doc-code">on_failure</code> writeback runs.</li>
+            <li>While a transition is being applied, a writeback onto that record does not re-run its automatic transitions from inside the transition; they are evaluated once the transition has landed.</li>
+          </ul>
           <!-- /SYNC:workflow-overview -->
         </div>
 
@@ -2024,7 +2037,7 @@ Reading: "approve a 25k budget from the South division"
           <!-- /SYNC:pipeline-dimensions -->
         </div>
 
-        <div class="doc-section" id="s-pipeline-owners" data-toc='[{"id":"pipeline-owner-matrix","label":"Owner Matrix UI"}]'>
+        <div class="doc-section" id="s-pipeline-owners" data-toc='[{"id":"pipeline-owner-matrix","label":"Owner Matrix UI"},{"id":"pipeline-owner-matrix-versions","label":"Owner matrix versions"}]'>
           <!-- SYNC:pipeline-owners -->
           <h1 class="doc-h1" id="pipeline-owner-matrix">Owner Matrix UI</h1>
           <p class="doc-p">The Owner Matrix is an interactive table where you assign users to states. Rows are values of the row-axis dimension; columns are workflow states.</p>
@@ -2054,6 +2067,18 @@ Reading: "approve a 25k budget from the South division"
           <h3 class="doc-h3">Adding rows</h3>
           <p class="doc-p">Click "+ Add Row" below the matrix. If row axis is a relation field, a searchable picker appears. Otherwise, enter a text value. Once created, the row appears and cells can be populated.</p>
           <div class="doc-note">Column filters (optional dimensions) can be left unset — the matrix shows "base-level" owners (groups with only required filter values). Set optional filters to see context-specific overrides.</div>
+          <h3 class="doc-h3" id="pipeline-owner-matrix-versions">Owner matrix versions</h3>
+          <p class="doc-p">The pipeline editor's "Owner matrix versions" card keeps the matrix recoverable. Before every owner change — a cell's filters, priority or WIP limit, a member or team added or removed, a dimension edited, a bulk add or an owner cleanup — the whole matrix is captured: dimensions, owner groups, members and team links. "Config versions" covers states, transitions and bindings; this card covers who owns them.</p>
+          <ul class="doc-ul">
+            <li>Diff compares a version with the live matrix cell by cell: filters, priority and WIP changes, people and teams added or removed, cells that exist on only one side, and dimension changes.</li>
+            <li>Restore makes the live matrix equal the version. It captures the current matrix first (so a restore can be undone), keeps every owner group's id, and writes only what differs. Cells whose state was deleted, people whose account is gone and deleted teams are skipped and counted.</li>
+            <li>Edits made by one person within two minutes share a version — it holds the matrix from before the burst. "Save a version now" takes a checkpoint at any moment.</li>
+            <li>The newest 30 versions are kept per template. Large matrices are stored compressed.</li>
+          </ul>
+          <pre class="doc-pre"><code>GET  /api/pipelines/:id/owner-matrix/versions
+POST /api/pipelines/:id/owner-matrix/versions            { note? }  — checkpoint now
+GET  /api/pipelines/:id/owner-matrix/versions/:vid/diff  ?against=current|&lt;vid&gt;
+POST /api/pipelines/:id/owner-matrix/versions/:vid/restore</code></pre>
           <!-- /SYNC:pipeline-owners -->
         </div>
 
@@ -2390,6 +2415,33 @@ const { data: tx } = await nivaro.request(
 }</code></pre>
           <div class="doc-note">A record lists 200 related rows per relation at most. When a list was cut, the response names the relation in <code class="doc-code">truncated_relations</code>. Related rows nest two levels deep. One read per relation per page is made, never one per record.</div>
           <p class="doc-p">A field name the collection does not have answers 400 with code <code class="doc-code">UNKNOWN_FIELD</code> and the names in <code class="doc-code">fields</code>.</p>
+          <h3 class="doc-h3">Links to several collections</h3>
+          <p class="doc-p">A relation whose links point at different collections row by row (a contact that is either a person or an outside email address) answers one entry per link: the link id, the collection it names, the linked id, and the linked record under <code class="doc-code">item</code>. <code class="doc-code">fields=contacts.*</code> or <code class="doc-code">contacts.item.*</code> reads the whole linked record; <code class="doc-code">contacts.item.email</code> (or the shorthand <code class="doc-code">contacts.email</code>) reads only the fields named; asking only for <code class="doc-code">contacts.id,contacts.collection</code> skips the linked record. People answer what the person directory (GET /users) shows and nothing more: the directory fields, never a suspended, redacted or placeholder account, and nothing at all through an API key whose scopes leave out nivaro_users. Every other collection is read as the caller, and a record the caller may not read, or a collection the relation does not allow, answers <code class="doc-code">item: null</code>. A relation left out of the field list the caller may read answers nothing. One read per linked collection per page, never one per link. The same works on a single record and through a relation (<code class="doc-code">request.contacts.*</code>).</p>
+          <pre class="doc-pre"><code>GET /api/items/requests/32842?fields=id,contacts.item.email
+
+{
+  "data": {
+    "id": 32842,
+    "contacts": [
+      { "id": 52295, "collection": "directus_users", "item_id": "7A0411F3-…", "item": { "id": "7A0411F3-…", "email": "pat@example.com" } },
+      { "id": 52296, "collection": "additional_emails", "item_id": "5", "item": { "id": 5, "email": "ops@example.com" } }
+    ]
+  }
+}</code></pre>
+          <h3 class="doc-h3">Several reads in one request</h3>
+          <p class="doc-p"><code class="doc-code">POST /api/items/batch-read</code> carries up to 20 reads. Each is a list read (no <code class="doc-code">id</code>) or a single-record read, with the query keys the GET routes take (<code class="doc-code">fields</code>, <code class="doc-code">filter</code>, <code class="doc-code">sort</code>, <code class="doc-code">limit</code>, <code class="doc-code">offset</code>, <code class="doc-code">page</code>, <code class="doc-code">search</code>, <code class="doc-code">after</code>, <code class="doc-code">count</code>, <code class="doc-code">conditions</code>) as strings or structured values. Every read runs as the caller exactly as its own GET would and answers its own status — a forbidden collection is 403, a missing record 404, a bad filter 400 — so one refused read never fails the others. A list read answers its rows in <code class="doc-code">data</code> and its paging facts in <code class="doc-code">meta</code>. Writes never batch. SDK: <code class="doc-code">readMany([...])</code>; a host can let <code class="doc-code">NivaroProvider batchReads</code> gather the record reads its components fire in the same moment into one batch.</p>
+          <pre class="doc-pre"><code>POST /api/items/batch-read
+{ "reads": [
+  { "key": "regions", "collection": "regions", "query": { "fields": "id,short_name", "limit": 5 } },
+  { "key": "order", "collection": "orders", "id": 41, "query": { "fields": "id,number" } },
+  { "key": "gone", "collection": "orders", "id": 999999 }
+] }
+
+{ "results": [
+  { "key": "regions", "status": 200, "data": [ ... ], "meta": { "total": 31, "limit": 5, "offset": 0 } },
+  { "key": "order", "status": 200, "data": { "id": 41, "number": "SO-1041" } },
+  { "key": "gone", "status": 404, "error": "Not found", "code": "NOT_FOUND" }
+] }</code></pre>
           <h3 class="doc-h3">Walking a large collection (<code class="doc-code">after</code>)</h3>
           <p class="doc-p">Offset paging pays for every row it skips, and rows written during the walk shift the pages. A cursor names the last row of the page just read, so the next page costs the same however far the walk is, and a write elsewhere moves nothing. Send <code class="doc-code">after=start</code> for the first page and the <code class="doc-code">next_cursor</code> of each page for the next. <code class="doc-code">next_cursor</code> is null on the last page.</p>
           <pre class="doc-pre"><code>GET /api/items/orders?limit=500&amp;sort=-amount&amp;fields=id,amount&amp;after=start&amp;count=0
@@ -2715,6 +2767,17 @@ Authorization: Bearer &lt;token&gt;
 // Runs a pipeline and is not canceled
 ?filter={"$state":{"_nin":["__none__","canceled"]}}</code></pre>
           <p class="doc-p">State keys are the pipeline's own keys. <code class="doc-code">__none__</code> stands for a record with no pipeline instance: name it in <code class="doc-code">_in</code> to include such records, or in <code class="doc-code">_nin</code> to leave them out.</p>
+          <h3 class="doc-h3">Reading the pipeline instance (<code class="doc-code">$workflow_instance</code>)</h3>
+          <p class="doc-p">Ask for <code class="doc-code">$workflow_instance</code> in <code class="doc-code">fields</code> on any collection bound to a pipeline and each record carries its current instance: the current state (with the name partners are sent, <code class="doc-code">external_label</code>), when it entered that state, and the transitions the caller's role may run from it. Add <code class="doc-code">$workflow_instance.history</code> for the transition log. It is never part of <code class="doc-code">*</code>, a record with no pipeline reads <code class="doc-code">null</code>, and a whole page is read in a fixed number of queries. <code class="doc-code">$state</code> is the lighter read when only the state is needed.</p>
+          <pre class="doc-pre"><code>// Current state + available transitions
+?fields=id,workflow_id,$workflow_instance
+
+// ... plus the transition log
+?fields=id,$workflow_instance.history
+
+// On a related record
+?fields=id,workflow.$workflow_instance</code></pre>
+          <div class="doc-note">Available transitions are filtered by role, not by their condition rules — the transition endpoint still judges those, so a listed transition can be refused.</div>
           <h3 class="doc-h3">Who wrote to it (<code class="doc-code">$origin</code>)</h3>
           <p class="doc-p">Every write is recorded with its origin: person, machine, import or integration. <code class="doc-code">$origin</code> filters records by the writes they have received. <code class="doc-code">_in</code> keeps records that have a write of those origins; <code class="doc-code">_nin</code> keeps records that have none. <code class="doc-code">days</code>, <code class="doc-code">since</code>, <code class="doc-code">until</code>, <code class="doc-code">by</code> (an account id) and <code class="doc-code">action</code> (create, update, delete) narrow which writes count.</p>
           <pre class="doc-pre"><code>// Touched by an integration or an import in the last 7 days
@@ -3249,6 +3312,8 @@ Content-Type: application/json
           <p class="doc-p">On the Users → user edit page, administrators see the same Delegation card plus an editable Manager field. Admins can set delegation and the manager relationship for any user.</p>
           <h3 class="doc-h3">How substitution works</h3>
           <p class="doc-p">When the pipeline engine resolves owners for a state, it applies delegation as the final step. Each resolved owner who is out of office with an active, non-expired delegate is replaced by the delegate. The result is de-duplicated, so two owners delegating to the same person collapse to a single entry.</p>
+          <h3 class="doc-h3">Acting for an owner</h3>
+          <p class="doc-p">When a delegate moves a record for an out-of-office owner of the step it is leaving — and is not an owner of that step in their own right — the history row records whose signature they stood in for (<code class="doc-code">on_behalf_of</code>). The pipeline panel, the record timeline, the revision history and the transition emails read it as "Kim Lee, for Beth Ross". An automatic transition never acts for anyone.</p>
           <!-- /SYNC:delegation -->
         </div>
 
@@ -4291,6 +4356,19 @@ query {
     _or: [{ _origin: { _nin: [person] } }, { _addendums: active }]
   }) { total }
 }</code></pre>
+          <h3 class="doc-h3">A record's pipeline instance</h3>
+          <p class="doc-p">Every collection bound to a pipeline has a <code class="doc-code">workflow_instance</code> field: the record's current instance with its state, when it entered it, the transitions your role may run and (when selected) its history. It resolves for a whole page in a fixed number of queries, and is null for a record with no pipeline. Binding or unbinding a collection rebuilds the schema on the process that made the change; other replicas pick it up on restart or <code class="doc-code">POST /api/graphql/rebuild</code>.</p>
+          <pre class="doc-pre"><code>query {
+  orders(limit: 25) {
+    id
+    workflow_instance {
+      currentState { key label externalLabel }
+      enteredAt
+      availableTransitions { id label }
+      history { timestamp toState { key } user { firstName } comment }
+    }
+  }
+}</code></pre>
           <h3 class="doc-h3">Filtering on the link itself</h3>
           <p class="doc-p">A many-to-many filter takes <code class="doc-code">_link</code>, which filters the junction row of the link: a membership that only applies in one region, a role on the link. Inside <code class="doc-code">_some</code> or <code class="doc-code">_none</code> it must hold on the same link as the other keys. On its own it means "some link like this".</p>
           <pre class="doc-pre"><code>query {
@@ -4424,6 +4502,12 @@ Authorization: Bearer &lt;admin-token&gt;
             <li>After hiding/unhiding a collection or field that affects schema visibility</li>
           </ul>
           <div class="doc-note">Rebuild is admin-only. It is safe to call at any time — in-flight GraphQL requests use the old schema until they complete; new requests after the rebuild use the updated schema.</div>
+          <h3 class="doc-h3">A missing id</h3>
+          <p class="doc-p">By default an update or delete naming an id that does not exist answers without an error and with null data, as it always has. With Settings → Content → Strict GraphQL mutations on, <code class="doc-code">update_&lt;collection&gt;_item</code>, <code class="doc-code">delete_&lt;collection&gt;_item</code> and the batch forms answer a <code class="doc-code">NOT_FOUND</code> error instead (<code class="doc-code">extensions.status</code> 404, <code class="doc-code">extensions.ids</code> naming every missing id), and nothing is changed. The check reads as the caller: a record outside the row filter or User Scopes of the caller answers exactly like one that does not exist, and a caller who cannot read the collection gets <code class="doc-code">NOT_FOUND</code> for every id. Tell API partners before turning it on: their calls on a missing record start failing. <code class="doc-code">GET /api/graphql/changelog</code> reports the switch as <code class="doc-code">policy.strict_mutations</code>.</p>
+          <pre class="doc-pre"><code>mutation { delete_orders_items(ids: [11, 999999]) { ids } }
+# strict on →
+# { "errors": [{ "message": "No orders record with id 999999",
+#                "extensions": { "code": "NOT_FOUND", "status": 404, "ids": ["999999"] } }] }</code></pre>
           <h3 class="doc-h3">Changelog and deprecation policy</h3>
           <p class="doc-p">Every rebuild that changes the schema writes a line-level diff (<code class="doc-code">+ type</code>, <code class="doc-code">- workflows.old_field</code>) to the changelog, <code class="doc-code">GET /api/graphql/changelog</code> (admin), and a removal notifies administrators. A field is retired in two steps: mark it deprecated in the Table Editor (Behavior → Deprecated for API callers, with a note naming the replacement) — the schema then carries <code class="doc-code">@deprecated(reason: …)</code> and clients that introspect see it — and remove it once the policy window has passed. Removing a served field before then is refused with <code class="doc-code">409</code> <code class="doc-code">FIELD_NOT_DEPRECATED</code> or <code class="doc-code">FIELD_DEPRECATION_TOO_RECENT</code>, naming the date it becomes removable; an administrator may force it with <code class="doc-code">?force=1</code>, which the activity log records. The window is Settings → Content → API field deprecation window: blank = 14 days, 0 = no policy.</p>
           <!-- /SYNC:graphql-rebuild -->
@@ -4436,6 +4520,9 @@ Authorization: Bearer &lt;admin-token&gt;
           <p class="doc-p">The <code class="doc-code">@nivaro/sdk</code> package is a fully-typed TypeScript client for the Nivaro REST, GraphQL, and realtime APIs. Works in Node.js, browsers, and edge runtimes.</p>
           <h3 class="doc-h3">Installation</h3>
           <pre class="doc-pre"><code>pnpm add @nivaro/sdk</code></pre>
+          <h3 class="doc-h3">MCP server (Claude Code, Claude Desktop, Cursor)</h3>
+          <p class="doc-p">The companion package <code class="doc-code">@nivaro/mcp</code> wraps the SDK as a Model Context Protocol server, so an AI coding assistant can read and write an instance directly: collection schemas, record reads and aggregates, rehearsed creates, updates, deletes with an explicit confirm, pipeline state and transitions, and the instance's own ask-your-data assistant. It authenticates with an <code class="doc-code">nvk_</code> API key, so role permissions, row-level security and user scopes apply unchanged; a sandbox key is read-only by construction. Install and client config snippets live in the package README (<code class="doc-code">packages/mcp/README.md</code>).</p>
+          <pre class="doc-pre"><code>claude mcp add nivaro -e NIVARO_URL=https://nivaro.example.com -e NIVARO_TOKEN=nvk_... -- npx -y @nivaro/mcp</code></pre>
           <h3 class="doc-h3">Create a client</h3>
           <pre class="doc-pre"><code>import { createNivaro } from '@nivaro/sdk'
 
@@ -6508,7 +6595,7 @@ await nivaro.request(releaseItemLock(collection, itemId))</code></pre>
         </div>
 
         <!-- EXTENSIONS -->
-        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-schema","label":"Schema steps"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"},{"id":"ext-overview-runbooks","label":"Runbooks"}]'>
+        <div class="doc-section" id="s-ext-overview" data-toc='[{"id":"ext-overview","label":"Extension Development — Overview"},{"id":"ext-overview-minimal","label":"Minimal Extension"},{"id":"ext-overview-routes","label":"Routes and their gates"},{"id":"ext-overview-tasks","label":"Operational tasks"},{"id":"ext-overview-seeds","label":"Config seeds"},{"id":"ext-overview-schema","label":"Schema steps"},{"id":"ext-overview-kit","label":"The extension kit"},{"id":"ext-overview-scaffold","label":"Starting a new extension"},{"id":"ext-overview-deprecations","label":"Deprecated context members"},{"id":"ext-overview-testing","label":"Testing an extension"},{"id":"ext-overview-loading","label":"Loading &amp; Reloading"},{"id":"ext-overview-env","label":"Environment manifest"},{"id":"ext-overview-runbooks","label":"Runbooks"}]'>
           <!-- SYNC:ext-overview -->
           <h1 class="doc-h1" id="ext-overview">Extension Development — Overview</h1>
           <p class="doc-p">Extensions are Node.js plugins that live in <code class="doc-code">api/extensions/&lt;name&gt;/</code>. Each exports a default object with an <code class="doc-code">id</code> and <code class="doc-code">register(ctx)</code> function. The loader auto-discovers them at startup and after "Scan for new" requests.</p>
@@ -6598,6 +6685,13 @@ export default defineExtension({
             <li>Members are only ever added to the context. An extension built against an older kit keeps compiling; a member that arrived in a later core release is documented as such on the type.</li>
             <li>In the monorepo the kit is a workspace package; a mounted extension resolves it from the image. Released with <code class="doc-code">pnpm kit:release</code>.</li>
           </ul>
+          <h3 class="doc-h3" id="ext-overview-scaffold">Starting a new extension</h3>
+          <p class="doc-p"><code class="doc-code">nivaro ext init &lt;id&gt;</code> (the CLI that ships with <code class="doc-code">@nivaro/sdk</code>) writes <code class="doc-code">api/extensions/&lt;id&gt;/</code> with an <code class="doc-code">index.ts</code> on <code class="doc-code">defineExtension</code> — one setting, one hook, one scheduled job with a description, and one route behind <code class="doc-code">requireAuth</code> — a passing test on <code class="doc-code">createTestContext()</code>, and a README naming the context members it uses. The id must be kebab-case and the directory must not exist yet; <code class="doc-code">--dir</code> writes somewhere else. Restart the API and the extension appears on the Extensions page.</p>
+          <pre class="doc-pre"><code>npx nivaro ext init acme-orders            # → api/extensions/acme-orders/
+cd api &amp;&amp; npx vitest run extensions/acme-orders
+npx tsc -p extensions/tsconfig.json</code></pre>
+          <h3 class="doc-h3" id="ext-overview-deprecations">Deprecated context members</h3>
+          <p class="doc-p">A context member on its way out is listed in the kit as data — <code class="doc-code">KIT_DEPRECATIONS</code>, each entry naming the member, its replacement and the kit version it leaves in — because a <code class="doc-code">@deprecated</code> tag is invisible at runtime. The loader watches every listed member on the context it hands <code class="doc-code">register()</code>: the first use per extension per boot logs a warning, the Extensions registry sheet lists the members in use under "Deprecated members in use" with a use count, and the readiness check "Extensions avoid deprecated kit members" warns while any loaded extension still reads one. In a test, <code class="doc-code">createTestContext().calls.deprecations</code> holds one sentence per read. Nothing is deprecated today.</p>
           <h3 class="doc-h3" id="ext-overview-testing">Testing an extension</h3>
           <p class="doc-p"><code class="doc-code">createTestContext()</code> from the kit is a context whose every effect is recorded instead of sent — notifications, external calls, activity rows, flow emits, obligations — and whose registrations the test can run: <code class="doc-code">runHooks(collection, action, timing, ctx)</code>, <code class="doc-code">runCron(id)</code>, <code class="doc-code">deliverEvent(type, payload)</code>, and <code class="doc-code">invoke(method, url, req)</code> for a route the extension registered. Its database is <code class="doc-code">createTestDb({ tables })</code>, an in-memory knex-shaped fake that covers the chain extensions use (where, whereIn, first, pluck, count, insert, update, del, <code class="doc-code">raw</code>, <code class="doc-code">schema.hasColumn</code>, <code class="doc-code">transaction</code>); joins are accepted and ignored, so seed the joined columns on the row you expect back. Nothing boots the API.</p>
           <pre class="doc-pre"><code>import { createTestContext } from '@nivaro/extension-kit'
@@ -7673,12 +7767,14 @@ ctx.storage.setActive('s3');</code></pre>
     { "tool": "aggregate", "input": {…}, "summary": "count by payment_status: 3 group(s)" }
   ] } }</code></pre>
           <ul class="doc-ul">
-            <li>Tools: list_collections, query_items (items service — RLS applies), aggregate (refuses when the user is row-filtered), semantic_search (hits intersected with the permission-checked read), integration_status (the obligation ledger for a record), record_event_path (the newest integration events naming a record and the path each set off — writes, transitions, flows, partner calls, where it failed), explain_access (why the asker — or, for administrators, another user — can or cannot see a record), record_integrity (a record's live integrity findings, or a collection's newest sweep totals) and run_custom_query (a saved SQL query from the catalogue the assistant is given — only queries whose access admits the asker, User-Scope params injected, 200 rows at most).</li>
+            <li>Tools: list_collections, query_items (items service — RLS applies), aggregate (refuses when the user is row-filtered), semantic_search (hits intersected with the permission-checked read), integration_status (the obligation ledger for a record), record_event_path (the newest integration events naming a record and the path each set off — writes, transitions, flows, partner calls, where it failed), explain_access (why the asker — or, for administrators, another user — can or cannot see a record), record_integrity (a record's live integrity findings, or a collection's newest sweep totals) run_custom_query (a saved SQL query from the catalogue the assistant is given — only queries whose access admits the asker, User-Scope params injected, 200 rows at most) and queue_summary (a queue the asker may read, by name or id from the queue catalogue in the prompt: totals, by-state counts, SLA breaches with hours over and owners, the oldest and unowned records as friendly ids with links, and the at-risk rules firing most — read as the asker through the queue service, so scopes apply).</li>
+            <li>Ask about a queue from its page: the queue toolbar's "Ask about this queue" opens /ask with the question seeded (<code class="doc-code">/ask?q=…</code> seeds and sends one question, then drops the parameter).</li>
             <li>Reads are direct; mutations only ever happen through the proposal gate (see AI Actions &amp; Dashboards) — the model can never write without your approval.</li>
             <li>Every answer shows the tool trace: exactly which queries produced it.</li>
             <li>A breakdown or a series (per state, per month, per vendor) comes with a chart: the model attaches a fenced <code class="doc-code">chart</code> block ({type, title, data:[{label, value}]}) that renders as a bar, line or pie under the prose.</li>
             <li>The same standalone question by the same person inside the answer-cache window (Settings → AI Features, default 15 minutes) answers from cache — the page says when it was first answered and offers "Ask again". Answers that propose an action are never cached; <code class="doc-code">fresh: true</code> in the request skips the cache.</li>
             <li>Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.</li>
+            <li>Answers stream as they are written: send <code class="doc-code">stream: true</code> and the route answers <code class="doc-code">202 {data: {stream_id}}</code> at once, then emits <code class="doc-code">ai:delta</code> (text, with its round), <code class="doc-code">ai:status</code> (the tool running), <code class="doc-code">ai:done</code> (the full normal body — proposals, trace, request_id) and <code class="doc-code">ai:error</code> to your Socket.io user room; add <code class="doc-code">Accept: text/event-stream</code> to get the same events as SSE instead (widgets, hosts without the socket). A caller with neither gets the plain reply. <code class="doc-code">POST /api/ai/chat/:stream_id/stop</code> halts a running answer. /summarize and /generate take the same <code class="doc-code">stream</code> option with text deltas only. The /ask page streams by default, shows what the model is doing while tools run, and has a Stop button.</li>
           </ul>
           <!-- /SYNC:ai-chat -->
         </div>
@@ -8223,6 +8319,7 @@ Authorization: Bearer &lt;token&gt;
             <li>Avg time to action — how long items sat in a state before this user moved them (wall-clock).</li>
           </ul>
           <div class="doc-note">Computed live from <code class="doc-code">nivaro_workflow_history</code> — fully retroactive, including imported legacy history. Per-owner backlog trends (My Items sparklines) accumulate daily from the snapshot cron and are not retroactive.</div>
+          <div class="doc-note">Every pipeline instance begins with a start entry in its history (no previous state, no transition): "started in &lt;state&gt;". It is never counted as a transition, completion or send-back, but it is where time in the first state is measured from — so avg time to action, SLA clocks and the record's Time in step bar read the first state from history like every other state. Instances started before this existed get their start entry from <code class="doc-code">pnpm --filter @nivaro/api run backfill:start-history -- --execute</code> (dry run without the flag).</div>
           <!-- /SYNC:team-throughput -->
         </div>
 
@@ -8564,7 +8661,7 @@ const { data: created } = await cms.request(
           <!-- /SYNC:scheduled-reports -->
         </div>
 
-        <div class="doc-section" id="s-sla-business-hours" data-toc='[{"id":"sla-business-hours","label":"SLA Business Hours &amp; Holidays"}]'>
+        <div class="doc-section" id="s-sla-business-hours" data-toc='[{"id":"sla-business-hours","label":"SLA Business Hours &amp; Holidays"},{"id":"sla-record-override","label":"Adjusting one record&apos;s clock"}]'>
           <!-- SYNC:sla-business-hours -->
           <h1 class="doc-h1" id="sla-business-hours">SLA Business Hours &amp; Holidays</h1>
           <p class="doc-p">Business-hours SLA math is schedule-driven: working days, day start/end hours, and a holiday list — configured in Settings → SLA and honored everywhere (status endpoints, notifications, queue SLA columns).</p>
@@ -8576,6 +8673,15 @@ const { data: created } = await cms.request(
             <li>Applies to every SLA consumer — status endpoints, queue SLA columns, breach notifications, escalation ladders and My Work.</li>
             <li>Applies only to rules with "business hours only" enabled; other rules use wall-clock hours.</li>
           </ul>
+          <h2 class="doc-h2" id="sla-record-override">Adjusting one record's clock</h2>
+          <p class="doc-p">The owner of a record's current step — or an admin — can extend or shorten that record's SLA clock with "Adjust clock" (on the pipeline panel's SLA line, and on the record's SLA banner). A reason is required. The rule itself does not change: the new duration applies to this record only, and only while it stays in this step — leaving the step ends it, and coming back starts the rule's own clock again.</p>
+          <ul class="doc-ul">
+            <li>Every SLA reader honours it: the record banner, queue SLA columns and sorts, My Work, breach notifications and escalation ladders.</li>
+            <li>The adjustment is written as a note on the record ("SLA clock") and the banner shows who set it, when and why. "Back to the rule" removes it.</li>
+            <li>Only one adjustment is active per stay; a new one replaces the old.</li>
+          </ul>
+          <pre class="doc-pre"><code>POST   /api/sla/override/:collection/:item   { "duration_hours": 48, "reason": "Waiting on the vendor quote" }
+DELETE /api/sla/override/:collection/:item   ?reason=…   — back to the rule's duration</code></pre>
           <!-- /SYNC:sla-business-hours -->
         </div>
 
@@ -11885,6 +11991,7 @@ Authorization: Bearer &lt;token&gt;
           <h3 class="doc-h3">In the admin UI</h3>
           <p class="doc-p">Open the Revisions panel on any item edit page. Each revision row shows the timestamp, user, and changed fields. Click Restore on any revision to roll back. A confirmation dialog shows a diff of the changes that will be applied.</p>
           <div class="doc-note">Rollback runs through the normal update pipeline — before/after hooks fire, activity is logged, and a new revision is written capturing the restored snapshot.</div>
+          <p class="doc-p">The revision history also lists pipeline moves: the record's own transitions and, for records with addendums, each addendum's transitions ("Addendum “Price change”: Level 1 → Level 2"). Every history read follows the record's own access — a caller who cannot open the record (role, row filter or User Scopes) gets 404 for its revisions, field history and line history alike.</p>
           <!-- /SYNC:content-ops-rollback -->
         </div>
 
@@ -12316,7 +12423,7 @@ SAML_AUDIENCE=nivaro                                 # expected audience (option
         </div>
 
         <!-- NAMED API KEYS -->
-        <div class="doc-section" id="s-api-keys" data-toc='[{"id":"api-keys","label":"Named API Keys with Scopes"},{"id":"api-keys-run-as","label":"Run the playground as a key"}]'>
+        <div class="doc-section" id="s-api-keys" data-toc='[{"id":"api-keys","label":"Named API Keys with Scopes"},{"id":"api-keys-run-as","label":"Run the playground as a key"},{"id":"api-keys-usage","label":"Usage per key and monthly statements"}]'>
           <!-- SYNC:api-keys -->
           <h1 class="doc-h1" id="api-keys">Named API Keys with Scopes</h1>
           <p class="doc-p">Named API keys are a managed alternative to per-user static tokens. Each key has a name, an optional expiry, a set of scopes, an optional IP allowlist, and an optional per-key rate limit. Keys are prefixed with <code class="doc-code">nvk_</code> and are shown exactly once at creation — only a SHA-256 hash is stored.</p>
@@ -12384,6 +12491,13 @@ DELETE /api/api-keys/:id    # revoke immediately</code></pre>
           <h2 class="doc-h2" id="api-keys-run-as">Run the playground as a key</h2>
           <p class="doc-p">The GraphQL explorer's "Run as" control lets an administrator send queries as any named key: <code class="doc-code">POST /api/api-keys/:id/simulate-token</code> mints a fifteen-minute <code class="doc-code">nvq_</code> token that carries the key's identity, scopes, row restrictions, depth cap and sandbox flag, so a scope refusal, a depth refusal or a rehearsed mutation reads exactly as the key's holder sees it. Nothing is counted against the key — no rate-limit tick, no last-used stamp, no IP check, no attribution in the request log (the rows read <code class="doc-code">key_sim</code>). A revoked or expired key refuses the same way it refuses its holder.</p>
           <p class="doc-p">The explorer toolbar saves the current query, its variables and the key it ran as, as a fixture (kept in the browser), so a partner's exact call can be replayed after a schema change.</p>
+          <h2 class="doc-h2" id="api-keys-usage">Usage per key and monthly statements</h2>
+          <p class="doc-p">A key's Usage button on /api-keys opens one month of its calls: calls by day and by route family (<code class="doc-code">items/&lt;collection&gt;</code>, <code class="doc-code">graphql</code>, <code class="doc-code">inbound/&lt;key&gt;</code>…), the error rate, rate-limit refusals (429 or <code class="doc-code">API_KEY_RATE_LIMITED</code>), refused calls (401 / 403), successful reads and writes, and the GraphQL operations it ran. CSV downloads the same figures as one flat file. The request log keeps 14 days, so a month that reaches further back is marked partial and says from which day it counts; the log records no row or byte counts, so egress is shown as successful reads.</p>
+          <p class="doc-p">Turn on the monthly usage statement in the same sheet and the key emails last month’s figures on the 1st (cron <code class="doc-code">api-key-usage-statements</code>, 07:10) to its usage contact, or to the key’s owner when no contact is set. Each key gets one statement per month; mail test mode applies.</p>
+          <pre class="doc-pre"><code>GET   /api/api-keys/:id/usage?month=2026-09            // monthly report (JSON)
+GET   /api/api-keys/:id/usage?month=2026-09&amp;format=csv // same, as CSV
+GET   /api/api-keys/:id/usage                         // last 30 days (the older summary)
+PATCH /api/api-keys/:id  { "usage_statement": true, "usage_contact": "team@partner.example" }</code></pre>
           <!-- /SYNC:api-keys -->
         </div>
 
@@ -12640,7 +12754,7 @@ MIGRATION_LOCK_TIMEOUT_MS=60000   # how long a starting instance waits for the l
         <!-- ════ DEVELOPER EXPERIENCE ════ -->
 
         <!-- TYPESCRIPT CODEGEN -->
-        <div class="doc-section" id="s-ts-codegen" data-toc='[{"id":"ts-codegen","label":"Schema → TypeScript Codegen"},{"id":"ts-codegen-usage","label":"Generating Types"},{"id":"ts-codegen-example","label":"Generated Output"},{"id":"ts-codegen-features","label":"Features"},{"id":"ts-codegen-workflow","label":"Recommended Workflow"},{"id":"ts-codegen-api","label":"API Reference"}]'>
+        <div class="doc-section" id="s-ts-codegen" data-toc='[{"id":"ts-codegen","label":"Schema → TypeScript Codegen"},{"id":"ts-codegen-usage","label":"Generating Types"},{"id":"ts-codegen-graphql","label":"Typed GraphQL client"},{"id":"ts-codegen-example","label":"Generated Output"},{"id":"ts-codegen-features","label":"Features"},{"id":"ts-codegen-workflow","label":"Recommended Workflow"},{"id":"ts-codegen-api","label":"API Reference"}]'>
           <!-- SYNC:ts-codegen -->
           <h1 class="doc-h1" id="ts-codegen">Schema → TypeScript Codegen</h1>
           <p class="doc-p">Automatically generate TypeScript interfaces for every collection from the metadata registry. The endpoint returns a ready-to-commit .ts file with one fully-typed interface per collection, including field types, relations, computed fields, and validation rules.</p>
@@ -12658,6 +12772,22 @@ curl -H "Authorization: Bearer &lt;token&gt;" \
 const typesTs = await nivaro.request(getTypes());
 console.log(typesTs);  // raw TypeScript code</code></pre>
           <div class="doc-note">The <code class="doc-code">nivaro</code> CLI is installed with <code class="doc-code">@nivaro/sdk</code> (its <code class="doc-code">bin</code>). <code class="doc-code">nivaro types</code> exits 0 when the file was written, 1 on usage errors, 2 when the request failed — wire it into a <code class="doc-code">postinstall</code> or a pre-commit step and the types can never drift from the instance.</div>
+          <h3 class="doc-h3" id="ts-codegen-graphql">Typed GraphQL client</h3>
+          <p class="doc-p"><code class="doc-code">nivaro types --graphql</code> introspects the live GraphQL schema and writes one standalone file: types for every object, input filter, enum and union, and <code class="doc-code">createGraphQLClient()</code> with <code class="doc-code">list</code>, <code class="doc-code">byId</code>, <code class="doc-code">create</code>, <code class="doc-code">update</code>, <code class="doc-code">delete</code>, <code class="doc-code">aggregated</code> and <code class="doc-code">metadata</code> per collection. The result of each call is typed from the fields you select — ask for <code class="doc-code">{ id: true, vendor: { name: true } }</code> and the result has exactly those. Any token works, not only an admin one: a refused token fails the command (exit 2), and the helpers written are the ones the token's role may use. <code class="doc-code">graphql(document, variables)</code> runs anything the helpers do not cover. The file needs no dependency and no DOM library.</p>
+          <pre class="doc-pre"><code>npx nivaro types --graphql --url https://nivaro.example.com --token &lt;token&gt; --out src/nivaro-gql.ts
+
+import { createGraphQLClient } from './nivaro-gql'
+const cms = createGraphQLClient({ url: 'https://nivaro.example.com', token })
+const rows = await cms.workflows.list(
+  { filter: { workflow_type: { _eq: 2 } }, limit: 20, sort: ['-id'] },
+  { id: true, workflow_id: true, project: { name: true } }
+)
+rows[0].project?.name   // string | null — typed from the selection
+const counts = await cms.workflows.aggregated({ groupBy: ['workflow_type'] }, { group: true, countAll: true })
+const raw = await cms.graphql&lt;{ workflows_metadata: { total: number } }&gt;(
+  'query { workflows_metadata { total } }'
+)</code></pre>
+          <div class="doc-note">Without a selection a helper fetches every plain field of the type. A polymorphic (union) field takes a raw string of inline fragments: <code class="doc-code">{ item: '... on vendors { id name }' }</code>. Errors in a GraphQL answer throw <code class="doc-code">GraphQLRequestError</code> with the server's messages.</div>
           <h3 class="doc-h3" id="ts-codegen-example">Generated Output</h3>
           <pre class="doc-pre"><code>// Example generated interface
 
@@ -12735,7 +12865,7 @@ this.emitFile({ type: 'asset', fileName: 'version.json',
         </div>
 
         <!-- OPENAPI / POSTMAN / BRUNO -->
-        <div class="doc-section" id="s-openapi-export" data-toc='[{"id":"openapi-export","label":"OpenAPI 3.1 &amp; API Collection Exports"},{"id":"openapi-formats","label":"Available Formats"},{"id":"openapi-endpoints","label":"API Reference"},{"id":"openapi-content","label":"What&apos;s Included"},{"id":"openapi-schemas","label":"Request/Response Schemas"},{"id":"openapi-usage","label":"Usage Examples"},{"id":"openapi-regeneration","label":"Regeneration"}]'>
+        <div class="doc-section" id="s-openapi-export" data-toc='[{"id":"openapi-export","label":"OpenAPI 3.1 &amp; API Collection Exports"},{"id":"openapi-formats","label":"Available Formats"},{"id":"openapi-endpoints","label":"API Reference"},{"id":"openapi-per-role","label":"A spec for one role"},{"id":"openapi-content","label":"What&apos;s Included"},{"id":"openapi-schemas","label":"Request/Response Schemas"},{"id":"openapi-usage","label":"Usage Examples"},{"id":"openapi-regeneration","label":"Regeneration"}]'>
           <!-- SYNC:openapi-export -->
           <h1 class="doc-h1" id="openapi-export">OpenAPI 3.1 &amp; API Collection Exports</h1>
           <p class="doc-p">Export the full REST API surface as an OpenAPI 3.1 specification, Postman collection, or Bruno collection. The spec includes all system endpoints plus dynamic per-collection CRUD endpoints generated from your schema, with real request/response models.</p>
@@ -12748,6 +12878,7 @@ this.emitFile({ type: 'asset', fileName: 'version.json',
           </ul>
           <h3 class="doc-h3" id="openapi-endpoints">API Reference</h3>
           <pre class="doc-pre"><code>GET /api/dev-tools/openapi.json     # Full OpenAPI 3.1 spec
+GET /api/dev-tools/openapi.json?role=&lt;role id&gt;  # Narrowed to one role
 GET /api/dev-tools/postman.json     # Postman collection
 GET /api/dev-tools/bruno.json       # Bruno collection format
 GET /api/dev-tools/graphql-schema   # GraphQL SDL
@@ -12756,6 +12887,8 @@ GET /api/dev-tools/graphql-schema   # GraphQL SDL
 cms.request(getOpenApi())
 cms.request(getPostmanCollection())
 cms.request(getBrunoCollection())</code></pre>
+          <h3 class="doc-h3" id="openapi-per-role">A spec for one role</h3>
+          <p class="doc-p">Pick a role next to the openapi.json download on the API Reference page (or pass <code class="doc-code">?role=&lt;id&gt;</code>) and the spec is narrowed to what that role's policies allow: only the collections and operations it holds, response schemas listing the fields it can read (<code class="doc-code">readOnly</code> when it can read but never write them), and <code class="doc-code">&lt;Name&gt;Create</code> / <code class="doc-code">&lt;Name&gt;Update</code> request schemas listing the fields it can write (<code class="doc-code">writeOnly</code> when it cannot read them back). Each operation's description names the role's row filter (for example <code class="doc-code">only rows where owner is the calling user</code>) and the User Scope dimensions that can narrow a caller further. A role with admin access gets the full spec, marked as such.</p>
           <h3 class="doc-h3" id="openapi-content">What's Included</h3>
           <ul class="doc-ul">
             <li>System endpoints: /collections, /users, /roles, /workflows, /pipelines, /webhooks, /rules, /flows, etc.</li>
@@ -13940,7 +14073,7 @@ GET  /api/erp-submissions/:id       # one push in full (admin): partner, obligat
           <!-- /SYNC:integration-obligations -->
         </div>
 
-        <div class="doc-section" id="s-integration-events" data-toc='[{"id":"integration-events","label":"Integration Events &amp; Replay"},{"id":"integration-events-header","label":"Per-integration status in the record header"},{"id":"integration-events-search","label":"Searching submission payloads"},{"id":"integration-events-retry","label":"Inline retries on external APIs"},{"id":"integration-events-webhooks","label":"Webhook test and replay with a payload"},{"id":"integration-events-webhook-conditions","label":"Webhook conditions"},{"id":"integration-events-webhook-payload","label":"What a webhook receives"},{"id":"integration-events-mock","label":"Mock mode per instance"},{"id":"integration-events-instances","label":"Per-instance credentials and hosts"},{"id":"integration-events-contracts","label":"Endpoint contract tests"},{"id":"integration-events-inbound","label":"Inbound mappings"},{"id":"integration-events-inbound-children","label":"Child rows"},{"id":"integration-events-inbound-fixtures","label":"Fixtures"},{"id":"integration-events-inbound-response","label":"Response shaping"},{"id":"integration-events-replay-inbound","label":"Replaying an inbound request"},{"id":"integration-events-flows","label":"Flow version diff and the field-watch trigger"}]'>
+        <div class="doc-section" id="s-integration-events" data-toc='[{"id":"integration-events","label":"Integration Events &amp; Replay"},{"id":"integration-events-header","label":"Per-integration status in the record header"},{"id":"integration-events-search","label":"Searching submission payloads"},{"id":"integration-events-retry","label":"Inline retries on external APIs"},{"id":"integration-events-webhooks","label":"Webhook test and replay with a payload"},{"id":"integration-events-webhook-conditions","label":"Webhook conditions"},{"id":"integration-events-webhook-payload","label":"What a webhook receives"},{"id":"integration-events-mock","label":"Mock mode per instance"},{"id":"integration-events-instances","label":"Per-instance credentials and hosts"},{"id":"integration-events-contracts","label":"Endpoint contract tests"},{"id":"integration-events-inbound","label":"Inbound mappings"},{"id":"integration-events-inbound-children","label":"Child rows"},{"id":"integration-events-inbound-fixtures","label":"Fixtures"},{"id":"integration-events-inbound-response","label":"Response shaping"},{"id":"integration-events-inbound-versions","label":"Versions"},{"id":"integration-events-replay-inbound","label":"Replaying an inbound request"},{"id":"integration-events-flows","label":"Flow version diff and the field-watch trigger"}]'>
           <!-- SYNC:integration-events -->
           <h1 class="doc-h1" id="integration-events">Integration Events &amp; Replay</h1>
           <p class="doc-p">Every integration that registers a notes source (<code class="doc-code">ctx.notes.registerSource</code>) can also answer two more questions: what happened lately across every record, and can this event be re-applied. The Events tab of the Integrations console (Operations → Integrations → Events; the old /integration-events address lands there) lists the newest events from every source grouped by day, with a status dot (ok / error / info), the record they belong to by its friendly id, and a Replay action where the source offers one. Filter by source and by status (All · Problems · OK · Info); Show older pages back through what the sources keep. The same Replay sits on the record's Notes thread beside each replayable external entry.</p>
@@ -14060,6 +14193,11 @@ POST   /api/inbound-mappings/:id/fixtures/run             // { rules?, children?
           <p class="doc-p">A partner that already parses an envelope keeps it: <code class="doc-code">response_template</code> is Liquid (the transition-payload filters, <code class="doc-code">jsonify</code> among them) rendered over <code class="doc-code">record</code> (the first record written), <code class="doc-code">records</code>, <code class="doc-code">created</code>, <code class="doc-code">updated</code>, <code class="doc-code">rejected</code>, <code class="doc-code">created_ids</code>, <code class="doc-code">updated_ids</code>, <code class="doc-code">errors</code> (index, message, issues, child), <code class="doc-code">results</code> and <code class="doc-code">outcome</code>. Output that parses as JSON is sent as JSON; anything else as text (XML when it starts with <code class="doc-code">&lt;</code>). <code class="doc-code">response_status</code> maps the outcome — <code class="doc-code">success</code> (all written), <code class="doc-code">partial</code>, <code class="doc-code">rejected</code> — to a status; unset keeps 200 / 207 / 422, and it applies with or without a template. With no template the body is the standard <code class="doc-code">{data: {results, created, updated, rejected}}</code>. A template that fails to render never turns a landed write into an error: the standard body goes out. The dry-run tester and every fixture show the response the partner would get.</p>
           <pre class="doc-pre"><code>"response_template": "{\"accepted\": {{ created }}, \"orderId\": {{ record.id | jsonify }}, \"errors\": {{ errors | map: 'message' | jsonify }}}",
 "response_status": { "success": 201, "rejected": 400 }</code></pre>
+          <h3 class="doc-h3" id="integration-events-inbound-versions">Versions</h3>
+          <p class="doc-p">Every save of a mapping — its settings, rules, child sets, fixtures, response template and status map — is kept as a version (an unchanged re-save adds none; the newest 30 are kept). The editor's Version history lists them with who saved and when; pick one to see what changed since (rules by target field, fixtures by their own id), and Restore puts it back. A restore keeps the mapping's id and every fixture's id, and records the state it replaces as a version first, so it can be undone. Deleting a mapping deletes its versions.</p>
+          <pre class="doc-pre"><code>GET  /api/inbound-mappings/:id/versions
+GET  /api/inbound-mappings/:id/versions/:vid/diff?against=current|&lt;vid&gt;
+POST /api/inbound-mappings/:id/versions/:vid/restore</code></pre>
           <h2 class="doc-h2" id="integration-events-replay-inbound">Replaying an inbound request</h2>
           <p class="doc-p">The request log keeps the JSON body of every inbound integration write (token or API-key caller, capped at 64 KB). Expanding such a row on API Analytics or the Integrations page shows the body with Replay and Edit &amp; replay: <code class="doc-code">POST /api/api-analytics/requests/:id/replay { body? }</code> re-dispatches the same method and path in-process AS THE ADMIN who clicked (the original credential is never stored), tags the new request with <code class="doc-code">x-nivaro-replay-of</code>, and logs <code class="doc-code">api-request-replay</code>.</p>
           <h2 class="doc-h2" id="integration-events-flows">Flow version diff and the field-watch trigger</h2>
@@ -14106,7 +14244,7 @@ POST   /api/inbound-mappings/:id/fixtures/run             // { rules?, children?
         </div>
 
         <!-- PARALLEL WORKFLOW BRANCHES -->
-        <div class="doc-section" id="s-parallel-branches" data-toc='[{"id":"parallel-branches","label":"Parallel Workflow Branches (Split / Join)"}]'>
+        <div class="doc-section" id="s-parallel-branches" data-toc='[{"id":"parallel-branches","label":"Parallel Workflow Branches (Split / Join)"},{"id":"parallel-branches-lanes","label":"Branch lanes on the state track"}]'>
           <!-- SYNC:parallel-branches -->
           <h1 class="doc-h1" id="parallel-branches">Parallel Workflow Branches (Split / Join)</h1>
           <p class="doc-p">A workflow instance can be split into parallel branches that progress independently — e.g. legal review and finance review happening at the same time. When every branch reaches a terminal state, the branches auto-join and the parent instance resumes.</p>
@@ -14122,6 +14260,14 @@ POST /api/workflows/instance/:id/split
             <li>Role gating applies per branch transition exactly as for linear workflows.</li>
             <li>Split/join events are recorded in the workflow history.</li>
           </ul>
+          <h2 class="doc-h2" id="parallel-branches-lanes">Branch lanes on the state track</h2>
+          <p class="doc-p">When a record has split, the expanded Pipeline panel draws each branch as its own lane from the split state to the join: the states the branch has passed through, where it sits now, how long it has been there, and who owns that step. The join names the branches it is still waiting on; once every branch finishes it reads "Joined" with the time. The panel always shows the parent instance — a branch is never picked as the record's pipeline.</p>
+          <pre class="doc-pre"><code>GET /api/pipelines/instance/:collection/:item
+→ data.branches = {
+    split_state, join_state, split_at, joined_at, open,
+    lanes: [{ instance_id, label, steps[], current, entered_at, terminal, finished_at, owners[] }],
+    waiting_on: [instance_id, …]
+  }   // null when the record never split; the most recent split otherwise</code></pre>
           <!-- /SYNC:parallel-branches -->
         </div>
 
@@ -14604,6 +14750,10 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&amp;category=workfl
           </ul>
           <pre class="doc-pre"><code>PATCH /api/users/me/preferences
 { "notification_prefs": { "matrix": { "workflow": { "inapp": true, "push": false, "email": "daily" } } } }</code></pre>
+          <h3 class="doc-h3">Record bundles in the bell</h3>
+          <p class="doc-p">Unread rows that name the same record fold into one bell entry — "3 things on REQ-1042" — with the categories as chips and the most urgent lane colouring the row. The chevron expands the rows (each keeps its own actions), clicking the bundle opens the record, and the check marks the whole bundle read in one call. The Notifications page does the same behind "Group by record" (on by default). <code class="doc-code">GET /api/notifications?bundle=record</code> returns <code class="doc-code">bundles</code> ([{collection, item, label, count, unread, lane, categories, newest, url, ids, rows}]) beside <code class="doc-code">data</code>, which then holds only the rows that stayed single; a lone row about a record is never bundled. <code class="doc-code">total</code>, <code class="doc-code">/count</code> and <code class="doc-code">/unread-count</code> are unchanged — a bundle presents rows, it does not reduce them. The label is never a bare id: the friendly id, else the display label, else — for a record deleted since — its trash snapshot's label with a "deleted" chip (<code class="doc-code">deleted: true</code>, no Open link), else "&lt;Singular&gt; #&lt;id&gt;"; <code class="doc-code">collection_label</code> carries the singular name for the chip beside it. Collection-wide subscription rows name the record the same way ("updated PRB1 (regions)").</p>
+          <h3 class="doc-h3">As it was — what they saw when notified</h3>
+          <p class="doc-p">A notification about a record remembers the record's revision current at send time (<code class="doc-code">revision_id</code>, stamped by notifyUser). "As it was" on a bell or inbox row opens a sheet with the record as it stood then beside the record now; fields that changed since are marked with an amber dot and listed first. Older rows (or a purged revision) fall back to the newest revision written before the notification; a record with no revision from that time says "No snapshot from that time" and shows the current values. <code class="doc-code">GET /api/notifications/:id/as-it-was</code> answers <code class="doc-code">{snapshot, current, changed_fields, fields, labels, revision_id, at}</code> for the caller's own row; <code class="doc-code">current</code> is read as the caller, so a record they can no longer open answers 403/404 and the snapshot is never shown without it. Scalar and link fields only — related sets are not compared.</p>
           <h3 class="doc-h3">Sending a notification (user to user)</h3>
           <p class="doc-p">Any authenticated user can send an in-app notification to another active user — built for chat @mentions and similar frontend features. The sender is always the authenticated caller, and delivery rides the full channel stack: the inbox row, a live Socket.io <code class="doc-code">notification:new</code> event, and browser push for users with a registered subscription.</p>
           <pre class="doc-pre"><code>POST /api/notifications
@@ -16155,7 +16305,7 @@ GET /api/environments/env-presence         → every registered API, compared</c
           <!-- /SYNC:instance-overrides -->
         </div>
 
-        <div class="doc-section" id="s-mail-harness" data-toc='[{"id":"mail-harness","label":"Mail Templates &amp; Test Harness"},{"id":"mail-harness-types","label":"Registered types"},{"id":"mail-harness-blocks","label":"What the detailed templates carry"},{"id":"mail-harness-why","label":"The \"why me\" footer"},{"id":"notification-bench","label":"Notification test bench"},{"id":"notification-targets","label":"What a notification click does"},{"id":"delegation-console","label":"Delegation console"},{"id":"notification-templates","label":"In-app notification templates"},{"id":"notification-analytics","label":"Notification analytics"},{"id":"broadcast-receipts","label":"Broadcast receipts by audience"},{"id":"mail-delivery-board","label":"Delivery board"},{"id":"mail-harness-links","label":"Where links land"},{"id":"mail-harness-api","label":"API"}]'>
+        <div class="doc-section" id="s-mail-harness" data-toc='[{"id":"mail-harness","label":"Mail Templates &amp; Test Harness"},{"id":"mail-harness-types","label":"Registered types"},{"id":"mail-harness-blocks","label":"What the detailed templates carry"},{"id":"mail-harness-why","label":"The \"why me\" footer"},{"id":"mail-harness-branding","label":"Mail branding per workspace"},{"id":"notification-bench","label":"Notification test bench"},{"id":"notification-targets","label":"What a notification click does"},{"id":"delegation-console","label":"Delegation console"},{"id":"notification-templates","label":"In-app notification templates"},{"id":"notification-analytics","label":"Notification analytics"},{"id":"broadcast-receipts","label":"Broadcast receipts by audience"},{"id":"mail-delivery-board","label":"Delivery board"},{"id":"mail-bounces","label":"Bounced addresses"},{"id":"mail-harness-links","label":"Where links land"},{"id":"mail-harness-api","label":"API"}]'>
           <!-- SYNC:mail-harness -->
           <h1 class="doc-h1" id="mail-harness">Mail Templates &amp; Test Harness</h1>
           <p class="doc-p">Every email the instance sends is registered as a mail TYPE (Mail Templates → "Send a real one"): what it is, which Liquid template renders it, and how to build it from a real sample — a workflow transition, a changed record, a user, a recent inbox row. Pick a type, pick a sample, and you see the exact email production would send, its subject, and the people it would go to with the reason each is on the list. Send it to yourself, to any address, or (admin, logged, confirmed) to the real recipients. Mail test mode still applies to every send.</p>
@@ -16185,6 +16335,8 @@ GET /api/environments/env-presence         → every registered API, compared</c
             <li>Programmatic senders pass <code class="doc-code">why</code> to notifyUser / sendMail / sendRawMail, or put <code class="doc-code">why</code> in the template's data.</li>
             <li>The rules link is the profile page — portal route key <code class="doc-code">profile</code> (Settings → Project → Frontend app), admin fallback /profile.</li>
           </ul>
+          <h2 class="doc-h2" id="mail-harness-branding">Mail branding per workspace</h2>
+          <p class="doc-p">The chrome around every email — logo, accent colour, the "Sent by" name (also the From display name) and a footer line — can differ per workspace. Each workspace sets its own on the Workspaces page (Mail branding card); anything left blank keeps the instance branding from Settings → Project (project name, project colour), and with nothing set anywhere the stock chrome stands. A send resolves the workspace from an explicit <code class="doc-code">workspace_id</code> option, else the record it is about (its collection's workspace), else the recipient's current workspace. The From ADDRESS never changes — only its display name. The harness has a workspace picker beside the sample picker so every type can be previewed and sent as any workspace; the Workspaces page has a chrome-only preview of its own.</p>
           <h2 class="doc-h2" id="notification-bench">Notification test bench</h2>
           <p class="doc-p">Data Tools → Notification Bench (admin). "Send me a sample of every category" delivers one real notification per category to you — through your own rules, so a category you switched off will not arrive, which is the point. The simulator takes a person + an event (category, subject, optional record, requested channels, "as of" time) and renders the exact delivery decision notifyUser would make: in-app, push, email (sent now / daily summary / off), SMS, with the reason for every kept or dropped channel (suspended, muted, matrix row, presence, quiet hours, digest mode, critical bypass, sender cadence), plus where the click lands in the portal and the admin and which inline action the row offers. Nothing is sent from the simulator.</p>
           <h2 class="doc-h2" id="notification-targets">What a notification click does</h2>
@@ -16207,6 +16359,8 @@ DELETE /api/notification-templates/:key       # revert</code></pre>
           <h2 class="doc-h2" id="mail-delivery-board">Delivery board</h2>
           <p class="doc-p">Mail Log → Delivery rolls the outbound log up over the last 7 / 14 / 30 days: sent / failed / dropped / deferred with the success rate (sent ÷ attempted), a per-day stacked chart, a per-template table (labelled with the mail type when one template maps to exactly one type; a row opens the log filtered to it), the busiest recipients, "Not reaching" (addresses whose LATEST attempt failed), and failure reasons grouped by the stable head of the SMTP error (addresses, ids and session tokens collapsed). Raw sends log a template name too (flow ops as flow:&lt;op key&gt;, the digest as daily_digest); rows older than that land in "Untemplated sends".</p>
           <p class="doc-p">A red banner at the top of the board means the RELAY is failing, not the addresses: the newest 20 send attempts are judged as one, and when at least 80% failed with one normalised error class the banner names it and when the streak began. Mixed failure classes are bounces and never raise it. The readiness check <code class="doc-code">mail-relay</code> makes the same judgement (skip under 8 attempts, pass, fail); <code class="doc-code">GET /api/mail-log/relay</code> returns it as JSON.</p>
+          <h2 class="doc-h2" id="mail-bounces">Bounced addresses</h2>
+          <p class="doc-p">A hard bounce — the relay refused the ADDRESS (5xx on RCPT/DATA with the address rejected, a 550/551/553/554 head, or "user unknown" / "mailbox unavailable" / "no such user" / "does not exist" in the reply) — marks the address in <code class="doc-code">nivaro_mail_suppressions</code> (address, reason, first/last seen, count). From then on every sender drops it: each dropped address gets its own mail-log row with status dropped and error "suppressed: &lt;reason&gt;", and a send with nothing left returns dropped without touching the relay. Soft refusals (4xx, greylisting, a dead relay) never suppress. The first time an address is marked, every administrator is told once (system category), and so is the person's manager when the address belongs to a user; a repeat bounce never pages anyone again. The person's profile header and their contact card show a rose "Email bouncing · since &lt;date&gt;" pill; Mail Log → Suppressed addresses lists, searches and clears the marks (activity <code class="doc-code">mail-suppression-clear</code>), and the Delivery board counts them. <code class="doc-code">GET /api/mail-suppressions</code> (admin), <code class="doc-code">DELETE /api/mail-suppressions/:id</code> (admin), <code class="doc-code">GET /api/mail-suppressions/check?address=</code> (signed in).</p>
           <h2 class="doc-h2" id="mail-harness-links">Where links land</h2>
           <p class="doc-p">Links in emails resolve per recipient. Settings → Project → "Frontend app (portal)" names the headless app and its routes (record, queue, report, alerts, chat, tasks, approvals, my_work, home; a <code class="doc-code">record:&lt;collection&gt;</code> key gives one collection its own page). A recipient's profile choice ("Email links open in": Automatic / Portal / Admin) wins; otherwise admins get the admin console and everyone else the portal. A destination the portal has no route for falls back to the admin. Emails sent to a list in one go (the workflow transition flows) link the portal when one is configured. Extensions can register the portal through ctx.links.register; the Settings value wins when both exist. The harness shows the app each recipient would land in.</p>
           <h2 class="doc-h2" id="mail-harness-api">API</h2>

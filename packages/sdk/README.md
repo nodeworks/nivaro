@@ -24,6 +24,14 @@ The `@nivaro/sdk` package is a fully-typed TypeScript client for the Nivaro REST
 pnpm add @nivaro/sdk
 ```
 
+#### MCP server (Claude Code, Claude Desktop, Cursor)
+
+The companion package `@nivaro/mcp` wraps the SDK as a Model Context Protocol server, so an AI coding assistant can read and write an instance directly: collection schemas, record reads and aggregates, rehearsed creates, updates, deletes with an explicit confirm, pipeline state and transitions, and the instance's own ask-your-data assistant. It authenticates with an `nvk_` API key, so role permissions, row-level security and user scopes apply unchanged; a sandbox key is read-only by construction. Install and client config snippets live in the package README (`packages/mcp/README.md`).
+
+```typescript
+claude mcp add nivaro -e NIVARO_URL=https://nivaro.example.com -e NIVARO_TOKEN=nvk_... -- npx -y @nivaro/mcp
+```
+
 #### Create a client
 
 ```typescript
