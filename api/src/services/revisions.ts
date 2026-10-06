@@ -26,7 +26,84 @@ export interface Revision {
     to_label: string | null
     transition_label: string | null
     source: string | null
+    /** Set when the move happened on an ADDENDUM's own pipeline instance
+     *  (nivaro_addendums.parent_* = this record), folded into the parent's
+     *  history so the record reads its whole approval story in one rail. */
+    addendum?: { id: string; title: string | null } | null
   } | null
+}
+
+/** Split/branch/join lifecycle rows store engine JSON in `comment` — never
+ *  something a person typed, so the history shows no quote for them. */
+function isEngineComment(comment: unknown): boolean {
+  const s = String(comment ?? '').trim()
+  if (!s.startsWith('{')) return false
+  try {
+    const parsed = JSON.parse(s) as { action?: unknown }
+    return parsed.action === 'split' || parsed.action === 'branch' || parsed.action === 'join'
+  } catch {
+    return false
+  }
+}
+
+/** Human-said part of a history comment: drops the engine's 'auto:' stamp
+ *  and split/branch/join JSON. */
+function historyComment(comment: unknown): string | null {
+  if (comment == null) return null
+  if (/^auto:\s/i.test(String(comment))) return null
+  if (isEngineComment(comment)) return null
+  return String(comment)
+}
+
+function historySelect(q: ReturnType<typeof db>) {
+  return q
+    .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+    .leftJoin('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
+    .leftJoin('nivaro_workflow_states as ts', 'ts.id', 'h.to_state')
+    .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
+    .leftJoin('nivaro_users as u', 'h.user', 'u.id')
+    .select(
+      'h.id as history_id',
+      'h.timestamp',
+      'h.comment',
+      'h.user as user_id',
+      'i.item as instance_item',
+      'fs.label as from_label',
+      'ts.label as to_label',
+      't.label as transition_label',
+      'u.first_name',
+      'u.last_name',
+      'u.email as user_email'
+    )
+}
+
+/** Transitions on the pipeline instances of this record's ADDENDUMS. An
+ *  addendum's instance lives on (nivaro_addendums, <addendum id>), so the
+ *  record's own history never saw it — the approval of a change to the record
+ *  belongs on the record. Best-effort: any failure folds in nothing. */
+async function addendumTransitionRows(
+  collection: string,
+  item: string
+): Promise<{ rows: Record<string, unknown>[]; titles: Map<string, string | null> }> {
+  const titles = new Map<string, string | null>()
+  try {
+    const addendums = (await db('nivaro_addendums')
+      .where({ parent_collection: collection, parent_id: String(item) })
+      .select('id', 'title')) as { id: string; title: string | null }[]
+    if (addendums.length === 0) return { rows: [], titles }
+    for (const a of addendums) titles.set(String(a.id).toUpperCase(), a.title ?? null)
+    const rows = (await historySelect(db('nivaro_workflow_history as h'))
+      .where('i.collection', 'nivaro_addendums')
+      .whereIn(
+        'i.item',
+        addendums.map((a) => String(a.id))
+      )
+      .orderBy('h.id', 'desc')
+      .limit(100)) as Record<string, unknown>[]
+    return { rows, titles }
+  } catch {
+    return { rows: [], titles }
+  }
 }
 
 function parseJson(value: unknown): Record<string, unknown> | null {
@@ -88,7 +165,7 @@ function hydrateRevision(row: Record<string, unknown>): Revision {
 }
 
 export async function listRevisions(collection: string, item: string): Promise<Revision[]> {
-  const [revRows, activityRows, transitionRows] = await Promise.all([
+  const [revRows, activityRows, transitionRows, addendumHistory] = await Promise.all([
     db('nivaro_revisions as r')
       .leftJoin('nivaro_activity as a', 'r.activity', 'a.id')
       .leftJoin('nivaro_users as u', 'a.user', 'u.id')
@@ -141,32 +218,50 @@ export async function listRevisions(collection: string, item: string): Promise<R
 
     // Pipeline transitions: a state move writes nivaro_workflow_history, not
     // a revision, so the history read them out of order until now — one row
-    // per transition of every instance this record has had (an addendum's
-    // instance lives on its own record and is not folded in here).
-    db('nivaro_workflow_history as h')
-      .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
-      .leftJoin('nivaro_workflow_states as fs', 'fs.id', 'h.from_state')
-      .leftJoin('nivaro_workflow_states as ts', 'ts.id', 'h.to_state')
-      .leftJoin('nivaro_workflow_transitions as t', 't.id', 'h.transition')
-      .leftJoin('nivaro_users as u', 'h.user', 'u.id')
-      .select(
-        'h.id as history_id',
-        'h.timestamp',
-        'h.comment',
-        'h.user as user_id',
-        'fs.label as from_label',
-        'ts.label as to_label',
-        't.label as transition_label',
-        'u.first_name',
-        'u.last_name',
-        'u.email as user_email'
-      )
+    // per transition of every instance this record has had (its addendums'
+    // instances live on their own records and are folded in separately).
+    historySelect(db('nivaro_workflow_history as h'))
       .where('i.collection', collection)
       .where('i.item', item)
       .orderBy('h.id', 'desc')
       .limit(100)
-      .catch(() => []) as Promise<Record<string, unknown>[]>
+      .catch(() => []) as Promise<Record<string, unknown>[]>,
+
+    addendumTransitionRows(collection, item)
   ])
+
+  function toTransitionEvent(
+    r: Record<string, unknown>,
+    addendum: { id: string; title: string | null } | null
+  ) {
+    return {
+      id: null,
+      activity: null,
+      collection,
+      item,
+      data: null,
+      delta: null,
+      parent: null,
+      timestamp: r.timestamp,
+      action: 'transition',
+      // 'auto: <label>' is the engine's stamp on an automatic move — the
+      // event carries that fact, so the comment shows only what a person said.
+      comment: historyComment(r.comment),
+      user_id: (r.user_id as string | null) ?? null,
+      first_name: r.first_name,
+      last_name: r.last_name,
+      user_email: r.user_email,
+      event: {
+        kind: 'transition',
+        history_id: Number(r.history_id),
+        from_label: (r.from_label as string | null) ?? null,
+        to_label: (r.to_label as string | null) ?? null,
+        transition_label: (r.transition_label as string | null) ?? null,
+        source: r.user_id ? 'manual' : 'auto',
+        addendum
+      }
+    }
+  }
 
   const all = [
     ...(revRows as Record<string, unknown>[]),
@@ -184,34 +279,14 @@ export async function listRevisions(collection: string, item: string): Promise<R
           }
         : r
     ),
-    ...(transitionRows as Record<string, unknown>[]).map((r) => ({
-      id: null,
-      activity: null,
-      collection,
-      item,
-      data: null,
-      delta: null,
-      parent: null,
-      timestamp: r.timestamp,
-      action: 'transition',
-      // 'auto: <label>' is the engine's stamp on an automatic move — the
-      // event carries that fact, so the comment shows only what a person said.
-      comment: /^auto:\s/i.test(String(r.comment ?? ''))
-        ? null
-        : ((r.comment as string | null) ?? null),
-      user_id: (r.user_id as string | null) ?? null,
-      first_name: r.first_name,
-      last_name: r.last_name,
-      user_email: r.user_email,
-      event: {
-        kind: 'transition',
-        history_id: Number(r.history_id),
-        from_label: (r.from_label as string | null) ?? null,
-        to_label: (r.to_label as string | null) ?? null,
-        transition_label: (r.transition_label as string | null) ?? null,
-        source: r.user_id ? 'manual' : 'auto'
-      }
-    }))
+    ...(transitionRows as Record<string, unknown>[]).map((r) => toTransitionEvent(r, null)),
+    ...addendumHistory.rows.map((r) => {
+      const id = String(r.instance_item ?? '')
+      return toTransitionEvent(r, {
+        id,
+        title: addendumHistory.titles.get(id.toUpperCase()) ?? null
+      })
+    })
   ]
   all.sort((a, b) => {
     const ta = a.timestamp ? new Date(a.timestamp as string).getTime() : 0

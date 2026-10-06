@@ -53,6 +53,9 @@ interface Revision {
     to_label: string | null
     transition_label: string | null
     source: string | null
+    /** The move happened on one of this record's ADDENDUMS (its own
+     *  pipeline instance), folded into the record's history. */
+    addendum?: { id: string; title: string | null } | null
   } | null
 }
 
@@ -727,7 +730,25 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
   const auto = ev?.source === 'auto' || (!revision.user_id && ev?.kind === 'transition')
   const who = auto ? 'Automatic rule' : revisionUserName(revision)
   let sentence: React.ReactNode
-  if (ev?.kind === 'transition') {
+  if (ev?.kind === 'transition' && ev.addendum) {
+    sentence = (
+      <>
+        moved{' '}
+        <span className='font-medium text-slate-700 dark:text-slate-200' data-revision-addendum>
+          Addendum “{ev.addendum.title || 'Untitled'}”
+        </span>
+        :{' '}
+        {ev.from_label && (
+          <>
+            <span className='font-medium text-slate-700 dark:text-slate-200'>{ev.from_label}</span>{' '}
+            →{' '}
+          </>
+        )}
+        <span className='font-medium text-slate-700 dark:text-slate-200'>{ev.to_label ?? '—'}</span>
+        {ev.transition_label && <span className='text-slate-400'> · {ev.transition_label}</span>}
+      </>
+    )
+  } else if (ev?.kind === 'transition') {
     sentence = (
       <>
         moved it{' '}
@@ -780,11 +801,13 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
       <span
         className={cn(
           'absolute left-[11px] top-[18px] h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-card',
-          ev?.kind === 'transition'
-            ? 'bg-violet-500'
-            : ev?.kind === 'start'
-              ? 'bg-violet-300'
-              : 'bg-slate-300'
+          ev?.kind === 'transition' && ev.addendum
+            ? 'bg-amber-500'
+            : ev?.kind === 'transition'
+              ? 'bg-violet-500'
+              : ev?.kind === 'start'
+                ? 'bg-violet-300'
+                : 'bg-slate-300'
         )}
         aria-hidden
       />
