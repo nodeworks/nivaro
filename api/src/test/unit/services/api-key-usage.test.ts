@@ -78,14 +78,36 @@ const report: KeyUsageReport = {
 }
 
 describe('usageToCsv', () => {
-  it('writes one row per section, quoting where needed', () => {
+  it('writes one row per section, every cell quoted', () => {
     const csv = usageToCsv(report).trim().split('\n')
-    expect(csv[0]).toBe('section,label,calls,errors,error_rate,rate_limited,avg_ms')
-    expect(csv[1]).toBe('total,2026-09,100,10,0.1000,3,42')
-    expect(csv).toContain('day,2026-09-30,100,10,0.1000,3,42')
-    expect(csv).toContain('route_family,items/workflows,100,10,0.1000,3,42')
-    expect(csv).toContain('graphql,query GetWorkflows,5,0,0.0000,,')
-    expect(csv.at(-1)).toBe('note,partial month,,,,,')
+    expect(csv[0]).toBe('"section","label","calls","errors","error_rate","rate_limited","avg_ms"')
+    expect(csv[1]).toBe('"total","2026-09","100","10","0.1000","3","42"')
+    expect(csv).toContain('"day","2026-09-30","100","10","0.1000","3","42"')
+    expect(csv).toContain('"route_family","items/workflows","100","10","0.1000","3","42"')
+    expect(csv).toContain('"graphql","query GetWorkflows","5","0","0.0000","",""')
+    expect(csv.at(-1)).toBe('"note","partial month","","","","",""')
+  })
+
+  it('neutralises caller-supplied text that would run as a formula', () => {
+    const hostile: KeyUsageReport = {
+      ...report,
+      by_family: [
+        { family: '=HYPERLINK("http://evil","x")', calls: 1, errors: 0, rate_limited: 0, avg_ms: 1 }
+      ],
+      graphql: [
+        { operation: '+cmd|"/c calc"!A1', kind: null, calls: 1, errors: 0 },
+        { operation: '@SUM(A1)', kind: null, calls: 1, errors: 0 },
+        { operation: '-2+3', kind: null, calls: 1, errors: 0 }
+      ]
+    }
+    const csv = usageToCsv(hostile)
+    expect(csv).toContain('"route_family","\'=HYPERLINK(""http://evil"",""x"")","1"')
+    expect(csv).toContain('"graphql","\'+cmd|""/c calc""!A1","1"')
+    expect(csv).toContain('"graphql","\'@SUM(A1)","1"')
+    expect(csv).toContain('"graphql","\'-2+3","1"')
+    for (const line of csv.trim().split('\n'))
+      for (const cell of line.match(/"(?:[^"]|"")*"/g) ?? [])
+        expect(/^"[=+\-@\t\r]/.test(cell)).toBe(false)
   })
 })
 

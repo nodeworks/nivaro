@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { csvRow } from '../lib/csv-cell.js'
 
 /**
  * API usage per key (#1462) — one month of a named API key's calls, read from
@@ -225,21 +226,14 @@ export async function keyUsage(keyId: number, month: string): Promise<KeyUsageRe
   }
 }
 
-const csvCell = (v: unknown): string => {
-  const s = v == null ? '' : String(v)
-  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
-}
-
 /** One flat CSV: a `section` column tells day / family / graphql rows apart. */
 export function usageToCsv(r: KeyUsageReport): string {
   const lines: string[] = [
-    ['section', 'label', 'calls', 'errors', 'error_rate', 'rate_limited', 'avg_ms']
-      .map(csvCell)
-      .join(',')
+    csvRow(['section', 'label', 'calls', 'errors', 'error_rate', 'rate_limited', 'avg_ms'])
   ]
   const rate = (calls: number, errors: number) => (calls ? (errors / calls).toFixed(4) : '0')
   lines.push(
-    [
+    csvRow([
       'total',
       r.month,
       r.totals.calls,
@@ -247,19 +241,23 @@ export function usageToCsv(r: KeyUsageReport): string {
       rate(r.totals.calls, r.totals.errors),
       r.totals.rate_limited,
       r.totals.avg_ms ?? ''
-    ]
-      .map(csvCell)
-      .join(',')
+    ])
   )
   for (const d of r.by_day)
     lines.push(
-      ['day', d.day, d.calls, d.errors, rate(d.calls, d.errors), d.rate_limited, d.avg_ms ?? '']
-        .map(csvCell)
-        .join(',')
+      csvRow([
+        'day',
+        d.day,
+        d.calls,
+        d.errors,
+        rate(d.calls, d.errors),
+        d.rate_limited,
+        d.avg_ms ?? ''
+      ])
     )
   for (const f of r.by_family)
     lines.push(
-      [
+      csvRow([
         'route_family',
         f.family,
         f.calls,
@@ -267,13 +265,11 @@ export function usageToCsv(r: KeyUsageReport): string {
         rate(f.calls, f.errors),
         f.rate_limited,
         f.avg_ms ?? ''
-      ]
-        .map(csvCell)
-        .join(',')
+      ])
     )
   for (const g of r.graphql)
     lines.push(
-      [
+      csvRow([
         'graphql',
         g.kind ? `${g.kind} ${g.operation}` : g.operation,
         g.calls,
@@ -281,11 +277,8 @@ export function usageToCsv(r: KeyUsageReport): string {
         rate(g.calls, g.errors),
         '',
         ''
-      ]
-        .map(csvCell)
-        .join(',')
+      ])
     )
-  if (r.retention.note)
-    lines.push(['note', r.retention.note, '', '', '', '', ''].map(csvCell).join(','))
+  if (r.retention.note) lines.push(csvRow(['note', r.retention.note, '', '', '', '', '']))
   return `${lines.join('\n')}\n`
 }
