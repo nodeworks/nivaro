@@ -26,6 +26,8 @@ interface TimelineEvent {
   type: 'activity' | 'revision' | 'workflow' | 'comment' | 'task' | 'addendum'
   timestamp: string
   user: { id: string; name: string } | null
+  /** #645 — a workflow move a delegate made for an out-of-office owner. */
+  on_behalf_of?: { id: string; name: string } | null
   title: string
   detail: string | null
 }
@@ -211,6 +213,11 @@ export function TimelineSheet({
                               }
                             />
                             {e.user.name}
+                            {e.on_behalf_of?.name && (
+                              <span data-timeline-on-behalf={e.on_behalf_of.id}>
+                                , for {e.on_behalf_of.name}
+                              </span>
+                            )}
                           </p>
                         )}
                       </div>

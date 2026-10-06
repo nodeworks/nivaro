@@ -56,6 +56,8 @@ interface Revision {
     /** The move happened on one of this record's ADDENDUMS (its own
      *  pipeline instance), folded into the record's history. */
     addendum?: { id: string; title: string | null } | null
+    /** #645 — the out-of-office owner a delegate's move stood in for. */
+    on_behalf_of?: { id: string; name: string | null } | null
   } | null
 }
 
@@ -728,7 +730,12 @@ function revisionSentence(rev: Revision, humanCount: number, systemCount: number
 function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean }) {
   const ev = revision.event
   const auto = ev?.source === 'auto' || (!revision.user_id && ev?.kind === 'transition')
-  const who = auto ? 'Automatic rule' : revisionUserName(revision)
+  const behalf = !auto && ev?.on_behalf_of?.name ? ev.on_behalf_of.name : null
+  const who = auto
+    ? 'Automatic rule'
+    : behalf
+      ? `${revisionUserName(revision)}, for ${behalf}`
+      : revisionUserName(revision)
   let sentence: React.ReactNode
   if (ev?.kind === 'transition' && ev.addendum) {
     sentence = (
@@ -765,6 +772,14 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
         {ev.transition_label && <span className='text-slate-400'> · {ev.transition_label}</span>}
       </>
     )
+  } else if (ev?.kind === 'start' && ev.to_label) {
+    // #1219: a start history row names the state the record started in.
+    sentence = (
+      <>
+        started it in{' '}
+        <span className='font-medium text-slate-700 dark:text-slate-200'>{ev.to_label}</span>
+      </>
+    )
   } else if (ev?.kind === 'start') {
     sentence = (
       <>
@@ -797,7 +812,11 @@ function EventRow({ revision, isLast }: { revision: Revision; isLast: boolean })
     ? new Date(revision.timestamp).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
     : '—'
   return (
-    <div className='relative pl-9' data-revision-event={ev?.kind ?? revision.action ?? ''}>
+    <div
+      className='relative pl-9'
+      data-revision-event={ev?.kind ?? revision.action ?? ''}
+      data-revision-on-behalf={behalf ? ev?.on_behalf_of?.id : undefined}
+    >
       <span
         className={cn(
           'absolute left-[11px] top-[18px] h-2.5 w-2.5 rounded-full ring-4 ring-white dark:ring-card',

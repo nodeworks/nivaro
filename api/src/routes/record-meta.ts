@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { findRecordInstance, type InstanceIdentity } from '../services/branch-instances.js'
 import { can } from '../services/permissions.js'
 
 /**
@@ -100,10 +101,10 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
       // Current pipeline owners + their active delegates.
       let owners: Array<{ id: string; name: string }> = []
       try {
-        const inst = (await db('nivaro_workflow_instances')
-          .where({ collection, item: String(item) })
-          .orderBy('started_at', 'desc')
-          .first()) as { id: string; current_state: string } | undefined
+        const inst = await findRecordInstance<InstanceIdentity & { current_state: string | null }>(
+          collection,
+          String(item)
+        )
         if (inst?.current_state) {
           const { resolveStateOwners } = await import('../services/pipeline-engine.js')
           owners = (
@@ -283,10 +284,7 @@ export async function recordMetaRoutes(app: FastifyInstance): Promise<void> {
       const { collection, item } = req.params
       if (!(await can(req.user!, 'read', collection)))
         return reply.code(403).send({ error: 'Forbidden' })
-      const inst = (await db('nivaro_workflow_instances')
-        .where({ collection, item: String(item) })
-        .orderBy('started_at', 'desc')
-        .first()) as { id: string } | undefined
+      const inst = await findRecordInstance(collection, String(item))
       if (!inst) return reply.send({ data: [] })
       const history = (await db('nivaro_workflow_history as h')
         .leftJoin('nivaro_workflow_states as s', 's.id', 'h.to_state')

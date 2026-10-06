@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
+  AlertTriangle,
   ArrowRight,
   Check,
   ChevronDown,
@@ -33,6 +34,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
+import { SlaClockLine } from './SlaClock'
 import {
   TransitionRequirementsDialog,
   type TransitionRequirementsPayload
@@ -83,6 +85,15 @@ interface PipelineHistoryEntry {
   transition_text?: string | null
   /** person | machine | import | integration — who kind of actor moved it. */
   origin?: string | null
+  /** #645 — a delegate's move: the out-of-office owner they stood in for. */
+  on_behalf_of?: string | null
+  on_behalf_of_name?: string | null
+}
+
+/** "Kim Lee, for Beth Ross" when a delegate moved it for an out-of-office owner. */
+function withBehalf(name: string | null | undefined, h: PipelineHistoryEntry): string {
+  const base = name || 'System'
+  return h.on_behalf_of_name ? `${base}, for ${h.on_behalf_of_name}` : base
 }
 
 /** The split/join engine writes JSON into `comment` (routes/workflows.ts) —
@@ -157,6 +168,74 @@ interface PipelinePanelData {
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
   /** Parallel branches of the most recent split, drawn as lanes (#1240). */
   branches?: BranchLanesData | null
+  /** Automatic transitions the engine stopped re-firing (#1217): their push
+   *  was refused and nothing they would send has changed since. */
+  auto_held?: HeldAutoTransition[]
+}
+interface HeldAutoTransition {
+  transition_id: string
+  transition_label: string | null
+  error_class: string | null
+  error: string | null
+  attempts: number
+  first_failed_at: string
+  last_failed_at: string
+  retry_at: string | null
+}
+
+const ERROR_CLASS_TEXT: Record<string, string> = {
+  validation: 'the partner refused what we sent',
+  not_found: 'the partner could not find what we referred to',
+  auth: 'the partner refused our credentials',
+  transient: 'the partner could not be reached',
+  rate_limited: 'the partner asked us to slow down',
+  unknown: 'the partner refused it'
+}
+
+/** "in 25 min" / "in 2h" / "on the next check" for a ladder retry time. */
+function retryWhen(iso: string): string {
+  const mins = Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000)
+  if (!Number.isFinite(mins) || mins <= 0) return 'on the next check'
+  if (mins < 60) return `in ${mins} min`
+  return `in ${Math.round(mins / 60)}h`
+}
+
+/** The "needs a person" strip for held automatic transitions (#1217). */
+function AutoHeldNotice({ held }: { held: HeldAutoTransition[] }) {
+  if (held.length === 0) return null
+  return (
+    <div
+      className='space-y-2 border-b border-amber-100 bg-amber-50 px-5 py-3 dark:border-amber-500/20 dark:bg-amber-500/10'
+      data-pipeline-auto-held
+    >
+      {held.map((h) => {
+        const label = h.transition_label ?? 'An automatic move'
+        const why = ERROR_CLASS_TEXT[h.error_class ?? 'unknown'] ?? ERROR_CLASS_TEXT.unknown
+        return (
+          <div key={h.transition_id} className='text-[12px] text-amber-800 dark:text-amber-300'>
+            <p className='font-medium'>
+              Needs a person: {label} stopped retrying — {why}.
+            </p>
+            {h.error && (
+              <p
+                className='mt-0.5 line-clamp-2 break-words text-[11px] text-amber-700/90 dark:text-amber-300/80'
+                data-tip={h.error}
+              >
+                {h.error}
+              </p>
+            )}
+            <p className='mt-1 text-[11px] text-amber-700 dark:text-amber-400'>
+              {h.retry_at
+                ? `It tries the same push again ${retryWhen(h.retry_at)}. `
+                : 'It will not send the same push again on its own. '}
+              Fix the record so what it sends changes, retry the push, or move the record by hand.
+              {h.attempts > 1 ? ` ${h.attempts} attempts so far.` : ''}
+            </p>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 interface RequirementsDialogState {
   payload: TransitionRequirementsPayload
@@ -427,7 +506,7 @@ function StateTrack({
     )
   }
   function entryName(h: PipelineHistoryEntry) {
-    return [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email || 'System'
+    return withBehalf([h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email, h)
   }
 
   // States a recorded forward hop jumped OVER. The engine skipped them at the
@@ -644,7 +723,7 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
         const machine = isMachineEntry(h)
         const userName = machine
           ? machineHeadline(h)
-          : [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email
+          : withBehalf([h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email, h)
         // The engine's own stamp ("auto: <rule>") is not a note anyone wrote.
         const lifecycle = lifecycleNote(h)
         const note = h.comment && !machine && !lifecycle ? h.comment : null
@@ -663,7 +742,10 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
                 <StateBadge label={h.to_state_label} color={h.to_state_color} small />
               </div>
               {note && <p className='mt-1 text-slate-500 italic'>"{note}"</p>}
-              <p className='mt-0.5 text-slate-400'>
+              <p
+                className='mt-0.5 text-slate-400'
+                data-history-on-behalf={h.on_behalf_of_name ? (h.on_behalf_of ?? '') : undefined}
+              >
                 {machine && <Zap className='mr-1 inline h-3 w-3' aria-hidden />}
                 {userName}
                 {detail ? ` · ${detail}` : ''} · {formatRelative(h.timestamp)}
@@ -1904,6 +1986,18 @@ function PipelinePanelInner({
               </span>
             )}
             {currentState && <StateBadge label={currentState.label} color={currentState.color} />}
+            {(data?.auto_held?.length ?? 0) > 0 && (
+              <span
+                className='flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 dark:border-amber-500/20 dark:bg-amber-500/10 dark:text-amber-400'
+                data-tip={(data?.auto_held ?? [])
+                  .map((h) => `${h.transition_label ?? 'Automatic move'}: ${h.error ?? 'refused'}`)
+                  .join('\n')}
+                data-pipeline-auto-held-pill
+              >
+                <AlertTriangle className='h-3 w-3 shrink-0' />
+                Needs a person
+              </span>
+            )}
             {addendumPending && (
               <span className='flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-700 border border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/20'>
                 <span className='h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse shrink-0' />
@@ -1961,6 +2055,7 @@ function PipelinePanelInner({
         )}
         {expanded && (
           <div className='border-t border-slate-100 dark:border-border/60'>
+            <AutoHeldNotice held={data?.auto_held ?? []} />
             {addendumPending && (
               <div className='flex items-center gap-2 border-b border-amber-100 bg-amber-50 px-5 py-2.5 dark:border-amber-500/20 dark:bg-amber-500/10'>
                 <span className='h-1.5 w-1.5 rounded-full bg-amber-400 shrink-0' />
@@ -2023,7 +2118,11 @@ function PipelinePanelInner({
                     />
                   </div>
                 )}
-                <div className='px-5 py-4'>
+                <div className='space-y-3 px-5 py-4'>
+                  {/* This step's SLA clock + Adjust clock (#1239); null without a rule. */}
+                  {!instance.completed_at && (
+                    <SlaClockLine collection={collection} itemId={String(item)} />
+                  )}
                   <OwnersSection
                     collection={collection}
                     item={item}

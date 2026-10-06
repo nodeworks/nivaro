@@ -84,12 +84,28 @@ export const userWorkflows: DocSection = {
         'review_when (child_fields): {"field": "<record field or one M2O hop, e.g. warehouse.ordering_system>", "in": [..]} (or a list — any match) on the transitioning record brings the dialog back with EVERY row, filled or not, when e.g. the last partner push failed ("push_status": ["error"]) — so a line can be corrected before trying again; "review_message" sets the banner text. The dialog\'s own re-submit sends reviewed: true, which skips review_when (incomplete rows still block), so it asks once per attempt.',
         'Repeat guard: the same manual transition on the same record is refused with 409 `TRANSITION_DUPLICATE` when it is made again within 10 seconds, so a double click or a retried request never runs the side effects twice. The answer cites the first history row. Settings → Content changes the window; 0 turns the guard off. `TRANSITION_GUARD_SECONDS` sets the default per instance.',
         'auto_trigger: engine-only transition — never shown as a button; fires automatically when its condition_rules pass (on record writes, on writes to child rows the rules reference, after manual transitions, after a staged import completes, and via the hourly sweep).',
+        'Failure memory (auto transitions): when an automatic transition\'s blocking push fails, the engine remembers the error class and a hash of what the blocking actions would send, and stops firing that transition while the hash is unchanged — a refused order is not re-sent on every write and every hourly sweep. The record shows "Needs a person" on the pipeline panel and a row under "Automatic moves waiting on a person" in the Integrations console. It fires again when what it would send changes (a record edit), when a person retries the push, re-runs the action or moves the record by hand, or — for transient, rate-limited and credential failures — on the remediation ladder (1, 5, 30, 120, 120 minutes, then held). The memory never blocks a manual transition. GET /api/pipelines/instance/:collection/:item returns the held transitions as auto_held.',
+        'require_owner: only the people who own the record\'s current step — a delegate covering for an out-of-office owner included — and administrators may run the transition. REST and GraphQL refuse anyone else with 403 code TRANSITION_OWNER_REQUIRED, and the transition is left out of available_transitions for them. Off by default; the "Only the step\'s owner" switch in the transition form, an "Owner only" badge on the route row.',
         'Related-row conditions: field "<childCollection>:<fkField>" with op related_some / related_none counts child rows pointing at the record. value is an optional JSON filter on those rows: plain columns, ONE hop through a child M2O as "m2o.col", "$record.<field>" tokens for the parent record values, ops _eq _neq _gt _gte _lt _lte _null _nnull _in _round_eq (rounded-dollar equality). Example, a linked PO on the same project whose amount matches the request total: {"purchase_order.project":{"_eq":"$record.project"},"purchase_order.amount":{"_round_eq":"$record.total_amount"}}. An unresolved $record token or unknown hop fails the filter closed.'
       ]
     },
     {
       type: 'note',
       text: 'Workflow state sync: if binding has state_field set, the current state KEY is written to that column on every transition. Enables cross-system integration and custom queries.'
+    },
+    { type: 'h3', text: 'What transition actions write' },
+    {
+      type: 'p',
+      text: "A transition action's writes — the record a `create_record` action makes (and its junction rows and link-back field), the `on_success` / `on_failure` values written back onto the record, and `on_success_children` values on child rows — go through the items service like any other save. Auto ids, field rules, the created record's own pipeline auto-start, revisions, stored rollups, the integrity check and subscriptions all see them."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Who: the person who made the transition is named on the activity row, writing with the administrator role (the transition was the authorized act). An automatic transition writes as the system — no person on the row.',
+        "Reason: every such write carries the change reason `transition-action: <transition label>` and is recorded as a machine write, so it never shows up as a person's note in the Notes thread.",
+        'A writeback the items service refuses (a validation rule, an unregistered table) still lands, written directly, so an `on_failure` status is never lost. A record `create_record` cannot create through the items service is the action failing: its `on_failure` writeback runs.',
+        'While a transition is being applied, a writeback onto that record does not re-run its automatic transitions from inside the transition; they are evaluated once the transition has landed.'
+      ]
     }
   ]
 }
@@ -285,6 +301,27 @@ export const pipelineOwnerMatrix: DocSection = {
     {
       type: 'note',
       text: 'Column filters (optional dimensions) can be left unset — the matrix shows "base-level" owners (groups with only required filter values). Set optional filters to see context-specific overrides.'
+    },
+    { type: 'h3', id: 'pipeline-owner-matrix-versions', text: 'Owner matrix versions' },
+    {
+      type: 'p',
+      text: 'The pipeline editor\'s "Owner matrix versions" card keeps the matrix recoverable. Before every owner change — a cell\'s filters, priority or WIP limit, a member or team added or removed, a dimension edited, a bulk add or an owner cleanup — the whole matrix is captured: dimensions, owner groups, members and team links. "Config versions" covers states, transitions and bindings; this card covers who owns them.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Diff compares a version with the live matrix cell by cell: filters, priority and WIP changes, people and teams added or removed, cells that exist on only one side, and dimension changes.',
+        "Restore makes the live matrix equal the version. It captures the current matrix first (so a restore can be undone), keeps every owner group's id, and writes only what differs. Cells whose state was deleted, people whose account is gone and deleted teams are skipped and counted.",
+        'Edits made by one person within two minutes share a version — it holds the matrix from before the burst. "Save a version now" takes a checkpoint at any moment.',
+        'The newest 30 versions are kept per template. Large matrices are stored compressed.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/pipelines/:id/owner-matrix/versions
+POST /api/pipelines/:id/owner-matrix/versions            { note? }  — checkpoint now
+GET  /api/pipelines/:id/owner-matrix/versions/:vid/diff  ?against=current|<vid>
+POST /api/pipelines/:id/owner-matrix/versions/:vid/restore`
     }
   ]
 }

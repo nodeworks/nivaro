@@ -59,6 +59,8 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
+import { OwnerMatrixVersionsCard } from './OwnerMatrixVersionsCard'
+import { SkipReportCard, TemplateLintCard } from './PipelineHealthCards'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
 import { PipelineStateOwners } from './PipelineStateOwners'
 import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from './relations'
@@ -707,6 +709,7 @@ type RouteEntry = {
   auto_trigger: boolean
   to_previous: boolean
   in_row_menu: boolean
+  require_owner: boolean
   notify_text: string | null
   comment_mode: string
   actions: TransitionAction[] | null
@@ -779,6 +782,7 @@ function groupByLabel(transitions: PipelineTransition[]): LabelGroup[] {
         auto_trigger: !!tx.auto_trigger,
         to_previous: !!(tx as { to_previous?: boolean }).to_previous,
         in_row_menu: (tx as { in_row_menu?: boolean }).in_row_menu !== false,
+        require_owner: (tx as { require_owner?: boolean }).require_owner === true,
         notify_text: (tx as { notify_text?: string | null }).notify_text ?? null,
         comment_mode: tx.comment_mode ?? 'none',
         actions: (tx.actions as TransitionAction[] | null) ?? null,
@@ -1496,6 +1500,8 @@ interface TransitionFormData {
   auto_trigger: boolean
   to_previous: boolean
   in_row_menu: boolean
+  /** Only the resolved owner of the current step (or an admin) may run it. */
+  require_owner: boolean
   /** A plain sentence for emails / notifications; null = the label. */
   notify_text: string | null
   comment_mode: string
@@ -1796,6 +1802,7 @@ function TransitionForm({
     auto_trigger: initial.auto_trigger ?? false,
     to_previous: initial.to_previous ?? false,
     in_row_menu: initial.in_row_menu ?? true,
+    require_owner: initial.require_owner ?? false,
     notify_text: initial.notify_text ?? null,
     comment_mode: initial.comment_mode ?? 'none',
     actions: initial.actions ?? null
@@ -1967,6 +1974,22 @@ function TransitionForm({
           checked={form.in_row_menu}
           onCheckedChange={(v) => set('in_row_menu', v)}
           data-transition-in-row-menu
+        />
+      </label>
+
+      <label className='flex cursor-pointer items-center justify-between rounded-lg border border-slate-200 bg-white px-3 py-2'>
+        <div>
+          <span className='text-[12px] font-medium text-slate-700'>Only the step's owner</span>
+          <p className='text-[11px] text-slate-400'>
+            Only the people who own the record's current step — delegates covering for them included
+            — and administrators can run this move. Everyone else gets a refusal, from the form, the
+            list menus and the API alike.
+          </p>
+        </div>
+        <Switch
+          checked={form.require_owner}
+          onCheckedChange={(v) => set('require_owner', v)}
+          data-transition-require-owner
         />
       </label>
 
@@ -2737,8 +2760,11 @@ export type PipelineEditorSection =
   | 'replay'
   | 'migration'
   | 'coverage'
+  | 'lint'
+  | 'skip-report'
   | 'ai-review'
   | 'versions'
+  | 'matrix-versions'
 
 export function PipelineEditorView({
   templateId,
@@ -2900,6 +2926,7 @@ export function PipelineEditorView({
         auto_trigger: data.auto_trigger,
         to_previous: data.to_previous,
         in_row_menu: data.in_row_menu,
+        require_owner: data.require_owner,
         notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         group_label: null,
@@ -2938,6 +2965,7 @@ export function PipelineEditorView({
             auto_trigger: data.auto_trigger,
             to_previous: data.to_previous,
             in_row_menu: data.in_row_menu,
+            require_owner: data.require_owner,
             notify_text: data.notify_text,
             group_label: null,
             actions: data.actions,
@@ -2975,6 +3003,7 @@ export function PipelineEditorView({
         auto_trigger: data.auto_trigger,
         to_previous: data.to_previous,
         in_row_menu: data.in_row_menu,
+        require_owner: data.require_owner,
         notify_text: data.notify_text,
         comment_mode: data.comment_mode,
         actions: data.actions
@@ -3701,6 +3730,7 @@ export function PipelineEditorView({
                                               auto_trigger: route.auto_trigger,
                                               to_previous: route.to_previous,
                                               in_row_menu: route.in_row_menu,
+                                              require_owner: route.require_owner,
                                               notify_text: route.notify_text,
                                               // Without this the form always opened
                                               // on 'No note', whatever was stored —
@@ -3759,6 +3789,15 @@ export function PipelineEditorView({
                                                 data-transition-form-only
                                               >
                                                 Form only
+                                              </span>
+                                            )}
+                                            {!route.auto_trigger && route.require_owner && (
+                                              <span
+                                                className='ml-1 inline-flex items-center rounded-full bg-violet-100 px-1.5 py-0.5 text-[10px] font-semibold text-violet-700 dark:bg-violet-900/30 dark:text-violet-300'
+                                                title="Only the current step's owner (or a delegate covering for them) and admins can run this move"
+                                                data-transition-owner-only
+                                              >
+                                                Owner only
                                               </span>
                                             )}
                                             {route.to_previous && (
@@ -4079,14 +4118,23 @@ export function PipelineEditorView({
         {/* Instance migration */}
         {!hiddenSet.has('migration') && <InstanceMigrationCard templateId={templateId} />}
 
+        {/* Reachability lint (#1241) */}
+        {!hiddenSet.has('lint') && <TemplateLintCard templateId={templateId} />}
+
         {/* Owner gaps */}
         {!hiddenSet.has('coverage') && <OwnerGapsCard templateId={templateId} states={states} />}
+
+        {/* Skip criteria in practice (#716) */}
+        {!hiddenSet.has('skip-report') && <SkipReportCard templateId={templateId} />}
 
         {/* AI config reviewer (#361) */}
         {!hiddenSet.has('ai-review') && <AiReviewCard templateId={templateId} />}
 
         {/* Config versions */}
         {!hiddenSet.has('versions') && <PipelineVersionsCard templateId={templateId} />}
+
+        {/* Owner matrix versions (#833) */}
+        {!hiddenSet.has('matrix-versions') && <OwnerMatrixVersionsCard templateId={templateId} />}
       </div>
     </>
   )

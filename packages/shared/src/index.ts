@@ -296,7 +296,9 @@ export {
   PipelineEditorView,
   PipelineSimulatorCard
 } from './components/pipeline/PipelineEditorView'
+export { SkipReportCard, TemplateLintCard } from './components/pipeline/PipelineHealthCards'
 export { TeamScopeEditor } from './components/pipeline/TeamScopeEditor'
+export { TeamSuggestionsPanel } from './components/pipeline/TeamSuggestions'
 export { type TeamRow, TeamsView } from './components/pipeline/TeamsView'
 export type { ScopeDimensionLite, TeamScopeMap, TeamTier } from './components/pipeline/teamScopes'
 export {
@@ -471,7 +473,15 @@ export {
   RealtimeContext,
   useOptionalRealtime
 } from './lib/realtime'
-export { createGatedClient, type GatedClient, withGetCoalescing } from './lib/request-gate'
+export {
+  BATCH_READ_LIMIT,
+  type BatchableRead,
+  batchableRead,
+  type CoalescingOptions,
+  createGatedClient,
+  type GatedClient,
+  withGetCoalescing
+} from './lib/request-gate'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'

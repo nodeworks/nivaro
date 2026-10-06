@@ -225,6 +225,55 @@ export async function userGroupsRoutes(app: FastifyInstance) {
     }
   )
 
+  // Team suggestions (#745): owner-group cells whose direct member set recurs
+  // across several cells — "these 14 cells share the same 4 people".
+  app.get<{ Querystring: { template?: string; min_cells?: string; min_members?: string } }>(
+    '/suggestions',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { findTeamSuggestions } = await import('../services/owner-team-suggestions.js')
+      const data = await findTeamSuggestions({
+        templateId: req.query.template || null,
+        minCells: req.query.min_cells ? Number(req.query.min_cells) : undefined,
+        minMembers: req.query.min_members ? Number(req.query.min_members) : undefined
+      })
+      return reply.send({ data })
+    }
+  )
+
+  // Dry run by default; `execute: true` creates (or links) the team, links it
+  // to every still-matching cell and removes the replaced direct member rows
+  // after a backup table + activity snapshot.
+  app.post<{
+    Body: {
+      members?: unknown
+      group_ids?: unknown
+      name?: string
+      existing_team_id?: number | null
+      execute?: boolean
+    }
+  }>('/suggestions/apply', { preHandler: requireAdmin }, async (req, reply) => {
+    const { applyTeamSuggestion } = await import('../services/owner-team-suggestions.js')
+    const members = Array.isArray(req.body?.members) ? req.body.members.map(String) : []
+    const groupIds = Array.isArray(req.body?.group_ids) ? req.body.group_ids.map(String) : []
+    try {
+      const plan = await applyTeamSuggestion({
+        members,
+        group_ids: groupIds,
+        name: req.body?.name ?? null,
+        existing_team_id:
+          req.body?.existing_team_id != null ? Number(req.body.existing_team_id) : null,
+        actorId: req.user!.id,
+        dryRun: req.body?.execute !== true
+      })
+      return reply.send({ data: plan })
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode
+      if (status && status < 500) return reply.code(status).send({ error: (err as Error).message })
+      throw err
+    }
+  })
+
   app.post<{ Body: { name?: string; slug?: string; description?: string } }>(
     '/',
     { preHandler: requireAdmin },

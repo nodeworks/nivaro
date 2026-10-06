@@ -38,6 +38,10 @@ export function originForWrite(
 ): NoteOrigin {
   if (isImportStamp(comment)) return 'import'
   if (!actor) return 'machine'
+  // A transition action's write (#818) is the machine's even when a person's
+  // transition set it off — and a writer with no id is no person at all.
+  if (/^transition-action:/i.test(String(comment ?? '').trim())) return 'machine'
+  if (!(actor as { id?: unknown }).id) return 'machine'
   return accountKindOf(actor) ? 'integration' : 'person'
 }
 

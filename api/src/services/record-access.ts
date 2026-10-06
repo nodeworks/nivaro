@@ -287,11 +287,28 @@ export interface ActVerdict {
   summary: string
 }
 
+/** Is `userId` among the resolved owners of a step (case-insensitive ids —
+ *  uniqueidentifiers come back upper-case, users carry either case). The
+ *  owner list is AFTER delegation: an out-of-office owner's working delegate
+ *  stands in their place, so the delegate passes and the absent owner does not. */
+export function ownsStep(
+  owners: Array<{ id: string | null | undefined }>,
+  userId: string
+): boolean {
+  const me = String(userId).toUpperCase()
+  return owners.some((o) => o.id != null && String(o.id).toUpperCase() === me)
+}
+
 export async function canActOn(
   user: User & AvailabilityRow,
   collection: string,
   id: string,
-  opts: { actingAdmin?: boolean } = {}
+  opts: {
+    actingAdmin?: boolean
+    /** Judge ownership on THIS pipeline instance (the one a transition runs
+     *  on) — completed or not — instead of the record's open instance. */
+    instanceId?: string
+  } = {}
 ): Promise<ActVerdict> {
   const gates = await compileAccessGates(user, collection, opts)
   const exists = !!(await db(collection)
@@ -309,10 +326,12 @@ export async function canActOn(
 
   let isOwner: boolean | null = null
   let state: string | null = null
-  const inst = (await db('nivaro_workflow_instances as i')
+  const instQuery = db('nivaro_workflow_instances as i')
     .join('nivaro_workflow_states as s', 's.id', 'i.current_state')
     .where({ 'i.collection': collection, 'i.item': String(id) })
-    .whereNull('i.completed_at')
+  if (opts.instanceId) instQuery.where('i.id', opts.instanceId)
+  else instQuery.whereNull('i.completed_at')
+  const inst = (await instQuery
     .first('i.id', 's.id as state_id', 's.label')
     .catch(() => undefined)) as { id: string; state_id: string; label: string } | undefined
   if (inst) {
@@ -321,9 +340,7 @@ export async function canActOn(
     const owners = await resolveStateOwnersBatch([
       { key: 'x', stateId: inst.state_id, instanceId: inst.id, collection, itemId: String(id) }
     ])
-    isOwner = (owners.get('x') ?? []).some(
-      (o) => String(o.id).toUpperCase() === String(user.id).toUpperCase()
-    )
+    isOwner = ownsStep(owners.get('x') ?? [], String(user.id))
   }
   const canAct = seen && !!canUpdate && !unavailable
   const summary = !exists
@@ -349,5 +366,47 @@ export async function canActOn(
     can_act: canAct,
     reasons,
     summary
+  }
+}
+
+// ── Owner-only transitions (#794) ───────────────────────────────────────────
+
+export const TRANSITION_OWNER_REQUIRED = 'TRANSITION_OWNER_REQUIRED'
+
+/** Does an owner-only transition let this caller through? Admins always;
+ *  anyone else only when canActOn found them among the current step's
+ *  resolved owners (delegation applied). A record with no step to own
+ *  (`is_owner` null) has nobody to be the owner — refused. */
+export function ownerOnlyAllows(isAdmin: boolean, verdict: Pick<ActVerdict, 'is_owner'>): boolean {
+  if (isAdmin) return true
+  return verdict.is_owner === true
+}
+
+/** The gate both manual transition paths run for a `require_owner` transition. */
+export async function checkTransitionOwner(opts: {
+  user: User
+  isAdmin: boolean
+  collection: string
+  item: string
+  instanceId: string
+}): Promise<{ allowed: boolean; message: string }> {
+  if (opts.isAdmin) return { allowed: true, message: '' }
+  let verdict: ActVerdict
+  try {
+    verdict = await canActOn(opts.user as User & AvailabilityRow, opts.collection, opts.item, {
+      instanceId: opts.instanceId
+    })
+  } catch {
+    // An owner question that cannot be answered is a refusal, never a pass.
+    return { allowed: false, message: 'Could not confirm you own the current step.' }
+  }
+  const allowed = ownerOnlyAllows(false, verdict)
+  return {
+    allowed,
+    message: allowed
+      ? ''
+      : verdict.state
+        ? `Only the owner of ${verdict.state} can make this move.`
+        : 'Only the owner of the current step can make this move.'
   }
 }

@@ -1,10 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { clearAutoFailures } from './auto-transition-memory.js'
 import { findRecordInstance } from './branch-instances.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
+import { assertInstanceAccess, InstanceAccessError } from './instance-guard.js'
+import { writeStartHistory } from './instance-start.js'
+import { originFields } from './note-authorship.js'
 import { parseJson } from './pipeline-engine.js'
+import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { TransitionBlockedError } from './workflow-actions.js'
@@ -52,6 +58,21 @@ export interface WorkflowActor {
   id?: string | null
   role?: string | null
   isAdmin?: boolean
+  /** The caller's user row: the start/advance gate reads the record AS them,
+   *  and owner-only transitions (#794) judge it (without it a non-admin is
+   *  refused an owner-only transition). */
+  user?: User | null
+}
+
+/** The shared start/advance gate (instance-guard), as a WorkflowMutationError. */
+async function guardRecord(actor: WorkflowActor | undefined, collection: string, item: string) {
+  try {
+    await assertInstanceAccess(actor?.user ?? null, actor?.isAdmin ?? false, collection, item)
+  } catch (err) {
+    if (err instanceof InstanceAccessError)
+      throw new WorkflowMutationError(err.statusCode, err.message)
+    throw err
+  }
 }
 
 /**
@@ -65,6 +86,7 @@ export async function startWorkflowInstance(opts: {
   actor?: WorkflowActor
 }): Promise<WorkflowInstance | undefined> {
   const { collection, item } = opts
+  await guardRecord(opts.actor, collection, item)
 
   const binding = (await db('nivaro_workflow_bindings').where({ collection }).first()) as
     | WorkflowBindingRow
@@ -81,15 +103,24 @@ export async function startWorkflowInstance(opts: {
     .first()) as WorkflowState | undefined
 
   const instanceId = randomUUID()
+  const startedAt = new Date()
   await db('nivaro_workflow_instances').insert({
     id: instanceId,
     template: binding.template,
     collection,
     item,
     current_state: initialState?.id ?? null,
-    started_at: new Date(),
+    started_at: startedAt,
     completed_at: null
   })
+  // #1219: the start is the instance's first history row.
+  if (initialState)
+    await writeStartHistory({
+      instanceId,
+      stateId: String(initialState.id),
+      userId: opts.actor?.id ?? null,
+      timestamp: startedAt
+    })
 
   // Resolve skip criteria — may advance past the initial state
   let finalState: WorkflowState | undefined = initialState
@@ -119,7 +150,8 @@ export async function startWorkflowInstance(opts: {
         to_state: finalStateId,
         user: opts.actor?.id ?? null,
         comment: 'Auto-advanced via skip criteria',
-        timestamp: new Date()
+        timestamp: new Date(),
+        ...(await originFields('nivaro_workflow_history', 'machine'))
       })
     }
   }
@@ -162,6 +194,7 @@ export async function executeWorkflowTransition(opts: {
 }): Promise<{ instance: WorkflowInstance | undefined; newState: WorkflowState | null }> {
   const { collection, item, transitionId } = opts
   if (!transitionId) throw new WorkflowMutationError(400, 'transition_id is required')
+  await guardRecord(opts.actor, collection, item)
 
   const instance = await findRecordInstance<WorkflowInstance>(collection, item)
   if (!instance) throw new WorkflowMutationError(404, 'No pipeline instance for this item')
@@ -195,6 +228,30 @@ export async function executeWorkflowTransition(opts: {
       if (!userRole || !roles.includes(userRole)) {
         throw new WorkflowMutationError(403, 'You do not have permission for this transition')
       }
+    }
+  }
+
+  // Owner-only (#794): same gate as the REST endpoint — the caller must own
+  // the current step (delegation applied); admins exempt.
+  if (coerceBool((transition as { require_owner?: unknown }).require_owner) && !isAdmin) {
+    if (!opts.actor.user) {
+      throw new WorkflowMutationError(
+        403,
+        'Only the owner of the current step can make this move.',
+        {
+          code: TRANSITION_OWNER_REQUIRED
+        }
+      )
+    }
+    const owner = await checkTransitionOwner({
+      user: opts.actor.user,
+      isAdmin,
+      collection,
+      item,
+      instanceId: String(instance.id)
+    })
+    if (!owner.allowed) {
+      throw new WorkflowMutationError(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })
     }
   }
 
@@ -237,6 +294,10 @@ export async function executeWorkflowTransition(opts: {
     }
     throw err
   }
+
+  // #1217: a person acting on the record is the retry the engine was waiting
+  // for — held auto transitions on it may fire again.
+  await clearAutoFailures({ instanceId: String(instance.id) })
 
   let applied: Awaited<ReturnType<typeof applyTransition>>
   try {

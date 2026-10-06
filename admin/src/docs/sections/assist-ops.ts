@@ -61,6 +61,62 @@ export const pipelineSimulatorDocs: DocSection = {
   ]
 }
 
+export const pipelineHealthDocs: DocSection = {
+  id: 'pipeline-health',
+  label: 'Pipeline Health Checks',
+  content: [
+    { type: 'h1', id: 'pipeline-health', text: 'Pipeline Health Checks' },
+    {
+      type: 'p',
+      text: 'Three checks that keep a pipeline template honest: can a record reach every state, do the skip rules actually fire, and is the same crew typed into owner cells over and over.'
+    },
+    { type: 'h2', id: 'pipeline-lint', text: 'Reachability' },
+    {
+      type: 'pre',
+      code: 'GET /api/pipelines/:id/lint'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A pure check over the template — no records are read. It starts from the initial state and follows every transition, send-backs included; a transition with no from-state counts from every non-terminal state.',
+        'Warnings: a state nothing enters, a state only entered from states a record can never reach, a transition that leaves an unreachable state, conditions that contradict each other (two different equals on one field, equals and not-equals of the same value, an equals outside its in-list, empty and filled, a number range with no room, related-some with related-none), a non-terminal state with no way out, and an automatic transition with no conditions on a state that also has manual exits (it fires on the first write, so the buttons are never really offered).',
+        'Notes: a terminal state with an exit — normal for an uncancel or reopen path.',
+        'UI: the Reachability card in the pipeline editor. The readiness check "Every pipeline template can reach all its states" runs the same lint over every template.'
+      ]
+    },
+    { type: 'h2', id: 'pipeline-skip-report', text: 'Skip criteria in practice' },
+    {
+      type: 'pre',
+      code: 'GET /api/pipelines/:id/skip-report?days=90&sample=120'
+    },
+    {
+      type: 'ul',
+      items: [
+        'History: per state, how many records entered it in the window and how many jumped over it — a forward move whose from and to states bracket a state the record never visited, the same rule the record’s state track uses. A state on another branch of the template can show skips without any rule.',
+        'Right now: for the newest open records (sample, default 120, max 500) every state still ahead with skip rules is judged one rule at a time by the engine’s own evaluator. Owner checks resolve in one batch; lookup thresholds stop at a time limit and the report says how many records it judged.',
+        'Each rule gets a verdict — never fires, always fires, fires sometimes, or too few records (under 10). A threshold that never or always fires is usually configured wrong.',
+        'UI: the "Skip criteria in practice" card in the pipeline editor (press Analyze).'
+      ]
+    },
+    { type: 'h2', id: 'team-suggestions', text: 'Suggested teams' },
+    {
+      type: 'pre',
+      code: `GET  /api/user-groups/suggestions?template=&min_cells=3&min_members=2
+POST /api/user-groups/suggestions/apply
+{ "members": [...], "group_ids": [...], "name": "Field crew", "execute": false }`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Finds owner-matrix cells whose individual members are exactly the same set of two or more people in three or more cells, skipping cells already linked to a team.',
+        'apply is a dry run unless `execute: true`: it re-checks every cell, then creates the team (or links an existing team that already has exactly those people), links it to each cell and removes the individual entries it replaces. Ownership does not change — a linked team’s roster is part of the cell.',
+        'The removed rows are backed up first: a `zz_backup_og_users_team_<stamp>` table on SQL Server, and always an `owner-team-swap-backup` activity row with every row as JSON. A cell whose members changed since the suggestion is left alone and named in the response.',
+        'UI: Teams → Suggested teams. Preview first; the create button only appears after the preview.'
+      ]
+    }
+  ]
+}
+
 export const slaScheduleDocs: DocSection = {
   id: 'sla-business-hours',
   label: 'SLA Business Hours',
@@ -80,6 +136,24 @@ export const slaScheduleDocs: DocSection = {
         'Applies to every SLA consumer — status endpoints, queue SLA columns, breach notifications, escalation ladders and My Work.',
         'Applies only to rules with "business hours only" enabled; other rules use wall-clock hours.'
       ]
+    },
+    { type: 'h2', id: 'sla-record-override', text: "Adjusting one record's clock" },
+    {
+      type: 'p',
+      text: "The owner of a record's current step — or an admin — can extend or shorten that record's SLA clock with \"Adjust clock\" (on the pipeline panel's SLA line, and on the record's SLA banner). A reason is required. The rule itself does not change: the new duration applies to this record only, and only while it stays in this step — leaving the step ends it, and coming back starts the rule's own clock again."
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every SLA reader honours it: the record banner, queue SLA columns and sorts, My Work, breach notifications and escalation ladders.',
+        'The adjustment is written as a note on the record ("SLA clock") and the banner shows who set it, when and why. "Back to the rule" removes it.',
+        'Only one adjustment is active per stay; a new one replaces the old.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `POST   /api/sla/override/:collection/:item   { "duration_hours": 48, "reason": "Waiting on the vendor quote" }
+DELETE /api/sla/override/:collection/:item   ?reason=…   — back to the rule's duration`
     }
   ]
 }

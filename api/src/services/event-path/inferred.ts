@@ -204,6 +204,8 @@ async function transitionsOn(
         'h.id',
         'h.timestamp',
         'h.comment',
+        'h.from_state',
+        'h.transition',
         'i.collection',
         'i.item',
         'fs.label as from_label',
@@ -220,7 +222,11 @@ async function transitionsOn(
         kind: 'transition',
         at: iso(h.timestamp),
         record: { collection: String(h.collection), item: String(h.item) },
-        summary: `${h.transition_label ?? 'Moved'} → ${h.to_label ?? '?'}`,
+        // #1219: a start row (no from_state, no transition) reads as the start.
+        summary:
+          h.from_state === null && h.transition === null
+            ? `Started in ${h.to_label ?? '?'}`
+            : `${h.transition_label ?? 'Moved'} → ${h.to_label ?? '?'}`,
         inferred: true,
         reason: `transition on a record this call wrote, ${gap(h.timestamp, callAt)} from the call`,
         detail: {

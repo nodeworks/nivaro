@@ -29,10 +29,16 @@ const NivaroFormContext = createContext<NivaroFormContextValue | null>(null)
 
 export function NivaroProvider({
   client,
-  children
+  children,
+  batchReads = false
 }: {
   client: NivaroClient
   children: React.ReactNode
+  /**
+   * #1304: record reads fired in the same tick share one
+   * `POST /items/batch-read`. Off by default; a host opts in.
+   */
+  batchReads?: boolean
 }) {
   // Components consume TanStack Query throughout. Hosts that already run a
   // QueryClientProvider (the admin) keep theirs; standalone consumers get one
@@ -49,8 +55,8 @@ export function NivaroProvider({
   // page asks for the same collection metadata from a dozen components under
   // a dozen query keys). A wrapped client passed twice stays wrapped once.
   const coalesced = useMemo(
-    () => (isCoalesced(client) ? client : withGetCoalescing(client)),
-    [client]
+    () => (isCoalesced(client) ? client : withGetCoalescing(client, { batchReads })),
+    [client, batchReads]
   )
   const inner = (
     <NivaroFormContext.Provider value={{ client: coalesced }}>

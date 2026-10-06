@@ -2,10 +2,12 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
+import { clearAutoFailures, heldForInstance } from '../services/auto-transition-memory.js'
 import { findRecordInstance } from '../services/branch-instances.js'
 import {
   type BranchLane,
@@ -17,6 +19,8 @@ import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { getCollection } from '../services/collections.js'
 import { selectInChunks } from '../services/db-batch.js'
+import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
+import { writeStartHistory } from '../services/instance-start.js'
 import { originFields, originSelect } from '../services/note-authorship.js'
 import { can } from '../services/permissions.js'
 import type { UnavailableChainOwner } from '../services/pipeline-chain.js'
@@ -25,8 +29,10 @@ import {
   resolveStateOwners,
   resolveStateOwnersBatch
 } from '../services/pipeline-engine.js'
+import { type LintState, type LintTransition, lintTemplate } from '../services/pipeline-lint.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import {
   evaluateTransitionRequirements,
@@ -56,6 +62,7 @@ import {
   resolveTransitionTarget,
   runAutoTransitions
 } from '../services/workflow-transitions.js'
+import { ownerMatrixVersionRoutes, registerOwnerMatrixCapture } from './owner-matrix-versions.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -101,6 +108,8 @@ interface WorkflowTransition {
   to_previous?: boolean | number
   /** Offered from list-row Actions menus (migration 312; default true). */
   in_row_menu?: boolean | number | null
+  /** Only the current step's owner (or an admin) may run it (migration 397). */
+  require_owner?: boolean | number | null
   /** How the move is described to people in mail / notifications (migration 352). */
   notify_text?: string | null
   sort: number
@@ -298,6 +307,7 @@ function formatTransition(t: WorkflowTransition) {
     auto_trigger: coerceBool(t.auto_trigger),
     to_previous: coerceBool(t.to_previous),
     in_row_menu: t.in_row_menu == null ? true : coerceBool(t.in_row_menu),
+    require_owner: coerceBool(t.require_owner),
     condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
     requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
@@ -357,6 +367,31 @@ function validateRequirements(value: unknown): string | null {
     }
   }
   return null
+}
+
+// ─── Template lint (#1241) ───────────────────────────────────────────────────
+async function loadTemplateLint(templateId: string) {
+  const tpl = (await db('nivaro_workflow_templates')
+    .where({ id: templateId })
+    .first('id', 'name')) as { id: string; name: string } | undefined
+  if (!tpl) return null
+  const [states, transitions] = await Promise.all([
+    db('nivaro_workflow_states')
+      .where({ template: templateId })
+      .orderBy('sort')
+      .select('id', 'key', 'label', 'is_initial', 'is_terminal', 'sort') as Promise<LintState[]>,
+    db('nivaro_workflow_transitions')
+      .where({ template: templateId })
+      .select(
+        'id',
+        'from_state',
+        'to_state',
+        'label',
+        'condition_rules',
+        'auto_trigger'
+      ) as Promise<LintTransition[]>
+  ])
+  return { template_id: tpl.id, template_name: tpl.name, ...lintTemplate(states, transitions) }
 }
 
 // ─── Routes ──────────────────────────────────────────────────────────────────
@@ -462,6 +497,10 @@ interface BranchOwner {
 }
 
 export async function pipelinesRoutes(app: FastifyInstance) {
+  // Owner matrix versions (#833): must precede every route declaration —
+  // onRoute only sees routes added after it.
+  registerOwnerMatrixCapture(app)
+  await ownerMatrixVersionRoutes(app)
   if (!ownerFilterCheckRegistered) {
     ownerFilterCheckRegistered = true
     registerReadinessCheck({
@@ -523,6 +562,36 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           const { repairStateMirror } = await import('../services/state-mirror.js')
           const r = await repairStateMirror()
           return { detail: `${r.repaired} state column(s) rewritten from their instance.` }
+        }
+      }
+    })
+    registerReadinessCheck({
+      id: 'pipeline-template-lint',
+      label: 'Every pipeline template can reach all its states',
+      group: 'Configuration',
+      description:
+        'A pure check over each template: states nothing enters, transitions that can never fire (from an unreachable state, or with conditions that contradict each other), non-terminal dead ends, and unconditioned automatic transitions that make a state’s manual buttons unreachable.',
+      run: async () => {
+        const templates = (await db('nivaro_workflow_templates').select('id', 'name')) as Array<{
+          id: string
+          name: string
+        }>
+        const results = await Promise.all(templates.map((t) => loadTemplateLint(String(t.id))))
+        const bad = results.filter((r): r is NonNullable<typeof r> => !!r && r.warnings > 0)
+        if (bad.length === 0)
+          return {
+            status: 'pass',
+            detail: `${templates.length} template(s) — every state is reachable and every transition can fire.`
+          }
+        return {
+          status: 'warn',
+          detail: `${bad.reduce((n, r) => n + r.warnings, 0)} finding(s) across ${bad.length} template(s).`,
+          blockers: bad.flatMap((r) =>
+            r.findings
+              .filter((f) => f.severity === 'warn')
+              .slice(0, 6)
+              .map((f) => `${r.template_name}: ${f.message}`)
+          )
         }
       }
     })
@@ -668,6 +737,31 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       }
       await logActivity({ action: 'pipeline-ai-review', user: req.user?.id, item: tid, req })
       return reply.send({ data: { structural, critique } })
+    }
+  )
+
+  // Template reachability lint (#1241) — states nothing reaches, transitions
+  // that can never fire, dead ends, autos that shadow manual exits.
+  app.get('/:id/lint', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const r = await loadTemplateLint(id)
+    if (!r) return reply.code(404).send({ error: 'Template not found' })
+    return reply.send({ data: r })
+  })
+
+  // Skip-criteria firing report (#716): 90-day entered-vs-skipped per state
+  // from history + which criterion would fire now over the newest open records.
+  app.get<{ Params: { id: string }; Querystring: { days?: string; sample?: string } }>(
+    '/:id/skip-report',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const { buildSkipReport } = await import('../services/pipeline-skip-report.js')
+      const r = await buildSkipReport(req.params.id, {
+        days: req.query.days ? Number(req.query.days) : undefined,
+        sample: req.query.sample ? Number(req.query.sample) : undefined
+      })
+      if (!r) return reply.code(404).send({ error: 'Template has no states' })
+      return reply.send({ data: r })
     }
   )
 
@@ -817,15 +911,12 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           current_state: initial.id,
           started_at: new Date()
         })
-        await db('nivaro_workflow_history').insert({
-          ...(await chainFields('nivaro_workflow_history')),
-          instance: instId,
-          from_state: null,
-          to_state: initial.id,
-          user: req.user?.id ?? null,
+        await writeStartHistory({
+          instanceId: instId,
+          stateId: String(initial.id),
+          userId: req.user?.id ?? null,
           comment: 'bulk-start (missing instance)',
-          timestamp: new Date(),
-          ...(await originFields('nivaro_workflow_history', 'machine'))
+          origin: 'machine'
         })
         started++
       } catch {
@@ -1229,6 +1320,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     await db('nivaro_workflow_bindings').where({ template: id }).delete()
     await db('nivaro_workflow_states').where({ template: id }).delete()
     await db('nivaro_workflow_template_versions').where({ template: id }).delete()
+    await db('nivaro_owner_matrix_versions')
+      .where({ template: id })
+      .delete()
+      .catch(() => 0) // table absent before migration 399
     const deleted = await db('nivaro_workflow_templates').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     refreshGraphQLForBindings()
@@ -1429,6 +1524,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'auto_trigger'
       | 'to_previous'
       | 'in_row_menu'
+      | 'require_owner'
       | 'notify_text'
       | 'sort'
       | 'group_label'
@@ -1454,6 +1550,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       auto_trigger: body.auto_trigger ? 1 : 0,
       to_previous: body.to_previous ? 1 : 0,
       in_row_menu: body.in_row_menu === false ? 0 : 1,
+      // Probed: a tenant behind migration 397 keeps creating transitions.
+      ...((await hasColumn('nivaro_workflow_transitions', 'require_owner'))
+        ? { require_owner: body.require_owner ? 1 : 0 }
+        : {}),
       notify_text: body.notify_text?.trim() || null,
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
@@ -1553,6 +1653,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         to_previous: body.to_previous !== undefined ? (body.to_previous ? 1 : 0) : tx.to_previous,
         in_row_menu:
           body.in_row_menu !== undefined ? (body.in_row_menu === false ? 0 : 1) : tx.in_row_menu,
+        ...(body.require_owner !== undefined &&
+        (await hasColumn('nivaro_workflow_transitions', 'require_owner'))
+          ? { require_owner: body.require_owner ? 1 : 0 }
+          : {}),
         notify_text:
           body.notify_text !== undefined ? body.notify_text?.trim() || null : tx.notify_text,
         sort: body.sort ?? tx.sort,
@@ -2200,14 +2304,46 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       })
       .map(formatTransition)
 
-    // Get history with joined state labels
-    const history = await db('nivaro_workflow_history as h')
+    // Owner-only transitions (#794): offered only to the people who own the
+    // current step (delegation applied) and admins — the same answer the
+    // execute paths give. Asked once, and only when one is on offer. A
+    // view-as-role preview has no person to judge, so it shows them.
+    let offeredTransitions = availableTransitions
+    if (!isAdmin && !asRole && req.user && availableTransitions.some((t) => t.require_owner)) {
+      const owner = await checkTransitionOwner({
+        user: req.user,
+        isAdmin: false,
+        collection,
+        item,
+        instanceId: String(instance.id)
+      })
+      if (!owner.allowed) offeredTransitions = availableTransitions.filter((t) => !t.require_owner)
+    }
+
+    // Get history with joined state labels. #645: a delegate's move names the
+    // out-of-office owner it stood in for (migration 395 — probed, so a
+    // tenant behind it still answers).
+    const behalfCol = await hasColumn('nivaro_workflow_history', 'on_behalf_of')
+    const historyQ = db('nivaro_workflow_history as h')
       .leftJoin('nivaro_workflow_states as fs', 'h.from_state', 'fs.id')
       .leftJoin('nivaro_workflow_states as ts', 'h.to_state', 'ts.id')
       .leftJoin('nivaro_users as u', 'h.user', 'u.id')
       .leftJoin('nivaro_workflow_transitions as tr', 'h.transition', 'tr.id')
+    if (behalfCol)
+      historyQ
+        .leftJoin('nivaro_users as ob', 'h.on_behalf_of', 'ob.id')
+        .select(
+          'h.on_behalf_of',
+          'ob.first_name as on_behalf_of_first_name',
+          'ob.last_name as on_behalf_of_last_name',
+          'ob.email as on_behalf_of_email'
+        )
+    const historyRows = await historyQ
       .where('h.instance', instance.id)
       .orderBy('h.timestamp', 'desc')
+      // A start row (#1219) and a skip-advance written in the same tick share
+      // a timestamp — the id keeps the start oldest.
+      .orderBy('h.id', 'desc')
       .select(
         'h.id',
         'h.transition',
@@ -2229,6 +2365,18 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         'u.last_name',
         'u.email as user_email'
       )
+    const history = (historyRows as Array<Record<string, unknown>>).map((h) => {
+      const {
+        on_behalf_of_first_name: bf,
+        on_behalf_of_last_name: bl,
+        on_behalf_of_email: be,
+        ...rest
+      } = h
+      const behalfName = h.on_behalf_of
+        ? [bf, bl].filter(Boolean).join(' ') || (be as string | null) || null
+        : null
+      return { ...rest, on_behalf_of: h.on_behalf_of ?? null, on_behalf_of_name: behalfName }
+    })
 
     const currentStateObj = states.find((s) => s.id === currentState)
     const branches = await loadBranchLanes(instance, history, states).catch(() => null)
@@ -2246,10 +2394,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // ONLY on the server after a transition lands; the panel never reads
         // them, and on a template with dozens of integration pushes they were
         // 70 KB of a 90 KB response fetched on every record open.
-        available_transitions: availableTransitions.map(stripTransitionActions),
+        available_transitions: offeredTransitions.map(stripTransitionActions),
         all_transitions: transitions.map((t) => stripTransitionActions(formatTransition(t))),
         history,
-        binding: effectiveBinding
+        binding: effectiveBinding,
+        // #1217: auto transitions the engine stopped re-firing because their
+        // blocking push failed and nothing it would send has changed.
+        auto_held: await heldForInstance(String(instance.id))
       }
     })
   })
@@ -2257,6 +2408,15 @@ export async function pipelinesRoutes(app: FastifyInstance) {
   // Start pipeline instance for an item
   app.post('/instance/:collection/:item/start', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    // Starting a pipeline changes the record: update permission + the caller
+    // can see it (row filter, User Scopes). Invisible = 404.
+    try {
+      await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item)
+    } catch (err) {
+      if (err instanceof InstanceAccessError)
+        return reply.code(err.statusCode).send({ error: err.message })
+      throw err
+    }
 
     const binding = await db<WorkflowBinding>('nivaro_workflow_bindings')
       .where({ collection })
@@ -2274,15 +2434,24 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       .first()
 
     const instanceId = randomUUID()
+    const startedAt = new Date()
     await db('nivaro_workflow_instances').insert({
       id: instanceId,
       template: binding.template,
       collection,
       item,
       current_state: initialState?.id ?? null,
-      started_at: new Date(),
+      started_at: startedAt,
       completed_at: null
     })
+    // #1219: the start is the instance's first history row.
+    if (initialState)
+      await writeStartHistory({
+        instanceId,
+        stateId: String(initialState.id),
+        userId: req.user?.id ?? null,
+        timestamp: startedAt
+      })
 
     // Resolve skip criteria — may advance past initial state
     let finalState = initialState
@@ -2352,6 +2521,14 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       const body = req.body as { transition_id: string; comment?: string; reviewed?: boolean }
 
       if (!body.transition_id) return reply.code(400).send({ error: 'transition_id is required' })
+      // Moving a pipeline changes the record: update permission + visibility.
+      try {
+        await assertInstanceAccess(req.user, req.isAdmin ?? false, collection, item)
+      } catch (err) {
+        if (err instanceof InstanceAccessError)
+          return reply.code(err.statusCode).send({ error: err.message })
+        throw err
+      }
 
       const instance = await findRecordInstance<WorkflowInstance>(collection, item)
       if (!instance) return reply.code(404).send({ error: 'No pipeline instance for this item' })
@@ -2393,6 +2570,21 @@ export async function pipelinesRoutes(app: FastifyInstance) {
           if (!userRole || !roles.includes(userRole)) {
             return reply.code(403).send({ error: 'You do not have permission for this transition' })
           }
+        }
+      }
+
+      // Owner-only (#794): the caller must own the current step — delegates
+      // standing in for an out-of-office owner included, admins exempt.
+      if (coerceBool(transition.require_owner) && req.user) {
+        const owner = await checkTransitionOwner({
+          user: req.user,
+          isAdmin,
+          collection,
+          item,
+          instanceId: String(instance.id)
+        })
+        if (!owner.allowed) {
+          return reply.code(403).send({ error: owner.message, code: TRANSITION_OWNER_REQUIRED })
         }
       }
 
@@ -2446,6 +2638,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         }
         throw err
       }
+
+      // #1217: a person acting on the record is the retry the engine was
+      // waiting for — held auto transitions on it may fire again.
+      await clearAutoFailures({ instanceId: String(instance.id) })
 
       let applied: Awaited<ReturnType<typeof applyTransition>>
       try {
@@ -2551,6 +2747,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .where({ collection, item: String(item) })
         .max('id as m')
         .first()) as { m: number | null }
+      // #1217: a resend by a person is a retry — held auto transitions on the
+      // record may fire again.
+      await clearAutoFailures({ collection, item: String(item) })
       const { skippedReason } = await runTransitionActions({
         transition: t,
         instance: { collection, item: String(item) },

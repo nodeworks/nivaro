@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { addendumSummaryBatch } from '../services/addendum-summary.js'
+import { writeStartHistory } from '../services/instance-start.js'
 import { can } from '../services/permissions.js'
 import { syncAddendumInQueues } from '../services/queue-materialization.js'
 import { emitWorkflowStartEvent } from '../services/workflow-transitions.js'
@@ -384,6 +385,13 @@ export async function addendumsRoutes(app: FastifyInstance) {
               .orderBy('started_at', 'desc')
               .first('id')) as { id: string } | undefined
             if (startedInstance) {
+              // #1219: the addendum's first state is history, not just started_at.
+              await writeStartHistory({
+                instanceId: String(startedInstance.id),
+                stateId: String(startState.id),
+                userId: req.user?.id ?? null,
+                timestamp: now
+              }).catch(() => {})
               void emitWorkflowStartEvent({
                 instanceId: String(startedInstance.id),
                 collection: 'nivaro_addendums',

@@ -421,7 +421,15 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
         .limit(limit)
         .select('id', 'at', 'diff', 'breaking')
       const { deprecationWindowDays } = await import('../services/deprecation-policy.js')
-      return reply.send({ data: rows, policy: { deprecation_days: await deprecationWindowDays() } })
+      const { graphqlStrictMutations } = await import('../services/graphql-strict.js')
+      return reply.send({
+        data: rows,
+        policy: {
+          deprecation_days: await deprecationWindowDays(),
+          // #1222: update/delete on a missing id answers NOT_FOUND instead of null.
+          strict_mutations: await graphqlStrictMutations()
+        }
+      })
     }
   )
 

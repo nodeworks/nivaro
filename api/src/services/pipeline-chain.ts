@@ -213,6 +213,7 @@ export async function computeStateChain(
     ? ((await db('nivaro_workflow_history')
         .where({ instance: instance.id })
         .orderBy('timestamp', 'asc')
+        .orderBy('id', 'asc')
         .select('from_state', 'to_state', 'timestamp', 'user')) as StateChain['history'])
     : []
   if (opts.asOf) {

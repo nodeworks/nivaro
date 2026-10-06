@@ -43,6 +43,7 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_workflow_transitions',
   'nivaro_workflow_bindings',
   'nivaro_workflow_template_versions',
+  'nivaro_owner_matrix_versions',
   'nivaro_pipeline_owner_dimensions',
   'nivaro_pipeline_owner_groups',
   'nivaro_pipeline_owner_group_users',
@@ -210,6 +211,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tasks',
   'nivaro_erp_submissions',
   'nivaro_erp_submission_attempts',
+  'nivaro_auto_transition_failures', // #1217 per-instance failure memory of auto transitions
   'nivaro_chain_roots', // integration event chains — which feed row / replay started which chain
   'nivaro_integration_signal_rows',
   'nivaro_integration_signal_runs',
@@ -279,6 +281,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_legal_holds',
   'nivaro_sla_escalations',
   'nivaro_sla_acks',
+  'nivaro_sla_overrides',
   'nivaro_comment_reactions',
   'nivaro_item_lock_queue',
   'nivaro_entry_reactions',

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { clearAutoFailures } from '../services/auto-transition-memory.js'
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
 import { requesterInsertFields } from '../services/erp-requester-columns.js'
@@ -600,6 +601,9 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
       // retries; one helper for the row update + obligation (#628) so this
       // route can never drift from the bulk paths about what a retry touches.
       const outcome = await retrySubmissionRow(row, req.user?.id ?? null)
+      // #1217: a person retrying the push is the retry a held auto transition
+      // was waiting for — it may fire again on the next evaluation.
+      await clearAutoFailures({ collection: row.collection, item: String(row.item) })
 
       const updated = (await db('nivaro_erp_submissions').where({ id }).first()) as ErpSubmissionRow
 
@@ -655,6 +659,9 @@ export async function erpSubmissionsRoutes(app: FastifyInstance) {
           // #628; the obligation moves with it) — a bulk-recovered submission
           // can neither hide from runRetryPass nor leave an obligation behind.
           const outcome = await retrySubmissionRow(row, req.user?.id ?? null)
+          // #1217: a person retrying the push is the retry a held auto transition
+          // was waiting for — it may fire again on the next evaluation.
+          await clearAutoFailures({ collection: row.collection, item: String(row.item) })
           results.push({ id, status: outcome.status, error: outcome.error ?? undefined })
         } catch (err) {
           results.push({

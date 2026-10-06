@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { ensureAutoWatch } from '../services/auto-watch.js'
+import { findRecordInstance } from '../services/branch-instances.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { renderNotificationTemplate } from '../services/notification-templates.js'
@@ -38,12 +39,16 @@ const MENTION_RE = /(@[a-zA-Z0-9._-]+)/g
 const OWNERS_MENTION_RE = /(^|\s)@owners\b/i
 
 async function resolveOwnerMentions(collection: string, item: string): Promise<MentionUserRow[]> {
-  const instance = (await db('nivaro_workflow_instances')
-    .where({ collection, item: String(item) })
-    .whereNull('completed_at')
-    .orderBy('started_at', 'desc')
-    .first('id', 'current_state')) as { id: string; current_state: string } | undefined
-  if (!instance?.current_state) return []
+  // The record's own instance (never a parallel-branch child), open only.
+  const instance = await findRecordInstance<{
+    id: string
+    collection: string
+    item: string
+    template: string
+    current_state: string | null
+    completed_at: Date | null
+  }>(collection, item)
+  if (!instance?.current_state || instance.completed_at) return []
   const owners = await resolveStateOwners(
     instance.current_state,
     instance.id,

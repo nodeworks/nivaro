@@ -492,6 +492,9 @@ export type PipelineHistoryEntry = {
   transition_label?: string | null
   transition_text?: string | null
   origin?: string | null
+  /** #645 — the out-of-office owner a delegate's move stood in for. */
+  on_behalf_of?: string | null
+  on_behalf_of_name?: string | null
 }
 
 export type PipelineStateInfo = {

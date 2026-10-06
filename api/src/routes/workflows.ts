@@ -4,7 +4,8 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chainFields } from '../services/chain-columns.js'
-import { can } from '../services/permissions.js'
+import { assertInstanceAccess, InstanceAccessError } from '../services/instance-guard.js'
+import { writeStartHistory } from '../services/instance-start.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 import { syncStateField } from '../services/workflow-transitions.js'
 
@@ -123,11 +124,25 @@ async function instanceAccessDenied(
   req: FastifyRequest,
   instance: WorkflowInstance,
   action: 'read' | 'update'
-): Promise<boolean> {
-  if (req.isAdmin) return false
-  if (instance.collection.startsWith('nivaro_')) return true
-  if (!req.user) return true
-  return !(await can(req.user, action, instance.collection))
+): Promise<InstanceAccessError | null> {
+  // The shared start/advance gate: permission on the collection AND the
+  // caller can see the record (row filter, User Scopes); addendums judged on
+  // their parent. A branch child shares its parent's record, so the same
+  // check covers split, branch transitions and the join they trigger.
+  try {
+    await assertInstanceAccess(
+      req.user,
+      req.isAdmin ?? false,
+      instance.collection,
+      String(instance.item),
+      undefined,
+      action
+    )
+    return null
+  } catch (err) {
+    if (err instanceof InstanceAccessError) return err
+    throw err
+  }
 }
 
 function formatStateLite(s: WorkflowState) {
@@ -371,9 +386,8 @@ export async function workflowsRoutes(app: FastifyInstance) {
       | WorkflowInstance
       | undefined
     if (!instance) return reply.code(404).send({ error: 'Instance not found' })
-    if (await instanceAccessDenied(req, instance, 'update')) {
-      return reply.code(403).send({ error: 'You do not have permission to modify this record' })
-    }
+    const denied = await instanceAccessDenied(req, instance, 'update')
+    if (denied) return reply.code(denied.statusCode).send({ error: denied.message })
     if (instance.completed_at) {
       return reply.code(400).send({ error: 'Workflow is already completed' })
     }
@@ -412,14 +426,14 @@ export async function workflowsRoutes(app: FastifyInstance) {
         started_at: now,
         completed_at: coerceBool(state.is_terminal) ? now : null
       })
-      await db('nivaro_workflow_history').insert({
-        ...(await chainFields('nivaro_workflow_history')),
-        instance: childId,
-        transition: null,
-        from_state: null,
-        to_state: state.id,
-        user: req.user?.id ?? null,
+      // A branch child starts in its branch state; the JSON comment is what the
+      // join engine reads back, so it stays.
+      await writeStartHistory({
+        instanceId: childId,
+        stateId: String(state.id),
+        userId: req.user?.id ?? null,
         comment: JSON.stringify({ action: 'branch', parent: id }),
+        origin: 'machine',
         timestamp: now
       })
     }
@@ -473,9 +487,8 @@ export async function workflowsRoutes(app: FastifyInstance) {
       | WorkflowInstance
       | undefined
     if (!instance) return reply.code(404).send({ error: 'Instance not found' })
-    if (await instanceAccessDenied(req, instance, 'read')) {
-      return reply.code(403).send({ error: 'You do not have permission to read this record' })
-    }
+    const denied = await instanceAccessDenied(req, instance, 'read')
+    if (denied) return reply.code(denied.statusCode).send({ error: denied.message })
 
     const [states, transitions] = await Promise.all([
       db<WorkflowState>('nivaro_workflow_states')
@@ -582,9 +595,8 @@ export async function workflowsRoutes(app: FastifyInstance) {
       | WorkflowInstance
       | undefined
     if (!instance) return reply.code(404).send({ error: 'Instance not found' })
-    if (await instanceAccessDenied(req, instance, 'update')) {
-      return reply.code(403).send({ error: 'You do not have permission to modify this record' })
-    }
+    const denied = await instanceAccessDenied(req, instance, 'update')
+    if (denied) return reply.code(denied.statusCode).send({ error: denied.message })
     if (instance.completed_at) {
       return reply.code(400).send({ error: 'This branch is already completed' })
     }
