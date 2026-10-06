@@ -5,6 +5,7 @@ import { logActivity } from '../services/activity.js'
 import { selectInChunks } from '../services/db-batch.js'
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
+import { canSeeRecord, visibleRecordIds } from '../services/sla-visibility.js'
 
 interface SlaRule {
   id: number
@@ -888,19 +889,10 @@ export async function slaRoutes(app: FastifyInstance) {
     if (!collection || !item)
       return reply.code(400).send({ error: 'collection and item are required' })
     // Acking silences the escalation ladder — only someone who can actually
-    // SEE the record may do it. readOne is the full gate (RBAC, row filters,
-    // user scopes, tree permissions), so a record the caller can't open can't
-    // be quietly un-escalated either.
-    // readOne returns NULL for rows the caller cannot see (it does not throw
-    // for row-filter/scope misses) — both the throw AND the null are denials.
-    try {
-      const { readOne } = await import('../services/items.js')
-      const visible = await readOne(req.user!, collection, item, undefined, ['id'])
-      if (!visible) {
-        return reply.code(403).send({ error: 'You cannot acknowledge a record you cannot read' })
-      }
-    } catch {
-      return reply.code(403).send({ error: 'You cannot acknowledge a record you cannot read' })
+    // SEE the record may do it (RBAC, row filters, User Scopes, tree
+    // permissions); a record outside that answers like one that isn't there.
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
     }
     const status = await computeStatus(collection, item)
     if (!status || status.status !== 'breached' || !status.sla_rule) {
@@ -946,7 +938,10 @@ export async function slaRoutes(app: FastifyInstance) {
       (g) => g.parentCollection === q.collection && g.aliasField === q.field
     )
     if (!grid) return reply.send({ data: null })
-    if (!(await can(req.user!, 'read', grid.childCollection))) {
+    if (
+      !(await can(req.user!, 'read', grid.childCollection)) ||
+      !(await canSeeRecord(req.user!, q.collection, String(q.parent_id), { isAdmin: req.isAdmin }))
+    ) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
     const aging = await lineAgingFor(grid, String(q.parent_id))
@@ -966,6 +961,9 @@ export async function slaRoutes(app: FastifyInstance) {
   // record leaves the state. Written as an activity note on the record.
   app.post('/override/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
+    }
     const input = validateOverrideInput((req.body ?? {}) as Record<string, unknown>)
     if ('error' in input) return reply.code(400).send({ error: input.error })
     if (!(await slaOverridesReady())) {
@@ -1014,6 +1012,9 @@ export async function slaRoutes(app: FastifyInstance) {
   // DELETE /sla/override/:collection/:item — back to the rule's own clock.
   app.delete('/override/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
+    }
     if (!(await slaOverridesReady())) return reply.code(404).send({ error: 'No override' })
     const gate = await canAdjustClock(req, collection, item)
     if (!gate.ok)
@@ -1050,6 +1051,9 @@ export async function slaRoutes(app: FastifyInstance) {
 
   app.get('/status/:collection/:item', { preHandler: requireAuth }, async (req, reply) => {
     const { collection, item } = req.params as { collection: string; item: string }
+    if (!(await canSeeRecord(req.user!, collection, item, { isAdmin: req.isAdmin }))) {
+      return reply.code(404).send({ error: 'Record not found' })
+    }
     const result = await computeStatus(collection, item)
     // Who may adjust this record's clock — asked only when a rule applies.
     const canAdjust =
@@ -1095,7 +1099,13 @@ export async function slaRoutes(app: FastifyInstance) {
       .map((s) => s.trim())
       .filter(Boolean)
 
-    const results = await Promise.all(ids.map((id) => computeStatus(collection, id)))
+    // Records the caller cannot see are simply left out.
+    const visible = await visibleRecordIds(req.user!, collection, ids.slice(0, BATCH_CAP), {
+      isAdmin: req.isAdmin
+    })
+    const results = await Promise.all(
+      ids.filter((id) => visible.has(id)).map((id) => computeStatus(collection, id))
+    )
     return reply.send({ data: results })
   })
 
@@ -1113,10 +1123,16 @@ export async function slaRoutes(app: FastifyInstance) {
     const allowed = await can(req.user!, 'read', body.collection)
     if (!allowed) return reply.code(403).send({ error: 'Forbidden' })
 
-    const ids = body.ids
+    const requested = body.ids
       .slice(0, BATCH_CAP)
       .map((v) => String(v))
       .filter(Boolean)
+    // Row filters / User Scopes: ids the caller cannot see are omitted, as if
+    // they had no SLA at all.
+    const visible = await visibleRecordIds(req.user!, body.collection, requested, {
+      isAdmin: req.isAdmin
+    })
+    const ids = requested.filter((id) => visible.has(id))
 
     const data = await computeStatusBatch(body.collection, ids)
     return reply.send({ data })
