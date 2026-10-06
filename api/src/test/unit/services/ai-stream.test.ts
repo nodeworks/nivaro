@@ -7,6 +7,7 @@ import { describe, expect, it } from 'vitest'
 // what the non-streamed translation produces for the same answer.
 
 import {
+  abortError,
   assembleMessage,
   createMessageAssembler,
   eventsOfMessage,
@@ -122,6 +123,61 @@ describe('openAiChunkToEvents', () => {
     expect(message.content).toEqual([
       { type: 'tool_use', id: 'call_1', name: 'aggregate', input: { collection: 'regions' } }
     ])
+  })
+
+  it('reads a tool call as tool_use when the gateway never sets finish_reason', () => {
+    // Some gateways send `finish_reason: null` on EVERY chunk, the real stop
+    // reason only in a vendor field — the blocks decide, or the loop reads
+    // the tool round as the final answer and the reply comes back empty.
+    const state = openAiStreamState('m')
+    const all: Ev[] = []
+    const chunks = [
+      {
+        choices: [
+          {
+            finish_reason: null,
+            delta: {
+              role: 'assistant',
+              tool_calls: [{ id: 't1', index: 0, function: { name: 'aggregate', arguments: '' } }]
+            }
+          }
+        ]
+      },
+      {
+        choices: [
+          {
+            finish_reason: null,
+            delta: { tool_calls: [{ index: 0, function: { name: '', arguments: '{"a":1}' } }] }
+          }
+        ]
+      },
+      { choices: [{ finish_reason: null, delta: {} }] },
+      {
+        choices: [{ finish_reason: null, delta: {} }],
+        usage: { prompt_tokens: 9, completion_tokens: 4 }
+      }
+    ]
+    for (const c of chunks) all.push(...(openAiChunkToEvents(c as never, state) as unknown as Ev[]))
+    all.push(...(openAiStreamEnd(state) as unknown as Ev[]))
+    const message = assembleMessage(all as never) as unknown as Ev
+    expect(message.stop_reason).toBe('tool_use')
+    expect((message.usage as Ev).output_tokens).toBe(4)
+    expect(message.content).toEqual([
+      { type: 'tool_use', id: 't1', name: 'aggregate', input: { a: 1 } }
+    ])
+  })
+
+  it('a text-only answer with no finish_reason is still end_turn', () => {
+    const state = openAiStreamState('m')
+    const all: Ev[] = [
+      ...(openAiChunkToEvents(
+        { choices: [{ finish_reason: null, delta: { content: 'hi' } }] },
+        state
+      ) as unknown as Ev[]),
+      ...(openAiStreamEnd(state) as unknown as Ev[])
+    ]
+    const message = assembleMessage(all as never) as unknown as Ev
+    expect(message.stop_reason).toBe('end_turn')
   })
 
   it('closes the text block before a tool call starts', () => {
@@ -371,6 +427,31 @@ describe('makeMessageStream', () => {
     ).rejects.toThrow('cut')
     await expect(stream.finalMessage()).rejects.toThrow('cut')
     expect(errors).toBe(1)
+  })
+
+  it('hands onError the partial message a cut stream had assembled', async () => {
+    let partial: Ev | null = null
+    const stream = makeMessageStream(
+      (async function* () {
+        yield { type: 'message_start', message: { id: 'p', model: 'x' } } as never
+        yield {
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'half an ans' }
+        } as never
+        throw abortError()
+      })(),
+      () => undefined,
+      { onError: (_err, m) => (partial = m as unknown as Ev) }
+    )
+    await expect(
+      (async () => {
+        for await (const _ of stream) {
+          /* consume */
+        }
+      })()
+    ).rejects.toThrow('stopped')
+    expect(((partial as unknown as Ev)?.content as Ev[])[0]).toMatchObject({ text: 'half an ans' })
   })
 })
 

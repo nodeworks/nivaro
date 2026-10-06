@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import {
   type AiMessageStream,
   type AiStreamEvent,
+  isAbortError,
   makeMessageStream,
   type StreamOptions
 } from './ai-stream.js'
@@ -211,7 +212,13 @@ export function loggedStream(
     }
     return makeMessageStream(source.events, source.abort, {
       onFinal: (m) => call.ok(m),
-      onError: (err) => call.fail(err)
+      // A stream the person STOPPED is not a provider failure: it logs as ok
+      // with what had arrived, stop_reason 'stopped', and no token figures
+      // (the usage rides the last chunk, which never came).
+      onError: (err, partial) =>
+        isAbortError(err)
+          ? call.ok({ ...partial, stop_reason: 'stopped', usage: undefined } as never)
+          : call.fail(err)
     })
   }
 }

@@ -150,8 +150,9 @@ export function assembleMessage(events: Iterable<AiStreamEvent>): Anthropic.Mess
 export interface MessageStreamHooks {
   /** Runs once with the assembled message after the last event. */
   onFinal?: (message: Anthropic.Message) => void
-  /** Runs once when iteration throws (the consumer still sees the throw). */
-  onError?: (err: unknown) => void
+  /** Runs once when iteration throws (the consumer still sees the throw);
+   *  `partial` is what had been assembled by then — an abort still has text. */
+  onError?: (err: unknown, partial: Anthropic.Message) => void
 }
 
 /**
@@ -193,7 +194,7 @@ export function makeMessageStream(
       resolveFinal(m)
     } catch (err) {
       try {
-        hooks.onError?.(err)
+        hooks.onError?.(err, assembler.finish())
       } catch {
         /* same */
       }
@@ -291,6 +292,9 @@ export interface OpenAiStreamState {
   textIndex: number | null
   /** openai tool_call index → our block index */
   tools: Map<number, number>
+  /** a tool block was opened at some point — the stop reason follows it when
+   *  the gateway never says (some send `finish_reason: null` on every chunk) */
+  hadTools: boolean
   finishReason: string | null
   usage: OpenAiChunk['usage'] | null
 }
@@ -304,6 +308,7 @@ export function openAiStreamState(model: string): OpenAiStreamState {
     nextIndex: 0,
     textIndex: null,
     tools: new Map(),
+    hadTools: false,
     finishReason: null,
     usage: null
   }
@@ -364,6 +369,7 @@ export function openAiChunkToEvents(chunk: OpenAiChunk, state: OpenAiStreamState
       }
       bi = state.nextIndex++
       state.tools.set(oi, bi)
+      state.hadTools = true
       out.push(
         ev({
           type: 'content_block_start',
@@ -420,8 +426,11 @@ export function openAiStreamEnd(state: OpenAiStreamState): AiStreamEvent[] {
     state.finished = true
     out.push(...closeBlocks(state))
   }
+  // A message that called a tool stopped FOR the tool, whatever the gateway
+  // said (or did not say) in `finish_reason`; only a length cut outranks it.
   const fr = state.finishReason
-  const stop_reason = fr === 'tool_calls' ? 'tool_use' : fr === 'length' ? 'max_tokens' : 'end_turn'
+  const stop_reason =
+    fr === 'length' ? 'max_tokens' : fr === 'tool_calls' || state.hadTools ? 'tool_use' : 'end_turn'
   const u = state.usage
   out.push(
     ev({
