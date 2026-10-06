@@ -83,7 +83,6 @@ export async function runOneCheck(
   }
 }
 
-/** The stored baseline of THIS run, or the error that stands in for it. Never another run's. */
 /** Sets row.legacy from a check's legacyLink; a throwing link leaves that row unset. */
 export function attachLegacyLinks(
   check: { legacyLink?: (key: string) => string | undefined },
@@ -100,6 +99,7 @@ export function attachLegacyLinks(
   }
 }
 
+/** The stored baseline of THIS run, or the error that stands in for it. Never another run's. */
 export function pickBaseline(side: {
   rows: QualityRow[] | null
   error: string | null
