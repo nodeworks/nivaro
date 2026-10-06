@@ -13,6 +13,9 @@
  * collection is unknown, unreadable, or the record is gone).
  */
 
+import { scopeAllows } from './permissions.js'
+import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
+
 /** Fields the link row itself carries — never forwarded to the item read. */
 const LINK_KEYS = new Set(['id', 'item_id', 'item'])
 
@@ -85,4 +88,37 @@ export function m2aItemFields(requested: string[], discriminator: string): strin
  *  junction rows store either case. */
 export function m2aIdKey(id: unknown): string {
   return String(id).toUpperCase()
+}
+
+/**
+ * May a caller whose policy field list for the parent collection is
+ * `allowedFields` read the to-many relation `alias`? null = every field.
+ * The relation name is a field like any other: a list that leaves it out
+ * reads none of its rows.
+ */
+export function aliasReadable(alias: string, allowedFields: string[] | null): boolean {
+  if (allowedFields === null) return true
+  return allowedFields.includes('*') || allowedFields.includes(alias)
+}
+
+/**
+ * The person columns an M2A link may answer: the directory projection GET
+ * /users gives a non-admin, narrowed to what was asked. A column outside it
+ * (static_token, phone, preferences ...) is never read, whoever asks.
+ */
+export function peopleFields(itemFields: string[]): string[] {
+  const directory = DIRECTORY_USER_COLS as readonly string[]
+  if (itemFields.includes('*')) return [...directory]
+  return ['id', ...itemFields.filter((f) => f !== 'id' && directory.includes(f))]
+}
+
+/**
+ * May a caller read people through a link at all? Only what GET /users would
+ * allow: an API key whose scopes leave out nivaro_users gets none, an
+ * administrator's key included.
+ */
+export function peopleReadable(
+  apiKeyScopes: Array<{ collection: string; actions: string[] }> | undefined
+): boolean {
+  return !apiKeyScopes || scopeAllows(apiKeyScopes, 'read', 'nivaro_users')
 }

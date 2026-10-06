@@ -49,9 +49,11 @@ import {
   updateOne,
   upsertInfoOf
 } from './items.js'
+import { peopleReadable } from './m2a-expand.js'
 import { boundCollections, resolveRecordInstanceGql } from './record-instance.js'
 import { timedGate, timedResolver } from './traffic-taps/graphql-resolvers.js'
 import { runUnit } from './unit-of-work.js'
+import { applyDirectoryListingRules } from './user-directory-cols.js'
 import { RECORD_ORIGINS, translateVirtualKeys } from './virtual-filters.js'
 import {
   executeWorkflowTransition,
@@ -396,6 +398,15 @@ function wrapWorkflowError(err: unknown): never {
     })
   }
   throw err
+}
+
+/**
+ * A to-many field is a field of its parent collection: a read policy whose
+ * field list leaves it out reads none of its rows (the REST rule, #1220).
+ */
+async function parentFieldHidden(ctx: GQLContext, collection: string, field: string) {
+  const gate = await timedGate(ctx, collection, () => nestedGate(ctx, collection))
+  return !gate.allowed || (gate.fields !== null && !gate.fields.has(field))
 }
 
 // ─── Schema builder ───────────────────────────────────────────────────────────
@@ -873,6 +884,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   ) => {
                     const parentId = (source as Record<string, unknown>)['id']
                     if (parentId == null) return []
+                    if (await parentFieldHidden(ctx, colName, f.field)) return []
                     const q = db(info.junction)
                       .where(info.fkToParent, parentId as string | number)
                       .orderBy('id', 'asc')
@@ -896,22 +908,17 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       if (!type) continue
                       const rows = new Map<string, Record<string, unknown>>()
                       if (userTypeFor(c)) {
-                        // People hang off a record the caller already read; the
-                        // User type carries only what a directory shows.
-                        const users = (await db('nivaro_users')
+                        // People hang off a record the caller already read. What
+                        // GET /users would give the same caller and no more: the
+                        // directory columns and listing rules, and nothing through
+                        // a key whose scopes leave nivaro_users out.
+                        if (!peopleReadable((ctx.user as User | undefined)?.api_key_scopes))
+                          continue
+                        const uq = db('nivaro_users')
                           .whereIn('id', [...ids])
-                          .where({ is_redacted: false })
-                          .select(
-                            'id',
-                            'email',
-                            'first_name',
-                            'last_name',
-                            'status',
-                            'last_access',
-                            'created_at',
-                            'updated_at'
-                          )
-                          .catch(() => [])) as Array<Record<string, unknown>>
+                          .select('id', 'email', 'first_name', 'last_name', 'status')
+                        applyDirectoryListingRules(uq)
+                        const users = (await uq.catch(() => [])) as Array<Record<string, unknown>>
                         for (const u of users) {
                           rows.set(String(u.id).toUpperCase(), {
                             id: u.id,
@@ -919,9 +926,9 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                             firstName: u.first_name,
                             lastName: u.last_name,
                             status: u.status,
-                            lastAccess: u.last_access,
-                            createdAt: u.created_at,
-                            updatedAt: u.updated_at,
+                            lastAccess: null,
+                            createdAt: null,
+                            updatedAt: null,
                             __typename: type.name
                           })
                         }
@@ -981,6 +988,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                     async (source: unknown, args: Record<string, unknown>, ctx: GQLContext) => {
                       const parentId = (source as Record<string, unknown>)['id']
                       if (parentId == null) return []
+                      if (await parentFieldHidden(ctx, colName, f.field)) return []
                       const gate = await timedGate(ctx, otherCol, () => nestedGate(ctx, otherCol))
                       const q = db(`${info.junction} as _j`)
                         .join(otherCol, `${otherCol}.id`, `_j.${info.fkToOther}`)
@@ -1023,6 +1031,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                     async (source: unknown, args: Record<string, unknown>, ctx: GQLContext) => {
                       const parentId = (source as Record<string, unknown>)['id']
                       if (parentId == null) return []
+                      if (await parentFieldHidden(ctx, colName, f.field)) return []
                       const gate = await timedGate(ctx, manyCol, () => nestedGate(ctx, manyCol))
                       const q = db(manyCol)
                         .where(`${manyCol}.${info.manyField}`, parentId as string | number)
@@ -1539,19 +1548,15 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         // #1222: with strict mutations on, a missing id is an error, not null.
-        const strict = await graphqlStrictMutations()
-        if (strict) {
-          const missing = await missingIds(name, [id])
+        if (await graphqlStrictMutations()) {
+          const missing = await missingIds(ctx.user, name, [id])
           if (missing.length > 0) throw notFoundError(name, missing)
         }
-        let updated: unknown
         try {
-          updated = await updateOne(ctx.user, name, id, data, ctx.req)
+          return await updateOne(ctx.user, name, id, data, ctx.req)
         } catch (e) {
           wrapError(e)
         }
-        if (strict && updated == null) throw notFoundError(name, [String(id)])
-        return updated
       }
     }
 
@@ -1564,7 +1569,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         if (await graphqlStrictMutations()) {
-          const missing = await missingIds(name, [id])
+          const missing = await missingIds(ctx.user, name, [id])
           if (missing.length > 0) throw notFoundError(name, missing)
         }
         try {
@@ -1648,7 +1653,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         })
       // #1222: name every missing id up front rather than the first one hit.
       if (await graphqlStrictMutations()) {
-        const missing = await missingIds(name, changes.map((c) => c.id).filter(Boolean))
+        const missing = await missingIds(ctx.user, name, changes.map((c) => c.id).filter(Boolean))
         if (missing.length > 0) throw notFoundError(name, missing)
       }
       const results: unknown[] = []
@@ -1740,7 +1745,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
             extensions: { code: 'UNAUTHENTICATED' }
           })
         if (await graphqlStrictMutations()) {
-          const missing = await missingIds(name, ids)
+          const missing = await missingIds(ctx.user, name, ids)
           if (missing.length > 0) throw notFoundError(name, missing)
         }
         try {

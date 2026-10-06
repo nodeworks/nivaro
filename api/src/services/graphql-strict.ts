@@ -5,7 +5,8 @@
  * does not exist answered 200 with null data — a partner could not tell "done"
  * from "there was nothing there". With `nivaro_settings.graphql_strict_mutations`
  * on, such a call answers a GraphQL error `NOT_FOUND` (status 404 in the
- * extensions) naming the missing ids. Off by default (migration 400) so a
+ * extensions) naming the ids the caller cannot see — absent and not visible
+ * answer the same. Off by default (migration 400) so a
  * partner can be warned before the answer changes.
  *
  * Read with a 30 s cache, cleared by the settings PATCH; a database behind
@@ -14,6 +15,8 @@
 import { db } from '../db/index.js'
 import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
+import type { User } from '../types.js'
+import { readItems } from './items.js'
 
 const TTL = 30_000
 const cache = new Map<string, { at: number; on: boolean }>()
@@ -43,29 +46,36 @@ export async function graphqlStrictMutations(): Promise<boolean> {
 }
 
 /**
- * Which of `ids` name no row in `collection`. Ids compare as strings,
- * case-insensitively (uniqueidentifiers come back upper-case). A probe that
- * cannot run (an id the key column cannot hold) reports nothing missing —
- * the write path then answers with its own refusal.
+ * Which of `ids` the CALLER cannot see in `collection` — read as the caller
+ * through readItems, so permission, row filter, User Scopes and key scopes all
+ * apply. A record that is absent and a record the caller may not see answer
+ * the same way, so the check is never an existence oracle; it never reads the
+ * table raw. A caller who cannot read the collection at all, or an id the key
+ * column cannot hold, sees none of them (fail closed — nothing is written).
  */
 export async function missingIds(
+  user: User,
   collection: string,
   ids: Array<string | number>
 ): Promise<string[]> {
   const wanted = [...new Set(ids.map((i) => String(i)))].filter((i) => i !== '')
   if (wanted.length === 0) return []
-  const present = new Set<string>()
-  try {
-    for (let i = 0; i < wanted.length; i += 1000) {
-      const rows = (await db(collection)
-        .whereIn('id', wanted.slice(i, i + 1000))
-        .select('id')) as Array<{ id: unknown }>
-      for (const r of rows) present.add(String(r.id).toUpperCase())
+  const seen = new Set<string>()
+  for (let i = 0; i < wanted.length; i += 500) {
+    const chunk = wanted.slice(i, i + 500)
+    try {
+      const page = (await readItems(user, collection, {
+        fields: ['id'],
+        filter: { id: { _in: chunk } },
+        limit: chunk.length,
+        count: false
+      })) as { data: Array<Record<string, unknown>> }
+      for (const r of page.data) seen.add(String(r.id).toUpperCase())
+    } catch {
+      // Unreadable collection, unreadable key: none of this chunk is visible.
     }
-  } catch {
-    return []
   }
-  return wanted.filter((i) => !present.has(i.toUpperCase()))
+  return wanted.filter((i) => !seen.has(i.toUpperCase()))
 }
 
 /** The GraphQL error a strict mutation answers for ids that do not exist. */

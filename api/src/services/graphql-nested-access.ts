@@ -1,7 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
+import { applyRowFilter, can, getAllowedFields, getRowFilter, scopeAllows } from './permissions.js'
 import {
   applyScopeEnforcement,
   getUserScopeEnforcement,
@@ -57,6 +57,9 @@ const PARENT_GATED = new Set(['nivaro_files'])
 const perRequest = new WeakMap<object, Map<string, Promise<NestedGate>>>()
 
 async function compile(user: User, isAdmin: boolean, collection: string): Promise<NestedGate> {
+  // An API key's scopes narrow whatever its owner may read, an administrator
+  // included — the same rule can() applies to every REST read.
+  if (user.api_key_scopes && !scopeAllows(user.api_key_scopes, 'read', collection)) return DENY
   const keyRestricted = (user.api_key_scope_restrictions ?? []).length > 0
   if (isAdmin && !keyRestricted) return OPEN
   if (PARENT_GATED.has(collection)) return OPEN

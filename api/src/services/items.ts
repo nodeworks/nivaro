@@ -34,7 +34,15 @@ import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import { enforceContracts } from './integration-contracts.js'
 import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
-import { m2aIdKey, m2aItemFields, m2aReadCollection, parseAllowedList } from './m2a-expand.js'
+import {
+  aliasReadable,
+  m2aIdKey,
+  m2aItemFields,
+  m2aReadCollection,
+  parseAllowedList,
+  peopleFields,
+  peopleReadable
+} from './m2a-expand.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
@@ -67,7 +75,7 @@ import { applySectionLocks } from './section-locks.js'
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
-import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
+import { applyDirectoryListingRules } from './user-directory-cols.js'
 import { applyUserScopesToQuery } from './user-scopes.js'
 import { enforceValidationRules } from './validation-rules.js'
 import {
@@ -1091,16 +1099,19 @@ async function expandRelations(
 
     // To-many aliases on the related record (`project.lines.amount`,
     // `request.internal_contact.*`) — read after the batch, as the caller.
-    const subToMany = await planToMany(
+    const subPlanned = await planToMany(
       relCollection,
       await getRelsForCollection(relCollection),
       subNested
     )
-    for (const plan of subToMany) {
+    for (const plan of subPlanned) {
       delete subNested[plan.alias]
       subDirect = subDirect.filter((f) => f !== plan.alias)
     }
-    if (subToMany.length > 0 && subDirect.length === 0) subDirect = ['id']
+    if (subPlanned.length > 0 && subDirect.length === 0) subDirect = ['id']
+    // The relation name is a field of the related collection: a read policy
+    // whose field list leaves it out reads none of its rows.
+    const subToMany = subPlanned.filter((p) => aliasReadable(p.alias, relAllowedFields))
 
     // Column-level permission filtering
     let selectCols: string[] =
@@ -2826,22 +2837,17 @@ async function expandM2A(
       const ids = [...idSet]
       try {
         if (c === 'nivaro_users') {
-          const cols: string[] =
-            itemFields[0] === '*'
-              ? [...DIRECTORY_USER_COLS]
-              : [
-                  ...new Set([
-                    'id',
-                    ...itemFields.filter((f) =>
-                      (DIRECTORY_USER_COLS as readonly string[]).includes(f)
-                    )
-                  ])
-                ]
+          // What GET /users gives this caller and nothing more: the directory
+          // projection, the directory's listing rules, and never through a key
+          // whose scopes leave nivaro_users out.
+          if (!peopleReadable(user.api_key_scopes)) continue
+          const cols = peopleFields(itemFields)
           for (let i = 0; i < ids.length; i += 1000) {
-            const us = (await db('nivaro_users')
+            const q = db('nivaro_users')
               .whereIn('id', ids.slice(i, i + 1000))
-              .where('is_redacted', false)
-              .select(cols)) as Array<Record<string, unknown>>
+              .select(cols)
+            applyDirectoryListingRules(q)
+            const us = (await q) as Array<Record<string, unknown>>
             for (const u of us) rows.set(m2aIdKey(u.id), u)
           }
         } else {
@@ -3119,12 +3125,14 @@ export async function readItems(
 
   // To-many aliases named with a dotted path (`lines.amount`) are read after
   // the page, as the caller. Planned here, before the alias names are stripped.
-  const toMany = await planToMany(collection, rels, nestedFieldMap)
-  for (const plan of toMany) {
+  const plannedToMany = await planToMany(collection, rels, nestedFieldMap)
+  for (const plan of plannedToMany) {
     delete nestedFieldMap[plan.alias]
     selectFields = selectFields.filter((f) => f !== plan.alias)
   }
-  if (toMany.length > 0) {
+  // A relation outside the caller's field list for this collection reads nothing.
+  const toMany = plannedToMany.filter((p) => aliasReadable(p.alias, allowedFields))
+  if (plannedToMany.length > 0) {
     if (selectFields.length === 0) selectFields = ['id']
     else if (selectFields[0] !== '*' && !selectFields.includes('id'))
       selectFields = ['id', ...selectFields]
@@ -3717,12 +3725,14 @@ export async function readOne(
 
   // To-many aliases named with a dotted path — see readItems.
   const oneRels = await getRelsForCollection(collection)
-  const toMany = await planToMany(collection, oneRels, nestedFieldMap)
-  for (const plan of toMany) {
+  const plannedToMany = await planToMany(collection, oneRels, nestedFieldMap)
+  for (const plan of plannedToMany) {
     delete nestedFieldMap[plan.alias]
     selectCols = selectCols.filter((f) => f !== plan.alias)
   }
-  if (toMany.length > 0) {
+  // A relation outside the caller's field list for this collection reads nothing.
+  const toMany = plannedToMany.filter((p) => aliasReadable(p.alias, allowedFields))
+  if (plannedToMany.length > 0) {
     if (selectCols.length === 0) selectCols = ['id']
     else if (selectCols[0] !== '*' && !selectCols.includes('id')) selectCols = ['id', ...selectCols]
   }

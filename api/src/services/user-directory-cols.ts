@@ -1,3 +1,5 @@
+import type { Knex } from 'knex'
+
 /**
  * What a NON-ADMIN may see of another user. The assignee/mention pickers that
  * every record form renders need a person directory, but the full USER_COLS set
@@ -21,3 +23,20 @@ export const DIRECTORY_USER_COLS = [
   'ooo_end',
   'delegate_id'
 ] as const
+
+/**
+ * The person directory's listing rules (GET /users for a non-admin, listUsers
+ * `directory`): people only (no integration or placeholder account), never a
+ * suspended or redacted account, never an anonymised or legacy placeholder
+ * row. Kept beside the projection so every reader of people applies both.
+ */
+export function applyDirectoryListingRules(qb: Knex.QueryBuilder): Knex.QueryBuilder {
+  return qb
+    .whereNull('account_kind')
+    .where((inner) => {
+      inner.where('status', '!=', 'suspended').orWhereNull('status')
+    })
+    .where('is_redacted', false)
+    .whereRaw(`email not like 'legacy-%'`)
+    .whereRaw(`email not like 'Redacted\\_%' escape '\\'`)
+}
