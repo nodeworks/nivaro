@@ -40,23 +40,25 @@ fragment TypeRef on __Type {
     ofType { kind name ofType { kind name ofType { kind name } } } } } } }
 }`
 
-const BUILTIN_SCALARS = {
+// Null-prototype maps: a server-sent name like `constructor` must not find
+// an inherited member.
+const BUILTIN_SCALARS = Object.assign(Object.create(null), {
   ID: 'string',
   String: 'string',
   Int: 'number',
   Float: 'number',
   Boolean: 'boolean'
-}
+})
 
 /** Custom scalars whose wire form is known; anything else is `unknown`. */
-const KNOWN_SCALARS = {
+const KNOWN_SCALARS = Object.assign(Object.create(null), {
   Date: 'string',
   DateTime: 'string',
   Timestamp: 'string',
   Time: 'string',
   BigInt: 'string',
   UUID: 'string'
-}
+})
 
 /** Names a generated type may not take: TS keywords, the globals the file
  *  uses, and the file's own helpers. A schema type with one of them gets a
@@ -161,11 +163,15 @@ const RESERVED = new Set([
   'GraphQLRequestError',
   'GraphQLClient',
   'createGraphQLClient',
+  'gqlRender',
+  'gqlDocument',
+  'globalThis',
   'DEFAULT_SELECTIONS'
 ])
 
 /** The TS name a GraphQL type is emitted under. */
 export function tsTypeName(name) {
+  if (!valid(name)) throw new Error(`Refusing to write the type name ${JSON.stringify(name)}`)
   return RESERVED.has(name) ? `${name}_` : name
 }
 
@@ -186,14 +192,34 @@ function isRequired(ref) {
   return ref.kind === 'NON_NULL'
 }
 
-const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/
+/**
+ * The only names the generator writes into code or into a GraphQL document.
+ * The introspection answer comes from a server and is untrusted: a type,
+ * field, argument, enum value or collection whose name fails this test is
+ * left out of the generated file (a reference to a dropped type reads as
+ * `unknown`; an operation that needs a dropped argument is dropped).
+ */
+export const GQL_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const valid = (name) => typeof name === 'string' && GQL_NAME.test(name)
+
 function prop(name) {
-  return IDENT.test(name) ? name : JSON.stringify(name)
+  return GQL_NAME.test(name) ? name : JSON.stringify(name)
+}
+
+/** Untrusted text made safe for the inside of a block comment: nothing can
+ *  end the comment, control characters and line separators are flattened. */
+export function commentText(text) {
+  return String(text ?? '')
+    .replace(/\r\n?|[\u2028\u2029]/g, '\n')
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: stripping them is the point
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, ' ')
+    .replace(/\*\//g, '* /')
+    .replace(/\/\*/g, '/ *')
 }
 
 function comment(text, indent = '') {
   if (!text) return ''
-  const clean = String(text).replace(/\*\//g, '* /').trim()
+  const clean = commentText(text).trim()
   if (!clean) return ''
   const lines = clean.split('\n')
   if (lines.length === 1) return `${indent}/** ${lines[0]} */\n`
@@ -240,9 +266,88 @@ function allowed(access, collection, method) {
   return !!(own?.has(action) || own?.has('*') || any?.has(action) || any?.has('*'))
 }
 
-export function analyzeSchema(schema, access = null) {
+/** The type reference with every name checked; null when a name fails. */
+function cleanRef(ref, depth = 0) {
+  if (!ref || typeof ref !== 'object' || depth > 10) return null
+  if (ref.kind === 'NON_NULL' || ref.kind === 'LIST') {
+    const inner = cleanRef(ref.ofType, depth + 1)
+    return inner ? { kind: ref.kind, name: null, ofType: inner } : null
+  }
+  return valid(ref.name) ? { kind: String(ref.kind), name: ref.name, ofType: null } : null
+}
+
+/**
+ * A copy of the introspection `__schema` holding only what may be written:
+ * valid names everywhere, references to dropped types removed, fields whose
+ * required argument was dropped removed. Descriptions stay — they are only
+ * ever written inside comments, through commentText().
+ */
+export function sanitizeSchema(schema) {
+  const kept = new Set(
+    (schema?.types ?? [])
+      .filter((t) => t && valid(t.name) && !t.name.startsWith('__'))
+      .map((t) => t.name)
+  )
+  for (const s of Object.keys(BUILTIN_SCALARS)) kept.add(s)
+  const ref = (r) => {
+    const c = cleanRef(r)
+    if (!c) return null
+    let n = c
+    while (n.ofType) n = n.ofType
+    return kept.has(n.name) ? c : null
+  }
+  const args = (list) => {
+    const out = []
+    for (const a of list ?? []) {
+      const type = valid(a?.name) ? ref(a.type) : null
+      if (type) out.push({ name: a.name, type, defaultValue: a.defaultValue ?? null })
+      else if (a?.type?.kind === 'NON_NULL' && a.defaultValue == null) return null
+    }
+    return out
+  }
+  const types = []
+  for (const t of schema?.types ?? []) {
+    if (!t || !kept.has(t.name) || t.name.startsWith('__')) continue
+    const fields = []
+    for (const f of t.fields ?? []) {
+      if (!valid(f?.name)) continue
+      const type = ref(f.type)
+      const a = args(f.args)
+      if (!type || !a) continue
+      fields.push({
+        name: f.name,
+        description: f.description ?? null,
+        isDeprecated: !!f.isDeprecated,
+        deprecationReason: f.deprecationReason ?? null,
+        args: a,
+        type
+      })
+    }
+    const inputFields = []
+    for (const f of t.inputFields ?? []) {
+      const type = valid(f?.name) ? ref(f.type) : null
+      if (type) inputFields.push({ name: f.name, type, defaultValue: f.defaultValue ?? null })
+    }
+    types.push({
+      kind: String(t.kind),
+      name: t.name,
+      description: t.description ?? null,
+      fields: t.fields ? fields : null,
+      inputFields: t.inputFields ? inputFields : null,
+      enumValues: t.enumValues ? t.enumValues.filter((v) => valid(v?.name)).map((v) => ({ name: v.name })) : null,
+      possibleTypes: t.possibleTypes
+        ? t.possibleTypes.filter((p) => kept.has(p?.name)).map((p) => ({ name: p.name }))
+        : null
+    })
+  }
+  const root = (r) => (r && valid(r.name) ? { name: r.name } : null)
+  return { queryType: root(schema?.queryType), mutationType: root(schema?.mutationType), types }
+}
+
+export function analyzeSchema(rawSchema, access = null) {
+  const schema = sanitizeSchema(rawSchema)
   const types = new Map()
-  for (const t of schema.types ?? []) if (t.name && !t.name.startsWith('__')) types.set(t.name, t)
+  for (const t of schema.types) types.set(t.name, t)
   const queryName = schema.queryType?.name ?? 'Query'
   const mutationName = schema.mutationType?.name ?? null
   const query = types.get(queryName)
@@ -285,7 +390,9 @@ function outTs(ref, types, nullable = true) {
       ? `Array<${outTs(ref.ofType, types)}>`
       : types.get(ref.name)?.kind === 'SCALAR' || BUILTIN_SCALARS[ref.name]
         ? scalarTs(ref.name)
-        : tsTypeName(ref.name)
+        : types.has(ref.name)
+          ? tsTypeName(ref.name)
+          : 'unknown'
   return nullable ? `${inner} | null` : inner
 }
 
@@ -295,7 +402,9 @@ function inTs(ref, types) {
   if (ref.kind === 'LIST') return `Array<${inTs(ref.ofType, types)}${nullableIn(ref.ofType)}>`
   return types.get(ref.name)?.kind === 'SCALAR' || BUILTIN_SCALARS[ref.name]
     ? scalarTs(ref.name)
-    : tsTypeName(ref.name)
+    : types.has(ref.name)
+      ? tsTypeName(ref.name)
+      : 'unknown'
 }
 function nullableIn(ref) {
   return ref.kind === 'NON_NULL' ? '' : ' | null'
@@ -435,7 +544,7 @@ export function generateGraphQLClient(schema, opts = {}) {
       '// biome-ignore-all lint: generated file\n' +
       '/**\n' +
       ' * Typed GraphQL client — generated by `nivaro types --graphql`.\n' +
-      ` * Source: ${opts.source ?? 'a Nivaro instance'}. Do not edit by hand; re-run the command.\n` +
+      ` * Source: ${commentText(opts.source ?? 'a Nivaro instance').replace(/\n/g, ' ')}. Do not edit by hand; re-run the command.\n` +
       ' *\n' +
       ' *   const cms = createGraphQLClient({ url: process.env.NIVARO_URL!, token })\n' +
       ' *   const rows = await cms.<collection>.list({ limit: 10 }, { id: true })\n' +
@@ -466,7 +575,7 @@ export function generateGraphQLClient(schema, opts = {}) {
     } else if (t.kind === 'OBJECT' || t.kind === 'INTERFACE') {
       const lines = (t.fields ?? []).map((f) => {
         const deprecated = f.isDeprecated
-          ? `  /** @deprecated ${String(f.deprecationReason ?? '').replace(/\*\//g, '* /')} */\n`
+          ? `  /** @deprecated ${commentText(f.deprecationReason).replace(/\n/g, ' ')} */\n`
           : comment(f.description, '  ')
         return `${deprecated}  ${prop(f.name)}: ${outTs(f.type, types)}`
       })
@@ -615,14 +724,14 @@ function renderOp(op, c, itemTs, types) {
   const vt = JSON.stringify(varTypes)
   if (!selectable) {
     const ret = resultOf(scalarTs(n.name) === 'unknown' ? 'unknown' : scalarTs(n.name))
-    return `${doc}      ${method}(${params.join(', ')}): Promise<${ret}> {\n        return run<${ret}>('${kind}', '${field.name}', ${vt}, ${varsExpr}, null)\n      },\n`
+    return `${doc}      ${method}(${params.join(', ')}): Promise<${ret}> {\n        return run<${ret}>('${kind}', ${JSON.stringify(field.name)}, ${vt}, ${varsExpr}, null)\n      },\n`
   }
   const defaultType = `(typeof DEFAULT_SELECTIONS)[${JSON.stringify(n.name)}]`
   params.push(`select?: S`)
   const ret = resultOf(`Selected<${retName}, S>`)
   return (
     `${doc}      ${method}<S extends Selection<${retName}> = ${defaultType}>(${params.join(', ')}): Promise<${ret}> {\n` +
-    `        return run<${ret}>('${kind}', '${field.name}', ${vt}, ${varsExpr}, (select ?? DEFAULT_SELECTIONS[${JSON.stringify(n.name)}]) as Record<string, unknown>)\n` +
+    `        return run<${ret}>('${kind}', ${JSON.stringify(field.name)}, ${vt}, ${varsExpr}, (select ?? DEFAULT_SELECTIONS[${JSON.stringify(n.name)}]) as Record<string, unknown>)\n` +
     '      },\n'
   )
 }

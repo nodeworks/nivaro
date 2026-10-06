@@ -10,7 +10,7 @@
  * Plain ESM so the CLI imports it directly and `node --test` covers it.
  */
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
-import { join, resolve } from 'node:path'
+import { isAbsolute, join, relative, resolve } from 'node:path'
 
 /** kebab-case: lowercase words joined by single hyphens, 2–64 characters. */
 const ID = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/
@@ -37,6 +37,9 @@ function camel(id) {
 
 /** The files, by name, for an extension called `id`. */
 export function scaffoldFiles(id) {
+  // The id is written into source text and a path: only a validated one.
+  const bad = validateExtensionId(id)
+  if (bad) throw new Error(bad)
   const label = id
     .split('-')
     .map((w) => w[0].toUpperCase() + w.slice(1))
@@ -198,8 +201,13 @@ deprecated kit member the extension read.
 export function writeScaffold(id, dir) {
   const bad = validateExtensionId(id)
   if (bad) throw new Error(bad)
+  if (typeof dir !== 'string' || dir.length === 0 || dir.includes('\0'))
+    throw new Error('--dir must be a directory path')
   const base = resolve(dir)
   const target = join(base, id)
+  // The extension lands exactly one level under --dir, never beside or above it.
+  const rel = relative(base, target)
+  if (rel !== id || isAbsolute(rel)) throw new Error(`Refusing to write outside ${base}`)
   if (existsSync(target)) throw new Error(`${target} already exists — pick another id or remove it`)
   mkdirSync(target, { recursive: true })
   const written = []

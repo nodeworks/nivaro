@@ -77,7 +77,9 @@ if (cmd === 'ext') {
   }
   const bad = validateExtensionId(id)
   if (bad) fail(bad, 1)
-  const dir = flag('dir') ? resolve(flag('dir')) : defaultExtensionsDir()
+  if (has('dir') && (!flag('dir') || flag('dir').startsWith('--')))
+    fail('--dir needs a directory path', 1)
+  const dir = has('dir') ? resolve(flag('dir')) : defaultExtensionsDir()
   let result
   try {
     result = writeScaffold(id, dir)

@@ -33,6 +33,34 @@ describe('ext init (#1302)', () => {
     assert.match(files['README.md'], /ctx\.hooks\.after/)
   })
 
+  it('never writes a hostile id into source or outside --dir', () => {
+    const hostile = [
+      "x'); process.exit(1); ('",
+      'x`${process.exit(1)}`',
+      '../escape',
+      'a/../../b',
+      '..',
+      'x\0y',
+      'x\nconst y = 1',
+      '/etc/passwd',
+      'acme\\orders'
+    ]
+    for (const id of hostile) {
+      assert.ok(validateExtensionId(id), `rejected: ${JSON.stringify(id)}`)
+      assert.throws(() => scaffoldFiles(id), /kebab-case|2–64/)
+    }
+    const dir = mkdtempSync(join(tmpdir(), 'nivaro-ext-h-'))
+    try {
+      for (const id of hostile) assert.throws(() => writeScaffold(id, join(dir, 'exts')))
+      assert.equal(existsSync(join(dir, 'exts')), false, 'nothing written for a refused id')
+      assert.equal(existsSync(join(dir, 'escape')), false)
+      assert.throws(() => writeScaffold('acme', ''), /--dir/)
+      assert.throws(() => writeScaffold('acme', 'a\0b'), /--dir/)
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
   it('refuses an existing directory and a bad id, writes a new one', () => {
     const dir = mkdtempSync(join(tmpdir(), 'nivaro-ext-'))
     try {
