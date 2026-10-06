@@ -285,6 +285,27 @@ export const pipelineOwnerMatrix: DocSection = {
     {
       type: 'note',
       text: 'Column filters (optional dimensions) can be left unset — the matrix shows "base-level" owners (groups with only required filter values). Set optional filters to see context-specific overrides.'
+    },
+    { type: 'h3', id: 'pipeline-owner-matrix-versions', text: 'Owner matrix versions' },
+    {
+      type: 'p',
+      text: 'The pipeline editor\'s "Owner matrix versions" card keeps the matrix recoverable. Before every owner change — a cell\'s filters, priority or WIP limit, a member or team added or removed, a dimension edited, a bulk add or an owner cleanup — the whole matrix is captured: dimensions, owner groups, members and team links. "Config versions" covers states, transitions and bindings; this card covers who owns them.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Diff compares a version with the live matrix cell by cell: filters, priority and WIP changes, people and teams added or removed, cells that exist on only one side, and dimension changes.',
+        "Restore makes the live matrix equal the version. It captures the current matrix first (so a restore can be undone), keeps every owner group's id, and writes only what differs. Cells whose state was deleted, people whose account is gone and deleted teams are skipped and counted.",
+        'Edits made by one person within two minutes share a version — it holds the matrix from before the burst. "Save a version now" takes a checkpoint at any moment.',
+        'The newest 30 versions are kept per template. Large matrices are stored compressed.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/pipelines/:id/owner-matrix/versions
+POST /api/pipelines/:id/owner-matrix/versions            { note? }  — checkpoint now
+GET  /api/pipelines/:id/owner-matrix/versions/:vid/diff  ?against=current|<vid>
+POST /api/pipelines/:id/owner-matrix/versions/:vid/restore`
     }
   ]
 }

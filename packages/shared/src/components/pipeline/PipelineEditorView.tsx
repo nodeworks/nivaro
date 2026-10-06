@@ -59,6 +59,7 @@ import { Switch } from '../ui/switch'
 import { Textarea } from '../ui/textarea'
 import { FieldPicker, type PickedField } from './FieldPicker'
 import { OwnerMatrix } from './OwnerMatrix'
+import { OwnerMatrixVersionsCard } from './OwnerMatrixVersionsCard'
 import { PipelineSkipCriteria } from './PipelineSkipCriteria'
 import { PipelineStateOwners } from './PipelineStateOwners'
 import { extractTemplateFields, findM2ORelation, renderDisplayTemplate } from './relations'
@@ -2739,6 +2740,7 @@ export type PipelineEditorSection =
   | 'coverage'
   | 'ai-review'
   | 'versions'
+  | 'matrix-versions'
 
 export function PipelineEditorView({
   templateId,
@@ -4087,6 +4089,9 @@ export function PipelineEditorView({
 
         {/* Config versions */}
         {!hiddenSet.has('versions') && <PipelineVersionsCard templateId={templateId} />}
+
+        {/* Owner matrix versions (#833) */}
+        {!hiddenSet.has('matrix-versions') && <OwnerMatrixVersionsCard templateId={templateId} />}
       </div>
     </>
   )

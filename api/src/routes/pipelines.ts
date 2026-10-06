@@ -49,6 +49,7 @@ import {
   resolveTransitionTarget,
   runAutoTransitions
 } from '../services/workflow-transitions.js'
+import { ownerMatrixVersionRoutes, registerOwnerMatrixCapture } from './owner-matrix-versions.js'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -356,6 +357,10 @@ function validateRequirements(value: unknown): string | null {
 let ownerFilterCheckRegistered = false
 
 export async function pipelinesRoutes(app: FastifyInstance) {
+  // Owner matrix versions (#833): must precede every route declaration —
+  // onRoute only sees routes added after it.
+  registerOwnerMatrixCapture(app)
+  await ownerMatrixVersionRoutes(app)
   if (!ownerFilterCheckRegistered) {
     ownerFilterCheckRegistered = true
     registerReadinessCheck({
@@ -1123,6 +1128,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
     await db('nivaro_workflow_bindings').where({ template: id }).delete()
     await db('nivaro_workflow_states').where({ template: id }).delete()
     await db('nivaro_workflow_template_versions').where({ template: id }).delete()
+    await db('nivaro_owner_matrix_versions')
+      .where({ template: id })
+      .delete()
+      .catch(() => 0) // table absent before migration 399
     const deleted = await db('nivaro_workflow_templates').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'Not found' })
     refreshGraphQLForBindings()
