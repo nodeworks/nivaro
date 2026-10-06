@@ -62,16 +62,142 @@ export function isCoalesced(client: NivaroClient): boolean {
   return (client as unknown as Record<symbol, unknown>)[COALESCED] === true
 }
 
-export function withGetCoalescing(client: NivaroClient): NivaroClient {
+export interface CoalescingOptions {
+  /**
+   * #1304: record reads (`GET /items/<c>` and `GET /items/<c>/<id>`) fired in
+   * the same tick ride ONE `POST /items/batch-read`. Off by default — a host
+   * opts in. A read the batch could not answer with 200 (or a batch that fails
+   * as a whole) is re-sent on its own, so callers see exactly the response or
+   * error they would have seen without batching. Writes never batch.
+   */
+  batchReads?: boolean
+}
+
+/** The most reads one batch carries (the server's own cap). */
+export const BATCH_READ_LIMIT = 20
+
+const ITEM_READ_PATH = /^\/items\/([A-Za-z_][A-Za-z0-9_]*)(?:\/([^/?#]+))?$/
+/** Second path segments that are routes, not record ids. */
+const NOT_A_RECORD = new Set(['aggregate', 'export', 'distinct', 'resolve-paths', 'batch-read'])
+/** The query keys the batch endpoint understands — the list route's own. */
+const BATCH_QUERY_KEYS = new Set([
+  'fields',
+  'filter',
+  'sort',
+  'limit',
+  'offset',
+  'page',
+  'search',
+  'after',
+  'count',
+  'conditions'
+])
+
+export interface BatchableRead {
+  collection: string
+  id?: string
+  query: Record<string, unknown>
+}
+
+/** The batch-read entry a GET command stands for, or null when it cannot batch. */
+export function batchableRead(command: unknown): BatchableRead | null {
+  const c = command as AnyCommand
+  if ((c._method ?? 'GET').toUpperCase() !== 'GET') return null
+  const m = ITEM_READ_PATH.exec(c._path ?? '')
+  if (!m) return null
+  const [, collection, id] = m
+  if (id !== undefined && NOT_A_RECORD.has(id)) return null
+  const params = (c._params ?? {}) as Record<string, unknown>
+  const query: Record<string, unknown> = {}
+  for (const [k, v] of Object.entries(params)) {
+    if (v === undefined) continue
+    if (!BATCH_QUERY_KEYS.has(k)) return null
+    query[k] = v
+  }
+  return id === undefined ? { collection, query } : { collection, id, query }
+}
+
+interface PendingRead {
+  read: BatchableRead
+  command: Command<unknown>
+  resolve: (v: unknown) => void
+  reject: (e: unknown) => void
+}
+
+interface BatchResult {
+  status?: number
+  data?: unknown
+  meta?: Record<string, unknown>
+}
+
+function readBatcher(client: NivaroClient) {
+  let pending: PendingRead[] = []
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const alone = (p: PendingRead) => client.request(p.command).then(p.resolve, p.reject)
+  const send = async (group: PendingRead[]) => {
+    if (group.length === 1) return alone(group[0])
+    let results: BatchResult[] | undefined
+    try {
+      const body = (await client.request({
+        _method: 'POST',
+        _path: '/items/batch-read',
+        _body: {
+          reads: group.map((p, i) => ({
+            key: String(i),
+            collection: p.read.collection,
+            ...(p.read.id !== undefined ? { id: p.read.id } : {}),
+            query: p.read.query
+          }))
+        }
+      } as Command<{ results: BatchResult[] }>)) as { results?: BatchResult[] }
+      results = Array.isArray(body?.results) ? body.results : undefined
+    } catch {
+      results = undefined
+    }
+    group.forEach((p, i) => {
+      const r = results?.[i]
+      if (r?.status !== 200 || r === undefined) {
+        void alone(p)
+        return
+      }
+      p.resolve(p.read.id !== undefined ? { data: r.data } : { data: r.data, ...(r.meta ?? {}) })
+    })
+  }
+  const flush = () => {
+    timer = undefined
+    const all = pending
+    pending = []
+    for (let i = 0; i < all.length; i += BATCH_READ_LIMIT)
+      void send(all.slice(i, i + BATCH_READ_LIMIT))
+  }
+  return <T>(command: Command<T>, read: BatchableRead): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      pending.push({
+        read,
+        command: command as Command<unknown>,
+        resolve: resolve as (v: unknown) => void,
+        reject
+      })
+      if (timer === undefined) timer = setTimeout(flush, 0)
+    })
+}
+
+export function withGetCoalescing(
+  client: NivaroClient,
+  opts: CoalescingOptions = {}
+): NivaroClient {
   if (isCoalesced(client)) return client
   const inflight = new Map<string, Promise<unknown>>()
+  const batch = opts.batchReads ? readBatcher(client) : null
   const request = <T>(command: Command<T>): Promise<T> => {
     const c = command as unknown as AnyCommand
     if (!isRead(c)) return client.request<T>(command)
     const key = commandKey(c)
     const current = inflight.get(key)
     if (current) return (current as Promise<T>).then(cloneResult)
-    const p = client.request<T>(command).finally(() => {
+    const read = batch ? batchableRead(c) : null
+    const sent = read && batch ? batch<T>(command, read) : client.request<T>(command)
+    const p = sent.finally(() => {
       if (inflight.get(key) === p) inflight.delete(key)
     })
     inflight.set(key, p)

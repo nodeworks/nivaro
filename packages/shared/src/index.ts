@@ -473,7 +473,15 @@ export {
   RealtimeContext,
   useOptionalRealtime
 } from './lib/realtime'
-export { createGatedClient, type GatedClient, withGetCoalescing } from './lib/request-gate'
+export {
+  BATCH_READ_LIMIT,
+  type BatchableRead,
+  batchableRead,
+  type CoalescingOptions,
+  createGatedClient,
+  type GatedClient,
+  withGetCoalescing
+} from './lib/request-gate'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'
 export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'

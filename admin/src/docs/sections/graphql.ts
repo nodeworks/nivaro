@@ -903,6 +903,18 @@ Authorization: Bearer <admin-token>
       type: 'note',
       text: 'Rebuild is admin-only. It is safe to call at any time — in-flight GraphQL requests use the old schema until they complete; new requests after the rebuild use the updated schema.'
     },
+    { type: 'h3', text: 'A missing id' },
+    {
+      type: 'p',
+      text: 'By default an update or delete naming an id that does not exist answers without an error and with null data, as it always has. With Settings → Content → Strict GraphQL mutations on, `update_<collection>_item`, `delete_<collection>_item` and the batch forms answer a `NOT_FOUND` error instead (`extensions.status` 404, `extensions.ids` naming every missing id), and nothing is changed. The check reads as the caller: a record outside the row filter or User Scopes of the caller answers exactly like one that does not exist, and a caller who cannot read the collection gets `NOT_FOUND` for every id. Tell API partners before turning it on: their calls on a missing record start failing. `GET /api/graphql/changelog` reports the switch as `policy.strict_mutations`.'
+    },
+    {
+      type: 'pre',
+      code: `mutation { delete_orders_items(ids: [11, 999999]) { ids } }
+# strict on →
+# { "errors": [{ "message": "No orders record with id 999999",
+#                "extensions": { "code": "NOT_FOUND", "status": 404, "ids": ["999999"] } }] }`
+    },
     { type: 'h3', text: 'Changelog and deprecation policy' },
     {
       type: 'p',

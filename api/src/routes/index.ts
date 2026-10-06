@@ -229,7 +229,9 @@ export async function registerRoutes(app: FastifyInstance) {
     if (
       url.startsWith('/api/auth') ||
       url.startsWith('/api/settings') ||
-      url.startsWith('/api/rum')
+      url.startsWith('/api/rum') ||
+      // A batch of reads (#1304) is a POST only because it carries a body.
+      url.startsWith('/api/items/batch-read')
     )
       return
     const { maintenanceState } = await import('../services/security.js')

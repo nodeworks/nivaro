@@ -34,6 +34,15 @@ import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
 import { enforceContracts } from './integration-contracts.js'
 import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
+import {
+  aliasReadable,
+  m2aIdKey,
+  m2aItemFields,
+  m2aReadCollection,
+  parseAllowedList,
+  peopleFields,
+  peopleReadable
+} from './m2a-expand.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
@@ -66,6 +75,7 @@ import { applySectionLocks } from './section-locks.js'
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
+import { applyDirectoryListingRules } from './user-directory-cols.js'
 import { applyUserScopesToQuery } from './user-scopes.js'
 import { enforceValidationRules } from './validation-rules.js'
 import {
@@ -1084,8 +1094,24 @@ async function expandRelations(
     // built; 'id' is always selected below, which is all the attach needs.
     const subState = splitStateField(subDirect0)
     const subInstance = splitInstanceField(subState.fields, subNested)
-    const subDirect = subInstance.fields
+    let subDirect = subInstance.fields
     delete subNested[STATE_FIELD]
+
+    // To-many aliases on the related record (`project.lines.amount`,
+    // `request.internal_contact.*`) — read after the batch, as the caller.
+    const subPlanned = await planToMany(
+      relCollection,
+      await getRelsForCollection(relCollection),
+      subNested
+    )
+    for (const plan of subPlanned) {
+      delete subNested[plan.alias]
+      subDirect = subDirect.filter((f) => f !== plan.alias)
+    }
+    if (subPlanned.length > 0 && subDirect.length === 0) subDirect = ['id']
+    // The relation name is a field of the related collection: a read policy
+    // whose field list leaves it out reads none of its rows.
+    const subToMany = subPlanned.filter((p) => aliasReadable(p.alias, relAllowedFields))
 
     // Column-level permission filtering
     let selectCols: string[] =
@@ -1131,6 +1157,9 @@ async function expandRelations(
     // Recurse for deeper expansion
     if (Object.keys(subNested).length > 0) {
       await expandRelations(user, relItems, relCollection, subNested, depth + 1, workspaceId)
+    }
+    if (subToMany.length > 0) {
+      await expandToMany(user, relItems, subToMany, workspaceId, toManyDepth.getStore() ?? 0)
     }
 
     // Merge onto parent items — FK stays as-is if related item was filtered out by RLS
@@ -2574,6 +2603,16 @@ type ToManyPlan =
       other: string
       fields: string[]
     }
+  | {
+      kind: 'm2a'
+      alias: string
+      junction: string
+      fkToParent: string
+      itemField: string
+      discriminator: string
+      allowed: string[]
+      fields: string[]
+    }
 
 async function planToMany(
   collection: string,
@@ -2609,8 +2648,24 @@ async function planToMany(
     const other = junctionRels.find(
       (r) => r.many_collection === leg.many_collection && r.many_field === leg.junction_field
     )
-    // A link to several collections names its target per row; not expanded here.
-    if (!other?.one_collection) continue
+    if (!other) continue
+    // A link to several collections names its target per row (#1220).
+    if (!other.one_collection) {
+      const allowed = parseAllowedList(other.one_allowed_collections)
+      if (allowed.length === 0) continue
+      plans.push({
+        kind: 'm2a',
+        alias,
+        junction: leg.many_collection,
+        fkToParent: leg.many_field,
+        itemField: leg.junction_field,
+        discriminator:
+          (other as { one_collection_field?: string | null }).one_collection_field || 'collection',
+        allowed,
+        fields
+      })
+      continue
+    }
     plans.push({
       kind: 'm2m',
       alias,
@@ -2695,6 +2750,8 @@ async function expandToMany(
             push(parent, r)
           }
         }
+      } else if (plan.kind === 'm2a') {
+        await expandM2A(user, ids, plan, workspaceId, depth, push)
       } else {
         const links: Array<{ parent: unknown; other: unknown }> = []
         for (let i = 0; i < ids.length; i += 1000) {
@@ -2734,6 +2791,100 @@ async function expandToMany(
     for (const it of items) it[plan.alias] = byParent.get(String(it.id)) ?? []
   }
   return truncated
+}
+
+/**
+ * One link row per junction row (#1220), the linked record read per the
+ * discriminator — one read per named collection, never per row. People
+ * (`directus_users` / `nivaro_users`) answer directory columns only and never
+ * a redacted account; business collections are read AS THE CALLER, so their
+ * permission, field list, row filter and scopes apply. A collection the
+ * relation does not allow, or the caller may not read, leaves `item: null`.
+ */
+async function expandM2A(
+  user: User,
+  parentIds: Array<string | number>,
+  plan: Extract<ToManyPlan, { kind: 'm2a' }>,
+  workspaceId: string | undefined,
+  depth: number,
+  push: (parent: unknown, row: Record<string, unknown>) => void
+): Promise<void> {
+  const links: Array<Record<string, unknown>> = []
+  for (let i = 0; i < parentIds.length; i += 1000) {
+    const rows = (await db(plan.junction)
+      .whereIn(plan.fkToParent, parentIds.slice(i, i + 1000))
+      .orderBy('id')
+      .select({
+        id: 'id',
+        parent: plan.fkToParent,
+        item: plan.itemField,
+        coll: plan.discriminator
+      })) as Array<Record<string, unknown>>
+    links.push(...rows)
+    if (links.length >= TO_MANY_TOTAL) break
+  }
+  const itemFields = m2aItemFields(plan.fields, plan.discriminator)
+  const found = new Map<string, Map<string, Record<string, unknown>>>()
+  if (itemFields.length > 0) {
+    const byCollection = new Map<string, Set<string>>()
+    for (const l of links) {
+      const c = m2aReadCollection(l.coll, plan.allowed)
+      if (!c || l.item == null || l.item === '') continue
+      byCollection.set(c, (byCollection.get(c) ?? new Set()).add(String(l.item)))
+    }
+    for (const [c, idSet] of byCollection) {
+      const rows = new Map<string, Record<string, unknown>>()
+      const ids = [...idSet]
+      try {
+        if (c === 'nivaro_users') {
+          // What GET /users gives this caller and nothing more: the directory
+          // projection, the directory's listing rules, and never through a key
+          // whose scopes leave nivaro_users out.
+          if (!peopleReadable(user.api_key_scopes)) continue
+          const cols = peopleFields(itemFields)
+          for (let i = 0; i < ids.length; i += 1000) {
+            const q = db('nivaro_users')
+              .whereIn('id', ids.slice(i, i + 1000))
+              .select(cols)
+            applyDirectoryListingRules(q)
+            const us = (await q) as Array<Record<string, unknown>>
+            for (const u of us) rows.set(m2aIdKey(u.id), u)
+          }
+        } else {
+          if (!(await getCollection(c))) continue
+          const fields = itemFields[0] === '*' ? ['*'] : [...new Set(['id', ...itemFields])]
+          for (let i = 0; i < ids.length; i += 500) {
+            const rs = await readAllAsCaller(
+              user,
+              c,
+              fields,
+              { id: { _in: ids.slice(i, i + 500) } },
+              workspaceId,
+              depth + 1
+            )
+            for (const r of rs) rows.set(m2aIdKey(r.id), r)
+          }
+        }
+      } catch (err) {
+        // Unreadable (or no longer present) — its links read `item: null`.
+        if (!(err instanceof ForbiddenError) && !(err instanceof CollectionNotFoundError)) throw err
+        continue
+      }
+      found.set(c, rows)
+    }
+  }
+  for (const l of links) {
+    const c = m2aReadCollection(l.coll, plan.allowed)
+    const row: Record<string, unknown> = {
+      id: l.id,
+      [plan.discriminator]: l.coll ?? null,
+      item_id: l.item ?? null
+    }
+    if (itemFields.length > 0) {
+      row.item = c && l.item != null ? (found.get(c)?.get(m2aIdKey(l.item)) ?? null) : null
+    }
+    push(l.parent, row)
+  }
 }
 
 // ── Keyset paging (`after=<cursor>`) ─────────────────────────────────────────
@@ -2974,12 +3125,14 @@ export async function readItems(
 
   // To-many aliases named with a dotted path (`lines.amount`) are read after
   // the page, as the caller. Planned here, before the alias names are stripped.
-  const toMany = await planToMany(collection, rels, nestedFieldMap)
-  for (const plan of toMany) {
+  const plannedToMany = await planToMany(collection, rels, nestedFieldMap)
+  for (const plan of plannedToMany) {
     delete nestedFieldMap[plan.alias]
     selectFields = selectFields.filter((f) => f !== plan.alias)
   }
-  if (toMany.length > 0) {
+  // A relation outside the caller's field list for this collection reads nothing.
+  const toMany = plannedToMany.filter((p) => aliasReadable(p.alias, allowedFields))
+  if (plannedToMany.length > 0) {
     if (selectFields.length === 0) selectFields = ['id']
     else if (selectFields[0] !== '*' && !selectFields.includes('id'))
       selectFields = ['id', ...selectFields]
@@ -3572,12 +3725,14 @@ export async function readOne(
 
   // To-many aliases named with a dotted path — see readItems.
   const oneRels = await getRelsForCollection(collection)
-  const toMany = await planToMany(collection, oneRels, nestedFieldMap)
-  for (const plan of toMany) {
+  const plannedToMany = await planToMany(collection, oneRels, nestedFieldMap)
+  for (const plan of plannedToMany) {
     delete nestedFieldMap[plan.alias]
     selectCols = selectCols.filter((f) => f !== plan.alias)
   }
-  if (toMany.length > 0) {
+  // A relation outside the caller's field list for this collection reads nothing.
+  const toMany = plannedToMany.filter((p) => aliasReadable(p.alias, allowedFields))
+  if (plannedToMany.length > 0) {
     if (selectCols.length === 0) selectCols = ['id']
     else if (selectCols[0] !== '*' && !selectCols.includes('id')) selectCols = ['id', ...selectCols]
   }

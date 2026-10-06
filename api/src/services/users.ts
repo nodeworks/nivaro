@@ -6,6 +6,7 @@ import { getApp } from './io-holder.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
 import { notificationRowMeta, notifyUser } from './notification-channels.js'
 import { queueOfficeGeocode } from './office-geocode.js'
+import { DIRECTORY_USER_COLS } from './user-directory-cols.js'
 
 /** Only an active, non-redacted account may hold a session. */
 export function canSignIn(user: Pick<User, 'status'> & { is_redacted?: unknown }): boolean {
@@ -222,29 +223,6 @@ function parsePreferences<T extends { preferences?: unknown }>(row: T): T {
   }
   return row
 }
-/**
- * What a NON-ADMIN may see of another user. The assignee/mention pickers that
- * every record form renders need a person directory, but the full USER_COLS set
- * carries `preferences` (headless hosts store access-request notes there), phone, and
- * the manager/delegate graph — none of which belong in a picker payload.
- */
-const DIRECTORY_USER_COLS = [
-  'id',
-  'first_name',
-  'last_name',
-  'email',
-  'title',
-  'department',
-  'company',
-  // Office location is org-visible; employee_id/city stay admin-only.
-  'office_location',
-  'status',
-  // OOO mention warnings (#221): pickers warn inline when the person being
-  // mentioned/assigned is out — availability is org-visible information.
-  'is_out_of_office',
-  'ooo_end',
-  'delegate_id'
-] as const
 
 const SORTABLE_USER_COLS = new Set<string>([
   'first_name',

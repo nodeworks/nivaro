@@ -135,6 +135,8 @@ const allowedSettingsKeys = [
   // Deprecation policy for the API surface (#613): days a field stays
   // deprecated before it may be removed; blank = 14, 0 = no policy
   'graphql_deprecation_days',
+  // #1222: update/delete on a missing id answers NOT_FOUND instead of null data
+  'graphql_strict_mutations',
   'portal_routes',
   'welcome_message',
   // Provisional-account roles (migration 330): first sign-in role + the role an
@@ -292,6 +294,13 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { clearDeprecationPolicyCache } = await import('../services/deprecation-policy.js')
       reply.raw.once('finish', () => clearDeprecationPolicyCache())
+    }
+
+    if ('graphql_strict_mutations' in patch) {
+      const raw = patch.graphql_strict_mutations
+      patch.graphql_strict_mutations = raw === true || raw === 1 || raw === '1' || raw === 'true'
+      const { clearGraphqlStrictCache } = await import('../services/graphql-strict.js')
+      reply.raw.once('finish', () => clearGraphqlStrictCache())
     }
 
     // Transition double-fire guard: whole seconds, 0 = off, blank = default.

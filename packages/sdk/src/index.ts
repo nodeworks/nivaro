@@ -625,6 +625,65 @@ export function readItem<T = Record<string, unknown>>(
   return cmd('GET', `/items/${collection}/${id}`)
 }
 
+/** One read inside {@link readMany}. Without `id` it is a list read. */
+export interface BatchRead<T = Record<string, unknown>> {
+  /** Echoed on the result so a caller can match answers to reads; defaults to the index. */
+  key?: string
+  collection: string
+  id?: string | number
+  /** The list read's query (ignored on a single-record read except `fields`). */
+  query?: Query<T> & { conditions?: unknown[] }
+}
+
+/** The answer to one read: its own status, never the whole batch's. */
+export interface BatchReadResult<T = Record<string, unknown>> {
+  key: string
+  status: number
+  /** A record (single read) or the page of records (list read). */
+  data?: T | T[]
+  /** A list read's paging facts (`total`, `limit`, `offset`, `next_cursor`, …). */
+  meta?: Record<string, unknown>
+  error?: string
+  code?: string
+}
+
+/** The most reads one {@link readMany} call carries. */
+export const READ_MANY_MAX = 20
+
+/**
+ * Several reads in one round trip (`POST /items/batch-read`, at most 20). Each
+ * runs as the caller exactly as its own GET would, and answers its own status —
+ * a forbidden or missing record never fails the others. Writes never batch.
+ */
+export function readMany<T = Record<string, unknown>>(
+  reads: BatchRead<T>[]
+): Command<{ results: BatchReadResult<T>[] }> {
+  return cmd('POST', '/items/batch-read', undefined, {
+    reads: reads.map((r) => ({
+      ...(r.key != null ? { key: r.key } : {}),
+      collection: r.collection,
+      ...(r.id != null ? { id: r.id } : {}),
+      ...(r.query ? { query: batchReadQuery(r.query, r.id == null) } : {})
+    }))
+  })
+}
+
+function batchReadQuery(query: Query<unknown> & { conditions?: unknown[] }, list: boolean) {
+  const q: Record<string, unknown> = {}
+  if (query.fields?.length) q.fields = query.fields.join(',')
+  if (!list) return q
+  if (query.filter) q.filter = query.filter
+  if (query.sort?.length) q.sort = query.sort.join(',')
+  if (query.limit != null) q.limit = query.limit
+  if (query.offset != null) q.offset = query.offset
+  if (query.page != null) q.page = query.page
+  if (query.search) q.search = query.search
+  if (query.after != null) q.after = query.after
+  if (query.count === false) q.count = 0
+  if (query.conditions?.length) q.conditions = query.conditions
+  return q
+}
+
 export function createItem<T = Record<string, unknown>>(
   collection: string,
   data: Partial<T>
