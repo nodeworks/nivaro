@@ -14,10 +14,13 @@
  * `available_transitions` = manual transitions out of the current state the
  * viewer's role may run. Condition rules are not evaluated (that needs the
  * record and every dotted path it names); the transition endpoint still judges
- * them, so a listed transition can still be refused.
+ * them, so a listed transition can still be refused. Owner-only transitions
+ * (`require_owner`, #794) are offered only to a viewer who owns the current
+ * step (delegation applied) and to admins — one owner resolution per page.
  */
 import { db, dbRead } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { ownerOnlyAllows, ownsStep } from './record-access.js'
 import { pickInstance } from './record-state.js'
 import { isAdminRole } from './user-scopes.js'
 
@@ -58,6 +61,7 @@ export interface TransitionRow {
   actions?: unknown
   sort: number | null
   auto_trigger?: unknown
+  require_owner?: unknown
 }
 
 export interface HistoryRow {
@@ -87,6 +91,59 @@ export interface LoadedInstance {
 export interface Viewer {
   role: string | null | undefined
   isAdmin: boolean
+  /** Owner-only transitions are judged against this person; absent = not an owner. */
+  userId?: string | null
+}
+
+/** Owners of one instance's current step, keyed by instance id. */
+export type StepOwnerResolver = (
+  instances: InstanceRow[]
+) => Promise<Map<string, Array<{ id: string | null | undefined }>>>
+
+const resolveStepOwners: StepOwnerResolver = async (instances) => {
+  const { resolveStateOwnersBatch } = await import('./pipeline-engine.js')
+  return resolveStateOwnersBatch(
+    instances
+      .filter((i) => i.current_state)
+      .map((i) => ({
+        key: i.id,
+        stateId: i.current_state as string,
+        instanceId: i.id,
+        collection: i.collection,
+        itemId: String(i.item)
+      }))
+  )
+}
+
+/**
+ * Drop owner-only transitions the viewer does not own (#794) — the same
+ * answer the execute paths give (ownerOnlyAllows over the resolved owners of
+ * the current step, delegation applied). ONE owner resolution for every
+ * instance on the page that offers such a transition; admins and pages with
+ * none skip it entirely.
+ */
+export async function applyOwnerOnly(
+  entries: Array<{ instance: InstanceRow; available: TransitionRow[] }>,
+  viewer: Viewer,
+  resolve: StepOwnerResolver = resolveStepOwners
+): Promise<void> {
+  if (viewer.isAdmin) return
+  const gated = entries.filter((e) => e.available.some((t) => truthy(t.require_owner)))
+  if (gated.length === 0) return
+  let owners: Map<string, Array<{ id: string | null | undefined }>>
+  try {
+    owners = viewer.userId ? await resolve(gated.map((e) => e.instance)) : new Map()
+  } catch {
+    // An owner question that cannot be answered hides the move, never offers it.
+    owners = new Map()
+  }
+  for (const e of gated) {
+    const list = owners.get(e.instance.id)
+    const isOwner =
+      viewer.userId && e.instance.current_state && list ? ownsStep(list, viewer.userId) : false
+    if (ownerOnlyAllows(false, { is_owner: isOwner })) continue
+    e.available = e.available.filter((t) => !truthy(t.require_owner))
+  }
 }
 
 /** Same normalisation as `$state`: `item` is a string mirror of the id, and
@@ -210,6 +267,7 @@ export async function loadCurrentInstances(
       states: tplStates
     })
   }
+  await applyOwnerOnly([...out.values()], viewer)
   return out
 }
 
@@ -279,12 +337,12 @@ export function splitInstanceField(
 export async function attachRecordInstance(
   collection: string,
   rows: Record<string, unknown>[],
-  user: { role?: string | null } | null | undefined,
+  user: { id?: string | null; role?: string | null } | null | undefined,
   opts: { history: boolean }
 ): Promise<void> {
   if (rows.length === 0) return
   const role = user?.role ?? null
-  const viewer: Viewer = { role, isAdmin: await isAdminRole(role) }
+  const viewer: Viewer = { role, isAdmin: await isAdminRole(role), userId: user?.id ?? null }
   const loaded = await loadCurrentInstances(
     collection,
     rows.map((r) => r.id as string | number),
@@ -428,12 +486,16 @@ function gqlState(s: StateRow) {
  * it) when the query selects it.
  */
 export async function resolveRecordInstanceGql(
-  ctx: { user?: { role?: string | null } | null; isAdmin?: boolean },
+  ctx: { user?: { id?: string | null; role?: string | null } | null; isAdmin?: boolean },
   collection: string,
   recordId: unknown
 ): Promise<Record<string, unknown> | null> {
   if (!ctx.user || recordId == null) return null
-  const viewer: Viewer = { role: ctx.user.role ?? null, isAdmin: ctx.isAdmin ?? false }
+  const viewer: Viewer = {
+    role: ctx.user.role ?? null,
+    isAdmin: ctx.isAdmin ?? false,
+    userId: ctx.user.id ?? null
+  }
   const batch = batchFor<LoadedInstance>(ctx, `instance:${collection}`, async (keys) => {
     return loadCurrentInstances(collection, keys, viewer)
   })
