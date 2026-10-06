@@ -245,6 +245,44 @@ Authorization: Bearer <admin-token>
   ],
   async register(ctx) { … }
 }`
+    },
+    { type: 'h3', id: 'ext-overview-host-runbooks', text: 'Host runbooks' },
+    {
+      type: 'p',
+      text: "A runbook declared with `runs_on: 'host'` runs on another machine — the one that can reach what it needs (the database server, a file share). Every instance lists it, local or deployed. Starting it QUEUES the run; the host agent on that machine claims it, runs it, and streams its output back every second while the console shows the phases, the live log and an estimate."
+    },
+    {
+      type: 'ul',
+      items: [
+        "Install the agent on the host with cron: `* * * * * bash -lc 'cd <checkout>/api && npx tsx src/scripts/runbook-agent.ts --once'` (or `pnpm --filter @nivaro/api run runbook:agent -- --once`). Each tick checks in, then claims the oldest queued run for a runbook the extensions on that checkout declare. RUNBOOK_AGENT_HOST overrides the host name. The console says when no agent is checking in.",
+        '`command` (an argv starting with bash, sh, node, npx or tsx and naming a file inside the extension) runs instead of `npx tsx <script>`; `--events` is not appended. `phases` ([{key, label}]) draws the track before any event arrives and offers "start from phase", passed through `resume_flag`.',
+        'The same rules as local runbooks: a real run needs a finished dry run of the target from the last 24 hours and the target typed back; one queued or running run per runbook; Cancel takes a queued run out of the queue and stops a running one (SIGTERM to its process group, SIGKILL 30 seconds later).',
+        "Exit 75, or a `### REFUSED: <reason>` line, records the run as refused (a lock, another job, an unreachable database) rather than done. A run whose agent stops reporting for 3 minutes reads as lost; the next tick re-attaches while the process still runs, and records its exit status (kept in a file beside the agent's lock) when it has finished.",
+        "A wrapped runbook's own step events can be printed as `@@sub {…}` lines: they show as the progress of the phase that is running, never as phases of their own.",
+        "Estimates: every successful phase and sub-step is timed into nivaro_runbook_step_timings. A phase's typical time is the median of its last 7 passes in the same mode; the console shows how long a full run (or a run from any phase) usually takes, and during a run the elapsed time, the current phase and sub-step, the share done, the ETA, and a stall warning when the run has been quiet longer than that phase ever was (10 minutes without history).",
+        '`history_dirs` ([{path, mode}], relative to the repository root) feed the estimates from runs started outside the console, such as a nightly cron: one directory per run with a `summary.txt` of `=== <n>-<phase> END … exit=0 elapsed=<m>m<s>s ===` lines and per phase a `<n>-<phase>.log` whose `─── <step> done in <m>m<ss>s ───` lines are its sub-steps. A run directory holding `.nivaro-runbook-run` is skipped (the console already timed it).'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `runbooks: [
+  {
+    key: 'rebuild',
+    label: 'Rebuild the rehearsal database',
+    runs_on: 'host',
+    command: ['bash', 'extensions/my-extension/scripts/rebuild.sh', 'nightly'],
+    dry_args: ['--dry'],
+    go_args: [],
+    resume_flag: '--from',
+    target_env: 'TARGET',
+    refuse_targets: ['production'],
+    phases: [
+      { key: 'clone', label: 'Clone production' },
+      { key: 'convert', label: 'Conversions' }
+    ],
+    history_dirs: [{ path: 'logs/nightly', mode: 'go' }]
+  }
+]`
     }
   ]
 }

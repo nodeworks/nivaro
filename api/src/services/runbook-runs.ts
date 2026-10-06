@@ -38,6 +38,8 @@ export interface RunbookRecord {
   mode: 'dry' | 'go'
   target: string | null
   args: string[]
+  /** The script the process runs — what liveness looks for (absent = args[0]). */
+  script?: string
   pid: number
   started_at: string
   started_by: string
@@ -53,7 +55,8 @@ export interface RunbookSummary extends RunbookRecord {
 
 export interface StepEvent {
   step: string
-  status: 'start' | 'ok' | 'fail' | 'skip' | 'refused'
+  /** `note` replaces the step's lines and leaves its status alone (sub-step progress). */
+  status: 'start' | 'ok' | 'fail' | 'skip' | 'refused' | 'note'
   at: string
   secs?: number
   lines?: string[]
@@ -95,21 +98,45 @@ export function runbooksAvailable(nodeEnv: string): boolean {
 
 // ── pure parts ────────────────────────────────────────────────────────────
 
+/** One line of a run's output, as the console reads it. */
+export type RunbookLine =
+  | { kind: 'steps'; steps: string[] }
+  | { kind: 'event'; event: StepEvent }
+  | { kind: 'sub'; event: StepEvent }
+
+/**
+ * `@@steps [names]`, `@@event {…}`, or `@@sub {…}` — a sub-step event of the
+ * phase that is running (a runbook that wraps another runbook rewrites the
+ * inner `@@event` lines to `@@sub` so the inner steps never read as phases).
+ */
+export function parseRunbookLine(line: string): RunbookLine | null {
+  const text = line.replace(/\r$/, '')
+  try {
+    if (text.startsWith('@@steps ')) {
+      const v = JSON.parse(text.slice(8))
+      return Array.isArray(v)
+        ? { kind: 'steps', steps: v.filter((x) => typeof x === 'string') }
+        : null
+    }
+    for (const [prefix, kind] of [
+      ['@@event ', 'event'],
+      ['@@sub ', 'sub']
+    ] as const) {
+      if (!text.startsWith(prefix)) continue
+      const e = JSON.parse(text.slice(prefix.length)) as StepEvent
+      return typeof e?.step === 'string' && typeof e.status === 'string' ? { kind, event: e } : null
+    }
+  } catch {}
+  return null
+}
+
 export function parseRunbookLog(log: string): { steps: string[]; events: StepEvent[] } {
   let steps: string[] = []
   const events: StepEvent[] = []
   for (const line of log.split('\n')) {
-    if (line.startsWith('@@steps ')) {
-      try {
-        const v = JSON.parse(line.slice(8))
-        if (Array.isArray(v)) steps = v.filter((x) => typeof x === 'string')
-      } catch {}
-    } else if (line.startsWith('@@event ')) {
-      try {
-        const e = JSON.parse(line.slice(8)) as StepEvent
-        if (typeof e.step === 'string' && typeof e.status === 'string') events.push(e)
-      } catch {}
-    }
+    const p = parseRunbookLine(line)
+    if (p?.kind === 'steps') steps = p.steps
+    else if (p?.kind === 'event') events.push(p.event)
   }
   return { steps, events }
 }
@@ -132,6 +159,7 @@ export function stepStates(
       map.set(e.step, { ...cur, status: 'failed', secs: e.secs, lines: e.lines ?? cur.lines })
     else if (e.status === 'skip') map.set(e.step, { ...cur, status: 'skipped', lines: e.lines })
     else if (e.status === 'refused') map.set(e.step, { ...cur, status: 'refused', lines: e.lines })
+    else if (e.status === 'note') map.set(e.step, { ...cur, lines: e.lines ?? cur.lines })
   }
   const out = order.map((s) => map.get(s) as StepState)
   if (state === 'cancelled' || state === 'lost')
@@ -193,6 +221,27 @@ export function dryRunGate(
   )
 }
 
+/**
+ * The process a run starts: `npx tsx <script> <args> --events`, or the
+ * declared `command` followed by the mode's args (no `--events`). `script`
+ * is what liveness checks look for in the process list.
+ */
+export function runbookArgv(
+  decl: ExtensionRunbookDecl,
+  mode: 'dry' | 'go',
+  from?: string
+): { file: string; args: string[]; script: string } {
+  const modeArgs = mode === 'dry' ? decl.dry_args : decl.go_args
+  const resume = from && decl.resume_flag ? [decl.resume_flag, from] : []
+  if (decl.command && decl.command.length > 1) {
+    const [file, ...rest] = decl.command
+    const script = rest.find((a) => a.startsWith('extensions/')) ?? rest[0]
+    return { file, args: [...rest, ...modeArgs, ...resume], script }
+  }
+  const script = decl.script ?? ''
+  return { file: 'npx', args: ['tsx', script, ...modeArgs, ...resume, '--events'], script }
+}
+
 export function validateTarget(
   decl: ExtensionRunbookDecl,
   target: unknown
@@ -243,7 +292,7 @@ async function readLog(id: string): Promise<string> {
   }
 }
 
-const scriptOf = (rec: RunbookRecord) => rec.args[0] ?? ''
+const scriptOf = (rec: RunbookRecord) => rec.script ?? rec.args[0] ?? ''
 
 async function summarize(rec: RunbookRecord): Promise<{ run: RunbookSummary; log: string }> {
   // Liveness before the log (see release-runs.summarize).
@@ -330,19 +379,14 @@ export async function startRunbookRun(opts: {
     const live = await currentRunbookRun()
     if (live) throw new RunbookLockedError(live)
     const { decl } = opts
-    const args = [
-      decl.script,
-      ...(opts.mode === 'dry' ? decl.dry_args : decl.go_args),
-      ...(opts.resumeFrom && decl.resume_flag ? [decl.resume_flag, opts.resumeFrom] : []),
-      '--events'
-    ]
+    const { file, args, script } = runbookArgv(decl, opts.mode, opts.resumeFrom)
     const id = randomUUID()
     const fd = openSync(logPath(id) as string, 'a')
     let child: ReturnType<typeof spawn>
     try {
       const env = childEnv()
       if (decl.target_env && opts.target) env[decl.target_env] = opts.target
-      child = spawn('npx', ['tsx', ...args], {
+      child = spawn(file, args, {
         cwd: runtime.apiDir(),
         detached: true,
         stdio: ['ignore', fd, fd],
@@ -360,7 +404,8 @@ export async function startRunbookRun(opts: {
       runbook: decl.key,
       mode: opts.mode,
       target: opts.target,
-      args,
+      args: file === 'npx' && args[0] === 'tsx' ? args.slice(1) : args,
+      script,
       pid: child.pid,
       started_at: new Date().toISOString(),
       started_by: opts.user

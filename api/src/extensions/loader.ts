@@ -51,6 +51,7 @@ import {
 } from './notification-channels.js'
 import { notificationSourceRegistry } from './notification-sources.js'
 import { relatedNoteRegistry } from './related-notes.js'
+import { normalizeRunbooks as normalizeRunbookDecls } from './runbook-decls.js'
 import { type StorageAdapter, storageAdapterRegistry } from './storage-adapters.js'
 import { type ValidatorDef, validatorRegistry } from './validators.js'
 import '../plugin-types.js'
@@ -110,47 +111,7 @@ export type {
 /** Runbooks every loaded extension declared (#720), by extension id. */
 export const extensionRunbooks = new Map<string, ExtensionRunbookDecl[]>()
 
-const RUNBOOK_KEY = /^[a-z0-9][a-z0-9-]{0,60}$/
-const ARG = /^[A-Za-z0-9_.,:=@/-]{1,200}$/
-
-/** Runbook declarations that name a script inside the extension's own folder. */
-export function normalizeRunbooks(extId: string, raw: unknown): ExtensionRunbookDecl[] {
-  if (!Array.isArray(raw)) return []
-  const out: ExtensionRunbookDecl[] = []
-  const args = (a: unknown) =>
-    Array.isArray(a) ? a.filter((x) => typeof x === 'string' && ARG.test(x)) : []
-  for (const r of raw.slice(0, 20)) {
-    const key = typeof r?.key === 'string' ? r.key : ''
-    const script = typeof r?.script === 'string' ? r.script : ''
-    if (!RUNBOOK_KEY.test(key)) continue
-    if (
-      !script.startsWith(`extensions/${extId}/`) ||
-      script.includes('..') ||
-      !/\.(ts|mjs|js)$/.test(script)
-    )
-      continue
-    out.push({
-      key,
-      label: typeof r.label === 'string' ? r.label.slice(0, 120) : key,
-      description: typeof r.description === 'string' ? r.description.slice(0, 600) : undefined,
-      script,
-      dry_args: args(r.dry_args),
-      go_args: args(r.go_args),
-      resume_flag:
-        typeof r.resume_flag === 'string' && /^--[a-z-]{1,30}$/.test(r.resume_flag)
-          ? r.resume_flag
-          : undefined,
-      target_env:
-        typeof r.target_env === 'string' && /^[A-Z][A-Z0-9_]{0,60}$/.test(r.target_env)
-          ? r.target_env
-          : undefined,
-      refuse_targets: Array.isArray(r.refuse_targets)
-        ? r.refuse_targets.filter((t: unknown) => typeof t === 'string').slice(0, 20)
-        : undefined
-    })
-  }
-  return out
-}
+export { normalizeRunbooks } from './runbook-decls.js'
 
 /** The declared environment of every loaded extension, by extension id. */
 export const extensionEnvDecls = new Map<string, ExtensionEnvDecl[]>()
@@ -1254,7 +1215,7 @@ async function loadExtension(
 
     if (Array.isArray(ext.settings) && ext.settings.length > 0)
       extensionSettingsDecls.set(extId, ext.settings)
-    const runbooks = normalizeRunbooks(extId, ext.runbooks)
+    const runbooks = normalizeRunbookDecls(extId, ext.runbooks)
     if (runbooks.length > 0) extensionRunbooks.set(extId, runbooks)
     else extensionRunbooks.delete(extId)
     const envDecls = normalizeEnvDecls(ext.env)

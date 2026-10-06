@@ -189,6 +189,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_migrations_lock',
   'nivaro_migration_effects',
   'nivaro_extension_schema_steps',
+  'nivaro_runbook_queue', //           host runbook runs (migration 403) — per database
+  'nivaro_runbook_queue_lines',
+  'nivaro_runbook_agents',
+  'nivaro_runbook_step_timings',
   'nivaro_cache_epochs',
   'nivaro_config_snapshots',
   'nivaro_dashboard_snapshots',

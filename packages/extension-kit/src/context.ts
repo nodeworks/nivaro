@@ -354,8 +354,11 @@ export interface ExtensionEnvDecl {
 
 /**
  * A long, multi-step operator script the admin Runbooks console runs as a
- * detached process and watches (#720) — local development only. The script
- * is started with `npx tsx <script> <args> --events` from the api directory
+ * detached process and watches (#720). A `local` runbook runs on the machine
+ * serving the console (local development only); a `host` runbook is queued
+ * from any instance and run by the host agent (`pnpm runbook:agent`) on the
+ * machine that checked in for it. The script is started with
+ * `npx tsx <script> <args> --events` (or `command`) from the api directory
  * and reports through `@@steps [names]` / `@@event {step, status, secs?,
  * lines?}` lines and a final `### DONE …` or `### FAILED at <step>: …`.
  */
@@ -364,8 +367,31 @@ export interface ExtensionRunbookDecl {
   key: string
   label: string
   description?: string
-  /** Path relative to the api directory, inside this extension's folder. */
-  script: string
+  /** Path relative to the api directory, inside this extension's folder.
+   *  Required unless `command` is given. */
+  script?: string
+  /** Where the run executes: `local` (default) = the API's own machine,
+   *  local development only; `host` = queued, run by the host agent. */
+  runs_on?: 'local' | 'host'
+  /** argv run from the api directory instead of `npx tsx <script>` (e.g.
+   *  `['bash', 'extensions/<id>/scripts/job.sh', 'staging']`). The first
+   *  element is bash, sh, node, npx or tsx; one element names a file inside
+   *  this extension's folder. `--events` is not appended. */
+  command?: string[]
+  /** The phases the run reports (`@@event` step keys), in order — the
+   *  console draws the track before any event arrives and offers
+   *  "start from phase" (passed through `resume_flag`). */
+  phases?: Array<{ key: string; label: string }>
+  /** Host runbooks: directories (relative to the repository root, no `..`)
+   *  holding past runs of the same job started OUTSIDE the console (a
+   *  nightly cron), one sub-directory per run. The host agent reads their
+   *  phase timings into the console's estimates: a `summary.txt` with
+   *  `=== <n>-<phase> END … exit=0 elapsed=<m>m<s>s ===` lines, and per
+   *  phase a `<n>-<phase>.log` whose `─── <step> done in <m>m<ss>s ───` lines
+   *  are that phase's sub-steps. A run directory holding a
+   *  `.nivaro-runbook-run` file was started by the console and is skipped
+   *  (the queue already timed it). */
+  history_dirs?: Array<{ path: string; mode: 'dry' | 'go' }>
   /** Arguments of the dry run — the report the console demands first. */
   dry_args: string[]
   /** Arguments of the real run. */
