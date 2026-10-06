@@ -1404,6 +1404,10 @@ Authorization: Bearer <token>
     {
       type: 'note',
       text: 'Rollback runs through the normal update pipeline — before/after hooks fire, activity is logged, and a new revision is written capturing the restored snapshot.'
+    },
+    {
+      type: 'p',
+      text: "The revision history also lists pipeline moves: the record's own transitions and, for records with addendums, each addendum's transitions (\"Addendum “Price change”: Level 1 → Level 2\"). Every history read follows the record's own access — a caller who cannot open the record (role, row filter or User Scopes) gets 404 for its revisions, field history and line history alike."
     }
   ]
 }

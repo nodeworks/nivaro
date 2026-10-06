@@ -143,6 +143,20 @@ POST /api/workflows/instance/:id/split
         'Role gating applies per branch transition exactly as for linear workflows.',
         'Split/join events are recorded in the workflow history.'
       ]
+    },
+    { type: 'h2', id: 'parallel-branches-lanes', text: 'Branch lanes on the state track' },
+    {
+      type: 'p',
+      text: 'When a record has split, the expanded Pipeline panel draws each branch as its own lane from the split state to the join: the states the branch has passed through, where it sits now, how long it has been there, and who owns that step. The join names the branches it is still waiting on; once every branch finishes it reads "Joined" with the time. The panel always shows the parent instance — a branch is never picked as the record\'s pipeline.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/pipelines/instance/:collection/:item
+→ data.branches = {
+    split_state, join_state, split_at, joined_at, open,
+    lanes: [{ instance_id, label, steps[], current, entered_at, terminal, finished_at, owners[] }],
+    waiting_on: [instance_id, …]
+  }   // null when the record never split; the most recent split otherwise`
     }
   ]
 }

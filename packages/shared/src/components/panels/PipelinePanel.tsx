@@ -32,6 +32,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { BranchLanes, type BranchLanesData } from './BranchLanes'
 import {
   TransitionRequirementsDialog,
   type TransitionRequirementsPayload
@@ -80,6 +81,23 @@ interface PipelineHistoryEntry {
   transition_text?: string | null
   /** person | machine | import | integration — who kind of actor moved it. */
   origin?: string | null
+}
+
+/** The split/join engine writes JSON into `comment` (routes/workflows.ts) —
+ *  say what happened instead of quoting it. Null for anything else. */
+function lifecycleNote(comment: string | null): string | null {
+  const s = (comment ?? '').trim()
+  if (!s.startsWith('{')) return null
+  try {
+    const c = JSON.parse(s) as { action?: string; children?: unknown[] }
+    if (c.action === 'split')
+      return `Split into ${Array.isArray(c.children) ? c.children.length : 'parallel'} branches`
+    if (c.action === 'join') return 'Every branch finished — joined'
+    if (c.action === 'branch') return 'Started as a parallel branch'
+  } catch {
+    // not engine JSON
+  }
+  return null
 }
 
 /** A move nobody made by hand: the engine, an import, or an integration. */
@@ -132,6 +150,8 @@ interface PipelinePanelData {
   all_transitions: PipelineTransition[]
   history: PipelineHistoryEntry[]
   binding: { id: number; template: string; collection: string; state_field: string | null } | null
+  /** Parallel branches of the most recent split, drawn as lanes (#1240). */
+  branches?: BranchLanesData | null
 }
 interface RequirementsDialogState {
   payload: TransitionRequirementsPayload
@@ -621,8 +641,9 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
           ? machineHeadline(h)
           : [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email
         // The engine's own stamp ("auto: <rule>") is not a note anyone wrote.
-        const note = h.comment && !machine ? h.comment : null
-        const detail = machine ? machineDetail(h) : null
+        const lifecycle = lifecycleNote(h.comment)
+        const note = h.comment && !machine && !lifecycle ? h.comment : null
+        const detail = lifecycle ?? (machine ? machineDetail(h) : null)
         return (
           <div key={h.id} className='flex items-start gap-2.5 text-[12px]'>
             <div className='mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-slate-200' />
@@ -1990,6 +2011,7 @@ function PipelinePanelInner({
                         skippedStates={skippedStates}
                       />
                     )}
+                    {data?.branches && <BranchLanes data={data.branches} />}
                     <StateDurationTimeline
                       history={history ?? []}
                       completedAt={instance.completed_at}
