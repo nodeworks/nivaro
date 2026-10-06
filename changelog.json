@@ -1,10 +1,191 @@
 {
-  "generated_at": "2026-10-06T14:04:45.307Z",
+  "generated_at": "2026-10-06T18:20:02.017Z",
   "releases": [
+    {
+      "version": "0.2.19",
+      "tag": "v0.2.19",
+      "date": "2026-10-06T14:19:50-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "action-writes: note that efp-ops matches the transition-action prefix",
+              "hash": "bf1eb114"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "skip rules resolve fields picked through a relation",
+              "hash": "e9a911d1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "per-record reads check the caller can see the record",
+              "hash": "4b287ba2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the start/move gate also applies updateOne's row-level checks",
+              "hash": "f11df757"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "split/branch/join are read only from engine-written rows",
+              "hash": "da3401d7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "one record-instance lookup that never picks a branch child",
+              "hash": "aafccea2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "sort imports after merge",
+              "hash": "9cbff1e5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Close authorization gaps in M2A expansion and strict mutations (#1220, #1222 review)",
+              "hash": "76a9fd59"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "one record-access gate for starting and moving instances",
+              "hash": "23707708"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "every SLA read checks the caller can see the record",
+              "hash": "4a2637fb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "transition actions write through the items service; acting-for stamp",
+              "hash": "55de7b87"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record-instance: owner-only transitions in $workflow_instance",
+              "hash": "7508176d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "reachability lint, skip-criteria report, team suggestions",
+              "hash": "604ff3ee"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "owner matrix versions with diff and restore (#833)",
+              "hash": "2c0f12d3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "per-record SLA clock override (#1239)",
+              "hash": "e725635b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "neutralise formula injection in the API key usage CSV",
+              "hash": "edbaef4f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "treat the introspection answer and the extension id as untrusted (#1282, #1302)",
+              "hash": "3c3d0a14"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "auto-transition failure memory + owner-only transitions",
+              "hash": "d75c4787"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "parallel branches as lanes on the state track (#1240)",
+              "hash": "2dd33af3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "OpenAPI per role, monthly API key usage, inbound mapping versions",
+              "hash": "089abb1d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "typed GraphQL client and extension scaffolder (#1282, #1302)",
+              "hash": "d4d84fd4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "warn when an extension uses a deprecated kit member (#1303)",
+              "hash": "64994755"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Batched reads: POST /items/batch-read, SDK readMany, opt-in client batching (#1304)",
+              "hash": "f4645655"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "GraphQL mutations answer NOT_FOUND on a missing id when strict (#1222)",
+              "hash": "c9356081"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "REST reads expand polymorphic (M2A) links (#1220)",
+              "hash": "fba40cc7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "every instance start is a history row (#1219)",
+              "hash": "65e52579"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "history reads are gated by record visibility",
+              "hash": "a56f863a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a record's history includes its addendums' transitions (#738)",
+              "hash": "921e7647"
+            }
+          ]
+        }
+      ],
+      "count": 28
+    },
     {
       "version": "0.2.18",
       "tag": "v0.2.18",
-      "date": "2026-10-06T10:04:32-04:00",
+      "date": "2026-10-06T10:04:45-04:00",
       "sections": [
         {
           "label": "Other",
