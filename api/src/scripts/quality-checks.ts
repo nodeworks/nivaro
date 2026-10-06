@@ -25,10 +25,12 @@ import { type DiffResult, diffRows } from '../services/quality/diff.js'
 import { loadQualityChecks } from '../services/quality/load-checks.js'
 import {
   createRun,
+  getRun,
   latestRunForTarget,
   loadKnown,
   loadSide,
   pruneRuns,
+  type RunRow,
   recordKnownHits,
   saveDiff,
   saveResult,
@@ -39,7 +41,10 @@ import {
 
 const DEFAULT_BUDGET_MS = 180_000
 const MAX_ROWS = 250_000
+/** The verify stage stops STARTING checks after this; a check already running may exceed it. */
 const VERIFY_STAGE_LIMIT_MS = 1_800_000
+/** tedious requestTimeout on the checks' own target connection: the largest check budget. */
+const TARGET_REQUEST_TIMEOUT_MS = 600_000
 const DB_NAME = /^[A-Za-z0-9_]+$/
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -95,7 +100,11 @@ export interface RunnerArgs {
   run: string
   only: string[] | null
   runbookRun: string | null
+  /** Accept any captured run (re-run runbook), not only one still waiting to be verified. */
+  rerun: boolean
 }
+
+const FLAGS = new Set(['rerun'])
 
 /** Parses and validates the command line; returns the error text on bad input. */
 export function parseArgs(argv: string[]): RunnerArgs | string {
@@ -105,6 +114,7 @@ export function parseArgs(argv: string[]): RunnerArgs | string {
     if (!a.startsWith('--')) return `unexpected argument: ${a}`
     const eq = a.indexOf('=')
     if (eq > 0) raw.set(a.slice(2, eq), a.slice(eq + 1))
+    else if (FLAGS.has(a.slice(2))) raw.set(a.slice(2), 'true')
     else {
       const v = argv[i + 1]
       if (v === undefined || v.startsWith('--')) return `missing value for ${a}`
@@ -112,7 +122,7 @@ export function parseArgs(argv: string[]): RunnerArgs | string {
       i++
     }
   }
-  const known = new Set(['stage', 'target', 'results-db', 'run', 'only', 'runbook-run'])
+  const known = new Set(['stage', 'target', 'results-db', 'run', 'only', 'runbook-run', 'rerun'])
   for (const k of raw.keys()) if (!known.has(k)) return `unknown option --${k}`
   const stage = raw.get('stage')
   if (stage !== 'baseline' && stage !== 'current') return '--stage must be baseline or current'
@@ -121,10 +131,15 @@ export function parseArgs(argv: string[]): RunnerArgs | string {
   if (!DB_NAME.test(target)) return '--target must be a database name'
   if (!DB_NAME.test(resultsDb)) return '--results-db must be a database name'
   if (target.toUpperCase() === 'EFP') return 'refusing to check the production database EFP'
+  if (resultsDb.toUpperCase() === 'EFP')
+    return 'refusing to write results to the production database EFP'
   if (target.toLowerCase() === resultsDb.toLowerCase())
     return '--target and --results-db must be different databases'
   const run = raw.get('run')
   if (run !== undefined && stage !== 'current') return '--run is for --stage current only'
+  const rerun = raw.has('rerun')
+  if (rerun && raw.get('rerun') !== 'true') return '--rerun takes no value'
+  if (rerun && stage !== 'current') return '--rerun is for --stage current only'
   if (run !== undefined && run !== 'latest' && !UUID.test(run))
     return '--run must be a run id or latest'
   const runbookRun = raw.get('runbook-run')
@@ -139,7 +154,15 @@ export function parseArgs(argv: string[]): RunnerArgs | string {
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean)
-  return { stage, target, resultsDb, run: run ?? 'latest', only, runbookRun: runbookRun ?? null }
+  return {
+    stage,
+    target,
+    resultsDb,
+    run: run ?? 'latest',
+    only,
+    runbookRun: runbookRun ?? null,
+    rerun
+  }
 }
 
 const say = (line: string) => process.stdout.write(`${line}\n`)
@@ -155,9 +178,9 @@ function event(step: string, status: 'start' | 'ok' | 'fail', secs?: number): vo
 
 const secsOf = (ms: number) => Math.round(ms / 1000)
 
-function contextFor(check: QualityCheck, target: string): QualityCheckContext {
+function contextFor(check: QualityCheck, target: string, targetDb: Knex): QualityCheckContext {
   return {
-    db: db as unknown as Knex,
+    db: targetDb,
     database: target,
     log: (message) => say(`  [${check.id}] ${message}`)
   }
@@ -171,19 +194,78 @@ const metaOf = (c: QualityCheck) => ({
   ...(c.tolerance ? { tolerance: c.tolerance } : {})
 })
 
-/** A Knex on the results database with the core connection's settings. */
-function resultsKnex(database: string): Knex {
+/**
+ * Connection settings for another database on the core server. Built explicitly:
+ * knex hides `password` on its stored config (non-enumerable), so spreading
+ * `db.client.config.connection` alone would drop it and every login would fail.
+ */
+export function connectionFor(
+  base: Record<string, unknown>,
+  database: string,
+  extra: Record<string, unknown> = {},
+  fallbackPassword?: string
+): Record<string, unknown> {
+  const password = (base as { password?: unknown }).password ?? fallbackPassword
+  const options =
+    base.options && typeof base.options === 'object' ? { ...(base.options as object) } : undefined
+  return {
+    ...base,
+    ...(options ? { options } : {}),
+    ...(password !== undefined ? { password } : {}),
+    database,
+    ...extra
+  }
+}
+
+/** A Knex on `database` with the core connection's server, login and options. */
+function knexFor(database: string, extra: Record<string, unknown> = {}): Knex {
   const cfg = (db as unknown as Knex).client.config as Knex.Config
   const conn = cfg.connection
   if (!conn || typeof conn !== 'object') throw new Error('core connection settings unavailable')
   return knex({
     client: cfg.client,
-    connection: { ...(conn as object), database } as Knex.StaticConnectionConfig,
+    connection: connectionFor(
+      conn as Record<string, unknown>,
+      database,
+      extra,
+      config.DB_PASSWORD
+    ) as Knex.StaticConnectionConfig,
     pool: { min: 0, max: 4 }
   })
 }
 
-async function runBaseline(app: Knex, args: RunnerArgs, checks: QualityCheck[]): Promise<void> {
+/**
+ * Which run a verify stage may diff against. `latest` (default) only takes a
+ * capture still waiting to be verified, so a capture that died before creating
+ * its run never makes tonight's target diff against yesterday's baseline;
+ * `--rerun` and an explicit `--run` take any captured run of the target.
+ */
+export function pickRun(
+  run: Pick<RunRow, 'id' | 'target' | 'status' | 'captured_at' | 'verified_at'> | null,
+  opts: { target: string; requested: string; rerun: boolean }
+): { id: string } | { error: string } {
+  const explicit = opts.requested !== 'latest'
+  if (!run || run.target.toLowerCase() !== opts.target.toLowerCase())
+    return {
+      error: explicit
+        ? `no quality run ${opts.requested} for ${opts.target}`
+        : `no quality run for ${opts.target}`
+    }
+  if (!explicit && !opts.rerun && (!run.captured_at || run.verified_at))
+    return {
+      error: `latest run ${run.id} for ${opts.target} is ${run.status} — no fresh capture to verify`
+    }
+  if (!run.captured_at)
+    return { error: `run ${run.id} for ${opts.target} is ${run.status} — it has no capture` }
+  return { id: run.id }
+}
+
+async function runBaseline(
+  app: Knex,
+  targetDb: Knex,
+  args: RunnerArgs,
+  checks: QualityCheck[]
+): Promise<void> {
   const run = await createRun(app, args.target, args.runbookRun)
   say(`quality run ${run} — baseline of ${args.target}, ${checks.length} checks`)
   let errors = 0
@@ -197,7 +279,7 @@ async function runBaseline(app: Knex, args: RunnerArgs, checks: QualityCheck[]):
           maxRows: MAX_ROWS,
           run: (ctx) => check.baseline(ctx)
         },
-        contextFor(check, args.target)
+        contextFor(check, args.target, targetDb)
       )
       await saveSide(app, run, check.id, 'baseline', out)
       if (out.error) {
@@ -216,25 +298,26 @@ async function runBaseline(app: Knex, args: RunnerArgs, checks: QualityCheck[]):
   say(`### DONE — quality baseline: ${checks.length} checks, ${errors} errors`)
 }
 
-async function runCurrent(app: Knex, args: RunnerArgs, checks: QualityCheck[]): Promise<void> {
-  let run: string
-  if (args.run === 'latest') {
-    const latest = await latestRunForTarget(app, args.target)
-    if (!latest) {
-      say(`### FAILED before starting: no quality run for ${args.target}`)
-      return
-    }
-    run = latest.id
-  } else {
-    const row = (await app('nivaro_quality_runs').where({ id: args.run }).first('target')) as
-      | { target: string }
-      | undefined
-    if (!row || row.target.toLowerCase() !== args.target.toLowerCase()) {
-      say(`### FAILED before starting: no quality run ${args.run} for ${args.target}`)
-      return
-    }
-    run = args.run
+async function runCurrent(
+  app: Knex,
+  targetDb: Knex,
+  args: RunnerArgs,
+  checks: QualityCheck[]
+): Promise<void> {
+  const candidate =
+    args.run === 'latest'
+      ? await latestRunForTarget(app, args.target).then((r) => (r ? getRun(app, r.id) : null))
+      : await getRun(app, args.run)
+  const picked = pickRun(candidate, {
+    target: args.target,
+    requested: args.run,
+    rerun: args.rerun
+  })
+  if ('error' in picked) {
+    say(`### FAILED before starting: ${picked.error}`)
+    return
   }
+  const run = picked.id
   say(`quality run ${run} — verifying ${args.target}, ${checks.length} checks`)
   await setRunStatus(app, run, { status: 'verifying' })
   const known = await loadKnown(app)
@@ -267,7 +350,7 @@ async function runCurrent(app: Knex, args: RunnerArgs, checks: QualityCheck[]): 
           maxRows: MAX_ROWS,
           run: (ctx) => check.current(ctx)
         },
-        contextFor(check, args.target)
+        contextFor(check, args.target, targetDb)
       )
       await saveSide(app, run, check.id, 'current', out)
       let diff: DiffResult | undefined
@@ -316,7 +399,7 @@ async function main(): Promise<void> {
   if (typeof args === 'string') {
     sayErr(`quality-checks: ${args}`)
     sayErr(
-      'usage: quality-checks --stage baseline|current --target <db> --results-db <db> [--run <uuid|latest>] [--only a,b] [--runbook-run <uuid>]'
+      'usage: quality-checks --stage baseline|current --target <db> --results-db <db> [--run <uuid|latest>] [--rerun] [--only a,b] [--runbook-run <uuid>]'
     )
     process.exit(2)
   }
@@ -327,8 +410,16 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   let app: Knex | null = null
+  let targetDb: Knex | null = null
   try {
-    app = resultsKnex(args.resultsDb)
+    app = knexFor(args.resultsDb)
+    if (!(await app.schema.hasTable('nivaro_quality_runs'))) {
+      say(
+        `### FAILED before starting: ${args.resultsDb} has no nivaro_quality_runs table — not an app database with migration 404`
+      )
+      return
+    }
+    targetDb = knexFor(args.target, { requestTimeout: TARGET_REQUEST_TIMEOUT_MS })
     const extDir = fileURLToPath(new URL('../../extensions', import.meta.url))
     let checks = await loadQualityChecks(extDir)
     if (args.only) {
@@ -337,17 +428,18 @@ async function main(): Promise<void> {
         if (!checks.some((c) => c.id === id)) say(`  --only: no check named ${id}`)
       checks = checks.filter((c) => wanted.has(c.id))
     }
-    if (args.stage === 'baseline') await runBaseline(app, args, checks)
-    else await runCurrent(app, args, checks)
+    if (args.stage === 'baseline') await runBaseline(app, targetDb, args, checks)
+    else await runCurrent(app, targetDb, args, checks)
   } catch (err) {
     say(`### FAILED — quality ${args.stage}: ${errorText(err)}`)
   } finally {
     await app?.destroy().catch(() => {})
+    await targetDb?.destroy().catch(() => {})
     await closeDb().catch(() => {})
+    // stdout to a pipe is asynchronous on macOS: let the DONE line out before exiting.
+    await new Promise<void>((r) => process.stdout.write('', () => r()))
+    process.exit(0)
   }
-  // stdout to a pipe is asynchronous on macOS: let the DONE line out before exiting.
-  await new Promise<void>((r) => process.stdout.write('', () => r()))
-  process.exit(0)
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main()

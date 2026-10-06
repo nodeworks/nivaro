@@ -65,7 +65,8 @@ describe('parseArgs', () => {
       resultsDb: 'EFP_Development',
       run: 'latest',
       only: ['a', 'b'],
-      runbookRun: null
+      runbookRun: null,
+      rerun: false
     })
     expect(parseArgs(['--stage=current', '--target=S', '--results-db=D'])).toMatchObject({
       stage: 'current',
@@ -131,5 +132,83 @@ describe('loadQualityChecks', () => {
     expect(checks[0].label).toBe('A')
     expect(logs.some((l) => l.includes('duplicate check id one.a'))).toBe(true)
     expect(logs.filter((l) => l.includes('must be a path inside'))).toHaveLength(2)
+  })
+})
+
+describe('fix round 1', () => {
+  it('refuses EFP and the target as the results database', async () => {
+    const { parseArgs } = await import('../../../scripts/quality-checks.js')
+    expect(
+      parseArgs(['--stage', 'baseline', '--target', 'EFP_Staging', '--results-db', 'efp'])
+    ).toBe('refusing to write results to the production database EFP')
+    expect(
+      parseArgs(['--stage', 'current', '--target', 'EFP_Staging', '--results-db', 'EFP_STAGING'])
+    ).toBe('--target and --results-db must be different databases')
+    expect(
+      parseArgs(['--stage', 'current', '--target', 'S', '--results-db', 'D', '--rerun'])
+    ).toMatchObject({ rerun: true, run: 'latest' })
+    expect(
+      parseArgs(['--stage', 'baseline', '--target', 'S', '--results-db', 'D', '--rerun'])
+    ).toBe('--rerun is for --stage current only')
+  })
+
+  it('keeps the password knex hides on its stored connection', async () => {
+    const { connectionFor } = await import('../../../scripts/quality-checks.js')
+    const knex = (await import('knex')).default
+    const k = knex({
+      client: 'mssql',
+      connection: {
+        server: 'h',
+        database: 'EFP_Staging',
+        user: 'u',
+        password: 'pw',
+        options: { encrypt: true }
+      }
+    })
+    const stored = k.client.config.connection as Record<string, unknown>
+    // the trap: a spread of the stored connection has no password
+    expect({ ...stored }.password).toBeUndefined()
+    const built = connectionFor(stored, 'EFP_Development', { requestTimeout: 600000 })
+    expect(built).toMatchObject({
+      server: 'h',
+      user: 'u',
+      password: 'pw',
+      database: 'EFP_Development',
+      requestTimeout: 600000,
+      options: { encrypt: true }
+    })
+    expect(Object.keys(built)).toContain('password')
+    expect(built.options).not.toBe(stored.options)
+    expect(connectionFor({ server: 'h' }, 'X', {}, 'fallback').password).toBe('fallback')
+    await k.destroy()
+  })
+
+  it('picks only a fresh capture for latest, any capture for --rerun or an explicit id', async () => {
+    const { pickRun } = await import('../../../scripts/quality-checks.js')
+    const at = new Date('2026-10-06T01:00:00Z')
+    const fresh = { id: 'R1', target: 'T', status: 'captured', captured_at: at, verified_at: null }
+    const verified = { ...fresh, status: 'done', verified_at: at }
+    const died = { ...fresh, status: 'capturing', captured_at: null }
+    const latest = { target: 'T', requested: 'latest', rerun: false }
+    expect(pickRun(fresh, latest)).toEqual({ id: 'R1' })
+    expect(pickRun({ ...fresh, status: 'verifying' }, latest)).toEqual({ id: 'R1' })
+    expect(pickRun(verified, latest)).toEqual({
+      error: 'latest run R1 for T is done — no fresh capture to verify'
+    })
+    expect(pickRun(died, latest)).toEqual({
+      error: 'latest run R1 for T is capturing — no fresh capture to verify'
+    })
+    expect(pickRun(null, latest)).toEqual({ error: 'no quality run for T' })
+    expect(pickRun(verified, { ...latest, rerun: true })).toEqual({ id: 'R1' })
+    expect(pickRun(died, { ...latest, rerun: true })).toEqual({
+      error: 'run R1 for T is capturing — it has no capture'
+    })
+    expect(pickRun(verified, { target: 'T', requested: 'R1', rerun: false })).toEqual({ id: 'R1' })
+    expect(pickRun(died, { target: 'T', requested: 'R1', rerun: false })).toEqual({
+      error: 'run R1 for T is capturing — it has no capture'
+    })
+    expect(pickRun(verified, { target: 'U', requested: 'R1', rerun: false })).toEqual({
+      error: 'no quality run R1 for U'
+    })
   })
 })

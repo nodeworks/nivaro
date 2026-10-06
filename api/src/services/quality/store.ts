@@ -145,6 +145,21 @@ export async function latestRunForTarget(
   return row ? { id: row.id, status: row.status } : null
 }
 
+export interface RunRow {
+  id: string
+  target: string
+  status: string
+  captured_at: Date | null
+  verified_at: Date | null
+}
+
+export async function getRun(app: Knex, id: string): Promise<RunRow | null> {
+  const row = (await app(RUNS)
+    .where({ id })
+    .first('id', 'target', 'status', 'captured_at', 'verified_at')) as RunRow | undefined
+  return row ?? null
+}
+
 export async function loadKnown(app: Knex): Promise<KnownDifference[]> {
   const rows = (await app(KNOWN).select('id', 'check_id', 'match', 'reason')) as Array<{
     id: number
