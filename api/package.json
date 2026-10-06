@@ -12,6 +12,7 @@
     "migrate:rollback": "tsx src/db/migrate.ts rollback",
     "traffic:replay": "tsx src/scripts/traffic-replay.ts",
     "runbook:agent": "tsx src/scripts/runbook-agent.ts",
+    "quality:checks": "tsx src/scripts/quality-checks.ts",
     "setup:template": "tsx src/db/setup-template.ts",
     "fix:roles": "tsx src/db/fix-roles.ts",
     "fix:collections": "tsx src/db/fix-collections.ts",
