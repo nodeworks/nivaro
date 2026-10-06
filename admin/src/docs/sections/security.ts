@@ -259,6 +259,22 @@ DELETE /api/api-keys/:id    # revoke immediately`
     {
       type: 'p',
       text: "The explorer toolbar saves the current query, its variables and the key it ran as, as a fixture (kept in the browser), so a partner's exact call can be replayed after a schema change."
+    },
+    { type: 'h2', id: 'api-keys-usage', text: 'Usage per key and monthly statements' },
+    {
+      type: 'p',
+      text: "A key's Usage button on /api-keys opens one month of its calls: calls by day and by route family (`items/<collection>`, `graphql`, `inbound/<key>`…), the error rate, rate-limit refusals (429 or `API_KEY_RATE_LIMITED`), refused calls (401 / 403), successful reads and writes, and the GraphQL operations it ran. CSV downloads the same figures as one flat file. The request log keeps 14 days, so a month that reaches further back is marked partial and says from which day it counts; the log records no row or byte counts, so egress is shown as successful reads."
+    },
+    {
+      type: 'p',
+      text: 'Turn on the monthly usage statement in the same sheet and the key emails last month’s figures on the 1st (cron `api-key-usage-statements`, 07:10) to its usage contact, or to the key’s owner when no contact is set. Each key gets one statement per month; mail test mode applies.'
+    },
+    {
+      type: 'pre',
+      code: `GET   /api/api-keys/:id/usage?month=2026-09            // monthly report (JSON)
+GET   /api/api-keys/:id/usage?month=2026-09&format=csv // same, as CSV
+GET   /api/api-keys/:id/usage                         // last 30 days (the older summary)
+PATCH /api/api-keys/:id  { "usage_statement": true, "usage_contact": "team@partner.example" }`
     }
   ]
 }

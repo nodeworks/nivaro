@@ -22,6 +22,13 @@ import {
   templateProblem
 } from '../services/inbound-mapping-bench.js'
 import {
+  deleteMappingVersions,
+  diffMappingVersion,
+  listMappingVersions,
+  restoreMappingVersion,
+  snapshotMappingVersion
+} from '../services/inbound-mapping-versions.js'
+import {
   applyInboundMapping,
   type InboundMappingRow,
   type InboundRunOutput,
@@ -329,6 +336,7 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
     const row = (await db('nivaro_inbound_mappings')
       .where({ key: patch.key as string })
       .first()) as InboundMappingRow
+    await snapshotMappingVersion(row.id, 'created', req.user?.id)
     await logActivity({
       action: 'create',
       collection: 'nivaro_inbound_mappings',
@@ -355,9 +363,11 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
         .first('id')
       if (dup) return reply.code(409).send({ error: 'A mapping with that key already exists' })
     }
+    await snapshotMappingVersion(id, 'before edit', req.user?.id)
     await db('nivaro_inbound_mappings')
       .where({ id })
       .update({ ...patch, updated_at: new Date() })
+    await snapshotMappingVersion(id, `edited ${Object.keys(patch).join(', ')}`, req.user?.id)
     const row = (await db('nivaro_inbound_mappings').where({ id }).first()) as InboundMappingRow
     await logActivity({
       action: 'update',
@@ -371,6 +381,8 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
   })
 
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
+    // Versions FK the mapping NO ACTION — clear them first.
+    await deleteMappingVersions(Number(req.params.id))
     const deleted = await db('nivaro_inbound_mappings')
       .where({ id: Number(req.params.id) })
       .delete()
@@ -384,6 +396,47 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
     })
     return reply.code(204).send()
   })
+
+  // ── #1266 — versions: every save snapshots the mapping (deduped, newest 30) ──
+  app.get<{ Params: { id: string } }>('/:id/versions', async (req, reply) => {
+    const existing = await loadById(req.params.id)
+    if (!existing) return reply.code(404).send({ error: 'Not found' })
+    return { data: await listMappingVersions(existing.id) }
+  })
+
+  app.get<{ Params: { id: string; vid: string }; Querystring: { against?: string } }>(
+    '/:id/versions/:vid/diff',
+    async (req, reply) => {
+      const against =
+        !req.query.against || req.query.against === 'current'
+          ? ('current' as const)
+          : Number(req.query.against)
+      if (against !== 'current' && !Number.isInteger(against))
+        return reply.code(400).send({ error: 'against must be "current" or a version id' })
+      const diff = await diffMappingVersion(Number(req.params.id), Number(req.params.vid), against)
+      if (!diff) return reply.code(404).send({ error: 'Version not found' })
+      return { data: diff }
+    }
+  )
+
+  app.post<{ Params: { id: string; vid: string } }>(
+    '/:id/versions/:vid/restore',
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      const res = await restoreMappingVersion(id, Number(req.params.vid), req.user?.id)
+      if (!res.ok) return reply.code(res.status).send({ error: res.error })
+      const row = (await db('nivaro_inbound_mappings').where({ id }).first()) as InboundMappingRow
+      await logActivity({
+        action: 'inbound-mapping-restore',
+        collection: 'nivaro_inbound_mappings',
+        item: String(id),
+        user: req.user?.id,
+        req,
+        comment: `${row.key}: restored v${res.version}`
+      })
+      return { data: serialize(row) }
+    }
+  )
 
   type DraftBody = {
     rules?: unknown[]
@@ -419,15 +472,22 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
 
   // ── #624 — fixtures: named partner payloads saved with the mapping ──────
 
-  async function saveFixtures(id: number, fixtures: InboundFixture[]) {
+  async function saveFixtures(
+    id: number,
+    fixtures: InboundFixture[],
+    note: string,
+    userId?: string | null
+  ) {
     if (!(await hasColumn('nivaro_inbound_mappings', 'fixtures')))
       throw Object.assign(new Error('Fixtures need migration 383'), { statusCode: 409 })
+    await snapshotMappingVersion(id, 'before edit', userId)
     await db('nivaro_inbound_mappings')
       .where({ id })
       .update({
         fixtures: fixtures.length ? JSON.stringify(fixtures) : null,
         updated_at: new Date()
       })
+    await snapshotMappingVersion(id, note, userId)
   }
 
   /** The payloads recent calls posted to this mapping's endpoint. */
@@ -522,7 +582,12 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
       source_log_id: sourceLogId,
       saved_at: new Date().toISOString()
     }
-    await saveFixtures(existing.id, [...fixtures, fixture])
+    await saveFixtures(
+      existing.id,
+      [...fixtures, fixture],
+      `fixture added: ${name}`.slice(0, 255),
+      req.user?.id
+    )
     await logActivity({
       action: 'inbound-fixture-add',
       collection: 'nivaro_inbound_mappings',
@@ -551,7 +616,7 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
     if (typeof req.body?.name === 'string' && req.body.name.trim())
       hit.name = req.body.name.trim().slice(0, 120)
     if (req.body?.expect === 'write' || req.body?.expect === 'reject') hit.expect = req.body.expect
-    await saveFixtures(existing.id, fixtures)
+    await saveFixtures(existing.id, fixtures, `fixture edited: ${hit.name}`, req.user?.id)
     await logActivity({
       action: 'inbound-fixture-update',
       collection: 'nivaro_inbound_mappings',
@@ -571,7 +636,9 @@ export async function inboundMappingsRoutes(app: FastifyInstance) {
     if (!hit) return reply.code(404).send({ error: 'Fixture not found' })
     await saveFixtures(
       existing.id,
-      fixtures.filter((f) => f.id !== hit.id)
+      fixtures.filter((f) => f.id !== hit.id),
+      `fixture removed: ${hit.name}`,
+      req.user?.id
     )
     await logActivity({
       action: 'inbound-fixture-delete',

@@ -143,6 +143,7 @@ export const devexOpenApi: DocSection = {
     {
       type: 'pre',
       code: `GET /api/dev-tools/openapi.json     # Full OpenAPI 3.1 spec
+GET /api/dev-tools/openapi.json?role=<role id>  # Narrowed to one role
 GET /api/dev-tools/postman.json     # Postman collection
 GET /api/dev-tools/bruno.json       # Bruno collection format
 GET /api/dev-tools/graphql-schema   # GraphQL SDL
@@ -151,6 +152,15 @@ GET /api/dev-tools/graphql-schema   # GraphQL SDL
 cms.request(getOpenApi())
 cms.request(getPostmanCollection())
 cms.request(getBrunoCollection())`
+    },
+    {
+      type: 'h3',
+      id: 'openapi-per-role',
+      text: 'A spec for one role'
+    },
+    {
+      type: 'p',
+      text: "Pick a role next to the openapi.json download on the API Reference page (or pass `?role=<id>`) and the spec is narrowed to what that role's policies allow: only the collections and operations it holds, response schemas listing the fields it can read (`readOnly` when it can read but never write them), and `<Name>Create` / `<Name>Update` request schemas listing the fields it can write (`writeOnly` when it cannot read them back). Each operation's description names the role's row filter (for example `only rows where owner is the calling user`) and the User Scope dimensions that can narrow a caller further. A role with admin access gets the full spec, marked as such."
     },
     {
       type: 'h3',

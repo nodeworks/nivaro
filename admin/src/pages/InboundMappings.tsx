@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Copy, History, Inbox, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { InboundMappingVersions } from '@/components/inbound-mapping-versions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -208,7 +209,11 @@ export function InboundMappingsPage() {
     } else if (selected === null) loadedFor.current = null
   }, [selected, current])
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ['inbound-mappings'] })
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ['inbound-mappings'] })
+    void queryClient.invalidateQueries({ queryKey: ['inbound-mapping-versions'] })
+    void queryClient.invalidateQueries({ queryKey: ['inbound-mapping-version-diff'] })
+  }
   const onErr = (e: { response?: { data?: { error?: string } } }) =>
     toast.error(e.response?.data?.error ?? 'Request failed', { duration: 8000 })
   const create = useMutation({
@@ -490,6 +495,16 @@ export function InboundMappingsPage() {
                 </div>
               </div>
               {current && <FixtureBench mapping={current} draft={draft} />}
+              {current && (
+                <InboundMappingVersions<Mapping>
+                  mappingId={current.id}
+                  onRestored={(m) => {
+                    setDraft(toDraft(m))
+                    loadedFor.current = m.id
+                    invalidate()
+                  }}
+                />
+              )}
               {current && <TestPanel mapping={current} draft={draft} />}
             </div>
           )}

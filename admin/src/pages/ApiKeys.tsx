@@ -1,7 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Check, ChevronsUpDown, Copy, KeyRound, Plus, Trash2, X } from 'lucide-react'
+import { BarChart3, Check, ChevronsUpDown, Copy, KeyRound, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ApiKeyUsageSheet } from '@/components/api-key-usage-sheet'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -37,6 +38,8 @@ interface ApiKey {
   last_used_at: string | null
   is_active: boolean
   sandbox?: boolean
+  usage_statement?: boolean
+  usage_contact?: string | null
   created_at: string
 }
 
@@ -233,6 +236,7 @@ export function ApiKeysPage() {
   const [form, setForm] = useState<FormState>(FORM_DEFAULTS)
   const [createdKey, setCreatedKey] = useState<string | null>(null)
   const [confirm, setConfirm] = useState<'revoke' | 'delete' | null>(null)
+  const [usageOpen, setUsageOpen] = useState(false)
 
   const { data: keys = [], isLoading } = useQuery<ApiKey[]>({
     queryKey: ['api-keys'],
@@ -562,16 +566,37 @@ export function ApiKeysPage() {
                     </Badge>
                   )}
                 </h2>
-                {selected.is_active ? (
-                  <Badge variant='success' className='h-5 px-2 text-[11px]'>
-                    Active
-                  </Badge>
-                ) : (
-                  <Badge variant='outline' className='h-5 px-2 text-[11px] text-slate-400'>
-                    Revoked
-                  </Badge>
-                )}
+                <div className='flex items-center gap-2'>
+                  <Button
+                    size='sm'
+                    variant='outline'
+                    className='h-7 gap-1.5 text-[12px]'
+                    onClick={() => setUsageOpen(true)}
+                    data-key-usage-open
+                  >
+                    <BarChart3 className='h-3.5 w-3.5' />
+                    Usage
+                  </Button>
+                  {selected.is_active ? (
+                    <Badge variant='success' className='h-5 px-2 text-[11px]'>
+                      Active
+                    </Badge>
+                  ) : (
+                    <Badge variant='outline' className='h-5 px-2 text-[11px] text-slate-400'>
+                      Revoked
+                    </Badge>
+                  )}
+                </div>
               </div>
+              <ApiKeyUsageSheet
+                key={selected.id}
+                keyId={selected.id}
+                keyName={selected.name}
+                usageStatement={!!selected.usage_statement}
+                usageContact={selected.usage_contact ?? null}
+                open={usageOpen}
+                onOpenChange={setUsageOpen}
+              />
 
               <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 dark:border-border dark:bg-border sm:grid-cols-3'>
                 <MetaCell
