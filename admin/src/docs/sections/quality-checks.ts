@@ -68,7 +68,7 @@ export const qualityChecksDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'A known difference belongs to one check and matches rows by their key or cluster.',
+        "A known difference belongs to one check and matches rows by their key or cluster. A key pattern may use * for any run of characters, up to four times. Mark as expected on a row names that row's key exactly, * included.",
         'The Known differences tab lists them with the reason, who added it and how many rows it matched last time.',
         'A known difference that matches nothing for 3 runs in a row is marked stale. It is kept until someone removes it.',
         'Known differences are configuration. They are copied with the rest of the configuration.'
@@ -77,7 +77,7 @@ export const qualityChecksDocs: DocSection = {
     { type: 'h2', id: 'quality-checks-rerun', text: 'Re-run quality checks' },
     {
       type: 'p',
-      text: 'Re-run checks starts the read-only check runbook on the host without rebuilding anything. It runs the verify phase again against the current database, using the baseline of the latest run. It skips the dry-run gate that other host runbooks require, because it writes nothing outside the results tables. It refuses to start while a rebuild is running.'
+      text: 'Re-run checks starts the read-only check runbook on the host without rebuilding anything. It runs the verify phase again against the current database, using the baseline of the latest run. It skips the dry-run gate that other host runbooks require, because it writes nothing outside the results tables. It refuses to start while a rebuild of the same database is running. The button queues only the runbook the extension that supplies the checks declares for it (`quality_rerun`), and only when that runbook runs on the host and declares `skip_dry_gate`.'
     },
     { type: 'h2', id: 'quality-checks-csv', text: 'CSV export' },
     {
@@ -122,6 +122,9 @@ export const qualityChecksDocs: DocSection = {
 export default {
   id: 'my-ext',
   quality_checks: 'extensions/my-ext/quality/checks.ts',
+  // Optional: the key of one of its own host runbooks (runs_on 'host',
+  // skip_dry_gate) that re-runs the checks; the console's Re-run queues it.
+  quality_rerun: 'checks-rerun',
   async register(ctx) {}
 }
 

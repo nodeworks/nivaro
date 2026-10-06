@@ -6803,13 +6803,13 @@ Authorization: Bearer &lt;admin-token&gt;
           <h2 class="doc-h2" id="quality-checks-known">Known differences</h2>
           <p class="doc-p">Some differences are deliberate. Use Mark as expected on a mismatch row, or on a whole cluster, and give a reason. The difference then reads amber instead of red in every later run.</p>
           <ul class="doc-ul">
-            <li>A known difference belongs to one check and matches rows by their key or cluster.</li>
+            <li>A known difference belongs to one check and matches rows by their key or cluster. A key pattern may use * for any run of characters, up to four times. Mark as expected on a row names that row&#x27;s key exactly, * included.</li>
             <li>The Known differences tab lists them with the reason, who added it and how many rows it matched last time.</li>
             <li>A known difference that matches nothing for 3 runs in a row is marked stale. It is kept until someone removes it.</li>
             <li>Known differences are configuration. They are copied with the rest of the configuration.</li>
           </ul>
           <h2 class="doc-h2" id="quality-checks-rerun">Re-run quality checks</h2>
-          <p class="doc-p">Re-run checks starts the read-only check runbook on the host without rebuilding anything. It runs the verify phase again against the current database, using the baseline of the latest run. It skips the dry-run gate that other host runbooks require, because it writes nothing outside the results tables. It refuses to start while a rebuild is running.</p>
+          <p class="doc-p">Re-run checks starts the read-only check runbook on the host without rebuilding anything. It runs the verify phase again against the current database, using the baseline of the latest run. It skips the dry-run gate that other host runbooks require, because it writes nothing outside the results tables. It refuses to start while a rebuild of the same database is running. The button queues only the runbook the extension that supplies the checks declares for it (<code class="doc-code">quality_rerun</code>), and only when that runbook runs on the host and declares <code class="doc-code">skip_dry_gate</code>.</p>
           <h2 class="doc-h2" id="quality-checks-csv">CSV export</h2>
           <p class="doc-p">Each check can be downloaded as CSV: one line per mismatch row, with the key, label, status, whether it is expected, the differing fields, the baseline and current values, and the reason. Cells that begin with a formula character are neutralised so the file is safe to open in a spreadsheet.</p>
           <h2 class="doc-h2" id="quality-checks-report-only">Report-only</h2>
@@ -6829,6 +6829,9 @@ Authorization: Bearer &lt;admin-token&gt;
 export default {
   id: &#x27;my-ext&#x27;,
   quality_checks: &#x27;extensions/my-ext/quality/checks.ts&#x27;,
+  // Optional: the key of one of its own host runbooks (runs_on &#x27;host&#x27;,
+  // skip_dry_gate) that re-runs the checks; the console&#x27;s Re-run queues it.
+  quality_rerun: &#x27;checks-rerun&#x27;,
   async register(ctx) {}
 }
 
