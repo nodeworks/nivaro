@@ -3,6 +3,7 @@
  * Keys are entity identities so a problem keeps its first_seen across runs.
  */
 import { db } from '../db/index.js'
+import { AUTO_FAILURE_TABLE, memoryAvailable } from './auto-transition-memory.js'
 import { selectInChunks } from './db-batch.js'
 import { importCadence, isImportStale } from './integration-signal-settings.js'
 import { registerIntegrationSignal, type SignalRow } from './integration-signals.js'
@@ -250,6 +251,67 @@ export function registerCoreIntegrationSignals(): void {
           ],
           drill: { kind: 'submission', id: String(r.id) }
         }))
+      )
+      return { count: out.length, rows: out }
+    }
+  })
+
+  // #1217: auto transitions the engine stopped re-firing — their blocking push
+  // failed and nothing it would send has changed. One row per (record,
+  // transition); the memory row's first failure is where the problem began.
+  registerIntegrationSignal({
+    id: 'core:auto-transition-held',
+    label: 'Automatic moves waiting on a person',
+    description:
+      'An automatic transition whose push the partner refused, held so it stops re-sending the same payload. It tries again when the record changes, a person retries the push, or someone moves the record by hand.',
+    tab: 'pushes',
+    severity: 'warn',
+    thresholds: [],
+    evaluate: async () => {
+      if (!(await memoryAvailable())) return { count: 0, rows: [] }
+      const rows = (await db(`${AUTO_FAILURE_TABLE} as f`)
+        .join('nivaro_workflow_instances as i', 'i.id', 'f.instance_id')
+        .whereNull('i.completed_at')
+        .orderBy('f.first_failed_at', 'desc')
+        .limit(2000)
+        .select(
+          'f.id',
+          'f.collection',
+          'f.item',
+          'f.transition_id',
+          'f.transition_label',
+          'f.error_class',
+          'f.error',
+          'f.attempts',
+          'f.first_failed_at'
+        )) as Array<{
+        id: number
+        collection: string
+        item: string
+        transition_id: string
+        transition_label: string | null
+        error_class: string | null
+        error: string | null
+        attempts: number
+        first_failed_at: Date
+      }>
+      const out: SignalRow[] = uniqueByKey(
+        rows.map((r) => {
+          const label = r.transition_label ?? 'Automatic transition'
+          return {
+            key: `${r.collection}:${r.item}:${String(r.transition_id).toUpperCase()}`,
+            group: label,
+            group_label: label,
+            title: `${label} stopped retrying`,
+            detail: `${r.error ?? 'push refused'}${r.error_class ? ` · ${r.error_class}` : ''} · ${r.attempts} attempt${Number(r.attempts) === 1 ? '' : 's'}`,
+            since: new Date(r.first_failed_at).toISOString(),
+            // The first failure names THIS hold; a clear and a fresh failure
+            // later is a new occurrence.
+            occurrence: `held:${new Date(r.first_failed_at).toISOString()}`,
+            record: { collection: r.collection, id: String(r.item) },
+            actions: [open(r.collection, String(r.item))]
+          }
+        })
       )
       return { count: out.length, rows: out }
     }

@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { clearAutoFailures, heldForInstance } from '../services/auto-transition-memory.js'
 import { activeAddendumInstances } from '../services/addendum-summary.js'
 import { buildApprovalBrief } from '../services/approval-brief.js'
 import { withChainStep } from '../services/chain.js'
@@ -21,6 +22,7 @@ import {
 } from '../services/pipeline-engine.js'
 import { ADDENDUM_COLLECTION } from '../services/pipeline-subject.js'
 import { registerReadinessCheck } from '../services/readiness.js'
+import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from '../services/record-access.js'
 import { claimTransition, TransitionDuplicateError } from '../services/transition-guard.js'
 import {
   evaluateTransitionRequirements,
@@ -95,6 +97,8 @@ interface WorkflowTransition {
   to_previous?: boolean | number
   /** Offered from list-row Actions menus (migration 312; default true). */
   in_row_menu?: boolean | number | null
+  /** Only the current step's owner (or an admin) may run it (migration 397). */
+  require_owner?: boolean | number | null
   /** How the move is described to people in mail / notifications (migration 352). */
   notify_text?: string | null
   sort: number
@@ -292,6 +296,7 @@ function formatTransition(t: WorkflowTransition) {
     auto_trigger: coerceBool(t.auto_trigger),
     to_previous: coerceBool(t.to_previous),
     in_row_menu: t.in_row_menu == null ? true : coerceBool(t.in_row_menu),
+    require_owner: coerceBool(t.require_owner),
     condition_rules: parseJson(t.condition_rules) as ConditionRule[] | null,
     requirements: parseJson(t.requirements) as ParsedRequirement[] | null
   }
@@ -1324,6 +1329,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       | 'auto_trigger'
       | 'to_previous'
       | 'in_row_menu'
+      | 'require_owner'
       | 'notify_text'
       | 'sort'
       | 'group_label'
@@ -1349,6 +1355,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       auto_trigger: body.auto_trigger ? 1 : 0,
       to_previous: body.to_previous ? 1 : 0,
       in_row_menu: body.in_row_menu === false ? 0 : 1,
+      // Probed: a tenant behind migration 397 keeps creating transitions.
+      ...((await hasColumn('nivaro_workflow_transitions', 'require_owner'))
+        ? { require_owner: body.require_owner ? 1 : 0 }
+        : {}),
       notify_text: body.notify_text?.trim() || null,
       sort: body.sort ?? 0,
       group_label: body.group_label?.trim() || null,
@@ -1448,6 +1458,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         to_previous: body.to_previous !== undefined ? (body.to_previous ? 1 : 0) : tx.to_previous,
         in_row_menu:
           body.in_row_menu !== undefined ? (body.in_row_menu === false ? 0 : 1) : tx.in_row_menu,
+        ...(body.require_owner !== undefined &&
+        (await hasColumn('nivaro_workflow_transitions', 'require_owner'))
+          ? { require_owner: body.require_owner ? 1 : 0 }
+          : {}),
         notify_text:
           body.notify_text !== undefined ? body.notify_text?.trim() || null : tx.notify_text,
         sort: body.sort ?? tx.sort,
@@ -2096,6 +2110,22 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       })
       .map(formatTransition)
 
+    // Owner-only transitions (#794): offered only to the people who own the
+    // current step (delegation applied) and admins — the same answer the
+    // execute paths give. Asked once, and only when one is on offer. A
+    // view-as-role preview has no person to judge, so it shows them.
+    let offeredTransitions = availableTransitions
+    if (!isAdmin && !asRole && req.user && availableTransitions.some((t) => t.require_owner)) {
+      const owner = await checkTransitionOwner({
+        user: req.user,
+        isAdmin: false,
+        collection,
+        item,
+        instanceId: String(instance.id)
+      })
+      if (!owner.allowed) offeredTransitions = availableTransitions.filter((t) => !t.require_owner)
+    }
+
     // Get history with joined state labels. #645: a delegate's move names the
     // out-of-office owner it stood in for (migration 395 — probed, so a
     // tenant behind it still answers).
@@ -2164,10 +2194,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         // ONLY on the server after a transition lands; the panel never reads
         // them, and on a template with dozens of integration pushes they were
         // 70 KB of a 90 KB response fetched on every record open.
-        available_transitions: availableTransitions.map(stripTransitionActions),
+        available_transitions: offeredTransitions.map(stripTransitionActions),
         all_transitions: transitions.map((t) => stripTransitionActions(formatTransition(t))),
         history,
-        binding: effectiveBinding
+        binding: effectiveBinding,
+        // #1217: auto transitions the engine stopped re-firing because their
+        // blocking push failed and nothing it would send has changed.
+        auto_held: await heldForInstance(String(instance.id))
       }
     })
   })
@@ -2316,6 +2349,21 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         }
       }
 
+      // Owner-only (#794): the caller must own the current step — delegates
+      // standing in for an out-of-office owner included, admins exempt.
+      if (coerceBool(transition.require_owner) && req.user) {
+        const owner = await checkTransitionOwner({
+          user: req.user,
+          isAdmin,
+          collection,
+          item,
+          instanceId: String(instance.id)
+        })
+        if (!owner.allowed) {
+          return reply.code(403).send({ error: owner.message, code: TRANSITION_OWNER_REQUIRED })
+        }
+      }
+
       // Transition requirements gate: block on incomplete child-row data before
       // even considering condition rules — a data-entry gate takes priority over
       // conditional branching, and API callers can't bypass it.
@@ -2366,6 +2414,10 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         }
         throw err
       }
+
+      // #1217: a person acting on the record is the retry the engine was
+      // waiting for — held auto transitions on it may fire again.
+      await clearAutoFailures({ instanceId: String(instance.id) })
 
       let applied: Awaited<ReturnType<typeof applyTransition>>
       try {
@@ -2475,6 +2527,9 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .where({ collection, item: String(item) })
         .max('id as m')
         .first()) as { m: number | null }
+      // #1217: a resend by a person is a retry — held auto transitions on the
+      // record may fire again.
+      await clearAutoFailures({ collection, item: String(item) })
       const { skippedReason } = await runTransitionActions({
         transition: t,
         instance: { collection, item: String(item) },

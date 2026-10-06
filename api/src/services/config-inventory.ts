@@ -210,6 +210,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tasks',
   'nivaro_erp_submissions',
   'nivaro_erp_submission_attempts',
+  'nivaro_auto_transition_failures', // #1217 per-instance failure memory of auto transitions
   'nivaro_chain_roots', // integration event chains — which feed row / replay started which chain
   'nivaro_integration_signal_rows',
   'nivaro_integration_signal_runs',

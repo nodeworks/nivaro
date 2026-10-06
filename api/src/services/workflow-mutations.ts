@@ -1,9 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
+import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { clearAutoFailures } from './auto-transition-memory.js'
 import { withChainStep } from './chain.js'
 import { chainFields } from './chain-columns.js'
 import { parseJson } from './pipeline-engine.js'
+import { checkTransitionOwner, TRANSITION_OWNER_REQUIRED } from './record-access.js'
 import { claimTransition, TransitionDuplicateError } from './transition-guard.js'
 import { evaluateTransitionRequirements } from './transition-requirements.js'
 import { TransitionBlockedError } from './workflow-actions.js'
@@ -51,6 +54,9 @@ export interface WorkflowActor {
   id?: string | null
   role?: string | null
   isAdmin?: boolean
+  /** The caller's user row — owner-only transitions (#794) judge it. Without
+   *  it an owner-only transition is refused for a non-admin. */
+  user?: User | null
 }
 
 /**
@@ -199,6 +205,30 @@ export async function executeWorkflowTransition(opts: {
     }
   }
 
+  // Owner-only (#794): same gate as the REST endpoint — the caller must own
+  // the current step (delegation applied); admins exempt.
+  if (coerceBool((transition as { require_owner?: unknown }).require_owner) && !isAdmin) {
+    if (!opts.actor.user) {
+      throw new WorkflowMutationError(
+        403,
+        'Only the owner of the current step can make this move.',
+        {
+          code: TRANSITION_OWNER_REQUIRED
+        }
+      )
+    }
+    const owner = await checkTransitionOwner({
+      user: opts.actor.user,
+      isAdmin,
+      collection,
+      item,
+      instanceId: String(instance.id)
+    })
+    if (!owner.allowed) {
+      throw new WorkflowMutationError(403, owner.message, { code: TRANSITION_OWNER_REQUIRED })
+    }
+  }
+
   // Data-entry gate: incomplete child-row / record-field requirements block
   // before condition rules — API callers cannot bypass it.
   if (transition.requirements) {
@@ -238,6 +268,10 @@ export async function executeWorkflowTransition(opts: {
     }
     throw err
   }
+
+  // #1217: a person acting on the record is the retry the engine was waiting
+  // for — held auto transitions on it may fire again.
+  await clearAutoFailures({ instanceId: String(instance.id) })
 
   let applied: Awaited<ReturnType<typeof applyTransition>>
   try {
