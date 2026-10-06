@@ -1812,6 +1812,8 @@ export function SettingsPage() {
   const [lockIdleMinutes, setLockIdleMinutes] = useState<number | ''>('')
   const [transitionGuardSeconds, setTransitionGuardSeconds] = useState<number | ''>('')
   const [graphqlDeprecationDays, setGraphqlDeprecationDays] = useState<number | ''>('')
+  // #1222 — null = this database has not run migration 400 yet (no column to write)
+  const [graphqlStrictMutations, setGraphqlStrictMutations] = useState<boolean | null>(null)
   const [integrationNotificationsEnabled, setIntegrationNotificationsEnabled] = useState(false)
   const [integrationRemediationEnabled, setIntegrationRemediationEnabled] = useState(false)
   // datetime-local value (browser-local wall clock, no timezone of its own —
@@ -1938,6 +1940,11 @@ export function SettingsPage() {
     setGraphqlDeprecationDays(
       (settings as { graphql_deprecation_days?: number | null }).graphql_deprecation_days ?? ''
     )
+    {
+      const strict = (settings as { graphql_strict_mutations?: boolean | number | null })
+        .graphql_strict_mutations
+      setGraphqlStrictMutations(strict === undefined ? null : !!strict)
+    }
     setIntegrationNotificationsEnabled(
       !!(settings as { integration_notifications_enabled?: boolean })
         .integration_notifications_enabled
@@ -2184,7 +2191,10 @@ export function SettingsPage() {
       field_watch_enabled: fieldWatchEnabled,
       lock_idle_release_minutes: lockIdleMinutes === '' ? null : lockIdleMinutes,
       transition_guard_seconds: transitionGuardSeconds === '' ? null : transitionGuardSeconds,
-      graphql_deprecation_days: graphqlDeprecationDays === '' ? null : graphqlDeprecationDays
+      graphql_deprecation_days: graphqlDeprecationDays === '' ? null : graphqlDeprecationDays,
+      ...(graphqlStrictMutations === null
+        ? {}
+        : { graphql_strict_mutations: graphqlStrictMutations })
     })
   }
 
@@ -3451,6 +3461,25 @@ export function SettingsPage() {
                       className='h-8 w-40 text-[13px]'
                     />
                   </Field>
+                  {graphqlStrictMutations !== null && (
+                    <div className='flex items-center justify-between rounded-lg border border-slate-200 px-3 py-2.5 dark:border-border'>
+                      <div>
+                        <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
+                          Strict GraphQL mutations
+                        </p>
+                        <p className='mt-0.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                          An update or delete naming an id that does not exist answers a NOT_FOUND
+                          error instead of an empty result. Tell API partners before turning this on
+                          — their calls on a missing record start failing. Off by default.
+                        </p>
+                      </div>
+                      <Switch
+                        checked={graphqlStrictMutations}
+                        onCheckedChange={setGraphqlStrictMutations}
+                        data-settings-graphql-strict
+                      />
+                    </div>
+                  )}
                   <Field
                     label='Repeat transition guard (seconds)'
                     hint='Refuse the same transition on the same record when it is made again within this many seconds — a double click or a retried request. Blank = 10 seconds. 0 = no guard.'

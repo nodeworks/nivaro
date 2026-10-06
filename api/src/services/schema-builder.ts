@@ -30,6 +30,7 @@ import { describeDbRefusal, reasonWithoutSql } from '../lib/db-refusal.js'
 import type { User } from '../types.js'
 import { getFields, getRelations, listCollections } from './collections.js'
 import { applyNestedGate, narrowNestedRow, nestedGate } from './graphql-nested-access.js'
+import { graphqlStrictMutations, missingIds, notFoundError } from './graphql-strict.js'
 import {
   AGGREGATE_FUNCTIONS,
   type AggregateFunction,
@@ -1537,11 +1538,20 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           throw Object.assign(new Error('Unauthorized'), {
             extensions: { code: 'UNAUTHENTICATED' }
           })
+        // #1222: with strict mutations on, a missing id is an error, not null.
+        const strict = await graphqlStrictMutations()
+        if (strict) {
+          const missing = await missingIds(name, [id])
+          if (missing.length > 0) throw notFoundError(name, missing)
+        }
+        let updated: unknown
         try {
-          return await updateOne(ctx.user, name, id, data, ctx.req)
+          updated = await updateOne(ctx.user, name, id, data, ctx.req)
         } catch (e) {
           wrapError(e)
         }
+        if (strict && updated == null) throw notFoundError(name, [String(id)])
+        return updated
       }
     }
 
@@ -1553,6 +1563,10 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           throw Object.assign(new Error('Unauthorized'), {
             extensions: { code: 'UNAUTHENTICATED' }
           })
+        if (await graphqlStrictMutations()) {
+          const missing = await missingIds(name, [id])
+          if (missing.length > 0) throw notFoundError(name, missing)
+        }
         try {
           await deleteOne(ctx.user, name, id, ctx.req)
           return { id }
@@ -1632,6 +1646,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
         throw Object.assign(new Error('At most 500 records per call'), {
           extensions: { code: 'BATCH_LIMIT', status: 422 }
         })
+      // #1222: name every missing id up front rather than the first one hit.
+      if (await graphqlStrictMutations()) {
+        const missing = await missingIds(name, changes.map((c) => c.id).filter(Boolean))
+        if (missing.length > 0) throw notFoundError(name, missing)
+      }
       const results: unknown[] = []
       const done: Array<{ id: string; prior: Record<string, unknown> }> = []
       const user = ctx.user
@@ -1720,6 +1739,10 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
           throw Object.assign(new Error('Unauthorized'), {
             extensions: { code: 'UNAUTHENTICATED' }
           })
+        if (await graphqlStrictMutations()) {
+          const missing = await missingIds(name, ids)
+          if (missing.length > 0) throw notFoundError(name, missing)
+        }
         try {
           for (const id of ids) await deleteOne(ctx.user, name, id, ctx.req)
           return { ids }
