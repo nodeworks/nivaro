@@ -91,7 +91,8 @@ export function normalizeRunbooks(extId: string, raw: unknown): ExtensionRunbook
           : undefined,
       refuse_targets: Array.isArray(r.refuse_targets)
         ? r.refuse_targets.filter((t: unknown) => typeof t === 'string').slice(0, 20)
-        : undefined
+        : undefined,
+      ...(r.skip_dry_gate === true ? { skip_dry_gate: true } : {})
     })
   }
   return out

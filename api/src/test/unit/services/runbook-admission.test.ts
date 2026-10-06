@@ -62,6 +62,13 @@ describe('hostRunRefusal', () => {
     const stale = now + 25 * 3600_000
     expect(hostRunRefusal(decl, run({ mode: 'go' }), [dryDone], stale)).toMatch(/dry run/)
   })
+  it('skips the dry-run gate only when the declaration says so', () => {
+    expect(hostRunRefusal(decl, run({ mode: 'go' }), [], now)).toMatch(/dry run/)
+    const skip = { ...decl, skip_dry_gate: true } as ExtensionRunbookDecl
+    expect(hostRunRefusal(skip, run({ mode: 'go' }), [], now)).toBeNull()
+    // the other gates still hold
+    expect(hostRunRefusal(skip, run({ mode: 'go', target: 'EFP' }), [], now)).toMatch(/refused/)
+  })
   it('refuses an unknown mode', () => {
     expect(hostRunRefusal(decl, run({ mode: 'exec' }), [], now)).toMatch(/mode/)
   })

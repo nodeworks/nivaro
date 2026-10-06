@@ -402,6 +402,9 @@ export interface ExtensionRunbookDecl {
   target_env?: string
   /** Targets refused outright (production is run by hand). */
   refuse_targets?: string[]
+  /** A real run needs no finished dry run first. Only for runbooks that
+   *  write nothing to their target (a read-only check), never a rebuild. */
+  skip_dry_gate?: boolean
 }
 
 /** The default export of an extension's entry module. */

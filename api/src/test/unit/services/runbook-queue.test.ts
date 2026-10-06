@@ -131,6 +131,16 @@ describe('host runbook queue', () => {
     )
   })
 
+  it('carries skip_dry_gate only when it is exactly true', () => {
+    const base = { key: 'k', command: ['bash', 'extensions/x/a.sh'], dry_args: [], go_args: [] }
+    const [on] = normalizeRunbooks('x', [{ ...base, skip_dry_gate: true }])
+    expect(on.skip_dry_gate).toBe(true)
+    for (const v of [undefined, false, 'true', 1]) {
+      const [d] = normalizeRunbooks('x', [{ ...base, skip_dry_gate: v }])
+      expect(d.skip_dry_gate).toBeUndefined()
+    }
+  })
+
   it('normalizes host declarations: command, phases, runs_on', () => {
     const [d] = normalizeRunbooks('x', [
       {

@@ -16,6 +16,11 @@ export interface AdmissionRun {
   from_step: string | null
 }
 
+/** A real run must follow a finished dry run unless the runbook declares it reads only. */
+export function needsDryRun(decl: ExtensionRunbookDecl): boolean {
+  return decl.skip_dry_gate !== true
+}
+
 /** null = admissible; otherwise the reason the run is refused. */
 export function hostRunRefusal(
   decl: ExtensionRunbookDecl,
@@ -35,7 +40,11 @@ export function hostRunRefusal(
     const byNumber = Number.isInteger(n) && n >= 1 && n <= phases.length
     if (!byKey && !byNumber) return `unknown start step ${run.from_step}`
   }
-  if (run.mode === 'go' && !dryRunGate(priorRuns, run.extension, run.runbook, t.target, now))
+  if (
+    run.mode === 'go' &&
+    needsDryRun(decl) &&
+    !dryRunGate(priorRuns, run.extension, run.runbook, t.target, now)
+  )
     return 'a real run needs a finished dry run of the same target from the last 24 hours'
   return null
 }

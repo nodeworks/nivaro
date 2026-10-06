@@ -5,6 +5,7 @@ import { extensionRunbooks } from '../extensions/loader.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readLogChunk } from '../services/release-runs.js'
+import { needsDryRun } from '../services/runbook-admission.js'
 import { liveEstimate, planEstimate, stallAfterSecs } from '../services/runbook-estimate.js'
 import {
   cancelHostRun,
@@ -167,7 +168,7 @@ export async function runbookRoutes(app: FastifyInstance) {
     }> = host ? hostRuns : local
     let resumeOf: string | null = null
     if (mode === 'go') {
-      if (!dryRunGate(runs as any, req.params.ext, decl.key, t.target))
+      if (needsDryRun(decl) && !dryRunGate(runs as any, req.params.ext, decl.key, t.target))
         return reply.code(409).send({
           error: `Run the dry run against ${t.target ?? 'this runbook'} first — a real run needs a finished dry run from the last 24 hours`
         })
