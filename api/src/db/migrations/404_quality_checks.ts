@@ -29,6 +29,9 @@ export async function up(knex: Knex): Promise<void> {
       t.datetime('started_at').notNullable().defaultTo(utcNow(knex))
       t.datetime('captured_at').nullable()
       t.datetime('verified_at').nullable()
+      // When the latest verify stage began; a run 'verifying' for over two
+      // hours past it is stale (its runner was killed).
+      t.datetime('verify_started_at').nullable()
       t.text('totals').nullable()
       t.string('error', 2000).nullable()
       t.uuid('created_by').nullable()

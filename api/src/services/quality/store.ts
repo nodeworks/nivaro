@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto'
 import { gunzipSync, gzipSync } from 'node:zlib'
 import type { QualityRow } from '@nivaro/extension-kit'
 import type { Knex } from 'knex'
-import { type DiffResult, type DiffRow, diffRows, type KnownDifference } from './diff.js'
+import {
+  type DiffResult,
+  type DiffRow,
+  diffRows,
+  type KnownDifference,
+  parseKnownMatch
+} from './diff.js'
 
 /**
  * Storage for staging quality checks (migration 404). Every write here goes to
@@ -22,12 +28,19 @@ export const RESULT_ROW_LIMIT = 500
 const clip = (s: string | null | undefined, n: number): string | null =>
   s == null ? null : s.length > n ? s.slice(0, n) : s
 
+/** A stored row list never inflates past this (a gzip bomb stops here, not in memory). */
+export const MAX_DECODED_BYTES = 256 * 1024 * 1024
+
+/** A run left 'verifying' this long without finishing is stale: its runner is gone. */
+export const STALE_VERIFY_MS = 2 * 60 * 60 * 1000
+
 function encodeJson(value: unknown): string {
   return gzipSync(Buffer.from(JSON.stringify(value), 'utf8')).toString('base64')
 }
 
-function decodeJson<T>(text: string): T {
-  return JSON.parse(gunzipSync(Buffer.from(text, 'base64')).toString('utf8')) as T
+function decodeJson<T>(text: string, maxBytes = MAX_DECODED_BYTES): T {
+  const raw = gunzipSync(Buffer.from(text, 'base64'), { maxOutputLength: maxBytes })
+  return JSON.parse(raw.toString('utf8')) as T
 }
 
 function parseJson<T>(text: unknown): T | null {
@@ -43,8 +56,8 @@ export function encodeRows(rows: QualityRow[]): string {
   return encodeJson(rows)
 }
 
-export function decodeRows(text: string): QualityRow[] {
-  return decodeJson<QualityRow[]>(text)
+export function decodeRows(text: string, maxBytes = MAX_DECODED_BYTES): QualityRow[] {
+  return decodeJson<QualityRow[]>(text, maxBytes)
 }
 
 export async function createRun(
@@ -150,18 +163,57 @@ export interface RunRow {
   id: string
   target: string
   status: string
+  started_at?: Date | null
   captured_at: Date | null
   verified_at: Date | null
+  verify_started_at?: Date | null
 }
 
 export async function getRun(app: Knex, id: string): Promise<RunRow | null> {
   const row = (await app(RUNS)
     .where({ id })
-    .first('id', 'target', 'status', 'captured_at', 'verified_at')) as RunRow | undefined
+    .first(
+      'id',
+      'target',
+      'status',
+      'started_at',
+      'captured_at',
+      'verified_at',
+      'verify_started_at'
+    )) as RunRow | undefined
   return row ?? null
 }
 
-export async function loadKnown(app: Knex): Promise<KnownDifference[]> {
+const timeOf = (d: unknown): number | null => {
+  if (d == null) return null
+  const t = new Date(d as Date).getTime()
+  return Number.isNaN(t) ? null : t
+}
+
+/**
+ * A run still 'verifying' more than two hours after its verify stage began
+ * (a killed runner never marks it): stale, so nothing waits on it any more.
+ */
+export function isStaleVerifying(
+  run: Pick<RunRow, 'status'> &
+    Partial<Pick<RunRow, 'verify_started_at' | 'captured_at' | 'started_at'>>,
+  now = Date.now()
+): boolean {
+  if (run.status !== 'verifying') return false
+  const since =
+    timeOf(run.verify_started_at) ?? timeOf(run.captured_at) ?? timeOf(run.started_at) ?? null
+  return since !== null && now - since > STALE_VERIFY_MS
+}
+
+/**
+ * The known differences, each re-validated with the routes' own validator: an
+ * entry written some other way (a hand edit) that no longer passes is skipped
+ * with a log line, never matched.
+ */
+export async function loadKnown(
+  app: Knex,
+  log: (message: string) => void = (m) => process.stderr.write(`[quality] ${m}\n`)
+): Promise<KnownDifference[]> {
   const rows = (await app(KNOWN).select('id', 'check_id', 'match', 'reason')) as Array<{
     id: number
     check_id: string
@@ -170,9 +222,12 @@ export async function loadKnown(app: Knex): Promise<KnownDifference[]> {
   }>
   const out: KnownDifference[] = []
   for (const r of rows) {
-    const match = parseJson<KnownDifference['match']>(r.match)
-    if (!match || typeof match !== 'object') continue
-    out.push({ id: Number(r.id), check_id: r.check_id, match, reason: r.reason })
+    const checked = parseKnownMatch(parseJson<unknown>(r.match))
+    if (!checked.ok) {
+      log(`skipped known difference ${r.id} (${r.check_id}): ${checked.error}`)
+      continue
+    }
+    out.push({ id: Number(r.id), check_id: r.check_id, match: checked.match, reason: r.reason })
   }
   return out
 }
@@ -248,36 +303,45 @@ export async function recordKnownHits(
 }
 
 /**
- * Re-diffs every check of a run from the stored sides — used after a known
- * difference is added or removed; never reads the checked database. A check
+ * Re-diffs the checks of a run from the stored sides — every check, or only
+ * `checkIds` — after a known difference is added, changed or removed; never
+ * reads the checked database. The run totals are recounted from every stored
+ * result either way. A check
  * whose own `expected()` marked a row amber cannot be called again here, so its
  * stored reason stands in for it; the stored reason of an unexpected row stands
  * in for `explain()`.
  */
 export async function rediffRun(
   app: Knex,
-  run: string
+  run: string,
+  opts: { checkIds?: string[] } = {}
 ): Promise<{ rediffed: boolean; reason?: string }> {
   // Optimistic guard: a verify stage of the same run may start while this
   // re-diff decodes sides. The run's status and verified_at are taken now and
   // re-read before every write; any change stops the re-diff where it stands,
   // so the runner's fresh results are never overwritten from stale sides.
+  // A run stuck 'verifying' for over two hours has no runner left: it is
+  // re-diffed like a finished one.
   const stampOf = (r: RunRow | null) => {
     if (!r) return null
-    const t = r.verified_at == null ? null : new Date(r.verified_at as Date).getTime()
-    return { status: r.status, verified: Number.isNaN(t) ? null : t }
+    return {
+      busy: r.status === 'verifying' && !isStaleVerifying(r),
+      verified: timeOf(r.verified_at),
+      verifyStarted: timeOf(r.verify_started_at)
+    }
   }
   const start = stampOf(await getRun(app, run))
   if (!start) return { rediffed: false, reason: 'no such run' }
-  if (start.status === 'verifying') return { rediffed: false, reason: 'the run is being verified' }
+  if (start.busy) return { rediffed: false, reason: 'the run is being verified' }
   const moved = async (): Promise<string | null> => {
     const now = stampOf(await getRun(app, run))
     if (!now) return 'the run was removed'
-    if (now.status === 'verifying') return 'the run is being verified'
+    if (now.busy || now.verifyStarted !== start.verifyStarted) return 'the run is being verified'
     if (now.verified !== start.verified) return 'the run was verified again'
     return null
   }
-  const results = (await app(RESULTS).where({ run }).select('*')) as Array<{
+  const only = opts.checkIds ? new Set(opts.checkIds) : null
+  const all = (await app(RESULTS).where({ run }).select('*')) as Array<{
     check_id: string
     area: string
     label: string
@@ -286,7 +350,8 @@ export async function rediffRun(
     tolerance: string | null
     duration_ms: number | null
   }>
-  if (results.length === 0) return { rediffed: false, reason: 'the run has no results' }
+  if (all.length === 0) return { rediffed: false, reason: 'the run has no results' }
+  const results = only ? all.filter((r) => only.has(r.check_id)) : all
   const known = await loadKnown(app)
   for (const res of results) {
     const base = await loadSide(app, run, res.check_id, 'baseline')
@@ -348,6 +413,7 @@ export async function setRunStatus(
     status: string
     captured_at: Date
     verified_at: Date
+    verify_started_at: Date
     totals: object
     error: string
   }>
@@ -356,6 +422,7 @@ export async function setRunStatus(
   if (patch.status !== undefined) update.status = patch.status
   if (patch.captured_at !== undefined) update.captured_at = patch.captured_at
   if (patch.verified_at !== undefined) update.verified_at = patch.verified_at
+  if (patch.verify_started_at !== undefined) update.verify_started_at = patch.verify_started_at
   if (patch.totals !== undefined) update.totals = JSON.stringify(patch.totals)
   if (patch.error !== undefined) update.error = clip(patch.error, 2000)
   if (Object.keys(update).length === 0) return

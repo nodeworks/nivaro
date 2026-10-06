@@ -271,4 +271,55 @@ describe('quality store tables', () => {
     const rows = await (db as any)('nivaro_quality_known').orderBy('id').select('*')
     expect(rows.map((r: { idle_runs: number }) => r.idle_runs)).toEqual([3, 0])
   })
+
+  it('re-validates stored known entries and skips the invalid ones with a log line', async () => {
+    const s = await import('../../../services/quality/store.js')
+    const db = await fresh({
+      nivaro_quality_known: [
+        { id: 1, check_id: 'a.b', match: '{"key":"w:*"}', reason: 'ok' },
+        { id: 2, check_id: 'a.b', match: '{}', reason: 'empty' },
+        { id: 3, check_id: 'a.b', match: '{"key":"*a*b*c*d*e"}', reason: 'too many stars' },
+        { id: 4, check_id: 'a.b', match: '{"cluster":{"__proto__":"x"}}', reason: 'proto' },
+        { id: 5, check_id: 'a.b', match: 'not json', reason: 'broken' }
+      ]
+    })
+    const logs: string[] = []
+    const known = await s.loadKnown(db, (m) => logs.push(m))
+    expect(known.map((k) => k.id)).toEqual([1])
+    expect(logs).toHaveLength(4)
+    expect(logs[0]).toMatch(/known difference 2/)
+  })
+
+  it('re-diffs only the listed checks and recomputes the run totals from every result', async () => {
+    const { s, db, app, statusOf } = await twoRedChecks()
+    expect(await s.rediffRun(app, 'R', { checkIds: ['a.one'] })).toEqual({ rediffed: true })
+    expect([statusOf('a.one'), statusOf('b.two')]).toEqual(['amber', 'red'])
+    expect(JSON.parse(db.state.tables.nivaro_quality_runs[0].totals)).toEqual({
+      green: 0,
+      amber: 1,
+      red: 1,
+      error: 0
+    })
+  })
+
+  it('treats a run stuck verifying for over two hours as stale', async () => {
+    const { s, db, app, statusOf } = await twoRedChecks()
+    const run = db.state.tables.nivaro_quality_runs[0]
+    run.status = 'verifying'
+    run.verify_started_at = new Date(Date.now() - 60 * 60 * 1000)
+    expect((await s.rediffRun(app, 'R')).rediffed).toBe(false)
+    run.verify_started_at = new Date(Date.now() - 3 * 60 * 60 * 1000)
+    expect(await s.rediffRun(app, 'R')).toEqual({ rediffed: true })
+    expect(statusOf('a.one')).toBe('amber')
+    expect(s.isStaleVerifying({ status: 'done', verify_started_at: null })).toBe(false)
+  })
+
+  it('refuses to inflate a stored row list past the size limit', async () => {
+    const s = await import('../../../services/quality/store.js')
+    const rows = Array.from({ length: 200 }, (_, i) => ({ key: `k${i}`, values: { v: i } }))
+    const text = s.encodeRows(rows)
+    expect(s.decodeRows(text)).toHaveLength(200)
+    expect(() => s.decodeRows(text, 100)).toThrow()
+    expect(s.MAX_DECODED_BYTES).toBe(256 * 1024 * 1024)
+  })
 })
