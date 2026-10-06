@@ -1,10 +1,532 @@
 {
-  "generated_at": "2026-10-02T00:45:17.307Z",
+  "generated_at": "2026-10-06T13:39:52.759Z",
   "releases": [
+    {
+      "version": "0.2.17",
+      "tag": "v0.2.17",
+      "date": "2026-10-06T09:39:39-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "database tuning (#996)",
+              "hash": "146657aa"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "traffic map investigation stack",
+              "hash": "361f2088"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a streamed tool round reads as tool_use when the gateway never sets finish_reason",
+              "hash": "1f69b707"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "stream Ask AI, summaries and field generation (#688)",
+              "hash": "a82f4090"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "as-it-was answers 404 for a vanished record; MCP ids are path-safe",
+              "hash": "b9e3a659"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "@nivaro/mcp — a Model Context Protocol server over the SDK (#687)",
+              "hash": "4f55ba69"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ask ai: a link cannot fire a question; queue names read as data",
+              "hash": "36d20a3a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "record bundles in the bell + \"as it was\" snapshot",
+              "hash": "335af256"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ask ai: queue_summary tool + \"Ask about this queue\" (#1276)",
+              "hash": "600a2e07"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "mail branding: renderMailTemplate takes a typed brand option",
+              "hash": "83fa1473"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "mail branding: logo URL is attribute-safe and the brand always wins",
+              "hash": "19104a54"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "file usage + mail suppressions: close two probe oracles",
+              "hash": "860c26c3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "mail branding per workspace (#1463)",
+              "hash": "c0f279ee"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "bounce handling — suppress hard-bounced addresses (#1299)",
+              "hash": "961987ec"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "show what carried a file on a record (#1288)",
+              "hash": "b8111ff0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: docs for the fix wave's behaviour",
+              "hash": "78bac34e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: the observe run leaves a target with a change in flight alone",
+              "hash": "5dca948f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: AI rewrite calls are logged under feature db-tune",
+              "hash": "bde2426a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: migration 391 down drops nivaro_settings.db_tuning",
+              "hash": "5281bb81"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: inherit a wrapping query's sets only under the proc's names",
+              "hash": "00d0f463"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: a proof rejection stays quiet 7 days; AI keyed by the old body",
+              "hash": "dab828ad"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: one observe run per database, not per process",
+              "hash": "c5351fd1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: settings cache and observe running flag keyed by tenant",
+              "hash": "828550cd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: settings PATCH merges onto the stored shared row",
+              "hash": "b6bd2669"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: re-prove reads the live object before it proves",
+              "hash": "fc6e4cde"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: index_drop re-checks usage at proof, refuses non-plain at Apply",
+              "hash": "a34bd014"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: the nightly re-check rolls back on a difference only",
+              "hash": "5acbcd8d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: proc_timeout_minutes bounds the whole twin proof",
+              "hash": "a9699192"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: a twin name of its own per proof",
+              "hash": "5da96a01"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: bodyHash reads past the procedure header",
+              "hash": "4ceb0aea"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: admin page, nav entry, DB Health strip",
+              "hash": "e2e03ec4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: shared DbTuningView",
+              "hash": "f387daec"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: routes — background observe, required dismiss note, reprove activity",
+              "hash": "f66138fb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: admin routes (/db-tuning)",
+              "hash": "13b529a8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: watch — :55 schedule, trailing-window judge, readiness never throws",
+              "hash": "11b70bbd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: hourly watch with regression rollback + readiness check",
+              "hash": "ab652ab1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: apply — rollback claim, strict index_create grammar, pre-change baseline, terminal states",
+              "hash": "e8257b57"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: apply refuses stale / rejected_by_proof with 'reprove first'",
+              "hash": "b4213ddb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: apply / rollback / dismiss with live re-validation",
+              "hash": "f7d9efa8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: observe run — sweep skips live twins, carried candidates stay seen, error refusals keep proposals",
+              "hash": "f8ee8f6f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: nightly observe run, cron, extension observers (ctx.tuning)",
+              "hash": "40b63bc1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: proof — discard a poisoned connection, dmv improvement floor, branch tests",
+              "hash": "9a9062a2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: proof dispatch (hypothetical index, usage stats, twin, cost model, freshness)",
+              "hash": "f7f297a9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: query cache — nightly also needs a quiet last day",
+              "hash": "6a3492c4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: query cache — nightly from the quiet share, not the median",
+              "hash": "c2199233"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: observers — measured write gaps, recursive/system rollup skips, schema-scoped proc reads",
+              "hash": "c69900af"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: procedure, rollup-store and query-cache observers",
+              "hash": "047c2c9c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: index observers — honest coverers, duplicate-create decline, plan XML source, drop safeguards",
+              "hash": "3d904c3d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: index observers over the advisor, DMV missing indexes and usage stats",
+              "hash": "2ef8e9e0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: ai candidate — budget fails closed, full-parameter signature compare",
+              "hash": "f5b2af5b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: AI rewrite candidate (signature-checked, budgeted)",
+              "hash": "33d89481"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: transformers — decline ALL/ANY, unqualified nested refs, @@ROWCOUNT neighbours; exact-body tests",
+              "hash": "dffcb70d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: mechanical rewrite transformers (junction EXISTS, grouped last-success, temp-table guard)",
+              "hash": "c6000eff"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: twin harness — refuse cross-database EXEC targets",
+              "hash": "643aff11"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: twin harness — tokenised scan, DDL/remote refusals, transactional exec, drop retry",
+              "hash": "ab71b202"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: twin proof harness (refusals, A/B/B/A, multiset diff, timing judge)",
+              "hash": "96faada5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "replication + canon: never cache a failed lookup, article type filter, no leading-zero numerics",
+              "hash": "6f8c581a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: canonical rows + multiset diff",
+              "hash": "2e1c41bb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "isReplicatedArticle/isReplicatedProcedure in core",
+              "hash": "767d67df"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: ledger — one twin lookup, mocked-db upsert tests",
+              "hash": "80f96348"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: proposal ledger (fingerprints, quiet rule, close-unseen)",
+              "hash": "89e9d7a0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: record only the parameters a call actually bound",
+              "hash": "34f24637"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: record the parameter sets a procedure proof replays",
+              "hash": "eeda5a93"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: settings (nivaro_settings.db_tuning) with validation",
+              "hash": "9b995bb0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "db tuning: ledger + param-set tables, shared types (#996)",
+              "hash": "99a144b7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: browser check fixes (actions row below the crumbs, slashes inside URL ids)",
+              "hash": "fddedd46"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: nav review fixes (same-error by fingerprint, peek times, search enter, clamped rewind, self refs, statement shape, tests)",
+              "hash": "30ab52d0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: background panels review fixes (server-side dry run on the stored payload, peek times, partner pushes by node, long runs)",
+              "hash": "433df180"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: record panels review fixes (issue match by fingerprint, peek times, missing recording 404, replay anchor)",
+              "hash": "2b2318e9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: entity panels review fixes (load rows, not-found semantics, anchored history, tests)",
+              "hash": "97ffd5b8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: actions review fixes (live tail buffer, notebook cache and save ordering, masked explain context)",
+              "hash": "1e0bbd22"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: request panel review fixes (pending state, trace-next re-arm, /graphql routes, LIKE escape, masking)",
+              "hash": "f63f2abe"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: related rail, page load waterfall, time anchor, search, keys",
+              "hash": "4f8c7e57"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: caller, entity, query, widget, page and down panels",
+              "hash": "9aca51d5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: explain, share, notebook, live tail, export (Task 8)",
+              "hash": "34775c81"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: AI call, job run, flow run and partner push levels",
+              "hash": "fd229838"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: chain, recording, record, write and issue levels (Task 4)",
+              "hash": "c196e19e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: request, trace, statement, compare and capture levels",
+              "hash": "730280c3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: peek times are epoch ms, client kind pattern matches the server",
+              "hash": "04de491b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: investigation panel review fixes (portal clicks, fluid split, focus, crumbs)",
+              "hash": "bada98a9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: an untraced request never inherits a stale request id",
+              "hash": "ab03b30a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map: investigation stack, inspect registries and hover peeks (drill-down wave 0)",
+              "hash": "65d56932"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "workflow_instance on every pipeline-bound record (REST + GraphQL)",
+              "hash": "21b69deb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "traffic map drill-down: request ids on events, request_id on API logs, inspect registry",
+              "hash": "25cced1e"
+            }
+          ]
+        }
+      ],
+      "count": 84
+    },
     {
       "version": "0.2.16",
       "tag": "v0.2.16",
-      "date": "2026-10-01T20:45:05-04:00",
+      "date": "2026-10-01T20:45:17-04:00",
       "sections": [
         {
           "label": "Other",
