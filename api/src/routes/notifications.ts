@@ -33,7 +33,7 @@ import {
   resolveTargetUrl
 } from '../services/notification-target.js'
 import { getLabels } from '../services/queues.js'
-import { resolveFriendlyIds } from '../services/workflow-transitions.js'
+import { type RecordHeadline, recordHeadlines } from '../services/record-headline.js'
 
 // Actual schema (migration 003 + renamed in 012):
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),
@@ -256,19 +256,27 @@ export async function notificationsRoutes(app: FastifyInstance) {
         set.add(b.item)
         byCollection.set(b.collection, set)
       }
-      const labels = new Map<string, string>()
+      // The headline is never a bare id: friendly id → display label → the
+      // trash snapshot of a record deleted since (flagged, no Open link —
+      // the record page would 404) → "<Singular> #<id>".
+      const headlines = new Map<string, RecordHeadline>()
       for (const [collection, items] of byCollection) {
-        const resolved = await resolveFriendlyIds(collection, [...items]).catch(
-          () => new Map<string, string>()
+        const resolved = await recordHeadlines(collection, [...items]).catch(
+          () => new Map<string, RecordHeadline>()
         )
-        for (const [id, label] of resolved) labels.set(`${collection}:${id}`, label)
+        for (const [id, h] of resolved) headlines.set(`${collection}:${id}`, h)
       }
       for (const b of bundles) {
-        b.label = labels.get(`${b.collection}:${b.item}`) ?? b.item
-        b.url = await resolveTargetUrl(
-          { kind: 'record', collection: b.collection, id: b.item },
-          { recipientUserId: userId, app }
-        ).catch(() => null)
+        const h = headlines.get(`${b.collection}:${b.item}`)
+        b.label = h?.label ?? b.item
+        b.deleted = h?.deleted ?? false
+        b.collection_label = h?.collection_label ?? null
+        b.url = b.deleted
+          ? null
+          : await resolveTargetUrl(
+              { kind: 'record', collection: b.collection, id: b.item },
+              { recipientUserId: userId, app }
+            ).catch(() => null)
       }
       return reply.send({ data: singles, bundles, total, page, limit })
     }

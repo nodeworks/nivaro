@@ -533,7 +533,8 @@ export function NotificationCenterView({
     const key = `${b.collection}:${b.item}`
     const isOpen = expanded.has(key)
     const tone = laneTone(b.lane)
-    const target = resolveNotificationTargetFor(bundleAsNotification(b), routes)
+    // A deleted record has nowhere to open — the bundle only expands.
+    const target = b.deleted ? null : resolveNotificationTargetFor(bundleAsNotification(b), routes)
     const unreadIds = b.rows.filter((n) => !n.read).map((n) => n.id)
     const toggle = () =>
       setExpanded((s) => {
@@ -548,6 +549,7 @@ export function NotificationCenterView({
         data-notification-bundle={key}
         data-notification-bundle-count={b.count}
         data-notification-bundle-lane={b.lane}
+        data-notification-bundle-deleted={b.deleted ? 'true' : undefined}
       >
         <div className='group flex items-start gap-3 px-4 py-3 transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/40'>
           <button
@@ -597,6 +599,22 @@ export function NotificationCenterView({
               </div>
             </button>
             <div className='mt-1 flex flex-wrap items-center gap-1.5'>
+              {b.collection_label && (
+                <span
+                  className='rounded border border-slate-200 px-1.5 py-px text-[10px] font-medium text-slate-500 dark:border-border dark:text-slate-400'
+                  data-notification-bundle-collection={b.collection}
+                >
+                  {b.collection_label}
+                </span>
+              )}
+              {b.deleted && (
+                <span
+                  className='rounded bg-rose-50 px-1.5 py-px text-[10px] font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'
+                  title='This record has since been deleted'
+                >
+                  deleted
+                </span>
+              )}
               {b.categories.map((c) => (
                 <span
                   key={c}

@@ -375,6 +375,33 @@ async function fireSubscriptionNotifications(
       }
     }
 
+    // The record's name for collection-wide subscriptions, resolved on first
+    // use (record watches carry their own row label): the live record's
+    // friendly label, else — a delete, or a record nothing names — the row
+    // itself through the collection's display template, else "<Singular> #id".
+    let recordNamePromise: Promise<string> | null = null
+    const recordNameOnce = (): Promise<string> => {
+      if (!recordNamePromise) {
+        recordNamePromise = (async () => {
+          if (eventType !== 'delete') {
+            const live = await friendlyRecordLabel(collection, item)
+            if (live !== `#${item}`) return live
+          }
+          try {
+            const { collectionWord, labelFromSnapshot } = await import(
+              '../services/record-headline.js'
+            )
+            const snap = await labelFromSnapshot(collection, data ?? previous)
+            if (snap) return snap
+            return `${await collectionWord(collection)} #${item}`
+          } catch {
+            return `#${item}`
+          }
+        })()
+      }
+      return recordNamePromise
+    }
+
     for (const sub of subs) {
       const recordScoped = isRecordScoped(sub)
       if (scope === 'wide' && recordScoped) continue
@@ -410,6 +437,10 @@ async function fireSubscriptionNotifications(
       // watch on a CHILD row (#11 — one forecast year, one PO line) names the
       // row AND the record it belongs to: "forecasts 2026 on CM26-79811".
       const friendly = recordScoped ? await friendlyRowLabel(collection, item, data) : null
+      // A collection-wide subscription names the record too — "updated PRB1
+      // (regions)", never "updated item 264 in regions". Resolved once per
+      // write, lazily, since most subscriptions filter out before this point.
+      const recordName = friendly ?? (await recordNameOnce())
       // A watched row opens its parent record at that row (`?row=` — the
       // record form jumps to the grid and flashes the line).
       const rowParent = recordScoped && !viaChild ? await parentOfRow(collection, item, data) : null
@@ -430,7 +461,7 @@ async function fireSubscriptionNotifications(
             .map((c) => `${c.label}: ${c.old ? `${c.old} → ` : ''}${c.new}`)
             .join(', ')}${viaChild.changes.length > 3 ? ', …' : ''}`
         : ''
-      const recordRef = friendly ? friendly : `item ${item} in ${collection}`
+      const recordRef = recordName
       const bundleWhat = bundle
         ? ` — ${bundle.changes
             .slice(0, 3)
@@ -443,14 +474,14 @@ async function fireSubscriptionNotifications(
           ? `${label}: ${childRef} ${viaChild.event}d${by}`
           : friendly
             ? `${label}: ${eventType}d${by}`
-            : `${label}: ${eventType} in ${collection}${by}`
+            : `${label}: ${recordName} ${eventType}d${by}`
       let message = bundle
         ? `${actorName ?? 'Someone'} changed ${recordRef}${bundleWhat}`
         : viaChild
           ? `${actorName ?? 'Someone'} ${viaChild.event}d ${childRef} on ${recordRef}${childWhat}`
           : actorName
-            ? `${actorName} ${eventType}d ${recordRef}${friendly ? ` (${collectionLabel})` : ''}`
-            : `${recordRef} was ${eventType}d${friendly ? ` (${collectionLabel})` : ''}`
+            ? `${actorName} ${eventType}d ${recordRef} (${collectionLabel})`
+            : `${recordRef} was ${eventType}d (${collectionLabel})`
       // Notification templates (#126): a `notification:subscription.<event>`
       // mail-template override rewrites the wording; {{changes}} carries the
       // field diff (#384). Hardcoded wording stays the default.

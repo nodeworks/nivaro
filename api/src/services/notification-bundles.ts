@@ -23,8 +23,13 @@ export interface BundleRow {
 export interface NotificationBundle<R extends BundleRow = BundleRow> {
   collection: string
   item: string
-  /** Filled by the route: the record's friendly id, else the raw item id. */
+  /** Filled by the route: the record's headline — friendly id, display
+   *  label, or its trash snapshot's label; never a bare internal id. */
   label: string
+  /** Filled by the route: the record no longer exists (label from trash). */
+  deleted: boolean
+  /** Filled by the route: "Region" — the collection's singular name. */
+  collection_label: string | null
   count: number
   unread: number
   lane: BundleLane
@@ -92,6 +97,8 @@ export function bundleNotifications<R extends BundleRow>(
       collection: String(first.collection),
       item: String(first.item),
       label: String(first.item),
+      deleted: false,
+      collection_label: null,
       count: sorted.length,
       unread: unreadRows.length,
       lane: mostUrgentLane((unreadRows.length > 0 ? unreadRows : sorted).map((r) => r.lane)),

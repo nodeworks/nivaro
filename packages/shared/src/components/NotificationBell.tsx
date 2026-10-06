@@ -413,12 +413,14 @@ export function NotificationBell({
     const key = `${b.collection}:${b.item}`
     const isOpen = expanded.has(key)
     const tone = laneTone(b.lane)
-    const target = resolveNotificationTargetFor(bundleAsNotification(b), routes)
+    // A deleted record has nowhere to open — the bundle only expands.
+    const target = b.deleted ? null : resolveNotificationTargetFor(bundleAsNotification(b), routes)
     const unreadIds = b.rows.filter((n) => !n.read).map((n) => n.id)
     return (
       <div
         key={`bundle:${key}`}
         className='border-b border-slate-50 last:border-b-0 dark:border-border/50'
+        data-notification-bundle-deleted={b.deleted ? 'true' : undefined}
         data-notification-bundle={key}
         data-notification-bundle-count={b.count}
         data-notification-bundle-lane={b.lane}
@@ -471,6 +473,22 @@ export function NotificationBell({
                   className={`rounded px-1 text-[9.5px] font-bold uppercase tracking-wide ${tone.chip}`}
                 >
                   Critical
+                </span>
+              )}
+              {b.collection_label && (
+                <span
+                  className='rounded border border-slate-200 px-1 py-px text-[9.5px] font-medium text-slate-500 dark:border-border dark:text-slate-400'
+                  data-notification-bundle-collection={b.collection}
+                >
+                  {b.collection_label}
+                </span>
+              )}
+              {b.deleted && (
+                <span
+                  className='rounded bg-rose-50 px-1 py-px text-[9.5px] font-semibold text-rose-700 dark:bg-rose-900/30 dark:text-rose-300'
+                  title='This record has since been deleted'
+                >
+                  deleted
                 </span>
               )}
               {b.categories.map((c) => (

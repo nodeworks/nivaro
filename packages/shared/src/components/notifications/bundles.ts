@@ -8,8 +8,13 @@ import type { NotificationLane, NotificationTargetSpec } from '../../lib/notific
 export interface NotificationBundle<R = unknown> {
   collection: string
   item: string
-  /** The record's friendly id (a raw id when nothing resolves it). */
+  /** The record's headline — friendly id, display label, or (deleted) its
+   *  trash snapshot's label. Only a client-side fold shows a raw id. */
   label: string
+  /** The record no longer exists: no Open, a "deleted" chip. */
+  deleted?: boolean
+  /** "Region" — the collection's singular name for a chip beside the label. */
+  collection_label?: string | null
   count: number
   unread: number
   lane: NotificationLane
@@ -124,6 +129,8 @@ export function bundleLocally<
       collection: String(list[0].collection),
       item: String(list[0].item),
       label: String(list[0].item),
+      deleted: false,
+      collection_label: null,
       count: list.length,
       unread: unreadRows.length,
       lane,

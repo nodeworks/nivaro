@@ -254,7 +254,7 @@ async function systemLabels(
 }
 
 /** "Project Sub Type" for `project_sub_types` — the registered singular when set. */
-async function collectionWord(collection: string): Promise<string> {
+export async function collectionWord(collection: string): Promise<string> {
   try {
     const meta = await getCollection(collection)
     if (meta?.singular) return meta.singular
