@@ -20,6 +20,7 @@ import { db as defaultDb } from '../db/index.js'
 
 /** Authored configuration. This is what a diff is actually about. */
 export const CONFIG_TABLES: string[] = [
+  'nivaro_quality_known', //           curated known differences (migration 404)
   // identity & access
   'nivaro_roles',
   'nivaro_policies',
@@ -194,6 +195,9 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_runbook_queue_lines',
   'nivaro_runbook_agents',
   'nivaro_runbook_step_timings',
+  'nivaro_quality_runs', //            staging quality checks (migration 404) — per database
+  'nivaro_quality_rows',
+  'nivaro_quality_results',
   'nivaro_cache_epochs',
   'nivaro_config_snapshots',
   'nivaro_dashboard_snapshots',

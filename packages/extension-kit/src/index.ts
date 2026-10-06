@@ -19,6 +19,7 @@ export type * from './hooks.js'
 export type * from './imports.js'
 export type * from './notifications.js'
 export type * from './obligations.js'
+export type * from './quality.js'
 export type * from './registrations.js'
 export {
   REQUESTER_COLUMNS,
