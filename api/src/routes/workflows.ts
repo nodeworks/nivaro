@@ -1,12 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
-import { syncStateField } from '../services/workflow-transitions.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { chainFields } from '../services/chain-columns.js'
 import { can } from '../services/permissions.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
+import { syncStateField } from '../services/workflow-transitions.js'
 
 // ─── Types (mirrors routes/pipelines.ts — same underlying tables) ─────────────
 
@@ -144,6 +144,9 @@ function formatStateLite(s: WorkflowState) {
 async function getOpenSplit(instanceId: string): Promise<SplitRecord | null> {
   const rows = (await db('nivaro_workflow_history')
     .where({ instance: instanceId })
+    // Engine lifecycle rows carry no transition; a person's comment always
+    // rides one, so a typed '{"action":"join"}' can never close a split.
+    .whereNull('transition')
     .where('comment', 'like', '%"action":%')
     .orderBy('timestamp', 'desc')
     .orderBy('id', 'desc')
@@ -175,6 +178,7 @@ async function isInstanceTerminal(instance: WorkflowInstance): Promise<boolean> 
 async function checkJoin(childInstanceId: string, userId: string | null) {
   // Find split history rows that reference this child.
   const candidates = (await db('nivaro_workflow_history')
+    .whereNull('transition')
     .where('comment', 'like', '%"action":"split"%')
     .where('comment', 'like', `%${childInstanceId}%`)
     .orderBy('timestamp', 'desc')

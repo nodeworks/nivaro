@@ -33,9 +33,12 @@ export interface Revision {
   } | null
 }
 
-/** Split/branch/join lifecycle rows store engine JSON in `comment` — never
- *  something a person typed, so the history shows no quote for them. */
-function isEngineComment(comment: unknown): boolean {
+/** Split/branch/join lifecycle rows store engine JSON in `comment`. Only a
+ *  row the ENGINE wrote counts — it has no transition; a person's comment
+ *  always rides a transition row, so a typed '{"action":"split"}' stays a
+ *  quote and is never hidden. */
+function isEngineComment(comment: unknown, transition: unknown): boolean {
+  if (transition != null && transition !== '') return false
   const s = String(comment ?? '').trim()
   if (!s.startsWith('{')) return false
   try {
@@ -48,10 +51,10 @@ function isEngineComment(comment: unknown): boolean {
 
 /** Human-said part of a history comment: drops the engine's 'auto:' stamp
  *  and split/branch/join JSON. */
-function historyComment(comment: unknown): string | null {
+function historyComment(comment: unknown, transition: unknown): string | null {
   if (comment == null) return null
   if (/^auto:\s/i.test(String(comment))) return null
-  if (isEngineComment(comment)) return null
+  if (isEngineComment(comment, transition)) return null
   return String(comment)
 }
 
@@ -67,6 +70,7 @@ function historySelect(q: ReturnType<typeof db>) {
       'h.timestamp',
       'h.comment',
       'h.user as user_id',
+      'h.transition as transition_id',
       'i.item as instance_item',
       'fs.label as from_label',
       'ts.label as to_label',
@@ -246,7 +250,7 @@ export async function listRevisions(collection: string, item: string): Promise<R
       action: 'transition',
       // 'auto: <label>' is the engine's stamp on an automatic move — the
       // event carries that fact, so the comment shows only what a person said.
-      comment: historyComment(r.comment),
+      comment: historyComment(r.comment, r.transition_id),
       user_id: (r.user_id as string | null) ?? null,
       first_name: r.first_name,
       last_name: r.last_name,

@@ -76,6 +76,8 @@ interface PipelineHistoryEntry {
   last_name: string | null
   comment: string | null
   timestamp: string
+  /** The transition row id — null on rows the engine wrote itself. */
+  transition?: string | null
   /** The transition that made the move (label + its people-facing sentence). */
   transition_label?: string | null
   transition_text?: string | null
@@ -84,9 +86,12 @@ interface PipelineHistoryEntry {
 }
 
 /** The split/join engine writes JSON into `comment` (routes/workflows.ts) —
- *  say what happened instead of quoting it. Null for anything else. */
-function lifecycleNote(comment: string | null): string | null {
-  const s = (comment ?? '').trim()
+ *  say what happened instead of quoting it. Only rows the engine wrote (no
+ *  transition): a person's typed comment always rides a transition row and
+ *  is quoted as written. Null for anything else. */
+function lifecycleNote(h: Pick<PipelineHistoryEntry, 'comment' | 'transition'>): string | null {
+  if (h.transition) return null
+  const s = (h.comment ?? '').trim()
   if (!s.startsWith('{')) return null
   try {
     const c = JSON.parse(s) as { action?: string; children?: unknown[] }
@@ -641,7 +646,7 @@ function HistoryTimeline({ history }: { history: PipelineHistoryEntry[] }) {
           ? machineHeadline(h)
           : [h.first_name, h.last_name].filter(Boolean).join(' ') || h.user_email
         // The engine's own stamp ("auto: <rule>") is not a note anyone wrote.
-        const lifecycle = lifecycleNote(h.comment)
+        const lifecycle = lifecycleNote(h)
         const note = h.comment && !machine && !lifecycle ? h.comment : null
         const detail = lifecycle ?? (machine ? machineDetail(h) : null)
         return (

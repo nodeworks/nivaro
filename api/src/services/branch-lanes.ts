@@ -14,6 +14,8 @@ export interface LaneHistoryRow {
   id: number
   /** Child instance the row belongs to (child history only). */
   instance?: string
+  /** Transition that wrote the row — lifecycle rows have none (see below). */
+  transition?: string | null
   from_state: string | null
   to_state: string
   comment: string | null
@@ -99,6 +101,16 @@ export function parseLifecycleComment(
   return null
 }
 
+/** Engine lifecycle JSON on a history row — only rows the engine wrote
+ *  (no transition). A person's comment always rides a transition row, so a
+ *  typed '{"action":"split",…}' is never read as a split. */
+export function lifecycleOf(
+  row: Pick<LaneHistoryRow, 'comment' | 'transition'>
+): { action: string; [k: string]: unknown } | null {
+  if (row.transition != null && row.transition !== '') return null
+  return parseLifecycleComment(row.comment)
+}
+
 function iso(v: Date | string | null | undefined): string | null {
   if (v == null) return null
   const d = v instanceof Date ? v : new Date(v)
@@ -120,6 +132,8 @@ function truthy(v: unknown): boolean {
  * that joined). Returns null when the instance never split.
  */
 export function buildBranchLanes(input: {
+  /** The record's own instance — a child counts only if its branch row names it. */
+  parentInstanceId: string
   parentHistory: LaneHistoryRow[]
   children: LaneChildInstance[]
   childHistory: LaneHistoryRow[]
@@ -129,7 +143,7 @@ export function buildBranchLanes(input: {
   let splitIndex = -1
   let split: SplitComment | null = null
   for (let i = 0; i < parentRows.length; i++) {
-    const c = parseLifecycleComment(parentRows[i].comment)
+    const c = lifecycleOf(parentRows[i])
     if (c?.action === 'split' && Array.isArray(c.children) && typeof c.join_state === 'string') {
       splitIndex = i
       split = c as unknown as SplitComment
@@ -139,9 +153,7 @@ export function buildBranchLanes(input: {
   const splitCfg: SplitComment = split
   const splitRow = parentRows[splitIndex]
   const joinRow =
-    parentRows
-      .slice(splitIndex + 1)
-      .find((row) => parseLifecycleComment(row.comment)?.action === 'join') ?? null
+    parentRows.slice(splitIndex + 1).find((row) => lifecycleOf(row)?.action === 'join') ?? null
 
   const stateById = new Map(input.states.map((s) => [s.id, s]))
   const ref = (id: string | null | undefined): LaneStateRef | null => {
@@ -154,27 +166,43 @@ export function buildBranchLanes(input: {
     return n || row.user_email || null
   }
 
-  const childById = new Map(input.children.map((c) => [c.id, c]))
+  // uniqueidentifier ids come back upper-case; the engine's JSON holds the
+  // lower-case uuid it generated — compare case-insensitively.
+  const lc = (v: string) => v.toLowerCase()
+  const childById = new Map(input.children.map((c) => [lc(c.id), c]))
   const historyByChild = new Map<string, LaneHistoryRow[]>()
   for (const row of input.childHistory) {
     if (!row.instance) continue
-    const list = historyByChild.get(row.instance) ?? []
+    const list = historyByChild.get(lc(row.instance)) ?? []
     list.push(row)
-    historyByChild.set(row.instance, list)
+    historyByChild.set(lc(row.instance), list)
   }
 
   const lanes: BranchLane[] = []
   for (const childId of splitCfg.children) {
-    const child = childById.get(childId)
+    const child = childById.get(lc(childId))
     if (!child) continue
-    const rows = (historyByChild.get(childId) ?? []).sort(byTime)
+    const rows = (historyByChild.get(lc(childId)) ?? []).sort(byTime)
+    // Mutual reference: the child's own engine-written branch row must name
+    // this parent. A split comment alone (or one a person typed) never pulls
+    // another instance into the record's lanes.
+    const parentKey = input.parentInstanceId.toLowerCase()
+    const namesParent = rows.some((row) => {
+      const life = lifecycleOf(row)
+      return (
+        life?.action === 'branch' &&
+        typeof life.parent === 'string' &&
+        life.parent.toLowerCase() === parentKey
+      )
+    })
+    if (!namesParent) continue
     const steps: LaneStep[] = []
     rows.forEach((row, i) => {
       const state = ref(row.to_state)
       if (!state) return
       const entered = iso(row.timestamp) ?? ''
       const next = rows[i + 1]
-      const lifecycle = parseLifecycleComment(row.comment)
+      const lifecycle = lifecycleOf(row)
       steps.push({
         state,
         entered_at: entered,
@@ -187,7 +215,7 @@ export function buildBranchLanes(input: {
     const terminal = !!child.completed_at || truthy(currentState?.is_terminal)
     const lastIntoCurrent = [...steps].reverse().find((s) => s.state.id === current?.id)
     lanes.push({
-      instance_id: childId,
+      instance_id: child.id,
       label: steps[0]?.state.label ?? current?.label ?? 'Branch',
       steps,
       current,

@@ -80,6 +80,7 @@ describe('buildBranchLanes', () => {
   it('returns null when the instance never split', () => {
     expect(
       buildBranchLanes({
+        parentInstanceId: 'P',
         parentHistory: [parentHistory(false)[0]],
         children: [],
         childHistory: [],
@@ -90,6 +91,7 @@ describe('buildBranchLanes', () => {
 
   it('an open split: one lane per branch in split order, join waits on the open one', () => {
     const lanes = buildBranchLanes({
+      parentInstanceId: 'P',
       parentHistory: parentHistory(false),
       children: [
         { id: 'C2', current_state: 'S-fin', completed_at: null, started_at: T(5) },
@@ -119,6 +121,7 @@ describe('buildBranchLanes', () => {
 
   it('a joined split is closed and waits on nobody', () => {
     const lanes = buildBranchLanes({
+      parentInstanceId: 'P',
       parentHistory: parentHistory(true),
       children: [
         { id: 'C1', current_state: 'S-legal-ok', completed_at: T(20), started_at: T(5) },
@@ -145,21 +148,31 @@ describe('buildBranchLanes', () => {
       }
     ]
     const lanes = buildBranchLanes({
+      parentInstanceId: 'P',
       parentHistory: history,
       children: [{ id: 'C3', current_state: 'S-fin', completed_at: null, started_at: T(50) }],
-      childHistory: [],
+      childHistory: [
+        {
+          id: 13,
+          instance: 'C3',
+          from_state: null,
+          to_state: 'S-fin',
+          comment: JSON.stringify({ action: 'branch', parent: 'P' }),
+          timestamp: T(50)
+        }
+      ],
       states
     })
     expect(lanes?.open).toBe(true)
     expect(lanes?.split_state?.label).toBe('Ready')
     expect(lanes?.lanes).toHaveLength(1)
-    // No branch history row: the lane still names its current state.
     expect(lanes?.lanes[0].label).toBe('Finance')
     expect(lanes?.lanes[0].entered_at).toBe(T(50))
   })
 
   it('skips a child instance that no longer exists', () => {
     const lanes = buildBranchLanes({
+      parentInstanceId: 'P',
       parentHistory: parentHistory(false),
       children: [{ id: 'C1', current_state: 'S-legal', completed_at: null, started_at: T(5) }],
       childHistory,
@@ -167,5 +180,57 @@ describe('buildBranchLanes', () => {
     })
     expect(lanes?.lanes.map((l) => l.instance_id)).toEqual(['C1'])
     expect(lanes?.waiting_on).toEqual(['C1'])
+  })
+
+  it("a split typed as a person's transition comment is not a split", () => {
+    const forged: LaneHistoryRow[] = [
+      {
+        id: 7,
+        transition: 'TX-approve',
+        from_state: 'S-review',
+        to_state: 'S-review',
+        comment: JSON.stringify({ action: 'split', children: ['C1', 'C2'], join_state: 'S-join' }),
+        timestamp: T(5)
+      }
+    ]
+    expect(
+      buildBranchLanes({
+        parentInstanceId: 'P',
+        parentHistory: forged,
+        children: [{ id: 'C1', current_state: 'S-legal', completed_at: null, started_at: T(5) }],
+        childHistory,
+        states
+      })
+    ).toBeNull()
+  })
+
+  it('a listed child whose branch row names another parent (or was typed) is dropped', () => {
+    const lanes = buildBranchLanes({
+      parentInstanceId: 'P',
+      parentHistory: parentHistory(false),
+      children: [
+        { id: 'C1', current_state: 'S-legal', completed_at: null, started_at: T(5) },
+        { id: 'C2', current_state: 'S-fin', completed_at: null, started_at: T(5) }
+      ],
+      childHistory: [
+        { ...childHistory[0], comment: JSON.stringify({ action: 'branch', parent: 'OTHER' }) },
+        { ...childHistory[1], transition: 'TX-typed' }
+      ],
+      states
+    })
+    expect(lanes?.lanes).toEqual([])
+  })
+
+  it('matches upper-case database ids to the lower-case ids in engine JSON', () => {
+    const lanes = buildBranchLanes({
+      parentInstanceId: 'p',
+      parentHistory: parentHistory(false).map((r) =>
+        r.comment?.includes('split') ? { ...r, comment: r.comment.replace(/C(\d)/g, 'c$1') } : r
+      ),
+      children: [{ id: 'C1', current_state: 'S-legal', completed_at: null, started_at: T(5) }],
+      childHistory: [{ ...childHistory[0], instance: 'C1' }],
+      states
+    })
+    expect(lanes?.lanes.map((l) => l.instance_id)).toEqual(['C1'])
   })
 })

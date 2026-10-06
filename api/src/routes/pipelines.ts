@@ -11,7 +11,7 @@ import {
   type BranchLane,
   type BranchLanes,
   buildBranchLanes,
-  parseLifecycleComment
+  lifecycleOf
 } from '../services/branch-lanes.js'
 import { withChainStep } from '../services/chain.js'
 import { chainFields } from '../services/chain-columns.js'
@@ -368,15 +368,20 @@ let ownerFilterCheckRegistered = false
  * Null when the instance never split. Best-effort — the caller swallows.
  */
 async function loadBranchLanes(
-  collection: string,
-  item: string,
+  instance: WorkflowInstance,
   history: Array<Record<string, unknown>>,
   states: WorkflowState[]
 ): Promise<(BranchLanes & { lanes: Array<BranchLane & { owners: BranchOwner[] }> }) | null> {
-  if (!history.some((h) => parseLifecycleComment(h.comment as string | null)?.action === 'split'))
-    return null
+  const { collection } = instance
+  const item = String(instance.item)
+  const asRow = (h: Record<string, unknown>) => ({
+    comment: (h.comment as string | null) ?? null,
+    transition: (h.transition as string | null) ?? null
+  })
+  if (!history.some((h) => lifecycleOf(asRow(h))?.action === 'split')) return null
   const parentHistory = history.map((h) => ({
     id: Number(h.id),
+    transition: (h.transition as string | null) ?? null,
     from_state: (h.from_state as string | null) ?? null,
     to_state: String(h.to_state),
     comment: (h.comment as string | null) ?? null,
@@ -386,13 +391,16 @@ async function loadBranchLanes(
   for (const h of [...parentHistory].sort(
     (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime() || a.id - b.id
   )) {
-    const c = parseLifecycleComment(h.comment)
+    const c = lifecycleOf(h)
     if (c?.action === 'split' && Array.isArray(c.children)) splitChildren = c.children.map(String)
   }
   if (splitChildren.length === 0) return null
   const [children, childHistory] = await Promise.all([
+    // Only instances of THIS record and template — an id in a comment is
+    // never trusted to reach another record's instance (or its owners).
     db('nivaro_workflow_instances')
       .whereIn('id', splitChildren)
+      .where({ collection, item, template: instance.template })
       .select('id', 'current_state', 'completed_at', 'started_at'),
     db('nivaro_workflow_history as h')
       .leftJoin('nivaro_users as u', 'h.user', 'u.id')
@@ -400,6 +408,7 @@ async function loadBranchLanes(
       .select(
         'h.id',
         'h.instance',
+        'h.transition',
         'h.from_state',
         'h.to_state',
         'h.comment',
@@ -410,6 +419,7 @@ async function loadBranchLanes(
       )
   ])
   const lanes = buildBranchLanes({
+    parentInstanceId: instance.id,
     parentHistory,
     children,
     childHistory,
@@ -2221,7 +2231,7 @@ export async function pipelinesRoutes(app: FastifyInstance) {
       )
 
     const currentStateObj = states.find((s) => s.id === currentState)
-    const branches = await loadBranchLanes(collection, item, history, states).catch(() => null)
+    const branches = await loadBranchLanes(instance, history, states).catch(() => null)
 
     return reply.send({
       data: {
