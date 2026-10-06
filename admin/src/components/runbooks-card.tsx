@@ -57,6 +57,8 @@ interface Runbook {
   target_env: string | null
   refuse_targets: string[]
   resumable: boolean
+  /** Read-only: it has no dry run, and a real run needs none first. */
+  skip_dry_gate?: boolean
   active: RunbookRun | null
   agents: Array<{ host: string; last_seen: string; online: boolean }>
   dry_runs: Array<{ id: string; target: string | null; finished_at: string; summary?: string }>
@@ -266,7 +268,10 @@ function RunbookRow({
   const t = rb.target_env ? target.trim() : ''
   const refused = rb.refuse_targets.some((x) => x.toLowerCase() === t.toLowerCase())
   const needsTarget = !!rb.target_env && !t
+  const noDry = rb.skip_dry_gate === true
   const dry = freshDryRun(rb, t || null)
+  // What unlocks a real run: a fresh dry run, or a runbook that needs none.
+  const unlocked = noDry || !!dry
   const newestGo = runs.find((r) => r.mode === 'go' && (r.target ?? '') === t)
   const canResume = rb.resumable && newestGo?.state === 'failed' && !!newestGo.failed_step
   const expected = t || rb.key
@@ -380,21 +385,25 @@ function RunbookRow({
               triggerProps={{ 'data-runbook-from': 'true' }}
             />
           )}
+          {!noDry && (
+            <Button
+              size='sm'
+              variant='outline'
+              disabled={busy || needsTarget || refused || start.isPending}
+              onClick={() => start.mutate({ mode: 'dry' })}
+              data-runbook-dry
+            >
+              Dry run
+            </Button>
+          )}
           <Button
             size='sm'
-            variant='outline'
-            disabled={busy || needsTarget || refused || start.isPending}
-            onClick={() => start.mutate({ mode: 'dry' })}
-            data-runbook-dry
-          >
-            Dry run
-          </Button>
-          <Button
-            size='sm'
-            disabled={busy || needsTarget || refused || !dry}
+            disabled={busy || needsTarget || refused || !unlocked}
             onClick={() => setAsking('go')}
             title={
-              dry ? undefined : 'Needs a finished dry run of this target from the last 24 hours'
+              unlocked
+                ? undefined
+                : 'Needs a finished dry run of this target from the last 24 hours'
             }
             data-runbook-go
           >
@@ -404,7 +413,7 @@ function RunbookRow({
             <Button
               size='sm'
               variant='outline'
-              disabled={busy || !dry}
+              disabled={busy || !unlocked}
               onClick={() => setAsking('resume')}
               data-runbook-resume
             >
@@ -426,7 +435,7 @@ function RunbookRow({
             : `A ${rb.active.mode === 'dry' ? 'dry run' : 'run'} is going on ${rb.active.host ?? 'the host'}.`}
         </p>
       )}
-      {!needsTarget && !refused && (
+      {!needsTarget && !refused && !noDry && (
         <p className='mt-2 text-slate-500 dark:text-muted-foreground' data-runbook-gate>
           {dry
             ? `Dry run ${formatRelative(dry.finished_at)}${dry.summary ? ` — ${dry.summary}` : ''}.`
