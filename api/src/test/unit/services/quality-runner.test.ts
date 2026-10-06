@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { attachLegacyLinks, runOneCheck } from '../../../scripts/quality-checks.js'
 
 const ctx = { db: {} as never, database: 'T', log: () => {} }
@@ -37,10 +37,10 @@ describe('runOneCheck', () => {
     // pickBaseline returns the error text when the stored side is missing; never looks up other runs
     const { pickBaseline } = await import('../../../scripts/quality-checks.js')
     expect(pickBaseline({ rows: null, error: null })).toEqual({
-      error: 'no baseline for this run — capture failed'
+      error: 'no baseline was taken for this check'
     })
     expect(pickBaseline({ rows: null, error: 'boom' })).toEqual({
-      error: 'no baseline for this run — capture failed (boom)'
+      error: 'the capture failed for this check (boom)'
     })
   })
 })
@@ -186,10 +186,11 @@ describe('fix round 1', () => {
   it('picks only a fresh capture for latest, any capture for --rerun or an explicit id', async () => {
     const { pickRun } = await import('../../../scripts/quality-checks.js')
     const at = new Date('2026-10-06T01:00:00Z')
+    const now = Date.parse('2026-10-06T09:00:00Z')
     const fresh = { id: 'R1', target: 'T', status: 'captured', captured_at: at, verified_at: null }
     const verified = { ...fresh, status: 'done', verified_at: at }
     const died = { ...fresh, status: 'capturing', captured_at: null }
-    const latest = { target: 'T', requested: 'latest', rerun: false }
+    const latest = { target: 'T', requested: 'latest', rerun: false, now }
     expect(pickRun(fresh, latest)).toEqual({ id: 'R1' })
     expect(pickRun({ ...fresh, status: 'verifying' }, latest)).toEqual({ id: 'R1' })
     expect(pickRun(verified, latest)).toEqual({
@@ -203,13 +204,173 @@ describe('fix round 1', () => {
     expect(pickRun(died, { ...latest, rerun: true })).toEqual({
       error: 'run R1 for T is capturing — it has no capture'
     })
-    expect(pickRun(verified, { target: 'T', requested: 'R1', rerun: false })).toEqual({ id: 'R1' })
-    expect(pickRun(died, { target: 'T', requested: 'R1', rerun: false })).toEqual({
+    expect(pickRun(verified, { target: 'T', requested: 'R1', rerun: false, now })).toEqual({
+      id: 'R1'
+    })
+    expect(pickRun(died, { target: 'T', requested: 'R1', rerun: false, now })).toEqual({
       error: 'run R1 for T is capturing — it has no capture'
     })
-    expect(pickRun(verified, { target: 'U', requested: 'R1', rerun: false })).toEqual({
+    expect(pickRun(verified, { target: 'U', requested: 'R1', rerun: false, now })).toEqual({
       error: 'no quality run R1 for U'
     })
+    // Targets compare case-insensitively.
+    expect(pickRun(fresh, { ...latest, target: 't' })).toEqual({ id: 'R1' })
+  })
+
+  it('refuses a latest capture older than 36 hours; an explicit run id may be any age', async () => {
+    const { pickRun } = await import('../../../scripts/quality-checks.js')
+    const at = new Date('2026-10-04T01:00:00Z')
+    const now = Date.parse('2026-10-05T18:00:00Z') // 41 hours later
+    const old = { id: 'R1', target: 'T', status: 'captured', captured_at: at, verified_at: null }
+    expect(pickRun(old, { target: 'T', requested: 'latest', rerun: false, now })).toEqual({
+      error:
+        'the latest capture of T is 41 hours old (over 36) — rebuild it, or name the run with --run R1'
+    })
+    expect(
+      pickRun({ ...old, status: 'done' }, { target: 'T', requested: 'latest', rerun: true, now })
+    ).toEqual({
+      error:
+        'the latest capture of T is 41 hours old (over 36) — rebuild it, or name the run with --run R1'
+    })
+    expect(pickRun(old, { target: 'T', requested: 'R1', rerun: false, now })).toEqual({ id: 'R1' })
+    expect(
+      pickRun(old, {
+        target: 'T',
+        requested: 'latest',
+        rerun: false,
+        now: at.getTime() + 35 * 3.6e6
+      })
+    ).toEqual({ id: 'R1' })
+  })
+})
+
+describe('runStage', () => {
+  const tables = () => ({
+    nivaro_quality_runs: [] as Record<string, unknown>[],
+    nivaro_quality_rows: [],
+    nivaro_quality_results: [],
+    nivaro_quality_known: []
+  })
+  const check = (id: string, base: unknown[], cur: unknown[]) => ({
+    id,
+    area: 'counts',
+    label: id,
+    description: '',
+    baseline: async () => base,
+    current: async () => cur
+  })
+  async function stage(
+    db: unknown,
+    stageName: 'baseline' | 'current',
+    checks: unknown[],
+    extra: Record<string, unknown> = {}
+  ) {
+    const { runStage } = await import('../../../scripts/quality-checks.js')
+    const out: string[] = []
+    const spy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk: unknown) => {
+      out.push(String(chunk))
+      return true
+    })
+    try {
+      const code = await runStage(
+        {
+          stage: stageName,
+          target: 'T',
+          resultsDb: 'D',
+          run: 'latest',
+          only: null,
+          runbookRun: null,
+          rerun: false,
+          ...extra
+        },
+        { app: db as never, targetDb: {} as never, loadChecks: async () => checks as never }
+      )
+      return { code, out: out.join('') }
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  it('exits 3 when the results database has no quality tables', async () => {
+    const { createTestDb } = await import('@nivaro/extension-kit')
+    const { code, out } = await stage(createTestDb({ tables: {} }), 'baseline', [])
+    expect(code).toBe(3)
+    expect(out).toMatch(/### FAILED before starting: D has no nivaro_quality_runs table/)
+  })
+
+  it('exits 3 when there is no run to verify', async () => {
+    const { createTestDb } = await import('@nivaro/extension-kit')
+    const { code, out } = await stage(createTestDb({ tables: tables() }), 'current', [])
+    expect(code).toBe(3)
+    expect(out).toMatch(/### FAILED before starting: no quality run for T/)
+  })
+
+  it('exits 0 for a clean run even when a check reads red, and stamps the verify start', async () => {
+    const { createTestDb } = await import('@nivaro/extension-kit')
+    const db = createTestDb({ tables: tables() }) as any
+    const checks = [
+      check('a.one', [{ key: 'k', values: { v: 1 } }], [{ key: 'k', values: { v: 2 } }])
+    ]
+    const base = await stage(db, 'baseline', checks)
+    expect(base.code).toBe(0)
+    expect(base.out).toMatch(/### DONE — quality baseline: 1 checks, 0 errors/)
+    const cur = await stage(db, 'current', checks)
+    expect(cur.code).toBe(0)
+    expect(cur.out).toMatch(/### DONE — quality: 1 red/)
+    const [run] = db.state.tables.nivaro_quality_runs
+    expect(run.status).toBe('done')
+    expect(run.verify_started_at).toBeInstanceOf(Date)
+  })
+
+  it('says why a check has no baseline: none taken, or the capture failed', async () => {
+    const { createTestDb } = await import('@nivaro/extension-kit')
+    const db = createTestDb({ tables: tables() }) as any
+    const failing = {
+      ...check('b.two', [], []),
+      baseline: async () => {
+        throw new Error('boom')
+      }
+    }
+    await stage(db, 'baseline', [failing])
+    const cur = await stage(db, 'current', [failing, check('c.new', [], [])])
+    expect(cur.code).toBe(0)
+    const err = (id: string) =>
+      db.state.tables.nivaro_quality_results.find((r: any) => r.check_id === id).error
+    expect(err('b.two')).toBe('the capture failed for this check (boom)')
+    expect(err('c.new')).toBe('no baseline was taken for this check')
+  })
+
+  it('marks the run as stopped when it is killed', async () => {
+    const { createTestDb } = await import('@nivaro/extension-kit')
+    const { markStopped } = await import('../../../scripts/quality-checks.js')
+    const db = createTestDb({
+      tables: { ...tables(), nivaro_quality_runs: [{ id: 'R', target: 'T', status: 'verifying' }] }
+    }) as any
+    await markStopped(db, 'R')
+    expect(db.state.tables.nivaro_quality_runs[0]).toMatchObject({
+      status: 'error',
+      error: 'Stopped before it finished'
+    })
+  })
+})
+
+describe('config epoch', () => {
+  it('turns the cache epoch off before anything loads the core database', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { fileURLToPath } = await import('node:url')
+    const src = readFileSync(
+      fileURLToPath(new URL('../../../scripts/quality-checks.ts', import.meta.url)),
+      'utf8'
+    )
+    const firstImport = src.split('\n').find((l) => l.startsWith('import '))
+    expect(firstImport).toBe("import './quality-checks-env.js'")
+    await import('../../../scripts/quality-checks-env.js')
+    expect(process.env.CACHE_EPOCH).toBe('off')
+    const epoch = readFileSync(
+      fileURLToPath(new URL('../../../db/config-epoch.ts', import.meta.url)),
+      'utf8'
+    )
+    expect(epoch).toContain("process.env.CACHE_EPOCH !== 'off'")
   })
 })
 
