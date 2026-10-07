@@ -27,7 +27,7 @@ export const lowCodePageBuilder: DocSection = {
     { type: 'h3', text: 'Query widget stats' },
     {
       type: 'p',
-      text: "A query widget can show a strip of stat tiles above its table. Each `stats` entry is computed over the query's rows (or its own query) and takes the keys below. A formula sums only rows that hold every operand it names, so a ratio over partly reported rows reads the reporting rows alone, and an additive formula also drops a row missing any operand."
+      text: "A query widget can show a strip of stat tiles above its table. Each `stats` entry is computed over the query's rows (or its own query) and takes the keys below. Every formula counts only rows that hold all of its operands: a ratio over partially reported rows reads the reporting rows alone, and a sum formula likewise skips a row missing any operand."
     },
     {
       type: 'table',
@@ -38,15 +38,15 @@ export const lowCodePageBuilder: DocSection = {
         ['query', 'An independent stat: `{slug, param_from, value_field, label_field}`'],
         ['field_subtract', 'Delta stat: `field` minus this column, shown with a leading + when positive'],
         ['formula', '`{{a}} / {{b}}` arithmetic over the summed columns'],
-        ['format', 'currency, number, percent (0-100 scale, up to 1 decimal), date or text. Date and text take the first row value and render quieter'],
+        ['format', 'currency, number, percent (0-100 scale, up to 1 decimal), date or text. Date and text render quieter and take the first row value only for a tile with a `query`; a row-field tile with these formats shows the empty label'],
         ['empty_label', 'Shown when the value is null'],
-        ['coverage', 'The result column whose non-empty count reads "N of M rows", or the empty label when no row reports'],
+        ['coverage', "Plural noun for a table row, for example `projects`. When only some rows report the figure, a quiet 'N of M projects' line appears under the value; when none do, the tile shows `empty_label`"],
         ['accent / accent_negative', 'Colour roles for the tile value and for a negative delta']
       ]
     },
     {
       type: 'pre',
-      code: "{ label: '% Remaining', formula: '{{remaining}} / {{budget}}', format: 'percent', empty_label: 'no data yet', coverage: 'remaining' }"
+      code: "{ label: '% Remaining', formula: '{{remaining}} / {{budget}}', format: 'percent', empty_label: 'no data yet', coverage: 'projects' }"
     },
     {
       type: 'p',
