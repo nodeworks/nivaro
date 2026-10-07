@@ -449,7 +449,7 @@ export async function batchUpdate(
       try {
         const caller = new Set(Object.keys(patch))
         await enforceValidationRules(collection, { ...was, ...patch }, caller)
-        await applyWriteComputedFields(collection, patch, { ...was, ...patch }, { previous: was })
+        await applyWriteComputedFields(collection, patch, { ...was, ...patch })
       } catch (err) {
         fail(index, label, messageOf(err))
         continue

@@ -15,7 +15,6 @@ import {
   keysetSorts
 } from '../lib/keyset.js'
 import { getAncestors, getTreeConfig, type TreeConfig } from '../lib/tree.js'
-import { shouldRecomputeWriteField } from '../lib/write-formula.js'
 import { fetchDefaultWorkspaceId } from '../middleware/workspace.js'
 import { deferEffect, withUnitOfWork } from '../services/unit-of-work.js'
 import type { CMSField, CMSRelation, ItemsQuery, User } from '../types.js'
@@ -635,8 +634,7 @@ function dropExtras(rows: Record<string, unknown>[], extras: string[]): void {
 export async function applyWriteComputedFields(
   collection: string,
   payload: Record<string, unknown>,
-  context?: Record<string, unknown>,
-  opts?: { previous?: Record<string, unknown> | null }
+  context?: Record<string, unknown>
 ): Promise<void> {
   const fields = await getComputedFields(collection)
   const writeFields = fields.filter((f) => f.computed_type === 'write' && f.computed_formula)
@@ -681,16 +679,7 @@ export async function applyWriteComputedFields(
   const evalCtx = context ?? payload
   for (const f of writeFields) {
     const store = f.computed_store === true || f.computed_store === 1
-    // On an update, a formula re-derives only when the payload CHANGES one of
-    // its inputs (lib/write-formula.ts). A stored value that does not equal
-    // the formula — a line copied over as it was — survives unrelated edits.
-    if (
-      opts?.previous &&
-      !shouldRecomputeWriteField(f.computed_formula as string, payload, opts.previous)
-    ) {
-      continue
-    }
-    // Only write to payload when computed_store=true.
+    // Always evaluate the formula; only write to payload when computed_store=true.
     // Skip overwrite when result is null (formula failure) to preserve any client-provided value.
     const result = evalFormula(f.computed_formula as string, evalCtx)
     if (store && result !== null) {
@@ -5283,7 +5272,7 @@ export async function updateOne(
   // Write-time computed fields — merge previous data as context so formula can read existing fields
   const writeCtx = { ...(previousData ?? {}), ...ctx.payload }
   await span('computed-fields:write', () =>
-    applyWriteComputedFields(collection, ctx.payload, writeCtx, { previous: previousData ?? null })
+    applyWriteComputedFields(collection, ctx.payload, writeCtx)
   )
 
   // Field validation rules on the caller's fields (see createOne)
