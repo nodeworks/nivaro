@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-10-07T18:06:18.357Z",
+  "generated_at": "2026-10-07T18:23:35.287Z",
   "releases": [
+    {
+      "version": "0.2.23",
+      "tag": "v0.2.23",
+      "date": "2026-10-07T14:23:21-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "2ec546f0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "revert the server-side write-computed re-derive rule",
+              "hash": "4390f3c3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "grid keeps computing amount from price x quantity",
+              "hash": "8669ce8e"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.2.22",
       "tag": "v0.2.22",
-      "date": "2026-10-07T14:06:06-04:00",
+      "date": "2026-10-07T14:06:18-04:00",
       "sections": [
         {
           "label": "Documentation",
