@@ -53,7 +53,7 @@ describe('parseArgs', () => {
         '--stage',
         'baseline',
         '--target',
-        'EFP_Staging',
+        'Mirror_DB',
         '--results-db',
         'EFP_Development',
         '--only',
@@ -61,7 +61,7 @@ describe('parseArgs', () => {
       ])
     ).toEqual({
       stage: 'baseline',
-      target: 'EFP_Staging',
+      target: 'Mirror_DB',
       resultsDb: 'EFP_Development',
       run: 'latest',
       only: ['a', 'b'],
@@ -139,10 +139,10 @@ describe('fix round 1', () => {
   it('refuses EFP and the target as the results database', async () => {
     const { parseArgs } = await import('../../../scripts/quality-checks.js')
     expect(
-      parseArgs(['--stage', 'baseline', '--target', 'EFP_Staging', '--results-db', 'efp'])
+      parseArgs(['--stage', 'baseline', '--target', 'Mirror_DB', '--results-db', 'efp'])
     ).toBe('refusing to write results to the production database EFP')
     expect(
-      parseArgs(['--stage', 'current', '--target', 'EFP_Staging', '--results-db', 'EFP_STAGING'])
+      parseArgs(['--stage', 'current', '--target', 'Mirror_DB', '--results-db', 'MIRROR_DB'])
     ).toBe('--target and --results-db must be different databases')
     expect(
       parseArgs(['--stage', 'current', '--target', 'S', '--results-db', 'D', '--rerun'])
@@ -159,7 +159,7 @@ describe('fix round 1', () => {
       client: 'mssql',
       connection: {
         server: 'h',
-        database: 'EFP_Staging',
+        database: 'Mirror_DB',
         user: 'u',
         password: 'pw',
         options: { encrypt: true }
