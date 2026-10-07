@@ -19,7 +19,10 @@ export const lowCodePageBuilder: DocSection = {
         ['markdown', 'Rich text / documentation blocks'],
         ['iframe', 'An embedded external page'],
         ['recent-activity', 'Latest activity entries, optionally scoped to a collection'],
-        ['query', 'A custom query rendered as a table, with optional filters, stat strip, row actions and drill sheets'],
+        [
+          'query',
+          'A custom query rendered as a table, with optional filters, stat strip, row actions and drill sheets'
+        ],
         ['matrix', 'A tuple-scoped value grid over a target collection'],
         ['record-grid', 'An editable grid over a collection, with scope pickers and month sets']
       ]
@@ -36,17 +39,26 @@ export const lowCodePageBuilder: DocSection = {
         ['label', 'Tile title'],
         ['field', 'Sum of this result column'],
         ['query', 'An independent stat: `{slug, param_from, value_field, label_field}`'],
-        ['field_subtract', 'Delta stat: `field` minus this column, shown with a leading + when positive'],
+        [
+          'field_subtract',
+          'Delta stat: `field` minus this column, shown with a leading + when positive'
+        ],
         ['formula', '`{{a}} / {{b}}` arithmetic over the summed columns'],
-        ['format', 'currency, number, percent (0-100 scale, up to 1 decimal), date or text. Date and text render quieter and take the first row value only for a tile with a `query`; a row-field tile with these formats shows the empty label'],
+        [
+          'format',
+          'currency, number, percent (0-100 scale, up to 1 decimal), date or text. Date and text render quieter and take the first row value only for a tile with a `query`; a row-field tile with these formats shows the empty label'
+        ],
         ['empty_label', 'Shown when the value is null'],
-        ['coverage', "Plural noun for a table row, for example `projects`. When only some rows report the figure, a quiet 'N of M projects' line appears under the value; when none do, the tile shows `empty_label`"],
+        [
+          'coverage',
+          "Plural noun for a table row, for example `projects`. When only some rows report the figure, a quiet 'N of M projects' line appears under the value; when none do, the tile shows `empty_label`"
+        ],
         ['accent / accent_negative', 'Colour roles for the tile value and for a negative delta']
       ]
     },
     {
       type: 'pre',
-      code: "{ label: '% Remaining', formula: '{{remaining}} / {{budget}}', format: 'percent', empty_label: 'no data yet', coverage: 'projects' }"
+      code: "{ label: '% Remaining', formula: '{{remaining}} / {{budget}} * 100', format: 'percent', empty_label: 'no data yet', coverage: 'projects' }"
     },
     {
       type: 'p',

@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { evaluateNumeric } from '../lib/expression'
 
 // Generic tabular renderer for custom-query rows (widget slots + page builder).
@@ -359,6 +359,43 @@ export function QueryTable({
   const [togglesOff, setTogglesOff] = useState<Set<string>>(
     () => new Set((config?.toggles ?? []).filter((t) => t.default_on === false).map((t) => t.label))
   )
+  // Horizontal overflow of the table scroller: `overflows` widens the pinned
+  // actions column's edge, `canScrollRight` shows the right-edge fade cue, and
+  // `cueInset` keeps the cue clear of the pinned actions column and scrollbars.
+  const [scrollEl, setScrollEl] = useState<HTMLDivElement | null>(null)
+  const [scrollState, setScrollState] = useState({
+    overflows: false,
+    canScrollRight: false,
+    cueInset: { right: 0, bottom: 0 }
+  })
+  useEffect(() => {
+    if (!scrollEl) return
+    const measure = () => {
+      const overflows = scrollEl.scrollWidth > scrollEl.clientWidth + 1
+      const canScrollRight = scrollEl.scrollWidth > scrollEl.clientWidth + scrollEl.scrollLeft + 1
+      const actions = scrollEl.querySelector<HTMLElement>('[data-qt-actions-head]')
+      const pinned = config?.sticky && actions ? actions.offsetWidth : 0
+      const right = scrollEl.offsetWidth - scrollEl.clientWidth + pinned
+      const bottom = scrollEl.offsetHeight - scrollEl.clientHeight
+      setScrollState((p) =>
+        p.overflows === overflows &&
+        p.canScrollRight === canScrollRight &&
+        p.cueInset.right === right &&
+        p.cueInset.bottom === bottom
+          ? p
+          : { overflows, canScrollRight, cueInset: { right, bottom } }
+      )
+    }
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(scrollEl)
+    if (scrollEl.firstElementChild) ro.observe(scrollEl.firstElementChild)
+    scrollEl.addEventListener('scroll', measure, { passive: true })
+    return () => {
+      ro.disconnect()
+      scrollEl.removeEventListener('scroll', measure)
+    }
+  }, [scrollEl, config?.sticky])
   if (!rows || rows.length === 0) {
     return (
       <p className='px-1 py-2 text-[12px] italic text-slate-400'>
@@ -664,6 +701,12 @@ export function QueryTable({
   /** Pinned-rail padding: the rail itself gets horizontal inset, and the
    *  column right after it stops sitting flush against the rail's border. */
   const afterRailPad = (j: number) => (sticky && (j === 0 || j === 1) ? 'pl-3' : '')
+  /** Row-actions column pins to the right edge on sticky tables so the drill
+   *  buttons stay reachable when the data columns overflow the card. The left
+   *  edge only shows while the table actually scrolls sideways. */
+  const ACTIONS_EDGE = scrollState.overflows ? 'border-l border-slate-200 dark:border-border' : ''
+  const stickyActionsCls = (bg: string) =>
+    sticky ? `sticky right-0 z-[2] ${ACTIONS_EDGE} ${bg}` : ''
 
   const renderRow = (
     row: Record<string, unknown>,
@@ -699,7 +742,13 @@ export function QueryTable({
           </td>
         ))}
         {rowActions && (
-          <td className='py-1 pl-2 pr-3 text-right'>
+          <td
+            className={`py-1 pl-2 pr-3 text-right ${stickyActionsCls(
+              d >= 2
+                ? 'bg-[#f3f9fe] group-hover/qtr:bg-[#e7f3fd] dark:bg-card dark:group-hover/qtr:bg-muted'
+                : 'bg-white group-hover/qtr:bg-slate-50 dark:bg-card dark:group-hover/qtr:bg-muted'
+            )}`}
+          >
             {/* flex-nowrap + nowrap buttons: wrapped action chips doubled every
               row's height when the actions column got squeezed. */}
             <span className='inline-flex flex-nowrap gap-1'>
@@ -787,7 +836,7 @@ export function QueryTable({
                           : ''}
                   </td>
                 ))}
-                {rowActions && <td />}
+                {rowActions && <td className={stickyActionsCls('bg-slate-100 dark:bg-muted')} />}
               </tr>
             }
           >
@@ -873,7 +922,9 @@ export function QueryTable({
                                         : ''}
                                 </td>
                               ))}
-                              {rowActions && <td />}
+                              {rowActions && (
+                                <td className={stickyActionsCls('bg-slate-100 dark:bg-muted')} />
+                              )}
                             </tr>
                           }
                         >
@@ -952,171 +1003,196 @@ export function QueryTable({
           )}
         </div>
       )}
-      <div className={sticky ? 'min-h-0 flex-1 overflow-auto' : 'overflow-x-auto'}>
-        <table className='w-full text-[12px]'>
-          <thead>
-            {hasGroups ? (
-              <>
-                <tr>
-                  {(() => {
-                    // Runs of consecutive same-group columns → one spanning cell;
-                    // ungrouped columns span both header rows.
-                    const cells: ReactNode[] = []
-                    let i = 0
-                    while (i < columns.length) {
-                      const c = columns[i]
-                      if (!c.group) {
+      <div className={sticky ? 'relative flex min-h-0 flex-1 flex-col' : 'relative'}>
+        <div
+          ref={setScrollEl}
+          className={sticky ? 'min-h-0 flex-1 overflow-auto' : 'overflow-x-auto'}
+        >
+          <table className='w-full text-[12px]'>
+            <thead>
+              {hasGroups ? (
+                <>
+                  <tr>
+                    {(() => {
+                      // Runs of consecutive same-group columns → one spanning cell;
+                      // ungrouped columns span both header rows.
+                      const cells: ReactNode[] = []
+                      let i = 0
+                      while (i < columns.length) {
+                        const c = columns[i]
+                        if (!c.group) {
+                          cells.push(
+                            <th
+                              key={`u-${c.field ?? i}`}
+                              rowSpan={2}
+                              className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 align-bottom text-[10.5px] font-semibold uppercase tracking-wider text-slate-500 dark:border-border dark:text-slate-400 ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                            >
+                              {c.label ?? titleize(c.field ?? '')}
+                            </th>
+                          )
+                          i++
+                          continue
+                        }
+                        let span = 1
+                        while (i + span < columns.length && columns[i + span].group === c.group)
+                          span++
                         cells.push(
                           <th
-                            key={`u-${c.field ?? i}`}
-                            rowSpan={2}
-                            className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 align-bottom text-[10.5px] font-semibold uppercase tracking-wider text-slate-500 dark:border-border dark:text-slate-400 ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                            key={`g-${c.group}-${i}`}
+                            colSpan={span}
+                            className={`whitespace-nowrap border-b border-slate-100 py-1 pr-3 text-center text-[11px] font-semibold dark:border-border/60 ${c.group === highlightGroup ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]' : `text-slate-600 dark:text-slate-300 ${bandCls(i)}`} ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`.trim()}
                           >
-                            {c.label ?? titleize(c.field ?? '')}
+                            {c.group}
                           </th>
                         )
-                        i++
-                        continue
+                        i += span
                       }
-                      let span = 1
-                      while (i + span < columns.length && columns[i + span].group === c.group)
-                        span++
-                      cells.push(
+                      return cells
+                    })()}
+                    {rowActions && (
+                      <th
+                        rowSpan={2}
+                        aria-label='Actions'
+                        data-qt-actions-head=''
+                        className={`border-b border-slate-200 dark:border-border ${sticky ? `sticky right-0 top-0 z-[3] ${ACTIONS_EDGE} bg-white dark:bg-card` : ''}`}
+                      />
+                    )}
+                  </tr>
+                  <tr>
+                    {columns.map((c, i) =>
+                      c.group ? (
                         <th
-                          key={`g-${c.group}-${i}`}
-                          colSpan={span}
-                          className={`whitespace-nowrap border-b border-slate-100 py-1 pr-3 text-center text-[11px] font-semibold dark:border-border/60 ${c.group === highlightGroup ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]' : `text-slate-600 dark:text-slate-300 ${bandCls(i)}`} ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`.trim()}
+                          key={c.field ?? c.label ?? i}
+                          // min-w keeps dash-only month columns from collapsing to
+                          // uneven slivers across the pivot grid
+                          className={`min-w-[58px] whitespace-nowrap border-b border-slate-200 py-1 pr-3 ${afterRailPad(i)} text-[11px] font-medium text-slate-500 dark:border-border dark:text-slate-400 ${isNumeric(c) ? 'text-right' : 'text-left'} ${hlCls(c) || bandCls(i)} ${sticky ? 'sticky top-[26px] z-[2] bg-white dark:bg-card' : ''}`}
                         >
-                          {c.group}
+                          {c.label ?? titleize(c.field ?? '')}
                         </th>
-                      )
-                      i += span
-                    }
-                    return cells
-                  })()}
+                      ) : null
+                    )}
+                  </tr>
+                </>
+              ) : (
+                <tr className='border-b border-slate-200 dark:border-border'>
+                  {columns.map((c, i) => (
+                    <th
+                      key={c.field ?? c.label ?? i}
+                      className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 ${afterRailPad(i)} text-[10.5px] font-semibold uppercase tracking-wider dark:border-border ${
+                        isHighlighted(c)
+                          ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]'
+                          : 'text-slate-500 dark:text-slate-400'
+                      } ${c.stack ? 'min-w-[64px]' : ''} ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                    >
+                      {c.label ?? titleize(c.field ?? '')}
+                      {c.stack && config?.stack_legend && (
+                        <span
+                          className='flex justify-end gap-1.5 text-[9px] font-medium normal-case tracking-normal'
+                          style={
+                            stackStyle(c)
+                              ? { ...stackStyle(c), ...(colorStyle(c) ?? {}) }
+                              : colorStyle(c)
+                          }
+                        >
+                          {showTop(c) && (
+                            <span
+                              className={
+                                c.color
+                                  ? 'text-[color:var(--qtc)] dark:text-[color:var(--qtcd)]'
+                                  : ''
+                              }
+                            >
+                              {config.stack_legend[0]}
+                            </span>
+                          )}
+                          {showStack(c) && (
+                            <span
+                              className={
+                                c.stack_color
+                                  ? 'text-[color:var(--qts)] dark:text-[color:var(--qtsd)]'
+                                  : ''
+                              }
+                            >
+                              {config.stack_legend[1]}
+                            </span>
+                          )}
+                        </span>
+                      )}
+                    </th>
+                  ))}
                   {rowActions && (
                     <th
-                      rowSpan={2}
                       aria-label='Actions'
-                      className={`border-b border-slate-200 dark:border-border ${sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : ''}`}
+                      data-qt-actions-head=''
+                      className={
+                        sticky
+                          ? `sticky right-0 top-0 z-[3] ${ACTIONS_EDGE} bg-white dark:bg-card`
+                          : undefined
+                      }
                     />
                   )}
                 </tr>
-                <tr>
-                  {columns.map((c, i) =>
-                    c.group ? (
-                      <th
-                        key={c.field ?? c.label ?? i}
-                        // min-w keeps dash-only month columns from collapsing to
-                        // uneven slivers across the pivot grid
-                        className={`min-w-[58px] whitespace-nowrap border-b border-slate-200 py-1 pr-3 ${afterRailPad(i)} text-[11px] font-medium text-slate-500 dark:border-border dark:text-slate-400 ${isNumeric(c) ? 'text-right' : 'text-left'} ${hlCls(c) || bandCls(i)} ${sticky ? 'sticky top-[26px] z-[2] bg-white dark:bg-card' : ''}`}
-                      >
-                        {c.label ?? titleize(c.field ?? '')}
-                      </th>
-                    ) : null
+              )}
+            </thead>
+            <tbody>{body}</tbody>
+            {totals && (
+              <tfoot>
+                <tr className='border-t border-slate-300 font-semibold dark:border-border'>
+                  {columns.map((c, i) => (
+                    <td
+                      key={c.field ?? c.label ?? i}
+                      className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(i)} ${colorCls(c, '')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${hlCls(c)} ${sticky ? `sticky bottom-0 border-t border-slate-300 dark:border-border ${i === 0 ? `left-0 z-[3] ${STICKY_EDGE} bg-slate-50 dark:bg-muted` : 'z-[2] bg-white dark:bg-card'}` : ''}`}
+                      style={colorStyle(
+                        c,
+                        Number(
+                          c.formula ? evalRowFormula(c.formula, totals) : totals[c.field ?? '']
+                        )
+                      )}
+                    >
+                      {i === 0 && !c.sum && !c.formula
+                        ? 'Total'
+                        : c.sum || c.formula
+                          ? c.formula
+                            ? fmtCell(evalRowFormula(c.formula, totals), c.format)
+                            : cellBody(totals, c)
+                          : ''}
+                    </td>
+                  ))}
+                  {rowActions && (
+                    <td
+                      // Pins with the rest of the totals row — an unpinned actions
+                      // cell scrolled away while its row stayed.
+                      className={`py-1.5 pr-3 text-right ${sticky ? `sticky bottom-0 right-0 z-[3] border-t border-slate-300 ${ACTIONS_EDGE} bg-white dark:border-border dark:bg-card` : ''}`}
+                    >
+                      <span className='inline-flex flex-nowrap gap-1.5'>
+                        {rowActions.map((a) => (
+                          <button
+                            key={a.label}
+                            type='button'
+                            onClick={() => a.onClick(null)}
+                            className='whitespace-nowrap rounded border border-[#a13ffb66] bg-[#a13ffb1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
+                          >
+                            {a.label}
+                          </button>
+                        ))}
+                      </span>
+                    </td>
                   )}
                 </tr>
-              </>
-            ) : (
-              <tr className='border-b border-slate-200 dark:border-border'>
-                {columns.map((c, i) => (
-                  <th
-                    key={c.field ?? c.label ?? i}
-                    className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 ${afterRailPad(i)} text-[10.5px] font-semibold uppercase tracking-wider dark:border-border ${
-                      isHighlighted(c)
-                        ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]'
-                        : 'text-slate-500 dark:text-slate-400'
-                    } ${c.stack ? 'min-w-[64px]' : ''} ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
-                  >
-                    {c.label ?? titleize(c.field ?? '')}
-                    {c.stack && config?.stack_legend && (
-                      <span
-                        className='flex justify-end gap-1.5 text-[9px] font-medium normal-case tracking-normal'
-                        style={
-                          stackStyle(c)
-                            ? { ...stackStyle(c), ...(colorStyle(c) ?? {}) }
-                            : colorStyle(c)
-                        }
-                      >
-                        {showTop(c) && (
-                          <span
-                            className={
-                              c.color ? 'text-[color:var(--qtc)] dark:text-[color:var(--qtcd)]' : ''
-                            }
-                          >
-                            {config.stack_legend[0]}
-                          </span>
-                        )}
-                        {showStack(c) && (
-                          <span
-                            className={
-                              c.stack_color
-                                ? 'text-[color:var(--qts)] dark:text-[color:var(--qtsd)]'
-                                : ''
-                            }
-                          >
-                            {config.stack_legend[1]}
-                          </span>
-                        )}
-                      </span>
-                    )}
-                  </th>
-                ))}
-                {rowActions && (
-                  <th
-                    aria-label='Actions'
-                    className={sticky ? 'sticky top-0 z-[2] bg-white dark:bg-card' : undefined}
-                  />
-                )}
-              </tr>
+              </tfoot>
             )}
-          </thead>
-          <tbody>{body}</tbody>
-          {totals && (
-            <tfoot>
-              <tr className='border-t border-slate-300 font-semibold dark:border-border'>
-                {columns.map((c, i) => (
-                  <td
-                    key={c.field ?? c.label ?? i}
-                    className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(i)} ${colorCls(c, '')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${hlCls(c)} ${sticky ? `sticky bottom-0 border-t border-slate-300 dark:border-border ${i === 0 ? `left-0 z-[3] ${STICKY_EDGE} bg-slate-50 dark:bg-muted` : 'z-[2] bg-white dark:bg-card'}` : ''}`}
-                    style={colorStyle(
-                      c,
-                      Number(c.formula ? evalRowFormula(c.formula, totals) : totals[c.field ?? ''])
-                    )}
-                  >
-                    {i === 0 && !c.sum && !c.formula
-                      ? 'Total'
-                      : c.sum || c.formula
-                        ? c.formula
-                          ? fmtCell(evalRowFormula(c.formula, totals), c.format)
-                          : cellBody(totals, c)
-                        : ''}
-                  </td>
-                ))}
-                {rowActions && (
-                  <td
-                    // Pins with the rest of the totals row — an unpinned actions
-                    // cell scrolled away while its row stayed.
-                    className={`py-1.5 pr-3 text-right ${sticky ? 'sticky bottom-0 z-[2] border-t border-slate-300 bg-white dark:border-border dark:bg-card' : ''}`}
-                  >
-                    <span className='inline-flex flex-nowrap gap-1.5'>
-                      {rowActions.map((a) => (
-                        <button
-                          key={a.label}
-                          type='button'
-                          onClick={() => a.onClick(null)}
-                          className='whitespace-nowrap rounded border border-[#a13ffb66] bg-[#a13ffb1a] px-1.5 py-0.5 text-[11px] text-slate-700 hover:brightness-105 dark:text-slate-200'
-                        >
-                          {a.label}
-                        </button>
-                      ))}
-                    </span>
-                  </td>
-                )}
-              </tr>
-            </tfoot>
-          )}
-        </table>
+          </table>
+        </div>
+        {scrollState.canScrollRight && (
+          // More columns to the right: fade the edge so readers know the
+          // table scrolls sideways (the native scrollbar is often invisible).
+          <div
+            aria-hidden
+            data-qt-scroll-cue=''
+            className='pointer-events-none absolute top-0 w-10 bg-gradient-to-r from-transparent to-white dark:to-card'
+            style={{ right: scrollState.cueInset.right, bottom: scrollState.cueInset.bottom }}
+          />
+        )}
       </div>
     </div>
   )
