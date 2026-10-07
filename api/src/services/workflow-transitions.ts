@@ -740,7 +740,8 @@ export async function emitWorkflowStartEvent(opts: {
       'workflow-transition',
       payload,
       console as unknown as Parameters<typeof emitTrigger>[2],
-      opts.userId ?? undefined
+      opts.userId ?? undefined,
+      { orderKey: `${opts.collection}:${opts.item}` }
     )
     import('../hooks/notification-subscriptions.js')
       .then(async ({ fireWorkflowStateSubscriptions }) =>
@@ -1287,7 +1288,10 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
         'workflow-transition',
         payload,
         console as unknown as Parameters<typeof emitTrigger>[2],
-        opts.userId ?? undefined
+        opts.userId ?? undefined,
+        // One record's transition events reach their flows in the order they
+        // happened, so a partner push for an older state never lands last.
+        { orderKey: `${instance.collection}:${instance.item}` }
       )
     )
     // Record rooms (#933, #948): a line in the record's chat room when the
