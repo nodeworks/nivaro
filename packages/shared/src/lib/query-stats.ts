@@ -1,4 +1,4 @@
-import { evaluateNumeric } from './expression'
+import { evaluateNumeric, extractExpressionTokens } from './expression'
 import { formatDate } from './utils'
 
 /** How a stat tile renders its value. Default is currency (the historic shape). */
@@ -11,7 +11,9 @@ export interface QueryStatSpec {
   /** Delta: value = sum(field) − sum(field_subtract). */
   field_subtract?: string
   /** `{{field}}` arithmetic over the SUMMED fields (so a ratio of totals is a
-   *  weighted ratio, the same math a table's totals row uses). */
+   *  weighted ratio, the same math a table's totals row uses). Only rows where
+   *  EVERY operand holds a number are summed — a ratio never divides a partial
+   *  numerator by a full denominator. */
   formula?: string
   format?: QueryStatFormat
   /** Rendered when the value is null — '—' by default. */
@@ -35,11 +37,35 @@ export function sumField(rows: Row[], field: string): number {
 }
 
 /** True when at least one row holds a finite number in `field`. */
+function isNum(v: unknown): boolean {
+  return v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
+}
+
 function hasNumeric(rows: Row[], field: string): boolean {
-  return rows.some((r) => {
-    const v = r[field]
-    return v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
-  })
+  return rows.some((r) => isNum(r[field]))
+}
+
+/** Rows a formula is evaluated over: every operand present on the row. */
+function formulaRows(formula: string, rows: Row[]): Row[] {
+  const tokens = extractExpressionTokens(formula)
+  return rows.filter((r) => tokens.every((t) => isNum(r[t])))
+}
+
+/** How many rows a row-derived tile actually summed, out of how many rows
+ *  there are — null for query tiles and date/text tiles. */
+export function statCoverage(
+  stat: QueryStatSpec,
+  rows: Row[]
+): { reporting: number; total: number } | null {
+  if (stat.query || stat.format === 'date' || stat.format === 'text') return null
+  const matched = matchRows(rows, stat.row_match)
+  if (stat.formula)
+    return { reporting: formulaRows(stat.formula, matched).length, total: matched.length }
+  if (stat.field) {
+    const f = stat.field
+    return { reporting: matched.filter((r) => isNum(r[f])).length, total: matched.length }
+  }
+  return null
 }
 
 export function matchRows(rows: Row[], match?: Record<string, unknown>): Row[] {
@@ -67,9 +93,10 @@ export function statValue(
   if (stat.formula) {
     // an operand with no numeric rows is unknown, not zero — a ratio over it
     // must read as "no figure", never 0%
+    const paired = formulaRows(stat.formula, matched)
     const v = evaluateNumeric(
       stat.formula,
-      (path) => (hasNumeric(matched, path) ? sumField(matched, path) : null),
+      (path) => (hasNumeric(paired, path) ? sumField(paired, path) : null),
       { missing: 'null' }
     )
     return v === null || !Number.isFinite(v) ? null : v
@@ -106,4 +133,17 @@ export function fmtStat(
     minimumFractionDigits: Number.isInteger(n) ? 0 : 2,
     maximumFractionDigits: 2
   })
+}
+
+/** Short money / number for a tile too narrow for the exact figure:
+ *  $637.1M, $13.5K, 1.2B. Below 10,000 the exact value is already short. */
+export function compactStat(n: number, format?: QueryStatFormat): string {
+  const abs = Math.abs(n)
+  if (abs < 10_000) return fmtStat(n, format)
+  const out = new Intl.NumberFormat('en-US', {
+    notation: 'compact',
+    maximumFractionDigits: abs < 1e6 ? 0 : 1
+  }).format(n)
+  if (format === 'number') return out
+  return n < 0 ? `-$${out.slice(1)}` : `$${out}`
 }

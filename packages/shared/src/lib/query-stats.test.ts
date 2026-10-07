@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fmtStat, statValue, sumField } from './query-stats'
+import { compactStat, fmtStat, statCoverage, statValue, sumField } from './query-stats'
 
 const rows = [
   { budget: 1000, remaining: 250, other: 400 },
@@ -27,6 +27,16 @@ describe('statValue', () => {
   it('a formula whose operand has no numeric rows is null, never NaN or 0', () => {
     expect(statValue({ formula: '{{nothing}} / {{budget}} * 100' }, rows, null)).toBeNull()
     expect(statValue({ formula: '{{remaining}} / {{nothing}}' }, rows, null)).toBeNull()
+  })
+  it('a formula sums only rows where every operand is present', () => {
+    // partial coverage: the numerator exists on one row, the denominator on three
+    const r = [
+      { left: 80, pub: 100 },
+      { left: null, pub: 900 },
+      { left: null, pub: 1000 },
+      { left: 50, pub: null }
+    ]
+    expect(statValue({ formula: '{{left}} / {{pub}} * 100' }, r, null)).toBe(80)
   })
   it('narrows by row_match before summing', () => {
     const r = [
@@ -75,5 +85,32 @@ describe('fmtStat', () => {
   })
   it('an unparseable date renders the empty label instead of throwing', () => {
     expect(fmtStat('not a date', 'date', 'n/a')).toBe('n/a')
+  })
+})
+
+describe('statCoverage', () => {
+  const r = [
+    { left: 80, pub: 100 },
+    { left: null, pub: 900 },
+    { left: 0, pub: 1000 }
+  ]
+  it('counts rows holding the field, out of all rows', () => {
+    expect(statCoverage({ field: 'left' }, r)).toEqual({ reporting: 2, total: 3 })
+    expect(statCoverage({ formula: '{{left}} / {{pub}}' }, r)).toEqual({ reporting: 2, total: 3 })
+  })
+  it('query and date tiles have no row coverage', () => {
+    expect(statCoverage({ query: { value_field: 'n' } }, r)).toBeNull()
+    expect(statCoverage({ field: 'left', format: 'date' }, r)).toBeNull()
+  })
+})
+
+describe('compactStat', () => {
+  it('shortens large money, keeps small values exact', () => {
+    expect(compactStat(637_056_259.98, 'currency')).toBe('$637.1M')
+    expect(compactStat(13_532_127.82)).toBe('$13.5M')
+    expect(compactStat(-2_400_000)).toBe('-$2.4M')
+    expect(compactStat(45_300)).toBe('$45K')
+    expect(compactStat(9_500.5)).toBe('$9,500.50')
+    expect(compactStat(1_250_000, 'number')).toBe('1.3M')
   })
 })

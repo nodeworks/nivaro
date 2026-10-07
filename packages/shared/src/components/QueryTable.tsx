@@ -93,6 +93,11 @@ export interface QueryTableColumn {
   sparkline_fields?: string[]
   /** Percent-of-total (#249): append this row's share of the column sum. */
   percent_of_total?: boolean
+  /** What a cell with NO value shows ('—' by default). '' leaves it blank —
+   *  with zero_dash on, a dash then means zero and a blank means no figure. */
+  empty_label?: string
+  /** Cap a long text column (px); the full text shows on hover. */
+  max_width?: number
 }
 
 export interface QueryTableConfig {
@@ -617,7 +622,13 @@ export function QueryTable({
         </span>
       )
     }
-    return dashed(fmtCell(cellValue(src, c), rowFormat(src, c)))
+    const v = cellValue(src, c)
+    if (c.empty_label !== undefined && (v === null || v === undefined || v === '')) {
+      return c.empty_label ? (
+        <span className='text-slate-500 dark:text-slate-400'>{c.empty_label}</span>
+      ) : null
+    }
+    return dashed(fmtCell(v, rowFormat(src, c)))
   }
 
   // Column-group banding: contiguous same-group runs alternate a faint tint so
@@ -676,11 +687,13 @@ export function QueryTable({
         {columns.map((c, j) => (
           <td
             key={c.field ?? c.label ?? j}
-            className={`whitespace-nowrap py-1.5 pr-3 ${afterRailPad(j)} ${colorCls(c, 'text-slate-700 dark:text-slate-200')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${c.group ? 'min-w-[58px]' : ''} ${hlCls(c) || bandCls(j)} ${stickyFirstCls(j, 'bg-slate-50 group-hover/qtr:bg-slate-100 dark:bg-muted dark:group-hover/qtr:bg-muted')}`}
+            className={`whitespace-nowrap py-1.5 pr-3 ${c.max_width ? 'overflow-hidden text-ellipsis' : ''} ${afterRailPad(j)} ${colorCls(c, 'text-slate-700 dark:text-slate-200')} ${isNumeric(c) ? 'text-right tabular-nums' : ''} ${c.group ? 'min-w-[58px]' : ''} ${hlCls(c) || bandCls(j)} ${stickyFirstCls(j, 'bg-slate-50 group-hover/qtr:bg-slate-100 dark:bg-muted dark:group-hover/qtr:bg-muted')}`}
             style={{
               ...(d > 0 && j === 0 ? { paddingLeft: 2 + d * 16 } : {}),
+              ...(c.max_width ? { maxWidth: c.max_width } : {}),
               ...(colorStyle(c, Number(cellValue(row, c))) ?? {})
             }}
+            title={c.max_width ? String(cellValue(row, c) ?? '') : undefined}
           >
             {j === 0 && firstColOverride !== undefined ? firstColOverride : cellBody(row, c)}
           </td>
@@ -957,7 +970,7 @@ export function QueryTable({
                           <th
                             key={`u-${c.field ?? i}`}
                             rowSpan={2}
-                            className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 align-bottom text-[10.5px] font-semibold uppercase tracking-wider text-slate-400 dark:border-border ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
+                            className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 align-bottom text-[10.5px] font-semibold uppercase tracking-wider text-slate-500 dark:border-border dark:text-slate-400 ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
                           >
                             {c.label ?? titleize(c.field ?? '')}
                           </th>
@@ -996,7 +1009,7 @@ export function QueryTable({
                         key={c.field ?? c.label ?? i}
                         // min-w keeps dash-only month columns from collapsing to
                         // uneven slivers across the pivot grid
-                        className={`min-w-[58px] whitespace-nowrap border-b border-slate-200 py-1 pr-3 ${afterRailPad(i)} text-[11px] font-medium text-slate-400 dark:border-border ${isNumeric(c) ? 'text-right' : 'text-left'} ${hlCls(c) || bandCls(i)} ${sticky ? 'sticky top-[26px] z-[2] bg-white dark:bg-card' : ''}`}
+                        className={`min-w-[58px] whitespace-nowrap border-b border-slate-200 py-1 pr-3 ${afterRailPad(i)} text-[11px] font-medium text-slate-500 dark:border-border dark:text-slate-400 ${isNumeric(c) ? 'text-right' : 'text-left'} ${hlCls(c) || bandCls(i)} ${sticky ? 'sticky top-[26px] z-[2] bg-white dark:bg-card' : ''}`}
                       >
                         {c.label ?? titleize(c.field ?? '')}
                       </th>
@@ -1012,7 +1025,7 @@ export function QueryTable({
                     className={`whitespace-nowrap border-b border-slate-200 py-1.5 pr-3 ${afterRailPad(i)} text-[10.5px] font-semibold uppercase tracking-wider dark:border-border ${
                       isHighlighted(c)
                         ? 'border-t-2 border-t-[#6366f1] bg-[#6366f10f] text-[#4f46e5] dark:border-t-[#a5b4fc] dark:bg-[#a5b4fc12] dark:text-[#a5b4fc]'
-                        : 'text-slate-400'
+                        : 'text-slate-500 dark:text-slate-400'
                     } ${c.stack ? 'min-w-[64px]' : ''} ${isNumeric(c) ? 'text-right' : 'text-left'} ${stickyHeaderCls(i)}`}
                   >
                     {c.label ?? titleize(c.field ?? '')}
