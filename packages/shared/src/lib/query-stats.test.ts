@@ -31,12 +31,12 @@ describe('statValue', () => {
   it('a formula sums only rows where every operand is present', () => {
     // partial coverage: the numerator exists on one row, the denominator on three
     const r = [
-      { left: 80, pub: 100 },
-      { left: null, pub: 900 },
-      { left: null, pub: 1000 },
-      { left: 50, pub: null }
+      { left: 80, budget: 100 },
+      { left: null, budget: 900 },
+      { left: null, budget: 1000 },
+      { left: 50, budget: null }
     ]
-    expect(statValue({ formula: '{{left}} / {{pub}} * 100' }, r, null)).toBe(80)
+    expect(statValue({ formula: '{{left}} / {{budget}} * 100' }, r, null)).toBe(80)
   })
   it('narrows by row_match before summing', () => {
     const r = [
@@ -90,13 +90,16 @@ describe('fmtStat', () => {
 
 describe('statCoverage', () => {
   const r = [
-    { left: 80, pub: 100 },
-    { left: null, pub: 900 },
-    { left: 0, pub: 1000 }
+    { left: 80, budget: 100 },
+    { left: null, budget: 900 },
+    { left: 0, budget: 1000 }
   ]
   it('counts rows holding the field, out of all rows', () => {
     expect(statCoverage({ field: 'left' }, r)).toEqual({ reporting: 2, total: 3 })
-    expect(statCoverage({ formula: '{{left}} / {{pub}}' }, r)).toEqual({ reporting: 2, total: 3 })
+    expect(statCoverage({ formula: '{{left}} / {{budget}}' }, r)).toEqual({
+      reporting: 2,
+      total: 3
+    })
   })
   it('query and date tiles have no row coverage', () => {
     expect(statCoverage({ query: { value_field: 'n' } }, r)).toBeNull()

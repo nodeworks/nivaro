@@ -36,11 +36,12 @@ export function sumField(rows: Row[], field: string): number {
   }, 0)
 }
 
-/** True when at least one row holds a finite number in `field`. */
+/** True when `v` is a finite number (or a numeric string). */
 function isNum(v: unknown): boolean {
   return v !== null && v !== undefined && v !== '' && Number.isFinite(Number(v))
 }
 
+/** True when at least one row holds a finite number in `field`. */
 function hasNumeric(rows: Row[], field: string): boolean {
   return rows.some((r) => isNum(r[field]))
 }

@@ -220,7 +220,12 @@ function StatBox({
             aria-controls={open ? detailsId : undefined}
             onFocus={() => setOpen(true)}
             onBlur={() => setOpen(false)}
-            onClick={() => setOpen((v) => !v)}
+            // Click / Enter / Space only ever open: hover or focus has usually
+            // opened it already, and a toggle would shut it on the same gesture.
+            onClick={() => setOpen(true)}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape') setOpen(false)
+            }}
             title={stat.label}
           >
             {stat.label}
