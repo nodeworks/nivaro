@@ -1,10 +1,172 @@
 {
-  "generated_at": "2026-10-06T21:15:50.003Z",
+  "generated_at": "2026-10-07T13:04:04.169Z",
   "releases": [
+    {
+      "version": "0.2.21",
+      "tag": "v0.2.21",
+      "date": "2026-10-07T09:03:51-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "quality_rerun declaration, key_exact, scoped busy check",
+              "hash": "e47031e5"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "staging quality checks",
+              "hash": "68f842b1"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "www Host runbooks section",
+              "hash": "0a7db5da"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "biome format for the quality runner and skip_dry_gate tests",
+              "hash": "de954606"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality runner tests: generic database names",
+              "hash": "0869e95b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "runbooks card: no dry run for a skip_dry_gate runbook",
+              "hash": "f0a500a3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality console: config-driven target and re-run, safe run ids",
+              "hash": "01572ae5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality routes: declared re-run, scoped re-diff, migration probe",
+              "hash": "1b068355"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "a skip_dry_gate runbook has no dry run",
+              "hash": "3f49e652"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality runner: exit codes, stop signal, stale captures, epoch off",
+              "hash": "85d00352"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: scoped re-diff, stale verify, bounded gunzip",
+              "hash": "3d03ccc7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: linear key matcher, key_exact, prototype-safe clusters",
+              "hash": "a3f6719a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "extension kit: QualityRow.context — carried facts, never compared or grouped",
+              "hash": "220428a0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality runner: put pickBaseline's doc comment back above it",
+              "hash": "b4710bdd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: carry legacy links onto mismatch rows",
+              "hash": "fe8d1a2f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: admin page and Environments card",
+              "hash": "81dd609e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: guard re-diffs against a concurrent verify",
+              "hash": "f9857ce6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: admin routes with known differences and re-run",
+              "hash": "1bb6f75e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "skip_dry_gate for read-only host runbooks",
+              "hash": "66290820"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: runner connections, run selection and results-db guards",
+              "hash": "4b76ff94"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: run store, check loader and runner CLI",
+              "hash": "131863a6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: diff engine",
+              "hash": "edd55866"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "quality checks: kit types, migration 404, inventory classification",
+              "hash": "dd1794f1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "runbook agent: child exit-code path must not end in _FILE",
+              "hash": "af591f1d"
+            }
+          ]
+        }
+      ],
+      "count": 24
+    },
     {
       "version": "0.2.20",
       "tag": "v0.2.20",
-      "date": "2026-10-06T17:15:38-04:00",
+      "date": "2026-10-06T17:15:50-04:00",
       "sections": [
         {
           "label": "Documentation",
