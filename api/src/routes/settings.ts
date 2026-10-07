@@ -181,6 +181,20 @@ export async function settingsRoutes(app: FastifyInstance) {
     return reply.send({
       data: {
         ...maskSettings(settings),
+        // The LIVE maintenance state, which may come from a rebuild job's
+        // Redis flag rather than the columns above (see maintenanceState).
+        ...(await (async () => {
+          const { maintenanceState } = await import('../services/security.js')
+          const m = await maintenanceState()
+          return {
+            maintenance_active: m.on,
+            maintenance_source: m.source,
+            maintenance_override:
+              m.source === 'override'
+                ? { message: m.message, display: m.display, until: m.until }
+                : null
+          }
+        })()),
         mail_test_env_mode: envOn(process.env.MAIL_TEST_MODE),
         mail_test_env_recipient: process.env.MAIL_TEST_RECIPIENT || null,
         sms_test_env_mode: envOn(process.env.SMS_TEST_MODE),
@@ -329,6 +343,17 @@ export async function settingsRoutes(app: FastifyInstance) {
     if ('maintenance_display' in patch || 'maintenance_until' in patch) {
       const { bustMaintenanceCache } = await import('../services/security.js')
       reply.raw.once('finish', () => bustMaintenanceCache())
+    }
+    // "End maintenance" must end it whatever set it: a rebuild job's Redis
+    // flag outranks the row, so switching the row off alone would change
+    // nothing visible. Clear the flag too.
+    if ('maintenance_mode' in patch) {
+      const raw = patch.maintenance_mode
+      const off = raw === false || raw === 0 || raw === '0' || raw === 'false'
+      if (off) {
+        const { clearMaintenanceOverride } = await import('../services/security.js')
+        await clearMaintenanceOverride()
+      }
     }
 
     // Transition double-fire guard: whole seconds, 0 = off, blank = default.

@@ -116,7 +116,10 @@ function MaintenanceCard() {
   const [message, setMessage] = useState<string | null>(null)
   const [display, setDisplay] = useState<'banner' | 'page' | null>(null)
   const [until, setUntil] = useState<string | null>(null)
-  const on = !!settings?.maintenance_mode
+  // `maintenance_active` is the LIVE state — a rebuild job's Redis flag
+  // outranks the row, and End maintenance clears both.
+  const override = settings?.maintenance_source === 'override'
+  const on = override || !!settings?.maintenance_mode
   const effDisplay = display ?? (settings?.maintenance_display === 'page' ? 'page' : 'banner')
   const effUntil = until ?? toLocalInput(settings?.maintenance_until)
   const draft = () => ({
@@ -176,6 +179,14 @@ function MaintenanceCard() {
                 Active
               </span>
             )}
+            {override && (
+              <span
+                data-maintenance-override
+                className='ml-2 rounded bg-amber-500/10 px-1.5 py-px text-[10.5px] font-semibold uppercase text-amber-700 dark:text-amber-400'
+              >
+                Set by a rebuild job
+              </span>
+            )}
           </p>
           <p className='mt-0.5 max-w-[64ch] text-[11.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
             Freezes every write for non-admins while reads keep working. The strip above the app
@@ -183,6 +194,17 @@ function MaintenanceCard() {
             says the portal is unavailable until maintenance ends. Both say earlier saves are safe.
             Admins stay exempt and always get the strip, so you can keep working.
           </p>
+          {override && (
+            <p className='mt-1.5 max-w-[64ch] text-[11.5px] leading-relaxed text-amber-700 dark:text-amber-400'>
+              A rebuild job set this (
+              {settings?.maintenance_override?.display === 'page' ? 'full page' : 'banner'}
+              {settings?.maintenance_override?.until
+                ? `, expected back ${new Date(settings.maintenance_override.until).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`
+                : ''}
+              ) and will clear it when it finishes. End maintenance clears it now; the fields below
+              are the row's own values, not what the job is showing.
+            </p>
+          )}
         </div>
         <button
           type='button'

@@ -1,5 +1,6 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { getApp } from './io-holder.js'
 import { notifyUser } from './notification-channels.js'
 
 /**
@@ -93,12 +94,72 @@ export interface MaintenanceState {
   display: MaintenanceDisplay
   /** When the freeze is expected to lift (ISO), or null when nobody said. */
   until: string | null
+  /** 'settings' = the nivaro_settings row; 'override' = the Redis flag an
+   *  operator or a rebuild job set (`MAINTENANCE_OVERRIDE_KEY`), which wins
+   *  while present — it is the one thing that survives a database restore. */
+  source: 'settings' | 'override'
 }
+
+/**
+ * Redis key holding an out-of-band maintenance flag: JSON
+ * `{on, message?, display?, until?, set_by?}`. A rebuild that restores
+ * production over the database (wiping nivaro_settings) or copies another
+ * instance's settings over it cannot keep a flag in the database — the
+ * golive chain sets this key in the API's own Redis instead, and clears it
+ * when it finishes. An admin's "End maintenance" clears it too.
+ */
+export const MAINTENANCE_OVERRIDE_KEY = 'nvr:maintenance'
 
 let maintCache: ({ at: number } & MaintenanceState) | null = null
 
 export function bustMaintenanceCache(): void {
   maintCache = null
+}
+
+// The ioredis client off the app holder, best-effort — null before boot.
+function redisClient(): any {
+  try {
+    return getApp()?.redis ?? null
+  } catch {
+    return null
+  }
+}
+
+async function readOverride(): Promise<Omit<MaintenanceState, 'source'> | null> {
+  const redis = redisClient()
+  if (!redis) return null
+  try {
+    const raw = (await redis.get(MAINTENANCE_OVERRIDE_KEY)) as string | null
+    if (!raw) return null
+    const j = JSON.parse(raw) as {
+      on?: unknown
+      message?: unknown
+      display?: unknown
+      until?: unknown
+    }
+    if (j?.on !== true) return null
+    const until = typeof j.until === 'string' && j.until ? new Date(j.until) : null
+    return {
+      on: true,
+      message: typeof j.message === 'string' && j.message.trim() ? j.message.trim() : null,
+      display: normalizeMaintenanceDisplay(j.display),
+      until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null
+    }
+  } catch {
+    return null
+  }
+}
+
+/** Remove the out-of-band flag (an admin ending maintenance, a finished rebuild). */
+export async function clearMaintenanceOverride(): Promise<void> {
+  const redis = redisClient()
+  if (!redis) return
+  try {
+    await redis.del(MAINTENANCE_OVERRIDE_KEY)
+  } catch {
+    /* best-effort */
+  }
+  bustMaintenanceCache()
 }
 
 export function normalizeMaintenanceDisplay(v: unknown): MaintenanceDisplay {
@@ -107,6 +168,12 @@ export function normalizeMaintenanceDisplay(v: unknown): MaintenanceDisplay {
 
 export async function maintenanceState(): Promise<MaintenanceState> {
   if (!maintCache || Date.now() - maintCache.at > 15_000) {
+    const override = await readOverride()
+    if (override) {
+      maintCache = { at: Date.now(), ...override, source: 'override' }
+      const { at: _o, ...state } = maintCache
+      return state
+    }
     try {
       const row = (await db('nivaro_settings')
         .where({ id: 1 })
@@ -135,10 +202,18 @@ export async function maintenanceState(): Promise<MaintenanceState> {
         on: !!row?.maintenance_mode,
         message: row?.maintenance_message ?? null,
         display: normalizeMaintenanceDisplay(row?.maintenance_display),
-        until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null
+        until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null,
+        source: 'settings'
       }
     } catch {
-      maintCache = { at: Date.now(), on: false, message: null, display: 'banner', until: null }
+      maintCache = {
+        at: Date.now(),
+        on: false,
+        message: null,
+        display: 'banner',
+        until: null,
+        source: 'settings'
+      }
     }
   }
   const { at: _at, ...state } = maintCache
