@@ -2,33 +2,31 @@ import { describe, expect, it } from 'vitest'
 import { fmtStat, statValue, sumField } from './query-stats'
 
 const rows = [
-  { pub_amount: 1000, total_remaining: 250, fusion_remaining: 400 },
-  { pub_amount: 3000, total_remaining: 750, fusion_remaining: null },
-  { pub_amount: 'x', total_remaining: null, fusion_remaining: null }
+  { budget: 1000, remaining: 250, other: 400 },
+  { budget: 3000, remaining: 750, other: null },
+  { budget: 'x', remaining: null, other: null }
 ]
 
 describe('sumField', () => {
   it('skips non-numeric and null values', () => {
-    expect(sumField(rows, 'pub_amount')).toBe(4000)
-    expect(sumField(rows, 'total_remaining')).toBe(1000)
+    expect(sumField(rows, 'budget')).toBe(4000)
+    expect(sumField(rows, 'remaining')).toBe(1000)
     expect(sumField(rows, 'missing')).toBe(0)
   })
 })
 
 describe('statValue', () => {
   it('sums a field, minus field_subtract', () => {
-    expect(statValue({ field: 'pub_amount' }, rows, null)).toBe(4000)
-    expect(statValue({ field: 'pub_amount', field_subtract: 'total_remaining' }, rows, null)).toBe(
-      3000
-    )
+    expect(statValue({ field: 'budget' }, rows, null)).toBe(4000)
+    expect(statValue({ field: 'budget', field_subtract: 'remaining' }, rows, null)).toBe(3000)
   })
   it('evaluates a formula over the summed fields', () => {
-    const v = statValue({ formula: '{{total_remaining}} / {{pub_amount}} * 100' }, rows, null)
+    const v = statValue({ formula: '{{remaining}} / {{budget}} * 100' }, rows, null)
     expect(v).toBe(25)
   })
   it('a formula whose operand has no numeric rows is null, never NaN or 0', () => {
-    expect(statValue({ formula: '{{nothing}} / {{pub_amount}} * 100' }, rows, null)).toBeNull()
-    expect(statValue({ formula: '{{total_remaining}} / {{nothing}}' }, rows, null)).toBeNull()
+    expect(statValue({ formula: '{{nothing}} / {{budget}} * 100' }, rows, null)).toBeNull()
+    expect(statValue({ formula: '{{remaining}} / {{nothing}}' }, rows, null)).toBeNull()
   })
   it('narrows by row_match before summing', () => {
     const r = [
@@ -37,6 +35,9 @@ describe('statValue', () => {
       { k: 'a', v: 4 }
     ]
     expect(statValue({ field: 'v', row_match: { k: 'a' } }, r, null)).toBe(5)
+  })
+  it('a date/text tile without a query is null, never a summed number', () => {
+    expect(statValue({ field: 'budget', format: 'date' }, rows, null)).toBeNull()
   })
   it('a query stat sums value_field, or returns the first raw value for date/text', () => {
     const q = [
@@ -71,5 +72,8 @@ describe('fmtStat', () => {
     expect(fmtStat(null)).toBe('—')
     expect(fmtStat(null, 'date', 'never imported')).toBe('never imported')
     expect(fmtStat(Number.NaN, 'percent', 'n/a')).toBe('n/a')
+  })
+  it('an unparseable date renders the empty label instead of throwing', () => {
+    expect(fmtStat('not a date', 'date', 'n/a')).toBe('n/a')
   })
 })

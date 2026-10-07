@@ -61,6 +61,8 @@ export function statValue(
     }
     return sumField(q, stat.query.value_field)
   }
+  // date/text values only come from a query; summing a field as a date reads 1970
+  if (stat.format === 'date' || stat.format === 'text') return null
   const matched = matchRows(rows, stat.row_match)
   if (stat.formula) {
     // an operand with no numeric rows is unknown, not zero — a ratio over it
@@ -88,7 +90,12 @@ export function fmtStat(
 ): string {
   if (v === null || v === undefined || v === '') return emptyLabel
   if (format === 'text') return String(v)
-  if (format === 'date') return formatDate(typeof v === 'number' ? new Date(v) : v)
+  if (format === 'date') {
+    // an unparseable value would make formatDate throw mid-render
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return emptyLabel
+    return formatDate(typeof v === 'number' ? d : v)
+  }
   const n = typeof v === 'number' ? v : Number(v)
   if (!Number.isFinite(n)) return emptyLabel
   if (format === 'number') return n.toLocaleString('en-US', { maximumFractionDigits: 2 })

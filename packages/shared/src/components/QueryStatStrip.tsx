@@ -38,7 +38,7 @@ export interface QueryWidgetStat {
    *  render with a leading '+'. */
   field_subtract?: string
   /** `{{field}}` arithmetic over the summed fields — a weighted ratio of totals
-   *  such as `{{total_remaining}} / {{pub_amount}} * 100`. */
+   *  such as `{{spent}} / {{budget}} * 100`. */
   formula?: string
   /** Shown when the value is null ('—' by default), e.g. 'never imported'. */
   empty_label?: string
