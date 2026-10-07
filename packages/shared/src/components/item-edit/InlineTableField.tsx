@@ -139,6 +139,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
 import type { RuleProvenance } from '../../lib/rule-provenance'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { formulaInputsChanged } from '../../lib/write-formula'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
@@ -2719,7 +2720,11 @@ export function InlineTableField({
         .map((r) => {
           const rid = String(r.id)
           const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
-          return Number(applyComputedFields(merged as Record<string, unknown>)[c.field])
+          return Number(
+            applyComputedFields(merged as Record<string, unknown>, r as Record<string, unknown>)[
+              c.field
+            ]
+          )
         })
         .filter((n) => !Number.isNaN(n))
       let result: number | null = null
@@ -2757,14 +2762,29 @@ export function InlineTableField({
     [cols]
   )
 
-  function applyComputedFields(draft: Record<string, unknown>): Record<string, unknown> {
+  /** Write-computed columns over a row. With a `base` (the saved row), a
+   *  formula re-derives only when one of its inputs differs from the stored
+   *  value — a line loaded with an amount that is not price × quantity keeps
+   *  that amount until someone edits price or quantity. No base = a new row,
+   *  always derived. */
+  function applyComputedFields(
+    draft: Record<string, unknown>,
+    base?: Record<string, unknown> | null
+  ): Record<string, unknown> {
     if (!computedWriteCols.length) return draft
     const next = { ...draft }
     for (const cf of computedWriteCols) {
-      const result = evalClientFormula(cf.computed_formula as string, next)
+      const formula = cf.computed_formula as string
+      if (base && !formulaInputsChanged(formula, next, base)) continue
+      const result = evalClientFormula(formula, next)
       if (result !== null) next[cf.field] = result
     }
     return next
+  }
+  /** The saved row behind an editor row id (undefined for pending rows). */
+  function savedRowFor(rowId: string | undefined): Record<string, unknown> | undefined {
+    if (!rowId || rowId.startsWith('pending:')) return undefined
+    return rows.find((r) => String(r.id) === rowId) as Record<string, unknown> | undefined
   }
 
   const SPECIAL_GROUP_KEYS = new Set(['__apply_values__', '__create_with_defaults__'])
@@ -2854,7 +2874,10 @@ export function InlineTableField({
         .map((r) => {
           const rid = String(r.id)
           const merged = pendingEdits.has(rid) ? { ...r, ...pendingEdits.get(rid) } : r
-          return applyComputedFields(merged as Record<string, unknown>)
+          return applyComputedFields(
+            merged as Record<string, unknown>,
+            r as Record<string, unknown>
+          )
         }),
       ...pendingRows.map((r) => applyComputedFields(r as Record<string, unknown>))
     ]
@@ -2862,7 +2885,7 @@ export function InlineTableField({
     // under the cursor instead of waiting for the edit to be committed — which
     // is what "live" means to someone watching both figures at once.
     if (editState) {
-      const draft = applyComputedFields({ ...editState.draft })
+      const draft = applyComputedFields({ ...editState.draft }, savedRowFor(editState.rowId))
       const pendingIdx = editState.rowId.startsWith('pending:')
         ? Number(editState.rowId.slice('pending:'.length))
         : -1
@@ -2884,7 +2907,9 @@ export function InlineTableField({
     if (activeView === 'original') return effectiveRowsForRollup
     const entry = addendumO2MEntries.find((e) => e.addendumId === activeView)
     if (!entry) return effectiveRowsForRollup
-    return entry.rows.map((r) => applyComputedFields({ ...r } as Record<string, unknown>))
+    return entry.rows.map((r) =>
+      applyComputedFields({ ...r } as Record<string, unknown>, savedRowFor(String(r.id ?? '')))
+    )
     // biome-ignore lint/correctness/useExhaustiveDependencies: applyComputedFields is a stable closure over field config
   }, [activeView, addendumO2MEntries, effectiveRowsForRollup])
 
@@ -4975,7 +5000,7 @@ export function InlineTableField({
       return
     }
     if (rowSoftLock) setRowSoftLock(null)
-    const draft = applyComputedFields({ ...row })
+    const draft = applyComputedFields({ ...row }, row as Record<string, unknown>)
     // #16 — remember what the row held when its editor opened, so a write by
     // someone else while it is open shows up as a per-field ghost.
     editBaseRef.current = { rowId: id, snap: snapshotRow(row) }
@@ -5234,7 +5259,10 @@ export function InlineTableField({
     const rowId = cur?.rowId ?? null
     if (draftKeySeqRef.current.rowId !== rowId) draftKeySeqRef.current = { rowId, seqs: new Map() }
     for (const k of Object.keys(patch)) draftKeySeqRef.current.seqs.set(k, ++ruleEvalSeqRef.current)
-    const nextDraft = applyComputedFields({ ...(cur?.draft ?? {}), ...patch })
+    const nextDraft = applyComputedFields(
+      { ...(cur?.draft ?? {}), ...patch },
+      savedRowFor(rowId ?? undefined)
+    )
     setEditState((st) => (st ? { ...st, draft: nextDraft } : st))
   }
   function setDraftField(k: string, v: unknown) {
@@ -5244,8 +5272,8 @@ export function InlineTableField({
     const seq = ++ruleEvalSeqRef.current
     draftKeySeqRef.current.seqs.set(k, seq)
     const nextDraft = cur
-      ? applyComputedFields({ ...cur.draft, [k]: v })
-      : applyComputedFields({ [k]: v })
+      ? applyComputedFields({ ...cur.draft, [k]: v }, savedRowFor(rowId ?? undefined))
+      : applyComputedFields({ [k]: v }, savedRowFor(rowId ?? undefined))
     const filled = v !== null && v !== undefined && v !== ''
     setEditState((s) =>
       s
