@@ -67,28 +67,71 @@ export async function recordLogin(
 }
 
 /** Maintenance-mode flag, cached 15s — read on every write request. */
-let maintCache: { at: number; on: boolean; message: string | null } | null = null
+export type MaintenanceDisplay = 'banner' | 'page'
+
+/** What the freeze means for a person, stated once and reused by the banner,
+ *  the full page and the write refusal — so no surface says less than another. */
+export const MAINTENANCE_EXPLAINER =
+  'You can keep reading and browsing, but saving changes is paused until maintenance ends. Anything you saved earlier is unaffected.'
+
+export const MAINTENANCE_DEFAULT_MESSAGE = 'Maintenance in progress.'
+
+export interface MaintenanceState {
+  on: boolean
+  message: string | null
+  /** How non-exempt people see the freeze: a strip above the app, or a page
+   *  that replaces it. Admins always get the strip — they stay exempt. */
+  display: MaintenanceDisplay
+  /** When the freeze is expected to lift (ISO), or null when nobody said. */
+  until: string | null
+}
+
+let maintCache: ({ at: number } & MaintenanceState) | null = null
 
 export function bustMaintenanceCache(): void {
   maintCache = null
 }
 
-export async function maintenanceState(): Promise<{ on: boolean; message: string | null }> {
+export function normalizeMaintenanceDisplay(v: unknown): MaintenanceDisplay {
+  return v === 'page' ? 'page' : 'banner'
+}
+
+export async function maintenanceState(): Promise<MaintenanceState> {
   if (!maintCache || Date.now() - maintCache.at > 15_000) {
     try {
       const row = (await db('nivaro_settings')
         .where({ id: 1 })
-        .first('maintenance_mode', 'maintenance_message')) as
-        | { maintenance_mode?: boolean; maintenance_message?: string | null }
+        .first(
+          'maintenance_mode',
+          'maintenance_message',
+          'maintenance_display',
+          'maintenance_until'
+        )
+        // A tenant behind migration 405 has no display/until columns yet —
+        // the freeze itself must keep working, so fall back to the two
+        // columns every database has.
+        .catch(() =>
+          db('nivaro_settings').where({ id: 1 }).first('maintenance_mode', 'maintenance_message')
+        )) as
+        | {
+            maintenance_mode?: boolean
+            maintenance_message?: string | null
+            maintenance_display?: string | null
+            maintenance_until?: Date | string | null
+          }
         | undefined
+      const until = row?.maintenance_until ? new Date(row.maintenance_until) : null
       maintCache = {
         at: Date.now(),
         on: !!row?.maintenance_mode,
-        message: row?.maintenance_message ?? null
+        message: row?.maintenance_message ?? null,
+        display: normalizeMaintenanceDisplay(row?.maintenance_display),
+        until: until && !Number.isNaN(until.getTime()) ? until.toISOString() : null
       }
     } catch {
-      maintCache = { at: Date.now(), on: false, message: null }
+      maintCache = { at: Date.now(), on: false, message: null, display: 'banner', until: null }
     }
   }
-  return { on: maintCache.on, message: maintCache.message }
+  const { at: _at, ...state } = maintCache
+  return state
 }

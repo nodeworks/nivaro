@@ -14,6 +14,7 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
 
@@ -205,6 +206,7 @@ export function OpsConsolePage() {
             status: string
             starts_at: string
             ends_at: string
+            display?: string | null
           }>
         }>('/ops-runtime/maintenance-windows')
         .then((r) => r.data.data)
@@ -212,17 +214,20 @@ export function OpsConsolePage() {
   const [winTitle, setWinTitle] = useState('')
   const [winStart, setWinStart] = useState('')
   const [winEnd, setWinEnd] = useState('')
+  const [winDisplay, setWinDisplay] = useState<'banner' | 'page'>('banner')
   const addWindow = useMutation({
     mutationFn: () =>
       api.post('/ops-runtime/maintenance-windows', {
         title: winTitle,
         starts_at: new Date(winStart).toISOString(),
-        ends_at: new Date(winEnd).toISOString()
+        ends_at: new Date(winEnd).toISOString(),
+        display: winDisplay
       }),
     onSuccess: () => {
       setWinTitle('')
       setWinStart('')
       setWinEnd('')
+      setWinDisplay('banner')
       void qc.invalidateQueries({ queryKey: ['maint-windows'] })
       toast.success('Window scheduled')
     },
@@ -610,6 +615,11 @@ export function OpsConsolePage() {
                     {w.status}
                   </span>
                   <span className='min-w-0 flex-1 truncate'>{w.title}</span>
+                  {w.display === 'page' && (
+                    <span className='shrink-0 rounded bg-slate-500/10 px-1.5 py-px text-[10px] font-medium text-slate-500 dark:text-muted-foreground'>
+                      full page
+                    </span>
+                  )}
                   <span className='tabular-nums text-[11.5px] text-slate-400'>
                     {new Date(w.starts_at).toLocaleString()} →{' '}
                     {new Date(w.ends_at).toLocaleTimeString()}
@@ -654,6 +664,16 @@ export function OpsConsolePage() {
                   value={winEnd}
                   onChange={(e) => setWinEnd(e.target.value)}
                   className='h-7 text-[12px]'
+                />
+                <SimpleSelect
+                  value={winDisplay}
+                  onChange={(v) => setWinDisplay(v === 'page' ? 'page' : 'banner')}
+                  options={[
+                    { value: 'banner', label: 'Banner' },
+                    { value: 'page', label: 'Full page' }
+                  ]}
+                  className='h-7 w-[120px] text-[12px]'
+                  triggerProps={{ 'aria-label': 'Shown to non-admins as' }}
                 />
                 <Button
                   type='submit'

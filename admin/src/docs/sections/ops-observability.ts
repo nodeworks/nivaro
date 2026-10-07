@@ -201,16 +201,20 @@ export const opsConsoleDocs: DocSection = {
       type: 'p',
       text: 'Each applied migration also shows what it DID: the schema is listed before and after every run and the difference is stored beside the ledger (nivaro_migration_effects — tables, columns, indexes, foreign keys and procedures added or removed, with the duration). A migration whose row reads "no schema change" either found its objects already in place or only touched data; the ledger alone cannot tell those apart, which is why the row exists. Migrations that ran before this was tracked say so.'
     },
-    { type: 'h2', id: 'ops-console-maintenance', text: 'Maintenance windows' },
+    { type: 'h2', id: 'ops-console-maintenance', text: 'Maintenance mode and windows' },
     {
       type: 'p',
-      text: 'A maintenance window is a scheduled freeze with a lifecycle the platform runs for you. Create one with a title, start, end, and optional message; from there it is automatic:'
+      text: 'Maintenance mode freezes every write for non-admins while reads keep working; admins stay exempt so they can do the work. Turn it on by hand from Security Center (Operations → Security Center → Maintenance mode) or let a scheduled window flip it. Either way people are told what the freeze means — browsing works, saving is paused, anything saved earlier is unaffected — in one of two presentations: a strip above the app (Banner) or a page that replaces the app until the freeze lifts (Full page). Admins always get the strip. The optional "Expected back" time shows on the page with a countdown, and the page checks every 30 seconds and returns people to the app on its own the moment maintenance ends. A write refused during the freeze answers 503 with code MAINTENANCE and the same explanation.'
+    },
+    {
+      type: 'p',
+      text: 'A maintenance window is a scheduled freeze with a lifecycle the platform runs for you. Create one with a title, start, end, optional message and the presentation (banner or full page); from there it is automatic:'
     },
     {
       type: 'ul',
       items: [
         'Pre-announce — once the start is under 24 hours away, a warning banner appears for everyone with a countdown and the local start–end times.',
-        'Start — a per-minute sweep flips maintenance mode on at the boundary. Non-admin writes are refused while it is on, the banner switches to a non-dismissable notice, and the alert engines (ops monitors, alert definitions, report alerts) pause — their skipped evaluations are not queued up, they simply do not run.',
+        'Start — a per-minute sweep flips maintenance mode on at the boundary, carrying the window\u2019s presentation and its end time as the expected-back time. Non-admin writes are refused while it is on, the banner switches to a non-dismissable notice (or the full page takes over), and the alert engines (ops monitors, alert definitions, report alerts) pause — their skipped evaluations are not queued up, they simply do not run.',
         'End — the sweep flips maintenance mode off and runs a smoke check (database, Redis, migrations, registered collections, and a self-request). Only when it passes is the "Maintenance complete" all-clear broadcast sent; a failed check raises a high-severity issue instead and holds the all-clear.',
         'Cancel — deleting an active window turns maintenance mode off immediately. The smoke check can also be run by hand at any time from the same card.'
       ]

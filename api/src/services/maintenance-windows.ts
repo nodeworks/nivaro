@@ -61,6 +61,14 @@ export async function runSmokeCheck(app: FastifyInstance): Promise<SmokeResult> 
   return { ok: checks.every((c) => c.ok), checks }
 }
 
+/** Turn the freeze off and clear the expected end, on any database shape. */
+export async function liftMaintenance(settingsId: number): Promise<void> {
+  await db('nivaro_settings')
+    .where({ id: settingsId })
+    .update({ maintenance_mode: 0, maintenance_until: null })
+    .catch(() => db('nivaro_settings').where({ id: settingsId }).update({ maintenance_mode: 0 }))
+}
+
 /** Per-minute sweep: activate due windows, complete expired ones. */
 export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<void> {
   const now = new Date()
@@ -69,7 +77,13 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
   const due = (await db('nivaro_maintenance_windows')
     .where('status', 'scheduled')
     .where('starts_at', '<=', now)
-    .where('ends_at', '>', now)) as Array<{ id: number; title: string; message: string | null }>
+    .where('ends_at', '>', now)) as Array<{
+    id: number
+    title: string
+    message: string | null
+    ends_at: Date
+    display?: string | null
+  }>
   for (const w of due) {
     await db('nivaro_settings')
       .orderBy('id', 'asc')
@@ -82,8 +96,23 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
                 maintenance_mode: 1,
                 maintenance_message:
                   w.message ??
-                  `Scheduled maintenance (${w.title}) — changes are temporarily disabled.`
+                  `Scheduled maintenance (${w.title}) — changes are temporarily disabled.`,
+                // The window's own presentation and end time become the live
+                // state — the full page shows "expected back by <ends_at>".
+                maintenance_display: w.display === 'page' ? 'page' : 'banner',
+                maintenance_until: new Date(w.ends_at)
               })
+              // A database behind migration 405: write the two columns it has.
+              .catch(() =>
+                db('nivaro_settings')
+                  .where({ id: row.id })
+                  .update({
+                    maintenance_mode: 1,
+                    maintenance_message:
+                      w.message ??
+                      `Scheduled maintenance (${w.title}) — changes are temporarily disabled.`
+                  })
+              )
           : null
       )
     await db('nivaro_maintenance_windows')
@@ -104,9 +133,7 @@ export async function sweepMaintenanceWindows(app: FastifyInstance): Promise<voi
     await db('nivaro_settings')
       .orderBy('id', 'asc')
       .first('id')
-      .then((row) =>
-        row ? db('nivaro_settings').where({ id: row.id }).update({ maintenance_mode: 0 }) : null
-      )
+      .then((row) => (row ? liftMaintenance(row.id) : null))
     bustMaintenanceCache()
     await db('nivaro_maintenance_windows')
       .where({ id: w.id })

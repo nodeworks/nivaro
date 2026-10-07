@@ -89,6 +89,8 @@ const allowedSettingsKeys = [
   'environment_label',
   'maintenance_mode',
   'maintenance_message',
+  'maintenance_display',
+  'maintenance_until',
   'sms_test_mode',
   'sms_test_recipient',
   'sms_test_allowlist',
@@ -301,6 +303,32 @@ export async function settingsRoutes(app: FastifyInstance) {
       patch.graphql_strict_mutations = raw === true || raw === 1 || raw === '1' || raw === 'true'
       const { clearGraphqlStrictCache } = await import('../services/graphql-strict.js')
       reply.raw.once('finish', () => clearGraphqlStrictCache())
+    }
+
+    // Full-page maintenance (migration 405): presentation is an enum, the
+    // expected end is a datetime or nothing. Both bust the same 15s cache
+    // the on/off switch busts, so a flip reaches every request at once.
+    if ('maintenance_display' in patch) {
+      const v = patch.maintenance_display
+      if (v !== 'banner' && v !== 'page') {
+        return reply.code(400).send({ error: "maintenance_display must be 'banner' or 'page'" })
+      }
+    }
+    if ('maintenance_until' in patch) {
+      const raw = patch.maintenance_until
+      if (raw == null || raw === '') {
+        patch.maintenance_until = null
+      } else {
+        const d = new Date(raw as string)
+        if (Number.isNaN(d.getTime())) {
+          return reply.code(400).send({ error: 'maintenance_until must be a datetime or blank' })
+        }
+        patch.maintenance_until = d
+      }
+    }
+    if ('maintenance_display' in patch || 'maintenance_until' in patch) {
+      const { bustMaintenanceCache } = await import('../services/security.js')
+      reply.raw.once('finish', () => bustMaintenanceCache())
     }
 
     // Transition double-fire guard: whole seconds, 0 = off, blank = default.

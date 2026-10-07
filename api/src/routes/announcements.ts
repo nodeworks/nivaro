@@ -563,17 +563,34 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     }))
     // Maintenance mode rides the same banner surface — synthetic row, not
     // dismissable (acking it would make the freeze invisible while it holds).
-    const { maintenanceState } = await import('../services/security.js')
+    const { maintenanceState, MAINTENANCE_EXPLAINER, MAINTENANCE_DEFAULT_MESSAGE } = await import(
+      '../services/security.js'
+    )
     const maint = await maintenanceState()
     if (maint.on) {
+      // `display`/`until` ride beside the strip fields: a host that knows the
+      // full-page mode replaces its app for non-exempt viewers; an older host
+      // just renders the strip as before. Admins are exempt from the freeze,
+      // so hosts show THEM the strip whatever `display` says.
+      const headline = (maint.message || MAINTENANCE_DEFAULT_MESSAGE).trim()
       data.unshift({
         id: -1,
-        message: maint.message || 'Maintenance in progress — changes are temporarily disabled.',
+        // The strip gets the whole story in one line: the admin's headline,
+        // then what the freeze means for the reader.
+        message: `${headline} ${MAINTENANCE_EXPLAINER}`,
         subject: 'Maintenance',
         severity: 'critical',
-        ends_at: null,
+        ends_at: maint.until,
         dismissable: false,
-        require_ack: false
+        require_ack: false,
+        ...({
+          maintenance: {
+            display: maint.display,
+            until: maint.until,
+            headline,
+            explainer: MAINTENANCE_EXPLAINER
+          }
+        } as object)
       })
     } else {
       // Upcoming-window countdown (#218): a scheduled window starting within

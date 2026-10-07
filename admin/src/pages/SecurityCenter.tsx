@@ -114,20 +114,51 @@ function MaintenanceCard() {
     queryFn: () => api.get('/settings').then((r) => r.data.data)
   })
   const [message, setMessage] = useState<string | null>(null)
+  const [display, setDisplay] = useState<'banner' | 'page' | null>(null)
+  const [until, setUntil] = useState<string | null>(null)
   const on = !!settings?.maintenance_mode
+  const effDisplay = display ?? (settings?.maintenance_display === 'page' ? 'page' : 'banner')
+  const effUntil = until ?? toLocalInput(settings?.maintenance_until)
+  const draft = () => ({
+    ...(message != null ? { maintenance_message: message } : {}),
+    maintenance_display: effDisplay,
+    maintenance_until: effUntil ? new Date(effUntil).toISOString() : null
+  })
+  const refresh = () => {
+    void qc.invalidateQueries({ queryKey: ['settings'] })
+    void qc.invalidateQueries({ queryKey: ['announcements-active'] })
+  }
 
   const toggle = useMutation({
     mutationFn: (next: boolean) =>
       api.patch('/settings', {
         maintenance_mode: next,
-        ...(message != null ? { maintenance_message: message } : {})
+        ...(next ? draft() : { maintenance_until: null })
       }),
     onSuccess: (_r, next) => {
-      toast.success(next ? 'Maintenance mode ON — writes frozen for non-admins' : 'Maintenance mode off')
-      void qc.invalidateQueries({ queryKey: ['settings'] })
-      void qc.invalidateQueries({ queryKey: ['announcements-active'] })
+      toast.success(
+        next
+          ? effDisplay === 'page'
+            ? 'Maintenance mode ON — non-admins see the maintenance page'
+            : 'Maintenance mode ON — writes frozen for non-admins'
+          : 'Maintenance mode off'
+      )
+      setUntil(null)
+      refresh()
     }
   })
+  const update = useMutation({
+    mutationFn: () => api.patch('/settings', draft()),
+    onSuccess: () => {
+      toast.success('Maintenance notice updated')
+      refresh()
+    }
+  })
+  const dirty =
+    on &&
+    (message != null ||
+      effDisplay !== (settings?.maintenance_display === 'page' ? 'page' : 'banner') ||
+      effUntil !== toLocalInput(settings?.maintenance_until))
 
   return (
     <div
@@ -136,7 +167,7 @@ function MaintenanceCard() {
         on ? 'border-red-300 dark:border-red-500/40' : 'border-slate-200 dark:border-border'
       )}
     >
-      <div className='flex flex-wrap items-center gap-3'>
+      <div className='flex flex-wrap items-start gap-3'>
         <div className='min-w-0 flex-1'>
           <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
             Maintenance mode
@@ -146,31 +177,100 @@ function MaintenanceCard() {
               </span>
             )}
           </p>
-          <p className='mt-0.5 text-[11.5px] text-slate-400'>
-            Freezes all writes for non-admins (reads keep working) and shows a banner everywhere.
-            For cutovers and migrations — admins stay exempt so you can work.
+          <p className='mt-0.5 max-w-[64ch] text-[11.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
+            Freezes every write for non-admins while reads keep working. People are told what that
+            means — browsing works, saving is paused, earlier saves are untouched — either in a
+            strip above the app or on a full page that replaces it. Admins stay exempt and always
+            get the strip, so you can keep working.
           </p>
         </div>
-        <input
-          value={message ?? settings?.maintenance_message ?? ''}
-          onChange={(e) => setMessage(e.target.value)}
-          placeholder='Banner message (optional)'
-          className='h-8 w-[280px] rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] dark:border-border'
-        />
         <button
           type='button'
           disabled={toggle.isPending}
           onClick={() => toggle.mutate(!on)}
           className={cn(
-            'h-8 rounded-md px-4 text-[12.5px] font-medium text-white disabled:opacity-50',
+            'h-8 shrink-0 rounded-md px-4 text-[12.5px] font-medium text-white disabled:opacity-50',
             on ? 'bg-emerald-600' : 'bg-red-600'
           )}
         >
           {on ? 'End maintenance' : 'Start maintenance'}
         </button>
       </div>
+      <div className='mt-3 flex flex-wrap items-end gap-3'>
+        <label className='flex min-w-[260px] flex-1 flex-col gap-1 text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+          Headline
+          <input
+            value={message ?? settings?.maintenance_message ?? ''}
+            onChange={(e) => setMessage(e.target.value)}
+            placeholder='Maintenance in progress.'
+            className='h-8 rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] font-normal text-foreground dark:border-border'
+          />
+        </label>
+        <div className='flex flex-col gap-1 text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+          Shown to non-admins as
+          <div
+            role='radiogroup'
+            aria-label='Maintenance presentation'
+            className='flex h-8 items-center rounded-md border border-slate-200 bg-background p-0.5 dark:border-border'
+          >
+            {(
+              [
+                ['banner', 'Banner'],
+                ['page', 'Full page']
+              ] as const
+            ).map(([v, label]) => (
+              // biome-ignore lint/a11y/useSemanticElements: a segmented control of buttons, same pattern as the summary-mode toggle
+              <button
+                key={v}
+                type='button'
+                role='radio'
+                aria-checked={effDisplay === v}
+                data-maintenance-display={v}
+                onClick={() => setDisplay(v)}
+                className={cn(
+                  'h-full rounded px-3 text-[12px] font-medium transition-colors',
+                  effDisplay === v
+                    ? 'bg-slate-900 text-white dark:bg-nvr-cyan dark:text-[#172940]'
+                    : 'text-slate-600 hover:text-slate-900 dark:text-muted-foreground dark:hover:text-foreground'
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className='flex flex-col gap-1 text-[11px] font-medium text-slate-500 dark:text-muted-foreground'>
+          Expected back (optional)
+          <input
+            type='datetime-local'
+            value={effUntil}
+            onChange={(e) => setUntil(e.target.value)}
+            data-maintenance-until
+            className='h-8 rounded-md border border-slate-200 bg-background px-2.5 text-[12.5px] font-normal text-foreground dark:border-border'
+          />
+        </label>
+        {dirty && (
+          <button
+            type='button'
+            disabled={update.isPending}
+            onClick={() => update.mutate()}
+            className='h-8 rounded-md border border-slate-300 px-3 text-[12.5px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+          >
+            Update notice
+          </button>
+        )}
+      </div>
     </div>
   )
+}
+
+// datetime-local wants local wall time without a zone; the API stores ISO.
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 export default function SecurityCenter() {
@@ -242,7 +342,10 @@ export default function SecurityCenter() {
             {[...byUser.entries()]
               .sort((a, z) => a[0].localeCompare(z[0]))
               .map(([name, list]) => (
-                <div key={name} className='rounded-md border border-slate-100 px-3 py-2 dark:border-border'>
+                <div
+                  key={name}
+                  className='rounded-md border border-slate-100 px-3 py-2 dark:border-border'
+                >
                   <p className='text-[12.5px] font-medium text-slate-700 dark:text-foreground'>
                     {name}
                     <span className='ml-1.5 text-[11px] font-normal text-slate-400'>
@@ -260,7 +363,8 @@ export default function SecurityCenter() {
                         <button
                           type='button'
                           onClick={() => {
-                            if (window.confirm(`Sign out this session of ${name}?`)) revoke.mutate(s.sid_prefix)
+                            if (window.confirm(`Sign out this session of ${name}?`))
+                              revoke.mutate(s.sid_prefix)
                           }}
                           className='text-slate-300 transition-colors hover:text-red-500'
                           title='Revoke — signs that browser out immediately'
@@ -333,7 +437,10 @@ export default function SecurityCenter() {
                         </span>
                       )}
                     </td>
-                    <td className='py-1.5 pr-3 text-slate-500' title={new Date(r.created_at).toLocaleString()}>
+                    <td
+                      className='py-1.5 pr-3 text-slate-500'
+                      title={new Date(r.created_at).toLocaleString()}
+                    >
                       {rel(r.created_at)}
                     </td>
                     <td className='max-w-[320px] truncate py-1.5 text-[11px] text-slate-400'>
@@ -392,9 +499,9 @@ function MasqueradeHistoryCard() {
     queryKey: ['masquerade-history'],
     queryFn: () =>
       api
-        .get<{ data: Array<{ id: number; action: string; admin: string; target: string; at: string }> }>(
-          '/security/masquerades'
-        )
+        .get<{
+          data: Array<{ id: number; action: string; admin: string; target: string; at: string }>
+        }>('/security/masquerades')
         .then((r) => r.data.data)
         .catch(() => []),
     staleTime: 60_000
@@ -410,7 +517,9 @@ function MasqueradeHistoryCard() {
         {rows.map((r) => (
           <p key={r.id} className='flex items-center gap-2 px-4 py-1.5 text-[12.5px]'>
             <span className='font-medium text-slate-700 dark:text-slate-200'>{r.admin}</span>
-            <span className='text-slate-400'>{r.action === 'masquerade-start' ? '→ became' : '← ended'}</span>
+            <span className='text-slate-400'>
+              {r.action === 'masquerade-start' ? '→ became' : '← ended'}
+            </span>
             <span className='text-slate-700 dark:text-slate-200'>{r.target}</span>
             <span className='ml-auto text-[11px] tabular-nums text-slate-400'>
               {new Date(r.at).toLocaleString()}
@@ -452,7 +561,10 @@ function LoginAnomaliesCard() {
       ) : (
         <div className='divide-y divide-slate-50 dark:divide-border/40'>
           {rows.map((r) => (
-            <p key={`${r.user}-${r.window_start}`} className='flex items-center gap-2 px-4 py-1.5 text-[12.5px]'>
+            <p
+              key={`${r.user}-${r.window_start}`}
+              className='flex items-center gap-2 px-4 py-1.5 text-[12.5px]'
+            >
               <span className='font-medium text-amber-700 dark:text-amber-400'>{r.name}</span>
               <span className='font-mono text-[11px] text-slate-500'>{r.ips.join(' · ')}</span>
               <span className='ml-auto text-[11px] tabular-nums text-slate-400'>

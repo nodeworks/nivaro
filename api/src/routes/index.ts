@@ -235,7 +235,9 @@ export async function registerRoutes(app: FastifyInstance) {
       url.startsWith('/api/items/batch-read')
     )
       return
-    const { maintenanceState } = await import('../services/security.js')
+    const { maintenanceState, MAINTENANCE_EXPLAINER, MAINTENANCE_DEFAULT_MESSAGE } = await import(
+      '../services/security.js'
+    )
     const maint = await maintenanceState()
     if (!maint.on) return
     // This app-level hook runs BEFORE the routes' own authenticate
@@ -247,8 +249,9 @@ export async function registerRoutes(app: FastifyInstance) {
     }
     if (req.isAdmin) return
     return reply.code(503).send({
-      error: maint.message || 'Maintenance in progress — changes are temporarily disabled.',
-      code: 'MAINTENANCE'
+      error: `${(maint.message || MAINTENANCE_DEFAULT_MESSAGE).trim()} ${MAINTENANCE_EXPLAINER}`,
+      code: 'MAINTENANCE',
+      until: maint.until
     })
   })
 
