@@ -78,6 +78,31 @@ test('compareReadiness: a drop fails and names the checks that got worse', () =>
   assert.equal(compareReadiness(before, null).ok, false)
 })
 
+test('compareReadiness: a pass → warn slide warns but does not block', () => {
+  const before = readinessSnapshot({
+    data: { score: 80, checks: [{ id: 'd', label: 'Stored procedure drift', status: 'pass' }] }
+  })
+  const after = readinessSnapshot({
+    data: { score: 79, checks: [{ id: 'd', label: 'Stored procedure drift', status: 'warn' }] }
+  })
+  const cmp = compareReadiness(before, after)
+  assert.equal(cmp.ok, true)
+  assert.equal(cmp.warning, true)
+  assert.deepEqual(cmp.worse, ['Stored procedure drift: pass → warn'])
+  assert.match(cmp.detail, /warnings only/)
+  // a NEW check that arrives failing with a score drop still blocks
+  const failingNew = readinessSnapshot({
+    data: {
+      score: 70,
+      checks: [
+        { id: 'd', label: 'Stored procedure drift', status: 'pass' },
+        { id: 'n', label: 'New thing', status: 'fail' }
+      ]
+    }
+  })
+  assert.equal(compareReadiness(before, failingNew).ok, false)
+})
+
 /** A fake API: `routes[method path] = { status, body }`. */
 function fakeApi(routes, seen = []) {
   return async (method, path, { auth }) => {

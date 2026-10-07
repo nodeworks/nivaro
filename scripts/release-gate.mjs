@@ -88,9 +88,12 @@ export function readinessSnapshot(body) {
 const RANK = { pass: 3, warn: 2, fail: 1, error: 1 }
 
 /**
- * Before vs after. ok = the score did not drop by more than `tolerance`.
- * `worse` names every check that moved down (pass → warn, warn → fail…), so a
- * drop reads as the checks that caused it, not a bare number.
+ * Before vs after. The gate exists to catch a bad IMAGE, so a drop counts only
+ * when a check moved INTO fail/error (or a new check arrived failing) — a
+ * pass → warn slide, e.g. a vendored procedure the database has not received
+ * yet, is reported as a warning and does not block; an unexplained drop does. `worse` names every check
+ * that moved down so a drop reads as the checks that caused it, not a bare
+ * number; `tolerance` is how far the score may fall before a fail counts.
  */
 export function compareReadiness(before, after, tolerance = 0) {
   if (!after) return { ok: false, detail: 'no readiness report after the deploy' }
@@ -98,14 +101,29 @@ export function compareReadiness(before, after, tolerance = 0) {
     return { ok: true, detail: `score ${after.score ?? 'n/a'} (no pre-deploy snapshot to compare)` }
   }
   const worse = []
+  const failed = []
   for (const [id, a] of Object.entries(after.checks)) {
     const b = before.checks[id]
-    if (!b || RANK[a.status] === undefined || RANK[b.status] === undefined) continue
-    if (RANK[a.status] < RANK[b.status]) worse.push(`${a.label}: ${b.status} → ${a.status}`)
+    if (RANK[a.status] === undefined) continue
+    if (!b) {
+      if (RANK[a.status] <= RANK.fail) failed.push(`${a.label}: new check, ${a.status}`)
+      continue
+    }
+    if (RANK[b.status] === undefined || RANK[a.status] >= RANK[b.status]) continue
+    worse.push(`${a.label}: ${b.status} → ${a.status}`)
+    if (RANK[a.status] <= RANK.fail) failed.push(`${a.label}: ${b.status} → ${a.status}`)
   }
   const dropped = after.score === null || after.score < before.score - tolerance
-  const detail = `score ${before.score} → ${after.score ?? 'n/a'}${worse.length ? `; worse: ${worse.join('; ')}` : ''}`
-  return { ok: !dropped, detail, worse }
+  // A drop is tolerated only when the checks EXPLAIN it as warnings alone;
+  // an unexplained drop (no check moved, or the report lost its checks) and
+  // any move into fail/error still block.
+  const explainedByWarnings = worse.length > 0 && failed.length === 0
+  const ok = !dropped || explainedByWarnings
+  const detail =
+    `score ${before.score} → ${after.score ?? 'n/a'}` +
+    (worse.length ? `; worse: ${worse.join('; ')}` : '') +
+    (ok && dropped ? ' (warnings only — not blocking)' : '')
+  return { ok, detail, worse, failed, warning: ok && (dropped || worse.length > 0) }
 }
 
 /**
