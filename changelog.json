@@ -1,10 +1,82 @@
 {
-  "generated_at": "2026-10-07T13:04:04.169Z",
+  "generated_at": "2026-10-07T18:06:18.357Z",
   "releases": [
+    {
+      "version": "0.2.22",
+      "tag": "v0.2.22",
+      "date": "2026-10-07T14:06:06-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "fix coverage wording for query widget stats",
+              "hash": "8dbb8144"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "page-builder query widget stats and column keys",
+              "hash": "1d3cadc3"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "write-computed fields re-derive only when an input changes",
+              "hash": "9a713028"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "table scroll cue + sticky actions column; docs example fix",
+              "hash": "799eafad"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "stat breakdown opens on click, generic test fixtures",
+              "hash": "6964e42b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "stat strip + query table design pass (impeccable)",
+              "hash": "62fa2a8e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "fusion:budget script alias",
+              "hash": "3cceedc2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "stat tiles never throw on a bad date; generic examples",
+              "hash": "eaa8a3ca"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "QueryStatStrip formula stats, percent/date/text formats, empty label",
+              "hash": "1c6e5c41"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.2.21",
       "tag": "v0.2.21",
-      "date": "2026-10-07T09:03:51-04:00",
+      "date": "2026-10-07T09:04:04-04:00",
       "sections": [
         {
           "label": "Documentation",
