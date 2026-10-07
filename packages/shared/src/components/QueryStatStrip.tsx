@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useNivaroClient } from '../context'
 import { post } from '../lib/commands'
+import { fmtStat, matchRows, type QueryStatFormat, statValue, sumField } from '../lib/query-stats'
 import { colorPair } from './QueryTable'
 
 // Stat boxes above a query table (budget-overview-style strip). Each stat is
@@ -14,7 +15,7 @@ export interface QueryWidgetStat {
   label: string
   /** Sum this field over the main query's rows. */
   field?: string
-  format?: 'currency' | 'number'
+  format?: QueryStatFormat
   /** Hover breakdown: each entry summed over the same rows. */
   details?: Array<{ label: string; field: string }>
   /** Independent source: own custom query. Value = sum of value_field over its
@@ -36,30 +37,17 @@ export interface QueryWidgetStat {
   /** Delta stat: value = sum(field) − sum(field_subtract); positive values
    *  render with a leading '+'. */
   field_subtract?: string
+  /** `{{field}}` arithmetic over the summed fields — a weighted ratio of totals
+   *  such as `{{total_remaining}} / {{pub_amount}} * 100`. */
+  formula?: string
+  /** Shown when the value is null ('—' by default), e.g. 'never imported'. */
+  empty_label?: string
   /** Stat-card accent: colored top border + value (accent_dark in dark
    *  mode; accent_negative when a delta goes negative). Each may be a role name
    *  — accent | positive | negative | info … — see QueryTable COLOR_ROLES. */
   accent?: string
   accent_dark?: string
   accent_negative?: string
-}
-
-function fmtStat(v: number | null, format?: 'currency' | 'number'): string {
-  if (v === null || !Number.isFinite(v)) return '—'
-  if (format === 'number') return v.toLocaleString('en-US', { maximumFractionDigits: 2 })
-  return v.toLocaleString('en-US', {
-    style: 'currency',
-    currency: 'USD',
-    minimumFractionDigits: Number.isInteger(v) ? 0 : 2,
-    maximumFractionDigits: 2
-  })
-}
-
-function sumField(rows: Array<Record<string, unknown>>, field: string): number {
-  return rows.reduce((s, r) => {
-    const n = Number(r[field])
-    return Number.isFinite(n) ? s + n : s
-  }, 0)
 }
 
 function StatBox({
@@ -96,21 +84,9 @@ function StatBox({
     staleTime: 60_000
   })
 
-  const matchedRows = stat.row_match
-    ? rows.filter((r) =>
-        Object.entries(stat.row_match ?? {}).every(([k, v]) => String(r[k] ?? '') === String(v))
-      )
-    : rows
-
+  const matchedRows = matchRows(rows, stat.row_match)
   const busy = q ? qLoading : loading
-  const value = busy
-    ? null
-    : q
-      ? sumField(qRows ?? [], q.value_field)
-      : stat.field
-        ? sumField(matchedRows, stat.field) -
-          (stat.field_subtract ? sumField(matchedRows, stat.field_subtract) : 0)
-        : null
+  const value = busy ? null : statValue(stat, rows, qRows ?? null)
 
   const detailItems: Array<{ label: string; value: number }> = q
     ? q.label_field
@@ -126,7 +102,7 @@ function StatBox({
   // A delta tile flips to accent_negative below zero; any other tile does
   // too when it OPTS IN with accent_negative (Remaining Budget overspent).
   const isNegativeDelta =
-    value !== null && value < 0 && (stat.field_subtract || stat.accent_negative)
+    typeof value === 'number' && value < 0 && (stat.field_subtract || stat.accent_negative)
   const accentPair = isNegativeDelta
     ? colorPair(stat.accent_negative ?? 'negative')
     : stat.accent
@@ -135,9 +111,9 @@ function StatBox({
   const accent = accentPair?.[0] ?? null
   const accentDark = accentPair?.[1] ?? null
   const valueText =
-    value !== null && stat.field_subtract && value > 0
-      ? `+${fmtStat(value, stat.format)}`
-      : fmtStat(value, stat.format)
+    typeof value === 'number' && stat.field_subtract && value > 0
+      ? `+${fmtStat(value, stat.format, stat.empty_label)}`
+      : fmtStat(value, stat.format, stat.empty_label)
 
   return (
     <div

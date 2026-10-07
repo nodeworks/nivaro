@@ -466,6 +466,7 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export * from './lib/query-stats'
 export * from './lib/queue-grouping'
 export {
   type CollectionUpdateEvent,
