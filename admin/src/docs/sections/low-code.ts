@@ -18,8 +18,39 @@ export const lowCodePageBuilder: DocSection = {
         ['kpi', 'A single aggregate number (count/sum/avg) with label'],
         ['markdown', 'Rich text / documentation blocks'],
         ['iframe', 'An embedded external page'],
-        ['recent-activity', 'Latest activity entries, optionally scoped to a collection']
+        ['recent-activity', 'Latest activity entries, optionally scoped to a collection'],
+        ['query', 'A custom query rendered as a table, with optional filters, stat strip, row actions and drill sheets'],
+        ['matrix', 'A tuple-scoped value grid over a target collection'],
+        ['record-grid', 'An editable grid over a collection, with scope pickers and month sets']
       ]
+    },
+    { type: 'h3', text: 'Query widget stats' },
+    {
+      type: 'p',
+      text: "A query widget can show a strip of stat tiles above its table. Each `stats` entry is computed over the query's rows (or its own query) and takes the keys below. A formula sums only rows that hold every operand it names, so a ratio over partly reported rows reads the reporting rows alone, and an additive formula also drops a row missing any operand."
+    },
+    {
+      type: 'table',
+      head: ['Key', 'Meaning'],
+      rows: [
+        ['label', 'Tile title'],
+        ['field', 'Sum of this result column'],
+        ['query', 'An independent stat: `{slug, param_from, value_field, label_field}`'],
+        ['field_subtract', 'Delta stat: `field` minus this column, shown with a leading + when positive'],
+        ['formula', '`{{a}} / {{b}}` arithmetic over the summed columns'],
+        ['format', 'currency, number, percent (0-100 scale, up to 1 decimal), date or text. Date and text take the first row value and render quieter'],
+        ['empty_label', 'Shown when the value is null'],
+        ['coverage', 'The result column whose non-empty count reads "N of M rows", or the empty label when no row reports'],
+        ['accent / accent_negative', 'Colour roles for the tile value and for a negative delta']
+      ]
+    },
+    {
+      type: 'pre',
+      code: "{ label: '% Remaining', formula: '{{remaining}} / {{budget}}', format: 'percent', empty_label: 'no data yet', coverage: 'remaining' }"
+    },
+    {
+      type: 'p',
+      text: 'Two query table column keys complement this: `empty_label` sets what a null cell prints (an empty string leaves it blank), and `max_width` caps a text column at that many pixels with an ellipsis.'
     },
     {
       type: 'note',
