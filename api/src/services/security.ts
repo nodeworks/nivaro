@@ -69,10 +69,19 @@ export async function recordLogin(
 /** Maintenance-mode flag, cached 15s — read on every write request. */
 export type MaintenanceDisplay = 'banner' | 'page'
 
-/** What the freeze means for a person, stated once and reused by the banner,
- *  the full page and the write refusal — so no surface says less than another. */
+/** What the freeze means for the person reading the STRIP: exempt admins, and
+ *  any client that only knows the banner (it can still browse). Reused by the
+ *  write refusal — the caller who hit it was, by definition, still reading. */
 export const MAINTENANCE_EXPLAINER =
   'You can keep reading and browsing, but saving changes is paused until maintenance ends. Anything you saved earlier is unaffected.'
+
+/** What the freeze means on the FULL PAGE, where nothing can be browsed. */
+export const MAINTENANCE_PAGE_EXPLAINER =
+  'The portal is unavailable until maintenance ends. Anything you saved earlier is safe and will be here when it is back.'
+
+export function maintenanceExplainer(display: MaintenanceDisplay): string {
+  return display === 'page' ? MAINTENANCE_PAGE_EXPLAINER : MAINTENANCE_EXPLAINER
+}
 
 export const MAINTENANCE_DEFAULT_MESSAGE = 'Maintenance in progress.'
 

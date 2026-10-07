@@ -563,9 +563,12 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     }))
     // Maintenance mode rides the same banner surface — synthetic row, not
     // dismissable (acking it would make the freeze invisible while it holds).
-    const { maintenanceState, MAINTENANCE_EXPLAINER, MAINTENANCE_DEFAULT_MESSAGE } = await import(
-      '../services/security.js'
-    )
+    const {
+      maintenanceState,
+      maintenanceExplainer,
+      MAINTENANCE_EXPLAINER,
+      MAINTENANCE_DEFAULT_MESSAGE
+    } = await import('../services/security.js')
     const maint = await maintenanceState()
     if (maint.on) {
       // `display`/`until` ride beside the strip fields: a host that knows the
@@ -576,7 +579,10 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       data.unshift({
         id: -1,
         // The strip gets the whole story in one line: the admin's headline,
-        // then what the freeze means for the reader.
+        // then what the freeze means for whoever reads the STRIP — exempt
+        // admins, or a client that only knows the banner and can still
+        // browse. The full page says something else: nothing can be browsed
+        // there, so its explainer rides in the block below.
         message: `${headline} ${MAINTENANCE_EXPLAINER}`,
         subject: 'Maintenance',
         severity: 'critical',
@@ -588,7 +594,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
             display: maint.display,
             until: maint.until,
             headline,
-            explainer: MAINTENANCE_EXPLAINER
+            explainer: maintenanceExplainer(maint.display)
           }
         } as object)
       })

@@ -178,10 +178,10 @@ function MaintenanceCard() {
             )}
           </p>
           <p className='mt-0.5 max-w-[64ch] text-[11.5px] leading-relaxed text-slate-500 dark:text-muted-foreground'>
-            Freezes every write for non-admins while reads keep working. People are told what that
-            means — browsing works, saving is paused, earlier saves are untouched — either in a
-            strip above the app or on a full page that replaces it. Admins stay exempt and always
-            get the strip, so you can keep working.
+            Freezes every write for non-admins while reads keep working. The strip above the app
+            tells people browsing works and saving is paused; the full page replaces the app and
+            says the portal is unavailable until maintenance ends. Both say earlier saves are safe.
+            Admins stay exempt and always get the strip, so you can keep working.
           </p>
         </div>
         <button
