@@ -6793,17 +6793,28 @@ Authorization: Bearer &lt;admin-token&gt;
           <h2 class="doc-h2" id="quality-checks-phases">The rebuild phases</h2>
           <p class="doc-p">A staging rebuild runs seven phases. Quality checks take part in three of them.</p>
           <div class="doc-table-wrap"><table class="doc-table">
-<thead><tr><th>Phase</th><th>What happens</th></tr></thead>
-<tbody><tr><td>refresh</td><td>The database is restored from production.</td></tr><tr><td>capture</td><td>Every check runs its baseline query on the fresh clone. The rows are stored.</td></tr><tr><td>migrate</td><td>Nivaro migrations run.</td></tr><tr><td>promote</td><td>Configuration is copied from the development database.</td></tr><tr><td>schema</td><td>Business tables, indexes and procedures are brought in line.</td></tr><tr><td>convert</td><td>The data conversions run.</td></tr><tr><td>verify</td><td>Every check runs its current query and is compared with the baseline.</td></tr></tbody></table></div>
+            <thead><tr><th>Phase</th><th>What happens</th></tr></thead>
+            <tbody><tr><tr><td>refresh</td><td>The database is restored from production.</td></tr>
+              <tr><td>capture</td><td>Every check runs its baseline query on the fresh clone. The rows are stored.</td></tr>
+              <tr><td>migrate</td><td>Nivaro migrations run.</td></tr>
+              <tr><td>promote</td><td>Configuration is copied from the development database.</td></tr>
+              <tr><td>schema</td><td>Business tables, indexes and procedures are brought in line.</td></tr>
+              <tr><td>convert</td><td>The data conversions run.</td></tr>
+              <tr><td>verify</td><td>Every check runs its current query and is compared with the baseline.</td></tr></tr></tbody>
+          </table></div>
           <h2 class="doc-h2" id="quality-checks-colours">Colours</h2>
           <div class="doc-table-wrap"><table class="doc-table">
-<thead><tr><th>Colour</th><th>Meaning</th></tr></thead>
-<tbody><tr><td>Green</td><td>Every compared row is equal.</td></tr><tr><td>Amber</td><td>Rows differ, and every difference is expected.</td></tr><tr><td>Red</td><td>At least one difference is not expected. Look at it.</td></tr><tr><td>Error</td><td>The check could not run or ran out of its time budget. It says why.</td></tr></tbody></table></div>
+            <thead><tr><th>Colour</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>Green</td><td>Every compared row is equal.</td></tr>
+              <tr><td>Amber</td><td>Rows differ, and every difference is expected.</td></tr>
+              <tr><td>Red</td><td>At least one difference is not expected. Look at it.</td></tr>
+              <tr><td>Error</td><td>The check could not run or ran out of its time budget. It says why.</td></tr></tr></tbody>
+          </table></div>
           <p class="doc-p">The Staging quality checks page lists the checks of the latest run by area. Open a check to see its clusters (mismatches grouped by the dimensions the check declares, such as state or zone) and the mismatch rows. A row links to the record in production when the deployment configures a legacy link.</p>
           <h2 class="doc-h2" id="quality-checks-known">Known differences</h2>
           <p class="doc-p">Some differences are deliberate. Use Mark as expected on a mismatch row, or on a whole cluster, and give a reason. The difference then reads amber instead of red in every later run.</p>
           <ul class="doc-ul">
-            <li>A known difference belongs to one check and matches rows by their key or cluster. A key pattern may use * for any run of characters, up to four times. Mark as expected on a row names that row&#x27;s key exactly, * included.</li>
+            <li>A known difference belongs to one check and matches rows by their key or cluster. A key pattern may use * for any run of characters, up to four times. Mark as expected on a row names that row's key exactly, * included.</li>
             <li>The Known differences tab lists them with the reason, who added it and how many rows it matched last time.</li>
             <li>A known difference that matches nothing for 3 runs in a row is marked stale. It is kept until someone removes it.</li>
             <li>Known differences are configuration. They are copied with the rest of the configuration.</li>
@@ -6827,35 +6838,56 @@ Authorization: Bearer &lt;admin-token&gt;
           <p class="doc-p">An extension supplies its own checks. Its default export names a module in <code class="doc-code">quality_checks</code>, a path from the API root inside the extension folder. That module exports the checks as <code class="doc-code">default</code> or <code class="doc-code">qualityChecks</code>, both arrays of <code class="doc-code">QualityCheck</code>.</p>
           <pre class="doc-pre"><code>// extensions/my-ext/index.ts
 export default {
-  id: &#x27;my-ext&#x27;,
-  quality_checks: &#x27;extensions/my-ext/quality/checks.ts&#x27;,
-  // Optional: the key of one of its own host runbooks (runs_on &#x27;host&#x27;,
-  // skip_dry_gate) that re-runs the checks; the console&#x27;s Re-run queues it.
-  quality_rerun: &#x27;checks-rerun&#x27;,
+  id: 'my-ext',
+  quality_checks: 'extensions/my-ext/quality/checks.ts',
+  // Optional: the key of one of its own host runbooks (runs_on 'host',
+  // skip_dry_gate) that re-runs the checks; the console's Re-run queues it.
+  quality_rerun: 'checks-rerun',
   async register(ctx) {}
 }
 
 // extensions/my-ext/quality/checks.ts
-import type { QualityCheck } from &#x27;@nivaro/extension-kit&#x27;
+import type { QualityCheck } from '@nivaro/extension-kit'
 
 export const qualityChecks: QualityCheck[] = [
   {
-    id: &#x27;orders.totals&#x27;,
-    area: &#x27;counts&#x27;,
-    label: &#x27;Order totals per month&#x27;,
-    description: &#x27;Sum of order amounts per month&#x27;,
+    id: 'orders.totals',
+    area: 'counts',
+    label: 'Order totals per month',
+    description: 'Sum of order amounts per month',
     budgetMs: 120_000,
     tolerance: { abs: 0.01 },
-    async baseline({ db }) { /* legacy shape → QualityRow[] */ return [] },
-    async current({ db }) { /* converted shape → QualityRow[] */ return [] }
+    async baseline({ db }) {
+      const rows = await db('orders_legacy').select('month').sum({ total: 'amount' }).groupBy('month')
+      return rows.map((r) =&gt; ({ key: `month:${r.month}`, values: { total: Number(r.total) } }))
+    },
+    async current({ db }) {
+      const rows = await db('orders').select('month').sum({ total: 'amount' }).groupBy('month')
+      return rows.map((r) =&gt; ({ key: `month:${r.month}`, values: { total: Number(r.total) } }))
+    }
   }
 ]</code></pre>
           <div class="doc-table-wrap"><table class="doc-table">
-<thead><tr><th>Field</th><th>Meaning</th></tr></thead>
-<tbody><tr><td><code class="doc-code">id</code></td><td>Lower case, starts with a letter, 2 to 81 characters from a-z, 0-9, dot, dash and underscore.</td></tr><tr><td><code class="doc-code">area</code></td><td>Groups the check on the page, for example counts, people, history, states, forecasts, lines, po, owners, budget.</td></tr><tr><td><code class="doc-code">label</code>, <code class="doc-code">description</code></td><td>What the check is called and what it measures.</td></tr><tr><td><code class="doc-code">baseline(ctx)</code></td><td>Legacy shape, run on the fresh clone before migrations. Returns <code class="doc-code">QualityRow[]</code>. A list check returns <code class="doc-code">[]</code>.</td></tr><tr><td><code class="doc-code">current(ctx)</code></td><td>Converted shape, run after the conversions. Returns <code class="doc-code">QualityRow[]</code>.</td></tr><tr><td><code class="doc-code">budgetMs</code></td><td>Time budget per side in milliseconds. Default 180000. A check over budget is recorded as an error.</td></tr><tr><td><code class="doc-code">tolerance</code></td><td><code class="doc-code">{ abs?, pct? }</code>. Numbers within it are equal. Without it values compare exactly, after rounding to 4 decimals.</td></tr><tr><td><code class="doc-code">expected(base, cur, fields)</code></td><td>Returns a reason when this mismatch is expected, else null. The row then reads amber.</td></tr><tr><td><code class="doc-code">explain(base, cur, fields)</code></td><td>Returns a plain sentence for an unexpected mismatch, or null.</td></tr><tr><td><code class="doc-code">legacyLink(key)</code></td><td>Returns an absolute URL to the record in the legacy system, or undefined.</td></tr></tbody></table></div>
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">id</code></td><td>Lower case, starts with a letter, 2 to 81 characters from a-z, 0-9, dot, dash and underscore.</td></tr>
+              <tr><td><code class="doc-code">area</code></td><td>Groups the check on the page, for example counts, people, history, states, forecasts, lines, po, owners, budget.</td></tr>
+              <tr><td><code class="doc-code">label</code>, <code class="doc-code">description</code></td><td>What the check is called and what it measures.</td></tr>
+              <tr><td><code class="doc-code">baseline(ctx)</code></td><td>Legacy shape, run on the fresh clone before migrations. Returns <code class="doc-code">QualityRow[]</code>. A list check returns <code class="doc-code">[]</code>.</td></tr>
+              <tr><td><code class="doc-code">current(ctx)</code></td><td>Converted shape, run after the conversions. Returns <code class="doc-code">QualityRow[]</code>.</td></tr>
+              <tr><td><code class="doc-code">budgetMs</code></td><td>Time budget per side in milliseconds. Default 180000. A check over budget is recorded as an error.</td></tr>
+              <tr><td><code class="doc-code">tolerance</code></td><td><code class="doc-code">{ abs?, pct? }</code>. Numbers within it are equal. Without it values compare exactly, after rounding to 4 decimals.</td></tr>
+              <tr><td><code class="doc-code">expected(base, cur, fields)</code></td><td>Returns a reason when this mismatch is expected, else null. The row then reads amber.</td></tr>
+              <tr><td><code class="doc-code">explain(base, cur, fields)</code></td><td>Returns a plain sentence for an unexpected mismatch, or null.</td></tr>
+              <tr><td><code class="doc-code">legacyLink(key)</code></td><td>Returns an absolute URL to the record in the legacy system, or undefined.</td></tr></tr></tbody>
+          </table></div>
           <div class="doc-table-wrap"><table class="doc-table">
-<thead><tr><th>QualityRow field</th><th>Meaning</th></tr></thead>
-<tbody><tr><td><code class="doc-code">key</code></td><td>Stable identity, such as <code class="doc-code">workflow:371367</code>. The same record must give the same key on both sides.</td></tr><tr><td><code class="doc-code">label</code></td><td>Optional human label for the key.</td></tr><tr><td><code class="doc-code">values</code></td><td>The compared values: string, number, boolean or null. Null and the empty string are equal.</td></tr><tr><td><code class="doc-code">cluster</code></td><td>Grouping dimensions for mismatch clusters, such as <code class="doc-code">{ state: "Waiting on PO" }</code>.</td></tr><tr><td><code class="doc-code">context</code></td><td>Facts carried for <code class="doc-code">expected()</code> and <code class="doc-code">explain()</code>. Stored with the row. Never compared and never grouped.</td></tr></tbody></table></div>
+            <thead><tr><th>QualityRow field</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">key</code></td><td>Stable identity, such as <code class="doc-code">workflow:371367</code>. The same record must give the same key on both sides.</td></tr>
+              <tr><td><code class="doc-code">label</code></td><td>Optional human label for the key.</td></tr>
+              <tr><td><code class="doc-code">values</code></td><td>The compared values: string, number, boolean or null. Null and the empty string are equal.</td></tr>
+              <tr><td><code class="doc-code">cluster</code></td><td>Grouping dimensions for mismatch clusters, such as <code class="doc-code">{ state: "Waiting on PO" }</code>.</td></tr>
+              <tr><td><code class="doc-code">context</code></td><td>Facts carried for <code class="doc-code">expected()</code> and <code class="doc-code">explain()</code>. Stored with the row. Never compared and never grouped.</td></tr></tr></tbody>
+          </table></div>
           <div class="doc-note">A check receives <code class="doc-code">ctx.db</code>, a connection to the database being checked with a long request timeout, <code class="doc-code">ctx.database</code> (its name) and <code class="doc-code">ctx.log(message)</code>. Keep checks read-only. A check that throws is recorded as an error and does not stop the others.</div>
           <!-- /SYNC:quality-checks -->
         </div>
@@ -15526,8 +15558,27 @@ POST /api/search/semantic/reindex
               <tr><td>kpi</td><td>A single aggregate number (count/sum/avg) with label</td></tr>
               <tr><td>markdown</td><td>Rich text / documentation blocks</td></tr>
               <tr><td>iframe</td><td>An embedded external page</td></tr>
-              <tr><td>recent-activity</td><td>Latest activity entries, optionally scoped to a collection</td></tr></tr></tbody>
+              <tr><td>recent-activity</td><td>Latest activity entries, optionally scoped to a collection</td></tr>
+              <tr><td>query</td><td>A custom query rendered as a table, with optional filters, stat strip, row actions and drill sheets</td></tr>
+              <tr><td>matrix</td><td>A tuple-scoped value grid over a target collection</td></tr>
+              <tr><td>record-grid</td><td>An editable grid over a collection, with scope pickers and month sets</td></tr></tr></tbody>
           </table></div>
+          <h3 class="doc-h3">Query widget stats</h3>
+          <p class="doc-p">A query widget can show a strip of stat tiles above its table. Each <code class="doc-code">stats</code> entry is computed over the query's rows (or its own query) and takes the keys below. Every formula counts only rows that hold all of its operands: a ratio over partially reported rows reads the reporting rows alone, and a sum formula likewise skips a row missing any operand.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Key</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>label</td><td>Tile title</td></tr>
+              <tr><td>field</td><td>Sum of this result column</td></tr>
+              <tr><td>query</td><td>An independent stat: <code class="doc-code">{slug, param_from, value_field, label_field}</code></td></tr>
+              <tr><td>field_subtract</td><td>Delta stat: <code class="doc-code">field</code> minus this column, shown with a leading + when positive</td></tr>
+              <tr><td>formula</td><td><code class="doc-code">{{a}} / {{b}}</code> arithmetic over the summed columns</td></tr>
+              <tr><td>format</td><td>currency, number, percent (0-100 scale, up to 1 decimal), date or text. Date and text render quieter and take the first row value only for a tile with a <code class="doc-code">query</code>; a row-field tile with these formats shows the empty label</td></tr>
+              <tr><td>empty_label</td><td>Shown when the value is null</td></tr>
+              <tr><td>coverage</td><td>Plural noun for a table row, for example <code class="doc-code">projects</code>. When only some rows report the figure, a quiet 'N of M projects' line appears under the value; when none do, the tile shows <code class="doc-code">empty_label</code></td></tr>
+              <tr><td>accent / accent_negative</td><td>Colour roles for the tile value and for a negative delta</td></tr></tr></tbody>
+          </table></div>
+          <pre class="doc-pre"><code>{ label: '% Remaining', formula: '{{remaining}} / {{budget}} * 100', format: 'percent', empty_label: 'no data yet', coverage: 'projects' }</code></pre>
+          <p class="doc-p">Two query table column keys complement this: <code class="doc-code">empty_label</code> sets what a null cell prints (an empty string leaves it blank), and <code class="doc-code">max_width</code> caps a text column at that many pixels with an ellipsis.</p>
           <div class="doc-note">Widget data is fetched server-side through a widget-data endpoint that enforces the viewer's permissions — a page can never show a user rows they could not read through the API.</div>
           <!-- /SYNC:page-builder -->
         </div>
