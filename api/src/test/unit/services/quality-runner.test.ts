@@ -138,9 +138,9 @@ describe('loadQualityChecks', () => {
 describe('fix round 1', () => {
   it('refuses EFP and the target as the results database', async () => {
     const { parseArgs } = await import('../../../scripts/quality-checks.js')
-    expect(
-      parseArgs(['--stage', 'baseline', '--target', 'Mirror_DB', '--results-db', 'efp'])
-    ).toBe('refusing to write results to the production database EFP')
+    expect(parseArgs(['--stage', 'baseline', '--target', 'Mirror_DB', '--results-db', 'efp'])).toBe(
+      'refusing to write results to the production database EFP'
+    )
     expect(
       parseArgs(['--stage', 'current', '--target', 'Mirror_DB', '--results-db', 'MIRROR_DB'])
     ).toBe('--target and --results-db must be different databases')

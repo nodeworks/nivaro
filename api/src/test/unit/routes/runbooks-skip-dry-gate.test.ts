@@ -92,4 +92,3 @@ describe('runbooks route — skip_dry_gate', () => {
     expect(list.find((r) => r.key === 'staging-rebuild')?.skip_dry_gate).toBe(false)
   })
 })
-
