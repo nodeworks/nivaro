@@ -109,8 +109,11 @@ export function buildRenderArgs(input: RenderInput): string[] {
     const to = next()
     parts.push(
       `[${label}]scale=w='trunc(${out.width}*${Z}/2)*2':h='trunc(${out.height}*${Z}/2)*2':eval=frame,` +
-        `crop=${out.width}:${out.height}:x='max(0,min(${CX}*iw-${out.width}/2,iw-${out.width}))':` +
-        `y='max(0,min(${CY}*ih-${out.height}/2,ih-${out.height}))'[${to}]`
+        // crop's iw/ih are the size the graph was configured with (the unzoomed
+        // frame), not the per-frame scaled size, so use the zoomed size explicitly.
+        `crop=${out.width}:${out.height}:` +
+        `x='max(0,min(${CX}*(${out.width}*${Z})-${out.width}/2,${out.width}*${Z}-${out.width}))':` +
+        `y='max(0,min(${CY}*(${out.height}*${Z})-${out.height}/2,${out.height}*${Z}-${out.height}))'[${to}]`
     )
     label = to
   }

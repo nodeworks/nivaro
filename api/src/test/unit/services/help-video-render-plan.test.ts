@@ -142,6 +142,21 @@ describe('buildRenderArgs', () => {
     expect(graph).toContain('crop=1280:720')
     expect(graph).toContain('clip(min((t-1.000)/0.500,(5.000-t)/0.500),0,1)')
   })
+  it('crops against the zoomed size, since crop sees iw/ih before the scale', () => {
+    const edits = normalizeEdits(
+      {
+        zooms: [{ start_ms: 0, end_ms: 5000, rect: { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, ease_ms: 0 }]
+      },
+      10_000
+    )
+    const graph = fc(buildRenderArgs({ ...base, edits }))
+    const z = '(1+(1.0000)*between(t,0.000,5.000))'
+    const cx = '(0.5+(0.2500)*between(t,0.000,5.000))'
+    const cy = '(0.5+(0.2500)*between(t,0.000,5.000))'
+    expect(graph).toContain(`x='max(0,min(${cx}*(1280*${z})-1280/2,1280*${z}-1280))'`)
+    expect(graph).toContain(`y='max(0,min(${cy}*(720*${z})-720/2,720*${z}-720))'`)
+    expect(graph).not.toMatch(/\*iw|\*ih|iw-|ih-/)
+  })
 })
 
 describe('input hardening', () => {
