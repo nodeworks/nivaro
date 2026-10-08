@@ -207,7 +207,7 @@ export async function recordHeadlineSnapshot(
         if (missing) throw new Error(`The query did not return the column ${missing}`)
       }
       const sum = (col: string) => cents(rows.reduce((s, r) => s + num(r[col]), 0))
-      // Rows that do not carry a value (a project with no Fusion import)
+      // Rows that do not carry a value (a project with no imported ERP figure)
       // are left out of these sums — absent data is null, never 0.
       const carries = (r: Record<string, unknown>, col: string) => r[col] != null && r[col] !== ''
       const optional = (col: string | undefined) => {
@@ -271,16 +271,16 @@ function isUniqueViolation(err: unknown): boolean {
 
 export const HEADLINE_TABLE = 'nivaro_dashboard_snapshots'
 
-// A database behind migration 406 has no Fusion columns — probe once per
+// A database behind migration 406 has no remaining-figure columns — probe once per
 // process (a hit is cached; a miss re-probes after a minute) so it keeps
 // working until the migration lands.
-let fusionColumns: { has: boolean; at: number } | null = null
-async function hasFusionColumns(): Promise<boolean> {
-  if (fusionColumns && (fusionColumns.has || Date.now() - fusionColumns.at < 60_000)) {
-    return fusionColumns.has
+let remainingColumns: { has: boolean; at: number } | null = null
+async function hasRemainingColumns(): Promise<boolean> {
+  if (remainingColumns && (remainingColumns.has || Date.now() - remainingColumns.at < 60_000)) {
+    return remainingColumns.has
   }
   const has = await db.schema.hasColumn(HEADLINE_TABLE, 'fusion_remaining').catch(() => false)
-  fusionColumns = { has, at: Date.now() }
+  remainingColumns = { has, at: Date.now() }
   return has
 }
 
@@ -317,7 +317,7 @@ export async function upsertHeadlineSnapshot(row: HeadlineSnapshotRow): Promise<
     committed: row.committed,
     remaining: row.remaining,
     projects: row.projects,
-    ...((await hasFusionColumns())
+    ...((await hasRemainingColumns())
       ? {
           fusion_committed: row.fusion_committed,
           fusion_remaining: row.fusion_remaining,
@@ -490,7 +490,7 @@ export async function readHeadlineHistory(opts: {
 }): Promise<HeadlineHistoryPoint[]> {
   const now = opts.now ?? new Date()
   const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - opts.days)
-  const withFusion = await hasFusionColumns()
+  const withRemainingColumns = await hasRemainingColumns()
   const q = db(HEADLINE_TABLE)
     .select(
       'snapshot_date',
@@ -499,7 +499,7 @@ export async function readHeadlineHistory(opts: {
       'committed',
       'remaining',
       'projects',
-      ...(withFusion ? ['fusion_committed', 'fusion_remaining', 'remaining_pct'] : [])
+      ...(withRemainingColumns ? ['fusion_committed', 'fusion_remaining', 'remaining_pct'] : [])
     )
     .where('year', opts.year)
     .where('snapshot_date', '>=', dayOf(from))

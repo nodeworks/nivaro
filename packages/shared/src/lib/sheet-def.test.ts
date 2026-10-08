@@ -9,14 +9,14 @@ describe('resolveSheetDef', () => {
       header: {
         query_slug: 'health',
         params: { projects: '$row.project_id' },
-        stats: [{ label: 'PUB' }]
+        stats: [{ label: 'Budget' }]
       },
       tabs: [{ label: 'Spend', config: { query_slug: 'spend' } }]
     }
     const out = resolveSheetDef(def, resolveConfig)
     expect(out.header).toEqual({
       config: { query_slug: 'health', params: { projects: '$row.project_id' }, resolved: true },
-      stats: [{ label: 'PUB' }]
+      stats: [{ label: 'Budget' }]
     })
     expect(out.resolvedTabs).toEqual([
       { label: 'Spend', config: { query_slug: 'spend', resolved: true } }
@@ -25,7 +25,7 @@ describe('resolveSheetDef', () => {
 
   it('keeps a header with no tabs at all', () => {
     const out = resolveSheetDef(
-      { header: { query_slug: 'health', stats: [{ label: 'PUB' }] } },
+      { header: { query_slug: 'health', stats: [{ label: 'Budget' }] } },
       resolveConfig
     )
     expect(out.resolvedTabs).toEqual([])

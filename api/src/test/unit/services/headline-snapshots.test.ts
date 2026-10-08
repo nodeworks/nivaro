@@ -156,7 +156,7 @@ describe('recordHeadlineSnapshot', () => {
     expect(insert).toHaveBeenCalledTimes(1)
   })
 
-  it('sums the optional Fusion columns and computes the weighted remaining % over Fusion rows only', async () => {
+  it('sums the optional ERP remaining figures and computes the weighted remaining % over the rows carrying them', async () => {
     const settings = {
       ...SETTINGS,
       fields: { ...SETTINGS.fields, fusion_committed: 'fc', fusion_remaining: 'fr' }
@@ -171,11 +171,11 @@ describe('recordHeadlineSnapshot', () => {
     expect(row.fusion_committed).toBe(100)
     expect(row.fusion_remaining).toBe(400)
     expect(row.remaining).toBe(250)
-    // 250 / 1000 — the 500 PUB with no Fusion figure is left out of the ratio
+    // 250 / 1000 — the 500 budget with no remaining figure is left out of the ratio
     expect(row.remaining_pct).toBe(25)
   })
 
-  it('leaves the Fusion figures and the % null when no row carries them', async () => {
+  it('leaves the remaining figures and the % null when no row carries them', async () => {
     const runQuery = vi.fn(async () => [{ pub: 1000, spent: 1, held: 1, left: null }])
     const insert = vi.fn()
     await recordHeadlineSnapshot(SETTINGS, runQuery, insert, [], NOW)
@@ -185,7 +185,7 @@ describe('recordHeadlineSnapshot', () => {
     expect(row.remaining_pct).toBeNull()
   })
 
-  it('refuses an optional Fusion column that is not an identifier', () => {
+  it('refuses an optional remaining-figure column that is not an identifier', () => {
     expect(
       parseHeadlineSettings({
         ...SETTINGS,
