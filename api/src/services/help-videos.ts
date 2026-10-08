@@ -782,8 +782,16 @@ export async function listVideos(
   const cats = await db('nivaro_help_videos')
     .where({ status: 'published' })
     .whereNotNull('category')
-    .select('category')
-  const categories = [...new Set(cats.map((c) => String(c.category)))].sort()
+    .select('category', 'status', 'visibility')
+  // Only categories of videos THIS viewer may see — a category name can
+  // itself be sensitive.
+  const categories = [
+    ...new Set(
+      (cats as VideoRow[])
+        .filter((c) => viewerMaySee(c, req.user!.role, author))
+        .map((c) => String(c.category))
+    )
+  ].sort()
   return { data, total: visible.length, categories, can_author: author }
 }
 
@@ -792,6 +800,10 @@ export async function registerPage(key: string, label: string, app: string | nul
   if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(key)) throw fail(400, 'HELP_VIDEO_PAGE', 'Invalid page key')
   const last = pageWrites.get(key) ?? 0
   if (Date.now() - last < 10 * 60_000) return
+  if (pageWrites.size > 1000) {
+    const cutoff = Date.now() - 10 * 60_000
+    for (const [k, t] of pageWrites) if (t < cutoff) pageWrites.delete(k)
+  }
   pageWrites.set(key, Date.now())
   const row = {
     label: String(label || key).slice(0, 200),

@@ -100,7 +100,7 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.send(await videosForContext(req, q))
   })
   app.get('/pages', async (_req, reply) => reply.send({ data: await listPages() }))
-  app.post('/pages', async (req, reply) => {
+  app.post('/pages', { preHandler: requireAuthor }, async (req, reply) => {
     const b = (req.body ?? {}) as { key?: string; label?: string; app?: string }
     await registerPage(String(b.key ?? ''), String(b.label ?? ''), b.app ?? null)
     return reply.code(204).send()
