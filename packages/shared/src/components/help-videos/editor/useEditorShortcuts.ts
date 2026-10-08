@@ -5,11 +5,18 @@ export type EditorShortcutActions = {
   redo: () => void
   split: () => void
   deletePiece: () => void
+  /** M: a chapter at the playhead. */
+  addChapter: () => void
+  /** Escape: put the drawing tool down. */
+  stopDrawing: () => void
+  /** ?: show or hide the list of shortcuts. */
+  toggleShortcuts: () => void
   /** A kept piece is selected (Delete cuts it). */
   pieceSelected: boolean
 }
 
 /** Shortcuts on the Edit tab: S split, Delete cut the selected piece,
+ *  M add a chapter, Escape stop drawing, ? list the shortcuts,
  *  Ctrl/⌘+Z undo, Shift+Ctrl/⌘+Z or Ctrl+Y redo. Never while typing or
  *  inside a popover or menu. The window listener is added once; each key
  *  reads the latest actions from a ref. */
@@ -38,6 +45,9 @@ export function useEditorShortcuts(active: boolean, actions: EditorShortcutActio
         if (e.shiftKey || k === 'y') a.redo()
         else a.undo()
       } else if (!mod && !e.altKey && k === 's') a.split()
+      else if (!mod && !e.altKey && k === 'm') a.addChapter()
+      else if (e.key === 'Escape') a.stopDrawing()
+      else if (!mod && e.key === '?') a.toggleShortcuts()
       else if (!mod && (e.key === 'Delete' || e.key === 'Backspace') && a.pieceSelected) {
         e.preventDefault()
         a.deletePiece()

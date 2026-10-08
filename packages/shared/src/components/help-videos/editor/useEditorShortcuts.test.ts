@@ -15,6 +15,9 @@ const actions = (over: Partial<EditorShortcutActions> = {}): EditorShortcutActio
   redo: vi.fn(),
   split: vi.fn(),
   deletePiece: vi.fn(),
+  addChapter: vi.fn(),
+  stopDrawing: vi.fn(),
+  toggleShortcuts: vi.fn(),
   pieceSelected: false,
   ...over
 })
@@ -55,6 +58,27 @@ describe('useEditorShortcuts', () => {
     await act(async () => root.render(createElement(Probe, { active: true, actions: b })))
     press('Delete')
     expect(b.deletePiece).toHaveBeenCalledTimes(1)
+    await act(async () => root.unmount())
+  })
+
+  it('adds a chapter with M, stops drawing with Escape, lists the keys with ?', async () => {
+    const root = createRoot(document.createElement('div'))
+    const a = actions()
+    await act(async () => root.render(createElement(Probe, { active: true, actions: a })))
+    press('m')
+    press('M', { shiftKey: true })
+    press('m', { metaKey: true })
+    expect(a.addChapter).toHaveBeenCalledTimes(2)
+    press('Escape')
+    expect(a.stopDrawing).toHaveBeenCalledTimes(1)
+    press('?', { shiftKey: true })
+    expect(a.toggleShortcuts).toHaveBeenCalledTimes(1)
+    // Never while typing.
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }))
+    expect(a.addChapter).toHaveBeenCalledTimes(2)
+    input.remove()
     await act(async () => root.unmount())
   })
 })

@@ -17,6 +17,14 @@ export type Change = { edits: VideoEdits; refused?: string }
 /** Notes read as sentences: every one ends with a full stop. */
 export const sentence = (s: string) => (/[.!?]$/.test(s) ? s : `${s}.`)
 
+/** A lane's bars in time order (the order the keyboard follows). */
+const laneBars = (lane: HTMLElement | null) =>
+  lane
+    ? Array.from(lane.querySelectorAll<HTMLElement>('[data-hv-order]')).sort(
+        (a, b) => Number(a.dataset.hvOrder) - Number(b.dataset.hvOrder)
+      )
+    : []
+
 /**
  * Dragging, stretching, snapping and keyboard handling for timeline bars.
  * A change the server would refuse is not applied; its reason goes to
@@ -149,12 +157,7 @@ export function useBarDrag(opts: {
         const step = e.shiftKey ? 1000 : 100
         commit(apply(e.key === 'ArrowLeft' ? -step : step), key)
       } else if (arrow || e.key === 'Home' || e.key === 'End') {
-        const lane = e.currentTarget.parentElement
-        const bars = lane
-          ? Array.from(lane.querySelectorAll<HTMLElement>('[data-hv-order]')).sort(
-              (a, b) => Number(a.dataset.hvOrder) - Number(b.dataset.hvOrder)
-            )
-          : []
+        const bars = laneBars(e.currentTarget.parentElement)
         const i = bars.indexOf(e.currentTarget)
         const j =
           e.key === 'Home'
@@ -171,9 +174,20 @@ export function useBarDrag(opts: {
         e.preventDefault()
         e.stopPropagation()
         const { setNote, onChange, onSelect } = latest.current
+        // Focus goes on to the next bar in time, else the previous one, else
+        // the (now empty) lane, so a keyboard user keeps their place.
+        const lane = e.currentTarget.parentElement
+        const bars = laneBars(lane)
+        const i = bars.indexOf(e.currentTarget)
+        const next = bars[i + 1] ?? bars[i - 1] ?? null
         setNote(null)
         onChange(remove())
-        onSelect(null)
+        if (next)
+          next.focus() // its focus handler selects it
+        else {
+          onSelect(null)
+          lane?.focus()
+        }
       }
     },
     [commit]

@@ -15,7 +15,9 @@ type TimedKey = 'annotations' | 'zooms' | 'blurs' | 'captions'
 type TimedItem = { id: string; start_ms: number; end_ms: number; text?: string; type?: string }
 
 // Tinted bars with dark ink: each lane reads at a glance without a saturated
-// block of colour, and the label inside clears 4.5:1 in both themes. A bar
+// block of colour, and the label inside clears 4.5:1 in both themes. Dark
+// tints sit on an opaque card ground (the same colour as a 25% tint), so
+// bars that overlap never show each other's labels through. A bar
 // that sits entirely inside a cut is drawn hollow (dashed border on the
 // lane's ground) with the same ink, so its label keeps full contrast.
 export const LANES: Array<{ key: 'cuts' | ListKey; label: string; tone: string; hollow: string }> =
@@ -24,34 +26,34 @@ export const LANES: Array<{ key: 'cuts' | ListKey; label: string; tone: string; 
     {
       key: 'chapters',
       label: 'Chapters',
-      tone: 'border-violet-300 bg-violet-100 text-violet-950 dark:border-violet-400/50 dark:bg-violet-500/25 dark:text-violet-50',
+      tone: 'border-violet-300 bg-violet-100 text-violet-950 dark:border-violet-400/50 dark:bg-card dark:bg-[linear-gradient(rgb(139_92_246/0.25),rgb(139_92_246/0.25))] dark:text-violet-50',
       hollow: ''
     },
     {
       key: 'annotations',
       label: 'Callouts',
-      tone: 'border-blue-300 bg-blue-100 text-blue-950 dark:border-blue-400/50 dark:bg-blue-500/25 dark:text-blue-50',
+      tone: 'border-blue-300 bg-blue-100 text-blue-950 dark:border-blue-400/50 dark:bg-card dark:bg-[linear-gradient(rgb(59_130_246/0.25),rgb(59_130_246/0.25))] dark:text-blue-50',
       hollow:
         'border-dashed border-blue-400 bg-card text-blue-950 dark:border-blue-400/70 dark:text-blue-100'
     },
     {
       key: 'zooms',
       label: 'Zoom',
-      tone: 'border-emerald-300 bg-emerald-100 text-emerald-950 dark:border-emerald-400/50 dark:bg-emerald-500/25 dark:text-emerald-50',
+      tone: 'border-emerald-300 bg-emerald-100 text-emerald-950 dark:border-emerald-400/50 dark:bg-card dark:bg-[linear-gradient(rgb(16_185_129/0.25),rgb(16_185_129/0.25))] dark:text-emerald-50',
       hollow:
         'border-dashed border-emerald-500 bg-card text-emerald-950 dark:border-emerald-400/70 dark:text-emerald-100'
     },
     {
       key: 'blurs',
       label: 'Blur',
-      tone: 'border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-400/50 dark:bg-amber-500/25 dark:text-amber-50',
+      tone: 'border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-400/50 dark:bg-card dark:bg-[linear-gradient(rgb(245_158_11/0.25),rgb(245_158_11/0.25))] dark:text-amber-50',
       hollow:
         'border-dashed border-amber-500 bg-card text-amber-950 dark:border-amber-400/70 dark:text-amber-100'
     },
     {
       key: 'captions',
       label: 'Captions',
-      tone: 'border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950 dark:border-fuchsia-400/50 dark:bg-fuchsia-500/25 dark:text-fuchsia-50',
+      tone: 'border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950 dark:border-fuchsia-400/50 dark:bg-card dark:bg-[linear-gradient(rgb(217_70_239/0.25),rgb(217_70_239/0.25))] dark:text-fuchsia-50',
       hollow:
         'border-dashed border-fuchsia-400 bg-card text-fuchsia-950 dark:border-fuchsia-400/70 dark:text-fuchsia-100'
     }
@@ -101,6 +103,21 @@ const edgeHandles = (
 
 type Bars = ReturnType<typeof useBarDrag>
 
+/** A lane is a labelled group. Focus lands on it when its last bar is
+ *  deleted, and an empty lane is the lane's one tab stop. */
+function laneProps(key: 'cuts' | ListKey, count: number) {
+  const label = LANES.find((l) => l.key === key)?.label ?? key
+  return {
+    role: 'group',
+    'aria-label': count ? label : `${label}: none yet`,
+    tabIndex: count ? -1 : 0,
+    'data-hv-lane': key,
+    className:
+      'relative border-b border-border outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
+    style: { height: LANE_H }
+  } as const
+}
+
 /**
  * The six edit lanes: kept pieces over a hatched "cut away" ground, chapter
  * marks, and one lane each for callouts, zoom, blur and captions.
@@ -140,14 +157,18 @@ export const Lanes = memo(function Lanes({
     for (const [id, rank] of order) if (rank === 0) return id
     return null
   }
-  const cutsStop = selection?.lane === 'cuts' ? selection.index : 0
+  // A stale index (pieces were cut since) still leaves the lane one stop.
+  const cutsStop =
+    selection?.lane === 'cuts'
+      ? Math.max(0, Math.min(selection.index, edits.segments.length - 1))
+      : 0
   const chapterOrder = orderOf(edits.chapters, (c) => c.at_ms)
   const chapterStop = tabStop('chapters', chapterOrder)
 
   return (
     <>
       {/* cuts: kept pieces over a hatched "cut away" ground */}
-      <div className='relative border-b border-border' style={{ height: LANE_H }}>
+      <div {...laneProps('cuts', edits.segments.length)}>
         <div
           className='absolute inset-y-0 left-0 bg-[repeating-linear-gradient(135deg,transparent_0_5px,rgb(148_163_184/0.28)_5px_10px)]'
           style={{ width: toPx(sourceMs) }}
@@ -198,7 +219,7 @@ export const Lanes = memo(function Lanes({
         })}
       </div>
       {/* chapters: a point in time each */}
-      <div className='relative border-b border-border' style={{ height: LANE_H }}>
+      <div {...laneProps('chapters', edits.chapters.length)}>
         {edits.chapters.map((c) => {
           const move = (at: number) =>
             upsertItemChecked(edits, 'chapters', {
@@ -242,11 +263,7 @@ export const Lanes = memo(function Lanes({
         const stop = tabStop(k, order)
         const lane = laneOf(k)
         return (
-          <div
-            key={k}
-            className='relative border-b border-border last:border-b-0'
-            style={{ height: LANE_H }}
-          >
+          <div key={k} {...laneProps(k, items.length)}>
             {items.map((it) => {
               const hidden = isHiddenByCuts(edits, it.start_ms, it.end_ms)
               const place = (s: number, en: number) =>

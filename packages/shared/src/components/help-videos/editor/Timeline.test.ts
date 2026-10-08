@@ -175,7 +175,32 @@ describe('Timeline keyboard', () => {
     expect(api.edits.annotations.find((a) => a.id === 'a1')?.start_ms).toBe(3100)
     await key(q('[data-hv-item="annotations:a1"]'), 'Delete')
     expect(api.edits.annotations.map((a) => a.id)).toEqual(['a2'])
+    // Focus (and the selection) moves on to the next bar in time.
+    expect(document.activeElement?.getAttribute('data-hv-item')).toBe('annotations:a2')
+    expect(api.selection).toEqual({ lane: 'annotations', id: 'a2' })
+  })
+
+  it('after Delete, focuses the previous bar when there is no next, then the empty lane', async () => {
+    const a2 = q<HTMLButtonElement>('[data-hv-item="annotations:a2"]')
+    await act(async () => a2.focus())
+    await key(a2, 'Delete')
+    expect(document.activeElement?.getAttribute('data-hv-item')).toBe('annotations:a1')
+    await key(document.activeElement as Element, 'Delete')
+    expect(api.edits.annotations).toEqual([])
+    const lane = document.activeElement as HTMLElement
+    expect(lane.getAttribute('data-hv-lane')).toBe('annotations')
+    expect(lane.tabIndex).toBe(0)
     expect(api.selection).toBeNull()
+  })
+
+  it('keeps one tab stop in every lane: empty lanes and a stale piece index too', async () => {
+    await act(async () => api.setEdits({ ...api.edits, captions: [] }))
+    expect(q('[data-hv-lane="captions"]').tabIndex).toBe(0)
+    expect(q('[data-hv-lane="annotations"]').tabIndex).toBe(-1)
+    // A selection left over from a longer list of pieces.
+    await act(async () => api.setSelection({ lane: 'cuts', index: 7 }))
+    const stops = host.querySelectorAll('[data-hv-segment][tabindex="0"]')
+    expect([...stops].map((b) => b.getAttribute('data-hv-segment'))).toEqual(['1'])
   })
 
   it('names callouts and captions by their lane, and keeps hidden bars readable', () => {

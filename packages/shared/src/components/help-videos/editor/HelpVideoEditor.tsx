@@ -8,15 +8,31 @@ import { Skeleton } from '../../ui/skeleton'
 import { Switch } from '../../ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs'
 import { helpVideoApi, helpVideoKeys, useHelpVideo } from '../api'
-import { ALLOWED_SPEEDS, removeSegment, segmentIndexAt, setSpeed, splitAt } from '../edits'
+import {
+  ALLOWED_SPEEDS,
+  removeSegment,
+  segmentIndexAt,
+  setSpeed,
+  sourceToEdited,
+  splitAt,
+  upsertItemChecked
+} from '../edits'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
+import { CaptionsPanel } from './CaptionsPanel'
+import { addChapterAt, ChaptersPanel } from './ChaptersPanel'
 import { historyReducer, initHistory } from './history'
+import { Inspector } from './Inspector'
+import { ClickRipples, PosterPicker } from './PosterAndClicks'
+import { PreviewTools } from './PreviewTools'
 import { SaveState } from './SaveState'
+import { ShortcutsCard } from './ShortcutsCard'
 import { SilenceSuggestions } from './SilenceSuggestions'
 import { suggestCuts } from './suggestCuts'
 import { type Selection, Timeline } from './Timeline'
+import { ToolPicker } from './ToolPicker'
 import { sentence } from './timeline/useBarDrag'
+import { clicksToRipples, editsForPreview, type Tool } from './tools'
 import { useAutosave } from './useAutosave'
 import { useEditorShortcuts } from './useEditorShortcuts'
 
@@ -136,6 +152,10 @@ function EditorBody({
 }) {
   const [h, dispatch] = useReducer(historyReducer, draft.edits, initHistory)
   const edits = h.present
+  // Callbacks handed to memoised panels read the latest edits from here, so
+  // they keep one identity and the panels skip playback frames.
+  const editsRef = useRef(edits)
+  editsRef.current = edits
   // One note beside the timeline for every change that can't be made
   // (overlapping zooms, too short, cutting the last second away).
   const [note, setNote] = useState<string | null>(null)
@@ -151,12 +171,25 @@ function EditorBody({
   const player = useRef<PlayerHandle | null>(null)
   const seek = useCallback((ms: number) => player.current?.seekSource(ms), [])
   const [src, setSrc] = useState(0)
+  const srcRef = useRef(src)
+  srcRef.current = src
+  /** The playhead now (the video's own clock when it has one). */
+  const playhead = useCallback(() => player.current?.sourceMs() ?? srcRef.current, [])
   const [selection, setSelection] = useState<Selection>(null)
   const [viewerPreview, setViewerPreview] = useState(false)
   const [tab, setTab] = useState('edit')
+  const [tool, setTool] = useState<Tool | null>(null)
+  const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  const root = useRef<HTMLDivElement | null>(null)
   const sourceMs = draft.source_duration_ms ?? 0
+  const clicks = draft.clicks
   const segIndex = segmentIndexAt(edits, src)
   const silent = useMemo(() => suggestCuts(draft.levels ?? null, edits), [draft.levels, edits])
+  // While a zoom is selected the preview shows the whole picture, to place it.
+  const playerEdits = useMemo(
+    () => (viewerPreview ? edits : editsForPreview(edits, selection)),
+    [edits, selection, viewerPreview]
+  )
   // The piece the speed and cut tools act on: the selected one, else the one
   // under the playhead.
   const pieceIndex = selection?.lane === 'cuts' ? selection.index : segIndex
@@ -166,18 +199,71 @@ function EditorBody({
   const deletePiece = () => {
     if (pieceIndex < 0) return
     const r = removeSegment(edits, pieceIndex)
-    if (r.refused) showNote(r.refused)
-    else {
-      set(r.edits)
-      setSelection(null)
+    if (r.refused) {
+      showNote(r.refused)
+      return
+    }
+    // Cut from a focused piece on the timeline: focus goes on to the piece
+    // that takes its place (or the one before, when it was the last).
+    const fromBar = document.activeElement?.closest?.('[data-hv-segment]')
+    set(r.edits)
+    setSelection(null)
+    if (fromBar) {
+      const j = Math.min(pieceIndex, r.edits.segments.length - 1)
+      requestAnimationFrame(() =>
+        root.current?.querySelector<HTMLElement>(`[data-hv-segment="${j}"]`)?.focus()
+      )
     }
   }
+  const addChapter = useCallback(() => {
+    const r = addChapterAt(editsRef.current, playhead())
+    if (r.refused) showNote(r.refused)
+    else set(r.edits)
+    if (r.id) setSelection({ lane: 'chapters', id: r.id })
+  }, [playhead, showNote, set])
+  const takePoster = useCallback((): number | null => {
+    const e = editsRef.current
+    const at = Math.round(playhead())
+    // The render takes the poster from the finished video.
+    if (sourceToEdited(e, at) === null) {
+      showNote(
+        'That frame is cut out of the video. Move the playhead to a part viewers see, then try again'
+      )
+      return null
+    }
+    set({ ...e, poster_ms: at })
+    return at
+  }, [playhead, showNote, set])
+  const addRipples = useCallback(() => {
+    const start = editsRef.current
+    const ripples = clicksToRipples(clicks ?? null, start.annotations, sourceMs)
+    let e = start
+    let added = 0
+    let refused: string | undefined
+    for (const a of ripples) {
+      const r = upsertItemChecked(e, 'annotations', a)
+      if (r.refused) {
+        refused = r.refused
+        break
+      }
+      e = r.edits
+      added++
+    }
+    if (e !== start) set(e)
+    if (refused) showNote(`Added ${added} of ${ripples.length} ripples. ${sentence(refused)}`)
+  }, [clicks, sourceMs, set, showNote])
+  const selectChapter = useCallback((id: string) => setSelection({ lane: 'chapters', id }), [])
+  const selectCaption = useCallback((id: string) => setSelection({ lane: 'captions', id }), [])
+  const stopDrawing = useCallback(() => setTool(null), [])
 
   useEditorShortcuts(tab === 'edit', {
     undo: () => dispatch({ type: 'undo' }),
     redo: () => dispatch({ type: 'redo' }),
     split,
     deletePiece,
+    addChapter,
+    stopDrawing,
+    toggleShortcuts: () => setShortcutsOpen((o) => !o),
     pieceSelected: selection?.lane === 'cuts'
   })
 
@@ -195,7 +281,11 @@ function EditorBody({
   }
 
   return (
-    <div className='flex h-full min-h-0 flex-col bg-background' data-hv-editor={video.id}>
+    <div
+      ref={root}
+      className='flex h-full min-h-0 flex-col bg-background'
+      data-hv-editor={video.id}
+    >
       <header className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2.5'>
         <h2 className='min-w-0 max-w-full truncate text-[15px] font-semibold text-foreground'>
           {video.title || 'Untitled video'}
@@ -206,7 +296,10 @@ function EditorBody({
             <Switch
               id={`hv-viewer-preview-${video.id}`}
               checked={viewerPreview}
-              onCheckedChange={setViewerPreview}
+              onCheckedChange={(v) => {
+                setViewerPreview(v)
+                if (v) setTool(null)
+              }}
               className='h-5 w-9 [&>span]:h-4 [&>span]:w-4 [&>span]:data-[state=checked]:translate-x-4'
               data-hv-viewer-preview
             />
@@ -244,10 +337,11 @@ function EditorBody({
           </TabsTrigger>
         </TabsList>
         {/* Kept mounted so the player keeps its place while another tab is open. */}
+        {/* Narrow screens scroll the whole tab; wide ones fit it to the window. */}
         <TabsContent
           value='edit'
           forceMount
-          className='mt-0 flex min-h-0 flex-1 flex-col data-[state=inactive]:hidden'
+          className='mt-0 flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden lg:overflow-y-visible'
         >
           <div
             className='flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 px-4 py-2'
@@ -307,7 +401,9 @@ function EditorBody({
               onSeek={seek}
               onRefused={showNote}
             />
+            {!viewerPreview && <ToolPicker tool={tool} onTool={setTool} />}
             <div className='ml-auto flex items-center gap-0.5'>
+              <ShortcutsCard open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
               <Button
                 size='sm'
                 variant='ghost'
@@ -334,20 +430,88 @@ function EditorBody({
               </Button>
             </div>
           </div>
-          <div className='flex min-h-[180px] flex-1'>
-            <div className='min-w-0 flex-1 px-3 pb-3'>
+          <div className='flex shrink-0 flex-col lg:min-h-[180px] lg:flex-1 lg:shrink lg:flex-row'>
+            <div className='h-[min(56vw,360px)] shrink-0 px-3 pb-3 lg:h-auto lg:min-w-0 lg:flex-1 lg:shrink'>
               <HelpVideoPlayer
                 video={playerVideo}
                 mode='live'
                 useDraft
-                edits={edits}
+                edits={playerEdits}
                 trackProgress={false}
                 handleRef={player}
                 onTime={(s) => setSrc(s)}
                 className='h-full'
-              />
+              >
+                {(frame) =>
+                  !viewerPreview && (
+                    <PreviewTools
+                      frame={frame}
+                      edits={edits}
+                      srcMs={src}
+                      sourceMs={sourceMs}
+                      tool={tool}
+                      selection={selection}
+                      onSelect={setSelection}
+                      onChange={set}
+                      onRefused={showNote}
+                      onDone={stopDrawing}
+                      note={note}
+                    />
+                  )
+                }
+              </HelpVideoPlayer>
             </div>
-            {/* Inspector + preview drawing tools: Task 15 */}
+            {!viewerPreview && (
+              <aside
+                aria-label='Selected item, chapters and captions'
+                className='divide-y divide-border border-t border-border px-3 lg:w-[300px] lg:shrink-0 lg:overflow-y-auto lg:border-t-0 lg:border-l'
+                data-hv-sidebar
+              >
+                <div className='py-3'>
+                  <Inspector
+                    edits={edits}
+                    selection={selection}
+                    sourceMs={sourceMs}
+                    onChange={set}
+                    onSelect={setSelection}
+                    onSeek={seek}
+                    onError={showNote}
+                  />
+                </div>
+                <div className='py-3'>
+                  <ChaptersPanel
+                    edits={edits}
+                    selectedId={selection?.lane === 'chapters' ? selection.id : null}
+                    onAdd={addChapter}
+                    onSeek={seek}
+                    onSelect={selectChapter}
+                  />
+                </div>
+                <div className='py-3'>
+                  <CaptionsPanel
+                    edits={edits}
+                    sourceMs={sourceMs}
+                    selectedId={selection?.lane === 'captions' ? selection.id : null}
+                    getSrcMs={playhead}
+                    onChange={set}
+                    onRefused={showNote}
+                    onSeek={seek}
+                    onSelect={selectCaption}
+                  />
+                </div>
+                <div className='py-3'>
+                  <PosterPicker edits={edits} onUse={takePoster} onSeek={seek} />
+                </div>
+                <div className='py-3'>
+                  <ClickRipples
+                    clicks={clicks}
+                    edits={edits}
+                    sourceMs={sourceMs}
+                    onAdd={addRipples}
+                  />
+                </div>
+              </aside>
+            )}
           </div>
           <Timeline
             edits={edits}
