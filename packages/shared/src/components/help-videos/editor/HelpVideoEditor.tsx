@@ -1,21 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import {
-  AlertCircle,
-  AlertTriangle,
-  AudioLines,
-  Check,
-  Redo2,
-  RotateCw,
-  Scissors,
-  Trash2,
-  Undo2
-} from 'lucide-react'
+import { AlertCircle, Redo2, RotateCw, Scissors, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { Button } from '../../ui/button'
 import { Label } from '../../ui/label'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
 import { Switch } from '../../ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs'
@@ -24,20 +13,12 @@ import { ALLOWED_SPEEDS, removeSegment, segmentIndexAt, setSpeed, splitAt } from
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
 import { historyReducer, initHistory } from './history'
-import { type Stretch, suggestCuts } from './suggestCuts'
+import { SaveState } from './SaveState'
+import { SilenceSuggestions } from './SilenceSuggestions'
+import { suggestCuts } from './suggestCuts'
 import { type Selection, Timeline } from './Timeline'
 import { useAutosave } from './useAutosave'
-
-const clock = (ms: number) => {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
-
-/** Split a silent stretch out as its own piece; returns that piece's index. */
-function isolate(e: VideoEdits, r: Stretch): { edits: VideoEdits; index: number } {
-  const out = splitAt(splitAt(e, r.start_ms), r.end_ms)
-  return { edits: out, index: segmentIndexAt(out, Math.round((r.start_ms + r.end_ms) / 2)) }
-}
+import { useEditorShortcuts } from './useEditorShortcuts'
 
 /** The stream path without its media ticket (`?st=`, new on every fetch). */
 const streamPath = (v: HelpVideoDto) => (v.draft_stream_url ?? v.stream_url ?? '').split('?')[0]
@@ -177,20 +158,6 @@ function EditorBody({
   const piece = pieceIndex >= 0 ? edits.segments[pieceIndex] : undefined
 
   const split = () => set(splitAt(edits, src))
-  // One click per suggested silence: cut it out, or keep it at 4×.
-  const cutSilence = (r: Stretch) => {
-    const { edits: e, index } = isolate(edits, r)
-    if (index < 0) return
-    const res = removeSegment(e, index)
-    if (res.refused) toast.error(res.refused)
-    else set(res.edits)
-  }
-  const speedSilence = (r: Stretch) => {
-    const { edits: e, index } = isolate(edits, r)
-    if (index >= 0) set(setSpeed(e, index, 4))
-  }
-  const splitAllSilences = () =>
-    set(silent.reduce((e, r) => splitAt(splitAt(e, r.start_ms), r.end_ms), edits))
   const deletePiece = () => {
     if (pieceIndex < 0) return
     const r = removeSegment(edits, pieceIndex)
@@ -201,39 +168,12 @@ function EditorBody({
     }
   }
 
-  // Shortcuts on the Edit tab: S split, Delete cut the selected piece,
-  // Ctrl/⌘+Z undo, Shift+Ctrl/⌘+Z or Ctrl+Y redo.
-  useEffect(() => {
-    if (tab !== 'edit') return
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return
-      const t = e.target as HTMLElement | null
-      if (
-        t &&
-        (t.tagName === 'INPUT' ||
-          t.tagName === 'TEXTAREA' ||
-          t.tagName === 'SELECT' ||
-          t.isContentEditable ||
-          t.closest('[data-radix-popper-content-wrapper], [role="menu"]'))
-      )
-        return
-      const mod = e.metaKey || e.ctrlKey
-      const k = e.key.toLowerCase()
-      if (mod && (k === 'z' || k === 'y')) {
-        e.preventDefault()
-        dispatch(e.shiftKey || k === 'y' ? { type: 'redo' } : { type: 'undo' })
-      } else if (!mod && !e.altKey && k === 's') split()
-      else if (
-        !mod &&
-        (e.key === 'Delete' || e.key === 'Backspace') &&
-        selection?.lane === 'cuts'
-      ) {
-        e.preventDefault()
-        deletePiece()
-      }
-    }
-    window.addEventListener('keydown', onKey)
-    return () => window.removeEventListener('keydown', onKey)
+  useEditorShortcuts(tab === 'edit', {
+    undo: () => dispatch({ type: 'undo' }),
+    redo: () => dispatch({ type: 'redo' }),
+    split,
+    deletePiece,
+    pieceSelected: selection?.lane === 'cuts'
   })
 
   // Close saves what's waiting first. If that save fails, the first Close
@@ -355,85 +295,12 @@ function EditorBody({
                 })}
               </div>
             </div>
-            {silent.length > 0 && (
-              <Popover>
-                <PopoverTrigger asChild>
-                  <Button
-                    size='sm'
-                    variant='outline'
-                    className='h-8 px-2.5 text-[12.5px]'
-                    data-hv-suggestions
-                  >
-                    <AudioLines className='!size-3.5' />
-                    {silent.length} silent stretch{silent.length === 1 ? '' : 'es'}
-                  </Button>
-                </PopoverTrigger>
-                <PopoverContent
-                  align='start'
-                  className='w-[380px] max-w-[calc(100vw-24px)] p-0'
-                  data-hv-suggestion-list
-                >
-                  <div className='border-b border-border px-3 py-2.5'>
-                    <p className='text-[13px] font-semibold text-foreground'>Long pauses</p>
-                    <p className='mt-0.5 text-[12px] leading-snug text-muted-foreground'>
-                      Your narration goes quiet here for 3 seconds or more. Cut each pause out, or
-                      keep it and play it at 4× speed.
-                    </p>
-                  </div>
-                  <ul className='max-h-[280px] divide-y divide-border overflow-y-auto'>
-                    {silent.map((r) => (
-                      <li
-                        key={`${r.start_ms}-${r.end_ms}`}
-                        className='flex flex-wrap items-center gap-x-2 gap-y-1.5 px-3 py-2'
-                      >
-                        <button
-                          type='button'
-                          className='mr-auto rounded-sm text-left text-[12.5px] text-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-                          onClick={() => player.current?.seekSource(r.start_ms)}
-                          aria-label={`Go to the pause at ${clock(r.start_ms)}`}
-                        >
-                          <span className='font-mono tabular-nums'>
-                            {clock(r.start_ms)}–{clock(r.end_ms)}
-                          </span>
-                          <span className='text-muted-foreground'>
-                            {' '}
-                            · {Math.round((r.end_ms - r.start_ms) / 1000)} s
-                          </span>
-                        </button>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          className='h-7 px-2 text-[12px]'
-                          onClick={() => cutSilence(r)}
-                          data-hv-suggestion-cut
-                        >
-                          Cut it
-                        </Button>
-                        <Button
-                          size='sm'
-                          variant='outline'
-                          className='h-7 px-2 text-[12px]'
-                          onClick={() => speedSilence(r)}
-                          data-hv-suggestion-speed
-                        >
-                          Speed up 4×
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className='border-t border-border px-3 py-2'>
-                    <button
-                      type='button'
-                      className='rounded-sm text-[12px] text-foreground underline underline-offset-2 hover:text-foreground/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-                      onClick={splitAllSilences}
-                      data-hv-suggestion-split-all
-                    >
-                      Split them all out and decide on the timeline
-                    </button>
-                  </div>
-                </PopoverContent>
-              </Popover>
-            )}
+            <SilenceSuggestions
+              silent={silent}
+              edits={edits}
+              onChange={set}
+              onSeek={(ms) => player.current?.seekSource(ms)}
+            />
             <div className='ml-auto flex items-center gap-0.5'>
               <Button
                 size='sm'
@@ -492,85 +359,6 @@ function EditorBody({
         <TabsContent value='versions' />
         <TabsContent value='stats' />
       </Tabs>
-    </div>
-  )
-}
-
-function SaveState({
-  save,
-  onReload
-}: {
-  save: ReturnType<typeof useAutosave>
-  onReload: () => void
-}) {
-  const body = (() => {
-    switch (save.status) {
-      case 'idle':
-        return <span className='text-muted-foreground'>Changes save as you go</span>
-      case 'saving':
-        return (
-          <span className='flex items-center gap-1.5 text-muted-foreground'>
-            <span
-              className='h-1.5 w-1.5 animate-pulse rounded-full bg-muted-foreground motion-reduce:animate-none'
-              aria-hidden
-            />
-            Saving…
-          </span>
-        )
-      case 'saved':
-        return (
-          <span className='flex items-center gap-1 text-muted-foreground'>
-            <Check className='h-3.5 w-3.5' aria-hidden />
-            All changes saved
-          </span>
-        )
-      case 'conflict':
-        return (
-          <span className='flex flex-wrap items-center gap-x-2 gap-y-1'>
-            <span className='flex items-start gap-1.5 text-amber-800 dark:text-amber-200'>
-              <AlertTriangle className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
-              <span>{save.message}</span>
-            </span>
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-7 px-2 text-[12px]'
-              onClick={onReload}
-              data-hv-reload
-            >
-              <RotateCw className='!size-3.5' /> Reload
-            </Button>
-          </span>
-        )
-      case 'invalid':
-        return (
-          <span className='flex items-start gap-1.5 text-rose-700 dark:text-rose-300'>
-            <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
-            <span>{save.message}</span>
-          </span>
-        )
-      case 'error':
-        return (
-          <span className='flex items-start gap-1.5 text-rose-700 dark:text-rose-300'>
-            <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
-            <span>
-              {save.message}{' '}
-              <button
-                type='button'
-                className='ml-1 rounded-sm font-medium text-foreground underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-                onClick={() => void save.flush()}
-                data-hv-save-retry
-              >
-                Try now
-              </button>
-            </span>
-          </span>
-        )
-    }
-  })()
-  return (
-    <div className='min-w-0 text-[12px]' role='status' data-hv-save-status={save.status}>
-      {body}
     </div>
   )
 }
