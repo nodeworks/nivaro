@@ -45,7 +45,6 @@ vi.mock('../../services/retention.js', () => ({
 vi.mock('../../services/files.js', () => ({
   listFiles: vi.fn().mockResolvedValue({ data: [], total: 0 }),
   getFile: vi.fn(),
-  readFileBuffer: vi.fn(),
   reportFileBandwidth: vi.fn().mockResolvedValue(undefined),
   updateFileMeta: vi.fn(),
   uploadFile: vi.fn(),
@@ -58,9 +57,14 @@ vi.mock('../../services/storage/index.js', () => ({
   getStorageProviderName: vi.fn(() => 'local')
 }))
 
+vi.mock('../../services/storage-drivers.js', () => ({
+  getActiveStorageDriver: vi.fn(async () => ({ name: 'local' })),
+  readStoredObject: vi.fn(async () => Buffer.from('%PDF'))
+}))
+
 import Fastify, { type FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
-import { getFile, listFiles, readFileBuffer } from '../../services/files.js'
+import { getFile, listFiles } from '../../services/files.js'
 import { makeAdminUser } from '../helpers.js'
 
 function makeDbChain(overrides: Record<string, unknown> = {}) {
@@ -83,7 +87,7 @@ function makeDbChain(overrides: Record<string, unknown> = {}) {
 async function buildApp(register: (app: FastifyInstance) => Promise<void>) {
   const app = Fastify({ logger: false })
   const adminUser = makeAdminUser()
-  // @ts-ignore test shim
+  // @ts-expect-error test shim
   app.decorateRequest('user', null)
   app.decorateRequest('isAdmin', true)
   app.addHook('onRequest', async (req) => {
@@ -134,15 +138,13 @@ describe('Retention regressions', () => {
 
   it('POST /retention/:id/run returns snake_case result shape', async () => {
     const chain = makeDbChain({
-      first: vi
-        .fn()
-        .mockResolvedValue({
-          id: 1,
-          name: 'p',
-          redact_fields: '[]',
-          exclusion_emails: '[]',
-          exclusion_roles: '[]'
-        })
+      first: vi.fn().mockResolvedValue({
+        id: 1,
+        name: 'p',
+        redact_fields: '[]',
+        exclusion_emails: '[]',
+        exclusion_roles: '[]'
+      })
     })
     vi.mocked(db as unknown as (t: string) => unknown).mockReturnValue(
       chain as unknown as ReturnType<typeof db>
@@ -250,7 +252,6 @@ describe('Files route regressions', () => {
       filename_download: 'report.pdf',
       type: 'application/pdf'
     } as never)
-    vi.mocked(readFileBuffer).mockResolvedValue(Buffer.from('%PDF'))
 
     const app = await buildApp(async (a) => {
       const { filesRoutes } = await import('../../routes/files.js')
