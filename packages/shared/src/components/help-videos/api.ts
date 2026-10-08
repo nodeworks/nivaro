@@ -104,6 +104,9 @@ export function useHelpVideoPages() {
   })
 }
 
+/** One click on the recorded tab: recording time and frame fractions (0–1). */
+export type RecordedClick = { t_ms: number; x: number; y: number }
+
 /** Every mutation, as plain functions over the client. */
 export function helpVideoApi(client: NivaroClient) {
   const r = client.request.bind(client)
@@ -178,7 +181,23 @@ export function helpVideoApi(client: NivaroClient) {
       r(post<{ data: { id: string; next_part: number } }>('/help-videos/uploads', { mime })).then(
         (x) => x.data
       ),
-    finalizeUpload: (id: string, meta: { duration_ms: number; clicks: unknown; levels: unknown }) =>
+    /**
+     * Closes an upload and stores the recorder's data with it, as given.
+     * - `duration_ms`: recording time without pauses (the server prefers its
+     *   own probe of the file; 0 when unknown).
+     * - `clicks`: `{ t_ms, x, y }` per click on the recorded tab: `t_ms` is
+     *   recording time, `x`/`y` are fractions (0–1) of the captured frame.
+     *   Null when clicks were not captured.
+     * - `levels`: microphone loudness, one number from 0 (silence) to 1 every
+     *   100 ms of recording time (10 per second), so `levels[i]` covers
+     *   `i * 100` ms. Null without a microphone.
+     * Matches `HelpVideoVersion.clicks` / `.levels` in @nivaro/sdk.
+     * 422 UPLOAD_TOO_LONG past 31 minutes, 409 UPLOAD_CLOSED when finished.
+     */
+    finalizeUpload: (
+      id: string,
+      meta: { duration_ms: number; clicks: RecordedClick[] | null; levels: number[] | null }
+    ) =>
       r(
         post<{ data: { file_id: string; duration_ms: number | null } }>(
           `/help-videos/uploads/${id}/finalize`,

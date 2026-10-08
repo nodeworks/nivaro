@@ -85,7 +85,9 @@ export interface VersionDto {
   note: string | null
   created_at: string
   /** Draft, re-record and restore results only (recorder data). */
+  /** Clicks on the recorded tab: `t_ms` source time, `x`/`y` frame fractions (0–1). */
   clicks?: Array<{ t_ms: number; x: number; y: number }> | null
+  /** Microphone loudness 0–1, one value per 100 ms of source time. */
   levels?: number[] | null
 }
 
