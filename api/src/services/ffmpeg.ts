@@ -39,6 +39,19 @@ function lastLine(s: string): string {
   return s.trim().split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 300) ?? ''
 }
 
+// Never let ffmpeg auto-detect the format of untrusted input: a playlist or
+// concat script posing as a recording could read local files or fetch URLs.
+const INPUT_FORMATS: Record<string, string> = {
+  'video/webm': 'matroska,webm',
+  'video/mp4': 'mov,mp4,m4a,3gp,3g2,mj2'
+}
+export function lockedInputArgs(mime?: string): string[] {
+  const fmt = mime ? INPUT_FORMATS[mime.split(';')[0].trim().toLowerCase()] : undefined
+  const args = ['-protocol_whitelist', 'file']
+  if (fmt) args.push('-f', fmt, '-format_whitelist', fmt)
+  return args
+}
+
 export function hasFfmpeg(): Promise<boolean> {
   if (!available) {
     available = Promise.all([run(FFMPEG, ['-version']), run(FFPROBE, ['-version'])])
@@ -48,7 +61,10 @@ export function hasFfmpeg(): Promise<boolean> {
   return available
 }
 
-export async function probeVideo(path: string): Promise<{
+export async function probeVideo(
+  path: string,
+  mime?: string
+): Promise<{
   duration_ms: number | null
   width: number | null
   height: number | null
@@ -57,6 +73,7 @@ export async function probeVideo(path: string): Promise<{
   const { stdout } = await run(FFPROBE, [
     '-v',
     'error',
+    ...lockedInputArgs(mime),
     '-show_entries',
     'format=duration:stream=codec_type,width,height',
     '-of',
@@ -79,8 +96,18 @@ export async function probeVideo(path: string): Promise<{
 
 /** Rewrite the container without re-encoding: a MediaRecorder WebM gains its
  *  duration and cue index, which is what makes browser seeking work. */
-export async function remuxToFile(input: string, output: string): Promise<void> {
-  await run(FFMPEG, ['-y', '-v', 'error', '-i', input, '-c', 'copy', output])
+export async function remuxToFile(input: string, output: string, mime?: string): Promise<void> {
+  await run(FFMPEG, [
+    '-y',
+    '-v',
+    'error',
+    ...lockedInputArgs(mime),
+    '-i',
+    input,
+    '-c',
+    'copy',
+    output
+  ])
 }
 
 export async function runFfmpeg(

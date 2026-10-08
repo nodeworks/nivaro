@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, rm, stat } from 'node:fs/promises'
+import { appendFile, mkdir, rm, stat, truncate } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../db/index.js'
@@ -20,6 +20,8 @@ export const MAX_PART_BYTES = 8 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = Math.round(1.2 * 1024 * 1024 * 1024)
 export const ALLOWED_MIME = ['video/webm', 'video/mp4']
 const STALE_HOURS = 24
+export const MAX_DURATION_MS = 31 * 60_000 // 30 minutes + 1 minute slack
+const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export interface UploadSession {
   id: string
@@ -47,8 +49,49 @@ function fail(statusCode: number, code: string, message: string): Error {
 export function videoWorkDir(): string {
   return process.env.VIDEO_WORK_DIR || join(tmpdir(), 'nivaro-video')
 }
+// SQL Server compares a string to a uniqueidentifier after truncating it, so
+// a caller id like '<uuid>/../x' would still match a row. Reject anything that
+// is not exactly a uuid BEFORE querying, and build every path from the row's id.
+function assertId(id: string): string {
+  if (typeof id !== 'string' || !UPLOAD_ID_RE.test(id)) {
+    throw fail(404, 'UPLOAD_NOT_FOUND', 'Upload not found')
+  }
+  return id.toLowerCase()
+}
 function partPath(id: string): string {
-  return join(videoWorkDir(), 'uploads', `${id.toLowerCase()}.part`)
+  return join(videoWorkDir(), 'uploads', `${assertId(id)}.part`)
+}
+
+// Per-upload serialization: uploads are pinned to one host, so an in-process
+// promise chain is enough to make read -> decide -> append -> update atomic.
+const locks = new Map<string, Promise<unknown>>()
+async function withLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const prev = locks.get(id) ?? Promise.resolve()
+  const run = prev.then(fn, fn)
+  const tail = run.catch(() => undefined)
+  locks.set(id, tail)
+  try {
+    return await run
+  } finally {
+    if (locks.get(id) === tail) locks.delete(id)
+  }
+}
+
+/** Does the first part look like the container the client declared? */
+export function looksLikeVideo(mime: string, head: Buffer): boolean {
+  if (mime === 'video/webm') {
+    return (
+      head.length >= 4 &&
+      head[0] === 0x1a &&
+      head[1] === 0x45 &&
+      head[2] === 0xdf &&
+      head[3] === 0xa3
+    )
+  }
+  if (mime === 'video/mp4') {
+    return head.length >= 8 && head.subarray(4, 8).toString('latin1') === 'ftyp'
+  }
+  return false
 }
 
 export function decidePart(
@@ -83,6 +126,7 @@ function shape(r: Record<string, unknown>): UploadSession {
 }
 
 async function own(user: User, id: string): Promise<Record<string, unknown>> {
+  id = assertId(id)
   const row = await db('nivaro_help_video_uploads').where({ id }).first()
   if (!row || String(row.user).toLowerCase() !== user.id.toLowerCase())
     throw fail(404, 'UPLOAD_NOT_FOUND', 'Upload not found')
@@ -122,32 +166,45 @@ export async function appendPart(
   n: number,
   body: Buffer
 ): Promise<UploadSession> {
-  const row = await own(user, id)
-  if (row.status !== 'open') throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
-  const decision = decidePart(
-    {
-      next_part: Number(row.next_part),
-      last_part_bytes: row.last_part_bytes == null ? null : Number(row.last_part_bytes),
-      bytes_received: Number(row.bytes_received)
-    },
-    n,
-    body.length
-  )
-  if (decision === 'duplicate') return shape(row)
-  if (typeof decision === 'object') throw fail(decision.status, 'UPLOAD_PART', decision.error)
-  await appendFile(partPath(id), body)
-  const updated = await db('nivaro_help_video_uploads')
-    .where({ id, next_part: n })
-    .update({
-      next_part: n + 1,
-      last_part_bytes: body.length,
-      bytes_received: Number(row.bytes_received) + body.length,
-      updated_at: new Date()
-    })
-  if (!updated) throw fail(409, 'UPLOAD_PART', 'Another request wrote this part first')
-  return shape(
-    (await db('nivaro_help_video_uploads').where({ id }).first()) as Record<string, unknown>
-  )
+  const rid = assertId(id)
+  return withLock(rid, async () => {
+    const row = await own(user, rid)
+    if (row.status !== 'open') throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
+    const decision = decidePart(
+      {
+        next_part: Number(row.next_part),
+        last_part_bytes: row.last_part_bytes == null ? null : Number(row.last_part_bytes),
+        bytes_received: Number(row.bytes_received)
+      },
+      n,
+      body.length
+    )
+    if (decision === 'duplicate') return shape(row)
+    if (typeof decision === 'object') throw fail(decision.status, 'UPLOAD_PART', decision.error)
+    if (n === 0 && !looksLikeVideo(String(row.mime), body)) {
+      throw fail(422, 'UPLOAD_NOT_VIDEO', 'That does not look like a WebM or MP4 recording')
+    }
+    const path = partPath(String(row.id))
+    await appendFile(path, body)
+    const updated = await db('nivaro_help_video_uploads')
+      .where({ id: row.id, next_part: n })
+      .update({
+        next_part: n + 1,
+        last_part_bytes: body.length,
+        bytes_received: Number(row.bytes_received) + body.length,
+        updated_at: new Date()
+      })
+    if (!updated) {
+      await truncate(path, Number(row.bytes_received)).catch(() => undefined)
+      throw fail(409, 'UPLOAD_PART', 'Another request wrote this part first')
+    }
+    return shape(
+      (await db('nivaro_help_video_uploads').where({ id: row.id }).first()) as Record<
+        string,
+        unknown
+      >
+    )
+  })
 }
 
 export async function finalizeUpload(
@@ -155,37 +212,51 @@ export async function finalizeUpload(
   id: string,
   meta: { duration_ms?: number; clicks?: unknown; levels?: unknown }
 ): Promise<FinalizedUpload> {
-  const row = await own(user, id)
-  if (row.status !== 'open') throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
-  const raw = partPath(id)
-  const size = await stat(raw)
-    .then((s) => s.size)
-    .catch(() => 0)
-  if (!size) throw fail(422, 'UPLOAD_EMPTY', 'Nothing was recorded')
+  const rid = assertId(id)
+  // Claim: only one finalize can flip open -> finalizing; appends are serialized
+  // on the same lock so none is mid-write when the claim lands.
+  const row = await withLock(rid, async () => {
+    const r = await own(user, rid)
+    if (r.status !== 'open') throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
+    const claimed = await db('nivaro_help_video_uploads')
+      .where({ id: r.id, status: 'open' })
+      .update({ status: 'finalizing', updated_at: new Date() })
+    if (!claimed) throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finishing')
+    return r
+  })
+  const dbId = row.id
+  const reopen = () =>
+    db('nivaro_help_video_uploads')
+      .where({ id: dbId, status: 'finalizing' })
+      .update({ status: 'open', updated_at: new Date() })
+  const raw = partPath(String(dbId))
   const ext = row.mime === 'video/mp4' ? '.mp4' : '.webm'
-  let path = raw
-  let probe = {
-    duration_ms: null as number | null,
-    width: null as number | null,
-    height: null as number | null,
-    has_audio: true
-  }
-  if (await hasFfmpeg()) {
-    const fixed = join(videoWorkDir(), 'uploads', `${id.toLowerCase()}.fixed${ext}`)
-    try {
-      await remuxToFile(raw, fixed)
-      path = fixed
-      probe = await probeVideo(fixed)
-    } catch (err) {
-      await rm(fixed, { force: true })
-      throw fail(
-        422,
-        'UPLOAD_UNREADABLE',
-        `The recording could not be read: ${(err as Error).message}`
-      )
-    }
-  }
+  const fixed = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
   try {
+    const size = await stat(raw)
+      .then((s) => s.size)
+      .catch(() => 0)
+    if (!size) throw fail(422, 'UPLOAD_EMPTY', 'Nothing was recorded')
+    let path = raw
+    let probe = {
+      duration_ms: null as number | null,
+      width: null as number | null,
+      height: null as number | null,
+      has_audio: true
+    }
+    if (await hasFfmpeg()) {
+      try {
+        await remuxToFile(raw, fixed, String(row.mime))
+        path = fixed
+        probe = await probeVideo(fixed, String(row.mime))
+      } catch (err) {
+        console.warn(`help-video upload ${String(dbId)}: ffmpeg failed: ${(err as Error).message}`)
+        throw fail(422, 'UPLOAD_UNREADABLE', 'The recording could not be read')
+      }
+    }
+    if (probe.duration_ms != null && probe.duration_ms > MAX_DURATION_MS) {
+      throw fail(422, 'UPLOAD_TOO_LONG', 'Recordings can be up to 30 minutes')
+    }
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
     const file = await uploadFileFromPath(user, path, `recording-${stamp}${ext}`, String(row.mime))
     const clientMs = Number(meta.duration_ms)
@@ -194,8 +265,8 @@ export async function finalizeUpload(
       (Number.isFinite(clientMs) && clientMs > 0
         ? Math.min(Math.round(clientMs), 30 * 60_000)
         : null)
-    await db('nivaro_help_video_uploads')
-      .where({ id })
+    const done = await db('nivaro_help_video_uploads')
+      .where({ id: dbId, status: 'finalizing' })
       .update({
         status: 'finalized',
         file_id: file.id,
@@ -209,6 +280,9 @@ export async function finalizeUpload(
         ),
         updated_at: new Date()
       })
+    if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
+    // The recording is stored and recorded: only now is the temp file expendable.
+    await rm(raw, { force: true })
     return {
       file_id: String(file.id),
       duration_ms: durationMs,
@@ -218,13 +292,16 @@ export async function finalizeUpload(
       clicks: meta.clicks ?? null,
       levels: meta.levels ?? null
     }
+  } catch (err) {
+    await reopen().catch(() => undefined)
+    throw err
   } finally {
-    await rm(raw, { force: true })
-    if (path !== raw) await rm(path, { force: true })
+    await rm(fixed, { force: true })
   }
 }
 
 export async function takeFinalizedUpload(user: User, uploadId: string): Promise<FinalizedUpload> {
+  uploadId = assertId(uploadId)
   const row = await db('nivaro_help_video_uploads').where({ id: uploadId }).first()
   if (
     !row ||
@@ -263,11 +340,11 @@ export async function listOpenUploads(user: User): Promise<UploadSession[]> {
 }
 
 export async function abandonUpload(user: User, id: string): Promise<void> {
-  await own(user, id)
+  const row = await own(user, id)
   await db('nivaro_help_video_uploads')
-    .where({ id })
+    .where({ id: row.id })
     .update({ status: 'abandoned', updated_at: new Date() })
-  await rm(partPath(id), { force: true })
+  await rm(partPath(String(row.id)), { force: true })
 }
 
 export async function purgeStaleUploads(): Promise<number> {
