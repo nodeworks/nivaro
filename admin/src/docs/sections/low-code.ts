@@ -27,6 +27,11 @@ export const lowCodePageBuilder: DocSection = {
         ['record-grid', 'An editable grid over a collection, with scope pickers and month sets']
       ]
     },
+    { type: 'h3', text: 'Value formats on record widgets' },
+    {
+      type: 'p',
+      text: 'A value pill on a record widget may carry `format`: `currency` (two decimals), `integer`, `percent` (a 0–100 figure, shown with one decimal and a % sign) or none (up to two decimals). A null value renders as —.'
+    },
     { type: 'h3', text: 'Drill sheets' },
     {
       type: 'p',

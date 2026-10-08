@@ -76,6 +76,7 @@ import {
   HEADER_VALUE_HERO,
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
+import { formatWidgetValue } from '../lib/widget-value-format'
 import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
@@ -200,7 +201,7 @@ function StripCell({
 }) {
   const prefix = (display.prefix ?? '') as string
   const suffix = (display.suffix ?? '') as string
-  const formatted = loading ? null : formatStatValue(value, (display.format ?? '') as string)
+  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string)
   return (
     // Same label / value vocabulary as a field tile in the record sub-header
     // (lib/header-strip.ts) — the two kinds of cell read as one row.
@@ -388,7 +389,7 @@ function StatDisplay({
   const display = (data.display ?? {}) as Record<string, unknown>
   const prefix = (display.prefix ?? '') as string
   const suffix = (display.suffix ?? '') as string
-  const formatted = formatStatValue(data.value, (display.format ?? '') as string)
+  const formatted = formatWidgetValue(data.value, (display.format ?? '') as string)
   return (
     <div className='flex items-baseline gap-1'>
       {prefix && <span className='text-[13px] text-slate-500'>{prefix}</span>}
@@ -415,7 +416,7 @@ function PillSection({
 }) {
   const prefix = (display.prefix ?? '') as string
   const suffix = (display.suffix ?? '') as string
-  const formatted = loading ? null : formatStatValue(value, (display.format ?? '') as string)
+  const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string)
   return (
     <div className='flex flex-col justify-center px-2.5 py-1 min-w-0 gap-0.5'>
       <span
@@ -535,20 +536,6 @@ function PillDisplay({
   )
 }
 
-function formatStatValue(value: unknown, format: string): string {
-  if (value == null) return '—'
-  if (typeof value === 'number') {
-    if (format === 'currency')
-      return new Intl.NumberFormat(undefined, {
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2
-      }).format(value)
-    if (format === 'integer') return new Intl.NumberFormat().format(Math.round(value))
-    return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)
-  }
-  return String(value)
-}
-
 function MultiStatDisplay({ data }: { data: Record<string, unknown> }) {
   const values = (data.values ?? []) as Array<{
     value: unknown
@@ -573,7 +560,7 @@ function MultiStatDisplay({ data }: { data: Record<string, unknown> }) {
             <div className='flex items-baseline gap-0.5'>
               {prefix && <span className='text-[12px] text-slate-500'>{prefix}</span>}
               <span className='text-xl font-semibold text-slate-900 dark:text-slate-100'>
-                {formatStatValue(v.value, format)}
+                {formatWidgetValue(v.value, format)}
               </span>
               {suffix && <span className='text-[12px] text-slate-500'>{suffix}</span>}
             </div>
