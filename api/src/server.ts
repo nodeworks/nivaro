@@ -736,7 +736,14 @@ export async function buildServer() {
         const { sweepRenders } = await import('./services/help-video-render.js')
         await sweepRenders()
       })
-      void import('./services/help-video-render.js').then((m) => m.kickRenderer()).catch(() => {})
+      // Every process clears its own stale render scratch; only a process
+      // that owns the render queue (ticks crons or VIDEO_RENDER=on) drains it.
+      void import('./services/help-video-render.js')
+        .then((m) => {
+          void m.cleanRenderScratch()
+          m.kickRenderer()
+        })
+        .catch(() => {})
 
       // Config health: nightly usage-hygiene + schema-lint sweep.
       app.cron.schedule('config-health-sweep', '10 3 * * *', async () => {
