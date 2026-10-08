@@ -40,9 +40,10 @@ const fmt = (ms: number) => {
 const isAuthorView = (v: HelpVideoDto) => v.visibility !== undefined
 const viewerMustWait = (v: HelpVideoDto) => !isAuthorView(v) && v.published?.playable === false
 
-/** Progress is reported for the published video only, once its length is known. */
-const isTracking = (l: { trackProgress: boolean; useDraft: boolean; totalMs: number }) =>
-  l.trackProgress && !l.useDraft && l.totalMs > 0
+/** Progress is reported for the published video only. Waiting for the
+ *  video's length is the beat tracker's job (progressBeats.ts). */
+const isTracking = (l: { trackProgress: boolean; useDraft: boolean }) =>
+  l.trackProgress && !l.useDraft
 
 // Shape and states only; each button adds its own ink (mixing two text-*
 // colours in one class list lets CSS order pick the winner).
@@ -296,20 +297,25 @@ function PlayerInner({
       beats.idle()
       return
     }
+    // Playback may start before the length is known (autoplay, slow
+    // network): the watch period opens as soon as it is.
+    if (!beats.opened && isTracking(latest.current)) {
+      void beats.tryOpen(editedMs, latest.current.dto.published?.id, totalMs)
+    }
     beats.see(editedMs, totalMs, performance.now())
   }, [beats, playing, editedMs, totalMs])
   const send = useCallback(
     (keepalive = false) => {
       const l = latest.current
       if (!isTracking(l)) return
-      void beats.beat(l.editedMs, l.dto.published?.id, keepalive)
+      void beats.beat(l.editedMs, l.dto.published?.id, l.totalMs, keepalive)
     },
     [beats]
   )
   const openWatch = () => {
     const l = latest.current
     if (!isTracking(l) || beats.opened) return
-    void beats.open(l.editedMs, l.dto.published?.id)
+    void beats.play(l.editedMs, l.dto.published?.id, l.totalMs)
   }
   const sendRef = useRef(send)
   sendRef.current = send

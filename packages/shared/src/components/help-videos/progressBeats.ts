@@ -31,21 +31,33 @@ export function createProgressBeats(post: PostBeat) {
     })
   }
 
+  let playRequested = false
+
+  /** The opening beat: the server's watch period starts now, nothing seen yet.
+   *  It needs the video's length, which a slow network or autoplay may not
+   *  have delivered when playback starts, so it waits for a known total. */
+  const tryOpen = (position_ms: number, version_id: string | undefined, totalMs: number) => {
+    if (opened || !playRequested || !(totalMs > 0)) return null
+    opened = true
+    return sendBody(
+      { position_ms: Math.round(position_ms), watched_ms_delta: 0, buckets: EMPTY, version_id },
+      false
+    )
+  }
+
   return {
     /** True once watching has started (the opening beat went out). */
     get opened() {
       return opened
     },
-    /** Watching just started: open the server's watch period now, with
-     *  nothing seen yet. Only the first call sends. */
-    open(position_ms: number, version_id?: string) {
-      if (opened) return null
-      opened = true
-      return sendBody(
-        { position_ms: Math.round(position_ms), watched_ms_delta: 0, buckets: EMPTY, version_id },
-        false
-      )
+    /** Playback started. Opens the watch period at once when the length is
+     *  known; otherwise `tryOpen` (or the next `beat`) does it when it is. */
+    play(position_ms: number, version_id: string | undefined, totalMs: number) {
+      playRequested = true
+      return tryOpen(position_ms, version_id, totalMs)
     },
+    /** Call when the length becomes known while playing. Sends only once. */
+    tryOpen,
     /** One frame of playback at `editedMs` of `totalMs`, at time `now` (ms). */
     see(editedMs: number, totalMs: number, now: number) {
       if (!totalMs) return
@@ -58,8 +70,11 @@ export function createProgressBeats(post: PostBeat) {
       lastTick = null
     },
     /** The sections seen so far and the watched time since the last beat.
-     *  Nothing is sent before watching has started. */
-    beat(position_ms: number, version_id?: string, keepalive = false) {
+     *  If playback started before the length was known, the opening beat
+     *  goes out first (and this beat after it). Nothing is sent before
+     *  playback has started. */
+    beat(position_ms: number, version_id: string | undefined, totalMs: number, keepalive = false) {
+      const opening = opened ? null : tryOpen(position_ms, version_id, totalMs)
       if (!opened) return null
       const body: ProgressBody = {
         position_ms: Math.round(position_ms),
@@ -68,7 +83,8 @@ export function createProgressBeats(post: PostBeat) {
         version_id
       }
       watched = 0
-      return sendBody(body, keepalive)
+      // the server dates the watch period from the first beat it sees
+      return opening ? opening.then(() => sendBody(body, keepalive)) : sendBody(body, keepalive)
     }
   }
 }

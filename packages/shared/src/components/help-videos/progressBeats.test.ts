@@ -17,7 +17,7 @@ describe('createProgressBeats', () => {
   it('sends a beat the moment watching starts, before any 10 s tick', async () => {
     const { client, request } = mockClient()
     const beats = createProgressBeats((body) => helpVideoApi(client).progress('v1', body))
-    await beats.open(0, 'ver1')
+    await beats.play(0, 'ver1', 10_000)
     expect(request).toHaveBeenCalledTimes(1)
     expect((request.mock.calls[0][0] as { _path: string })._path).toBe('/help-videos/v1/progress')
     expect(bodyOf(request.mock.calls[0])).toEqual({
@@ -27,30 +27,30 @@ describe('createProgressBeats', () => {
       version_id: 'ver1'
     })
     // a second play (after a pause) does not open again
-    await beats.open(3000, 'ver1')
+    await beats.play(3000, 'ver1', 10_000)
     expect(request).toHaveBeenCalledTimes(1)
   })
   it('sends nothing before watching starts', async () => {
     const { client, request } = mockClient()
     const beats = createProgressBeats((body) => helpVideoApi(client).progress('v1', body))
-    await beats.beat(0)
+    await beats.beat(0, undefined, 10_000)
     expect(request).not.toHaveBeenCalled()
   })
   it('reports the sections seen and the watched time since the last beat', async () => {
     const { client, request } = mockClient()
     const beats = createProgressBeats((body) => helpVideoApi(client).progress('v1', body))
-    await beats.open(0)
+    await beats.play(0, undefined, 10_000)
     beats.see(0, 10_000, 0)
     beats.see(600, 10_000, 600)
     beats.see(1200, 10_000, 1200)
-    await beats.beat(1200, 'ver1')
+    await beats.beat(1200, 'ver1', 10_000)
     expect(bodyOf(request.mock.calls[1])).toEqual({
       position_ms: 1200,
       watched_ms_delta: 1200,
       buckets: '11100000000000000000',
       version_id: 'ver1'
     })
-    await beats.beat(1200, 'ver1')
+    await beats.beat(1200, 'ver1', 10_000)
     expect(bodyOf(request.mock.calls[2]).watched_ms_delta).toBe(0)
   })
   it('keeps watched time from a failed beat for the next one', async () => {
@@ -61,16 +61,52 @@ describe('createProgressBeats', () => {
       if (fail) throw new Error('offline')
     })
     fail = false
-    await beats.open(0)
+    await beats.play(0, undefined, 10_000)
     beats.see(0, 10_000, 0)
     beats.see(800, 10_000, 800)
     fail = true
-    await beats.beat(800)
+    await beats.beat(800, undefined, 10_000)
     fail = false
     beats.idle()
     beats.see(900, 10_000, 5000)
     beats.see(1400, 10_000, 5500)
-    await beats.beat(1400)
+    await beats.beat(1400, undefined, 10_000)
     expect(calls.map((c) => c.watched_ms_delta)).toEqual([0, 800, 1300])
+  })
+  it('opens once the length is known when playback started without it', async () => {
+    const { client, request } = mockClient()
+    const beats = createProgressBeats((body) => helpVideoApi(client).progress('v1', body))
+    // autoplay / slow network: playing before loadedmetadata, total still 0
+    expect(beats.play(0, 'ver1', 0)).toBeNull()
+    beats.see(100, 0, 100)
+    expect(beats.tryOpen(150, 'ver1', 0)).toBeNull()
+    expect(request).not.toHaveBeenCalled()
+    // the length arrives while playing
+    await beats.tryOpen(200, 'ver1', 8000)
+    expect(bodyOf(request.mock.calls[0])).toMatchObject({
+      buckets: '0'.repeat(20),
+      watched_ms_delta: 0
+    })
+    beats.see(400, 8000, 400)
+    beats.see(800, 8000, 800)
+    await beats.beat(800, 'ver1', 8000)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(bodyOf(request.mock.calls[1])).toMatchObject({
+      buckets: '01100000000000000000',
+      watched_ms_delta: 400
+    })
+  })
+  it('sends the opening beat first when the first beat finds the length known', async () => {
+    const { client, request } = mockClient()
+    const beats = createProgressBeats((body) => helpVideoApi(client).progress('v1', body))
+    beats.play(0, 'ver1', 0)
+    await beats.beat(0, 'ver1', 0)
+    expect(request).not.toHaveBeenCalled()
+    beats.see(1000, 8000, 1000)
+    beats.see(1500, 8000, 1500)
+    await beats.beat(1500, 'ver1', 8000)
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(bodyOf(request.mock.calls[0])).toMatchObject({ buckets: '0'.repeat(20) })
+    expect(bodyOf(request.mock.calls[1])).toMatchObject({ buckets: '00110000000000000000' })
   })
 })
