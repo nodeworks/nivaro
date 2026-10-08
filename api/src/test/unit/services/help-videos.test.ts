@@ -265,6 +265,46 @@ describe('serializeVideo', () => {
     expect(dto.draft_stream_url).toMatch(/\/stream\?st=\d+\.U1\.d\.[^&]+&source=1$/)
     expect(dto.draft_captions_url).toMatch(/\/captions\.vtt\?st=\d+\.U1\.d\./)
   })
+
+  it('marks the published version unplayable for a viewer while a blurred video waits for its render', async () => {
+    const blurred = {
+      v: 1,
+      segments: [{ start_ms: 0, end_ms: 10_000, speed: 1 }],
+      blurs: [{ id: 'b', start_ms: 0, end_ms: 2000, rect: { x: 0, y: 0, w: 0.5, h: 0.5 } }]
+    }
+    const stale = {
+      ...tables,
+      nivaro_help_video_versions: [
+        {
+          ...versionRow,
+          id: 'P1',
+          video_id: 'AAAA',
+          edits: JSON.stringify(blurred),
+          edits_hash: 'new',
+          rendered_hash: 'old'
+        }
+      ]
+    }
+    vi.mocked(db).mockImplementation(fakeDb(stale, []) as never)
+    const viewer = await serializeVideo(video, { author: false, userId: 'U1', role: 'R1' })
+    expect(viewer.published?.playable).toBe(false)
+    const author = await serializeVideo(video, { author: true, userId: 'U1', role: 'R1' })
+    expect(author.published?.playable).toBe(true)
+    vi.mocked(db).mockImplementation(fakeDb(tables, []) as never)
+    const current = await serializeVideo(video, { author: false, userId: 'U1', role: 'R1' })
+    expect(current.published?.playable).toBe(true)
+  })
+
+  it('binds a session id into media tickets when one is given', async () => {
+    vi.mocked(db).mockImplementation(fakeDb(tables, []) as never)
+    const dto = await serializeVideo(video, {
+      author: false,
+      userId: 'U1',
+      role: 'R1',
+      sid: 'sessionIdABCDEFGH_123'
+    })
+    expect(dto.stream_url).toMatch(/\?st=\d+\.U1\.p\.sessionIdABCDEFGH_123\.[A-Za-z0-9_-]+$/)
+  })
 })
 
 describe('ids that are not exact uuids', () => {

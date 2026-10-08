@@ -47,7 +47,16 @@ vi.mock('../../../db/index.js', () => {
   return { db }
 })
 vi.mock('../../../middleware/authenticate.js', () => ({
-  authenticate: async (req: { user?: unknown; masqueradeAdminId?: string }) => {
+  // Like the real hook: no Authorization header → 401. So a media GET that
+  // answers 2xx without a header proves the media plugin has no authenticate.
+  authenticate: async (req: {
+    headers: Record<string, unknown>
+    user?: unknown
+    masqueradeAdminId?: string
+  }) => {
+    if (!req.headers.authorization) {
+      throw Object.assign(new Error('Not signed in'), { statusCode: 401 })
+    }
     req.user = { id: USER, role: ROLE }
     if (state.masquerade) req.masqueradeAdminId = 'ADMIN'
   }
@@ -74,14 +83,25 @@ import { helpVideoMediaRoutes, helpVideosRoutes } from '../../../routes/help-vid
 import { recordProgress } from '../../../services/help-video-views.js'
 import { mediaTicket } from '../../../services/help-videos.js'
 
+const revoked = vi.hoisted(() => ({ sids: new Set<string>(), fail: false }))
+
 async function app() {
   const a = Fastify()
+  a.decorate('redis', {
+    exists: async (key: string) => {
+      if (revoked.fail) throw new Error('redis down')
+      return revoked.sids.has(key.replace('sess:revoked:', '')) ? 1 : 0
+    }
+  } as never)
   await a.register(helpVideosRoutes, { prefix: '/api/help-videos' })
   await a.register(helpVideoMediaRoutes, { prefix: '/api/help-videos' })
   return a
 }
 
+const AUTH = { authorization: 'Bearer test' }
+// Media GETs deliberately send NO Authorization header.
 const get = async (url: string) => (await app()).inject({ method: 'GET', url })
+const authGet = async (url: string) => (await app()).inject({ method: 'GET', url, headers: AUTH })
 const stream = (ticket: string, id = VID) => get(`/api/help-videos/${id}/stream?st=${ticket}`)
 
 beforeEach(() => {
@@ -98,10 +118,30 @@ beforeEach(() => {
     poster_file: 'POSTER'
   }
   state.versions = {
-    P1: { id: 'P1', source_file: 'PUB_SRC', rendered_file: null, edits: null },
-    D1: { id: 'D1', source_file: 'DRAFT_SRC', rendered_file: null, edits: null }
+    P1: {
+      id: 'P1',
+      source_file: 'PUB_SRC',
+      rendered_file: null,
+      edits: null,
+      source_duration_ms: 4000
+    },
+    D1: {
+      id: 'D1',
+      source_file: 'DRAFT_SRC',
+      rendered_file: null,
+      edits: null,
+      source_duration_ms: 4000
+    }
   }
+  revoked.sids.clear()
+  revoked.fail = false
   vi.mocked(recordProgress).mockClear()
+})
+
+const BLURRED_EDITS = JSON.stringify({
+  v: 1,
+  segments: [{ start_ms: 0, end_ms: 4000, speed: 1 }],
+  blurs: [{ id: 'b1', start_ms: 500, end_ms: 1500, rect: { x: 0, y: 0, w: 0.3, h: 0.3 } }]
 })
 
 describe('media routes — signed tickets', () => {
@@ -110,6 +150,18 @@ describe('media routes — signed tickets', () => {
     expect(res.statusCode).toBe(200)
     expect(res.body).toBe('bytes:PUB_SRC.webm')
     expect(res.headers['cache-control']).toBe('private, no-cache')
+  })
+
+  it('media plugin is unauthenticated; the watching routes are not', async () => {
+    const cap = await get(`/api/help-videos/${VID}/captions.vtt?st=${mediaTicket(VID, USER, 'p')}`)
+    expect(cap.statusCode).toBe(200)
+    const prog = await (await app()).inject({
+      method: 'POST',
+      url: `/api/help-videos/${VID}/progress`,
+      payload: { position_ms: 1 }
+    })
+    expect(prog.statusCode).toBe(401)
+    expect((await get(`/api/help-videos/${VID}`)).statusCode).toBe(401)
   })
 
   it('answers 404 with no ticket, a garbage ticket, or a ticket for another video', async () => {
@@ -132,7 +184,7 @@ describe('media routes — signed tickets', () => {
     expect((await get(`/api/help-videos/${VID}/captions.vtt?st=${ticket}`)).statusCode).toBe(404)
     expect((await get(`/api/help-videos/${VID}/poster?st=${ticket}`)).statusCode).toBe(404)
     // …and the record itself is not readable by id either
-    expect((await get(`/api/help-videos/${VID}`)).statusCode).toBe(404)
+    expect((await authGet(`/api/help-videos/${VID}`)).statusCode).toBe(404)
   })
 
   it('an old link stops working once the person moves to a role outside the video', async () => {
@@ -179,12 +231,91 @@ describe('media routes — signed tickets', () => {
   })
 })
 
+describe('media routes — the original recording is only for authors when edits hide things', () => {
+  beforeEach(() => {
+    state.versions.P1 = {
+      ...state.versions.P1,
+      edits: BLURRED_EDITS,
+      edits_hash: 'new',
+      rendered_file: 'PUB_RENDER',
+      rendered_hash: 'old'
+    }
+  })
+
+  it('a viewer asking for source=1 on a blurred version with a stale render gets 409', async () => {
+    const res = await get(
+      `/api/help-videos/${VID}/stream?st=${mediaTicket(VID, USER, 'p')}&source=1`
+    )
+    expect(res.statusCode).toBe(409)
+    expect(res.json()).toEqual({
+      error: 'This video is still being prepared. Try again in a few minutes.',
+      code: 'HELP_VIDEO_PROCESSING'
+    })
+  })
+
+  it('a viewer gets the current render even when asking for source=1', async () => {
+    state.versions.P1.rendered_hash = 'new'
+    const res = await get(
+      `/api/help-videos/${VID}/stream?st=${mediaTicket(VID, USER, 'p')}&source=1`
+    )
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('bytes:PUB_RENDER.webm')
+    expect(res.headers['x-help-video-source']).toBe('rendered')
+  })
+
+  it('a viewer gets the source when nothing is blurred, cut or trimmed and the render is stale', async () => {
+    state.versions.P1.edits = JSON.stringify({
+      v: 1,
+      segments: [{ start_ms: 0, end_ms: 4000, speed: 1 }]
+    })
+    const res = await stream(mediaTicket(VID, USER, 'p'))
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('bytes:PUB_SRC.webm')
+    expect(res.headers['x-help-video-source']).toBe('source')
+  })
+
+  it('an author asking for source=1 gets the source', async () => {
+    state.author = true
+    state.versions.P1.rendered_hash = 'new'
+    const res = await get(
+      `/api/help-videos/${VID}/stream?st=${mediaTicket(VID, USER, 'p')}&source=1`
+    )
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('bytes:PUB_SRC.webm')
+  })
+})
+
+describe('media routes — session-bound tickets', () => {
+  const SID = 'sessionIdABCDEFGH_123'
+
+  it('a ticket whose session was revoked answers 404', async () => {
+    revoked.sids.add(SID)
+    expect((await stream(mediaTicket(VID, USER, 'p', Date.now(), SID))).statusCode).toBe(404)
+  })
+
+  it('a ticket whose session is still live is served', async () => {
+    revoked.sids.add('some-other-session-id')
+    expect((await stream(mediaTicket(VID, USER, 'p', Date.now(), SID))).statusCode).toBe(200)
+  })
+
+  it('a ticket without a session (token / API key / masquerade) is served', async () => {
+    revoked.sids.add(SID)
+    expect((await stream(mediaTicket(VID, USER, 'p'))).statusCode).toBe(200)
+  })
+
+  it('a Redis error fails open (the role and visibility checks still apply)', async () => {
+    revoked.fail = true
+    expect((await stream(mediaTicket(VID, USER, 'p', Date.now(), SID))).statusCode).toBe(200)
+  })
+})
+
 describe('POST /:id/progress', () => {
   it('is not recorded under masquerade (204)', async () => {
     state.masquerade = true
     const res = await (await app()).inject({
       method: 'POST',
       url: `/api/help-videos/${VID}/progress`,
+      headers: AUTH,
       payload: { position_ms: 1000, buckets: '1'.repeat(20) }
     })
     expect(res.statusCode).toBe(204)
@@ -195,6 +326,7 @@ describe('POST /:id/progress', () => {
     const res = await (await app()).inject({
       method: 'POST',
       url: `/api/help-videos/${VID}/progress`,
+      headers: AUTH,
       payload: { position_ms: 1000 }
     })
     expect(res.statusCode).toBe(200)
@@ -206,6 +338,7 @@ describe('POST /:id/progress', () => {
     const res = await (await app()).inject({
       method: 'POST',
       url: `/api/help-videos/${VID}/progress`,
+      headers: AUTH,
       payload: { position_ms: 1000 }
     })
     expect(res.statusCode).toBe(404)

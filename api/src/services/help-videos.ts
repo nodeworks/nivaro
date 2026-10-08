@@ -14,6 +14,7 @@ import {
 } from './help-video-edits.js'
 import { queueRender } from './help-video-render.js'
 import { takeFinalizedUpload } from './help-video-uploads.js'
+import { viewerCanPlay } from './help-video-views.js'
 
 // Help videos: who may author and watch, and the video/version lifecycle.
 // A video has one published version (what viewers get) and at most one draft
@@ -56,6 +57,8 @@ export interface VersionDto {
   render_progress: number | null
   render_error: string | null
   rendered_current: boolean
+  /** Published version only: false when a non-author would get "still being prepared". */
+  playable?: boolean
   note: string | null
   created_at: string
   clicks?: Array<{ t_ms: number; x: number; y: number }> | null
@@ -229,42 +232,67 @@ export async function loadVideoForUser(
 
 const WINDOW_MS = 3 * 3_600_000
 
-function ticketSig(videoId: string, userId: string, scope: string, exp: number): string {
+const SID_RE = /^[A-Za-z0-9_-]{8,128}$/
+
+function ticketSig(
+  videoId: string,
+  userId: string,
+  scope: string,
+  exp: number,
+  sid: string | null
+): string {
+  const tail = sid ? `|${sid}` : ''
   return createHmac('sha256', config.SESSION_SECRET)
-    .update(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}`)
+    .update(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}${tail}`)
     .digest('base64url')
     .slice(0, 32)
+}
+
+/** The session id to bind into media tickets: only for a session-cookie
+ *  request (token, API-key and masquerade requests have no session to revoke). */
+export function sessionSid(req: FastifyRequest): string | null {
+  if (req.authMethod !== 'session') return null
+  const sid = (req.session as { sessionId?: unknown } | undefined)?.sessionId
+  return typeof sid === 'string' && SID_RE.test(sid) ? sid : null
 }
 
 /** A media link ticket: <video>/<track>/<img> cannot send Authorization
  *  headers, so stream/captions/poster URLs carry a signed, expiring ticket for
  *  the person who asked. Stable for a 3-hour window so the browser can cache.
  *  A valid ticket only names the person — every media request still re-checks
- *  their current role and the video's current visibility. */
+ *  their current role and the video's current visibility. A ticket minted for
+ *  a session carries that session id (`<exp>.<user>.<scope>.<sid>.<sig>`) so
+ *  a logout revokes it. */
 export function mediaTicket(
   videoId: string,
   userId: string,
   scope: 'p' | 'd',
-  now = Date.now()
+  now = Date.now(),
+  sid: string | null = null
 ): string {
   const exp = Math.floor(now / WINDOW_MS) * WINDOW_MS + 2 * WINDOW_MS
-  return `${exp}.${up(userId)}.${scope}.${ticketSig(videoId, userId, scope, exp)}`
+  const s = sid && SID_RE.test(sid) ? sid : null
+  const sig = ticketSig(videoId, userId, scope, exp, s)
+  return s ? `${exp}.${up(userId)}.${scope}.${s}.${sig}` : `${exp}.${up(userId)}.${scope}.${sig}`
 }
 
 export function verifyMediaTicket(
   ticket: string,
   videoId: string,
   now = Date.now()
-): { userId: string; scope: 'p' | 'd' } | null {
+): { userId: string; scope: 'p' | 'd'; sid?: string } | null {
   const parts = String(ticket ?? '').split('.')
-  if (parts.length !== 4) return null
-  const [expRaw, userId, scope, sig] = parts
+  if (parts.length !== 4 && parts.length !== 5) return null
+  const [expRaw, userId, scope] = parts
+  const sid = parts.length === 5 ? parts[3] : null
+  const sig = parts[parts.length - 1]
+  if (sid !== null && !SID_RE.test(sid)) return null
   const exp = Number(expRaw)
   if (!Number.isFinite(exp) || exp < now || (scope !== 'p' && scope !== 'd')) return null
-  const want = Buffer.from(ticketSig(videoId, userId, scope, exp))
+  const want = Buffer.from(ticketSig(videoId, userId, scope, exp, sid))
   const got = Buffer.from(sig)
   if (want.length !== got.length || !timingSafeEqual(want, got)) return null
-  return { userId, scope }
+  return sid ? { userId, scope, sid } : { userId, scope }
 }
 
 /** A video is required for THIS viewer only when one of its requirement rows
@@ -278,7 +306,7 @@ export function requiredForRole(roleIds: unknown[], role: string | null): boolea
 
 export async function serializeVideo(
   video: VideoRow,
-  ctx: { author: boolean; userId: string; role: string | null }
+  ctx: { author: boolean; userId: string; role: string | null; sid?: string | null }
 ): Promise<HelpVideoDto> {
   const id = low(video.id)
   const [published, draft, contexts, reqs, view, creator] = await Promise.all([
@@ -294,7 +322,7 @@ export async function serializeVideo(
       : Promise.resolve(undefined)
   ])
   const base = `/api/help-videos/${id}`
-  const pt = mediaTicket(id, ctx.userId, 'p')
+  const pt = mediaTicket(id, ctx.userId, 'p', Date.now(), ctx.sid ?? null)
   const buckets = String(view?.buckets ?? '')
   const seen = [...buckets].filter((c) => c === '1').length
   const requiredSince = video.required_since ? new Date(video.required_since as string) : null
@@ -320,7 +348,14 @@ export async function serializeVideo(
       reqs.map((r: { role_id: unknown }) => r.role_id),
       ctx.role
     ),
-    published: published ? serializeVersion(published, { withRecorderData: false }) : null,
+    published: published
+      ? {
+          ...serializeVersion(published, { withRecorderData: false }),
+          // A viewer gets the 409 "still being prepared" when there is no
+          // current render and the original would show blurred or cut content.
+          playable: ctx.author || viewerCanPlay(published)
+        }
+      : null,
     updated_at: new Date(video.updated_at as string).toISOString(),
     my_progress: view
       ? {
@@ -335,7 +370,7 @@ export async function serializeVideo(
     dto.required_role_ids = reqs.map((r: { role_id: unknown }) => up(r.role_id))
     dto.draft = draft ? serializeVersion(draft, { withRecorderData: true }) : null
     if (draft) {
-      const dt = mediaTicket(id, ctx.userId, 'd')
+      const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sid ?? null)
       dto.draft_stream_url = `${base}/stream?st=${dt}&source=1`
       dto.draft_captions_url = `${base}/captions.vtt?st=${dt}`
     }
@@ -800,7 +835,12 @@ export async function videosForContext(
     )
   const data = await Promise.all(
     shown.map((v) =>
-      serializeVideo(v, { author: false, userId: req.user!.id, role: req.user!.role ?? null })
+      serializeVideo(v, {
+        author: false,
+        userId: req.user!.id,
+        role: req.user!.role ?? null,
+        sid: sessionSid(req)
+      })
     )
   )
   return { data, can_author: author, state }
@@ -828,7 +868,12 @@ export async function listVideos(
   const pageRows = visible.slice((page - 1) * limit, page * limit)
   const data = await Promise.all(
     pageRows.map((v) =>
-      serializeVideo(v, { author, userId: req.user!.id, role: req.user!.role ?? null })
+      serializeVideo(v, {
+        author,
+        userId: req.user!.id,
+        role: req.user!.role ?? null,
+        sid: sessionSid(req)
+      })
     )
   )
   const cats = await db('nivaro_help_videos')

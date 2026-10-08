@@ -1,6 +1,7 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { isUuid, type VideoRow } from './help-videos.js'
+import { EditsError, normalizeEdits, type VideoEdits } from './help-video-edits.js'
+import type { VideoRow } from './help-videos.js'
 
 // Who watched what and how far: one row per (video, person) with a 20-character
 // map of the 5% sections seen. Completed = 18 of 20 sections. Required viewing
@@ -38,76 +39,190 @@ export function dropOff(rows: string[]): number[] {
   return out.map((n) => Math.round((n / rows.length) * 1000) / 1000)
 }
 
-export function pickStreamFile(
-  version: {
-    source_file: unknown
-    rendered_file: unknown
-    rendered_hash: unknown
-    edits_hash: unknown
-  },
-  opts: { forceSource: boolean }
-): { fileId: string; kind: 'rendered' | 'source' } {
-  if (!opts.forceSource && version.rendered_file && version.rendered_hash === version.edits_hash) {
-    return { fileId: String(version.rendered_file), kind: 'rendered' }
+/** May a NON-author be handed the original recording? Only when the edits
+ *  hide nothing: in live mode blurs are only CSS and cuts/trims are only
+ *  player skips, so a download of the source would show what was blurred or
+ *  cut away. Unreadable edits or an unknown source length count as "hides
+ *  something" — the viewer then needs a current render. */
+export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boolean {
+  const src = Math.round(Number(sourceMs))
+  if (!Number.isFinite(src) || src <= 0) return false
+  let parsed: unknown = rawEdits
+  if (typeof rawEdits === 'string') {
+    try {
+      parsed = JSON.parse(rawEdits)
+    } catch {
+      return false
+    }
   }
-  return { fileId: String(version.source_file), kind: 'source' }
+  if (parsed == null) return true // nothing stored = the whole recording, untouched
+  let e: VideoEdits
+  try {
+    e = normalizeEdits(parsed, src)
+  } catch (err) {
+    if (err instanceof EditsError) return false
+    throw err
+  }
+  if (e.blurs.length) return false
+  const segs = e.segments
+  if (!segs.length) return false
+  if (segs[0].start_ms > 0 || segs[segs.length - 1].end_ms < src) return false // trimmed
+  for (let i = 1; i < segs.length; i++) if (segs[i].start_ms > segs[i - 1].end_ms) return false // cut
+  return true
 }
 
+export type StreamVersion = {
+  source_file: unknown
+  rendered_file: unknown
+  rendered_hash: unknown
+  edits_hash: unknown
+  edits?: unknown
+  source_duration_ms?: unknown
+}
+
+/** Which file a request gets. Authors: the source when asked (forceSource)
+ *  or when the render is stale, else the render. Non-authors: the current
+ *  render; else the source only when viewerMayPlaySource; else null (the
+ *  route answers 409 "still being prepared"). forceSource is ignored for
+ *  non-authors. */
+export function pickStreamFile(
+  version: StreamVersion,
+  opts: { forceSource: boolean; author: boolean }
+): { fileId: string; kind: 'rendered' | 'source' } | null {
+  const renderCurrent = !!version.rendered_file && version.rendered_hash === version.edits_hash
+  if (opts.author) {
+    if (!opts.forceSource && renderCurrent) {
+      return { fileId: String(version.rendered_file), kind: 'rendered' }
+    }
+    return { fileId: String(version.source_file), kind: 'source' }
+  }
+  if (renderCurrent) return { fileId: String(version.rendered_file), kind: 'rendered' }
+  if (viewerMayPlaySource(version.edits ?? null, version.source_duration_ms)) {
+    return { fileId: String(version.source_file), kind: 'source' }
+  }
+  return null
+}
+
+/** True when a non-author would get a file rather than the 409. */
+export function viewerCanPlay(version: StreamVersion): boolean {
+  return pickStreamFile(version, { forceSource: false, author: false }) !== null
+}
+
+const MAX_POSITION_MS = 2 ** 31 - 1
+const FALLBACK_DURATION_MS = 31 * 60_000
+const MAX_SPEED = 4 // the fastest speed-up the editor offers
+
+/** MSSQL 2627 / 2601 (duplicate key), also when knex wraps it in an
+ *  AggregateError whose own `.number` is unset. */
+function isUniqueViolation(err: unknown): boolean {
+  if (!err || typeof err !== 'object') return false
+  const isCode = (n: unknown) => n === 2627 || n === 2601
+  const top = err as { number?: unknown; errors?: unknown }
+  if (isCode(top.number)) return true
+  return (
+    Array.isArray(top.errors) && top.errors.some((e) => isCode((e as { number?: unknown })?.number))
+  )
+}
+
+/** Keep every section already in `base` and at most `limit` of the sections
+ *  that are new in `incoming`, lowest index first. */
+export function limitNewBuckets(base: string, incoming: string, limit: number): string {
+  const b = sanitizeBuckets(base)
+  const inc = sanitizeBuckets(incoming)
+  let left = Math.max(0, Math.floor(limit))
+  let out = ''
+  for (let i = 0; i < 20; i++) {
+    if (b[i] === '1') out += '1'
+    else if (inc[i] === '1' && left > 0) {
+      out += '1'
+      left--
+    } else out += '0'
+  }
+  return out
+}
+
+export type ProgressInput = {
+  position_ms?: number
+  watched_ms_delta?: number
+  buckets?: unknown
+  version_id?: string
+}
+
+/** Record one progress beat. Progress is reported by the browser, so each
+ *  beat is bounded by the wall-clock time since the row's last beat: new
+ *  sections ≤ ceil(elapsed × 4 / section length) + 1 (a first beat: one),
+ *  watched time ≤ elapsed × 4 + 5 s. When the video was (re)required after
+ *  the person's last beat, the section map restarts from empty. */
 export async function recordProgress(
   user: User,
   video: VideoRow,
-  input: {
-    position_ms?: number
-    watched_ms_delta?: number
-    buckets?: unknown
-    version_id?: string
-  }
+  input: ProgressInput,
+  nowMs: number = Date.now()
 ): Promise<{ completed: boolean }> {
-  const now = new Date()
-  const position = Math.max(0, Math.round(Number(input.position_ms) || 0))
-  const delta = Math.min(Math.max(0, Math.round(Number(input.watched_ms_delta) || 0)), 60_000)
+  const now = new Date(nowMs)
+  const duration = Number(video.duration_ms) > 0 ? Number(video.duration_ms) : FALLBACK_DURATION_MS
+  const position = Math.min(
+    Math.max(0, Math.round(Number(input.position_ms) || 0)),
+    Math.min(duration, MAX_POSITION_MS)
+  )
+  const askedDelta = Math.min(Math.max(0, Math.round(Number(input.watched_ms_delta) || 0)), 60_000)
   const incoming = sanitizeBuckets(input.buckets)
-  // The client's version id is only kept when it is an exact uuid; anything
-  // else falls back to the published version (never reaches the column raw).
-  const versionId = isUuid(input.version_id) ? input.version_id : null
-  const row = await db('nivaro_help_video_views')
-    .where({ video_id: video.id, user: user.id })
-    .first()
+  // Only a version of THIS video is kept; anything else is stored as null.
+  const asked = typeof input.version_id === 'string' ? input.version_id.toUpperCase() : ''
+  const versionId =
+    asked &&
+    [video.published_version_id, video.draft_version_id].some(
+      (v) => v != null && String(v).toUpperCase() === asked
+    )
+      ? (input.version_id as string)
+      : null
+  const where = { video_id: video.id, user: user.id }
+
+  let row = await db('nivaro_help_video_views').where(where).first()
   if (!row) {
-    const done = isComplete(incoming)
-    await db('nivaro_help_video_views')
-      .insert({
-        video_id: video.id,
-        user: user.id,
-        version_id: versionId ?? video.published_version_id,
+    const buckets = limitNewBuckets(EMPTY, incoming, 1)
+    const done = isComplete(buckets)
+    try {
+      await db('nivaro_help_video_views').insert({
+        ...where,
+        version_id: versionId,
         first_viewed: now,
         last_viewed: now,
-        watched_ms: delta,
+        watched_ms: Math.min(askedDelta, 5000),
         position_ms: position,
-        buckets: incoming,
+        buckets,
         completed_at: done ? now : null
       })
-      .catch(() => {
-        // a parallel first beat inserted it — the next beat takes the update path
-      })
-    return { completed: done }
+      return { completed: done }
+    } catch (err) {
+      // A parallel first beat inserted the row: take the update path so this
+      // beat is not lost. Anything else is a real failure.
+      if (!isUniqueViolation(err)) throw err
+      row = await db('nivaro_help_video_views').where(where).first()
+      if (!row) throw err
+    }
   }
-  const buckets = mergeBuckets(String(row.buckets ?? EMPTY), incoming)
+
+  const lastBeat = row.last_viewed ? new Date(row.last_viewed).getTime() : nowMs
+  const elapsed = Math.max(0, nowMs - lastBeat)
   const requiredSince = video.required_since ? new Date(video.required_since as string) : null
-  const stale = !!row.completed_at && !!requiredSince && new Date(row.completed_at) < requiredSince
-  // A completion from before the video became required (again) does not count:
-  // start the section map over from this beat.
-  const kept = stale ? incoming : buckets
-  const done = isComplete(kept)
+  const rearmed = !!requiredSince && lastBeat < requiredSince.getTime()
+  const base = rearmed ? EMPTY : sanitizeBuckets(String(row.buckets ?? EMPTY))
+  const maxNew = Math.ceil((elapsed * MAX_SPEED) / (duration / 20)) + 1
+  const buckets = limitNewBuckets(base, incoming, maxNew)
+  const delta = Math.min(askedDelta, elapsed * MAX_SPEED + 5000)
+  const done = isComplete(buckets)
+  // A completion from before the re-arm no longer counts.
+  const kept = rearmed ? null : (row.completed_at ?? null)
   await db('nivaro_help_video_views')
     .where({ id: row.id })
     .update({
       last_viewed: now,
       watched_ms: Number(row.watched_ms ?? 0) + delta,
       position_ms: position,
-      buckets: kept,
-      version_id: versionId ?? row.version_id,
-      completed_at: done && (!row.completed_at || stale) ? now : stale ? null : row.completed_at
+      buckets,
+      version_id: versionId ?? row.version_id ?? null,
+      completed_at: kept ?? (done ? now : null)
     })
   return { completed: done }
 }

@@ -1,4 +1,5 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { getFile } from '../services/files.js'
@@ -43,6 +44,7 @@ import {
   saveDraftEdits,
   serializeVersion,
   serializeVideo,
+  sessionSid,
   updateDetails,
   type VideoRow,
   validateContexts,
@@ -67,7 +69,7 @@ async function requireAuthor(req: FastifyRequest, reply: FastifyReply): Promise<
 }
 
 function viewerCtx(req: FastifyRequest, author: boolean) {
-  return { author, userId: req.user!.id, role: req.user!.role ?? null }
+  return { author, userId: req.user!.id, role: req.user!.role ?? null, sid: sessionSid(req) }
 }
 
 export async function helpVideosRoutes(app: FastifyInstance) {
@@ -199,7 +201,11 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const { video } = await loadVideoForUser(req, id)
     return reply.send({
-      data: await recordProgress(req.user!, video, (req.body ?? {}) as Record<string, never>)
+      data: await recordProgress(
+        req.user!,
+        video,
+        (req.body ?? {}) as Parameters<typeof recordProgress>[2]
+      )
     })
   })
 
@@ -275,6 +281,13 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
     if (!isUuid(id)) throw notFound
     const t = typeof st === 'string' ? verifyMediaTicket(st, id) : null
     if (!t || !isUuid(t.userId)) throw notFound
+    if (t.sid) {
+      // A ticket minted for a session dies with it (logout / logout-all write
+      // this marker). Redis errors fail OPEN, the rate-limit convention: the
+      // status, role and visibility re-checks below still apply.
+      const revoked = await app.redis.exists(`${REVOKED_PREFIX}${t.sid}`).catch(() => 0)
+      if (revoked) throw notFound
+    }
     const user = (await db('nivaro_users').where({ id: t.userId, status: 'active' }).first()) as
       | (User & { is_redacted?: unknown })
       | undefined
@@ -291,17 +304,26 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       t.scope === 'd' ? video.draft_version_id : video.published_version_id
     )
     if (!version) throw notFound
-    return { video, version, draft: t.scope === 'd' }
+    return { video, version, draft: t.scope === 'd', author }
   }
 
   // no-cache on every media answer: a browser may keep the bytes but must ask
   // again, so someone whose role or the video's visibility changed stops
   // getting it at once instead of after an hour of cache.
   app.get('/:id/stream', async (req, reply) => {
-    const { version, draft } = await resolve(req)
+    const { version, draft, author } = await resolve(req)
+    // ?source=1 is honoured for authors only; a viewer never gets an original
+    // whose blurs or cuts would show (see viewerMayPlaySource).
     const pick = pickStreamFile(version, {
+      author,
       forceSource: draft || (req.query as { source?: string }).source === '1'
     })
+    if (!pick) {
+      return reply.code(409).send({
+        error: 'This video is still being prepared. Try again in a few minutes.',
+        code: 'HELP_VIDEO_PROCESSING'
+      })
+    }
     const file = await getFile(pick.fileId)
     if (!file?.filename_disk) return reply.code(404).send({ error: 'Recording not found' })
     reply.header('Cache-Control', 'private, no-cache').header('X-Help-Video-Source', pick.kind)
