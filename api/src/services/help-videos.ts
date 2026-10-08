@@ -488,9 +488,23 @@ export async function saveDraftEdits(
   }
   const edits = normalizeEdits(input, Number(draft.source_duration_ms ?? UNKNOWN_DURATION_MS))
   const hash = hashEdits(edits)
-  await db('nivaro_help_video_versions')
-    .where({ id: draft.id })
+  // Conditional write: only if nobody saved since we read it (same hash) AND it
+  // is still the video's draft — a save that lands after Publish moved this
+  // version to published_version_id must never rewrite the published edits.
+  const updated = await db('nivaro_help_video_versions')
+    .where({ id: draft.id, edits_hash: draft.edits_hash })
+    .whereIn('id', db('nivaro_help_videos').where({ id: video.id }).select('draft_version_id'))
     .update({ edits: JSON.stringify(edits), edits_hash: hash })
+  if (!Number(updated)) {
+    const fresh = await db('nivaro_help_videos').where({ id: video.id }).first('draft_version_id')
+    const current = await loadVersion(fresh?.draft_version_id as string | null | undefined)
+    throw fail(
+      409,
+      'HELP_VIDEO_EDITS_CONFLICT',
+      'These edits changed in another tab — reload to continue',
+      { current_hash: current?.edits_hash ?? null }
+    )
+  }
   await db('nivaro_help_videos').where({ id: video.id }).update(touch(user))
   return serializeVersion(
     { ...draft, edits: JSON.stringify(edits), edits_hash: hash },

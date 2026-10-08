@@ -11,6 +11,7 @@ import {
   publishChecklist,
   requiredForRole,
   restoreVersion,
+  saveDraftEdits,
   serializeVersion,
   serializeVideo,
   type VideoRow,
@@ -141,25 +142,57 @@ describe('serializeVersion', () => {
   })
 })
 
-// A tiny stand-in for the knex builder: db(table).where({...}).first()/select().
+// A tiny stand-in for the knex builder: db(table).where({...}).whereIn(col, sub)
+// .first()/select()/update(). Reads hand back copies (a row read at request
+// start does not change under the caller); an awaited builder yields its rows;
+// a builder passed to whereIn acts as a subquery over its selected column.
 type Rows = Record<string, Array<Record<string, unknown>>>
+type Fake = {
+  where(f: Record<string, unknown>): Fake
+  whereIn(col: string, sub: unknown[] | Fake): Fake
+  select(...cols: string[]): Fake
+  first(...cols: string[]): Promise<Record<string, unknown> | undefined>
+  update(patch: Record<string, unknown>): Promise<number>
+  values(): unknown[]
+  then<T>(res: (rows: Array<Record<string, unknown>>) => T, rej?: (e: unknown) => T): Promise<T>
+}
+const same = (a: unknown, b: unknown) => String(a).toLowerCase() === String(b).toLowerCase()
 function fakeDb(tables: Rows, seen: string[]) {
-  return (table: string) => {
+  return (table: string): Fake => {
+    const tests: Array<(r: Record<string, unknown>) => boolean> = []
     let filter: Record<string, unknown> = {}
-    const rows = () =>
-      (tables[table] ?? []).filter((r) =>
-        Object.entries(filter).every(
-          ([k, v]) => String(r[k]).toLowerCase() === String(v).toLowerCase()
-        )
-      )
-    const b = {
-      where(f: Record<string, unknown>) {
+    let cols: string[] = []
+    const live = () => (tables[table] ?? []).filter((r) => tests.every((t) => t(r)))
+    const b: Fake = {
+      where(f) {
         filter = { ...filter, ...f }
         seen.push(`${table}:${JSON.stringify(filter)}`)
+        tests.push((r) => Object.entries(f).every(([k, v]) => same(r[k], v)))
         return b
       },
-      select: async () => rows(),
-      first: async () => rows()[0]
+      whereIn(col, sub) {
+        tests.push((r) => {
+          const vals = Array.isArray(sub) ? sub : sub.values()
+          return vals.some((v) => v != null && same(v, r[col]))
+        })
+        return b
+      },
+      select(...c) {
+        cols = c
+        return b
+      },
+      values: () => live().map((r) => r[cols[0]]),
+      first: async () => {
+        const r = live()[0]
+        return r ? { ...r } : undefined
+      },
+      update: async (patch) => {
+        const rs = live()
+        for (const r of rs) Object.assign(r, patch)
+        return rs.length
+      },
+      // biome-ignore lint/suspicious/noThenProperty: knex builders are thenable; the fake must be too
+      then: (res, rej) => Promise.resolve(live().map((r) => ({ ...r }))).then(res, rej)
     }
     return b
   }
@@ -244,5 +277,65 @@ describe('ids that are not exact uuids', () => {
       restoreVersion({ id: uuid } as VideoRow, { id: 'U1' } as never, `${uuid}zz`)
     ).rejects.toMatchObject({ statusCode: 404, code: 'HELP_VIDEO_VERSION_NOT_FOUND' })
     expect(vi.mocked(db)).not.toHaveBeenCalled()
+  })
+})
+
+describe('saveDraftEdits', () => {
+  const uuid = '0b6c5a7e-1d2f-4a3b-8c9d-0e1f2a3b4c5d'
+  const user = { id: 'U1' } as never
+  const base = emptyEdits(10_000)
+  const h0 = hashEdits(base)
+  const withPoster = (ms: number) => ({ ...base, poster_ms: ms })
+  function setup(videoDraft: string | null) {
+    const tables: Rows = {
+      nivaro_help_videos: [
+        { id: uuid, draft_version_id: videoDraft, published_version_id: videoDraft ? null : 'D1' }
+      ],
+      nivaro_help_video_versions: [
+        { ...versionRow, id: 'D1', video_id: uuid, edits: JSON.stringify(base), edits_hash: h0 }
+      ]
+    }
+    vi.mocked(db).mockImplementation(fakeDb(tables, []) as never)
+    // What the route read at request start: the draft is D1.
+    const video = { id: uuid, draft_version_id: 'D1', published_version_id: null } as never
+    return { tables, video }
+  }
+
+  it('saves when the base hash is current', async () => {
+    const { tables, video } = setup('D1')
+    const dto = await saveDraftEdits(video, user, withPoster(500), h0)
+    expect(dto.edits.poster_ms).toBe(500)
+    expect(tables.nivaro_help_video_versions[0].edits_hash).toBe(dto.edits_hash)
+  })
+
+  it('refuses the second of two saves made from the same base hash', async () => {
+    const { tables, video } = setup('D1')
+    const results = await Promise.allSettled([
+      saveDraftEdits(video, user, withPoster(500), h0),
+      saveDraftEdits(video, user, withPoster(800), h0)
+    ])
+    const ok = results.filter((r) => r.status === 'fulfilled')
+    const refused = results.filter((r) => r.status === 'rejected') as PromiseRejectedResult[]
+    expect(ok).toHaveLength(1)
+    expect(refused).toHaveLength(1)
+    const winner = (ok[0] as PromiseFulfilledResult<{ edits_hash: string }>).value
+    expect(refused[0].reason).toMatchObject({
+      statusCode: 409,
+      code: 'HELP_VIDEO_EDITS_CONFLICT',
+      current_hash: winner.edits_hash
+    })
+    expect(tables.nivaro_help_video_versions[0].edits_hash).toBe(winner.edits_hash)
+  })
+
+  it('never rewrites a version that was published after the save read it', async () => {
+    // The video row now says D1 is published and there is no draft.
+    const { tables, video } = setup(null)
+    await expect(saveDraftEdits(video, user, withPoster(500), h0)).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'HELP_VIDEO_EDITS_CONFLICT',
+      current_hash: null
+    })
+    expect(tables.nivaro_help_video_versions[0].edits_hash).toBe(h0)
+    expect(tables.nivaro_help_video_versions[0].edits).toBe(JSON.stringify(base))
   })
 })
