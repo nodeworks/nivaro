@@ -13,14 +13,29 @@ function matches(r: Row, cond: Row) {
 }
 function builder() {
   let cond: Row = {}
+  const lts: Array<[string, Date]> = []
+  let ins: [string, unknown[]] | null = null
+  const sel = () =>
+    rows.filter(
+      (r) =>
+        matches(r, cond) &&
+        lts.every(([k, v]) => new Date(r[k] as string).getTime() < v.getTime()) &&
+        (!ins || ins[1].includes(r[ins[0]]))
+    )
   const b: Record<string, unknown> = {
-    where(c: Row) {
-      cond = { ...cond, ...c }
+    where(c: Row | string, _op?: string, v?: Date) {
+      if (typeof c === 'string') lts.push([c, v as Date])
+      else cond = { ...cond, ...c }
       return b
     },
-    first: async () => rows.find((r) => matches(r, cond)),
+    whereIn(k: string, vals: unknown[]) {
+      ins = [k, vals]
+      return b
+    },
+    select: async () => sel(),
+    first: async () => sel()[0],
     update: async (patch: Row) => {
-      const hit = rows.filter((r) => matches(r, cond))
+      const hit = sel()
       for (const r of hit) Object.assign(r, patch)
       return hit.length
     },
@@ -158,5 +173,31 @@ describe('finalize', () => {
     })
     expect(rows[0].status).toBe('open')
     expect(existsSync(partFile(s.id))).toBe(true)
+  })
+})
+
+describe('stale finalizing rows', () => {
+  async function stuck(ageMs: number) {
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    rows[0].status = 'finalizing'
+    rows[0].updated_at = new Date(Date.now() - ageMs)
+    return s
+  }
+  it('a fresh finalizing row still answers 409', async () => {
+    const s = await stuck(60_000)
+    await expect(up.finalizeUpload(user, s.id, {})).rejects.toMatchObject({ statusCode: 409 })
+    expect(rows[0].status).toBe('finalizing')
+  })
+  it('a finalizing row older than an hour can be finalized again', async () => {
+    const s = await stuck(2 * 3_600_000)
+    await expect(up.finalizeUpload(user, s.id, {})).resolves.toMatchObject({ file_id: 'file-1' })
+    expect(rows[0].status).toBe('finalized')
+  })
+  it('purge abandons a stale finalizing row and removes its part', async () => {
+    const s = await stuck(25 * 3_600_000)
+    expect(await up.purgeStaleUploads()).toBe(1)
+    expect(rows[0].status).toBe('abandoned')
+    expect(existsSync(partFile(s.id))).toBe(false)
   })
 })

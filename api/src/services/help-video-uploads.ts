@@ -20,6 +20,7 @@ export const MAX_PART_BYTES = 8 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = Math.round(1.2 * 1024 * 1024 * 1024)
 export const ALLOWED_MIME = ['video/webm', 'video/mp4']
 const STALE_HOURS = 24
+const FINALIZING_STALE_MS = 3_600_000 // a 1.2 GB remux finishes well inside this
 export const MAX_DURATION_MS = 31 * 60_000 // 30 minutes + 1 minute slack
 const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
@@ -217,11 +218,23 @@ export async function finalizeUpload(
   // on the same lock so none is mid-write when the claim lands.
   const row = await withLock(rid, async () => {
     const r = await own(user, rid)
-    if (r.status !== 'open') throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
-    const claimed = await db('nivaro_help_video_uploads')
-      .where({ id: r.id, status: 'open' })
-      .update({ status: 'finalizing', updated_at: new Date() })
-    if (!claimed) throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finishing')
+    let claimed: number
+    if (r.status === 'finalizing') {
+      // A finalize that died mid-flight leaves the row here; re-claim it once
+      // its claim is older than the window (age measured from the claim stamp).
+      const cutoff = new Date(Date.now() - FINALIZING_STALE_MS)
+      claimed = await db('nivaro_help_video_uploads')
+        .where({ id: r.id, status: 'finalizing' })
+        .where('updated_at', '<', cutoff)
+        .update({ updated_at: new Date() })
+      if (!claimed) throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finishing')
+    } else {
+      if (r.status !== 'open') throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
+      claimed = await db('nivaro_help_video_uploads')
+        .where({ id: r.id, status: 'open' })
+        .update({ status: 'finalizing', updated_at: new Date() })
+      if (!claimed) throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finishing')
+    }
     return r
   })
   const dbId = row.id
@@ -350,7 +363,7 @@ export async function abandonUpload(user: User, id: string): Promise<void> {
 export async function purgeStaleUploads(): Promise<number> {
   const cutoff = new Date(Date.now() - STALE_HOURS * 3_600_000)
   const rows = await db('nivaro_help_video_uploads')
-    .where({ status: 'open' })
+    .whereIn('status', ['open', 'finalizing'])
     .where('updated_at', '<', cutoff)
     .select('id')
   for (const r of rows) await rm(partPath(String(r.id)), { force: true })
