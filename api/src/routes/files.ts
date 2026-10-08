@@ -25,6 +25,7 @@ import {
   readStorageSettings,
   testStorageDriver
 } from '../services/storage-drivers.js'
+import { sendStoredObject } from '../services/stored-object-stream.js'
 
 function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'inline'): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_')
@@ -409,19 +410,18 @@ export async function filesRoutes(app: FastifyInstance) {
     if (!file || !file.filename_disk) return reply.code(404).send({ error: 'Not found' })
     const contentType =
       file.type ?? (mime.lookup(file.filename_download) || 'application/octet-stream')
-    let buffer: Buffer
-    try {
-      buffer = await readFileBuffer(file)
-    } catch {
-      return reply.code(404).send({ error: 'Stored object not found' })
-    }
     // Report bandwidth usage to gateway (fire-and-forget)
     reportFileBandwidth(file).catch(() => {})
     const mode = q.download === '1' || q.download === 'true' ? 'attachment' : 'inline'
-    reply
-      .header('Content-Type', contentType)
-      .header('Content-Disposition', contentDisposition(file.filename_download ?? 'file', mode))
-    return reply.send(buffer)
+    try {
+      return await sendStoredObject(reply, file.filename_disk, {
+        rangeHeader: req.headers.range,
+        contentType,
+        disposition: contentDisposition(file.filename_download ?? 'file', mode)
+      })
+    } catch {
+      return reply.code(404).send({ error: 'Stored object not found' })
+    }
   })
 
   app.patch('/:id', async (req, reply) => {
