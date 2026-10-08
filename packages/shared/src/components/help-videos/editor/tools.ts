@@ -139,9 +139,9 @@ export function clicksToRipples(
 
 /**
  * Type-along captioning: a caption starts at the playhead and runs 3 s, or
- * until the next caption or the end of the recording. The caption showing
- * at the playhead ends there. Refused (edits unchanged, with the reason)
- * when that would leave either one shorter than 0.2 s.
+ * until the next caption or the end of the recording. Every caption showing
+ * at the playhead ends there (they can overlap). Refused (edits unchanged,
+ * with the reason) when that would leave any of them shorter than 0.2 s.
  */
 export function typeAlongCaptionChecked(
   edits: VideoEdits,
@@ -151,14 +151,15 @@ export function typeAlongCaptionChecked(
 ): { edits: VideoEdits; refused?: string } {
   const at = Math.round(srcMs)
   let e = edits
-  const open = edits.captions.find((c) => at > c.start_ms && at < c.end_ms)
-  if (open) {
-    if (at - open.start_ms < EDIT_LIMITS.minItemMs)
-      return {
-        edits,
-        refused: 'Let the caption before this one show for at least 0.2 seconds first'
-      }
-    const closed = upsertItemChecked(e, 'captions', { ...open, end_ms: at })
+  // Every caption showing at the playhead ends there (they can overlap).
+  const open = edits.captions.filter((c) => at > c.start_ms && at < c.end_ms)
+  if (open.some((c) => at - c.start_ms < EDIT_LIMITS.minItemMs))
+    return {
+      edits,
+      refused: 'Let the caption before this one show for at least 0.2 seconds first'
+    }
+  for (const c of open) {
+    const closed = upsertItemChecked(e, 'captions', { ...c, end_ms: at })
     if (closed.refused) return { edits, refused: closed.refused }
     e = closed.edits
   }

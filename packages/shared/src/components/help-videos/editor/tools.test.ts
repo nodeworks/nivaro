@@ -183,6 +183,26 @@ describe('typeAlongCaption', () => {
     const end = typeAlongCaptionChecked(empty, 19_000, 'Last', 20_000)
     expect(end.edits.captions[0]).toMatchObject({ start_ms: 19_000, end_ms: 20_000 })
   })
+  it('closes every caption open at the playhead, or refuses when one would be too short', () => {
+    const two: VideoEdits = {
+      ...empty,
+      captions: [
+        { id: 'k1', start_ms: 1000, end_ms: 6000, text: 'One' },
+        { id: 'k2', start_ms: 2000, end_ms: 7000, text: 'Two' }
+      ]
+    }
+    const e = typeAlongCaption(two, 4000, 'Three')
+    expect(
+      e.captions.map((c) => [c.id === 'k1' || c.id === 'k2' ? c.id : 'new', c.start_ms, c.end_ms])
+    ).toEqual([
+      ['k1', 1000, 4000],
+      ['k2', 2000, 4000],
+      ['new', 4000, 7000]
+    ])
+    const tooSoon = typeAlongCaptionChecked(two, 2100, 'Three')
+    expect(tooSoon.refused).toMatch(/0\.2 seconds/)
+    expect(tooSoon.edits).toBe(two)
+  })
   it('refuses, with the reason, when there is no room', () => {
     const e = typeAlongCaption(empty, 1000, 'First')
     const tooSoon = typeAlongCaptionChecked(e, 1100, 'Second')

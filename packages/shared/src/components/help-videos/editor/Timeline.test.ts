@@ -217,6 +217,30 @@ describe('Timeline keyboard', () => {
     expect(blur.className).toMatch(/border-dashed/)
   })
 
+  it('stacks bars at the same moment on sub-rows, and the labels follow', async () => {
+    const same = (id: string) => ({
+      ...base.annotations[1],
+      id,
+      start_ms: 6000,
+      end_ms: 9000,
+      text: id
+    })
+    await act(async () =>
+      api.setEdits({ ...api.edits, annotations: [same('s1'), same('s2'), same('s3')] })
+    )
+    const tops = ['s1', 's2', 's3'].map((id) => q(`[data-hv-item="annotations:${id}"]`).style.top)
+    expect(new Set(tops).size).toBe(3)
+    const lane = q('[data-hv-lane="annotations"]')
+    expect(lane.style.height).toBe('66px')
+    expect(q('[data-hv-lane-label="annotations"]').style.height).toBe(lane.style.height)
+    // Keyboard order still follows time (then id), not the rows.
+    expect(
+      ['s1', 's2', 's3'].map((id) => q(`[data-hv-item="annotations:${id}"]`).dataset.hvOrder)
+    ).toEqual(['0', '1', '2'])
+    // A lane with one row keeps the usual height.
+    expect(q('[data-hv-lane="zooms"]').style.height).toBe('28px')
+  })
+
   it('shows a refused change as a note and leaves the edits alone', async () => {
     // Two zooms; moving the second onto the first is refused.
     await act(async () =>

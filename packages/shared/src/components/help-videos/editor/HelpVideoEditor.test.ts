@@ -57,6 +57,34 @@ vi.mock('../HelpVideoPlayer', async () => {
 const request = vi.fn()
 vi.mock('../../../context', () => ({ useNivaroClient: () => ({ request }) }))
 
+// The side panels are memoised components. Each is wrapped in a memo with
+// the same props that counts its renders, so the playback test can show
+// they skip frames.
+const { renders, counted } = vi.hoisted(() => {
+  const renders = { inspector: 0, captions: 0, clicks: 0 }
+  const counted = async <T>(real: T, name: keyof typeof renders) => {
+    const { createElement: h, memo } = await import('react')
+    const inner = (real as unknown as { type: (p: object) => ReactNode }).type
+    return memo((p: object) => {
+      renders[name]++
+      return h(inner, p)
+    }) as unknown as T
+  }
+  return { renders, counted }
+})
+vi.mock('./Inspector', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./Inspector')>()
+  return { ...real, Inspector: await counted(real.Inspector, 'inspector') }
+})
+vi.mock('./CaptionsPanel', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./CaptionsPanel')>()
+  return { ...real, CaptionsPanel: await counted(real.CaptionsPanel, 'captions') }
+})
+vi.mock('./PosterAndClicks', async (importOriginal) => {
+  const real = await importOriginal<typeof import('./PosterAndClicks')>()
+  return { ...real, ClickRipples: await counted(real.ClickRipples, 'clicks') }
+})
+
 globalThis.ResizeObserver ??= class {
   observe() {}
   unobserve() {}
@@ -150,6 +178,7 @@ async function mount(clicks: Clicks = null) {
 
 beforeEach(() => {
   fake.now = 0
+  Object.assign(renders, { inspector: 0, captions: 0, clicks: 0 })
   vi.mocked(editsModule.isHiddenByCuts).mockClear()
   vi.mocked(editsModule.sourceToEdited).mockClear()
   request.mockReset()
@@ -186,17 +215,22 @@ const note = () => q('[data-hv-timeline-note]').textContent
 
 describe('HelpVideoEditor during playback', () => {
   it('moves the playhead without re-rendering the lanes or the side panels', async () => {
-    await mount()
+    await mount([{ t_ms: 1000, x: 0.5, y: 0.5 }])
     const lanes = laneWork()
     const panels = panelWork()
+    const side = { ...renders }
     expect(lanes).toBeGreaterThan(0)
     expect(panels).toBeGreaterThan(0)
+    expect(side.inspector).toBeGreaterThan(0)
+    expect(side.captions).toBeGreaterThan(0)
+    expect(side.clicks).toBeGreaterThan(0)
     const playhead = q('[data-hv-playhead]')
     const left0 = playhead.style.left
     await frames(60)
     expect(playhead.style.left).not.toBe(left0)
     expect(laneWork()).toBe(lanes)
     expect(panelWork()).toBe(panels)
+    expect({ ...renders }).toEqual(side)
     // The drawing layer does follow the playhead: it lives in the player.
     expect(q('[data-hv-preview-tools]')).not.toBeNull()
   })
@@ -225,7 +259,10 @@ describe('HelpVideoEditor tools', () => {
     layer.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 360 }) as DOMRect
     fake.now = 1000
     await act(async () => fake.props?.onTime?.(1000, 1000))
+    expect(q('[data-hv-tool-hint]')).not.toBeNull()
     await pointer(layer, 'pointerdown', 320, 180)
+    // The hint gets out of the way while drawing.
+    expect(q('[data-hv-tool-hint]')).toBeNull()
     await pointer(layer, 'pointerup', 320, 180)
     const added = edits().annotations.find((a) => a.id !== 'a1')
     expect(added).toMatchObject({
@@ -259,6 +296,9 @@ describe('HelpVideoEditor tools', () => {
     await pointer(layer(), 'pointermove', 300, 200)
     await pointer(layer(), 'pointerup', 300, 200)
     expect(edits().zooms).toHaveLength(0) // a selected zoom is left out of the preview
+    // …but it was stored: the timeline and the Inspector have it.
+    expect(host.querySelectorAll('[data-hv-item^="zooms:"]')).toHaveLength(1)
+    expect(q('[data-hv-inspector="zooms"]')).not.toBeNull()
     await click(q('[data-hv-tool="zoom"]'))
     await pointer(layer(), 'pointerdown', 400, 100)
     await pointer(layer(), 'pointerup', 400, 100)
@@ -326,5 +366,55 @@ describe('HelpVideoEditor click ripples', () => {
     expect(edits().annotations.filter((a) => a.type === 'ripple')).toHaveLength(2)
     expect(q('[data-hv-add-ripples]')).toBeNull()
     expect(q('[data-hv-clicks-state]').textContent).toMatch(/Every one of the 2 recorded clicks/)
+  })
+})
+
+describe('HelpVideoEditor shapes on the picture', () => {
+  const frameRect = () => {
+    const l = q('[data-hv-preview-tools]')
+    l.getBoundingClientRect = () => ({ left: 0, top: 0, width: 640, height: 360 }) as DOMRect
+  }
+  const at = (ms: number) =>
+    act(async () => {
+      fake.now = ms
+      fake.props?.onTime?.(ms, ms)
+    })
+  const native = (el: Element, type: string, x: number, y: number) =>
+    act(async () => {
+      el.dispatchEvent(new MouseEvent(type, { bubbles: true, clientX: x, clientY: y, button: 0 }))
+    })
+
+  it('selects a shape with a click that jitters, without moving it or adding an undo step', async () => {
+    await mount()
+    await at(3000)
+    frameRect()
+    const pick = q('[data-hv-pick="a1"]')
+    await pointer(pick, 'pointerdown', 128, 54)
+    await native(pick, 'pointermove', 129, 55)
+    await native(pick, 'pointerup', 129, 55)
+    const a1 = () => edits().annotations.find((a) => a.id === 'a1')
+    expect(a1()?.rect).toEqual({ x: 0.1, y: 0.1, w: 0.2, h: 0.1 })
+    expect(q('[data-hv-inspector="annotations"]')).not.toBeNull()
+    expect(q<HTMLButtonElement>('[data-hv-undo]').disabled).toBe(true)
+    // A real drag does move it.
+    await pointer(pick, 'pointerdown', 128, 54)
+    await native(pick, 'pointermove', 192, 54)
+    await native(pick, 'pointerup', 192, 54)
+    expect(a1()?.rect.x).toBeCloseTo(0.2)
+    expect(q<HTMLButtonElement>('[data-hv-undo]').disabled).toBe(false)
+  })
+
+  it('keeps focus in the preview when the focused shape leaves the picture', async () => {
+    await mount()
+    await click(q('[data-hv-tool="callout"]'))
+    frameRect()
+    await at(1000)
+    const layer = q('[data-hv-preview-tools]')
+    await pointer(layer, 'pointerdown', 320, 180)
+    await pointer(layer, 'pointerup', 320, 180)
+    expect(document.activeElement?.hasAttribute('data-hv-selected')).toBe(true)
+    await at(6000) // the 1–4 s callout is gone from the picture
+    expect(q('[data-hv-selected]')).toBeNull()
+    expect(document.activeElement?.hasAttribute('data-hv-preview-tools')).toBe(true)
   })
 })

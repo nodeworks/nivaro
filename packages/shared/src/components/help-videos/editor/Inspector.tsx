@@ -116,7 +116,9 @@ export const Inspector = memo(function Inspector({
     if (!s) return frame('Nothing selected', 'none', null)
     const trim = (patch: { start_ms?: number; end_ms?: number }) => {
       const next = trimSegment(edits, i, patch, sourceMs)
-      if (next !== edits) onChange(next, `trim:${i}`)
+      const t = next.segments[i]
+      // Stopped by a neighbour or the recording's edge: nothing to write.
+      if (t.start_ms !== s.start_ms || t.end_ms !== s.end_ms) onChange(next, `trim:${i}`)
     }
     return frame(
       `Piece ${i + 1} of ${edits.segments.length}`,
@@ -189,6 +191,10 @@ export const Inspector = memo(function Inspector({
   if (!item) return frame('Nothing selected', 'none', null)
   /** Write a changed copy of the item; a refusal goes to the note. */
   const update = (patch: Record<string, unknown>, key?: string) => {
+    // A step stopped at 0 or at the end (or the colour it already has)
+    // changes nothing: no undo step, no save.
+    const now = item as unknown as Record<string, unknown>
+    if (Object.entries(patch).every(([k, v]) => now[k] === v)) return
     const r = upsertItemChecked(edits, lane as ListKey, { ...item, ...patch } as never)
     if (r.refused) onError(r.refused)
     else if (r.edits !== edits) onChange(r.edits, key)

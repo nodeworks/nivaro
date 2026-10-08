@@ -168,11 +168,19 @@ export function PreviewTools({
   const visible = !!selected && srcMs >= selected.start_ms && srcMs <= selected.end_ms
   const isArrow = selected?.type === 'arrow' && !!selected.to
 
-  // A shape just drawn takes the keyboard straight away.
+  // A shape just drawn takes the keyboard straight away. When a focused
+  // shape leaves the picture (its time passed), focus stays in the preview
+  // instead of falling back to the page.
+  const shapeFocused = useRef(false)
   useEffect(() => {
     if (focusSelected.current && visible) {
       focusSelected.current = false
       selectedEl.current?.focus({ preventScroll: true })
+    }
+    if (!visible && shapeFocused.current) {
+      shapeFocused.current = false
+      const active = document.activeElement
+      if (!active || active === document.body) layer.current?.focus({ preventScroll: true })
     }
   })
 
@@ -189,7 +197,12 @@ export function PreviewTools({
       } else selectedEl.current?.focus({ preventScroll: true })
       const p0 = frac(e)
       const base = edits
+      // A click that selects (with a pixel or two of jitter) moves nothing.
+      const [x0, y0] = [e.clientX, e.clientY]
+      let moving = false
       const move = (ev: PointerEvent) => {
+        if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) < CLICK_PX) return
+        moving = true
         const p = frac(ev)
         write(base, l, reshapeItem(s, l, mode, p.x - p0.x, p.y - p0.y), `rect:${s.id}`)
       }
@@ -280,8 +293,12 @@ export function PreviewTools({
       onPointerCancel={() => setDraft(null)}
       data-hv-preview-tools={tool ?? 'select'}
     >
-      {tool && (
-        <p className='pointer-events-none absolute top-2 left-1/2 w-max max-w-[calc(100%-16px)] -translate-x-1/2 rounded-md bg-slate-950/80 px-2.5 py-1 text-center text-[12px] leading-snug font-medium text-white'>
+      {/* Out of the way while drawing: it would cover the shape on a small picture. */}
+      {tool && !draft && (
+        <p
+          className='pointer-events-none absolute top-2 left-1/2 w-max max-w-[calc(100%-16px)] -translate-x-1/2 rounded-md bg-[#020617]/80 px-2.5 py-1 text-center text-[12px] leading-snug font-medium text-white'
+          data-hv-tool-hint
+        >
           Drag on the picture to draw {TOOL_NAMES[tool]}. Esc to stop.
         </p>
       )}
@@ -339,6 +356,13 @@ export function PreviewTools({
             style={reach(selected)}
             onPointerDown={edit('move', selected, lane)}
             onKeyDown={onShapeKey}
+            onFocus={() => {
+              shapeFocused.current = true
+            }}
+            onBlur={(e) => {
+              // Focus moved somewhere else (not the shape leaving the picture).
+              if (e.relatedTarget) shapeFocused.current = false
+            }}
             aria-label={`${shapeName(lane, selected)}, selected`}
             aria-describedby={hintId}
             data-hv-shape

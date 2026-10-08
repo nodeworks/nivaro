@@ -35,6 +35,7 @@ const base: VideoEdits = {
 
 let api: { edits: VideoEdits }
 const onError = vi.fn()
+const changes = vi.fn()
 let root: Root
 let host: HTMLDivElement
 function Harness({ selection }: { selection: Selection }) {
@@ -45,7 +46,10 @@ function Harness({ selection }: { selection: Selection }) {
     edits,
     selection: sel,
     sourceMs: 20_000,
-    onChange: setEdits,
+    onChange: (e: VideoEdits) => {
+      changes()
+      setEdits(e)
+    },
     onSelect: setSel,
     onSeek: () => {},
     onError
@@ -57,7 +61,10 @@ async function mount(selection: Selection) {
   root = createRoot(host)
   await act(async () => root.render(createElement(Harness, { selection })))
 }
-beforeEach(() => onError.mockReset())
+beforeEach(() => {
+  onError.mockReset()
+  changes.mockReset()
+})
 afterEach(async () => {
   if (!host) return
   await act(async () => root.unmount())
@@ -139,5 +146,25 @@ describe('Inspector timing from the keyboard', () => {
     await key(end, 'Enter')
     expect(onError).toHaveBeenLastCalledWith(expect.stringMatching(/Zooms can.t overlap/))
     expect(api.edits.zooms[0].end_ms).toBe(3000)
+  })
+
+  it('writes nothing when a step is stopped at 0 or at the end of the recording', async () => {
+    await mount({ lane: 'annotations', id: 'a1' })
+    const start = q<HTMLInputElement>('[data-hv-time="start"]')
+    await type(start, '0')
+    await key(start, 'Enter')
+    expect(callout().start_ms).toBe(0)
+    const n = changes.mock.calls.length
+    await key(start, 'ArrowDown')
+    await click(q('[aria-label="Start 0.1 seconds earlier"]'))
+    const end = q<HTMLInputElement>('[data-hv-time="end"]')
+    await type(end, '20')
+    await key(end, 'Enter')
+    const m = changes.mock.calls.length
+    expect(m).toBe(n + 1)
+    await key(end, 'ArrowUp')
+    await click(q('[data-hv-move="later"]'))
+    await click(q('[data-hv-tone="accent"]')) // already blue
+    expect(changes.mock.calls.length).toBe(m)
   })
 })

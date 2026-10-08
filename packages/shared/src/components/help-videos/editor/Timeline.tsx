@@ -10,8 +10,9 @@ import {
 } from 'react'
 import type { VideoEdits } from '../types'
 import type { Stretch } from './suggestCuts'
-import { clock, LANE_H, LANES, Lanes, type Selection } from './timeline/Lanes'
+import { clock, LANES, Lanes, type Selection } from './timeline/Lanes'
 import { Playhead } from './timeline/Playhead'
+import { laneLayout } from './timeline/packRows'
 import { useBarDrag } from './timeline/useBarDrag'
 import { waveformPath } from './timeline/waveform'
 
@@ -62,6 +63,8 @@ export function Timeline({
   const note = onNote ? (noteProp ?? null) : ownNote
   const setNote = onNote ?? setOwnNote
   const hintId = useId()
+  // Bars at the same moment stack on sub-rows; labels and lanes share it.
+  const layout = useMemo(() => laneLayout(edits), [edits])
 
   useLayoutEffect(() => {
     const el = scroller.current
@@ -193,7 +196,8 @@ export function Timeline({
             <div
               key={l.key}
               className='truncate border-b border-border px-2 text-[12px] font-medium text-foreground last:border-b-0'
-              style={{ height: LANE_H, lineHeight: `${LANE_H}px` }}
+              style={{ height: layout.height[l.key], lineHeight: '28px' }}
+              data-hv-lane-label={l.key}
             >
               {l.label}
             </div>
@@ -253,6 +257,7 @@ export function Timeline({
               drag={drag}
               nudge={nudge}
               hintId={hintId}
+              layout={layout}
             />
             <Playhead srcMs={playheadSrcMs} pps={pps} scroller={scroller} dragging={dragging} />
           </div>

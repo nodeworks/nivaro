@@ -7,6 +7,7 @@ import {
   upsertItemChecked
 } from '../../edits'
 import type { VideoEdits } from '../../types'
+import { LANE_H, type laneLayout, type Packed, SUB_H } from './packRows'
 import type { useBarDrag } from './useBarDrag'
 
 export type Selection = { lane: 'cuts'; index: number } | { lane: ListKey; id: string } | null
@@ -59,7 +60,9 @@ export const LANES: Array<{ key: 'cuts' | ListKey; label: string; tone: string; 
     }
   ]
 const laneOf = (k: ListKey) => LANES.find((l) => l.key === k)
-export const LANE_H = 28
+
+export { LANE_H }
+
 /** Narrower bars drop their label rather than show a clipped letter. */
 const MIN_LABEL_PX = 40
 
@@ -93,7 +96,7 @@ function orderOf<T extends { id: string }>(list: T[], start: (x: T) => number) {
 
 const selectedRing = 'z-10 ring-2 ring-nvr-cyan'
 const barBase =
-  'absolute top-1 bottom-1 cursor-grab touch-none overflow-hidden rounded-[4px] border text-left text-[11px] font-medium leading-none outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:cursor-grabbing'
+  'absolute cursor-grab touch-none overflow-hidden rounded-[4px] border text-left text-[11px] font-medium leading-none outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:cursor-grabbing'
 const edgeHandles = (
   <>
     <span aria-hidden className='absolute inset-y-0 left-0 w-1.5 cursor-ew-resize' />
@@ -102,10 +105,18 @@ const edgeHandles = (
 )
 
 type Bars = ReturnType<typeof useBarDrag>
+type Layout = ReturnType<typeof laneLayout>
+
+/** A bar's place in its lane: the usual inset with one row, else its
+ *  sub-row (bars at the same moment stack instead of hiding each other). */
+function rowBox(p: Packed, id: string) {
+  if (p.rows === 1) return { top: 4, height: LANE_H - 8 }
+  return { top: 2 + (p.row.get(id) ?? 0) * SUB_H, height: SUB_H - 4 }
+}
 
 /** A lane is a labelled group. Focus lands on it when its last bar is
  *  deleted, and an empty lane is the lane's one tab stop. */
-function laneProps(key: 'cuts' | ListKey, count: number) {
+function laneProps(key: 'cuts' | ListKey, count: number, height = LANE_H) {
   const label = LANES.find((l) => l.key === key)?.label ?? key
   return {
     role: 'group',
@@ -114,7 +125,7 @@ function laneProps(key: 'cuts' | ListKey, count: number) {
     'data-hv-lane': key,
     className:
       'relative border-b border-border outline-none last:border-b-0 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
-    style: { height: LANE_H }
+    style: { height }
   } as const
 }
 
@@ -134,7 +145,8 @@ export const Lanes = memo(function Lanes({
   onSelect,
   drag,
   nudge,
-  hintId
+  hintId,
+  layout
 }: {
   edits: VideoEdits
   sourceMs: number
@@ -145,6 +157,8 @@ export const Lanes = memo(function Lanes({
   nudge: Bars['nudge']
   /** id of the visually hidden keyboard hint every bar is described by. */
   hintId: string
+  /** Sub-rows and heights (Timeline memoises it on the edits). */
+  layout: Layout
 }) {
   const toPx = (ms: number) => (ms / 1000) * pps
   const selectedIn = (k: ListKey) =>
@@ -202,7 +216,7 @@ export const Lanes = memo(function Lanes({
               onFocus={() => onSelect({ lane: 'cuts', index: i })}
               // Arrows move between pieces; Delete is the editor's "Cut piece".
               onKeyDown={(e) => nudge(e, null, `seg:${i}`)}
-              className={`${barBase} flex items-center justify-center border-slate-400 bg-slate-200 text-slate-900 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-50 ${selected ? selectedRing : ''}`}
+              className={`${barBase} top-1 bottom-1 flex items-center justify-center border-slate-400 bg-slate-200 text-slate-900 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-50 ${selected ? selectedRing : ''}`}
               style={{
                 left: toPx(s.start_ms),
                 width: Math.max(4, toPx(s.end_ms - s.start_ms))
@@ -249,7 +263,7 @@ export const Lanes = memo(function Lanes({
                   () => removeItem(edits, 'chapters', c.id)
                 )
               }
-              className={`${barBase} max-w-[180px] truncate px-1.5 ${laneOf('chapters')?.tone} ${isSelected('chapters', c.id) ? selectedRing : ''}`}
+              className={`${barBase} top-1 bottom-1 max-w-[180px] truncate px-1.5 ${laneOf('chapters')?.tone} ${isSelected('chapters', c.id) ? selectedRing : ''}`}
               style={{ left: toPx(c.at_ms) }}
             >
               {c.title || 'Chapter'}
@@ -261,9 +275,10 @@ export const Lanes = memo(function Lanes({
         const items = edits[k] as TimedItem[]
         const order = orderOf(items, (x) => x.start_ms)
         const stop = tabStop(k, order)
+        const packed = layout.lanes[k]
         const lane = laneOf(k)
         return (
-          <div key={k} {...laneProps(k, items.length)}>
+          <div key={k} {...laneProps(k, items.length, layout.height[k])}>
             {items.map((it) => {
               const hidden = isHiddenByCuts(edits, it.start_ms, it.end_ms)
               const place = (s: number, en: number) =>
@@ -305,7 +320,7 @@ export const Lanes = memo(function Lanes({
                     )
                   }
                   className={`${barBase} truncate px-1.5 ${hidden ? lane?.hollow : lane?.tone} ${isSelected(k, it.id) ? selectedRing : ''}`}
-                  style={{ left: toPx(it.start_ms), width: barW }}
+                  style={{ left: toPx(it.start_ms), width: barW, ...rowBox(packed, it.id) }}
                 >
                   {/* Too short to read: the bar alone, named by aria-label. */}
                   {barW >= MIN_LABEL_PX && itemLabel(k, it)}
