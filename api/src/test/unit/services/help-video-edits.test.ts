@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   captionsToVtt,
+  EDIT_LIMITS,
   EditsError,
   editedDuration,
   editedToSource,
@@ -12,6 +13,18 @@ import {
 } from '../../../services/help-video-edits.js'
 
 const SRC = 60_000
+
+describe('zoom magnification limit', () => {
+  it('raises a tiny zoom rect to the minimum side (at most 4x)', () => {
+    const e = normalizeEdits(
+      { zooms: [{ start_ms: 0, end_ms: 4000, rect: { x: 0.9, y: 0.9, w: 0.1, h: 0.1 } }] },
+      SRC
+    )
+    expect(e.zooms[0].rect.w).toBe(EDIT_LIMITS.zoomMinSide)
+    expect(e.zooms[0].rect.w).toBe(0.25)
+    expect(e.zooms[0].rect.x).toBe(0.75)
+  })
+})
 
 describe('normalizeEdits', () => {
   it('defaults to one full segment', () => {

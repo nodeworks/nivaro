@@ -74,7 +74,9 @@ export const EDIT_LIMITS = {
   chapterTitle: 120,
   minKeptMs: 1000,
   minItemMs: 200,
-  minSegmentMs: 100
+  minSegmentMs: 100,
+  /** Smallest zoom rect side (fraction of the frame): at most 4x magnification. */
+  zoomMinSide: 0.25
 } as const
 
 export class EditsError extends Error {
@@ -203,7 +205,7 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
     if (!s) continue
     if (zooms.length && s.start_ms < zooms[zooms.length - 1].end_ms) continue
     const r = rect(z.rect)
-    const side = clamp(Math.max(r.w, r.h), 0.1, 1)
+    const side = clamp(Math.max(r.w, r.h), EDIT_LIMITS.zoomMinSide, 1)
     const sq = { x: clamp(r.x, 0, 1 - side), y: clamp(r.y, 0, 1 - side), w: side, h: side }
     const half = Math.floor((s.end_ms - s.start_ms) / 2)
     zooms.push({

@@ -206,3 +206,101 @@ describe('buildPosterArgs', () => {
       'p.jpg'
     ]))
 })
+
+describe('blur radius cap', () => {
+  it('caps a tiny box so the half-size chroma planes accept it', () => {
+    const edits = normalizeEdits(
+      {
+        blurs: [
+          {
+            start_ms: 0,
+            end_ms: 3000,
+            rect: { x: 0.1, y: 0.1, w: 0.0625, h: 0.1125 },
+            strength: 40
+          }
+        ]
+      },
+      10_000
+    )
+    // 1280x720 frame: the box is 80x80, so the radius is floor(80/4)-1 = 19 at most.
+    const graph = fc(buildRenderArgs({ ...base, edits }))
+    expect(graph).toContain('crop=80:80:128:72,boxblur=19:1')
+  })
+  it('never goes below 1 for the smallest box', () => {
+    const edits = normalizeEdits(
+      {
+        blurs: [
+          { start_ms: 0, end_ms: 3000, rect: { x: 0.1, y: 0.1, w: 0.001, h: 0.001 }, strength: 40 }
+        ]
+      },
+      10_000
+    )
+    // normalizeEdits floors the rect at 0.01 (12x6 px here); radius stays 1
+    expect(fc(buildRenderArgs({ ...base, edits }))).toContain('crop=12:6:128:72,boxblur=1:1')
+  })
+})
+
+describe('audio chain, interleaving and chaining', () => {
+  const segs = (speed: number) =>
+    normalizeEdits(
+      {
+        segments: [
+          { start_ms: 0, end_ms: 2000, speed },
+          { start_ms: 5000, end_ms: 9000, speed: 1 }
+        ]
+      },
+      10_000
+    )
+  it.each([
+    [1.5, 'atempo=1.5'],
+    [2, 'atempo=2'],
+    [1, 'anull']
+  ])('speed %s uses %s after atrim and asetpts', (speed, filter) => {
+    const graph = fc(buildRenderArgs({ ...base, edits: segs(speed) }))
+    expect(graph).toContain(`[as0]atrim=start=0.000:end=2.000,asetpts=PTS-STARTPTS,${filter}[ca0]`)
+  })
+  it('interleaves concat inputs video then audio per piece', () => {
+    const graph = fc(buildRenderArgs({ ...base, edits: segs(1) }))
+    expect(graph).toContain('[c0][ca0][c1][ca1]concat=n=2:v=1:a=1[vout][aout]')
+  })
+  it('maps only video when there is no sound', () => {
+    const args = buildRenderArgs({ ...base, hasAudio: false, edits: segs(1) })
+    expect(args.filter((a) => a === '-map')).toHaveLength(1)
+    expect(args).toContain('[vout]')
+    expect(fc(args)).not.toContain('[aout]')
+    expect(args).not.toContain('-c:a')
+  })
+  it('chains two blurs and sums two zoom terms', () => {
+    const edits = normalizeEdits(
+      {
+        blurs: [
+          { start_ms: 0, end_ms: 1000, rect: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 }, strength: 6 },
+          { start_ms: 2000, end_ms: 3000, rect: { x: 0.5, y: 0.5, w: 0.2, h: 0.2 }, strength: 6 }
+        ],
+        zooms: [
+          { start_ms: 1000, end_ms: 2000, rect: { x: 0, y: 0, w: 0.5, h: 0.5 }, ease_ms: 0 },
+          { start_ms: 4000, end_ms: 6000, rect: { x: 0.5, y: 0.5, w: 0.5, h: 0.5 }, ease_ms: 0 }
+        ]
+      },
+      10_000
+    )
+    const graph = fc(buildRenderArgs({ ...base, edits }))
+    expect(graph).toContain('[v0]split[v0a][v0b]')
+    expect(graph).toContain('[v0a][bl0]overlay=')
+    expect(graph).toContain('[v1]split[v1a][v1b]')
+    expect(graph).toContain('[v1a][bl1]overlay=')
+    expect(graph).toContain('[v2]scale=')
+    expect(graph).toContain('(1+(1.0000)*between(t,1.000,2.000)+(1.0000)*between(t,4.000,6.000))')
+  })
+  it('builds a valid graph for one trimmed or sped-up segment', () => {
+    for (const seg of [
+      { start_ms: 1000, end_ms: 9000, speed: 1 },
+      { start_ms: 0, end_ms: 10_000, speed: 2 }
+    ]) {
+      const edits = normalizeEdits({ segments: [seg] }, 10_000)
+      const graph = fc(buildRenderArgs({ ...base, edits }))
+      expect(graph).toContain('split=1[s0]')
+      expect(graph).toContain('concat=n=1:v=1:a=1[vout][aout]')
+    }
+  })
+})

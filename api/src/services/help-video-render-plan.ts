@@ -60,8 +60,15 @@ export function buildRenderArgs(input: RenderInput): string[] {
   parts.push(`[0:v]scale=${out.width}:${out.height},format=yuv420p,setsar=1[${label}]`)
 
   for (const b of e.blurs) {
-    const r = pixelRect(b.rect, out)
-    const strength = Math.max(1, Math.min(b.strength, Math.floor(Math.min(r.w, r.h) / 2) - 1))
+    const pr = pixelRect(b.rect, out)
+    // Chroma planes are half size and need room for a radius-1 box blur, so
+    // a blur box is never smaller than 4x4 pixels (ffmpeg fails below that).
+    const w = Math.min(Math.max(pr.w, 4), out.width)
+    const h = Math.min(Math.max(pr.h, 4), out.height)
+    const r = { x: Math.min(pr.x, out.width - w), y: Math.min(pr.y, out.height - h), w, h }
+    // boxblur's radius applies to the half-size chroma planes too, so it is
+    // bounded by a quarter of the smaller side.
+    const strength = Math.max(1, Math.min(b.strength, Math.floor(Math.min(r.w, r.h) / 4) - 1))
     const a = `${label}a`
     const c = `${label}b`
     const blurred = `bl${n}`
