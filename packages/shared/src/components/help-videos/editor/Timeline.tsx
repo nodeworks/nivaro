@@ -2,6 +2,7 @@ import { Info, Maximize2, ZoomIn, ZoomOut } from 'lucide-react'
 import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -33,7 +34,9 @@ export function Timeline({
   selection,
   onSelect,
   onSeek,
-  onChange
+  onChange,
+  note: noteProp,
+  onNote
 }: {
   edits: VideoEdits
   sourceMs: number
@@ -45,13 +48,20 @@ export function Timeline({
   onSelect: (s: Selection) => void
   onSeek: (srcMs: number) => void
   onChange: (e: VideoEdits, key?: string) => void
+  /** Controlled note (the editor routes its own refusals here too). Without
+   *  `onNote` the timeline keeps its note itself. */
+  note?: string | null
+  onNote?: (n: string | null) => void
 }) {
   const scroller = useRef<HTMLDivElement | null>(null)
   const [viewW, setViewW] = useState(0)
   const [pxPerSec, setPxPerSec] = useState<number | null>(null)
   // A change the server would refuse (overlapping zooms, too short) is not
   // applied; the reason shows here until the next interaction.
-  const [note, setNote] = useState<string | null>(null)
+  const [ownNote, setOwnNote] = useState<string | null>(null)
+  const note = onNote ? (noteProp ?? null) : ownNote
+  const setNote = onNote ?? setOwnNote
+  const hintId = useId()
 
   useLayoutEffect(() => {
     const el = scroller.current
@@ -166,6 +176,10 @@ export function Timeline({
           </button>
         </div>
       </div>
+      <p id={hintId} className='sr-only'>
+        Left and Right arrows move along the lane. Alt with an arrow moves the item a tenth of a
+        second, with Shift a whole second. Delete removes it.
+      </p>
       <div className='flex border-t border-border'>
         <div className='w-[76px] shrink-0 border-r border-border sm:w-[88px]' aria-hidden>
           <div style={{ height: RULER_H }} className='border-b border-border' />
@@ -238,6 +252,7 @@ export function Timeline({
               onSelect={onSelect}
               drag={drag}
               nudge={nudge}
+              hintId={hintId}
             />
             <Playhead srcMs={playheadSrcMs} pps={pps} scroller={scroller} dragging={dragging} />
           </div>

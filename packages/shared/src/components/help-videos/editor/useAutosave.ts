@@ -21,8 +21,6 @@ function stable(v: unknown): string {
   )
 }
 
-const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
-
 /**
  * Saves the draft edits 1 s after the last change.
  * - One PUT at a time; a change made meanwhile is saved right after.
@@ -98,6 +96,9 @@ export function useAutosave(
         stable(v.edits) !== stable(edits)
       ) {
         saved.current = v.edits
+        // The editor shows the stored copy from its next render on; until
+        // then a flush (Close, publish) must already see it as saved.
+        presentRef.current = v.edits
         onAdopt.current(edits, v.edits)
       }
       fails.current = 0
@@ -120,9 +121,8 @@ export function useAutosave(
         const delay = Math.min(RETRY_MAX_MS, RETRY_FIRST_MS * 2 ** fails.current)
         fails.current += 1
         setRetryInMs(delay)
-        setMessage(
-          `Couldn't save your latest changes. Trying again in ${plural(delay / 1000, 'second')}.`
-        )
+        // The delay grows to a minute; a fixed number would go stale.
+        setMessage("Couldn't save your latest changes. Trying again shortly.")
         mark('error')
         schedule(delay)
       }

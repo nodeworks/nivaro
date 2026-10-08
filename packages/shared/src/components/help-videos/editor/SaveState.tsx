@@ -2,8 +2,16 @@ import { AlertCircle, AlertTriangle, Check, RotateCw } from 'lucide-react'
 import { Button } from '../../ui/button'
 import type { useAutosave } from './useAutosave'
 
-/** The editor header's save line: routine states in muted text, problems
- *  with what to do about them (Reload after a conflict, Try now). */
+const PROBLEMS = new Set(['conflict', 'invalid', 'error'])
+
+/**
+ * The editor header's save line: routine states in muted text, problems
+ * with what to do about them (Reload after a conflict, Try now).
+ *
+ * Only problems are announced. "Saving…" and "All changes saved" come and go
+ * with every edit, so they stay out of the live region; a visually hidden
+ * status carries the problem's message alone.
+ */
 export function SaveState({
   save,
   onReload
@@ -76,9 +84,14 @@ export function SaveState({
         )
     }
   })()
+  const problem = PROBLEMS.has(save.status)
   return (
-    <div className='min-w-0 text-[12px]' role='status' data-hv-save-status={save.status}>
+    <div className='min-w-0 text-[12px]' data-hv-save-status={save.status}>
+      {/* The visible line is not a live region: routine states stay quiet. */}
       {body}
+      <span className='sr-only' role='status' data-hv-save-announce>
+        {problem ? save.message : ''}
+      </span>
     </div>
   )
 }

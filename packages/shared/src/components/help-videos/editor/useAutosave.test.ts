@@ -66,6 +66,7 @@ beforeEach(() => {
 afterEach(async () => {
   await act(async () => root.unmount())
   vi.useRealTimers()
+  vi.restoreAllMocks()
 })
 
 describe('useAutosave', () => {
@@ -219,7 +220,29 @@ describe('useAutosave', () => {
     await wait(5000)
     expect(api.save.status).toBe('saved')
     expect(live.size).toBe(0)
-    vi.restoreAllMocks()
+  })
+
+  it('flush resolves true when the server returns a normalized copy', async () => {
+    const normalized = { ...e(2000), poster_ms: 1234 }
+    request.mockResolvedValue(version(normalized, 'h1'))
+    await mount()
+    await change(e(2000))
+    let ok: boolean | undefined
+    await act(async () => {
+      ok = await api.save.flush()
+    })
+    expect(ok).toBe(true)
+    expect(api.h.present).toEqual(normalized)
+    await wait(5000)
+    expect(puts()).toHaveLength(1)
+  })
+
+  it('says it will try again without promising a number of seconds', async () => {
+    request.mockRejectedValue(new Error('Failed to fetch'))
+    await mount()
+    await change(e(2000))
+    await wait(1000)
+    expect(api.save.message).toBe("Couldn't save your latest changes. Trying again shortly.")
   })
 
   it('flush saves at once', async () => {

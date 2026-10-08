@@ -17,7 +17,11 @@ export const helpVideoKeys = {
   forCtx: (ctx: Record<string, unknown>) => ['help-videos', 'for', ctx] as const,
   library: (p: Record<string, unknown>) => ['help-videos', 'library', p] as const,
   required: ['help-videos', 'required'] as const,
-  pages: ['help-videos', 'pages'] as const
+  pages: ['help-videos', 'pages'] as const,
+  /** The editor's draft load. Outside the `all` prefix on purpose: GET
+   *  /draft/edits creates a missing draft, so a broad invalidation must
+   *  never refetch it. `n` bumps on Reload. */
+  draftEdits: (id: string, n: number) => ['help-video-draft', id, n] as const
 }
 
 /** One video as this person may see it (fresh media tickets every call). */

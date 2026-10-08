@@ -1,7 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Redo2, RotateCw, Scissors, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
-import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { Button } from '../../ui/button'
 import { Label } from '../../ui/label'
@@ -17,6 +16,7 @@ import { SaveState } from './SaveState'
 import { SilenceSuggestions } from './SilenceSuggestions'
 import { suggestCuts } from './suggestCuts'
 import { type Selection, Timeline } from './Timeline'
+import { sentence } from './timeline/useBarDrag'
 import { useAutosave } from './useAutosave'
 import { useEditorShortcuts } from './useEditorShortcuts'
 
@@ -45,7 +45,7 @@ export function HelpVideoEditor({ videoId, onClose }: { videoId: string; onClose
   // A query, not an effect: GET /draft/edits creates the draft when there is
   // none, and two calls at once (StrictMode mounts twice) could create two.
   const draftQuery = useQuery({
-    queryKey: ['help-videos', 'draft-edits', videoId, loads],
+    queryKey: helpVideoKeys.draftEdits(videoId, loads),
     queryFn: async () => {
       const d = await helpVideoApi(client).draft(videoId)
       // The draft may be new; refetch the video so it carries draft_stream_url.
@@ -136,15 +136,20 @@ function EditorBody({
 }) {
   const [h, dispatch] = useReducer(historyReducer, draft.edits, initHistory)
   const edits = h.present
-  const set = useCallback(
-    (e: VideoEdits, key?: string) => dispatch({ type: 'set', edits: e, key, now: Date.now() }),
-    []
-  )
+  // One note beside the timeline for every change that can't be made
+  // (overlapping zooms, too short, cutting the last second away).
+  const [note, setNote] = useState<string | null>(null)
+  const showNote = useCallback((n: string | null) => setNote(n && sentence(n)), [])
+  const set = useCallback((e: VideoEdits, key?: string) => {
+    setNote(null)
+    dispatch({ type: 'set', edits: e, key, now: Date.now() })
+  }, [])
   const save = useAutosave(video.id, edits, draft.edits_hash, {
     onAdopt: (from, stored) => dispatch({ type: 'adopt', from, edits: stored })
   })
   const playerVideo = usePinnedVideo(video, draft)
   const player = useRef<PlayerHandle | null>(null)
+  const seek = useCallback((ms: number) => player.current?.seekSource(ms), [])
   const [src, setSrc] = useState(0)
   const [selection, setSelection] = useState<Selection>(null)
   const [viewerPreview, setViewerPreview] = useState(false)
@@ -161,7 +166,7 @@ function EditorBody({
   const deletePiece = () => {
     if (pieceIndex < 0) return
     const r = removeSegment(edits, pieceIndex)
-    if (r.refused) toast.error(r.refused)
+    if (r.refused) showNote(r.refused)
     else {
       set(r.edits)
       setSelection(null)
@@ -299,7 +304,8 @@ function EditorBody({
               silent={silent}
               edits={edits}
               onChange={set}
-              onSeek={(ms) => player.current?.seekSource(ms)}
+              onSeek={seek}
+              onRefused={showNote}
             />
             <div className='ml-auto flex items-center gap-0.5'>
               <Button
@@ -351,8 +357,10 @@ function EditorBody({
             silences={silent}
             selection={selection}
             onSelect={setSelection}
-            onSeek={(ms) => player.current?.seekSource(ms)}
+            onSeek={seek}
             onChange={set}
+            note={note}
+            onNote={showNote}
           />
         </TabsContent>
         <TabsContent value='details' />

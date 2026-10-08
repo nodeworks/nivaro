@@ -1,3 +1,4 @@
+import { memo } from 'react'
 import {
   isHiddenByCuts,
   type ListKey,
@@ -14,36 +15,48 @@ type TimedKey = 'annotations' | 'zooms' | 'blurs' | 'captions'
 type TimedItem = { id: string; start_ms: number; end_ms: number; text?: string; type?: string }
 
 // Tinted bars with dark ink: each lane reads at a glance without a saturated
-// block of colour, and the label inside clears 4.5:1 in both themes.
-export const LANES: Array<{ key: 'cuts' | ListKey; label: string; tone: string }> = [
-  { key: 'cuts', label: 'Cuts', tone: '' },
-  {
-    key: 'chapters',
-    label: 'Chapters',
-    tone: 'border-violet-300 bg-violet-100 text-violet-950 dark:border-violet-400/50 dark:bg-violet-500/25 dark:text-violet-50'
-  },
-  {
-    key: 'annotations',
-    label: 'Callouts',
-    tone: 'border-blue-300 bg-blue-100 text-blue-950 dark:border-blue-400/50 dark:bg-blue-500/25 dark:text-blue-50'
-  },
-  {
-    key: 'zooms',
-    label: 'Zoom',
-    tone: 'border-emerald-300 bg-emerald-100 text-emerald-950 dark:border-emerald-400/50 dark:bg-emerald-500/25 dark:text-emerald-50'
-  },
-  {
-    key: 'blurs',
-    label: 'Blur',
-    tone: 'border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-400/50 dark:bg-amber-500/25 dark:text-amber-50'
-  },
-  {
-    key: 'captions',
-    label: 'Captions',
-    tone: 'border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950 dark:border-fuchsia-400/50 dark:bg-fuchsia-500/25 dark:text-fuchsia-50'
-  }
-]
-const toneOf = (k: ListKey) => LANES.find((l) => l.key === k)?.tone ?? ''
+// block of colour, and the label inside clears 4.5:1 in both themes. A bar
+// that sits entirely inside a cut is drawn hollow (dashed border on the
+// lane's ground) with the same ink, so its label keeps full contrast.
+export const LANES: Array<{ key: 'cuts' | ListKey; label: string; tone: string; hollow: string }> =
+  [
+    { key: 'cuts', label: 'Cuts', tone: '', hollow: '' },
+    {
+      key: 'chapters',
+      label: 'Chapters',
+      tone: 'border-violet-300 bg-violet-100 text-violet-950 dark:border-violet-400/50 dark:bg-violet-500/25 dark:text-violet-50',
+      hollow: ''
+    },
+    {
+      key: 'annotations',
+      label: 'Callouts',
+      tone: 'border-blue-300 bg-blue-100 text-blue-950 dark:border-blue-400/50 dark:bg-blue-500/25 dark:text-blue-50',
+      hollow:
+        'border-dashed border-blue-400 bg-card text-blue-950 dark:border-blue-400/70 dark:text-blue-100'
+    },
+    {
+      key: 'zooms',
+      label: 'Zoom',
+      tone: 'border-emerald-300 bg-emerald-100 text-emerald-950 dark:border-emerald-400/50 dark:bg-emerald-500/25 dark:text-emerald-50',
+      hollow:
+        'border-dashed border-emerald-500 bg-card text-emerald-950 dark:border-emerald-400/70 dark:text-emerald-100'
+    },
+    {
+      key: 'blurs',
+      label: 'Blur',
+      tone: 'border-amber-300 bg-amber-100 text-amber-950 dark:border-amber-400/50 dark:bg-amber-500/25 dark:text-amber-50',
+      hollow:
+        'border-dashed border-amber-500 bg-card text-amber-950 dark:border-amber-400/70 dark:text-amber-100'
+    },
+    {
+      key: 'captions',
+      label: 'Captions',
+      tone: 'border-fuchsia-300 bg-fuchsia-100 text-fuchsia-950 dark:border-fuchsia-400/50 dark:bg-fuchsia-500/25 dark:text-fuchsia-50',
+      hollow:
+        'border-dashed border-fuchsia-400 bg-card text-fuchsia-950 dark:border-fuchsia-400/70 dark:text-fuchsia-100'
+    }
+  ]
+const laneOf = (k: ListKey) => LANES.find((l) => l.key === k)
 export const LANE_H = 28
 /** Narrower bars drop their label rather than show a clipped letter. */
 const MIN_LABEL_PX = 40
@@ -64,6 +77,17 @@ function itemLabel(k: TimedKey, it: TimedItem): string {
   if (k === 'blurs') return 'Blur'
   return it.text?.trim() || 'Caption'
 }
+/** Screen-reader name: the lane first where the bar's own label doesn't say it. */
+function itemName(k: TimedKey, it: TimedItem): string {
+  const label = itemLabel(k, it)
+  return k === 'annotations' || k === 'captions' ? `${laneOf(k)?.label}: ${label}` : label
+}
+
+/** Rank of each id when the lane is read left to right (keyboard order). */
+function orderOf<T extends { id: string }>(list: T[], start: (x: T) => number) {
+  const ranked = [...list].sort((a, b) => start(a) - start(b))
+  return new Map(ranked.map((x, i) => [x.id, i]))
+}
 
 const selectedRing = 'z-10 ring-2 ring-nvr-cyan'
 const barBase =
@@ -77,16 +101,23 @@ const edgeHandles = (
 
 type Bars = ReturnType<typeof useBarDrag>
 
-/** The six edit lanes: kept pieces over a hatched "cut away" ground, chapter
- *  marks, and one lane each for callouts, zoom, blur and captions. */
-export function Lanes({
+/**
+ * The six edit lanes: kept pieces over a hatched "cut away" ground, chapter
+ * marks, and one lane each for callouts, zoom, blur and captions.
+ *
+ * Memoised and never given the playhead: during playback only the playhead
+ * moves, and these hundreds of bars stay put. Each lane is one tab stop (the
+ * selected bar, else the first); arrows move along the lane.
+ */
+export const Lanes = memo(function Lanes({
   edits,
   sourceMs,
   pps,
   selection,
   onSelect,
   drag,
-  nudge
+  nudge,
+  hintId
 }: {
   edits: VideoEdits
   sourceMs: number
@@ -95,10 +126,24 @@ export function Lanes({
   onSelect: (s: Selection) => void
   drag: Bars['drag']
   nudge: Bars['nudge']
+  /** id of the visually hidden keyboard hint every bar is described by. */
+  hintId: string
 }) {
   const toPx = (ms: number) => (ms / 1000) * pps
-  const isSelected = (k: ListKey, id: string) =>
-    !!selection && selection.lane === k && selection.id === id
+  const selectedIn = (k: ListKey) =>
+    selection && selection.lane === k ? (selection as { id: string }).id : null
+  const isSelected = (k: ListKey, id: string) => selectedIn(k) === id
+  /** The lane's one tab stop: its selected bar, else the earliest. */
+  const tabStop = (k: ListKey, order: Map<string, number>) => {
+    const sel = selectedIn(k)
+    if (sel && order.has(sel)) return sel
+    for (const [id, rank] of order) if (rank === 0) return id
+    return null
+  }
+  const cutsStop = selection?.lane === 'cuts' ? selection.index : 0
+  const chapterOrder = orderOf(edits.chapters, (c) => c.at_ms)
+  const chapterStop = tabStop('chapters', chapterOrder)
+
   return (
     <>
       {/* cuts: kept pieces over a hatched "cut away" ground */}
@@ -116,7 +161,10 @@ export function Lanes({
               key={i}
               type='button'
               data-hv-segment={i}
+              data-hv-order={i}
+              tabIndex={i === cutsStop ? 0 : -1}
               aria-label={`Kept piece ${clock(s.start_ms)} to ${clock(s.end_ms)}${s.speed !== 1 ? `, ${s.speed}× speed` : ''}`}
+              aria-describedby={hintId}
               aria-pressed={selected}
               onPointerDown={(e) => {
                 onSelect({ lane: 'cuts', index: i })
@@ -131,6 +179,8 @@ export function Lanes({
                 )
               }}
               onFocus={() => onSelect({ lane: 'cuts', index: i })}
+              // Arrows move between pieces; Delete is the editor's "Cut piece".
+              onKeyDown={(e) => nudge(e, null, `seg:${i}`)}
               className={`${barBase} flex items-center justify-center border-slate-400 bg-slate-200 text-slate-900 dark:border-slate-500 dark:bg-slate-700 dark:text-slate-50 ${selected ? selectedRing : ''}`}
               style={{
                 left: toPx(s.start_ms),
@@ -160,7 +210,10 @@ export function Lanes({
               key={c.id}
               type='button'
               data-hv-chapter={c.id}
+              data-hv-order={chapterOrder.get(c.id)}
+              tabIndex={c.id === chapterStop ? 0 : -1}
               aria-label={`Chapter ${clock(c.at_ms)}: ${c.title}`}
+              aria-describedby={hintId}
               aria-pressed={isSelected('chapters', c.id)}
               onPointerDown={(e) => {
                 onSelect({ lane: 'chapters', id: c.id })
@@ -175,7 +228,7 @@ export function Lanes({
                   () => removeItem(edits, 'chapters', c.id)
                 )
               }
-              className={`${barBase} max-w-[180px] truncate px-1.5 ${toneOf('chapters')} ${isSelected('chapters', c.id) ? selectedRing : ''}`}
+              className={`${barBase} max-w-[180px] truncate px-1.5 ${laneOf('chapters')?.tone} ${isSelected('chapters', c.id) ? selectedRing : ''}`}
               style={{ left: toPx(c.at_ms) }}
             >
               {c.title || 'Chapter'}
@@ -183,60 +236,69 @@ export function Lanes({
           )
         })}
       </div>
-      {(['annotations', 'zooms', 'blurs', 'captions'] as const).map((k) => (
-        <div
-          key={k}
-          className='relative border-b border-border last:border-b-0'
-          style={{ height: LANE_H }}
-        >
-          {(edits[k] as TimedItem[]).map((it) => {
-            const hidden = isHiddenByCuts(edits, it.start_ms, it.end_ms)
-            const place = (s: number, en: number) =>
-              upsertItemChecked(edits, k, {
-                ...(it as object),
-                start_ms: s,
-                end_ms: en
-              } as never)
-            const label = itemLabel(k, it)
-            const barW = Math.max(6, toPx(it.end_ms - it.start_ms))
-            return (
-              <button
-                key={it.id}
-                type='button'
-                data-hv-item={`${k}:${it.id}`}
-                data-tip={hidden ? 'Hidden: this sits entirely inside a cut' : undefined}
-                aria-label={`${label}, ${clock(it.start_ms)} to ${clock(it.end_ms)}${hidden ? ', hidden by a cut' : ''}`}
-                aria-pressed={isSelected(k, it.id)}
-                onPointerDown={(e) => {
-                  onSelect({ lane: k, id: it.id })
-                  drag(e, it.start_ms, it.end_ms, place, `${k}:${it.id}`)
-                }}
-                onFocus={() => onSelect({ lane: k, id: it.id })}
-                onKeyDown={(e) =>
-                  nudge(
-                    e,
-                    (d) => {
-                      const s = Math.max(
-                        0,
-                        Math.min(sourceMs - (it.end_ms - it.start_ms), it.start_ms + d)
-                      )
-                      return place(s, s + (it.end_ms - it.start_ms))
-                    },
-                    `${k}:${it.id}`,
-                    () => removeItem(edits, k, it.id)
-                  )
-                }
-                className={`${barBase} truncate px-1.5 ${toneOf(k)} ${hidden ? 'border-dashed opacity-60' : ''} ${isSelected(k, it.id) ? selectedRing : ''}`}
-                style={{ left: toPx(it.start_ms), width: barW }}
-              >
-                {/* Too short to read: the bar alone, named by aria-label. */}
-                {barW >= MIN_LABEL_PX && label}
-                {edgeHandles}
-              </button>
-            )
-          })}
-        </div>
-      ))}
+      {(['annotations', 'zooms', 'blurs', 'captions'] as const).map((k) => {
+        const items = edits[k] as TimedItem[]
+        const order = orderOf(items, (x) => x.start_ms)
+        const stop = tabStop(k, order)
+        const lane = laneOf(k)
+        return (
+          <div
+            key={k}
+            className='relative border-b border-border last:border-b-0'
+            style={{ height: LANE_H }}
+          >
+            {items.map((it) => {
+              const hidden = isHiddenByCuts(edits, it.start_ms, it.end_ms)
+              const place = (s: number, en: number) =>
+                upsertItemChecked(edits, k, {
+                  ...(it as object),
+                  start_ms: s,
+                  end_ms: en
+                } as never)
+              const barW = Math.max(6, toPx(it.end_ms - it.start_ms))
+              return (
+                <button
+                  key={it.id}
+                  type='button'
+                  data-hv-item={`${k}:${it.id}`}
+                  data-hv-order={order.get(it.id)}
+                  data-hv-hidden={hidden || undefined}
+                  data-tip={hidden ? 'Hidden: this sits entirely inside a cut' : undefined}
+                  tabIndex={it.id === stop ? 0 : -1}
+                  aria-label={`${itemName(k, it)}, ${clock(it.start_ms)} to ${clock(it.end_ms)}${hidden ? ', hidden by a cut' : ''}`}
+                  aria-describedby={hintId}
+                  aria-pressed={isSelected(k, it.id)}
+                  onPointerDown={(e) => {
+                    onSelect({ lane: k, id: it.id })
+                    drag(e, it.start_ms, it.end_ms, place, `${k}:${it.id}`)
+                  }}
+                  onFocus={() => onSelect({ lane: k, id: it.id })}
+                  onKeyDown={(e) =>
+                    nudge(
+                      e,
+                      (d) => {
+                        const s = Math.max(
+                          0,
+                          Math.min(sourceMs - (it.end_ms - it.start_ms), it.start_ms + d)
+                        )
+                        return place(s, s + (it.end_ms - it.start_ms))
+                      },
+                      `${k}:${it.id}`,
+                      () => removeItem(edits, k, it.id)
+                    )
+                  }
+                  className={`${barBase} truncate px-1.5 ${hidden ? lane?.hollow : lane?.tone} ${isSelected(k, it.id) ? selectedRing : ''}`}
+                  style={{ left: toPx(it.start_ms), width: barW }}
+                >
+                  {/* Too short to read: the bar alone, named by aria-label. */}
+                  {barW >= MIN_LABEL_PX && itemLabel(k, it)}
+                  {edgeHandles}
+                </button>
+              )
+            })}
+          </div>
+        )
+      })}
     </>
   )
-}
+})

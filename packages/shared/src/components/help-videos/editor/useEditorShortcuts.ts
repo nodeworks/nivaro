@@ -1,24 +1,27 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
+
+export type EditorShortcutActions = {
+  undo: () => void
+  redo: () => void
+  split: () => void
+  deletePiece: () => void
+  /** A kept piece is selected (Delete cuts it). */
+  pieceSelected: boolean
+}
 
 /** Shortcuts on the Edit tab: S split, Delete cut the selected piece,
  *  Ctrl/⌘+Z undo, Shift+Ctrl/⌘+Z or Ctrl+Y redo. Never while typing or
- *  inside a popover or menu. */
-export function useEditorShortcuts(
-  active: boolean,
-  actions: {
-    undo: () => void
-    redo: () => void
-    split: () => void
-    deletePiece: () => void
-    /** A kept piece is selected (Delete cuts it). */
-    pieceSelected: boolean
-  }
-) {
+ *  inside a popover or menu. The window listener is added once; each key
+ *  reads the latest actions from a ref. */
+export function useEditorShortcuts(active: boolean, actions: EditorShortcutActions) {
+  const latest = useRef({ active, actions })
+  latest.current = { active, actions }
   useEffect(() => {
-    if (!active) return
     const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented) return
-      const t = e.target as HTMLElement | null
+      const { active: on, actions: a } = latest.current
+      if (!on || e.defaultPrevented) return
+      // The target can be the window or document itself, not an element.
+      const t = e.target instanceof HTMLElement ? e.target : null
       if (
         t &&
         (t.tagName === 'INPUT' ||
@@ -32,15 +35,15 @@ export function useEditorShortcuts(
       const k = e.key.toLowerCase()
       if (mod && (k === 'z' || k === 'y')) {
         e.preventDefault()
-        if (e.shiftKey || k === 'y') actions.redo()
-        else actions.undo()
-      } else if (!mod && !e.altKey && k === 's') actions.split()
-      else if (!mod && (e.key === 'Delete' || e.key === 'Backspace') && actions.pieceSelected) {
+        if (e.shiftKey || k === 'y') a.redo()
+        else a.undo()
+      } else if (!mod && !e.altKey && k === 's') a.split()
+      else if (!mod && (e.key === 'Delete' || e.key === 'Backspace') && a.pieceSelected) {
         e.preventDefault()
-        actions.deletePiece()
+        a.deletePiece()
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  })
+  }, [])
 }
