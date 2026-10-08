@@ -655,6 +655,7 @@ export async function publishVideo(
   }
   const edits = json<VideoEdits>(draft.edits, emptyEdits(0))
   const now = new Date()
+  const firstPublish = video.published_version_id == null
   await db('nivaro_help_videos')
     .where({ id: video.id })
     .update({
@@ -666,6 +667,19 @@ export async function publishVideo(
       ...touch(user)
     })
   await queueRender(String(draft.id))
+  if (firstPublish || opts.watch_again) {
+    void db('nivaro_help_video_requirements')
+      .where({ video_id: video.id })
+      .select('role_id')
+      .then((rows: Array<{ role_id: unknown }>) =>
+        notifyRequiredViewers(
+          String(video.id),
+          String(video.title ?? ''),
+          rows.map((r) => String(r.role_id))
+        )
+      )
+      .catch(() => 0)
+  }
   await logActivity({
     action: 'help-video-publish',
     user: user.id,
@@ -674,6 +688,64 @@ export async function publishVideo(
     comment: `version ${draft.version}${opts.watch_again ? ' · asked everyone to watch again' : ''}`
   })
   return String(draft.id)
+}
+
+export function requiredNotice(title: string): { subject: string; message: string; why: string } {
+  return {
+    subject: `Please watch: ${title}`.slice(0, 250),
+    message:
+      'A short video your role is asked to watch. It is on your dashboard under Required videos.',
+    why: 'This video is required for your role.'
+  }
+}
+
+const NOTIFY_CAP = 2000
+
+/**
+ * One notification to each active person in the given roles who can actually
+ * see the video: when its visibility is limited, only roles on that allowlist
+ * count (the same rule as viewerMaySee). At most NOTIFY_CAP people.
+ */
+export async function notifyRequiredViewers(
+  videoId: string,
+  title: string,
+  roleIds: string[]
+): Promise<number> {
+  let roles = [...new Set(roleIds.filter(isUuid).map(up))]
+  if (!roles.length) return 0
+  const app = (await import('./io-holder.js')).getApp()
+  if (!app) return 0
+  const row = await db('nivaro_help_videos').where({ id: videoId }).first('visibility')
+  const vis = parseVisibility(row?.visibility)
+  if (vis.mode === 'roles') roles = roles.filter((r) => vis.role_ids.includes(r))
+  if (!roles.length) return 0
+  const { notifyUser } = await import('./notification-channels.js')
+  // Ask for one more than the cap so a truncation is detectable.
+  const found = await db('nivaro_users')
+    .whereIn('role', roles)
+    .where({ status: 'active' })
+    .where((w) => w.where('is_redacted', 0).orWhereNull('is_redacted'))
+    .whereNull('account_kind')
+    .limit(NOTIFY_CAP + 1)
+    .select('id')
+  if (found.length > NOTIFY_CAP) {
+    app.log?.warn?.(
+      `help video ${low(videoId)}: more than ${NOTIFY_CAP} people need this video; notified the first ${NOTIFY_CAP}`
+    )
+  }
+  const users = found.slice(0, NOTIFY_CAP)
+  const notice = requiredNotice(title || 'Untitled video')
+  for (const u of users) {
+    await notifyUser(app, String(u.id), {
+      subject: notice.subject,
+      message: notice.message,
+      category: 'system',
+      why: notice.why,
+      target: { kind: 'home', focus: 'help-required' },
+      source: { kind: 'help-video', label: title, id: low(videoId) }
+    }).catch(() => null)
+  }
+  return users.length
 }
 
 export async function rerecordVideo(

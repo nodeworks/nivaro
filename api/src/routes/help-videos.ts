@@ -34,6 +34,7 @@ import {
   listVideos,
   loadVersion,
   loadVideoForUser,
+  notifyRequiredViewers,
   publishVideo,
   purgeVideo,
   registerPage,
@@ -175,6 +176,9 @@ export async function helpVideosRoutes(app: FastifyInstance) {
       req.user!,
       (req.body as { role_ids?: unknown })?.role_ids
     )
+    if (video.status === 'published' && added.length) {
+      void notifyRequiredViewers(String(video.id), String(video.title ?? ''), added).catch(() => 0)
+    }
     return reply.send({ data: { ok: true, added } })
   })
 
