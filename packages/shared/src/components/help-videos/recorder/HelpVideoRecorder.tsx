@@ -4,16 +4,22 @@ import { Dialog, DialogContent } from '../../ui/dialog'
 import { modalHostOf } from '../../ui/popover'
 import { fetchHelpVideo, helpVideoApi } from '../api'
 import type { HelpVideoContext, HelpVideoDto } from '../types'
-import { type Failure, plainFailure, serverMessage } from './failure'
-import { idbPartStore, PartUploader } from './partQueue'
+import { type Failure, plainFailure, stopsRecording } from './failure'
+import { findLeftovers, type Leftover, planResume } from './leftovers'
+import { idbPartStore, PartUploader, type UploadState } from './partQueue'
 import { RecorderBar } from './RecorderBar'
-import { DEFAULT_SETUP, type Leftover, RecorderSetup, type SetupOptions } from './RecorderSetup'
-import { ErrorView, LimitView, SavingView, UnsupportedView } from './RecorderStatus'
+import { DEFAULT_SETUP, RecorderSetup, type SetupOptions } from './RecorderSetup'
+import { DoneView, ErrorView, LimitView, SavingView, UnsupportedView } from './RecorderStatus'
+import { partSender } from './sendPart'
+import { leaveWarningActive, useLeaveWarning } from './useLeaveWarning'
 import { type CaptureMeta, useScreenCapture } from './useScreenCapture'
 
 export { RECORD_UNSUPPORTED } from './RecorderStatus'
 
-type Stage = 'setup' | 'countdown' | 'recording' | 'saving' | 'error' | 'limit'
+type Stage = 'setup' | 'countdown' | 'recording' | 'saving' | 'error' | 'limit' | 'done'
+
+/** Attempts per part once recording has stopped (live parts retry without limit). */
+const SAVE_ATTEMPTS = 12
 
 export function canRecord(): boolean {
   return (
@@ -28,9 +34,10 @@ const emptyMeta = (): CaptureMeta => ({ duration_ms: 0, clicks: null, levels: nu
 /**
  * Records this tab, a window or the whole screen with optional microphone
  * narration. Parts upload every five seconds and are kept in this browser
- * (IndexedDB) until the server confirms each one, so an outage or a closed
- * tab loses nothing: a refused or interrupted recording stays in the browser
- * until the person keeps or discards it. Recording stops by itself at 30:00.
+ * (IndexedDB) before they are sent and until the server confirms each one, so
+ * an outage or a closed tab loses nothing: recording carries on through an
+ * outage, and a refused or interrupted recording stays in the browser until
+ * the person keeps or discards it. Recording stops by itself at 30:00.
  *
  * During recording only a small control bar shows. It portals into the
  * hosting [role="dialog"] when the recorder sits inside one (a modal sheet
@@ -53,7 +60,7 @@ export function HelpVideoRecorder({
 }) {
   const client = useNivaroClient()
   const api = helpVideoApi(client)
-  const { apiBase, authHeaders, credentials } = useApiFetchConfig()
+  const sendPart = partSender(useApiFetchConfig())
   const [supported] = useState(canRecord)
   const [stage, setStage] = useState<Stage>('setup')
   const [options, setOptions] = useState<SetupOptions>(DEFAULT_SETUP)
@@ -62,10 +69,14 @@ export function HelpVideoRecorder({
   const [leftovers, setLeftovers] = useState<Leftover[]>([])
   const [busyLeftover, setBusyLeftover] = useState<string | null>(null)
   const [confirmDiscard, setConfirmDiscard] = useState<string | null>(null)
-  const [upload, setUpload] = useState({ pending: 0, retrying: false })
+  const [upload, setUpload] = useState<UploadState>(() => ({
+    pending: 0,
+    retrying: false,
+    durable: idbPartStore().durable
+  }))
   const [savePhase, setSavePhase] = useState<'upload' | 'finish'>('upload')
   const [autoStopped, setAutoStopped] = useState(false)
-  const [limitVideo, setLimitVideo] = useState<HelpVideoDto | null>(null)
+  const [saved, setSaved] = useState<HelpVideoDto | null>(null)
 
   // Where the recording bar portals: the hosting [role="dialog"] when the
   // recorder was opened inside one (a drill sheet's modal lock makes anything
@@ -92,6 +103,8 @@ export function HelpVideoRecorder({
     onSharingEnded: () => (cap.isLive() ? void stop() : void cancelCountdown())
   })
 
+  useLeaveWarning(leaveWarningActive(open, stage))
+
   // A fresh start every time the recorder opens (unless a recording is live).
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs on open only
   useEffect(() => {
@@ -99,7 +112,7 @@ export function HelpVideoRecorder({
     setStage('setup')
     setFailure(null)
     setSetupError(null)
-    setLimitVideo(null)
+    setSaved(null)
     setConfirmDiscard(null)
   }, [open])
 
@@ -110,62 +123,20 @@ export function HelpVideoRecorder({
     let stop = false
     void api
       .myUploads()
-      .then(async (list) => {
-        const store = idbPartStore()
-        const rows: Leftover[] = []
-        for (const u of list) {
-          const local = await store.list(u.id).catch(() => [])
-          const kept = local.filter((p) => p.n >= u.next_part)
-          rows.push({
-            id: u.id,
-            created_at: u.created_at,
-            bytes: u.bytes_received + kept.reduce((sum, p) => sum + p.blob.size, 0)
-          })
-        }
-        if (!stop) setLeftovers(rows)
-      })
+      .then((list) => findLeftovers(list, idbPartStore()))
+      .then((rows) => !stop && setLeftovers(rows))
       .catch(() => null)
     return () => {
       stop = true
     }
   }, [open, stage, supported])
 
-  // Leaving the page mid-recording would drop the parts not yet in the browser.
-  useEffect(() => {
-    if (stage !== 'countdown' && stage !== 'recording' && stage !== 'saving') return
-    const warn = (e: BeforeUnloadEvent) => {
-      e.preventDefault()
-      e.returnValue = ''
-    }
-    window.addEventListener('beforeunload', warn)
-    return () => window.removeEventListener('beforeunload', warn)
-  }, [stage])
-
-  async function sendPart(uploadId: string, n: number, blob: Blob) {
-    const res = await fetch(`${apiBase}/help-videos/uploads/${uploadId}/parts/${n}`, {
-      method: 'PUT',
-      credentials,
-      headers: { 'Content-Type': 'application/octet-stream', ...authHeaders },
-      body: blob
-    })
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as {
-        error?: string
-        message?: string
-        code?: string
-      }
-      throw Object.assign(
-        new Error(serverMessage(body) ?? 'The server did not accept part of the recording'),
-        { status: res.status, code: body.code }
-      )
-    }
-  }
-
-  function newUploader(uploadId: string, startAt = 0) {
+  function newUploader(uploadId: string, startAt: number, maxAttempts: number) {
     return new PartUploader({
       uploadId,
       store: idbPartStore(),
       startAt,
+      maxAttempts,
       send: (n, blob) => sendPart(uploadId, n, blob),
       onChange: setUpload
     })
@@ -174,7 +145,7 @@ export function HelpVideoRecorder({
   async function start() {
     setSetupError(null)
     setAutoStopped(false)
-    setUpload({ pending: 0, retrying: false })
+    setUpload({ pending: 0, retrying: false, durable: idbPartStore().durable })
     cap.reset()
     const s = r.current
     Object.assign(s, { failed: false, meta: null, uploadId: undefined, uploader: undefined })
@@ -182,12 +153,15 @@ export function HelpVideoRecorder({
       const mime = await cap.acquire(options)
       const opened = await api.openUpload(mime.split(';')[0])
       s.uploadId = opened.id
-      const uploader = newUploader(opened.id)
+      // While recording, an outage never gives up: parts wait in the browser.
+      const uploader = newUploader(opened.id, 0, Number.POSITIVE_INFINITY)
       s.uploader = uploader
       cap.arm(mime, (blob) => {
         uploader.enqueue(blob)
-        // A refusal mid-recording stops it at once; the parts stay in the browser.
-        void uploader.drain().catch((err) => void failWhileRecording(err))
+        // Only a refusal stops the recording; the parts stay in the browser.
+        void uploader.drain().catch((err) => {
+          if (stopsRecording(err)) void failWhileRecording(err)
+        })
       })
       setStage('countdown')
       if (!(await cap.countdown())) return
@@ -228,10 +202,12 @@ export function HelpVideoRecorder({
     if (!cap.isLive()) return
     s.meta = cap.meta()
     await cap.halt()
+    const uploader = s.uploader as PartUploader
+    uploader.limitAttempts(SAVE_ATTEMPTS)
     setAutoStopped(auto)
     setSavePhase('upload')
     setStage('saving')
-    await save(String(s.uploadId), s.uploader as PartUploader, s.meta, auto)
+    await save(String(s.uploadId), uploader, s.meta, auto)
   }
 
   async function failWhileRecording(err: unknown) {
@@ -272,10 +248,13 @@ export function HelpVideoRecorder({
       await uploader.drain()
       setSavePhase('finish')
       const video = await finish(uploadId, meta)
+      setSaved(video)
+      // Leave 'saving' before handing the video over, so nothing (the leave
+      // warning, the hidden close button) outlives the save.
       if (auto) {
-        setLimitVideo(video)
         setStage('limit')
       } else {
+        setStage('done')
         props.current.onDone(video)
       }
     } catch (err) {
@@ -284,39 +263,44 @@ export function HelpVideoRecorder({
     }
   }
 
-  /** Re-sends what this browser kept for an upload, from the part the server expects next. */
-  async function resumeUploader(uploadId: string): Promise<PartUploader> {
-    const parts = await idbPartStore().list(uploadId)
-    const nextServer = (await api.myUploads()).find((u) => u.id === uploadId)?.next_part ?? 0
-    const up = newUploader(uploadId, nextServer)
-    up.resume(parts.filter((p) => p.n >= nextServer))
-    return up
-  }
-
-  /** Saves an upload again from what the server and this browser hold. */
-  async function saveAgain(id: string, meta: CaptureMeta) {
+  /** Saves an upload again from what the server and this browser hold. When
+   *  the end never reached the server (`gap`), only `keepPartial` saves it. */
+  async function saveAgain(id: string, meta: CaptureMeta, keepPartial = false) {
+    setFailure(null)
     setSavePhase('upload')
     setStage('saving')
     try {
-      await save(id, await resumeUploader(id), meta, false)
+      const parts = await idbPartStore().list(id)
+      const nextServer = (await api.myUploads()).find((u) => u.id === id)?.next_part ?? 0
+      const { resend, gap } = planResume(parts, nextServer)
+      if (gap && !keepPartial) {
+        setFailure({
+          message: "The end of this recording didn't reach the server.",
+          retryable: false,
+          closed: false,
+          partial: true,
+          uploadId: id
+        })
+        setStage('error')
+        return
+      }
+      const up = newUploader(id, nextServer, SAVE_ATTEMPTS)
+      up.resume(resend)
+      await save(id, up, meta, false)
     } catch (err) {
       setFailure({ ...plainFailure(err), uploadId: id })
       setStage('error')
     }
   }
 
-  async function retry() {
-    if (!failure) return
-    const id = failure.uploadId
-    const meta = r.current.uploadId === id && r.current.meta ? r.current.meta : emptyMeta()
-    setFailure(null)
-    await saveAgain(id, meta)
-  }
+  const metaFor = (id: string) =>
+    r.current.uploadId === id && r.current.meta ? r.current.meta : emptyMeta()
 
   async function keepLeftover(id: string) {
+    const row = leftovers.find((l) => l.id === id)
     setBusyLeftover(id)
     setAutoStopped(false)
-    await saveAgain(id, emptyMeta())
+    await saveAgain(id, emptyMeta(), !!row?.gap)
     setBusyLeftover(null)
   }
 
@@ -347,6 +331,7 @@ export function HelpVideoRecorder({
             hasMic={cap.hasMic}
             micMissing={cap.micMissing}
             retrying={upload.retrying}
+            durable={upload.durable}
             announce={cap.announce}
             onCancel={() => void cancelCountdown()}
             onPause={cap.togglePause}
@@ -360,6 +345,12 @@ export function HelpVideoRecorder({
 
   const title = videoId ? 'Re-record this video' : 'Record a tutorial'
   const saving = stage === 'saving'
+  /** The limit notice hands the video over when it is opened or closed. */
+  const handOver = () => {
+    if (!saved) return
+    setStage('done')
+    props.current.onDone(saved)
+  }
   return (
     <>
       {/* Rendered in every stage so the bar's host is known before recording starts. */}
@@ -368,15 +359,13 @@ export function HelpVideoRecorder({
         open
         onOpenChange={(o) => {
           if (o || saving) return
-          // The video exists once the limit notice shows: closing still hands it over.
-          if (stage === 'limit' && limitVideo) props.current.onDone(limitVideo)
-          else onClose()
+          if (stage === 'limit') handOver()
+          onClose()
         }}
       >
         <DialogContent
-          className={`w-[calc(100vw-2rem)] max-w-[520px] font-sans dark:bg-card ${
-            saving ? '[&>button:last-child]:hidden' : ''
-          }`}
+          className='w-[calc(100vw-2rem)] max-w-[520px] font-sans dark:bg-card'
+          hideClose={saving}
           data-hv-recorder
           data-hv-stage={supported ? stage : 'unsupported'}
         >
@@ -388,12 +377,16 @@ export function HelpVideoRecorder({
               phase={savePhase}
               pending={upload.pending}
               retrying={upload.retrying}
+              durable={upload.durable}
             />
           ) : stage === 'limit' ? (
-            <LimitView onOpen={() => limitVideo && props.current.onDone(limitVideo)} />
+            <LimitView onOpen={handOver} />
+          ) : stage === 'done' ? (
+            <DoneView onClose={onClose} />
           ) : stage === 'error' && failure ? (
             <ErrorView
               failure={failure}
+              durable={upload.durable}
               confirming={confirmDiscard === failure.uploadId}
               onAskDiscard={() => setConfirmDiscard(failure.uploadId)}
               onCancelDiscard={() => setConfirmDiscard(null)}
@@ -403,7 +396,10 @@ export function HelpVideoRecorder({
                 setStage('setup')
               }}
               onClose={onClose}
-              onRetry={() => void retry()}
+              onRetry={() => void saveAgain(failure.uploadId, metaFor(failure.uploadId))}
+              onKeepPartial={() =>
+                void saveAgain(failure.uploadId, metaFor(failure.uploadId), true)
+              }
             />
           ) : (
             <RecorderSetup

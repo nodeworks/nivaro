@@ -207,7 +207,13 @@ export function helpVideoApi(client: NivaroClient) {
     myUploads: () =>
       r(
         get<{
-          data: Array<{ id: string; bytes_received: number; next_part: number; created_at: string }>
+          data: Array<{
+            id: string
+            bytes_received: number
+            next_part: number
+            created_at: string
+            updated_at: string
+          }>
         }>('/help-videos/uploads/mine')
       ).then((x) => x.data),
     abandonUpload: (id: string) => r(del(`/help-videos/uploads/${id}`)),

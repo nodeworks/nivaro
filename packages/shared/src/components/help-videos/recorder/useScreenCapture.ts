@@ -31,6 +31,8 @@ type Refs = {
   stream?: MediaStream
   recorder?: MediaRecorder
   live: boolean
+  /** Click capture is on for this recording (this tab only). */
+  clickCapture: boolean
   cancelled: boolean
   warned: boolean
   startedAt: number
@@ -43,6 +45,7 @@ type Refs = {
 
 const fresh = (): Refs => ({
   live: false,
+  clickCapture: false,
   cancelled: false,
   warned: false,
   startedAt: 0,
@@ -211,6 +214,7 @@ export function useScreenCapture(events: {
     s.live = true
     const surface = s.display?.getVideoTracks()[0]?.getSettings().displaySurface
     if (captureClicks && surface === 'browser') {
+      s.clickCapture = true
       window.addEventListener('pointerdown', onPointer, true)
     }
     s.timers.push(
@@ -239,12 +243,13 @@ export function useScreenCapture(events: {
     setAnnounce('Recording.')
   }
 
-  /** The recording's data so far (call before `halt`). */
+  /** The recording's data so far (call before `halt`). `clicks` is null when
+   *  click capture was off, [] when it was on and caught nothing. */
   function meta(): CaptureMeta {
     const s = r.current
     return {
       duration_ms: Math.min(MAX_MS, Math.round(elapsedMs())),
-      clicks: s.clicks,
+      clicks: s.clickCapture ? s.clicks : null,
       levels: s.levels.length ? s.levels : null
     }
   }

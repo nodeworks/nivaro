@@ -1,7 +1,19 @@
 import { isFatalStatus } from './partQueue'
 
 /** A failed save, as the error view shows it. */
-export type Failure = { message: string; retryable: boolean; uploadId: string }
+export type Failure = PlainFailure & {
+  uploadId: string
+  /** The server has the start of the recording but the end never reached it. */
+  partial?: boolean
+}
+
+export type PlainFailure = {
+  message: string
+  /** Trying again could help (an outage, not a refusal). */
+  retryable: boolean
+  /** The server no longer holds this upload open: it can never be saved. */
+  closed: boolean
+}
 
 /** Ends the text with a full stop unless it already ends a sentence. */
 export function sentence(text: string): string {
@@ -21,7 +33,7 @@ export function serverMessage(body: { error?: unknown; message?: unknown }): str
 /** The server's own plain message for a refusal (never a raw code), and
  *  whether trying again could help. No status means the request never got
  *  an answer: the network or the server is down. */
-export function plainFailure(err: unknown): { message: string; retryable: boolean } {
+export function plainFailure(err: unknown): PlainFailure {
   const e = (err ?? {}) as {
     message?: unknown
     status?: unknown
@@ -30,7 +42,7 @@ export function plainFailure(err: unknown): { message: string; retryable: boolea
   }
   const status = typeof e.status === 'number' ? e.status : undefined
   if (status === undefined) {
-    return { message: 'The server could not be reached.', retryable: true }
+    return { message: 'The server could not be reached.', retryable: true, closed: false }
   }
   const code =
     typeof e.code === 'string'
@@ -43,5 +55,15 @@ export function plainFailure(err: unknown): { message: string; retryable: boolea
     typeof text === 'string' && text.trim()
       ? sentence(text)
       : 'The server did not accept the recording.'
-  return { message, retryable: !isFatalStatus(status, code) }
+  return {
+    message,
+    retryable: !isFatalStatus(status, code),
+    closed: status === 404 || code === 'UPLOAD_CLOSED' || code === 'UPLOAD_NOT_FOUND'
+  }
+}
+
+/** Only a refusal stops a live recording; an outage keeps it going while the
+ *  parts wait in the browser. */
+export function stopsRecording(err: unknown): boolean {
+  return !plainFailure(err).retryable
 }

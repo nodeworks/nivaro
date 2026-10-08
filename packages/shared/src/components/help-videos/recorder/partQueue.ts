@@ -7,10 +7,20 @@ export interface PartStore {
   remove(uploadId: string, n: number): Promise<void>
   list(uploadId: string): Promise<Array<{ n: number; blob: Blob }>>
   clear(uploadId: string): Promise<void>
+  /** Every upload id that has parts stored. */
+  uploads(): Promise<string[]>
+  /** False once parts are kept only in memory (lost when the tab closes). */
+  readonly durable: boolean
 }
 
+const uploadIdOf = (key: string) => key.slice(0, key.lastIndexOf(':'))
+
 export class MemoryPartStore implements PartStore {
+  readonly durable: boolean = false
   private m = new Map<string, Blob>()
+  async uploads() {
+    return [...new Set([...this.m.keys()].map(uploadIdOf))]
+  }
   async put(u: string, n: number, b: Blob) {
     this.m.set(`${u}:${n}`, b)
   }
@@ -38,6 +48,11 @@ function req<T>(r: IDBRequest<T>): Promise<T> {
 class IdbPartStore implements PartStore {
   private memory = new MemoryPartStore()
   private dbp: Promise<IDBDatabase> | null = null
+  private fellBack = false
+
+  get durable(): boolean {
+    return !this.fellBack
+  }
 
   private async store(mode: IDBTransactionMode): Promise<IDBObjectStore> {
     if (!this.dbp) {
@@ -55,8 +70,20 @@ class IdbPartStore implements PartStore {
     try {
       await req((await this.store('readwrite')).put(b, `${u}:${n}`))
     } catch {
+      this.fellBack = true
       await this.memory.put(u, n, b)
     }
+  }
+
+  async uploads(): Promise<string[]> {
+    const ids = new Set(await this.memory.uploads())
+    try {
+      const keys = (await req((await this.store('readonly')).getAllKeys())) as string[]
+      for (const k of keys) ids.add(uploadIdOf(String(k)))
+    } catch {
+      /* memory only */
+    }
+    return [...ids]
   }
 
   async remove(u: string, n: number): Promise<void> {
@@ -112,6 +139,8 @@ export function isFatalStatus(status: number | undefined, code?: string): boolea
   return [400, 404, 409, 413, 415, 422].includes(status)
 }
 
+export type UploadState = { pending: number; retrying: boolean; durable: boolean }
+
 export class PartUploader {
   private next: number
   private queue: number[] = []
@@ -124,8 +153,10 @@ export class PartUploader {
     store: PartStore
     sleep: (ms: number) => Promise<void>
     maxAttempts: number
-    onChange?: (s: { pending: number; retrying: boolean }) => void
+    onChange?: (s: UploadState) => void
   }
+  /** Resolves once a part is in the store; sending waits for it. */
+  private stored = new Map<number, Promise<void>>()
 
   constructor(opts: {
     uploadId: string
@@ -133,8 +164,10 @@ export class PartUploader {
     store: PartStore
     startAt?: number
     sleep?: (ms: number) => Promise<void>
+    /** Attempts per part before giving up on an outage (default 12;
+     *  Infinity keeps trying, backoff capped at 30 s). */
     maxAttempts?: number
-    onChange?: (s: { pending: number; retrying: boolean }) => void
+    onChange?: (s: UploadState) => void
   }) {
     this.next = opts.startAt ?? 0
     this.opts = {
@@ -148,12 +181,28 @@ export class PartUploader {
     return this.queue.length
   }
 
+  /** Caps the attempts per part from now on (e.g. once recording stops). */
+  limitAttempts(max: number): void {
+    this.opts.maxAttempts = max
+  }
+
+  private emit(retrying: boolean): void {
+    this.opts.onChange?.({
+      pending: this.queue.length,
+      retrying,
+      durable: this.opts.store.durable !== false
+    })
+  }
+
   enqueue(blob: Blob): void {
     if (!blob.size) return
     const n = this.next++
     this.blobs.set(n, blob)
     this.queue.push(n)
-    void this.opts.store.put(this.opts.uploadId, n, blob)
+    this.stored.set(
+      n,
+      this.opts.store.put(this.opts.uploadId, n, blob).catch(() => undefined)
+    )
     this.pump()
   }
 
@@ -174,10 +223,13 @@ export class PartUploader {
       while (this.queue.length) {
         const n = this.queue[0]
         const blob = this.blobs.get(n) as Blob
+        // Kept in the browser before it leaves it, so a crash mid-send loses nothing.
+        await this.stored.get(n)
+        this.stored.delete(n)
         let attempt = 0
         for (;;) {
           try {
-            this.opts.onChange?.({ pending: this.queue.length, retrying: attempt > 0 })
+            this.emit(attempt > 0)
             await this.opts.send(n, blob)
             break
           } catch (err) {
@@ -193,7 +245,7 @@ export class PartUploader {
         this.blobs.delete(n)
         await this.opts.store.remove(this.opts.uploadId, n)
       }
-      this.opts.onChange?.({ pending: 0, retrying: false })
+      this.emit(false)
     })().finally(() => {
       this.running = null
     })

@@ -1,4 +1,4 @@
-import { AppWindow, History, Monitor, PanelTop } from 'lucide-react'
+import { AppWindow, ArchiveX, History, Monitor, PanelTop } from 'lucide-react'
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '../../ui/button'
 import { Checkbox } from '../../ui/checkbox'
@@ -11,6 +11,7 @@ import {
 } from '../../ui/dialog'
 import { Label } from '../../ui/label'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import type { Leftover } from './leftovers'
 import { ConfirmDiscard, ErrorNote, ghostBtn, primaryBtn } from './RecorderStatus'
 import type { Source } from './useScreenCapture'
 
@@ -26,9 +27,6 @@ export const DEFAULT_SETUP: SetupOptions = {
   micId: 'default',
   captureClicks: true
 }
-
-/** An upload this person started and never finished. */
-export type Leftover = { id: string; created_at: string; bytes: number }
 
 const SOURCES: Array<{ id: Source; label: string; hint: string; icon: ReactNode }> = [
   { id: 'tab', label: 'This tab', hint: 'Recommended', icon: <PanelTop className='h-4 w-4' /> },
@@ -104,69 +102,25 @@ export function RecorderSetup({
   return (
     <>
       <DialogHeader className='pr-12'>
-        <DialogTitle className='text-[16px] dark:text-foreground'>{title}</DialogTitle>
-        <DialogDescription className='text-[13px] text-slate-600 dark:text-muted-foreground'>
+        <DialogTitle className='text-[16px] text-foreground'>{title}</DialogTitle>
+        <DialogDescription className='text-[13px] text-muted-foreground'>
           {rerecord
             ? 'The new recording becomes a fresh draft. The published video stays as it is until you publish again.'
             : 'Show how something works while you talk it through. You can trim, annotate and caption it afterwards.'}
         </DialogDescription>
       </DialogHeader>
       <DialogBody className='space-y-5 text-[13px]'>
-        {leftovers.length > 0 && (
-          <section
-            aria-labelledby={`${ids}-left`}
-            className='rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-3 dark:border-amber-400/30 dark:bg-amber-400/10'
-            data-hv-leftovers
-          >
-            <div className='flex items-start gap-2.5'>
-              <History className='mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300' />
-              <div className='min-w-0 flex-1'>
-                <p id={`${ids}-left`} className='font-medium text-amber-950 dark:text-amber-100'>
-                  {leftovers.length === 1
-                    ? 'A recording was interrupted'
-                    : `${leftovers.length} recordings were interrupted`}
-                </p>
-                <ul className='mt-2 space-y-2.5'>
-                  {leftovers.map((l) => (
-                    <li key={l.id} className='flex flex-col items-start gap-2'>
-                      <span className='text-amber-900 dark:text-amber-200'>
-                        Started {when(l.created_at)}, {sizeLabel(l.bytes)} saved so far.
-                      </span>
-                      <span className='flex flex-wrap items-center gap-1.5'>
-                        {confirmDiscard !== l.id && (
-                          <Button
-                            size='sm'
-                            className={`h-8 text-[12.5px] ${primaryBtn}`}
-                            disabled={!!busyLeftover}
-                            onClick={() => onKeep(l.id)}
-                            data-hv-keep
-                          >
-                            Keep what was recorded
-                          </Button>
-                        )}
-                        <ConfirmDiscard
-                          compact
-                          confirming={confirmDiscard === l.id}
-                          busy={!!busyLeftover}
-                          label='Discard'
-                          onAsk={() => onConfirmDiscard(l.id)}
-                          onCancel={() => onConfirmDiscard(null)}
-                          onConfirm={() => onDiscard(l.id)}
-                        />
-                      </span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </div>
-          </section>
-        )}
+        <LeftoverList
+          leftovers={leftovers}
+          busy={busyLeftover}
+          confirmDiscard={confirmDiscard}
+          onConfirmDiscard={onConfirmDiscard}
+          onKeep={onKeep}
+          onDiscard={onDiscard}
+        />
 
         <fieldset>
-          <legend
-            id={`${ids}-src`}
-            className='mb-2 font-medium text-slate-900 dark:text-foreground'
-          >
+          <legend id={`${ids}-src`} className='mb-2 font-medium text-foreground'>
             What to record
           </legend>
           <SourcePicker
@@ -174,9 +128,7 @@ export function RecorderSetup({
             onChange={(s) => set({ source: s })}
             labelledBy={`${ids}-src`}
           />
-          <p className='mt-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
-            {SOURCE_NOTES[source]}
-          </p>
+          <p className='mt-2 text-[12.5px] text-muted-foreground'>{SOURCE_NOTES[source]}</p>
         </fieldset>
 
         <div className='space-y-3.5'>
@@ -189,10 +141,7 @@ export function RecorderSetup({
               data-hv-use-mic
             />
             <div className='min-w-0 flex-1'>
-              <Label
-                htmlFor={`${ids}-mic`}
-                className='text-[13px] leading-snug text-slate-900 dark:text-foreground'
-              >
+              <Label htmlFor={`${ids}-mic`} className='text-[13px] leading-snug text-foreground'>
                 Narrate with my microphone
               </Label>
               {options.useMic && (
@@ -220,13 +169,10 @@ export function RecorderSetup({
               className='mt-px'
             />
             <div className='min-w-0 flex-1'>
-              <Label
-                htmlFor={`${ids}-clicks`}
-                className='text-[13px] leading-snug text-slate-900 dark:text-foreground'
-              >
+              <Label htmlFor={`${ids}-clicks`} className='text-[13px] leading-snug text-foreground'>
                 Capture my clicks
               </Label>
-              <p className='mt-1 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
+              <p className='mt-1 text-[12.5px] text-muted-foreground'>
                 {source === 'tab'
                   ? 'The editor can turn them into click ripples.'
                   : 'Clicks can only be captured when you record this tab.'}
@@ -237,7 +183,7 @@ export function RecorderSetup({
 
         {error && <ErrorNote data-hv-setup-error>{error}</ErrorNote>}
       </DialogBody>
-      <DialogFooter className='dark:border-border'>
+      <DialogFooter className='border-border'>
         <Button variant='ghost' className={ghostBtn} onClick={onCancel}>
           Cancel
         </Button>
@@ -296,31 +242,134 @@ function SourcePicker({
             onKeyDown={(e) => onKey(e, i)}
             data-hv-source={s.id}
             className={`flex min-w-0 items-center gap-3 rounded-lg border px-3 py-2.5 text-left transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none sm:flex-col sm:items-start sm:gap-1.5 ${
-              on
-                ? 'border-nvr-cyan bg-nvr-cyan/10'
-                : 'border-slate-200 hover:bg-slate-50 dark:border-border dark:hover:bg-white/5'
+              on ? 'border-nvr-cyan bg-nvr-cyan/10' : 'border-border hover:bg-muted/60'
             }`}
           >
-            <span
-              className={
-                on
-                  ? 'text-slate-900 dark:text-foreground'
-                  : 'text-slate-500 dark:text-muted-foreground'
-              }
-            >
-              {s.icon}
-            </span>
+            <span className={on ? 'text-foreground' : 'text-muted-foreground'}>{s.icon}</span>
             <span className='flex min-w-0 flex-1 items-baseline gap-2 sm:block sm:w-full'>
-              <span className='block truncate font-medium text-slate-900 dark:text-foreground'>
-                {s.label}
-              </span>
-              <span className='block truncate text-[12px] text-slate-600 dark:text-muted-foreground'>
-                {s.hint}
-              </span>
+              <span className='block truncate font-medium text-foreground'>{s.label}</span>
+              <span className='block truncate text-[12px] text-muted-foreground'>{s.hint}</span>
             </span>
           </button>
         )
       })}
     </div>
+  )
+}
+
+/** Interrupted recordings (keep or discard) and copies the server can no
+ *  longer take (discard only). */
+function LeftoverList({
+  leftovers,
+  busy,
+  confirmDiscard,
+  onConfirmDiscard,
+  onKeep,
+  onDiscard
+}: {
+  leftovers: Leftover[]
+  busy: string | null
+  confirmDiscard: string | null
+  onConfirmDiscard: (id: string | null) => void
+  onKeep: (id: string) => void
+  onDiscard: (id: string) => void
+}) {
+  const ids = useId()
+  const interrupted = leftovers.filter((l) => l.kind === 'interrupted')
+  const unsaveable = leftovers.filter((l) => l.kind === 'unsaveable')
+  const discard = (l: Leftover) => (
+    <ConfirmDiscard
+      compact
+      confirming={confirmDiscard === l.id}
+      busy={!!busy}
+      label='Discard'
+      onAsk={() => onConfirmDiscard(l.id)}
+      onCancel={() => onConfirmDiscard(null)}
+      onConfirm={() => onDiscard(l.id)}
+    />
+  )
+  return (
+    <>
+      {interrupted.length > 0 && (
+        <section
+          aria-labelledby={`${ids}-left`}
+          className='rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-3 dark:border-amber-400/30 dark:bg-amber-400/10'
+          data-hv-leftovers
+        >
+          <div className='flex items-start gap-2.5'>
+            <History className='mt-0.5 h-4 w-4 shrink-0 text-amber-700 dark:text-amber-300' />
+            <div className='min-w-0 flex-1'>
+              <p id={`${ids}-left`} className='font-medium text-amber-950 dark:text-amber-100'>
+                {interrupted.length === 1
+                  ? 'A recording was interrupted'
+                  : `${interrupted.length} recordings were interrupted`}
+              </p>
+              <ul className='mt-2 space-y-2.5'>
+                {interrupted.map((l) => (
+                  <li
+                    key={l.id}
+                    className='flex flex-col items-start gap-2'
+                    data-hv-leftover={l.id}
+                  >
+                    <span className='text-amber-900 dark:text-amber-200'>
+                      Started {when(l.created_at as string)}, {sizeLabel(l.bytes)} saved so far.
+                      {l.gap &&
+                        " The end of this recording didn't reach the server, so only the part before it can be kept."}
+                    </span>
+                    <span className='flex flex-wrap items-center gap-1.5'>
+                      {confirmDiscard !== l.id && (
+                        <Button
+                          size='sm'
+                          className={`h-8 text-[12.5px] ${primaryBtn}`}
+                          disabled={!!busy}
+                          onClick={() => onKeep(l.id)}
+                          data-hv-keep
+                        >
+                          {l.gap ? 'Keep what was saved' : 'Keep what was recorded'}
+                        </Button>
+                      )}
+                      {discard(l)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+      )}
+      {unsaveable.length > 0 && (
+        <section
+          aria-labelledby={`${ids}-gone`}
+          className='rounded-lg border border-border bg-muted/50 px-3.5 py-3'
+          data-hv-unsaveable
+        >
+          <div className='flex items-start gap-2.5'>
+            <ArchiveX className='mt-0.5 h-4 w-4 shrink-0 text-muted-foreground' />
+            <div className='min-w-0 flex-1'>
+              <p id={`${ids}-gone`} className='font-medium text-foreground'>
+                {unsaveable.length === 1
+                  ? 'A recording could not be saved'
+                  : `${unsaveable.length} recordings could not be saved`}
+              </p>
+              <ul className='mt-2 space-y-2.5'>
+                {unsaveable.map((l) => (
+                  <li
+                    key={l.id}
+                    className='flex flex-col items-start gap-2'
+                    data-hv-leftover={l.id}
+                  >
+                    <span className='text-muted-foreground'>
+                      The server no longer accepts it. Discard removes the copy kept in this browser
+                      ({sizeLabel(l.bytes)}).
+                    </span>
+                    {discard(l)}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+      )}
+    </>
   )
 }

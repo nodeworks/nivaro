@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { plainFailure, sentence, serverMessage } from './failure'
+import { plainFailure, sentence, serverMessage, stopsRecording } from './failure'
 
 const refusal = (status: number, body: Record<string, unknown>, message = 'x') =>
   Object.assign(new Error(message), { status, response: body })
@@ -27,7 +27,11 @@ describe('plainFailure', () => {
         'Conflict'
       )
     )
-    expect(f).toEqual({ message: 'This upload is already finished.', retryable: false })
+    expect(f).toEqual({
+      message: 'This upload is already finished.',
+      retryable: false,
+      closed: true
+    })
     expect(sentence('Done!')).toBe('Done!')
   })
   it('classifies refusals as final and outages as retryable', () => {
@@ -49,12 +53,32 @@ describe('plainFailure', () => {
   it('says the server could not be reached when nothing answered', () => {
     expect(plainFailure(new TypeError('Failed to fetch'))).toEqual({
       message: 'The server could not be reached.',
-      retryable: true
+      retryable: true,
+      closed: false
     })
   })
   it('never shows an empty message', () => {
     expect(plainFailure(refusal(500, {}, '')).message).toBe(
       'The server did not accept the recording.'
     )
+  })
+  it('marks uploads the server no longer holds as closed', () => {
+    expect(
+      plainFailure(refusal(404, { message: 'Upload not found', code: 'UPLOAD_NOT_FOUND' })).closed
+    ).toBe(true)
+    expect(
+      plainFailure(refusal(422, { message: 'Not a video', code: 'UPLOAD_NOT_VIDEO' })).closed
+    ).toBe(false)
+  })
+})
+
+describe('stopsRecording', () => {
+  it('stops for a refusal, never for an outage', () => {
+    expect(stopsRecording(refusal(422, { code: 'UPLOAD_NOT_VIDEO' }))).toBe(true)
+    expect(stopsRecording(new TypeError('Failed to fetch'))).toBe(false)
+    expect(stopsRecording(refusal(503, {}))).toBe(false)
+    expect(
+      stopsRecording(Object.assign(new Error('x'), { status: 409, code: 'UPLOAD_ELSEWHERE' }))
+    ).toBe(false)
   })
 })

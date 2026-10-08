@@ -1,6 +1,7 @@
 import { Mic, MicOff, Pause, Play, Square } from 'lucide-react'
-import type { ReactNode } from 'react'
+import { type ReactNode, useLayoutEffect, useState } from 'react'
 import { createPortal } from 'react-dom'
+import { NO_BACKUP_SENTENCE } from './RecorderStatus'
 import { LAST_MINUTE_MS, MAX_MS, WARN_MS } from './useScreenCapture'
 
 /** m:ss from whole seconds. */
@@ -24,6 +25,7 @@ export function RecorderBar({
   hasMic,
   micMissing,
   retrying,
+  durable,
   announce,
   onCancel,
   onPause,
@@ -39,6 +41,8 @@ export function RecorderBar({
   hasMic: boolean
   micMissing: boolean
   retrying: boolean
+  /** False when parts live only in memory (no backup if the tab closes). */
+  durable: boolean
   announce: string
   onCancel: () => void
   onPause: () => void
@@ -47,8 +51,10 @@ export function RecorderBar({
 }) {
   const remainingS = Math.ceil((MAX_MS - elapsed) / 1000)
   const lastMinute = elapsed >= LAST_MINUTE_MS
+  const place = useViewportCorner(host)
   return createPortal(
     <div
+      style={place ?? undefined}
       data-hv-recorder-bar
       role='toolbar'
       aria-label='Recording controls'
@@ -93,6 +99,12 @@ export function RecorderBar({
               Reconnecting…
             </span>
           )}
+          {!durable && (
+            <span className='ml-1.5 text-amber-300' title={NO_BACKUP_SENTENCE} data-hv-no-backup>
+              Keep this tab open
+              <span className='sr-only'> {NO_BACKUP_SENTENCE}</span>
+            </span>
+          )}
           {micMissing && (
             <span
               className='ml-1.5 inline-flex text-white/70'
@@ -128,6 +140,31 @@ export function RecorderBar({
   )
 }
 
+/**
+ * Inside a host with a CSS transform (a centred dialog), `position: fixed`
+ * is relative to the host, not the viewport. Offsets that put the bar 16 px
+ * from the viewport's bottom-left again; null when no correction is needed.
+ */
+function useViewportCorner(host: HTMLElement): { left: number; bottom: number } | null {
+  const [place, setPlace] = useState<{ left: number; bottom: number } | null>(null)
+  useLayoutEffect(() => {
+    if (host === document.body) return
+    const update = () => {
+      if (getComputedStyle(host).transform === 'none') return setPlace(null)
+      const rect = host.getBoundingClientRect()
+      setPlace({ left: 16 - rect.left, bottom: rect.bottom - window.innerHeight + 16 })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => {
+      window.removeEventListener('resize', update)
+      window.removeEventListener('scroll', update, true)
+    }
+  }, [host])
+  return place
+}
+
 function BarButton({
   label,
   onClick,
@@ -147,7 +184,7 @@ function BarButton({
       title={label}
       onClick={onClick}
       className={`inline-flex h-8 min-w-8 shrink-0 items-center justify-center gap-1.5 rounded-full px-2.5 text-white transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none ${
-        tone === 'stop' ? 'bg-rose-600 hover:bg-rose-500' : 'hover:bg-white/10'
+        tone === 'stop' ? 'bg-rose-600 hover:bg-rose-700' : 'hover:bg-white/10'
       }`}
       {...rest}
     >
