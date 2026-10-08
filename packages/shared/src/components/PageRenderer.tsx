@@ -12,6 +12,7 @@ import {
 } from '../context'
 import { get, post } from '../lib/commands'
 import { initialFilterSelection } from '../lib/query-filter-seed'
+import { resolveSheetDef, type SheetDefInput } from '../lib/sheet-def'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -479,6 +480,10 @@ export interface QuerySheetDef {
   title?: string
   width?: number | string
   config?: QueryWidgetConfig
+  /** Figures above the tabs from a query of their own (same param tokens as a tab). */
+  header?: { query_slug: string; params?: Record<string, unknown>; stats: QueryWidgetStat[] }
+  /** Zero-based tab to open first (clamped into range). */
+  initial_tab?: number
   /** A tab is a nested query view OR a MatrixEditor (`matrix`): its scope is
    *  seeded from the clicked row — `scope: {project: '$row.id'}` — and those
    *  fields render as fixed context, not pickers. */
@@ -562,16 +567,49 @@ function resolveSheetConfig(
   return { ...config, params }
 }
 
+function SheetHeader({ config, stats }: { config: QueryWidgetConfig; stats: QueryWidgetStat[] }) {
+  const client = useNivaroClient()
+  const params = (config.params ?? {}) as Record<string, unknown>
+  const { data, isPending } = useQuery<CustomQueryEnvelope>({
+    queryKey: ['page-renderer-query', config.query_slug, JSON.stringify(params)],
+    queryFn: () =>
+      client.request<CustomQueryEnvelope>(
+        post(`/custom-queries/${config.query_slug}/execute`, { params })
+      ),
+    enabled: !!config.query_slug,
+    staleTime: 60_000
+  })
+  return (
+    <div
+      className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'
+      data-sheet-header
+    >
+      <QueryStatStrip
+        stats={stats}
+        rows={data?.data ?? []}
+        effectiveParams={params}
+        loading={isPending}
+      />
+    </div>
+  )
+}
+
+type SheetRuntimeDef = Omit<QuerySheetDef, 'header'> & {
+  resolvedTabs: ResolvedSheetTab[]
+  header?: { config: QueryWidgetConfig; stats: QueryWidgetStat[] } | null
+  initialTab?: number
+}
+
 function QuerySheet({
   def,
   row,
   onClose
 }: {
-  def: QuerySheetDef & { resolvedTabs: ResolvedSheetTab[] }
+  def: SheetRuntimeDef
   row: Record<string, unknown> | null
   onClose: () => void
 }) {
-  const [tab, setTab] = useState(0)
+  const [tab, setTab] = useState(def.initialTab ?? 0)
   const title = def.title
     ? def.title.replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_, f: string) => {
         const v = row?.[f]
@@ -617,6 +655,7 @@ function QuerySheet({
             Close
           </button>
         </div>
+        {def.header && <SheetHeader config={def.header.config} stats={def.header.stats} />}
         <div className='min-h-0 flex-1 overflow-auto'>
           {active?.matrix ? (
             <MatrixEditor
@@ -968,7 +1007,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
   const [pickerRow, setPickerRow] = useState<Record<string, unknown> | null>(null)
   const [matrixScopeId, setMatrixScopeId] = useState<unknown>(null)
   const [sheetState, setSheetState] = useState<{
-    def: QuerySheetDef & { resolvedTabs: ResolvedSheetTab[] }
+    def: SheetRuntimeDef
     row: Record<string, unknown> | null
   } | null>(null)
   const [filterSel, setFilterSel] = useState<Record<string, Array<Record<string, unknown>>>>(() =>
@@ -1213,28 +1252,43 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
     )
   const rc = cfg.row_click
   const openSheet = (def: QuerySheetDef, row: Record<string, unknown> | null) => {
-    const rawTabs = def.tabs ?? (def.config ? [{ label: 'View', config: def.config }] : [])
-    const resolvedTabs: ResolvedSheetTab[] = rawTabs.map((t) => {
-      if (t.matrix) {
+    const resolve = (c: Record<string, unknown>) =>
+      resolveSheetConfig(
+        c as QueryWidgetConfig,
+        row,
+        data ?? [],
+        effectiveParams,
+        filterSel,
+        cfg.filters
+      ) as Record<string, unknown>
+    const r = resolveSheetDef(def as SheetDefInput, resolve)
+    const resolvedTabs: ResolvedSheetTab[] = r.resolvedTabs.map((t) => {
+      if ('matrix' in t) {
         const initialScope: Record<string, unknown> = {}
         for (const [field, src] of Object.entries(t.matrix.scope)) {
           initialScope[field] = src.startsWith('$row.') ? row?.[src.slice('$row.'.length)] : src
         }
-        return { label: t.label, matrix: { config: t.matrix.config, initialScope } }
+        return {
+          label: t.label,
+          matrix: { config: t.matrix.config as unknown as MatrixEditorConfig, initialScope }
+        }
       }
-      return {
-        label: t.label,
-        config: resolveSheetConfig(
-          t.config ?? {},
-          row,
-          data ?? [],
-          effectiveParams,
-          filterSel,
-          cfg.filters
-        )
-      }
+      return { label: t.label, config: t.config as QueryWidgetConfig }
     })
-    setSheetState({ def: { ...def, resolvedTabs }, row })
+    setSheetState({
+      def: {
+        ...def,
+        resolvedTabs,
+        header: r.header
+          ? {
+              config: r.header.config as QueryWidgetConfig,
+              stats: r.header.stats as QueryWidgetStat[]
+            }
+          : null,
+        initialTab: r.initialTab
+      },
+      row
+    })
   }
   const handleRow = rc
     ? (row: Record<string, unknown>) => {

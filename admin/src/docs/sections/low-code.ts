@@ -27,6 +27,15 @@ export const lowCodePageBuilder: DocSection = {
         ['record-grid', 'An editable grid over a collection, with scope pickers and month sets']
       ]
     },
+    { type: 'h3', text: 'Drill sheets' },
+    {
+      type: 'p',
+      text: "A query widget's `row_click.sheet` (and each `row_actions[].sheet`) takes `title`, `width`, `tabs` (each a nested query view or a matrix), an optional `header` — `{ query_slug, params, stats }`, a query of its own rendered as stat tiles above the tabs with the same `$row.` / `$param.` / `$filters.` tokens as a tab — and `initial_tab`, the zero-based tab to open first."
+    },
+    {
+      type: 'pre',
+      code: "row_actions: [{ label: 'View budget', sheet: { title: '{{project_id}}', header: { query_slug: 'project-health', params: { projects: '$row.project_id' }, stats: [{ label: 'Remaining', field: 'remaining', format: 'currency' }] }, initial_tab: 1, tabs: [ … ] } }]"
+    },
     { type: 'h3', text: 'Query widget stats' },
     {
       type: 'p',
