@@ -87,13 +87,7 @@ export function DefinitionHealthPanel({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  const [open, setOpen] = useState(() => {
-    try {
-      return localStorage.getItem(OPEN_KEY) !== '0'
-    } catch {
-      return true
-    }
-  })
+  const [open, setOpen] = useState(false)
   const toggle = () => {
     setOpen((o) => {
       try {
