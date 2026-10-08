@@ -15,6 +15,7 @@ import {
 import { queueRender } from './help-video-render.js'
 import { takeFinalizedUpload } from './help-video-uploads.js'
 import { viewerCanPlay } from './help-video-views.js'
+import { getApp } from './io-holder.js'
 
 // Help videos: who may author and watch, and the video/version lifecycle.
 // A video has one published version (what viewers get) and at most one draft
@@ -668,17 +669,20 @@ export async function publishVideo(
     })
   await queueRender(String(draft.id))
   if (firstPublish || opts.watch_again) {
-    void db('nivaro_help_video_requirements')
-      .where({ video_id: video.id })
-      .select('role_id')
-      .then((rows: Array<{ role_id: unknown }>) =>
-        notifyRequiredViewers(
+    void (async () => {
+      try {
+        const rows = await db('nivaro_help_video_requirements')
+          .where({ video_id: video.id })
+          .select('role_id')
+        await notifyRequiredViewers(
           String(video.id),
           String(video.title ?? ''),
-          rows.map((r) => String(r.role_id))
+          rows.map((r: { role_id: unknown }) => String(r.role_id))
         )
-      )
-      .catch(() => 0)
+      } catch (err) {
+        warnNotifyFailed(err, String(video.id))
+      }
+    })()
   }
   await logActivity({
     action: 'help-video-publish',
@@ -700,6 +704,7 @@ export function requiredNotice(title: string): { subject: string; message: strin
 }
 
 const NOTIFY_CAP = 2000
+const NOTIFY_BATCH = 10
 
 /**
  * One notification to each active person in the given roles who can actually
@@ -713,19 +718,21 @@ export async function notifyRequiredViewers(
 ): Promise<number> {
   let roles = [...new Set(roleIds.filter(isUuid).map(up))]
   if (!roles.length) return 0
-  const app = (await import('./io-holder.js')).getApp()
+  const app = getApp()
   if (!app) return 0
   const row = await db('nivaro_help_videos').where({ id: videoId }).first('visibility')
   const vis = parseVisibility(row?.visibility)
   if (vis.mode === 'roles') roles = roles.filter((r) => vis.role_ids.includes(r))
   if (!roles.length) return 0
   const { notifyUser } = await import('./notification-channels.js')
+  const sourceLabel = (title || 'Untitled video').slice(0, 250)
   // Ask for one more than the cap so a truncation is detectable.
   const found = await db('nivaro_users')
     .whereIn('role', roles)
     .where({ status: 'active' })
     .where((w) => w.where('is_redacted', 0).orWhereNull('is_redacted'))
     .whereNull('account_kind')
+    .orderBy('id')
     .limit(NOTIFY_CAP + 1)
     .select('id')
   if (found.length > NOTIFY_CAP) {
@@ -735,17 +742,55 @@ export async function notifyRequiredViewers(
   }
   const users = found.slice(0, NOTIFY_CAP)
   const notice = requiredNotice(title || 'Untitled video')
-  for (const u of users) {
-    await notifyUser(app, String(u.id), {
-      subject: notice.subject,
-      message: notice.message,
-      category: 'system',
-      why: notice.why,
-      target: { kind: 'home', focus: 'help-required' },
-      source: { kind: 'help-video', label: title, id: low(videoId) }
-    }).catch(() => null)
+  let delivered = 0
+  let failed = 0
+  let firstError: unknown = null
+  for (let i = 0; i < users.length; i += NOTIFY_BATCH) {
+    await Promise.all(
+      users.slice(i, i + NOTIFY_BATCH).map(async (u: { id: unknown }) => {
+        try {
+          await notifyUser(app, String(u.id), {
+            subject: notice.subject,
+            message: notice.message,
+            category: 'system',
+            why: notice.why,
+            target: { kind: 'home', focus: 'help-required' },
+            source: { kind: 'help-video', label: sourceLabel, id: low(videoId) }
+          })
+          delivered++
+        } catch (err) {
+          failed++
+          firstError ??= err
+        }
+      })
+    )
   }
-  return users.length
+  if (failed) {
+    app.log?.warn?.(
+      { err: firstError, videoId: low(videoId), failed, total: users.length },
+      `help video required notify: ${failed} of ${users.length} notifications failed`
+    )
+  }
+  return delivered
+}
+
+function warnNotifyFailed(err: unknown, videoId: string): void {
+  const app: any = getApp()
+  app?.log?.warn?.({ err, videoId }, 'help video required notify failed')
+}
+
+/** Fire-and-forget callers use this: a failure is logged, never thrown. */
+export async function notifyRequiredViewersSafely(
+  videoId: string,
+  title: string,
+  roleIds: string[]
+): Promise<number> {
+  try {
+    return await notifyRequiredViewers(videoId, title, roleIds)
+  } catch (err) {
+    warnNotifyFailed(err, videoId)
+    return 0
+  }
 }
 
 export async function rerecordVideo(

@@ -3,10 +3,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../services/help-video-render.js', () => ({ queueRender: vi.fn() }))
 vi.mock('../../../services/notification-channels.js', () => ({ notifyUser: vi.fn() }))
+vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn() }))
 vi.mock('../../../services/io-holder.js', () => ({ getApp: vi.fn() }))
 
 import { db } from '../../../db/index.js'
-import { notifyRequiredViewers, requiredNotice } from '../../../services/help-videos.js'
+import {
+  notifyRequiredViewers,
+  notifyRequiredViewersSafely,
+  publishVideo,
+  requiredNotice
+} from '../../../services/help-videos.js'
 import { getApp } from '../../../services/io-holder.js'
 import { notifyUser } from '../../../services/notification-channels.js'
 
@@ -27,6 +33,7 @@ function fakeDb(visibility: unknown, users: Array<{ id: string }>) {
     q.whereIn = vi.fn(() => q)
     q.where = vi.fn(() => q)
     q.whereNull = vi.fn(() => q)
+    q.orderBy = vi.fn(() => q)
     q.limit = vi.fn(() => q)
     q.select = vi.fn(async () => users)
     usersQuery = q
@@ -91,5 +98,108 @@ describe('notifyRequiredViewers', () => {
     expect(await notifyRequiredViewers(VIDEO, 'T', [R1])).toBe(2000)
     expect(notifyUser).toHaveBeenCalledTimes(2000)
     expect(warn).toHaveBeenCalledTimes(1)
+  })
+
+  it('counts per-user failures, logs one summary, and returns the delivered count', async () => {
+    fakeDb(null, [{ id: 'u1' }, { id: 'u2' }, { id: 'u3' }])
+    const boom = new Error('boom')
+    vi.mocked(notifyUser)
+      .mockResolvedValueOnce(undefined as never)
+      .mockRejectedValueOnce(boom)
+      .mockRejectedValueOnce(new Error('second'))
+    expect(await notifyRequiredViewers(VIDEO, 'T', [R1])).toBe(1)
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(warn.mock.calls[0][0]).toMatchObject({ err: boom, failed: 2 })
+  })
+
+  it('bounds the label and uses a fallback title', async () => {
+    fakeDb(null, [{ id: 'u1' }])
+    await notifyRequiredViewers(VIDEO, '', [R1])
+    expect(vi.mocked(notifyUser).mock.calls[0][2]).toMatchObject({
+      source: { label: 'Untitled video' }
+    })
+    await notifyRequiredViewers(VIDEO, 'x'.repeat(400), [R1])
+    const last = vi.mocked(notifyUser).mock.calls.at(-1)?.[2] as { source: { label: string } }
+    expect(last.source.label).toHaveLength(250)
+  })
+})
+
+describe('notifyRequiredViewersSafely', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(getApp).mockReturnValue({ log: { warn } })
+  })
+
+  it('logs an outer failure instead of throwing', async () => {
+    const boom = new Error('db down')
+    vi.mocked(db).mockImplementation((() => {
+      throw boom
+    }) as never)
+    expect(await notifyRequiredViewersSafely(VIDEO, 'T', [R1])).toBe(0)
+    expect(warn).toHaveBeenCalledWith(
+      { err: boom, videoId: VIDEO },
+      'help video required notify failed'
+    )
+  })
+})
+
+describe('publishVideo notifies', () => {
+  const user = { id: 'U1' } as never
+  const flush = () => new Promise((r) => setTimeout(r, 0))
+
+  function publishDb() {
+    vi.mocked(db).mockImplementation(((table: string) => {
+      const q: any = {}
+      q.where = vi.fn(() => q)
+      q.whereIn = vi.fn(() => q)
+      q.whereNull = vi.fn(() => q)
+      q.orderBy = vi.fn(() => q)
+      q.limit = vi.fn(() => q)
+      q.update = vi.fn(async () => 1)
+      q.count = vi.fn(() => q)
+      q.first = vi.fn(async () => {
+        if (table === 'nivaro_help_video_versions') return { id: 'V2', version: 2, edits: null }
+        if (table === 'nivaro_help_video_contexts') return { n: 1 }
+        return { visibility: null }
+      })
+      q.select = vi.fn(async () => {
+        if (table === 'nivaro_help_video_requirements') return [{ role_id: R1 }]
+        return [{ id: 'u1' }]
+      })
+      return q
+    }) as never)
+  }
+
+  const video = (published: string | null) =>
+    ({
+      id: VIDEO,
+      title: 'Hello',
+      published_version_id: published,
+      draft_version_id: 'V2'
+    }) as never
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(getApp).mockReturnValue({ log: { warn } })
+    vi.mocked(notifyUser).mockResolvedValue(undefined as never)
+    publishDb()
+  })
+
+  it('on a first publish', async () => {
+    await publishVideo(video(null), user, {})
+    await flush()
+    expect(notifyUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('on ask-everyone-to-watch-again', async () => {
+    await publishVideo(video('V1'), user, { watch_again: true })
+    await flush()
+    expect(notifyUser).toHaveBeenCalledTimes(1)
+  })
+
+  it('not on a plain republish', async () => {
+    await publishVideo(video('V1'), user, {})
+    await flush()
+    expect(notifyUser).not.toHaveBeenCalled()
   })
 })
