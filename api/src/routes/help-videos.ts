@@ -14,10 +14,13 @@ import {
   createVideo,
   ensureDraft,
   isAuthor,
+  listPages,
   listVersions,
+  listVideos,
   loadVideoForUser,
   publishVideo,
   purgeVideo,
+  registerPage,
   replaceContexts,
   replaceRequirements,
   rerecordVideo,
@@ -26,7 +29,8 @@ import {
   serializeVersion,
   serializeVideo,
   updateDetails,
-  validateContexts
+  validateContexts,
+  videosForContext
 } from '../services/help-videos.js'
 
 // /api/help-videos — tutorial videos (spec 2026-10-08). Authoring routes need
@@ -86,6 +90,20 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const id = await createVideo(req.user!, (req.body ?? {}) as Record<string, string>)
     const { video } = await loadVideoForUser(req, id)
     return reply.code(201).send({ data: await serializeVideo(video, viewerCtx(req, true)) })
+  })
+
+  app.get('/', async (req, reply) => {
+    return reply.send(await listVideos(req, req.query as Record<string, string>))
+  })
+  app.get('/for', async (req, reply) => {
+    const q = req.query as { collection?: string; item?: string; state?: string; page?: string }
+    return reply.send(await videosForContext(req, q))
+  })
+  app.get('/pages', async (_req, reply) => reply.send({ data: await listPages() }))
+  app.post('/pages', async (req, reply) => {
+    const b = (req.body ?? {}) as { key?: string; label?: string; app?: string }
+    await registerPage(String(b.key ?? ''), String(b.label ?? ''), b.app ?? null)
+    return reply.code(204).send()
   })
 
   app.get('/:id', async (req, reply) => {

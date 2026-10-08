@@ -3,6 +3,7 @@ import type { FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import type { InstanceIdentity } from './branch-instances.js'
 import {
   editedDuration,
   emptyEdits,
@@ -678,4 +679,134 @@ export async function purgeVideo(video: VideoRow, user: User): Promise<void> {
     collection: 'nivaro_help_videos',
     item: low(video.id)
   })
+}
+
+export function rankForContext(
+  rows: Array<{ video_id: string; kind: string; key: string; state_key: string | null }>,
+  q: { collection?: string; state?: string | null; page?: string }
+): string[] {
+  const best = new Map<string, { rank: number; order: number }>()
+  rows.forEach((r, order) => {
+    let rank: number | null = null
+    if (r.kind === 'collection' && q.collection && r.key === q.collection) {
+      if (r.state_key) rank = q.state && r.state_key === q.state ? 0 : null
+      else rank = 1
+    } else if (r.kind === 'page' && q.page && r.key === q.page) {
+      rank = 2
+    }
+    if (rank === null) return
+    const id = low(r.video_id)
+    const prev = best.get(id)
+    if (!prev || rank < prev.rank)
+      best.set(id, { rank, order: prev ? Math.min(prev.order, order) : order })
+  })
+  return [...best.entries()]
+    .sort((a, b) => a[1].rank - b[1].rank || a[1].order - b[1].order)
+    .map(([id]) => id.toUpperCase())
+}
+
+export async function videosForContext(
+  req: FastifyRequest,
+  q: { collection?: string; item?: string; state?: string; page?: string }
+): Promise<{ data: HelpVideoDto[]; can_author: boolean; state: string | null }> {
+  const author = await isAuthor(req.user!, !!req.isAdmin)
+  let state = q.state ?? null
+  if (!state && q.collection && q.item) {
+    // A record's pipeline state is record data: read the record AS THE CALLER
+    // first (RBAC, row filter, user scopes). readOne answers null — not an
+    // error — for a row the caller cannot see; unreadable = no state, so only
+    // the collection-wide and page videos match.
+    const { readOne } = await import('./items.js')
+    const visible = await readOne(req.user!, q.collection, q.item, req.workspaceId ?? undefined, [
+      'id'
+    ]).catch(() => null)
+    if (visible) {
+      const { findRecordInstance } = await import('./branch-instances.js')
+      type WithState = InstanceIdentity & { current_state: string | null }
+      const inst = await findRecordInstance<WithState>(q.collection, q.item).catch(() => undefined)
+      if (inst?.current_state) {
+        const s = await db('nivaro_workflow_states').where({ id: inst.current_state }).first('key')
+        state = s?.key ?? null
+      }
+    }
+  }
+  if (!q.collection && !q.page) return { data: [], can_author: author, state }
+  const qb = db('nivaro_help_video_contexts').select('video_id', 'kind', 'key', 'state_key')
+  qb.where((w) => {
+    if (q.collection) w.orWhere((x) => x.where({ kind: 'collection', key: q.collection }))
+    if (q.page) w.orWhere((x) => x.where({ kind: 'page', key: q.page }))
+  })
+  const ids = rankForContext(await qb, { collection: q.collection, state, page: q.page })
+  if (!ids.length) return { data: [], can_author: author, state }
+  const videos = (await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[]
+  const byId = new Map(videos.map((v) => [up(v.id), v]))
+  const shown = ids
+    .map((id) => byId.get(id))
+    .filter(
+      (v): v is VideoRow =>
+        !!v && v.status === 'published' && viewerMaySee(v, req.user!.role, false)
+    )
+  const data = await Promise.all(
+    shown.map((v) =>
+      serializeVideo(v, { author: false, userId: req.user!.id, role: req.user!.role ?? null })
+    )
+  )
+  return { data, can_author: author, state }
+}
+
+export async function listVideos(
+  req: FastifyRequest,
+  q: { search?: string; category?: string; status?: string; page?: number; limit?: number }
+): Promise<{ data: HelpVideoDto[]; total: number; categories: string[]; can_author: boolean }> {
+  const author = await isAuthor(req.user!, !!req.isAdmin)
+  const limit = Math.min(Math.max(Number(q.limit) || 24, 1), 100)
+  const page = Math.max(Number(q.page) || 1, 1)
+  const status =
+    author && ['draft', 'published', 'archived'].includes(String(q.status))
+      ? String(q.status)
+      : 'published'
+  const base = db('nivaro_help_videos').where({ status })
+  if (q.category) base.where({ category: String(q.category) })
+  if (q.search) {
+    const s = `%${String(q.search).replace(/[%_[]/g, (c) => `[${c}]`)}%`
+    base.where((w) => w.where('title', 'like', s).orWhere('description', 'like', s))
+  }
+  const rows = (await base.clone().orderBy('title', 'asc')) as VideoRow[]
+  const visible = rows.filter((v) => viewerMaySee(v, req.user!.role, author))
+  const pageRows = visible.slice((page - 1) * limit, page * limit)
+  const data = await Promise.all(
+    pageRows.map((v) =>
+      serializeVideo(v, { author, userId: req.user!.id, role: req.user!.role ?? null })
+    )
+  )
+  const cats = await db('nivaro_help_videos')
+    .where({ status: 'published' })
+    .whereNotNull('category')
+    .select('category')
+  const categories = [...new Set(cats.map((c) => String(c.category)))].sort()
+  return { data, total: visible.length, categories, can_author: author }
+}
+
+const pageWrites = new Map<string, number>()
+export async function registerPage(key: string, label: string, app: string | null): Promise<void> {
+  if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(key)) throw fail(400, 'HELP_VIDEO_PAGE', 'Invalid page key')
+  const last = pageWrites.get(key) ?? 0
+  if (Date.now() - last < 10 * 60_000) return
+  pageWrites.set(key, Date.now())
+  const row = {
+    label: String(label || key).slice(0, 200),
+    app: app ? String(app).slice(0, 50) : null,
+    last_seen: new Date()
+  }
+  const updated = await db('nivaro_help_video_pages').where({ key }).update(row)
+  if (!updated)
+    await db('nivaro_help_video_pages')
+      .insert({ key, ...row })
+      .catch(() => null)
+}
+
+export async function listPages(): Promise<
+  Array<{ key: string; label: string; app: string | null }>
+> {
+  return db('nivaro_help_video_pages').orderBy('label', 'asc').select('key', 'label', 'app')
 }
