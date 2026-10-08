@@ -74,7 +74,7 @@ WORKDIR /app
 # Upgrade Alpine packages to pick up security patches (busybox etc.)
 RUN apk upgrade --no-cache
 # Required for sharp (image processing) native binaries on Alpine
-RUN apk add --no-cache libc6-compat chromium nss freetype harfbuzz ca-certificates ttf-freefont
+RUN apk add --no-cache libc6-compat chromium nss freetype harfbuzz ca-certificates ttf-freefont ffmpeg
 RUN corepack enable pnpm
 
 # Install production deps only

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process'
+import { setPriority } from 'node:os'
 
 // ffmpeg/ffprobe wrappers. Always argument arrays, never a shell string.
 // FFMPEG_PATH / FFPROBE_PATH override the binaries on PATH.
@@ -10,10 +11,17 @@ let available: Promise<boolean> | null = null
 function run(
   bin: string,
   args: string[],
-  opts: { onStdout?: (s: string) => void; signal?: AbortSignal } = {}
+  opts: { onStdout?: (s: string) => void; signal?: AbortSignal; lowPriority?: boolean } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], signal: opts.signal })
+    if (opts.lowPriority && child.pid) {
+      try {
+        setPriority(child.pid, 19) // lowest: renders only use CPU that requests leave idle
+      } catch {
+        /* not permitted on this host — the thread cap still applies */
+      }
+    }
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (d: Buffer) => {
@@ -113,11 +121,13 @@ export async function remuxToFile(input: string, output: string, mime?: string):
 export async function runFfmpeg(
   args: string[],
   onProgress?: (outTimeMs: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  opts: { lowPriority?: boolean } = {}
 ): Promise<void> {
   const withProgress = onProgress ? ['-progress', 'pipe:1', '-nostats', ...args] : args
   await run(FFMPEG, withProgress, {
     signal,
+    lowPriority: opts.lowPriority,
     onStdout: onProgress
       ? (chunk) => {
           for (const m of chunk.matchAll(/out_time_ms=(\d+)/g))

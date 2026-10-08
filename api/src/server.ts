@@ -674,6 +674,12 @@ export async function buildServer() {
           }
           await purgeExpiredTrash()
           await purgeExpiredRecordings().catch(() => {})
+          await import('./services/help-video-uploads.js')
+            .then((m) => m.purgeStaleUploads())
+            .catch(() => 0)
+          await import('./services/help-video-render.js')
+            .then((m) => m.pruneOldRenders())
+            .catch(() => 0)
           // #528 — ERP push payloads/responses past the configured window lose their bytes, never their history.
           await import('./services/erp-retention.js')
             .then((m) => m.pruneErpSubmissionPayloads())
@@ -723,6 +729,14 @@ export async function buildServer() {
         const { runSlaEscalations } = await import('./services/sla-escalations.js')
         await runSlaEscalations(app)
       })
+
+      // Help videos: pick up queued renders after a restart and re-queue any
+      // that died mid-render. Request-driven kicks handle the normal case.
+      app.cron.schedule('help-video-render-sweep', '*/5 * * * *', async () => {
+        const { sweepRenders } = await import('./services/help-video-render.js')
+        await sweepRenders()
+      })
+      void import('./services/help-video-render.js').then((m) => m.kickRenderer()).catch(() => {})
 
       // Config health: nightly usage-hygiene + schema-lint sweep.
       app.cron.schedule('config-health-sweep', '10 3 * * *', async () => {

@@ -44,6 +44,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly re-evaluation of per-record alert definitions (thresholds and anomalies on nivaro_alert_definitions) so time-based conditions fire without a write.',
   'sla-escalations':
     'Every 30 minutes — finds breached SLA records whose escalation ladder has a tier due and notifies the tier target (owner, manager, named user) once per episode.',
+  'help-video-render-sweep':
+    'Every 5 minutes — re-queues help-video renders stuck for 2 hours and starts any queued render on a process allowed to render (VIDEO_RENDER, NIVARO_ROLE). Renders run at low priority with VIDEO_RENDER_THREADS threads.',
   'api-key-usage-statements':
     'On the 1st — mails last month’s usage statement (calls, error rate, rate-limit refusals, busiest routes, GraphQL operations) for every API key with statements turned on, to its usage contact or owner. Once per key per month.',
   'task-reminders':

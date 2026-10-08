@@ -375,7 +375,7 @@ async function enrichRelationValues(
 
 let browser: Browser | null = null
 
-async function getBrowser(): Promise<Browser> {
+export async function getBrowser(): Promise<Browser> {
   if (browser?.connected) return browser
   browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
