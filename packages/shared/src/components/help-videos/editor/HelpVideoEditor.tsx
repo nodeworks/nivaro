@@ -8,22 +8,12 @@ import { Skeleton } from '../../ui/skeleton'
 import { Switch } from '../../ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs'
 import { helpVideoApi, helpVideoKeys, useHelpVideo } from '../api'
-import {
-  ALLOWED_SPEEDS,
-  removeSegment,
-  segmentIndexAt,
-  setSpeed,
-  sourceToEdited,
-  splitAt,
-  upsertItemChecked
-} from '../edits'
+import { ALLOWED_SPEEDS, removeSegment, segmentIndexAt, setSpeed, splitAt } from '../edits'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
-import { CaptionsPanel } from './CaptionsPanel'
-import { addChapterAt, ChaptersPanel } from './ChaptersPanel'
+import { addChapterAt } from './ChaptersPanel'
+import { EditorSidebar } from './EditorSidebar'
 import { historyReducer, initHistory } from './history'
-import { Inspector } from './Inspector'
-import { ClickRipples, PosterPicker } from './PosterAndClicks'
 import { PreviewTools } from './PreviewTools'
 import { SaveState } from './SaveState'
 import { ShortcutsCard } from './ShortcutsCard'
@@ -32,7 +22,7 @@ import { suggestCuts } from './suggestCuts'
 import { type Selection, Timeline } from './Timeline'
 import { ToolPicker } from './ToolPicker'
 import { sentence } from './timeline/useBarDrag'
-import { clicksToRipples, editsForPreview, type Tool } from './tools'
+import { editsForPreview, type Tool } from './tools'
 import { useAutosave } from './useAutosave'
 import { useEditorShortcuts } from './useEditorShortcuts'
 
@@ -221,39 +211,6 @@ function EditorBody({
     else set(r.edits)
     if (r.id) setSelection({ lane: 'chapters', id: r.id })
   }, [playhead, showNote, set])
-  const takePoster = useCallback((): number | null => {
-    const e = editsRef.current
-    const at = Math.round(playhead())
-    // The render takes the poster from the finished video.
-    if (sourceToEdited(e, at) === null) {
-      showNote(
-        'That frame is cut out of the video. Move the playhead to a part viewers see, then try again'
-      )
-      return null
-    }
-    set({ ...e, poster_ms: at })
-    return at
-  }, [playhead, showNote, set])
-  const addRipples = useCallback(() => {
-    const start = editsRef.current
-    const ripples = clicksToRipples(clicks ?? null, start.annotations, sourceMs)
-    let e = start
-    let added = 0
-    let refused: string | undefined
-    for (const a of ripples) {
-      const r = upsertItemChecked(e, 'annotations', a)
-      if (r.refused) {
-        refused = r.refused
-        break
-      }
-      e = r.edits
-      added++
-    }
-    if (e !== start) set(e)
-    if (refused) showNote(`Added ${added} of ${ripples.length} ripples. ${sentence(refused)}`)
-  }, [clicks, sourceMs, set, showNote])
-  const selectChapter = useCallback((id: string) => setSelection({ lane: 'chapters', id }), [])
-  const selectCaption = useCallback((id: string) => setSelection({ lane: 'captions', id }), [])
   const stopDrawing = useCallback(() => setTool(null), [])
 
   useEditorShortcuts(tab === 'edit', {
@@ -462,55 +419,18 @@ function EditorBody({
               </HelpVideoPlayer>
             </div>
             {!viewerPreview && (
-              <aside
-                aria-label='Selected item, chapters and captions'
-                className='divide-y divide-border border-t border-border px-3 lg:w-[300px] lg:shrink-0 lg:overflow-y-auto lg:border-t-0 lg:border-l'
-                data-hv-sidebar
-              >
-                <div className='py-3'>
-                  <Inspector
-                    edits={edits}
-                    selection={selection}
-                    sourceMs={sourceMs}
-                    onChange={set}
-                    onSelect={setSelection}
-                    onSeek={seek}
-                    onError={showNote}
-                  />
-                </div>
-                <div className='py-3'>
-                  <ChaptersPanel
-                    edits={edits}
-                    selectedId={selection?.lane === 'chapters' ? selection.id : null}
-                    onAdd={addChapter}
-                    onSeek={seek}
-                    onSelect={selectChapter}
-                  />
-                </div>
-                <div className='py-3'>
-                  <CaptionsPanel
-                    edits={edits}
-                    sourceMs={sourceMs}
-                    selectedId={selection?.lane === 'captions' ? selection.id : null}
-                    getSrcMs={playhead}
-                    onChange={set}
-                    onRefused={showNote}
-                    onSeek={seek}
-                    onSelect={selectCaption}
-                  />
-                </div>
-                <div className='py-3'>
-                  <PosterPicker edits={edits} onUse={takePoster} onSeek={seek} />
-                </div>
-                <div className='py-3'>
-                  <ClickRipples
-                    clicks={clicks}
-                    edits={edits}
-                    sourceMs={sourceMs}
-                    onAdd={addRipples}
-                  />
-                </div>
-              </aside>
+              <EditorSidebar
+                edits={edits}
+                selection={selection}
+                sourceMs={sourceMs}
+                clicks={clicks}
+                playhead={playhead}
+                onChange={set}
+                onSelect={setSelection}
+                onSeek={seek}
+                onNote={showNote}
+                onAddChapter={addChapter}
+              />
             )}
           </div>
           <Timeline
