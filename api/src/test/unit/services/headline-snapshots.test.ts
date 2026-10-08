@@ -79,6 +79,9 @@ describe('recordHeadlineSnapshot', () => {
         spend: 100,
         committed: 11,
         remaining: 194.5,
+        fusion_committed: null,
+        fusion_remaining: null,
+        remaining_pct: 63.67,
         projects: 3
       },
       {
@@ -89,6 +92,9 @@ describe('recordHeadlineSnapshot', () => {
         spend: 40,
         committed: 10,
         remaining: 50,
+        fusion_committed: null,
+        fusion_remaining: null,
+        remaining_pct: 50,
         projects: 1
       },
       {
@@ -99,6 +105,9 @@ describe('recordHeadlineSnapshot', () => {
         spend: 60,
         committed: 1,
         remaining: 144.5,
+        fusion_committed: null,
+        fusion_remaining: null,
+        remaining_pct: 70.32,
         projects: 2
       }
     ])
@@ -146,6 +155,44 @@ describe('recordHeadlineSnapshot', () => {
     expect(runQuery).toHaveBeenCalledTimes(1)
     expect(insert).toHaveBeenCalledTimes(1)
   })
+
+  it('sums the optional Fusion columns and computes the weighted remaining % over Fusion rows only', async () => {
+    const settings = {
+      ...SETTINGS,
+      fields: { ...SETTINGS.fields, fusion_committed: 'fc', fusion_remaining: 'fr' }
+    }
+    const runQuery = vi.fn(async () => [
+      { pub: 1000, spent: 1, held: 1, left: 250, fc: 100, fr: 400 },
+      { pub: 500, spent: 1, held: 1, left: null, fc: null, fr: null }
+    ])
+    const insert = vi.fn()
+    await recordHeadlineSnapshot(settings, runQuery, insert, [], NOW)
+    const row = insert.mock.calls[0][0] as HeadlineSnapshotRow
+    expect(row.fusion_committed).toBe(100)
+    expect(row.fusion_remaining).toBe(400)
+    expect(row.remaining).toBe(250)
+    // 250 / 1000 — the 500 PUB with no Fusion figure is left out of the ratio
+    expect(row.remaining_pct).toBe(25)
+  })
+
+  it('leaves the Fusion figures and the % null when no row carries them', async () => {
+    const runQuery = vi.fn(async () => [{ pub: 1000, spent: 1, held: 1, left: null }])
+    const insert = vi.fn()
+    await recordHeadlineSnapshot(SETTINGS, runQuery, insert, [], NOW)
+    const row = insert.mock.calls[0][0] as HeadlineSnapshotRow
+    expect(row.fusion_committed).toBeNull()
+    expect(row.fusion_remaining).toBeNull()
+    expect(row.remaining_pct).toBeNull()
+  })
+
+  it('refuses an optional Fusion column that is not an identifier', () => {
+    expect(
+      parseHeadlineSettings({
+        ...SETTINGS,
+        fields: { ...SETTINGS.fields, fusion_remaining: 'a b' }
+      })
+    ).toBeNull()
+  })
 })
 
 describe('planHeadlineSnapshot', () => {
@@ -184,6 +231,7 @@ describe('assertHeadlineRun', () => {
 /** A knex-shaped fake whose update / insert results are scripted per call. */
 function scriptedDb(script: { update: unknown[]; insert: unknown[] }) {
   const calls: string[] = []
+  ;(db as unknown as { schema: unknown }).schema = { hasColumn: async () => true }
   vi.mocked(db).mockImplementation(((_table: string) => {
     const chain: Record<string, unknown> = {}
     for (const m of ['where', 'whereNull']) chain[m] = () => chain
@@ -209,6 +257,9 @@ const ROW: HeadlineSnapshotRow = {
   spend: 1,
   committed: 1,
   remaining: 1,
+  fusion_committed: null,
+  fusion_remaining: null,
+  remaining_pct: null,
   projects: 1
 }
 

@@ -19,7 +19,14 @@ export interface HeadlineSettings {
   zone_param: string | null
   zone_collection: string | null
   zone_field: string | null
-  fields: { pubd: string; spend: string; committed: string; remaining: string }
+  fields: {
+    pubd: string
+    spend: string
+    committed: string
+    remaining: string
+    fusion_committed?: string
+    fusion_remaining?: string
+  }
 }
 
 export interface HeadlineSnapshotRow {
@@ -30,6 +37,9 @@ export interface HeadlineSnapshotRow {
   spend: number
   committed: number
   remaining: number
+  fusion_committed: number | null
+  fusion_remaining: number | null
+  remaining_pct: number | null
   projects: number
 }
 
@@ -52,6 +62,7 @@ const IDENT = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 const SLUG = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 const SYSTEM = /^(nivaro_|directus_)/i
 const FIELD_KEYS = ['pubd', 'spend', 'committed', 'remaining'] as const
+const OPTIONAL_KEYS = ['fusion_committed', 'fusion_remaining'] as const
 
 function asObject(raw: unknown): Record<string, unknown> | null {
   let v = raw
@@ -116,6 +127,14 @@ export function validateHeadlineSettings(raw: unknown): {
   const fields = {} as HeadlineSettings['fields']
   for (const k of FIELD_KEYS) {
     const v = f[k]
+    if (typeof v !== 'string' || !IDENT.test(v)) {
+      return { value: null, error: `dashboard_headline.fields.${k} must be a result column name` }
+    }
+    fields[k] = v
+  }
+  for (const k of OPTIONAL_KEYS) {
+    const v = f[k]
+    if (v === undefined || v === null || v === '') continue
     if (typeof v !== 'string' || !IDENT.test(v)) {
       return { value: null, error: `dashboard_headline.fields.${k} must be a result column name` }
     }
@@ -188,6 +207,18 @@ export async function recordHeadlineSnapshot(
         if (missing) throw new Error(`The query did not return the column ${missing}`)
       }
       const sum = (col: string) => cents(rows.reduce((s, r) => s + num(r[col]), 0))
+      // Rows that do not carry a value (a project with no Fusion import)
+      // are left out of these sums — absent data is null, never 0.
+      const carries = (r: Record<string, unknown>, col: string) => r[col] != null && r[col] !== ''
+      const optional = (col: string | undefined) => {
+        if (!col) return null
+        const present = rows.filter((r) => carries(r, col))
+        return present.length ? cents(present.reduce((s, r) => s + num(r[col]), 0)) : null
+      }
+      const remCol = settings.fields.remaining
+      const withRemaining = rows.filter((r) => carries(r, remCol))
+      const remainingSum = withRemaining.reduce((s, r) => s + num(r[remCol]), 0)
+      const pubOfThose = withRemaining.reduce((s, r) => s + num(r[settings.fields.pubd]), 0)
       await insert({
         snapshot_date: snapshotDate,
         year,
@@ -195,7 +226,13 @@ export async function recordHeadlineSnapshot(
         pubd: sum(settings.fields.pubd),
         spend: sum(settings.fields.spend),
         committed: sum(settings.fields.committed),
-        remaining: sum(settings.fields.remaining),
+        remaining: cents(remainingSum),
+        fusion_committed: optional(settings.fields.fusion_committed),
+        fusion_remaining: optional(settings.fields.fusion_remaining),
+        remaining_pct:
+          withRemaining.length && pubOfThose > 0
+            ? Math.round((10000 * remainingSum) / pubOfThose) / 100
+            : null,
         projects: rows.length
       })
       written++
@@ -234,6 +271,19 @@ function isUniqueViolation(err: unknown): boolean {
 
 export const HEADLINE_TABLE = 'nivaro_dashboard_snapshots'
 
+// A database behind migration 406 has no Fusion columns — probe once per
+// process (a hit is cached; a miss re-probes after a minute) so it keeps
+// working until the migration lands.
+let fusionColumns: { has: boolean; at: number } | null = null
+async function hasFusionColumns(): Promise<boolean> {
+  if (fusionColumns && (fusionColumns.has || Date.now() - fusionColumns.at < 60_000)) {
+    return fusionColumns.has
+  }
+  const has = await db.schema.hasColumn(HEADLINE_TABLE, 'fusion_remaining').catch(() => false)
+  fusionColumns = { has, at: Date.now() }
+  return has
+}
+
 /** `strict` lets a failed read throw; the default reads a failure as "not
  *  configured", which only suits the dry-run preview. */
 export async function loadHeadlineSettings(
@@ -266,7 +316,14 @@ export async function upsertHeadlineSnapshot(row: HeadlineSnapshotRow): Promise<
     spend: row.spend,
     committed: row.committed,
     remaining: row.remaining,
-    projects: row.projects
+    projects: row.projects,
+    ...((await hasFusionColumns())
+      ? {
+          fusion_committed: row.fusion_committed,
+          fusion_remaining: row.fusion_remaining,
+          remaining_pct: row.remaining_pct
+        }
+      : {})
   }
   const match = (q: ReturnType<typeof db>) => {
     q.where({ snapshot_date: row.snapshot_date, year: row.year })
@@ -349,6 +406,9 @@ export interface HeadlineHistoryPoint {
   spend: number
   committed: number
   remaining: number
+  fusion_committed: number | null
+  fusion_remaining: number | null
+  remaining_pct: number | null
   projects: number
 }
 
@@ -430,8 +490,17 @@ export async function readHeadlineHistory(opts: {
 }): Promise<HeadlineHistoryPoint[]> {
   const now = opts.now ?? new Date()
   const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - opts.days)
+  const withFusion = await hasFusionColumns()
   const q = db(HEADLINE_TABLE)
-    .select('snapshot_date', 'pubd', 'spend', 'committed', 'remaining', 'projects')
+    .select(
+      'snapshot_date',
+      'pubd',
+      'spend',
+      'committed',
+      'remaining',
+      'projects',
+      ...(withFusion ? ['fusion_committed', 'fusion_remaining', 'remaining_pct'] : [])
+    )
     .where('year', opts.year)
     .where('snapshot_date', '>=', dayOf(from))
     .orderBy('snapshot_date', 'asc')
@@ -445,6 +514,9 @@ export async function readHeadlineHistory(opts: {
     spend: num(r.spend),
     committed: num(r.committed),
     remaining: num(r.remaining),
+    fusion_committed: r.fusion_committed == null ? null : num(r.fusion_committed),
+    fusion_remaining: r.fusion_remaining == null ? null : num(r.fusion_remaining),
+    remaining_pct: r.remaining_pct == null ? null : num(r.remaining_pct),
     projects: num(r.projects)
   }))
 }
