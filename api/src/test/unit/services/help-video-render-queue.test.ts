@@ -1,4 +1,14 @@
-import { mkdirSync, mkdtempSync, utimesSync } from 'node:fs'
+import {
+  existsSync,
+  lutimesSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync
+} from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -117,7 +127,8 @@ vi.mock('../../../services/job-runs.js', () => ({
 const app = { current: null as unknown }
 vi.mock('../../../services/io-holder.js', () => ({ getApp: () => app.current }))
 const work = mkdtempSync(join(tmpdir(), 'nvr-render-'))
-vi.mock('../../../services/help-video-uploads.js', () => ({ videoWorkDir: () => work }))
+const wd = { dir: work }
+vi.mock('../../../services/help-video-uploads.js', () => ({ videoWorkDir: () => wd.dir }))
 
 const r = await import('../../../services/help-video-render.js')
 
@@ -359,15 +370,58 @@ describe('pruneOldRenders', () => {
 })
 
 describe('cleanRenderScratch', () => {
-  it('removes only scratch directories older than 24 hours', async () => {
-    const base = join(work, 'render')
-    mkdirSync(join(base, 'old-1'), { recursive: true })
-    mkdirSync(join(base, 'young-1'), { recursive: true })
+  const ID = '2f7a396d-6d50-411c-8a5a-6267d4bcfafe'
+  const age = (path: string) => {
     const old = new Date(Date.now() - 25 * HOUR)
-    utimesSync(join(base, 'old-1'), old, old)
-    expect(await r.cleanRenderScratch()).toBe(1)
-    const { readdirSync } = await import('node:fs')
-    expect(readdirSync(base)).toContain('young-1')
-    expect(readdirSync(base)).not.toContain('old-1')
+    utimesSync(path, old, old)
+  }
+  afterEach(() => {
+    wd.dir = work
+  })
+
+  it('removes an old scratch directory (new and old layouts), keeps a young one', async () => {
+    const base = join(work, 'render')
+    for (const n of [`${ID}-0a1b2c3d`, ID.toUpperCase(), `${ID}-ffffffff`])
+      mkdirSync(join(base, n), { recursive: true })
+    age(join(base, `${ID}-0a1b2c3d`))
+    age(join(base, ID.toUpperCase()))
+    expect(await r.cleanRenderScratch()).toBe(2)
+    expect(readdirSync(base)).toEqual([`${ID}-ffffffff`])
+    rmSync(base, { recursive: true, force: true })
+  })
+
+  it('keeps a directory whose name is not a scratch name', async () => {
+    const base = join(work, 'render')
+    mkdirSync(join(base, 'keep-me'), { recursive: true })
+    age(join(base, 'keep-me'))
+    expect(await r.cleanRenderScratch()).toBe(0)
+    expect(readdirSync(base)).toContain('keep-me')
+    rmSync(base, { recursive: true, force: true })
+  })
+
+  it('skips a symlinked entry instead of following it', async () => {
+    const base = join(work, 'render')
+    mkdirSync(base, { recursive: true })
+    const target = mkdtempSync(join(tmpdir(), 'nvr-target-'))
+    writeFileSync(join(target, 'precious'), 'x')
+    age(target) // following the link would see an old directory
+    symlinkSync(target, join(base, `${ID}-0a1b2c3d`))
+    const old = new Date(Date.now() - 25 * HOUR)
+    lutimesSync(join(base, `${ID}-0a1b2c3d`), old, old)
+    expect(await r.cleanRenderScratch()).toBe(0)
+    expect(existsSync(join(target, 'precious'))).toBe(true)
+    expect(readdirSync(base)).toContain(`${ID}-0a1b2c3d`)
+    rmSync(base, { recursive: true, force: true })
+  })
+
+  it('deletes nothing when the render directory itself is a symlink', async () => {
+    const elsewhere = mkdtempSync(join(tmpdir(), 'nvr-elsewhere-'))
+    mkdirSync(join(elsewhere, `${ID}-0a1b2c3d`))
+    age(join(elsewhere, `${ID}-0a1b2c3d`))
+    const linked = mkdtempSync(join(tmpdir(), 'nvr-linked-'))
+    symlinkSync(elsewhere, join(linked, 'render'))
+    wd.dir = linked
+    expect(await r.cleanRenderScratch()).toBe(0)
+    expect(readdirSync(elsewhere)).toContain(`${ID}-0a1b2c3d`)
   })
 })

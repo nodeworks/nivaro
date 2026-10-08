@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, readdir, rm, stat, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, readdir, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
@@ -350,16 +350,24 @@ export async function sweepRenders(): Promise<number> {
   return n
 }
 
+/** A render scratch directory name: `<version id>-<8 hex>`, or the earlier
+ *  `<version id>` layout. */
+const SCRATCH_NAME_RE = /^[0-9a-f-]{36}(-[0-9a-f]{8})?$/i
+
 /** Remove render scratch directories older than 24 h (a crash leaves source
- *  copies of up to 1.2 GB behind). Never touches a younger one. */
+ *  copies of up to 1.2 GB behind). Never touches a younger one, a name that is
+ *  not a scratch name, or anything reached through a symlink. */
 export async function cleanRenderScratch(maxAgeMs = SCRATCH_MAX_AGE_MS): Promise<number> {
   const base = join(videoWorkDir(), 'render')
+  const baseStat = await lstat(base).catch(() => null)
+  if (!baseStat?.isDirectory()) return 0 // missing, a symlink, or not a directory
   let removed = 0
   const names = await readdir(base).catch(() => [] as string[])
   for (const name of names) {
+    if (!SCRATCH_NAME_RE.test(name)) continue
     const path = join(base, name)
-    const st = await stat(path).catch(() => null)
-    if (!st || Date.now() - st.mtimeMs < maxAgeMs) continue
+    const st = await lstat(path).catch(() => null)
+    if (!st?.isDirectory() || Date.now() - st.mtimeMs < maxAgeMs) continue
     await rm(path, { recursive: true, force: true })
       .then(() => removed++)
       .catch(() => null)
