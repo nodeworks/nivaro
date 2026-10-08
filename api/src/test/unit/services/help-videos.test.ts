@@ -234,7 +234,11 @@ describe('serializeVideo', () => {
     expect('required_role_ids' in dto).toBe(false)
     expect('created_by_name' in dto).toBe(false)
     expect(dto.published?.id).toBe('p1')
-    expect(JSON.stringify(dto)).not.toContain('d1')
+    // Media-ticket signatures are random-looking text; leave them out of the
+    // "never mentions the draft id" check.
+    expect(JSON.stringify(dto).replace(/\?st=[^"]*/g, '')).not.toContain('d1')
+    expect(dto.stream_url).toMatch(/^\/api\/help-videos\/aaaa\/stream\?st=\d+\.U1\.p\./)
+    expect('draft_stream_url' in dto).toBe(false)
     expect(JSON.stringify(dto)).not.toContain('secret draft')
     // The draft version row is never even read for a viewer.
     expect(seen.some((s) => s.includes('"D1"'))).toBe(false)
@@ -258,6 +262,8 @@ describe('serializeVideo', () => {
     expect(dto.required_role_ids).toEqual(['R1'])
     expect(dto.required).toBe(false)
     expect(dto.created_by_name).toBe('Ada L')
+    expect(dto.draft_stream_url).toMatch(/\/stream\?st=\d+\.U1\.d\.[^&]+&source=1$/)
+    expect(dto.draft_captions_url).toMatch(/\/captions\.vtt\?st=\d+\.U1\.d\./)
   })
 })
 

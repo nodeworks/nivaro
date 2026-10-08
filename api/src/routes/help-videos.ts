@@ -1,6 +1,13 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
-import { EditsError } from '../services/help-video-edits.js'
+import { getFile } from '../services/files.js'
+import {
+  captionsToVtt,
+  EditsError,
+  emptyEdits,
+  normalizeEdits
+} from '../services/help-video-edits.js'
 import {
   abandonUpload,
   appendPart,
@@ -10,13 +17,21 @@ import {
   openUpload
 } from '../services/help-video-uploads.js'
 import {
+  pickStreamFile,
+  recordProgress,
+  requiredForUser,
+  videoAnalytics
+} from '../services/help-video-views.js'
+import {
   archiveVideo,
   createVideo,
   ensureDraft,
   isAuthor,
+  isUuid,
   listPages,
   listVersions,
   listVideos,
+  loadVersion,
   loadVideoForUser,
   publishVideo,
   purgeVideo,
@@ -29,9 +44,14 @@ import {
   serializeVersion,
   serializeVideo,
   updateDetails,
+  type VideoRow,
   validateContexts,
-  videosForContext
+  verifyMediaTicket,
+  videosForContext,
+  viewerMaySee
 } from '../services/help-videos.js'
+import { sendStoredObject } from '../services/stored-object-stream.js'
+import type { User } from '../types.js'
 
 // /api/help-videos — tutorial videos (spec 2026-10-08). Authoring routes need
 // an author (admin or a role in help_video_author_roles); everything else is
@@ -106,6 +126,19 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
+  // ── Watching ──────────────────────────────────────────────────────────────
+  app.get('/required/mine', async (req, reply) => {
+    const ids = await requiredForUser(req.user!)
+    if (!ids.length) return reply.send({ data: [] })
+    const rows = (await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[]
+    const data = await Promise.all(
+      rows
+        .filter((v) => viewerMaySee(v, req.user!.role, false))
+        .map((v) => serializeVideo(v, viewerCtx(req, false)))
+    )
+    return reply.send({ data })
+  })
+
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const { video, author } = await loadVideoForUser(req, id)
@@ -159,6 +192,23 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
+  app.post('/:id/progress', async (req, reply) => {
+    // Masquerade sessions are not tracked: an admin looking as someone else
+    // must never complete that person's required viewing.
+    if (req.masqueradeAdminId) return reply.code(204).send()
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    return reply.send({
+      data: await recordProgress(req.user!, video, (req.body ?? {}) as Record<string, never>)
+    })
+  })
+
+  app.get('/:id/analytics', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    return reply.send({ data: await videoAnalytics(video) })
+  })
+
   // ── Draft edits ───────────────────────────────────────────────────────────
   app.get('/:id/draft/edits', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -205,5 +255,92 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const { id, vid } = req.params as { id: string; vid: string }
     const { video } = await loadVideoForUser(req, id)
     return reply.send({ data: await restoreVersion(video, req.user!, vid) })
+  })
+}
+
+/** Media routes (stream, captions, poster): <video>, <track> and <img> cannot
+ *  send an Authorization header, so these sit in their own plugin WITHOUT the
+ *  authenticate hook and are authorised by a signed ticket (?st=) instead.
+ *  The ticket only names the person: every request re-checks that person's
+ *  CURRENT status and role and the video's CURRENT visibility. Unknown,
+ *  invisible, expired and unauthorised all answer the same 404. */
+export async function helpVideoMediaRoutes(app: FastifyInstance) {
+  async function resolve(req: FastifyRequest) {
+    const { id } = req.params as { id: string }
+    const { st } = req.query as { st?: string }
+    const notFound = Object.assign(new Error('Video not found'), {
+      statusCode: 404,
+      code: 'HELP_VIDEO_NOT_FOUND'
+    })
+    if (!isUuid(id)) throw notFound
+    const t = typeof st === 'string' ? verifyMediaTicket(st, id) : null
+    if (!t || !isUuid(t.userId)) throw notFound
+    const user = (await db('nivaro_users').where({ id: t.userId, status: 'active' }).first()) as
+      | (User & { is_redacted?: unknown })
+      | undefined
+    if (!user || user.is_redacted === true || user.is_redacted === 1) throw notFound
+    const video = (await db('nivaro_help_videos').where({ id }).first()) as VideoRow | undefined
+    if (!video) throw notFound
+    const role = user.role
+      ? await db('nivaro_roles').where({ id: user.role }).first('admin_access')
+      : null
+    const author = await isAuthor(user, !!role?.admin_access)
+    if (!viewerMaySee(video, user.role ?? null, author)) throw notFound
+    if (t.scope === 'd' && !author) throw notFound
+    const version = await loadVersion(
+      t.scope === 'd' ? video.draft_version_id : video.published_version_id
+    )
+    if (!version) throw notFound
+    return { video, version, draft: t.scope === 'd' }
+  }
+
+  // no-cache on every media answer: a browser may keep the bytes but must ask
+  // again, so someone whose role or the video's visibility changed stops
+  // getting it at once instead of after an hour of cache.
+  app.get('/:id/stream', async (req, reply) => {
+    const { version, draft } = await resolve(req)
+    const pick = pickStreamFile(version, {
+      forceSource: draft || (req.query as { source?: string }).source === '1'
+    })
+    const file = await getFile(pick.fileId)
+    if (!file?.filename_disk) return reply.code(404).send({ error: 'Recording not found' })
+    reply.header('Cache-Control', 'private, no-cache').header('X-Help-Video-Source', pick.kind)
+    return sendStoredObject(reply, file.filename_disk, {
+      rangeHeader: req.headers.range,
+      contentType: pick.kind === 'rendered' ? 'video/mp4' : String(file.type ?? 'video/webm')
+    })
+  })
+
+  app.get('/:id/captions.vtt', async (req, reply) => {
+    const { version } = await resolve(req)
+    const sourceMs = Number(version.source_duration_ms ?? 30 * 60_000)
+    let raw: unknown = emptyEdits(0)
+    try {
+      raw = typeof version.edits === 'string' ? JSON.parse(version.edits) : raw
+    } catch {
+      // unreadable edits read as none — captions simply come back empty
+    }
+    // Edited time always: a current render plays in edited time, and the
+    // player converts live-mode positions to edited time before showing cues.
+    let vtt = 'WEBVTT\n\n'
+    try {
+      vtt = captionsToVtt(normalizeEdits(raw, sourceMs))
+    } catch (err) {
+      if (!(err instanceof EditsError)) throw err
+    }
+    return reply
+      .header('Content-Type', 'text/vtt; charset=utf-8')
+      .header('Cache-Control', 'private, no-cache')
+      .send(vtt)
+  })
+
+  app.get('/:id/poster', async (req, reply) => {
+    const { video } = await resolve(req)
+    const file = video.poster_file ? await getFile(String(video.poster_file)) : undefined
+    if (!file?.filename_disk) return reply.code(404).send({ error: 'No poster yet' })
+    reply.header('Cache-Control', 'private, no-cache')
+    return sendStoredObject(reply, file.filename_disk, {
+      contentType: String(file.type ?? 'image/jpeg')
+    })
   })
 }

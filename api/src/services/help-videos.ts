@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
@@ -33,6 +34,9 @@ export type VersionRow = Record<string, unknown> & {
   video_id: string
   edits: string
   edits_hash: string
+  source_file: string
+  rendered_file: string | null
+  rendered_hash: string | null
 }
 export interface ContextInput {
   kind: 'collection' | 'page'
@@ -74,6 +78,8 @@ export interface HelpVideoDto {
   visibility?: Visibility
   required_role_ids?: string[]
   draft?: VersionDto | null
+  draft_stream_url?: string | null
+  draft_captions_url?: string | null
   created_by_name?: string | null
   updated_at: string
   my_progress: { position_ms: number; completed: boolean; percent: number } | null
@@ -221,6 +227,46 @@ export async function loadVideoForUser(
   return { video, author }
 }
 
+const WINDOW_MS = 3 * 3_600_000
+
+function ticketSig(videoId: string, userId: string, scope: string, exp: number): string {
+  return createHmac('sha256', config.SESSION_SECRET)
+    .update(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}`)
+    .digest('base64url')
+    .slice(0, 32)
+}
+
+/** A media link ticket: <video>/<track>/<img> cannot send Authorization
+ *  headers, so stream/captions/poster URLs carry a signed, expiring ticket for
+ *  the person who asked. Stable for a 3-hour window so the browser can cache.
+ *  A valid ticket only names the person — every media request still re-checks
+ *  their current role and the video's current visibility. */
+export function mediaTicket(
+  videoId: string,
+  userId: string,
+  scope: 'p' | 'd',
+  now = Date.now()
+): string {
+  const exp = Math.floor(now / WINDOW_MS) * WINDOW_MS + 2 * WINDOW_MS
+  return `${exp}.${up(userId)}.${scope}.${ticketSig(videoId, userId, scope, exp)}`
+}
+
+export function verifyMediaTicket(
+  ticket: string,
+  videoId: string,
+  now = Date.now()
+): { userId: string; scope: 'p' | 'd' } | null {
+  const parts = String(ticket ?? '').split('.')
+  if (parts.length !== 4) return null
+  const [expRaw, userId, scope, sig] = parts
+  const exp = Number(expRaw)
+  if (!Number.isFinite(exp) || exp < now || (scope !== 'p' && scope !== 'd')) return null
+  const want = Buffer.from(ticketSig(videoId, userId, scope, exp))
+  const got = Buffer.from(sig)
+  if (want.length !== got.length || !timingSafeEqual(want, got)) return null
+  return { userId, scope }
+}
+
 /** A video is required for THIS viewer only when one of its requirement rows
  *  names the viewer's own role — someone outside those roles never sees
  *  "Required" on it. */
@@ -248,6 +294,7 @@ export async function serializeVideo(
       : Promise.resolve(undefined)
   ])
   const base = `/api/help-videos/${id}`
+  const pt = mediaTicket(id, ctx.userId, 'p')
   const buckets = String(view?.buckets ?? '')
   const seen = [...buckets].filter((c) => c === '1').length
   const requiredSince = video.required_since ? new Date(video.required_since as string) : null
@@ -259,9 +306,9 @@ export async function serializeVideo(
     category: (video.category as string | null) ?? null,
     status: video.status as HelpVideoDto['status'],
     duration_ms: video.duration_ms == null ? null : Number(video.duration_ms),
-    poster_url: video.poster_file ? `${base}/poster` : null,
-    stream_url: published ? `${base}/stream` : null,
-    captions_url: published ? `${base}/captions.vtt` : null,
+    poster_url: video.poster_file ? `${base}/poster?st=${pt}` : null,
+    stream_url: published ? `${base}/stream?st=${pt}` : null,
+    captions_url: published ? `${base}/captions.vtt?st=${pt}` : null,
     contexts: contexts.map(
       (c: { kind: ContextInput['kind']; key: string; state_key: string | null }) => ({
         kind: c.kind,
@@ -287,6 +334,11 @@ export async function serializeVideo(
     dto.visibility = parseVisibility(video.visibility)
     dto.required_role_ids = reqs.map((r: { role_id: unknown }) => up(r.role_id))
     dto.draft = draft ? serializeVersion(draft, { withRecorderData: true }) : null
+    if (draft) {
+      const dt = mediaTicket(id, ctx.userId, 'd')
+      dto.draft_stream_url = `${base}/stream?st=${dt}&source=1`
+      dto.draft_captions_url = `${base}/captions.vtt?st=${dt}`
+    }
     dto.created_by_name = creator
       ? `${creator.first_name ?? ''} ${creator.last_name ?? ''}`.trim() || null
       : null
