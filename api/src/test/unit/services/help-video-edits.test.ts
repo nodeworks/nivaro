@@ -4,11 +4,11 @@ import {
   EditsError,
   editedDuration,
   editedToSource,
-  emptyEdits,
   hashEdits,
   isHiddenByCuts,
   normalizeEdits,
-  sourceToEdited
+  sourceToEdited,
+  type VideoEdits
 } from '../../../services/help-video-edits.js'
 
 const SRC = 60_000
@@ -136,12 +136,38 @@ describe('time mapping', () => {
 })
 
 describe('hashEdits', () => {
-  it('ignores key order', () => {
-    const a = emptyEdits(SRC)
-    // Same content, top-level keys in reverse order (a replacer ARRAY would
-    // also filter nested keys, emptying every segment — don't use one here).
-    const b = Object.fromEntries(Object.entries(a).reverse())
-    expect(hashEdits(a)).toBe(hashEdits(normalizeEdits(b, SRC)))
+  // Hand-built objects: deliberately NOT passed through normalizeEdits, which
+  // would rebuild keys in a fixed order and hide a missing sort.
+  const a = {
+    v: 1,
+    segments: [{ start_ms: 0, end_ms: 5000, speed: 1 }],
+    poster_ms: 0,
+    chapters: [],
+    annotations: [],
+    zooms: [
+      { id: 'z1', start_ms: 0, end_ms: 2000, rect: { x: 0, y: 0, w: 0.5, h: 0.5 }, ease_ms: 100 }
+    ],
+    blurs: [],
+    captions: []
+  } as unknown as VideoEdits
+  const b = {
+    captions: [],
+    blurs: [],
+    zooms: [
+      { ease_ms: 100, rect: { h: 0.5, w: 0.5, y: 0, x: 0 }, end_ms: 2000, start_ms: 0, id: 'z1' }
+    ],
+    annotations: [],
+    chapters: [],
+    poster_ms: 0,
+    segments: [{ speed: 1, end_ms: 5000, start_ms: 0 }],
+    v: 1
+  } as unknown as VideoEdits
+  it('ignores key order, top-level and nested', () => {
+    expect(hashEdits(a)).toBe(hashEdits(b))
+  })
+  it('changes when a value changes', () => {
+    const c = { ...b, poster_ms: 1 } as VideoEdits
+    expect(hashEdits(c)).not.toBe(hashEdits(a))
   })
 })
 
