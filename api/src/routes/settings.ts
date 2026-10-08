@@ -274,6 +274,8 @@ export async function settingsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'help_video_author_roles must be a list of role ids' })
       }
       patch.help_video_author_roles = list.length ? JSON.stringify([...new Set(list)]) : null
+      const { bustAuthorRoleCache } = await import('../services/help-videos.js')
+      reply.raw.once('finish', () => bustAuthorRoleCache())
     }
 
     // Approved accent palette (#83): strict shape, stored as JSON text.
