@@ -33,6 +33,8 @@ export interface CronEntry {
   gate?: { flag: string; enabled: boolean }
   /** #198 — a paused cron's ticks return immediately. */
   paused?: boolean
+  /** Ticks during maintenance mode (only the window sweep itself). */
+  duringMaintenance?: boolean
   /** #32 — the job registered a dry-run handler (report, no writes). */
   supports_dry_run?: boolean
   /** #54 — chained: runs right after this job completes instead of on its
@@ -75,6 +77,13 @@ export interface ScheduleOpts {
   /** #831 — pin this job to a zone (e.g. 'UTC' for jobs that must follow UTC
    *  days). Absent = the instance time zone. */
   timezone?: string
+  /** Keep ticking while maintenance mode is on. Scheduled ticks skip by
+   *  default during a freeze — a rebuild that restores the database must not
+   *  have partner polls and auto-sweeps writing into the half-converted copy
+   *  (2026-10-07: the MDSi shipment poll and the workflow auto-sweep
+   *  completed an inventory request mid-rebuild). Only the sweep that ENDS a
+   *  maintenance window may opt in; run-now is never gated. */
+  duringMaintenance?: boolean
 }
 
 /** A usable IANA zone name, or null. */
@@ -792,6 +801,10 @@ export class CronManager {
         // #1080 — only the process holding the scheduler lease fires, and a
         // given scheduled fire runs once even when two processes overlap.
         if (!this.mayTick()) return
+        // Maintenance mode freezes scheduled work along with writes: a job
+        // that would run now waits for the freeze to lift (run-now, which an
+        // admin asks for by hand, is not gated).
+        if (await this.heldByMaintenance(id)) return
         if (this.leader.active && !(await this.leader.claimRun(id, scheduledFireTime(cronJob))))
           return
         // #1085 — an unsafe job already running (a run-now elsewhere) skips this tick.
@@ -879,6 +892,7 @@ export class CronManager {
       idempotent: opts?.idempotent ?? 'unknown',
       description: opts?.description,
       dryRun: opts?.dryRun,
+      duringMaintenance: opts?.duringMaintenance === true,
       timezone: zone.tz ?? containerTimeZone(),
       timezone_source: zone.source,
       job,
@@ -900,6 +914,38 @@ export class CronManager {
   /** #1051 — the scheduler lease holder as this process last saw it ('uncoordinated' = no Redis). */
   private leaseHolderNow(): string {
     return this.leader.active ? (this.leader.status().holder ?? INSTANCE_ID) : 'uncoordinated'
+  }
+
+  /** Jobs whose skip was already logged this freeze (one line per job, not one per tick). */
+  private maintenanceSkipped = new Set<string>()
+
+  /**
+   * True while maintenance mode is on and this job did not opt in
+   * (`duringMaintenance`). Reads the same cached state the write freeze uses
+   * (the Redis override a rebuild sets, else the settings row). A failed
+   * read never holds a job: a broken maintenance lookup must not silently
+   * stop every scheduled job.
+   */
+  private async heldByMaintenance(id: string): Promise<boolean> {
+    const entry = this.entries.get(id)
+    if (entry?.duringMaintenance) return false
+    let on = false
+    try {
+      const { maintenanceState } = await import('../services/security.js')
+      on = (await maintenanceState()).on
+    } catch {
+      return false
+    }
+    if (!on) {
+      if (this.maintenanceSkipped.delete(id))
+        console.log(`[cron] maintenance ended — "${id}" ticks again`)
+      return false
+    }
+    if (!this.maintenanceSkipped.has(id)) {
+      this.maintenanceSkipped.add(id)
+      console.log(`[cron] "${id}" held — maintenance mode is on`)
+    }
+    return true
   }
 
   /**
@@ -976,6 +1022,7 @@ export class CronManager {
     for (const entry of this.entries.values()) {
       const hours = entry.catchUpHours
       if (!hours) continue
+      if (await this.heldByMaintenance(entry.id)) continue
       try {
         const recent = await db('nivaro_job_runs')
           .where({ job_id: entry.id, status: 'completed' })

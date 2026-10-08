@@ -45,6 +45,10 @@ export const qualityChecksDocs: DocSection = {
         ['verify', 'Every check runs its current query and is compared with the baseline.']
       ]
     },
+    {
+      type: 'note',
+      text: 'The whole run happens under maintenance mode, and scheduled jobs hold while it is on: a partner poll or an auto-sweep writing into the half-converted copy would otherwise move a record between capture and verify and show up as a false mismatch. Jobs resume when the run ends; an admin\u2019s Run now is never held.'
+    },
     { type: 'h2', id: 'quality-checks-colours', text: 'Colours' },
     {
       type: 'table',

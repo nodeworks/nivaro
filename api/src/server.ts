@@ -866,10 +866,16 @@ export async function buildServer() {
       // Maintenance windows (#214/#303): per-minute sweep flips maintenance
       // mode at window boundaries; the exit smoke-checks and sends the
       // verified all-clear.
-      app.cron.schedule('maintenance-windows', '* * * * *', async () => {
-        const { sweepMaintenanceWindows } = await import('./services/maintenance-windows.js')
-        await sweepMaintenanceWindows(app)
-      })
+      app.cron.schedule(
+        'maintenance-windows',
+        '* * * * *',
+        async () => {
+          const { sweepMaintenanceWindows } = await import('./services/maintenance-windows.js')
+          await sweepMaintenanceWindows(app)
+        },
+        // The one job that must tick DURING a freeze — it is what ends a window.
+        { duringMaintenance: true }
+      )
 
       // Post-deploy smoke (#299): a version change gets one health verdict at
       // minute one instead of waiting for the first user report.
