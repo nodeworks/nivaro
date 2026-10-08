@@ -47,6 +47,7 @@
     "fusion:inbound-identity": "tsx extensions/efp-ops/scripts/fusion-inbound-identity.ts",
     "fusion:cifa-tasks": "tsx extensions/efp-ops/scripts/fusion-cifa-tasks.ts",
     "fusion:budget": "tsx extensions/efp-ops/scripts/fusion-budget.ts",
+    "budget:surfaces": "tsx extensions/efp-ops/scripts/budget-surfaces.ts",
     "integrations:queries": "tsx extensions/efp-ops/scripts/integrations-console-queries.ts",
     "typecheck:extensions": "tsc -p extensions/tsconfig.json",
     "purge:ephemeral-audit": "tsx src/scripts/purge-ephemeral-audit.ts",
