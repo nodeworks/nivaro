@@ -26,6 +26,24 @@ export function renderSize(width: number, height: number): { width: number; heig
   return { width: even(width * scale), height: even(height * scale) }
 }
 
+/** ffmpeg's boxblur (radius r) looks about as soft as a CSS blur of r / 1.7. */
+const BOX_TO_CSS_BLUR = 1.7
+/** The CSS blur radius (frame pixels) that looks like the render's blur box.
+ *  Same radius rule as the render plan: the box is at least 4×4 output
+ *  pixels and the radius is at most a quarter of its smaller side, minus 1. */
+export function liveBlurPx(
+  strength: number,
+  rect: { w: number; h: number },
+  canvas: { width: number; height: number },
+  frameWidth: number
+): number {
+  const w = Math.max(4, even(rect.w * canvas.width))
+  const h = Math.max(4, even(rect.h * canvas.height))
+  const r = Math.max(1, Math.min(strength, Math.floor(Math.min(w, h) / 4) - 1))
+  const k = canvas.width ? frameWidth / canvas.width : 1
+  return (r * k) / BOX_TO_CSS_BLUR
+}
+
 /** Zoom as CSS: transform-origin 0 0, translate(tx·100%, ty·100%) scale(z).
  *  Same maths as the render's crop: offset = clamp(0.5 − centre·z, 1 − z, 0). */
 export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; ty: number } {

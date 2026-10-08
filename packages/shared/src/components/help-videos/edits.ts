@@ -1,9 +1,24 @@
-import type { Blur, Chapter, Speed, VideoEdits, Zoom } from './types'
+import type {
+  Annotation,
+  Blur,
+  Caption,
+  Chapter,
+  Point,
+  Rect,
+  Speed,
+  VideoEdits,
+  Zoom
+} from './types'
 
 // Client twin of api/src/services/help-video-edits.ts (time mapping and
-// EDIT_LIMITS) plus the editor's pure operations. The server normalizes
-// whatever the editor sends; these keep the editor's working copy identical
-// to what that normalization would produce, so a save never moves anything.
+// EDIT_LIMITS) plus the editor's pure operations. The server's normalizeEdits
+// is the source of truth; upsertItem applies its per-item rules (rect clamps,
+// zoom squares, eases, strengths, text, minimum length, zoom overlap, list
+// caps and sort order) so what the editor shows is what gets stored. Three
+// things are left to the server on save, and can still change the copy:
+// clamping times to the recording's length (the editor places items inside
+// it), turning a blank chapter title into "Chapter", and dropping a caption
+// whose text is blank.
 
 export const ALLOWED_SPEEDS: Speed[] = [1, 1.5, 2, 4]
 /** Same values as the server's EDIT_LIMITS — keep them in step. */
@@ -104,42 +119,112 @@ export function trimSegment(
 
 type Item<K extends ListKey> = VideoEdits[K][number]
 
-/** The server's per-item rules that the editor can break by dragging or
- *  typing: zoom rects are squares of side ≥ zoomMinSide inside the frame with
- *  an ease of at most half their length, blur strength is 2–40, and text and
- *  chapter titles are cut to their limits. */
+/** The server's rect(): sides at least 0.01 and at most 1, inside the frame. */
+function clampRect(r: Rect): Rect {
+  const w = clamp(r.w, 0.01, 1)
+  const h = clamp(r.h, 0.01, 1)
+  return { x: clamp(r.x, 0, 1 - w), y: clamp(r.y, 0, 1 - h), w, h }
+}
+const clampPoint = (p: Point): Point => ({ x: clamp(p.x, 0, 1), y: clamp(p.y, 0, 1) })
+const span = (s: { start_ms: number; end_ms: number }) => ({
+  start_ms: Math.round(Math.max(0, s.start_ms)),
+  end_ms: Math.round(Math.max(0, s.end_ms))
+})
+
+/** One item as normalizeEdits would store it (all but the source-length
+ *  clamp, which the editor applies when it places an item). Chapter titles
+ *  are cut to their limit but not trimmed, so typing a space still works;
+ *  the server turns a blank title into "Chapter" when it saves. */
 function normalizeItem<K extends ListKey>(key: K, item: Item<K>): Item<K> {
+  if (key === 'chapters') {
+    const c = item as Chapter
+    return {
+      ...c,
+      at_ms: Math.round(Math.max(0, c.at_ms)),
+      title: c.title.slice(0, EDIT_LIMITS.chapterTitle)
+    } as Item<K>
+  }
   if (key === 'zooms') {
     const z = item as Zoom
-    const side = clamp(Math.max(z.rect.w, z.rect.h), EDIT_LIMITS.zoomMinSide, 1)
-    const half = Math.floor((z.end_ms - z.start_ms) / 2)
+    const s = span(z)
+    const r = clampRect(z.rect)
+    const side = clamp(Math.max(r.w, r.h), EDIT_LIMITS.zoomMinSide, 1)
+    const half = Math.floor((s.end_ms - s.start_ms) / 2)
     return {
       ...z,
-      rect: { x: clamp(z.rect.x, 0, 1 - side), y: clamp(z.rect.y, 0, 1 - side), w: side, h: side },
+      ...s,
+      rect: { x: clamp(r.x, 0, 1 - side), y: clamp(r.y, 0, 1 - side), w: side, h: side },
       ease_ms: Math.round(clamp(z.ease_ms, 0, Math.max(0, half)))
     } as Item<K>
   }
   if (key === 'blurs') {
     const b = item as Blur
-    return { ...b, strength: Math.round(clamp(b.strength, 2, 40)) } as Item<K>
+    return {
+      ...b,
+      ...span(b),
+      rect: clampRect(b.rect),
+      strength: Math.round(clamp(b.strength, 2, 40))
+    } as Item<K>
   }
-  if (key === 'chapters') {
-    const c = item as Chapter
-    return { ...c, title: c.title.slice(0, EDIT_LIMITS.chapterTitle) } as Item<K>
+  if (key === 'annotations') {
+    const a = item as Annotation
+    const arrow = a.type === 'arrow'
+    return {
+      ...a,
+      ...span(a),
+      rect: clampRect(a.rect),
+      to: arrow ? clampPoint(a.to ?? { x: 0.5, y: 0.5 }) : null,
+      // only callouts and boxes carry text; the server stores '' for the rest
+      text: a.type === 'callout' || a.type === 'box' ? a.text.slice(0, EDIT_LIMITS.text) : ''
+    } as Item<K>
   }
-  const t = item as { text: string }
-  return { ...item, text: t.text.slice(0, EDIT_LIMITS.text) } as Item<K>
+  const c = item as Caption
+  return { ...c, ...span(c), text: c.text.slice(0, EDIT_LIMITS.text) } as Item<K>
 }
 
-/** Add or replace an item by id. A NEW item past the server's list cap is
- *  refused (the edits come back unchanged), since the server would drop it. */
-export function upsertItem<K extends ListKey>(e: VideoEdits, key: K, item: Item<K>): VideoEdits {
+const startOf = (x: { start_ms?: number; at_ms?: number }) => x.start_ms ?? x.at_ms ?? 0
+/** The lists the server stores sorted by start (annotations and blurs keep
+ *  their order). */
+const SORTED: ListKey[] = ['chapters', 'zooms', 'captions']
+
+/** Add or replace an item by id, normalized the way the server's
+ *  normalizeEdits would store it. Refused (edits unchanged, with the reason)
+ *  when the server would drop the item: shorter than 0.2 seconds, a zoom
+ *  overlapping another zoom, or a new item past the list cap. */
+export function upsertItemChecked<K extends ListKey>(
+  e: VideoEdits,
+  key: K,
+  item: Item<K>
+): { edits: VideoEdits; refused?: string } {
   const list = e[key] as Array<{ id: string }>
   const next = normalizeItem(key, item)
+  if (key !== 'chapters') {
+    const s = next as { start_ms: number; end_ms: number }
+    if (s.end_ms - s.start_ms < EDIT_LIMITS.minItemMs) {
+      return { edits: e, refused: 'Make it at least 0.2 seconds long' }
+    }
+  }
+  if (key === 'zooms') {
+    const z = next as Zoom
+    const clash = e.zooms.some(
+      (o) => o.id !== z.id && z.start_ms < o.end_ms && z.end_ms > o.start_ms
+    )
+    if (clash) return { edits: e, refused: 'Zooms can’t overlap. Move it clear of the other zoom.' }
+  }
   const i = list.findIndex((x) => x.id === item.id)
-  if (i < 0 && list.length >= EDIT_LIMITS[key]) return e
+  if (i < 0 && list.length >= EDIT_LIMITS[key]) {
+    return { edits: e, refused: `There can be at most ${EDIT_LIMITS[key]} of these` }
+  }
   const out = i < 0 ? [...list, next] : list.map((x, j) => (j === i ? next : x))
-  return { ...e, [key]: out } as VideoEdits
+  if (SORTED.includes(key)) {
+    out.sort((a, b) => startOf(a as { start_ms?: number }) - startOf(b as { start_ms?: number }))
+  }
+  return { edits: { ...e, [key]: out } as VideoEdits }
+}
+
+/** upsertItemChecked without the reason: refused changes return `e` itself. */
+export function upsertItem<K extends ListKey>(e: VideoEdits, key: K, item: Item<K>): VideoEdits {
+  return upsertItemChecked(e, key, item).edits
 }
 export function removeItem(e: VideoEdits, key: ListKey, id: string): VideoEdits {
   return {

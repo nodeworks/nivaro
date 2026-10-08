@@ -3,6 +3,7 @@ import {
   activeAt,
   bucketIndex,
   fitFrame,
+  liveBlurPx,
   liveStep,
   renderSize,
   resolveDurationMs,
@@ -84,4 +85,15 @@ describe('renderSize', () => {
     expect(renderSize(1001, 501)).toEqual({ width: 1000, height: 500 })
     expect(renderSize(1080, 2400)).toEqual({ width: 486, height: 1080 })
   })
+})
+
+describe('liveBlurPx', () => {
+  const canvas = { width: 1280, height: 720 }
+  it('scales the render radius to the frame and softens it to match boxblur', () =>
+    expect(liveBlurPx(17, { w: 0.5, h: 0.5 }, canvas, 640)).toBe(5))
+  it('caps the radius by the box size like the render plan', () =>
+    // 0.05 × 720 = 36 px → at most 36 / 4 − 1 = 8
+    expect(liveBlurPx(40, { w: 0.5, h: 0.05 }, canvas, 1280)).toBeCloseTo(8 / 1.7))
+  it('never goes below radius 1', () =>
+    expect(liveBlurPx(12, { w: 0.001, h: 0.001 }, canvas, 1280)).toBeCloseTo(1 / 1.7))
 })

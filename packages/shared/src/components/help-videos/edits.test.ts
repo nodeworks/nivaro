@@ -10,7 +10,8 @@ import {
   sourceToEdited,
   splitAt,
   trimSegment,
-  upsertItem
+  upsertItem,
+  upsertItemChecked
 } from './edits'
 import type { Annotation, VideoEdits } from './types'
 
@@ -170,5 +171,99 @@ describe('mirrors the server EDIT_LIMITS', () => {
     expect(upsertItem(full, 'chapters', { id: 'new', at_ms: 0, title: 'T' })).toBe(full)
     const e = upsertItem(full, 'chapters', { id: 'c3', at_ms: 3, title: 'Renamed' })
     expect(e.chapters[3].title).toBe('Renamed')
+  })
+})
+
+// Expected values below are what api/src/services/help-video-edits.ts
+// normalizeEdits stores for the same input (checked by a parity script).
+describe('upsertItem follows normalizeEdits', () => {
+  const ann = (over: Partial<Annotation>): Annotation => ({
+    id: 'a',
+    type: 'callout',
+    start_ms: 0,
+    end_ms: 1000,
+    rect: { x: 0.1, y: 0.1, w: 0.2, h: 0.1 },
+    to: null,
+    text: 'Hi',
+    tone: 'accent',
+    ...over
+  })
+  const zr = { rect: { x: 0, y: 0, w: 0.5, h: 0.5 }, ease_ms: 0 }
+  it('refuses an item shorter than 200 ms, with the reason', () => {
+    const r = upsertItemChecked(base, 'blurs', {
+      id: 'b',
+      start_ms: 1000,
+      end_ms: 1150,
+      rect: { x: 0, y: 0, w: 0.2, h: 0.2 },
+      strength: 12
+    })
+    expect(r.edits).toBe(base)
+    expect(r.refused).toBe('Make it at least 0.2 seconds long')
+  })
+  it('refuses a zoom that overlaps another, but lets a zoom move over its own old place', () => {
+    const one = upsertItem(base, 'zooms', { id: 'z1', start_ms: 1000, end_ms: 3000, ...zr })
+    const r = upsertItemChecked(one, 'zooms', { id: 'z2', start_ms: 2500, end_ms: 4000, ...zr })
+    expect(r.edits).toBe(one)
+    expect(r.refused).toBe('Zooms can’t overlap. Move it clear of the other zoom.')
+    const moved = upsertItem(one, 'zooms', { id: 'z1', start_ms: 2000, end_ms: 3500, ...zr })
+    expect(moved.zooms[0].start_ms).toBe(2000)
+    const touching = upsertItem(one, 'zooms', { id: 'z2', start_ms: 3000, end_ms: 4000, ...zr })
+    expect(touching.zooms).toHaveLength(2)
+  })
+  it('clamps annotation and blur rects like rect()', () => {
+    const a = upsertItem(
+      base,
+      'annotations',
+      ann({ rect: { x: 0.995, y: -0.2, w: 0.005, h: 1.4 } })
+    )
+    expect(a.annotations[0].rect).toEqual({ x: 0.99, y: 0, w: 0.01, h: 1 })
+    const b = upsertItem(base, 'blurs', {
+      id: 'b',
+      start_ms: 0,
+      end_ms: 1000,
+      rect: { x: 0.9, y: 0.95, w: 0.3, h: 0.3 },
+      strength: 12
+    })
+    expect(b.blurs[0].rect).toEqual({ x: 0.7, y: 0.7, w: 0.3, h: 0.3 })
+  })
+  it('keeps text only on callouts and boxes, and a target only on arrows', () => {
+    const ripple = upsertItem(base, 'annotations', ann({ type: 'ripple', to: { x: 1, y: 1 } }))
+    expect(ripple.annotations[0]).toMatchObject({ text: '', to: null })
+    const arrow = upsertItem(base, 'annotations', ann({ type: 'arrow', to: { x: 1.4, y: -1 } }))
+    expect(arrow.annotations[0]).toMatchObject({ text: '', to: { x: 1, y: 0 } })
+    const bare = upsertItem(base, 'annotations', ann({ type: 'arrow', to: null }))
+    expect(bare.annotations[0].to).toEqual({ x: 0.5, y: 0.5 })
+    expect(upsertItem(base, 'annotations', ann({ type: 'box' })).annotations[0].text).toBe('Hi')
+  })
+  it('sorts chapters, captions and zooms by start, and keeps annotation order', () => {
+    let e = upsertItem(base, 'chapters', { id: 'c2', at_ms: 5000, title: 'Later' })
+    e = upsertItem(e, 'chapters', { id: 'c1', at_ms: 1000, title: 'Sooner' })
+    expect(e.chapters.map((c) => c.id)).toEqual(['c1', 'c2'])
+    e = upsertItem(e, 'captions', { id: 'k2', start_ms: 4000, end_ms: 5000, text: 'B' })
+    e = upsertItem(e, 'captions', { id: 'k1', start_ms: 1000, end_ms: 2000, text: 'A' })
+    expect(e.captions.map((c) => c.id)).toEqual(['k1', 'k2'])
+    e = upsertItem(e, 'zooms', { id: 'z2', start_ms: 6000, end_ms: 7000, ...zr })
+    e = upsertItem(e, 'zooms', { id: 'z1', start_ms: 1000, end_ms: 2000, ...zr })
+    expect(e.zooms.map((x) => x.id)).toEqual(['z1', 'z2'])
+    e = upsertItem(e, 'annotations', ann({ id: 'a2', start_ms: 5000, end_ms: 6000 }))
+    e = upsertItem(e, 'annotations', ann({ id: 'a1' }))
+    expect(e.annotations.map((x) => x.id)).toEqual(['a2', 'a1'])
+  })
+  it('rounds times and never goes below zero', () => {
+    const e = upsertItem(base, 'captions', { id: 'k', start_ms: -40.4, end_ms: 999.6, text: 'A' })
+    expect(e.captions[0]).toMatchObject({ start_ms: 0, end_ms: 1000 })
+  })
+  it('does not trim a chapter title while it is being typed', () => {
+    const e = upsertItem(base, 'chapters', { id: 'c', at_ms: 0, title: 'Intro ' })
+    expect(e.chapters[0].title).toBe('Intro ')
+  })
+  it('says why a new item past the cap is refused', () => {
+    const chapters = Array.from({ length: 100 }, (_, i) => ({ id: `c${i}`, at_ms: i, title: 'T' }))
+    const r = upsertItemChecked({ ...base, chapters }, 'chapters', {
+      id: 'n',
+      at_ms: 0,
+      title: 'T'
+    })
+    expect(r.refused).toBe('There can be at most 100 of these')
   })
 })

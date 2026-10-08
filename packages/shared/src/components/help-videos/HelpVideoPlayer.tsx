@@ -14,7 +14,8 @@ import { useApiFetchConfig, useNivaroClient } from '../../context'
 import { fetchHelpVideo, helpVideoApi, helpVideoKeys } from './api'
 import { editedDuration, editedToSource, sourceToEdited } from './edits'
 import { OverlayLayer } from './OverlayLayer'
-import { bucketIndex, fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
+import { fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
+import { createProgressBeats } from './progressBeats'
 import type { HelpVideoDto, VideoEdits } from './types'
 
 export type PlayerHandle = {
@@ -39,21 +40,18 @@ const fmt = (ms: number) => {
 const isAuthorView = (v: HelpVideoDto) => v.visibility !== undefined
 const viewerMustWait = (v: HelpVideoDto) => !isAuthorView(v) && v.published?.playable === false
 
-const iconButton =
-  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-600 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none dark:text-muted-foreground dark:hover:bg-white/5 dark:hover:text-foreground'
+/** Progress is reported for the published video only, once its length is known. */
+const isTracking = (l: { trackProgress: boolean; useDraft: boolean; totalMs: number }) =>
+  l.trackProgress && !l.useDraft && l.totalMs > 0
 
-export function HelpVideoPlayer({
-  video,
-  mode,
-  edits: editsProp,
-  useDraft = false,
-  onTime,
-  trackProgress = true,
-  autoPlay = false,
-  handleRef,
-  className,
-  children
-}: {
+// Shape and states only; each button adds its own ink (mixing two text-*
+// colours in one class list lets CSS order pick the winner).
+const iconButton =
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors duration-150 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none dark:hover:bg-white/5 dark:hover:text-foreground'
+const inkMuted = 'text-slate-600 dark:text-muted-foreground'
+const inkStrong = 'text-slate-900 dark:text-foreground'
+
+export type HelpVideoPlayerProps = {
   video: HelpVideoDto
   /** viewer = rendered file when current; live = always source + edits (authors). */
   mode?: 'viewer' | 'live'
@@ -68,7 +66,26 @@ export function HelpVideoPlayer({
   className?: string
   /** Rendered in frame coordinates above the video, outside the zoom (editor tools). */
   children?: (frame: { width: number; height: number }) => ReactNode
-}) {
+}
+
+/** Keyed by video id: switching to another video starts a fresh player, so
+ *  progress, the resume point and the one-retry flag never carry over. */
+export function HelpVideoPlayer(props: HelpVideoPlayerProps) {
+  return <PlayerInner key={props.video.id} {...props} />
+}
+
+function PlayerInner({
+  video,
+  mode,
+  edits: editsProp,
+  useDraft = false,
+  onTime,
+  trackProgress = true,
+  autoPlay = false,
+  handleRef,
+  className,
+  children
+}: HelpVideoPlayerProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
@@ -239,61 +256,61 @@ export function HelpVideoPlayer({
     return () => v.removeEventListener('loadedmetadata', onMeta)
   }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited, seekSource])
 
-  // Progress: sections seen while playing, sent every 10 s, on pause and on close.
-  const seen = useRef<boolean[]>(new Array(20).fill(false))
-  const watched = useRef(0)
-  const lastTick = useRef<number | null>(null)
-  useEffect(() => {
-    if (!playing || !totalMs) {
-      lastTick.current = null
-      return
-    }
-    const now = performance.now()
-    if (lastTick.current !== null) watched.current += Math.min(1000, now - lastTick.current)
-    lastTick.current = now
-    seen.current[bucketIndex(editedMs, totalMs)] = true
-  }, [playing, editedMs, totalMs])
-
-  // `send` reads the latest values through a ref so it stays one stable
-  // function: the interval and the close handler are not re-armed per frame.
-  const latest = useRef({ trackProgress, useDraft, totalMs, editedMs, dto, started })
-  latest.current = { trackProgress, useDraft, totalMs, editedMs, dto, started }
-  const send = useCallback(
-    (keepalive = false) => {
-      const l = latest.current
-      if (!l.trackProgress || l.useDraft || !l.totalMs || !l.started) return
-      const body = {
-        position_ms: Math.round(l.editedMs),
-        watched_ms_delta: Math.round(watched.current),
-        buckets: seen.current.map((b) => (b ? '1' : '0')).join(''),
-        version_id: l.dto.published?.id
-      }
-      watched.current = 0
+  // Progress: one beat the moment watching starts (it opens the server's
+  // watch period), then the sections seen every 10 s, on pause, at the end
+  // and on close. See progressBeats.ts.
+  // Everything the beats read lives in refs, so `beats` is created once per
+  // player (useApiFetchConfig returns a new headers object every render).
+  const latest = useRef({ trackProgress, useDraft, totalMs, editedMs, dto })
+  latest.current = { trackProgress, useDraft, totalMs, editedMs, dto }
+  const io = useRef({ apiBase, authHeaders, credentials, client, qc })
+  io.current = { apiBase, authHeaders, credentials, client, qc }
+  const [beats] = useState(() =>
+    createProgressBeats((body, keepalive) => {
+      const { apiBase, authHeaders, credentials, client, qc } = io.current
+      const id = latest.current.dto.id
       if (keepalive) {
-        void fetch(`${apiBase}/help-videos/${l.dto.id}/progress`, {
+        return fetch(`${apiBase}/help-videos/${id}/progress`, {
           method: 'POST',
           keepalive: true,
           credentials,
           headers: { 'Content-Type': 'application/json', ...authHeaders },
           body: JSON.stringify(body)
-        }).catch(() => null)
-        return
+        })
       }
-      const wasComplete = !!l.dto.my_progress?.completed
-      void helpVideoApi(client)
-        .progress(l.dto.id, body)
+      const wasComplete = !!latest.current.dto.my_progress?.completed
+      return helpVideoApi(client)
+        .progress(id, body)
         .then((r) => {
           // The first post that counts the video as watched refreshes the
           // required list and the video's own progress.
           if (r?.data?.completed && !wasComplete) {
             void qc.invalidateQueries({ queryKey: helpVideoKeys.required })
-            void qc.invalidateQueries({ queryKey: helpVideoKeys.one(l.dto.id) })
+            void qc.invalidateQueries({ queryKey: helpVideoKeys.one(id) })
           }
         })
-        .catch(() => null)
-    },
-    [apiBase, authHeaders, credentials, client, qc]
+    })
   )
+  useEffect(() => {
+    if (!playing || !totalMs) {
+      beats.idle()
+      return
+    }
+    beats.see(editedMs, totalMs, performance.now())
+  }, [beats, playing, editedMs, totalMs])
+  const send = useCallback(
+    (keepalive = false) => {
+      const l = latest.current
+      if (!isTracking(l)) return
+      void beats.beat(l.editedMs, l.dto.published?.id, keepalive)
+    },
+    [beats]
+  )
+  const openWatch = () => {
+    const l = latest.current
+    if (!isTracking(l) || beats.opened) return
+    void beats.open(l.editedMs, l.dto.published?.id)
+  }
   const sendRef = useRef(send)
   sendRef.current = send
   useEffect(() => {
@@ -400,9 +417,13 @@ export function HelpVideoPlayer({
     if (k === ' ' || k === 'k') {
       e.preventDefault()
       togglePlay()
-    } else if (k === 'arrowleft' || k === 'j') seekEdited(Math.max(0, editedMs - 5000))
-    else if (k === 'arrowright' || k === 'l') seekEdited(Math.min(totalMs, editedMs + 5000))
-    else if (k === 'c') setCaptions((x) => !x)
+    } else if (k === 'arrowleft' || k === 'j') {
+      e.preventDefault()
+      seekEdited(Math.max(0, editedMs - 5000))
+    } else if (k === 'arrowright' || k === 'l') {
+      e.preventDefault()
+      seekEdited(Math.min(totalMs, editedMs + 5000))
+    } else if (k === 'c') setCaptions((x) => !x)
     else if (k === 'f') fullscreen()
   }
 
@@ -415,12 +436,14 @@ export function HelpVideoPlayer({
       className={`flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card ${className ?? ''}`}
       data-hv-player={video.id}
     >
+      {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useAriaPropsSupportedByRole: the stage is role=application with a label and key handler exactly when it is playable; otherwise it has neither */}
       <div
         ref={boxRef}
-        role='application'
-        aria-label={`Video player: ${dto.title}`}
-        tabIndex={playable ? 0 : -1}
-        onKeyDown={onKey}
+        // only a playable stage takes keyboard shortcuts; the state panels are plain content
+        role={playable ? 'application' : undefined}
+        aria-label={playable ? `Video player: ${dto.title}` : undefined}
+        tabIndex={playable ? 0 : undefined}
+        onKeyDown={playable ? onKey : undefined}
         className={`relative aspect-video min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan ${
           playable ? 'bg-[#0b0f17]' : 'bg-slate-50 dark:bg-background'
         }`}
@@ -453,10 +476,12 @@ export function HelpVideoPlayer({
                 onPlay={() => {
                   setPlaying(true)
                   setStarted(true)
+                  openWatch()
                 }}
-                onPause={() => {
+                onPause={(e) => {
                   setPlaying(false)
-                  send()
+                  // at the end the browser fires pause and then ended: onEnded sends
+                  if (!e.currentTarget.ended) send()
                 }}
                 onEnded={() => {
                   setPlaying(false)
@@ -582,11 +607,14 @@ export function HelpVideoPlayer({
               className='peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0'
               data-hv-scrubber
             />
-            <div className='pointer-events-none relative h-1 w-full overflow-hidden rounded-full bg-slate-200 transition-transform duration-150 group-hover:scale-y-150 motion-reduce:transition-none dark:bg-white/15'>
-              <div className='absolute inset-y-0 left-0 bg-nvr-cyan' style={{ width: `${pct}%` }} />
+            <div className='pointer-events-none relative h-1 w-full overflow-hidden rounded-full bg-slate-300 transition-transform duration-150 group-hover:scale-y-150 motion-reduce:transition-none dark:bg-white/15'>
+              <div
+                className='absolute inset-y-0 left-0 bg-nvr-cyan-dark dark:bg-nvr-cyan'
+                style={{ width: `${pct}%` }}
+              />
             </div>
             <div
-              className='pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-nvr-cyan ring-2 ring-white peer-focus-visible:ring-4 peer-focus-visible:ring-nvr-cyan/40 dark:ring-card'
+              className='pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-nvr-cyan-dark ring-2 ring-slate-700 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-nvr-cyan-dark dark:bg-nvr-cyan dark:ring-card dark:peer-focus-visible:outline-nvr-cyan'
               style={{ left: `${pct}%` }}
             />
             {chapters.map((c) => (
@@ -600,7 +628,7 @@ export function HelpVideoPlayer({
                 style={{ left: `${totalMs ? (c.edited / totalMs) * 100 : 0}%` }}
                 data-hv-chapter-tick={c.id}
               >
-                <span className='h-2.5 w-[3px] rounded-full bg-white ring-1 ring-slate-300 group-hover/tick:ring-slate-500 group-focus-visible/tick:ring-2 group-focus-visible/tick:ring-nvr-cyan dark:bg-card dark:ring-white/30 dark:group-hover/tick:ring-white/70' />
+                <span className='h-2.5 w-[3px] rounded-full bg-white ring-1 ring-slate-500 group-hover/tick:ring-slate-800 group-focus-visible/tick:ring-2 group-focus-visible/tick:ring-nvr-cyan-dark dark:bg-card dark:ring-white/50 dark:group-hover/tick:ring-white/80 dark:group-focus-visible/tick:ring-nvr-cyan' />
               </button>
             ))}
           </div>
@@ -608,7 +636,7 @@ export function HelpVideoPlayer({
             <button
               type='button'
               aria-label={playing ? 'Pause' : 'Play'}
-              className={`${iconButton} text-slate-900 dark:text-foreground`}
+              className={`${iconButton} ${inkStrong}`}
               onClick={togglePlay}
               data-hv-play
             >
@@ -629,7 +657,7 @@ export function HelpVideoPlayer({
               aria-label='Captions'
               data-tip={captions ? 'Hide captions (C)' : 'Show captions (C)'}
               onClick={() => setCaptions((x) => !x)}
-              className={`${iconButton} ${captions ? 'bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-foreground' : ''}`}
+              className={`${iconButton} ${captions ? `bg-slate-100 dark:bg-white/10 ${inkStrong}` : inkMuted}`}
             >
               <Captions className='h-4 w-4' />
             </button>
@@ -638,7 +666,7 @@ export function HelpVideoPlayer({
               aria-label='Full screen'
               data-tip='Full screen (F)'
               onClick={fullscreen}
-              className={iconButton}
+              className={`${iconButton} ${inkMuted}`}
             >
               <Maximize className='h-4 w-4' />
             </button>

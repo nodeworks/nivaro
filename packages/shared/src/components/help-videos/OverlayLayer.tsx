@@ -1,6 +1,6 @@
 import type { CSSProperties } from 'react'
 import { ANNOTATION_PALETTE, annotationUnit } from './annotationStyles'
-import { activeAt, renderSize } from './playerMath'
+import { activeAt, liveBlurPx, renderSize } from './playerMath'
 import type { Annotation, VideoEdits } from './types'
 
 /** Annotations, blur boxes and the caption line for one moment of SOURCE
@@ -35,22 +35,25 @@ export function OverlayLayer({
   return (
     <>
       <div className='pointer-events-none absolute inset-0' data-hv-overlay>
-        {activeAt(edits.blurs, srcMs).map((b) => (
-          <div
-            key={b.id}
-            data-hv-blur={b.id}
-            style={{
-              position: 'absolute',
-              left: b.rect.x * W,
-              top: b.rect.y * H,
-              width: b.rect.w * W,
-              height: b.rect.h * H,
-              // the render blurs in output pixels; scale the radius to the frame
-              backdropFilter: `blur(${b.strength * kx}px)`,
-              WebkitBackdropFilter: `blur(${b.strength * kx}px)`
-            }}
-          />
-        ))}
+        {activeAt(edits.blurs, srcMs).map((b) => {
+          // the render's boxblur radius, scaled to the frame and softened to match
+          const px = liveBlurPx(b.strength, b.rect, canvas, W)
+          return (
+            <div
+              key={b.id}
+              data-hv-blur={b.id}
+              style={{
+                position: 'absolute',
+                left: b.rect.x * W,
+                top: b.rect.y * H,
+                width: b.rect.w * W,
+                height: b.rect.h * H,
+                backdropFilter: `blur(${px}px)`,
+                WebkitBackdropFilter: `blur(${px}px)`
+              }}
+            />
+          )
+        })}
         {showAnnotations && (
           <div
             style={{
