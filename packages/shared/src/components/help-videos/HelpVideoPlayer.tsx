@@ -1,0 +1,705 @@
+import { useQueryClient } from '@tanstack/react-query'
+import { Captions, Hourglass, Maximize, Pause, Play, RotateCw, VideoOff } from 'lucide-react'
+import {
+  type KeyboardEvent,
+  type MutableRefObject,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
+import { useApiFetchConfig, useNivaroClient } from '../../context'
+import { fetchHelpVideo, helpVideoApi, helpVideoKeys } from './api'
+import { editedDuration, editedToSource, sourceToEdited } from './edits'
+import { OverlayLayer } from './OverlayLayer'
+import { bucketIndex, fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
+import type { HelpVideoDto, VideoEdits } from './types'
+
+export type PlayerHandle = {
+  seekEdited(ms: number): void
+  seekSource(ms: number): void
+  play(): void
+  pause(): void
+  sourceMs(): number
+  editedMs(): number
+  frame(): { width: number; height: number } | null
+}
+
+const SPEEDS = [0.75, 1, 1.25, 1.5, 2]
+const fmt = (ms: number) => {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** A video the stream would refuse with 409 HELP_VIDEO_PROCESSING: a viewer
+ *  (authors always get a file) and the published version has no current
+ *  render while its edits hide something. */
+const isAuthorView = (v: HelpVideoDto) => v.visibility !== undefined
+const viewerMustWait = (v: HelpVideoDto) => !isAuthorView(v) && v.published?.playable === false
+
+const iconButton =
+  'inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-600 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none dark:text-muted-foreground dark:hover:bg-white/5 dark:hover:text-foreground'
+
+export function HelpVideoPlayer({
+  video,
+  mode,
+  edits: editsProp,
+  useDraft = false,
+  onTime,
+  trackProgress = true,
+  autoPlay = false,
+  handleRef,
+  className,
+  children
+}: {
+  video: HelpVideoDto
+  /** viewer = rendered file when current; live = always source + edits (authors). */
+  mode?: 'viewer' | 'live'
+  /** Editor working copy (live mode). */
+  edits?: VideoEdits
+  /** Play the draft (authors in the editor). */
+  useDraft?: boolean
+  onTime?: (sourceMs: number, editedMs: number) => void
+  trackProgress?: boolean
+  autoPlay?: boolean
+  handleRef?: MutableRefObject<PlayerHandle | null>
+  className?: string
+  /** Rendered in frame coordinates above the video, outside the zoom (editor tools). */
+  children?: (frame: { width: number; height: number }) => ReactNode
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { apiBase, authHeaders, credentials } = useApiFetchConfig()
+  const origin = apiBase.replace(/\/api$/, '')
+
+  // Media tickets expire after a few hours. A failed load fetches the video
+  // again for fresh URLs; that copy wins until the host passes a newer one.
+  const [fresh, setFresh] = useState<HelpVideoDto | null>(null)
+  const [failure, setFailure] = useState<null | 'processing' | 'error'>(null)
+  const retried = useRef(false)
+  // A new `video` prop (the host refetched: fresh tickets, maybe a finished
+  // render) supersedes the refreshed copy and any earlier load failure. The
+  // one-retry flag is NOT reset here: our own refresh updates a host that
+  // reads useHelpVideo(id), and resetting would turn a broken stream into an
+  // endless refresh loop. Only a successful load (onLoadedData) re-arms it.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on purpose when `video` changes
+  useEffect(() => {
+    setFresh(null)
+    setFailure(null)
+  }, [video])
+  const dto = fresh && fresh.id === video.id ? fresh : video
+
+  const author = isAuthorView(dto)
+  const live = useDraft || (mode === 'live' && author)
+  const version = useDraft ? dto.draft : dto.published
+  const edits = editsProp ?? version?.edits
+  const rendered = !live && !!version?.rendered_current
+  // Ticketed URLs are used exactly as the server sent them. Authors previewing
+  // a draft or live edits play the draft's original (draft_stream_url). When
+  // there is no draft yet (the editor creates it on first load) or it was just
+  // published, an author falls back to the published original; a viewer never
+  // asks for an original.
+  const withSource = (url: string) => `${url}${url.includes('?') ? '&' : '?'}source=1`
+  const srcPath = live
+    ? (dto.draft_stream_url ?? (author && dto.stream_url ? withSource(dto.stream_url) : null))
+    : dto.stream_url
+  const src = srcPath ? `${origin}${srcPath}` : null
+  const poster = !live && dto.poster_url ? `${origin}${dto.poster_url}` : undefined
+
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const boxRef = useRef<HTMLDivElement | null>(null)
+  const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null)
+  const videoRef = useRef<HTMLVideoElement | null>(null)
+  videoRef.current = videoEl
+  const [frame, setFrame] = useState<{
+    left: number
+    top: number
+    width: number
+    height: number
+  } | null>(null)
+  const [srcMs, setSrcMs] = useState(0)
+  const [playing, setPlaying] = useState(false)
+  const [started, setStarted] = useState(false)
+  const [userRate, setUserRate] = useState(1)
+  const [captions, setCaptions] = useState(true)
+  const [fileDurMs, setFileDurMs] = useState(0)
+  const [checking, setChecking] = useState(false)
+  const resumeAt = useRef<number | null>(null)
+
+  const status: 'ok' | 'processing' | 'error' | 'unavailable' =
+    (!live && viewerMustWait(dto)) || failure === 'processing'
+      ? 'processing'
+      : failure === 'error'
+        ? 'error'
+        : src
+          ? 'ok'
+          : 'unavailable'
+
+  const totalMs = rendered ? fileDurMs : edits ? editedDuration(edits) : 0
+  const editedMs = rendered ? srcMs : edits ? (sourceToEdited(edits, srcMs) ?? 0) : srcMs
+  const overlaySrcMs = rendered && edits ? editedToSource(edits, srcMs) : srcMs
+
+  // Measure the visible picture (object-fit: contain letterboxing).
+  useEffect(() => {
+    const box = boxRef.current
+    if (!box) return
+    const measure = () => {
+      const w = videoEl?.videoWidth || version?.width || 16
+      const h = videoEl?.videoHeight || version?.height || 9
+      setFrame(fitFrame(box.clientWidth, box.clientHeight, w, h))
+    }
+    const ro = new ResizeObserver(measure)
+    ro.observe(box)
+    videoEl?.addEventListener('loadedmetadata', measure)
+    measure()
+    return () => {
+      ro.disconnect()
+      videoEl?.removeEventListener('loadedmetadata', measure)
+    }
+  }, [videoEl, version?.width, version?.height])
+
+  // Live mode: skip cuts and apply each piece's speed on every frame.
+  useEffect(() => {
+    const v = videoEl
+    if (!v) return
+    let raf = 0
+    const tick = () => {
+      const ms = v.currentTime * 1000
+      if (!rendered && edits && !v.paused) {
+        const step = liveStep(edits, ms)
+        if (step.action === 'end') {
+          v.pause()
+        } else {
+          if (v.playbackRate !== step.rate * userRate) v.playbackRate = step.rate * userRate
+          if (step.action === 'seek') v.currentTime = step.toMs / 1000
+        }
+      }
+      setSrcMs(v.currentTime * 1000)
+      raf = requestAnimationFrame(tick)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [videoEl, rendered, edits, userRate])
+
+  useEffect(() => {
+    if (rendered && videoEl) videoEl.playbackRate = userRate
+  }, [videoEl, rendered, userRate])
+
+  useEffect(() => {
+    onTime?.(overlaySrcMs, editedMs)
+  }, [overlaySrcMs, editedMs, onTime])
+
+  const seekEdited = useCallback(
+    (ms: number) => {
+      const v = videoRef.current
+      if (!v) return
+      v.currentTime = (rendered || !edits ? ms : editedToSource(edits, ms)) / 1000
+    },
+    [rendered, edits]
+  )
+  const seekSource = useCallback((ms: number) => {
+    if (videoRef.current) videoRef.current.currentTime = ms / 1000
+  }, [])
+  const togglePlay = useCallback(() => {
+    const v = videoRef.current
+    if (!v) return
+    if (v.paused) void v.play().catch(() => null)
+    else v.pause()
+  }, [])
+  const fullscreen = () => void rootRef.current?.requestFullscreen?.().catch(() => null)
+
+  if (handleRef) {
+    handleRef.current = {
+      seekEdited,
+      seekSource,
+      play: () => void videoRef.current?.play().catch(() => null),
+      pause: () => videoRef.current?.pause(),
+      sourceMs: () => (videoRef.current?.currentTime ?? 0) * 1000,
+      editedMs: () => editedMs,
+      frame: () => (frame ? { width: frame.width, height: frame.height } : null)
+    }
+  }
+
+  // Resume where this person stopped (unless they finished it).
+  const resumed = useRef(false)
+  useEffect(() => {
+    const v = videoEl
+    if (!v || resumed.current || useDraft) return
+    const at = dto.my_progress && !dto.my_progress.completed ? dto.my_progress.position_ms : 0
+    const onMeta = () => {
+      resumed.current = true
+      if (at > 5000) seekEdited(at)
+      if (!rendered && edits?.segments[0] && v.currentTime * 1000 < edits.segments[0].start_ms) {
+        seekSource(edits.segments[0].start_ms)
+      }
+    }
+    v.addEventListener('loadedmetadata', onMeta, { once: true })
+    return () => v.removeEventListener('loadedmetadata', onMeta)
+  }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited, seekSource])
+
+  // Progress: sections seen while playing, sent every 10 s, on pause and on close.
+  const seen = useRef<boolean[]>(new Array(20).fill(false))
+  const watched = useRef(0)
+  const lastTick = useRef<number | null>(null)
+  useEffect(() => {
+    if (!playing || !totalMs) {
+      lastTick.current = null
+      return
+    }
+    const now = performance.now()
+    if (lastTick.current !== null) watched.current += Math.min(1000, now - lastTick.current)
+    lastTick.current = now
+    seen.current[bucketIndex(editedMs, totalMs)] = true
+  }, [playing, editedMs, totalMs])
+
+  // `send` reads the latest values through a ref so it stays one stable
+  // function: the interval and the close handler are not re-armed per frame.
+  const latest = useRef({ trackProgress, useDraft, totalMs, editedMs, dto, started })
+  latest.current = { trackProgress, useDraft, totalMs, editedMs, dto, started }
+  const send = useCallback(
+    (keepalive = false) => {
+      const l = latest.current
+      if (!l.trackProgress || l.useDraft || !l.totalMs || !l.started) return
+      const body = {
+        position_ms: Math.round(l.editedMs),
+        watched_ms_delta: Math.round(watched.current),
+        buckets: seen.current.map((b) => (b ? '1' : '0')).join(''),
+        version_id: l.dto.published?.id
+      }
+      watched.current = 0
+      if (keepalive) {
+        void fetch(`${apiBase}/help-videos/${l.dto.id}/progress`, {
+          method: 'POST',
+          keepalive: true,
+          credentials,
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify(body)
+        }).catch(() => null)
+        return
+      }
+      const wasComplete = !!l.dto.my_progress?.completed
+      void helpVideoApi(client)
+        .progress(l.dto.id, body)
+        .then((r) => {
+          // The first post that counts the video as watched refreshes the
+          // required list and the video's own progress.
+          if (r?.data?.completed && !wasComplete) {
+            void qc.invalidateQueries({ queryKey: helpVideoKeys.required })
+            void qc.invalidateQueries({ queryKey: helpVideoKeys.one(l.dto.id) })
+          }
+        })
+        .catch(() => null)
+    },
+    [apiBase, authHeaders, credentials, client, qc]
+  )
+  const sendRef = useRef(send)
+  sendRef.current = send
+  useEffect(() => {
+    if (!playing) return
+    const t = setInterval(() => sendRef.current(), 10_000)
+    return () => clearInterval(t)
+  }, [playing])
+  useEffect(() => {
+    const onHide = () => sendRef.current(true)
+    window.addEventListener('pagehide', onHide)
+    return () => {
+      window.removeEventListener('pagehide', onHide)
+      sendRef.current(true)
+    }
+  }, [])
+
+  // ── Load failures ────────────────────────────────────────────────────────
+  // A <video> error carries no HTTP status, so ask the stream once: a 409
+  // HELP_VIDEO_PROCESSING means "still being prepared". Anything else is most
+  // likely an expired ticket — fetch the video ONCE for fresh URLs and load
+  // again; a second failure shows the error with Retry.
+  const refresh = useCallback(async () => {
+    const next = await qc.fetchQuery({
+      queryKey: helpVideoKeys.one(video.id),
+      queryFn: () => fetchHelpVideo(client, video.id),
+      staleTime: 0
+    })
+    setFresh(next)
+    return next
+  }, [qc, client, video.id])
+
+  const reload = useCallback((next: HelpVideoDto) => {
+    if (viewerMustWait(next)) {
+      setFailure('processing')
+      return
+    }
+    setFailure(null)
+    // Same URL (nothing changed server-side): load it again by hand.
+    requestAnimationFrame(() => videoRef.current?.load())
+  }, [])
+
+  const onMediaError = useCallback(async () => {
+    if (checking || !src) return
+    resumeAt.current = (videoRef.current?.currentTime ?? 0) * 1000
+    setChecking(true)
+    try {
+      const res = await fetch(src, { headers: { Range: 'bytes=0-0' }, credentials }).catch(
+        () => null
+      )
+      if (res?.status === 409) {
+        const body = (await res.json().catch(() => null)) as { code?: string } | null
+        if (body?.code === 'HELP_VIDEO_PROCESSING') {
+          setFailure('processing')
+          return
+        }
+      } else {
+        void res?.body?.cancel().catch(() => null)
+      }
+      if (retried.current) {
+        setFailure('error')
+        return
+      }
+      retried.current = true
+      reload(await refresh())
+    } catch {
+      setFailure('error')
+    } finally {
+      setChecking(false)
+    }
+  }, [checking, src, credentials, refresh, reload])
+
+  const retry = useCallback(async () => {
+    setChecking(true)
+    retried.current = true
+    try {
+      reload(await refresh())
+    } catch {
+      setFailure((f) => f ?? 'error')
+    } finally {
+      setChecking(false)
+    }
+  }, [refresh, reload])
+
+  // The recording's own size: annotations are laid out at render size.
+  const natural =
+    videoEl?.videoWidth && videoEl.videoHeight
+      ? { width: videoEl.videoWidth, height: videoEl.videoHeight }
+      : version?.width && version.height
+        ? { width: version.width, height: version.height }
+        : null
+  const zoom = !rendered && edits ? zoomAt(edits, overlaySrcMs) : { z: 1, tx: 0, ty: 0 }
+  const chapters = useMemo(
+    () =>
+      (edits?.chapters ?? [])
+        .map((c) => ({ ...c, edited: edits ? sourceToEdited(edits, c.at_ms) : null }))
+        // A chapter at the very start needs no tick: the track's own start is it.
+        .filter((c): c is typeof c & { edited: number } => c.edited !== null && c.edited > 0),
+    [edits]
+  )
+
+  const onKey = (e: KeyboardEvent) => {
+    if (status !== 'ok' || !videoRef.current) return
+    const k = e.key.toLowerCase()
+    if (k === ' ' || k === 'k') {
+      e.preventDefault()
+      togglePlay()
+    } else if (k === 'arrowleft' || k === 'j') seekEdited(Math.max(0, editedMs - 5000))
+    else if (k === 'arrowright' || k === 'l') seekEdited(Math.min(totalMs, editedMs + 5000))
+    else if (k === 'c') setCaptions((x) => !x)
+    else if (k === 'f') fullscreen()
+  }
+
+  const pct = totalMs ? Math.min(100, (Math.min(editedMs, totalMs) / totalMs) * 100) : 0
+  const playable = status === 'ok'
+
+  return (
+    <div
+      ref={rootRef}
+      className={`flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card ${className ?? ''}`}
+      data-hv-player={video.id}
+    >
+      <div
+        ref={boxRef}
+        role='application'
+        aria-label={`Video player: ${dto.title}`}
+        tabIndex={playable ? 0 : -1}
+        onKeyDown={onKey}
+        className={`relative aspect-video min-h-0 flex-1 outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan ${
+          playable ? 'bg-[#0b0f17]' : 'bg-slate-50 dark:bg-background'
+        }`}
+      >
+        {playable && (
+          <div
+            className='absolute overflow-hidden'
+            style={
+              frame
+                ? { left: frame.left, top: frame.top, width: frame.width, height: frame.height }
+                : { inset: 0 }
+            }
+          >
+            <div
+              className='absolute inset-0 origin-top-left transition-transform duration-75 motion-reduce:transition-none'
+              style={{
+                transform: `translate(${zoom.tx * 100}%, ${zoom.ty * 100}%) scale(${zoom.z})`
+              }}
+            >
+              {/* biome-ignore lint/a11y/useMediaCaption: captions are drawn by OverlayLayer from the edits */}
+              <video
+                ref={setVideoEl}
+                src={src ?? undefined}
+                poster={poster}
+                autoPlay={autoPlay}
+                playsInline
+                preload='metadata'
+                crossOrigin='use-credentials'
+                className='absolute inset-0 h-full w-full'
+                onPlay={() => {
+                  setPlaying(true)
+                  setStarted(true)
+                }}
+                onPause={() => {
+                  setPlaying(false)
+                  send()
+                }}
+                onEnded={() => {
+                  setPlaying(false)
+                  send()
+                }}
+                onLoadedMetadata={() => {
+                  if (resumeAt.current !== null) {
+                    seekSource(resumeAt.current)
+                    resumeAt.current = null
+                  }
+                }}
+                onLoadedData={() => {
+                  // A good load re-arms the one fresh-URL retry for a later expiry.
+                  retried.current = false
+                }}
+                onError={() => void onMediaError()}
+                onDurationChange={(e) =>
+                  setFileDurMs(
+                    resolveDurationMs(e.currentTarget.duration, version?.source_duration_ms ?? null)
+                  )
+                }
+                onClick={togglePlay}
+              />
+              {frame && edits && !rendered && (
+                <OverlayLayer
+                  edits={edits}
+                  frame={frame}
+                  srcMs={overlaySrcMs}
+                  source={natural}
+                  showCaptions={false}
+                />
+              )}
+            </div>
+            {frame && edits && captions && (
+              <OverlayLayer
+                edits={{ ...edits, annotations: [], blurs: [] }}
+                frame={frame}
+                srcMs={overlaySrcMs}
+                showAnnotations={false}
+              />
+            )}
+            {frame && children?.({ width: frame.width, height: frame.height })}
+          </div>
+        )}
+        {playable && !started && !checking && (
+          <button
+            type='button'
+            aria-label='Play'
+            onClick={togglePlay}
+            className='absolute left-1/2 top-1/2 inline-flex h-14 w-14 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-[#0b0f17]/70 text-white transition-[background-color,transform] duration-150 hover:scale-105 hover:bg-[#0b0f17]/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-[#0b0f17] motion-reduce:transition-none motion-reduce:hover:scale-100'
+            data-hv-big-play
+          >
+            <Play className='ml-0.5 h-6 w-6 fill-current' />
+          </button>
+        )}
+        {status === 'processing' && (
+          <StatePanel
+            role='status'
+            icon={<Hourglass className='h-5 w-5' />}
+            tint='bg-slate-200/70 text-slate-600 dark:bg-white/10 dark:text-muted-foreground'
+            title='This video is still being prepared.'
+            body='Try again in a few minutes.'
+            data='processing'
+            action={
+              <button
+                type='button'
+                onClick={() => void retry()}
+                disabled={checking}
+                className='inline-flex h-8 items-center rounded-md border border-slate-200 bg-white px-3 text-[12.5px] font-medium text-slate-700 transition-colors duration-150 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan disabled:opacity-50 motion-reduce:transition-none dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-white/5'
+                data-hv-check-again
+              >
+                {checking ? 'Checking…' : 'Check again'}
+              </button>
+            }
+          />
+        )}
+        {status === 'error' && (
+          <StatePanel
+            role='alert'
+            icon={<VideoOff className='h-5 w-5' />}
+            tint='bg-red-100 text-red-600 dark:bg-red-500/15 dark:text-red-400'
+            title='This video didn’t load.'
+            body='The connection may have dropped, or its link expired. Retrying usually fixes it.'
+            data='error'
+            action={
+              <button
+                type='button'
+                onClick={() => void retry()}
+                disabled={checking}
+                className='inline-flex h-8 items-center gap-1.5 rounded-md bg-nvr-cyan px-3 text-[12.5px] font-semibold text-nvr-navy transition-colors duration-150 hover:bg-nvr-cyan-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-2 focus-visible:ring-offset-slate-50 disabled:opacity-50 motion-reduce:transition-none dark:focus-visible:ring-offset-background'
+                data-hv-retry
+              >
+                <RotateCw
+                  className={`h-3.5 w-3.5 ${checking ? 'animate-spin motion-reduce:animate-none' : ''}`}
+                />
+                {checking ? 'Retrying…' : 'Retry'}
+              </button>
+            }
+          />
+        )}
+        {status === 'unavailable' && (
+          <StatePanel
+            role='status'
+            icon={<VideoOff className='h-5 w-5' />}
+            tint='bg-slate-200/70 text-slate-600 dark:bg-white/10 dark:text-muted-foreground'
+            title='This recording is not available yet.'
+            data='unavailable'
+          />
+        )}
+      </div>
+      {playable && (
+        <div className='flex shrink-0 flex-col gap-0.5 border-t border-slate-200 px-2 pb-1.5 pt-1 dark:border-border'>
+          <div className='group relative flex h-5 items-center'>
+            <input
+              type='range'
+              min={0}
+              max={Math.max(1, totalMs)}
+              step={100}
+              value={Math.min(editedMs, totalMs)}
+              onChange={(e) => seekEdited(Number(e.target.value))}
+              aria-label='Seek'
+              aria-valuetext={`${fmt(editedMs)} of ${fmt(totalMs)}`}
+              className='peer absolute inset-0 z-10 h-full w-full cursor-pointer opacity-0'
+              data-hv-scrubber
+            />
+            <div className='pointer-events-none relative h-1 w-full overflow-hidden rounded-full bg-slate-200 transition-transform duration-150 group-hover:scale-y-150 motion-reduce:transition-none dark:bg-white/15'>
+              <div className='absolute inset-y-0 left-0 bg-nvr-cyan' style={{ width: `${pct}%` }} />
+            </div>
+            <div
+              className='pointer-events-none absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rounded-full bg-nvr-cyan ring-2 ring-white peer-focus-visible:ring-4 peer-focus-visible:ring-nvr-cyan/40 dark:ring-card'
+              style={{ left: `${pct}%` }}
+            />
+            {chapters.map((c) => (
+              <button
+                key={c.id}
+                type='button'
+                data-tip={c.title}
+                aria-label={`Chapter: ${c.title}`}
+                onClick={() => seekEdited(c.edited)}
+                className='group/tick absolute top-0 z-20 flex h-5 w-3 -translate-x-1/2 items-center justify-center focus-visible:outline-none'
+                style={{ left: `${totalMs ? (c.edited / totalMs) * 100 : 0}%` }}
+                data-hv-chapter-tick={c.id}
+              >
+                <span className='h-2.5 w-[3px] rounded-full bg-white ring-1 ring-slate-300 group-hover/tick:ring-slate-500 group-focus-visible/tick:ring-2 group-focus-visible/tick:ring-nvr-cyan dark:bg-card dark:ring-white/30 dark:group-hover/tick:ring-white/70' />
+              </button>
+            ))}
+          </div>
+          <div className='flex items-center gap-1'>
+            <button
+              type='button'
+              aria-label={playing ? 'Pause' : 'Play'}
+              className={`${iconButton} text-slate-900 dark:text-foreground`}
+              onClick={togglePlay}
+              data-hv-play
+            >
+              {playing ? (
+                <Pause className='h-4 w-4 fill-current' />
+              ) : (
+                <Play className='h-4 w-4 fill-current' />
+              )}
+            </button>
+            <span className='px-1 text-[12px] tabular-nums text-slate-600 dark:text-muted-foreground'>
+              {fmt(editedMs)} / {fmt(totalMs)}
+            </span>
+            <span className='flex-1' />
+            <SpeedButton value={userRate} onChange={setUserRate} />
+            <button
+              type='button'
+              aria-pressed={captions}
+              aria-label='Captions'
+              data-tip={captions ? 'Hide captions (C)' : 'Show captions (C)'}
+              onClick={() => setCaptions((x) => !x)}
+              className={`${iconButton} ${captions ? 'bg-slate-100 text-slate-900 dark:bg-white/10 dark:text-foreground' : ''}`}
+            >
+              <Captions className='h-4 w-4' />
+            </button>
+            <button
+              type='button'
+              aria-label='Full screen'
+              data-tip='Full screen (F)'
+              onClick={fullscreen}
+              className={iconButton}
+            >
+              <Maximize className='h-4 w-4' />
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function StatePanel({
+  role,
+  icon,
+  tint,
+  title,
+  body,
+  action,
+  data
+}: {
+  role: 'status' | 'alert'
+  icon: ReactNode
+  tint: string
+  title: string
+  body?: string
+  action?: ReactNode
+  data: 'processing' | 'error' | 'unavailable'
+}) {
+  return (
+    <div
+      role={role}
+      className='nvr-rise-in absolute inset-0 flex flex-col items-center justify-center gap-2 overflow-y-auto p-6 text-center'
+      data-hv-state={data}
+      {...(data === 'unavailable' ? { 'data-hv-unavailable': '' } : {})}
+      {...(data === 'processing' ? { 'data-hv-processing': '' } : {})}
+      {...(data === 'error' ? { 'data-hv-error': '' } : {})}
+    >
+      <div className={`mb-1 flex h-10 w-10 items-center justify-center rounded-full ${tint}`}>
+        {icon}
+      </div>
+      <p className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>{title}</p>
+      {body && (
+        <p className='max-w-[42ch] text-[12.5px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
+          {body}
+        </p>
+      )}
+      {action && <div className='mt-2'>{action}</div>}
+    </div>
+  )
+}
+
+function SpeedButton({ value, onChange }: { value: number; onChange: (n: number) => void }) {
+  return (
+    <button
+      type='button'
+      aria-label={`Playback speed ${value}×`}
+      data-tip='Playback speed'
+      onClick={() => onChange(SPEEDS[(SPEEDS.indexOf(value) + 1) % SPEEDS.length])}
+      className='h-8 min-w-[2.75rem] rounded-md px-1.5 text-[12px] font-medium tabular-nums text-slate-600 transition-colors duration-150 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none dark:text-muted-foreground dark:hover:bg-white/5 dark:hover:text-foreground'
+      data-hv-speed
+    >
+      {value}×
+    </button>
+  )
+}
