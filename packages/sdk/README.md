@@ -2454,6 +2454,89 @@ await nivaro.request(createHierarchyConfig({
 
 ---
 
+## SDK — Help Videos
+
+Tutorial recordings: upload, edit, version, publish, choose where they show, require viewing and track progress. Authoring commands need an author (an administrator or a role in the author setting); reading and progress need only visibility.
+
+```typescript
+import {
+  openHelpVideoUpload, finalizeHelpVideoUpload, createHelpVideo,
+  setHelpVideoContexts, publishHelpVideo, helpVideosFor,
+} from '@nivaro/sdk'
+
+// 1. Open an upload, send the bytes, finalize, create the video
+const { data: up } = await nivaro.request(openHelpVideoUpload('video/webm'))
+let part = up.next_part
+for (const chunk of chunks) {
+  // Raw PUT — not a Command, because Commands JSON-encode their bodies.
+  await fetch(`${baseUrl}/api/help-videos/uploads/${up.id}/parts/${part++}`, {
+    method: 'PUT',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/octet-stream' },
+    body: chunk, // at most 8 MB per part; the response is the upload session
+  })
+}
+await nivaro.request(finalizeHelpVideoUpload(up.id, { duration_ms }))
+const { data: video } = await nivaro.request(createHelpVideo({ upload_id: up.id, title: 'Raise a PO' }))
+
+// 2. Say where it shows, then publish
+await nivaro.request(setHelpVideoContexts(video.id, [{ kind: 'page', key: 'inbox', state_key: null }]))
+await nivaro.request(publishHelpVideo(video.id))
+
+// 3. Show the right videos on a screen
+const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orders', item: 42 }))
+```
+
+#### Response notes
+
+- `stream_url`, `captions_url` and `poster_url` are ticketed (`?st=`): hand them to `<video>`, `<track>` and `<img>` as-is. Authors also get `draft_stream_url` and `draft_captions_url`.
+- `published.playable` is `false` when a viewer's stream would answer 409 (the video is still being prepared); authors always get `true`.
+- `required` is true when the video is required for the caller's own role. Authors also get `required_role_ids`. `my_progress` is the caller's own progress (or `null`).
+- `recordHelpVideoProgress` takes `buckets` as a 20-character `0`/`1` string (the 5% sections seen) and answers `{ data: { completed } }`, or no body (204) for a masquerade session.
+- `listHelpVideos` and `helpVideosFor` carry `can_author`, so a screen can offer "Add a video" without a second call.
+
+#### Errors callers must handle
+
+| Status | `code` | When |
+|--------|--------|------|
+| 409 | `HELP_VIDEO_PROCESSING` | A viewer requested `stream_url` before a current render exists and the original cannot be shown. Check `published.playable`, retry later. |
+| 409 | `HELP_VIDEO_EDITS_CONFLICT` | `saveHelpVideoDraft` with a stale `base_hash`. The body carries `current_hash`; reload the draft and merge. |
+| 409 | `UPLOAD_CLOSED` | The upload is already finalized or finishing. |
+| 422 | `UPLOAD_NOT_VIDEO` | A part is not a WebM or MP4 recording. |
+| 422 | `UPLOAD_TOO_LONG` | The recording is longer than 30 minutes (on finalize). |
+| 422 | `HELP_VIDEO_NOT_READY` | `publishHelpVideo` before the checklist is done; the body lists `missing`. |
+| 409 | `HELP_VIDEO_NOTHING_TO_RENDER` | `rerenderHelpVideo` for a version that does not exist. |
+| 403 | `HELP_VIDEO_AUTHOR_ONLY` | An authoring command by a non-author. |
+| 404 | `HELP_VIDEO_NOT_FOUND` | Unknown id, or a video the caller may not see. |
+
+| Command | Route | Auth |
+|---------|-------|------|
+| listHelpVideos(params?) | GET /help-videos | Authenticated |
+| readHelpVideo(id) | GET /help-videos/:id | Authenticated |
+| helpVideosFor(params) | GET /help-videos/for | Authenticated |
+| createHelpVideo(body) | POST /help-videos | Author |
+| updateHelpVideo(id, body) | PATCH /help-videos/:id | Author |
+| setHelpVideoContexts(id, contexts) | PUT /help-videos/:id/contexts | Author |
+| setHelpVideoRequirements(id, role_ids) | PUT /help-videos/:id/requirements | Author |
+| archiveHelpVideo(id, opts?) | DELETE /help-videos/:id | Author (purge: admin) |
+| readHelpVideoDraft(id) | GET /help-videos/:id/draft/edits | Author |
+| saveHelpVideoDraft(id, edits, base_hash?) | PUT /help-videos/:id/draft/edits | Author |
+| publishHelpVideo(id, opts?) | POST /help-videos/:id/publish | Author |
+| rerecordHelpVideo(id, upload_id) | POST /help-videos/:id/rerecord | Author |
+| listHelpVideoVersions(id) | GET /help-videos/:id/versions | Author |
+| restoreHelpVideoVersion(id, versionId) | POST /help-videos/:id/versions/:vid/restore | Author |
+| rerenderHelpVideo(id, opts?) | POST /help-videos/:id/render | Author |
+| recordHelpVideoProgress(id, body) | POST /help-videos/:id/progress | Authenticated |
+| readRequiredHelpVideos() | GET /help-videos/required/mine | Authenticated |
+| readHelpVideoAnalytics(id) | GET /help-videos/:id/analytics | Author |
+| openHelpVideoUpload(mime) | POST /help-videos/uploads | Author |
+| finalizeHelpVideoUpload(id, meta?) | POST /help-videos/uploads/:id/finalize | Author |
+| listMyHelpVideoUploads() | GET /help-videos/uploads/mine | Author |
+| abandonHelpVideoUpload(id) | DELETE /help-videos/uploads/:id | Author |
+| listHelpVideoPages() | GET /help-videos/pages | Authenticated |
+| registerHelpVideoPage(body) | POST /help-videos/pages | Author |
+
+---
+
 ## SDK Coverage: 300+ Typed Commands
 
 The @nivaro/sdk command surface now covers every feature area — roughly 175 typed `Command<T>` factories spanning items, files, workflows, pipelines, flows, comments, webhooks, rules, custom queries, trees and hierarchies, submission forms, field watches, notification subscriptions, imports, SLA, alerts, AI endpoints (generate, summarize, validate, check-duplicates), translations, drafts, scheduled changes, record templates, saved views, API keys, widget feeds, sync jobs, ERP submissions, PDF templates, pages, queues (worklists, items, claims, saved views, trends, workload), roles & policies (RBAC/RLS), user management + out-of-office delegation, file management (list/meta/presign/transform URLs), dashboard widgets, extension item/bulk actions, throughput reporting, and more. If a REST route exists, there is a typed command for it.

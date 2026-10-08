@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
 import { getFile } from '../services/files.js'
 import {
   captionsToVtt,
@@ -9,6 +10,7 @@ import {
   emptyEdits,
   normalizeEdits
 } from '../services/help-video-edits.js'
+import { queueRender } from '../services/help-video-render.js'
 import {
   abandonUpload,
   appendPart,
@@ -256,6 +258,26 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const { video } = await loadVideoForUser(req, id)
     const uploadId = String((req.body as { upload_id?: string })?.upload_id ?? '')
     return reply.send({ data: await rerecordVideo(video, req.user!, uploadId) })
+  })
+  app.post('/:id/render', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { draft } = req.query as { draft?: string }
+    const { video } = await loadVideoForUser(req, id)
+    const versionId = draft === '1' ? video.draft_version_id : video.published_version_id
+    if (!versionId) {
+      return reply
+        .code(409)
+        .send({ error: 'Nothing to render', code: 'HELP_VIDEO_NOTHING_TO_RENDER' })
+    }
+    await queueRender(String(versionId))
+    await logActivity({
+      action: 'help-video-render',
+      user: req.user!.id,
+      collection: 'nivaro_help_videos',
+      item: String(video.id).toLowerCase(),
+      comment: draft === '1' ? 'draft' : 'published'
+    })
+    return reply.send({ data: { ok: true } })
   })
   app.get('/:id/versions', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
