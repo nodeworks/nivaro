@@ -1,10 +1,77 @@
 {
-  "generated_at": "2026-10-08T00:28:13.944Z",
+  "generated_at": "2026-10-08T16:22:44.606Z",
   "releases": [
+    {
+      "version": "0.2.27",
+      "tag": "v0.2.27",
+      "date": "2026-10-08T12:22:32-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Query sheets: an optional \"as of\" line under the header strip",
+              "hash": "64c2f2e6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Headline snapshots: generic wording in comments, names and tests",
+              "hash": "e64446e1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Budget surfaces: missing figures read as a dash, never as zero",
+              "hash": "d04b23c3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "import health collapse",
+              "hash": "322ee4cf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "retire:project-allocations script alias",
+              "hash": "ae460920"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "budget:surfaces script alias",
+              "hash": "22df97b9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Headline snapshots: Fusion committed, Fusion remaining and the weighted remaining %",
+              "hash": "8d564c4e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Widget value pills: a percent format",
+              "hash": "665c60e6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Query sheets: a header strip above the tabs and an initial tab",
+              "hash": "36ae44a9"
+            }
+          ]
+        }
+      ],
+      "count": 9
+    },
     {
       "version": "0.2.26",
       "tag": "v0.2.26",
-      "date": "2026-10-07T20:28:02-04:00",
+      "date": "2026-10-07T20:28:14-04:00",
       "sections": [
         {
           "label": "Other",
