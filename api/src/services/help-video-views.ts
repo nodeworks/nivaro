@@ -43,7 +43,8 @@ export function dropOff(rows: string[]): number[] {
  *  hide nothing: in live mode blurs are only CSS and cuts/trims are only
  *  player skips, so a download of the source would show what was blurred or
  *  cut away. Unreadable edits or an unknown source length count as "hides
- *  something" — the viewer then needs a current render. */
+ *  something", and so does a box annotation — the viewer then needs a
+ *  current render. */
 export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boolean {
   const src = Math.round(Number(sourceMs))
   if (!Number.isFinite(src) || src <= 0) return false
@@ -64,6 +65,9 @@ export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boole
     throw err
   }
   if (e.blurs.length) return false
+  // An opaque box can mask content just like a blur; callouts, arrows,
+  // ripples and zooms only draw attention.
+  if (e.annotations.some((a) => a.type === 'box')) return false
   const segs = e.segments
   if (!segs.length) return false
   if (segs[0].start_ms > 0 || segs[segs.length - 1].end_ms < src) return false // trimmed
@@ -148,11 +152,13 @@ export type ProgressInput = {
   version_id?: string
 }
 
-/** Record one progress beat. Progress is reported by the browser, so each
- *  beat is bounded by the wall-clock time since the row's last beat: new
- *  sections ≤ ceil(elapsed × 4 / section length) + 1 (a first beat: one),
- *  watched time ≤ elapsed × 4 + 5 s. When the video was (re)required after
- *  the person's last beat, the section map restarts from empty. */
+/** Record one progress beat. Progress is reported by the browser, so it is
+ *  bounded CUMULATIVELY by the wall-clock time since the row's watch period
+ *  began (first_viewed): total sections ≤ 1 + floor(elapsed × 4 / section
+ *  length), total watched time ≤ elapsed × 4 + 5 s (4 = the fastest speed-up
+ *  the editor offers). A first beat therefore gets one section and 5 s. When
+ *  the video was (re)required after the person's last beat — or after their
+ *  completion — the section map, watched time and period restart now. */
 export async function recordProgress(
   user: User,
   video: VideoRow,
@@ -203,28 +209,70 @@ export async function recordProgress(
     }
   }
 
-  const lastBeat = row.last_viewed ? new Date(row.last_viewed).getTime() : nowMs
-  const elapsed = Math.max(0, nowMs - lastBeat)
-  const requiredSince = video.required_since ? new Date(video.required_since as string) : null
-  const rearmed = !!requiredSince && lastBeat < requiredSince.getTime()
-  const base = rearmed ? EMPTY : sanitizeBuckets(String(row.buckets ?? EMPTY))
-  const maxNew = Math.ceil((elapsed * MAX_SPEED) / (duration / 20)) + 1
-  const buckets = limitNewBuckets(base, incoming, maxNew)
-  const delta = Math.min(askedDelta, elapsed * MAX_SPEED + 5000)
-  const done = isComplete(buckets)
-  // A completion from before the re-arm no longer counts.
-  const kept = rearmed ? null : (row.completed_at ?? null)
-  await db('nivaro_help_video_views')
-    .where({ id: row.id })
-    .update({
+  const requiredSince = video.required_since
+    ? new Date(video.required_since as string).getTime()
+    : null
+  const bucketMs = duration / 20
+
+  // One read-modify-write, guarded by the last_viewed that was read: a
+  // parallel beat that landed first makes this update touch 0 rows.
+  async function apply(r: Record<string, unknown>): Promise<{ landed: boolean; done: boolean }> {
+    const lastBeat = r.last_viewed ? new Date(r.last_viewed as string).getTime() : nowMs
+    const completedAt = r.completed_at ? new Date(r.completed_at as string).getTime() : null
+    // Re-armed: the video was (re)required after the person's last beat, or a
+    // completion predates the requirement (a beat that raced the re-arm).
+    const rearmed =
+      requiredSince !== null &&
+      (lastBeat < requiredSince || (completedAt !== null && completedAt < requiredSince))
+    // The bound is cumulative from the start of the current watch period; a
+    // re-arm starts a new period now (like a first beat).
+    const start = rearmed
+      ? nowMs
+      : r.first_viewed
+        ? new Date(r.first_viewed as string).getTime()
+        : nowMs
+    const elapsed = Math.max(0, nowMs - start)
+    const base = rearmed ? EMPTY : sanitizeBuckets(String(r.buckets ?? EMPTY))
+    const allowedTotal = 1 + Math.floor((elapsed * MAX_SPEED) / bucketMs)
+    const buckets = limitNewBuckets(base, incoming, allowedTotal - countBuckets(base))
+    const prevWatched = rearmed ? 0 : Number(r.watched_ms ?? 0)
+    const watchedCap = elapsed * MAX_SPEED + 5000
+    const watched = Math.max(prevWatched, Math.min(prevWatched + askedDelta, watchedCap))
+    const done = isComplete(buckets)
+    // A completion from before the re-arm no longer counts.
+    const kept = rearmed ? null : (r.completed_at ?? null)
+    const patch: Record<string, unknown> = {
       last_viewed: now,
-      watched_ms: Number(row.watched_ms ?? 0) + delta,
+      watched_ms: watched,
       position_ms: position,
       buckets,
-      version_id: versionId ?? row.version_id ?? null,
+      version_id: versionId ?? r.version_id ?? null,
       completed_at: kept ?? (done ? now : null)
-    })
-  return { completed: done }
+    }
+    if (rearmed) patch.first_viewed = now
+    // Match the read last_viewed within ±5 ms, not exactly: the driver binds
+    // JS dates as DATETIME (1/300 s) and the datetime2 column keeps that
+    // rounding (.9266667), while the value read back is cut to .926 — an
+    // exact compare would never match. Whatever slips through the window can
+    // only under-count: the totals above are capped from first_viewed.
+    const seen = r.last_viewed ? new Date(r.last_viewed as string).getTime() : null
+    const q = db('nivaro_help_video_views').where({ id: r.id })
+    if (seen === null) q.whereNull('last_viewed')
+    else
+      q.where('last_viewed', '>', new Date(seen - 5)).where('last_viewed', '<', new Date(seen + 5))
+    const n = await q.update(patch)
+    return { landed: Number(n) > 0, done }
+  }
+
+  let res = await apply(row)
+  if (!res.landed) {
+    // Re-read once and retry once; a beat that loses twice is dropped.
+    const again = await db('nivaro_help_video_views').where(where).first()
+    if (!again) return { completed: false }
+    res = await apply(again)
+    if (!res.landed) return { completed: !!again.completed_at }
+  }
+  return { completed: res.done }
 }
 
 export async function requiredForUser(user: User): Promise<string[]> {

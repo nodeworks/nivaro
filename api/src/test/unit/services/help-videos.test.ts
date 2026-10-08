@@ -14,6 +14,7 @@ import {
   saveDraftEdits,
   serializeVersion,
   serializeVideo,
+  sessionTag,
   type VideoRow,
   validateContexts,
   viewerMaySee
@@ -295,15 +296,44 @@ describe('serializeVideo', () => {
     expect(current.published?.playable).toBe(true)
   })
 
-  it('binds a session id into media tickets when one is given', async () => {
+  it('binds a session tag — never the raw session id — into media tickets', async () => {
+    const SID = 'sessionIdABCDEFGH_123'
+    const set = vi.fn(async () => 'OK')
+    const req = {
+      authMethod: 'session',
+      session: { sessionId: SID },
+      server: { redis: { set } }
+    } as never
+    const tag = sessionTag(req)
+    expect(tag).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    expect(tag).not.toBe(SID)
+    expect(set).toHaveBeenCalledWith(`hv:sidtag:${tag}`, SID, 'EX', 7 * 3600)
+    // a second ticket in the same hour does not write again
+    sessionTag(req)
+    expect(set).toHaveBeenCalledTimes(1)
     vi.mocked(db).mockImplementation(fakeDb(tables, []) as never)
     const dto = await serializeVideo(video, {
       author: false,
       userId: 'U1',
       role: 'R1',
-      sid: 'sessionIdABCDEFGH_123'
+      sidTag: tag
     })
-    expect(dto.stream_url).toMatch(/\?st=\d+\.U1\.p\.sessionIdABCDEFGH_123\.[A-Za-z0-9_-]+$/)
+    expect(dto.stream_url).toContain(`.U1.p.${tag}.`)
+    expect(dto.stream_url).not.toContain(SID)
+    expect(JSON.stringify(dto)).not.toContain(SID)
+  })
+
+  it('binds no session for token, API-key and masquerade requests', () => {
+    const set = vi.fn(async () => 'OK')
+    for (const authMethod of ['token', 'api_key', 'masquerade']) {
+      const req = {
+        authMethod,
+        session: { sessionId: 'sessionIdABCDEFGH_123' },
+        server: { redis: { set } }
+      }
+      expect(sessionTag(req as never)).toBeNull()
+    }
+    expect(set).not.toHaveBeenCalled()
   })
 })
 

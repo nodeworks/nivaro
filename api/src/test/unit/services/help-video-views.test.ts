@@ -8,6 +8,10 @@ const fake = vi.hoisted(() => ({
   insertError: null as unknown,
   inserts: [] as Record<string, unknown>[],
   updates: [] as Record<string, unknown>[],
+  // what each update reports as rows touched (default 1); a 0 simulates a
+  // parallel beat that moved last_viewed first
+  updateCounts: [] as number[],
+  rowAfterLostUpdate: undefined as Record<string, unknown> | undefined,
   selectRows: [] as Record<string, unknown>[]
 }))
 
@@ -22,6 +26,7 @@ vi.mock('../../../db/index.js', () => {
           return b
         },
         where: () => b,
+        whereNull: () => b,
         select: async () => fake.selectRows,
         first: async () => fake.row,
         insert: async (r: Record<string, unknown>) => {
@@ -34,7 +39,15 @@ vi.mock('../../../db/index.js', () => {
           fake.inserts.push(r)
         },
         update: async (r: Record<string, unknown>) => {
+          const n = fake.updateCounts.length ? (fake.updateCounts.shift() as number) : 1
+          if (n === 0) {
+            if (fake.rowAfterLostUpdate) fake.row = fake.rowAfterLostUpdate
+            return 0
+          }
           fake.updates.push(r)
+          // the stored row moves on, like the database would
+          if (fake.row) fake.row = { ...fake.row, ...r }
+          return n
         }
       }
       return b
@@ -60,7 +73,7 @@ import {
   viewerMayPlaySource
 } from '../../../services/help-video-views.js'
 import type { VideoRow } from '../../../services/help-videos.js'
-import { mediaTicket, verifyMediaTicket } from '../../../services/help-videos.js'
+import { mediaTicket, sidTag, verifyMediaTicket } from '../../../services/help-videos.js'
 import type { User } from '../../../types.js'
 
 describe('buckets', () => {
@@ -106,17 +119,22 @@ describe('media tickets', () => {
     expect(verifyMediaTicket(t, 'abc', t0 + 7 * 3_600_000)).toBeNull()
     expect(verifyMediaTicket('garbage', 'abc', t0)).toBeNull()
   })
-  it('binds a session id into the signature and the token', () => {
+  it('binds an opaque session tag into the signature and the token', () => {
     const sid = 'AbCdEf_123-xyzSESSION'
-    const t = mediaTicket('abc', 'u', 'p', t0, sid)
+    const tag = sidTag(sid)
+    expect(tag).toMatch(/^[A-Za-z0-9_-]{22}$/)
+    const t = mediaTicket('abc', 'u', 'p', t0, tag)
+    expect(t).not.toContain(sid)
     expect(t.split('.')).toHaveLength(5)
-    expect(verifyMediaTicket(t, 'abc', t0)).toEqual({ userId: 'U', scope: 'p', sid })
-    // swapping the sid (or dropping it) breaks the signature
-    expect(verifyMediaTicket(t.replace(sid, 'Another_session_id'), 'abc', t0)).toBeNull()
+    expect(verifyMediaTicket(t, 'abc', t0)).toEqual({ userId: 'U', scope: 'p', tag })
+    // swapping the tag (or dropping it) breaks the signature
+    expect(verifyMediaTicket(t.replace(tag, sidTag('Another_session_id')), 'abc', t0)).toBeNull()
     const parts = t.split('.')
     expect(
       verifyMediaTicket([parts[0], parts[1], parts[2], parts[4]].join('.'), 'abc', t0)
     ).toBeNull()
+    // a raw sid in the tag slot is refused outright (not 22 base64url chars)
+    expect(mediaTicket('abc', 'u', 'p', t0, sid).split('.')).toHaveLength(4)
   })
 })
 
@@ -130,6 +148,18 @@ describe('viewerMayPlaySource', () => {
   it('allows no stored edits at all', () => expect(viewerMayPlaySource(null, src)).toBe(true))
   it('refuses a blur', () =>
     expect(viewerMayPlaySource(editsJson({ blurs: [blur] }), src)).toBe(false))
+  it('refuses a box annotation (it can mask content); a callout is fine', () => {
+    const ann = (type: string) => ({
+      id: 'a1',
+      type,
+      start_ms: 1000,
+      end_ms: 3000,
+      rect: { x: 0.1, y: 0.1, w: 0.3, h: 0.3 },
+      text: 'x'
+    })
+    expect(viewerMayPlaySource(editsJson({ annotations: [ann('box')] }), src)).toBe(false)
+    expect(viewerMayPlaySource(editsJson({ annotations: [ann('callout')] }), src)).toBe(true)
+  })
   it('refuses a cut', () =>
     expect(
       viewerMayPlaySource(
@@ -231,6 +261,8 @@ describe('recordProgress', () => {
     fake.insertError = null
     fake.inserts = []
     fake.updates = []
+    fake.updateCounts = []
+    fake.rowAfterLostUpdate = undefined
   })
 
   it('a first beat claiming every section gets one', async () => {
@@ -245,17 +277,73 @@ describe('recordProgress', () => {
     expect(fake.inserts[0].watched_ms).toBe(5000)
   })
 
-  it('a beat 10 s later on a 100 s video gains at most 9 sections and 45 s of watching', async () => {
+  it('20 rapid beats 1 ms apart on a fresh row reach at most 1 section', async () => {
+    for (let i = 0; i < 20; i++) {
+      await recordProgress(
+        USER,
+        video(),
+        { buckets: '1'.repeat(20), watched_ms_delta: 60_000 },
+        NOW + i
+      )
+      // the first beat inserts; the fake row is what the insert stored
+      if (i === 0) fake.row = { id: 1, ...fake.inserts[0] }
+    }
+    expect(countBuckets(String(fake.row?.buckets))).toBe(1)
+    expect(Number(fake.row?.watched_ms)).toBeLessThanOrEqual(5000 + 19 * 4)
+  })
+
+  it('a row whose watching began 10 s ago on a 100 s video holds at most 9 sections, however many beats', async () => {
     fake.row = {
       id: 1,
       buckets: '0'.repeat(20),
       watched_ms: 0,
-      last_viewed: new Date(NOW - 10_000)
+      first_viewed: new Date(NOW - 10_000),
+      last_viewed: new Date(NOW - 1)
     }
-    await recordProgress(USER, video(), { buckets: '1'.repeat(20), watched_ms_delta: 60_000 }, NOW)
-    expect(countBuckets(String(fake.updates[0].buckets))).toBe(9)
-    expect(fake.updates[0].buckets).toBe(`${'1'.repeat(9)}${'0'.repeat(11)}`)
-    expect(fake.updates[0].watched_ms).toBe(45_000)
+    for (let i = 0; i < 25; i++) {
+      await recordProgress(
+        USER,
+        video(),
+        { buckets: '1'.repeat(20), watched_ms_delta: 60_000 },
+        NOW
+      )
+    }
+    expect(fake.row.buckets).toBe(`${'1'.repeat(9)}${'0'.repeat(11)}`)
+    expect(fake.row.watched_ms).toBe(45_000)
+  })
+
+  it('a beat that loses the conditional update re-reads and retries once', async () => {
+    fake.row = {
+      id: 1,
+      buckets: '10000000000000000000',
+      watched_ms: 0,
+      first_viewed: new Date(NOW - 60_000),
+      last_viewed: new Date(NOW - 2000)
+    }
+    fake.updateCounts = [0, 1]
+    fake.rowAfterLostUpdate = {
+      ...fake.row,
+      buckets: '11000000000000000000',
+      last_viewed: new Date(NOW - 500)
+    }
+    await recordProgress(USER, video(), { buckets: '00100000000000000000' }, NOW)
+    expect(fake.updates).toHaveLength(1)
+    // merged onto what the parallel beat had written
+    expect(fake.updates[0].buckets).toBe('11100000000000000000')
+  })
+
+  it('a beat that loses twice is dropped silently', async () => {
+    fake.row = {
+      id: 1,
+      buckets: '10000000000000000000',
+      watched_ms: 0,
+      first_viewed: new Date(NOW - 60_000),
+      last_viewed: new Date(NOW - 2000)
+    }
+    fake.updateCounts = [0, 0]
+    const r = await recordProgress(USER, video(), { buckets: '1'.repeat(20) }, NOW)
+    expect(r.completed).toBe(false)
+    expect(fake.updates).toHaveLength(0)
   })
 
   it('merges with sections seen before', async () => {
@@ -263,6 +351,7 @@ describe('recordProgress', () => {
       id: 1,
       buckets: '11000000000000000000',
       watched_ms: 1000,
+      first_viewed: new Date(NOW - 60_000),
       last_viewed: new Date(NOW - 10_000)
     }
     await recordProgress(USER, video(), { buckets: '00110000000000000000' }, NOW)
@@ -274,6 +363,7 @@ describe('recordProgress', () => {
       id: 1,
       buckets: `${'1'.repeat(17)}000`,
       watched_ms: 0,
+      first_viewed: new Date(NOW - 120_000),
       last_viewed: new Date(NOW - 10_000),
       completed_at: null
     }
@@ -307,6 +397,7 @@ describe('recordProgress', () => {
       id: 7,
       buckets: '10000000000000000000',
       watched_ms: 0,
+      first_viewed: new Date(NOW - 5000),
       last_viewed: new Date(NOW - 5000)
     }
     await recordProgress(USER, video(), { buckets: '01000000000000000000' }, NOW)
@@ -336,6 +427,31 @@ describe('recordProgress', () => {
     expect(r.completed).toBe(false)
     expect(fake.updates[0].buckets).toBe('10000000000000000000')
     expect(fake.updates[0].completed_at).toBeNull()
+    // the watch period restarts with the fresh section map
+    expect(fake.updates[0].first_viewed).toEqual(new Date(NOW))
+    expect(fake.updates[0].watched_ms).toBe(0)
+  })
+
+  it('a beat that raced the re-arm still loses its pre-requirement completion', async () => {
+    // last beat AFTER required_since, but the completion is from BEFORE it
+    fake.row = {
+      id: 1,
+      buckets: '1'.repeat(20),
+      watched_ms: 0,
+      first_viewed: new Date(NOW - 3 * 86_400_000),
+      last_viewed: new Date(NOW - 86_400_000 + 5),
+      completed_at: new Date(NOW - 86_400_000 - 5)
+    }
+    const r = await recordProgress(
+      USER,
+      video({ required_since: new Date(NOW - 86_400_000) }),
+      { buckets: '' },
+      NOW
+    )
+    expect(r.completed).toBe(false)
+    expect(fake.updates[0].buckets).toBe('0'.repeat(20))
+    expect(fake.updates[0].completed_at).toBeNull()
+    expect(fake.updates[0].first_viewed).toEqual(new Date(NOW))
   })
 
   it('sections seen before a re-arm do not count, even without a completion', async () => {
@@ -362,6 +478,7 @@ describe('recordProgress', () => {
       id: 1,
       buckets: '1'.repeat(20),
       watched_ms: 0,
+      first_viewed: new Date(NOW - 7200_000),
       last_viewed: done,
       completed_at: done
     }

@@ -233,27 +233,65 @@ export async function loadVideoForUser(
 const WINDOW_MS = 3 * 3_600_000
 
 const SID_RE = /^[A-Za-z0-9_-]{8,128}$/
+const TAG_RE = /^[A-Za-z0-9_-]{22}$/
+/** Redis key holding the session id behind a ticket's opaque session tag. */
+export const SIDTAG_PREFIX = 'hv:sidtag:'
+const SIDTAG_TTL_S = 7 * 3600
+const SIDTAG_REWRITE_MS = 3_600_000
+const SIDTAG_THROTTLE_MAX = 5000
+const sidTagWritten = new Map<string, number>()
 
 function ticketSig(
   videoId: string,
   userId: string,
   scope: string,
   exp: number,
-  sid: string | null
+  tag: string | null
 ): string {
-  const tail = sid ? `|${sid}` : ''
+  const tail = tag ? `|${tag}` : ''
   return createHmac('sha256', config.SESSION_SECRET)
     .update(`hv|${low(videoId)}|${up(userId)}|${scope}|${exp}${tail}`)
     .digest('base64url')
     .slice(0, 32)
 }
 
-/** The session id to bind into media tickets: only for a session-cookie
- *  request (token, API-key and masquerade requests have no session to revoke). */
-export function sessionSid(req: FastifyRequest): string | null {
+/** Opaque stand-in for a session id: URLs land in proxy logs, browser history
+ *  and telemetry, so a ticket never carries the raw sid. */
+export function sidTag(sid: string): string {
+  return createHmac('sha256', config.SESSION_SECRET)
+    .update(`hv-sid|${sid}`)
+    .digest('base64url')
+    .slice(0, 22)
+}
+
+/** The session tag to bind into media tickets, for a session-cookie request
+ *  only (token, API-key and masquerade requests have no session to revoke).
+ *  Records tag → sid in Redis (7 h) so a media request can find the session
+ *  and check its revocation marker; rewritten at most once an hour per tag by
+ *  this process. A failed write simply leaves the ticket unbound (fails open). */
+export function sessionTag(req: FastifyRequest): string | null {
   if (req.authMethod !== 'session') return null
   const sid = (req.session as { sessionId?: unknown } | undefined)?.sessionId
-  return typeof sid === 'string' && SID_RE.test(sid) ? sid : null
+  if (typeof sid !== 'string' || !SID_RE.test(sid)) return null
+  const tag = sidTag(sid)
+  const now = Date.now()
+  const last = sidTagWritten.get(tag)
+  if (last === undefined || now - last > SIDTAG_REWRITE_MS) {
+    const redis = (req.server as { redis?: FastifyRequest['server']['redis'] } | undefined)?.redis
+    if (redis) {
+      sidTagWritten.delete(tag)
+      sidTagWritten.set(tag, now)
+      while (sidTagWritten.size > SIDTAG_THROTTLE_MAX) {
+        const oldest = sidTagWritten.keys().next().value
+        if (oldest === undefined) break
+        sidTagWritten.delete(oldest)
+      }
+      void redis.set(`${SIDTAG_PREFIX}${tag}`, sid, 'EX', SIDTAG_TTL_S).catch(() => {
+        sidTagWritten.delete(tag)
+      })
+    }
+  }
+  return tag
 }
 
 /** A media link ticket: <video>/<track>/<img> cannot send Authorization
@@ -261,38 +299,38 @@ export function sessionSid(req: FastifyRequest): string | null {
  *  the person who asked. Stable for a 3-hour window so the browser can cache.
  *  A valid ticket only names the person — every media request still re-checks
  *  their current role and the video's current visibility. A ticket minted for
- *  a session carries that session id (`<exp>.<user>.<scope>.<sid>.<sig>`) so
- *  a logout revokes it. */
+ *  a session carries its opaque session tag (`<exp>.<user>.<scope>.<tag>.<sig>`)
+ *  so a logout revokes it. */
 export function mediaTicket(
   videoId: string,
   userId: string,
   scope: 'p' | 'd',
   now = Date.now(),
-  sid: string | null = null
+  tag: string | null = null
 ): string {
   const exp = Math.floor(now / WINDOW_MS) * WINDOW_MS + 2 * WINDOW_MS
-  const s = sid && SID_RE.test(sid) ? sid : null
-  const sig = ticketSig(videoId, userId, scope, exp, s)
-  return s ? `${exp}.${up(userId)}.${scope}.${s}.${sig}` : `${exp}.${up(userId)}.${scope}.${sig}`
+  const t = tag && TAG_RE.test(tag) ? tag : null
+  const sig = ticketSig(videoId, userId, scope, exp, t)
+  return t ? `${exp}.${up(userId)}.${scope}.${t}.${sig}` : `${exp}.${up(userId)}.${scope}.${sig}`
 }
 
 export function verifyMediaTicket(
   ticket: string,
   videoId: string,
   now = Date.now()
-): { userId: string; scope: 'p' | 'd'; sid?: string } | null {
+): { userId: string; scope: 'p' | 'd'; tag?: string } | null {
   const parts = String(ticket ?? '').split('.')
   if (parts.length !== 4 && parts.length !== 5) return null
   const [expRaw, userId, scope] = parts
-  const sid = parts.length === 5 ? parts[3] : null
+  const tag = parts.length === 5 ? parts[3] : null
   const sig = parts[parts.length - 1]
-  if (sid !== null && !SID_RE.test(sid)) return null
+  if (tag !== null && !TAG_RE.test(tag)) return null
   const exp = Number(expRaw)
   if (!Number.isFinite(exp) || exp < now || (scope !== 'p' && scope !== 'd')) return null
-  const want = Buffer.from(ticketSig(videoId, userId, scope, exp, sid))
+  const want = Buffer.from(ticketSig(videoId, userId, scope, exp, tag))
   const got = Buffer.from(sig)
   if (want.length !== got.length || !timingSafeEqual(want, got)) return null
-  return sid ? { userId, scope, sid } : { userId, scope }
+  return tag ? { userId, scope, tag } : { userId, scope }
 }
 
 /** A video is required for THIS viewer only when one of its requirement rows
@@ -306,7 +344,7 @@ export function requiredForRole(roleIds: unknown[], role: string | null): boolea
 
 export async function serializeVideo(
   video: VideoRow,
-  ctx: { author: boolean; userId: string; role: string | null; sid?: string | null }
+  ctx: { author: boolean; userId: string; role: string | null; sidTag?: string | null }
 ): Promise<HelpVideoDto> {
   const id = low(video.id)
   const [published, draft, contexts, reqs, view, creator] = await Promise.all([
@@ -322,7 +360,7 @@ export async function serializeVideo(
       : Promise.resolve(undefined)
   ])
   const base = `/api/help-videos/${id}`
-  const pt = mediaTicket(id, ctx.userId, 'p', Date.now(), ctx.sid ?? null)
+  const pt = mediaTicket(id, ctx.userId, 'p', Date.now(), ctx.sidTag ?? null)
   const buckets = String(view?.buckets ?? '')
   const seen = [...buckets].filter((c) => c === '1').length
   const requiredSince = video.required_since ? new Date(video.required_since as string) : null
@@ -370,7 +408,7 @@ export async function serializeVideo(
     dto.required_role_ids = reqs.map((r: { role_id: unknown }) => up(r.role_id))
     dto.draft = draft ? serializeVersion(draft, { withRecorderData: true }) : null
     if (draft) {
-      const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sid ?? null)
+      const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sidTag ?? null)
       dto.draft_stream_url = `${base}/stream?st=${dt}&source=1`
       dto.draft_captions_url = `${base}/captions.vtt?st=${dt}`
     }
@@ -835,11 +873,13 @@ export async function videosForContext(
     )
   const data = await Promise.all(
     shown.map((v) =>
+      // The caller's real author flag (as the library does): an author sees
+      // `playable` and draft details exactly as on the video's own page.
       serializeVideo(v, {
-        author: false,
+        author,
         userId: req.user!.id,
         role: req.user!.role ?? null,
-        sid: sessionSid(req)
+        sidTag: sessionTag(req)
       })
     )
   )
@@ -872,7 +912,7 @@ export async function listVideos(
         author,
         userId: req.user!.id,
         role: req.user!.role ?? null,
-        sid: sessionSid(req)
+        sidTag: sessionTag(req)
       })
     )
   )

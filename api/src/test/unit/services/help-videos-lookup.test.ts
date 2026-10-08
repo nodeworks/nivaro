@@ -141,6 +141,42 @@ describe('videosForContext visibility', () => {
     const out = await videosForContext(req, { page: 'p' })
     expect(out.data.map((d) => d.title)).toEqual(['Video A'])
   })
+
+  it('serializes with the caller’s real author flag (playable for authors, not viewers)', async () => {
+    // A blurred published version whose render is stale: a viewer would get
+    // "still being prepared", an author plays the original.
+    const version = {
+      id: 'P1',
+      video_id: 'A',
+      version: 1,
+      source_file: 'F',
+      source_duration_ms: 10_000,
+      edits: JSON.stringify({
+        v: 1,
+        segments: [{ start_ms: 0, end_ms: 10_000, speed: 1 }],
+        blurs: [{ id: 'b', start_ms: 0, end_ms: 2000, rect: { x: 0, y: 0, w: 0.5, h: 0.5 } }]
+      }),
+      edits_hash: 'new',
+      rendered_file: 'R',
+      rendered_hash: 'old',
+      render_status: 'ready',
+      created_at: new Date('2026-10-08T00:00:00Z')
+    }
+    vi.mocked(db).mockReset()
+    vi.mocked(db).mockImplementation(((t: string) => {
+      if (t === 'nivaro_help_video_contexts')
+        return chain([{ video_id: 'A', kind: 'page', key: 'p', state_key: null }])
+      if (t === 'nivaro_help_videos') return chain([pub('A', { published_version_id: 'P1' })])
+      if (t === 'nivaro_help_video_versions') return chain([version])
+      return chain([])
+    }) as never)
+    const viewer = await videosForContext(req, { page: 'p' })
+    expect(viewer.data[0].published?.playable).toBe(false)
+    const asAuthor = { user: { id: 'U1', role: 'R1' }, isAdmin: true, workspaceId: null } as never
+    const author = await videosForContext(asAuthor, { page: 'p' })
+    expect(author.can_author).toBe(true)
+    expect(author.data[0].published?.playable).toBe(true)
+  })
 })
 
 describe('listVideos', () => {

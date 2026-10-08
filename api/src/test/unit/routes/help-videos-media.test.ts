@@ -81,13 +81,21 @@ vi.mock('../../../services/help-video-views.js', async (orig) => ({
 
 import { helpVideoMediaRoutes, helpVideosRoutes } from '../../../routes/help-videos.js'
 import { recordProgress } from '../../../services/help-video-views.js'
-import { mediaTicket } from '../../../services/help-videos.js'
+import { mediaTicket, sidTag } from '../../../services/help-videos.js'
 
-const revoked = vi.hoisted(() => ({ sids: new Set<string>(), fail: false }))
+const revoked = vi.hoisted(() => ({
+  sids: new Set<string>(),
+  tags: new Map<string, string>(),
+  fail: false
+}))
 
 async function app() {
   const a = Fastify()
   a.decorate('redis', {
+    get: async (key: string) => {
+      if (revoked.fail) throw new Error('redis down')
+      return revoked.tags.get(key.replace('hv:sidtag:', '')) ?? null
+    },
     exists: async (key: string) => {
       if (revoked.fail) throw new Error('redis down')
       return revoked.sids.has(key.replace('sess:revoked:', '')) ? 1 : 0
@@ -134,6 +142,7 @@ beforeEach(() => {
     }
   }
   revoked.sids.clear()
+  revoked.tags.clear()
   revoked.fail = false
   vi.mocked(recordProgress).mockClear()
 })
@@ -287,25 +296,48 @@ describe('media routes — the original recording is only for authors when edits
 
 describe('media routes — session-bound tickets', () => {
   const SID = 'sessionIdABCDEFGH_123'
+  const tag = () => sidTag(SID)
+  const sessionTicket = () => mediaTicket(VID, USER, 'p', Date.now(), tag())
+
+  it('a session ticket carries an opaque tag, never the raw session id', () => {
+    expect(sessionTicket()).not.toContain(SID)
+    expect(sessionTicket().split('.')[3]).toBe(tag())
+  })
 
   it('a ticket whose session was revoked answers 404', async () => {
+    revoked.tags.set(tag(), SID)
     revoked.sids.add(SID)
-    expect((await stream(mediaTicket(VID, USER, 'p', Date.now(), SID))).statusCode).toBe(404)
+    expect((await stream(sessionTicket())).statusCode).toBe(404)
   })
 
   it('a ticket whose session is still live is served', async () => {
+    revoked.tags.set(tag(), SID)
     revoked.sids.add('some-other-session-id')
-    expect((await stream(mediaTicket(VID, USER, 'p', Date.now(), SID))).statusCode).toBe(200)
+    expect((await stream(sessionTicket())).statusCode).toBe(200)
+  })
+
+  it('a ticket whose tag has no mapping is served (fails open)', async () => {
+    revoked.sids.add(SID)
+    expect((await stream(sessionTicket())).statusCode).toBe(200)
   })
 
   it('a ticket without a session (token / API key / masquerade) is served', async () => {
+    revoked.tags.set(tag(), SID)
     revoked.sids.add(SID)
     expect((await stream(mediaTicket(VID, USER, 'p'))).statusCode).toBe(200)
   })
 
   it('a Redis error fails open (the role and visibility checks still apply)', async () => {
+    revoked.tags.set(tag(), SID)
+    revoked.sids.add(SID)
     revoked.fail = true
-    expect((await stream(mediaTicket(VID, USER, 'p', Date.now(), SID))).statusCode).toBe(200)
+    expect((await stream(sessionTicket())).statusCode).toBe(200)
+  })
+
+  it('a ticket whose tag was swapped fails its signature (404)', async () => {
+    const parts = sessionTicket().split('.')
+    parts[3] = sidTag('anotherSessionId_XYZ123')
+    expect((await stream(parts.join('.'))).statusCode).toBe(404)
   })
 })
 

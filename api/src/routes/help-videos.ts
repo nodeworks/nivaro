@@ -41,10 +41,11 @@ import {
   replaceRequirements,
   rerecordVideo,
   restoreVersion,
+  SIDTAG_PREFIX,
   saveDraftEdits,
   serializeVersion,
   serializeVideo,
-  sessionSid,
+  sessionTag,
   updateDetails,
   type VideoRow,
   validateContexts,
@@ -69,7 +70,7 @@ async function requireAuthor(req: FastifyRequest, reply: FastifyReply): Promise<
 }
 
 function viewerCtx(req: FastifyRequest, author: boolean) {
-  return { author, userId: req.user!.id, role: req.user!.role ?? null, sid: sessionSid(req) }
+  return { author, userId: req.user!.id, role: req.user!.role ?? null, sidTag: sessionTag(req) }
 }
 
 export async function helpVideosRoutes(app: FastifyInstance) {
@@ -281,12 +282,15 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
     if (!isUuid(id)) throw notFound
     const t = typeof st === 'string' ? verifyMediaTicket(st, id) : null
     if (!t || !isUuid(t.userId)) throw notFound
-    if (t.sid) {
+    if (t.tag) {
       // A ticket minted for a session dies with it (logout / logout-all write
-      // this marker). Redis errors fail OPEN, the rate-limit convention: the
-      // status, role and visibility re-checks below still apply.
-      const revoked = await app.redis.exists(`${REVOKED_PREFIX}${t.sid}`).catch(() => 0)
-      if (revoked) throw notFound
+      // the revocation marker). A missing tag mapping or a Redis error fails
+      // OPEN — the status, role and visibility re-checks below still apply.
+      const sid = await app.redis.get(`${SIDTAG_PREFIX}${t.tag}`).catch(() => null)
+      if (sid) {
+        const revoked = await app.redis.exists(`${REVOKED_PREFIX}${sid}`).catch(() => 0)
+        if (revoked) throw notFound
+      }
     }
     const user = (await db('nivaro_users').where({ id: t.userId, status: 'active' }).first()) as
       | (User & { is_redacted?: unknown })
