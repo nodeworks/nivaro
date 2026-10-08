@@ -1,3 +1,5 @@
+import { latestAsOf, type SheetHeaderAsOf } from '../lib/sheet-def'
+import { formatDate } from '../lib/utils'
 import { QueryStatStrip, type QueryWidgetStat } from './QueryStatStrip'
 
 /** The figure strip above a sheet. A failed header query says so: tiles summed
@@ -7,13 +9,15 @@ export function SheetHeaderBody({
   rows,
   params,
   loading,
-  error
+  error,
+  asOf
 }: {
   stats: QueryWidgetStat[]
   rows: Array<Record<string, unknown>>
   params: Record<string, unknown>
   loading: boolean
   error: boolean
+  asOf?: SheetHeaderAsOf
 }) {
   if (error) {
     return (
@@ -22,5 +26,18 @@ export function SheetHeaderBody({
       </p>
     )
   }
-  return <QueryStatStrip stats={stats} rows={rows} effectiveParams={params} loading={loading} />
+  const latest = !loading && asOf ? latestAsOf(rows, asOf.field) : null
+  return (
+    <>
+      <QueryStatStrip stats={stats} rows={rows} effectiveParams={params} loading={loading} />
+      {asOf && latest && (
+        <p
+          className='mt-1.5 text-[11px] text-slate-500 dark:text-slate-400'
+          data-sheet-header-as-of
+        >
+          {asOf.label} {formatDate(latest)}
+        </p>
+      )}
+    </>
+  )
 }

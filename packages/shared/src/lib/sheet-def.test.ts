@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { resolveSheetDef, type SheetDefInput } from './sheet-def'
+import { latestAsOf, resolveSheetDef, type SheetDefInput } from './sheet-def'
 
 const resolveConfig = (cfg: Record<string, unknown>) => ({ ...cfg, resolved: true })
 
@@ -64,5 +64,28 @@ describe('resolveSheetDef', () => {
       label: 'M',
       matrix: { config: { target_collection: 't' }, scope: { project: '$row.id' } }
     })
+  })
+})
+
+describe('sheet header as-of line', () => {
+  it('passes the as-of field through and picks the latest dated row', () => {
+    const out = resolveSheetDef(
+      {
+        header: {
+          query_slug: 'health',
+          stats: [],
+          as_of: { field: 'synced_at', label: 'Figures as of' }
+        }
+      },
+      resolveConfig
+    )
+    expect(out.header?.asOf).toEqual({ field: 'synced_at', label: 'Figures as of' })
+    expect(
+      latestAsOf(
+        [{ synced_at: '2026-09-30T10:00:00Z' }, { synced_at: '2026-10-02T08:00:00Z' }, {}],
+        'synced_at'
+      )
+    ).toBe('2026-10-02T08:00:00Z')
+    expect(latestAsOf([{ synced_at: null }, { synced_at: 'not a date' }], 'synced_at')).toBeNull()
   })
 })

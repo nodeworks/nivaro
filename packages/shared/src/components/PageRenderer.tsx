@@ -12,7 +12,7 @@ import {
 } from '../context'
 import { get, post } from '../lib/commands'
 import { initialFilterSelection } from '../lib/query-filter-seed'
-import { resolveSheetDef, type SheetDefInput } from '../lib/sheet-def'
+import { resolveSheetDef, type SheetDefInput, type SheetHeaderAsOf } from '../lib/sheet-def'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -482,7 +482,13 @@ export interface QuerySheetDef {
   width?: number | string
   config?: QueryWidgetConfig
   /** Figures above the tabs from a query of their own (same param tokens as a tab). */
-  header?: { query_slug: string; params?: Record<string, unknown>; stats: QueryWidgetStat[] }
+  header?: {
+    query_slug: string
+    params?: Record<string, unknown>
+    stats: QueryWidgetStat[]
+    /** "As of" line under the tiles: label + the latest value of field. */
+    as_of?: SheetHeaderAsOf
+  }
   /** Zero-based tab to open first (clamped into range). */
   initial_tab?: number
   /** A tab is a nested query view OR a MatrixEditor (`matrix`): its scope is
@@ -570,7 +576,15 @@ function resolveSheetConfig(
   return { ...config, params }
 }
 
-function SheetHeader({ config, stats }: { config: QueryWidgetConfig; stats: QueryWidgetStat[] }) {
+function SheetHeader({
+  config,
+  stats,
+  asOf
+}: {
+  config: QueryWidgetConfig
+  stats: QueryWidgetStat[]
+  asOf?: SheetHeaderAsOf
+}) {
   const client = useNivaroClient()
   const params = (config.params ?? {}) as Record<string, unknown>
   const { data, isPending, isError } = useQuery<CustomQueryEnvelope>({
@@ -593,6 +607,7 @@ function SheetHeader({ config, stats }: { config: QueryWidgetConfig; stats: Quer
         params={params}
         loading={isPending && !isError}
         error={isError}
+        asOf={asOf}
       />
     </div>
   )
@@ -600,7 +615,7 @@ function SheetHeader({ config, stats }: { config: QueryWidgetConfig; stats: Quer
 
 type SheetRuntimeDef = Omit<QuerySheetDef, 'header'> & {
   resolvedTabs: ResolvedSheetTab[]
-  header?: { config: QueryWidgetConfig; stats: QueryWidgetStat[] } | null
+  header?: { config: QueryWidgetConfig; stats: QueryWidgetStat[]; asOf?: SheetHeaderAsOf } | null
   initialTab?: number
 }
 
@@ -659,7 +674,9 @@ function QuerySheet({
             Close
           </button>
         </div>
-        {def.header && <SheetHeader config={def.header.config} stats={def.header.stats} />}
+        {def.header && (
+          <SheetHeader config={def.header.config} stats={def.header.stats} asOf={def.header.asOf} />
+        )}
         <div className='min-h-0 flex-1 overflow-auto'>
           {active?.matrix ? (
             <MatrixEditor
@@ -1286,7 +1303,8 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
         header: r.header
           ? {
               config: r.header.config as QueryWidgetConfig,
-              stats: r.header.stats as QueryWidgetStat[]
+              stats: r.header.stats as QueryWidgetStat[],
+              asOf: r.header.asOf
             }
           : null,
         initialTab: r.initialTab
