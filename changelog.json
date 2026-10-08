@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-07T21:32:32.560Z",
+  "generated_at": "2026-10-08T00:28:13.944Z",
   "releases": [
+    {
+      "version": "0.2.26",
+      "tag": "v0.2.26",
+      "date": "2026-10-07T20:28:02-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Scheduled jobs hold while maintenance mode is on",
+              "hash": "cdb121df"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.25",
       "tag": "v0.2.25",
-      "date": "2026-10-07T17:32:20-04:00",
+      "date": "2026-10-07T17:32:32-04:00",
       "sections": [
         {
           "label": "Other",
