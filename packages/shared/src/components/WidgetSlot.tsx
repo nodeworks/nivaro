@@ -76,7 +76,7 @@ import {
   HEADER_VALUE_HERO,
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
-import { formatWidgetValue } from '../lib/widget-value-format'
+import { affixesFor, formatWidgetValue } from '../lib/widget-value-format'
 import { type CacheInfo, CacheStamp, type CustomQueryEnvelope, cacheStampTip } from './CacheStamp'
 import { useStagedRelations } from './item-edit/O2MStagingContext'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
@@ -199,8 +199,7 @@ function StripCell({
   loading?: boolean
   awaiting?: string | null
 }) {
-  const prefix = (display.prefix ?? '') as string
-  const suffix = (display.suffix ?? '') as string
+  const { prefix, suffix } = affixesFor(value, display)
   const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string)
   return (
     // Same label / value vocabulary as a field tile in the record sub-header
@@ -387,8 +386,7 @@ function StatDisplay({
 }) {
   if (awaiting && data.value == null) return <AwaitingValue awaiting={awaiting} />
   const display = (data.display ?? {}) as Record<string, unknown>
-  const prefix = (display.prefix ?? '') as string
-  const suffix = (display.suffix ?? '') as string
+  const { prefix, suffix } = affixesFor(data.value, display)
   const formatted = formatWidgetValue(data.value, (display.format ?? '') as string)
   return (
     <div className='flex items-baseline gap-1'>
@@ -414,8 +412,7 @@ function PillSection({
   loading?: boolean
   awaiting?: string | null
 }) {
-  const prefix = (display.prefix ?? '') as string
-  const suffix = (display.suffix ?? '') as string
+  const { prefix, suffix } = affixesFor(value, display)
   const formatted = loading ? null : formatWidgetValue(value, (display.format ?? '') as string)
   return (
     <div className='flex flex-col justify-center px-2.5 py-1 min-w-0 gap-0.5'>
@@ -549,8 +546,7 @@ function MultiStatDisplay({ data }: { data: Record<string, unknown> }) {
       style={{ gridTemplateColumns: `repeat(${Math.min(values.length, 3)}, minmax(0, 1fr))` }}
     >
       {values.map((v, i) => {
-        const prefix = (v.display?.prefix ?? '') as string
-        const suffix = (v.display?.suffix ?? '') as string
+        const { prefix, suffix } = affixesFor(v.value, v.display)
         const format = (v.display?.format ?? '') as string
         return (
           <div key={i} className='flex flex-col gap-0.5'>

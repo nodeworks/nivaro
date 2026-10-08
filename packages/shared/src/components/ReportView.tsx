@@ -150,6 +150,7 @@ const catAxisProps = (count: number) => ({
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
+import { buildReportTree, type ReportTreeNode } from '../lib/report-tree'
 import {
   effectiveScopeSeedIds,
   matchScopeDimension,
@@ -465,67 +466,7 @@ const DEFAULT_TREE_THRESHOLDS = [
   { gte: -Infinity, color: '#10b981' }
 ]
 
-interface TreeNode {
-  key: string
-  label: string
-  depth: number
-  sums: Record<string, number>
-  pct: number
-  children: TreeNode[]
-  /** leaf only */
-  badge?: string
-  drillId?: string | number | null
-}
-
-function buildTree(
-  rows: Array<Record<string, unknown>>,
-  cfg: NonNullable<ReportQueryWidgetConfig['tree']>,
-  seriesFields: string[]
-): TreeNode[] {
-  const pctOf = (sums: Record<string, number>) => {
-    if (!cfg.pct) return 0
-    const den = sums[cfg.pct.den] ?? 0
-    return den > 0 ? Math.round(((sums[cfg.pct.num] ?? 0) / den) * 1000) / 10 : 0
-  }
-  const make = (
-    slice: Array<Record<string, unknown>>,
-    depth: number,
-    prefix: string
-  ): TreeNode[] => {
-    const field = cfg.levels[depth]
-    const last = depth === cfg.levels.length - 1
-    const groups = new Map<string, Array<Record<string, unknown>>>()
-    for (const r of slice) {
-      const k = String(r[field] ?? 'Unknown')
-      const g = groups.get(k) ?? []
-      g.push(r)
-      groups.set(k, g)
-    }
-    const nodes = [...groups.entries()].map(([label, g]) => {
-      const sums: Record<string, number> = {}
-      for (const f of seriesFields) sums[f] = g.reduce((a, r) => a + (Number(r[f]) || 0), 0)
-      const node: TreeNode = {
-        key: `${prefix}/${label}`,
-        label,
-        depth,
-        sums,
-        pct: pctOf(sums),
-        children: last ? [] : make(g, depth + 1, `${prefix}/${label}`)
-      }
-      if (last) {
-        const row = g[0]
-        if (cfg.badge) node.badge = String(row[cfg.badge] ?? '')
-        if (cfg.drill) node.drillId = row[cfg.drill.id_field] as string | number | null
-      }
-      return node
-    })
-    // Ordering: top level alphabetical, deeper levels by first value desc
-    if (depth === 0) nodes.sort((a, b) => a.label.localeCompare(b.label))
-    else nodes.sort((a, b) => (b.sums[seriesFields[0]] ?? 0) - (a.sums[seriesFields[0]] ?? 0))
-    return nodes
-  }
-  return make(rows, 0, '')
-}
+type TreeNode = ReportTreeNode
 
 function TreeWidget({
   rows,
@@ -547,7 +488,7 @@ function TreeWidget({
   const nodes = useMemo(
     () =>
       tc
-        ? buildTree(
+        ? buildReportTree(
             rows,
             tc,
             seriesDefs.map((sd) => sd.field)
@@ -576,7 +517,8 @@ function TreeWidget({
   }, [nodes, seeded])
 
   const thresholds = tc?.thresholds ?? DEFAULT_TREE_THRESHOLDS
-  const colorFor = (pct: number) => thresholds.find((t) => pct >= t.gte)?.color ?? '#10b981'
+  const colorFor = (pct: number | null) =>
+    pct == null ? undefined : (thresholds.find((t) => pct >= t.gte)?.color ?? '#10b981')
 
   const renderNode = (n: TreeNode): React.ReactNode => {
     const isLeaf = n.children.length === 0
@@ -643,13 +585,21 @@ function TreeWidget({
             >
               {n.label}
             </span>
-            {tc?.pct && (
-              <span className='shrink-0 text-[10.5px] font-semibold tabular-nums' style={{ color }}>
-                {n.pct.toFixed(1)}%
-              </span>
-            )}
+            {tc?.pct &&
+              (n.pct == null ? (
+                <span className='shrink-0 text-[10.5px] font-semibold tabular-nums text-slate-400'>
+                  —
+                </span>
+              ) : (
+                <span
+                  className='shrink-0 text-[10.5px] font-semibold tabular-nums'
+                  style={{ color }}
+                >
+                  {n.pct.toFixed(1)}%
+                </span>
+              ))}
           </div>
-          {tc?.pct && (
+          {tc?.pct && n.pct != null && (
             <div
               className={cn(
                 'ml-[18px] mt-0.5 overflow-hidden rounded-full bg-slate-100 dark:bg-muted',
@@ -658,7 +608,7 @@ function TreeWidget({
             >
               <div
                 className='h-full rounded-full transition-[width] duration-300'
-                style={{ width: `${Math.min(n.pct, 100)}%`, background: color }}
+                style={{ width: `${Math.min(Math.max(n.pct, 0), 100)}%`, background: color }}
               />
             </div>
           )}
@@ -667,9 +617,11 @@ function TreeWidget({
               <span key={sd.field}>
                 {(sd.label ?? sd.field).slice(0, 14)}{' '}
                 <span className='font-medium text-slate-500 dark:text-slate-300'>
-                  {cfg.value_format === 'currency'
-                    ? compactMoney(n.sums[sd.field] ?? 0)
-                    : (n.sums[sd.field] ?? 0).toLocaleString()}
+                  {n.sums[sd.field] == null
+                    ? '—'
+                    : cfg.value_format === 'currency'
+                      ? compactMoney(n.sums[sd.field] as number)
+                      : (n.sums[sd.field] as number).toLocaleString()}
                 </span>
               </span>
             ))}

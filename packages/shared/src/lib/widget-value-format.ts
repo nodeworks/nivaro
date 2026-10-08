@@ -17,3 +17,16 @@ export function formatWidgetValue(value: unknown, format: string): string {
   }
   return String(value)
 }
+
+/** The prefix / suffix a value renders with. A missing value reads as a bare
+ *  dash, so its affixes are dropped ("—", never "$—" or "—%"). */
+export function affixesFor(
+  value: unknown,
+  display: { prefix?: unknown; suffix?: unknown } | undefined
+): { prefix: string; suffix: string } {
+  if (value == null) return { prefix: '', suffix: '' }
+  return {
+    prefix: String(display?.prefix ?? ''),
+    suffix: String(display?.suffix ?? '')
+  }
+}

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatWidgetValue } from './widget-value-format'
+import { affixesFor, formatWidgetValue } from './widget-value-format'
 
 describe('formatWidgetValue', () => {
   it('renders null as a dash whatever the format', () => {
@@ -17,5 +17,16 @@ describe('formatWidgetValue', () => {
   })
   it('passes strings through', () => {
     expect(formatWidgetValue('n/a', 'percent')).toBe('n/a')
+  })
+})
+
+describe('affixesFor', () => {
+  it('drops the prefix and suffix when the value is missing', () => {
+    expect(affixesFor(null, { prefix: '$', suffix: ' USD' })).toEqual({ prefix: '', suffix: '' })
+    expect(affixesFor(undefined, { prefix: '$' })).toEqual({ prefix: '', suffix: '' })
+  })
+  it('keeps them around a real value, zero included', () => {
+    expect(affixesFor(0, { prefix: '$', suffix: '%' })).toEqual({ prefix: '$', suffix: '%' })
+    expect(affixesFor(12, undefined)).toEqual({ prefix: '', suffix: '' })
   })
 })

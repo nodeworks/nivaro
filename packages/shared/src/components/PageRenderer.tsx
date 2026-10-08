@@ -27,6 +27,7 @@ import { QueryStatStrip, type QueryWidgetStat } from './QueryStatStrip'
 import { QueryTable, type QueryTableConfig } from './QueryTable'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RecordGridEditor, type RecordGridEditorConfig } from './RecordGridEditor'
+import { SheetHeaderBody } from './SheetHeaderBody'
 
 // Headless page-builder renderer: draws a nivaro_pages layout (widget grid)
 // through the SDK client, so external apps render pages the same way they
@@ -507,6 +508,8 @@ export interface QueryWidgetConfig {
   row_click?: QueryRowClick
   filters?: QueryWidgetFilter[]
   stats?: QueryWidgetStat[]
+  /** Sentence shown, as written, when the query returns no rows. */
+  empty_label?: string
   /** Trailing action buttons per row (and totals row) opening nested sheets. */
   row_actions?: Array<{ label: string; sheet: QuerySheetDef }>
   /** Toolbar action buttons running a (write) custom query — params support
@@ -570,7 +573,7 @@ function resolveSheetConfig(
 function SheetHeader({ config, stats }: { config: QueryWidgetConfig; stats: QueryWidgetStat[] }) {
   const client = useNivaroClient()
   const params = (config.params ?? {}) as Record<string, unknown>
-  const { data, isPending } = useQuery<CustomQueryEnvelope>({
+  const { data, isPending, isError } = useQuery<CustomQueryEnvelope>({
     queryKey: ['page-renderer-query', config.query_slug, JSON.stringify(params)],
     queryFn: () =>
       client.request<CustomQueryEnvelope>(
@@ -584,11 +587,12 @@ function SheetHeader({ config, stats }: { config: QueryWidgetConfig; stats: Quer
       className='shrink-0 border-b border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'
       data-sheet-header
     >
-      <QueryStatStrip
+      <SheetHeaderBody
         stats={stats}
         rows={data?.data ?? []}
-        effectiveParams={params}
-        loading={isPending}
+        params={params}
+        loading={isPending && !isError}
+        error={isError}
       />
     </div>
   )
@@ -1338,6 +1342,7 @@ function QueryWidgetInner({ config: cfg }: { config: QueryWidgetConfig }) {
         }
         onRowClick={handleRow}
         rowActions={rowActions}
+        emptyText={cfg.empty_label}
         pivotYear={
           cfg.table?.pivot?.year_param
             ? Number(String(effectiveParams[cfg.table.pivot.year_param] ?? '').split(',')[0]) ||
