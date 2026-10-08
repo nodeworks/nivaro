@@ -26,6 +26,7 @@ function maskSettings(settings: Record<string, unknown>) {
 }
 
 const allowedSettingsKeys = [
+  'help_video_author_roles',
   'project_name',
   'project_description',
   'project_url',
@@ -251,6 +252,28 @@ export async function settingsRoutes(app: FastifyInstance) {
       }
       const { clearSlaZoneCache } = await import('../services/sla-zones.js')
       reply.raw.once('finish', () => clearSlaZoneCache())
+    }
+
+    // Help videos: the roles allowed to record, stored as JSON text.
+    if ('help_video_author_roles' in patch) {
+      const raw = patch.help_video_author_roles
+      const list = ((): unknown[] | null => {
+        if (raw == null || raw === '') return []
+        if (Array.isArray(raw)) return raw
+        if (typeof raw === 'string') {
+          try {
+            const parsed = JSON.parse(raw) as unknown
+            return Array.isArray(parsed) ? parsed : null
+          } catch {
+            return null
+          }
+        }
+        return null
+      })()
+      if (!list || list.some((v) => typeof v !== 'string' || !/^[0-9a-f-]{36}$/i.test(v))) {
+        return reply.code(400).send({ error: 'help_video_author_roles must be a list of role ids' })
+      }
+      patch.help_video_author_roles = list.length ? JSON.stringify([...new Set(list)]) : null
     }
 
     // Approved accent palette (#83): strict shape, stored as JSON text.
