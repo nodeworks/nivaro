@@ -1,10 +1,419 @@
 {
-  "generated_at": "2026-10-08T16:22:44.606Z",
+  "generated_at": "2026-10-09T04:40:29.864Z",
   "releases": [
+    {
+      "version": "0.2.28",
+      "tag": "v0.2.28",
+      "date": "2026-10-09T00:40:18-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release chain: build shared before typechecking admin",
+              "hash": "e1590fdd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: only archived videos can be deleted permanently",
+              "hash": "793f61aa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Record form: hideHelpVideoButton lets a host carry the Videos button in its own top bar",
+              "hash": "214b5476"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: administrators can delete an archived video permanently",
+              "hash": "a5967a0c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Record header: fold by tile key; tests guard the kept widths honestly",
+              "hash": "f646231b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Record header: stop the fold loop that crashed the record form",
+              "hash": "ae6e7dd9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: forget a role by its own row id",
+              "hash": "ec417834"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: Publish stays pending until the refetched video arrives",
+              "hash": "0ea21ff0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: no orphaned file rows on any failure path",
+              "hash": "fb2b156a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Record header: move the stat band's measurer and fold rendering out of ItemEditForm",
+              "hash": "b946e485"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "the transform cache key comes from the resolved row id",
+              "hash": "de00f119"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: final-review minors (alias lookup, role delete, docs, blur)",
+              "hash": "c5550e6a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: a callout hides what is under it; it needs the render too",
+              "hash": "4b9f50ab"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: publishing an unchanged draft is refused, not re-rendered",
+              "hash": "62398877"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: a finished recording never saved can be saved or discarded",
+              "hash": "c7b6f424"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: the files table is never an items collection",
+              "hash": "eacf67f1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: help-video files fail closed on every files reader",
+              "hash": "a63c1eba"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: the files API never serves a help-video file",
+              "hash": "98820a1b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: docs and README",
+              "hash": "c31e427b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: who-can-record saves one at a time",
+              "hash": "f97e214f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: a re-armed video starts again at zero",
+              "hash": "7a51395b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: admin Videos page, who can record, app-wide recorder",
+              "hash": "069f3d13"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: recording bar works from inside a modal; stable library paging",
+              "hash": "cb62f2ae"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: review fixes for the watching surfaces",
+              "hash": "fb28035f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: one recorder for the whole app, so a take survives navigation",
+              "hash": "b10aef72"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: Videos button, watch sheet, required videos, library",
+              "hash": "8c5654db"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: editor review fixes: pipeline steps, saves, accessibility",
+              "hash": "388a1ba1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: details, versions, stats and publishing in the editor",
+              "hash": "55bde022"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: stacked bars get their own rows, editor review fixes",
+              "hash": "de9e084d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: move the editor's side column into EditorSidebar",
+              "hash": "9bebe915"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: render zoom crops against the zoomed size",
+              "hash": "fe52342a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: draw callouts, arrows, zoom and blur on the picture",
+              "hash": "5b9a083c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: editor review fixes: playback, keyboard, notes",
+              "hash": "7d34384e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: split the editor into focused modules",
+              "hash": "58392927"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: editor shell, timeline and cutting",
+              "hash": "e84f5502"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: recorder keeps recording through outages and never strands a copy",
+              "hash": "5bd22a5f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: split the recorder into focused modules",
+              "hash": "f82ee0fa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: browser recorder with crash-safe uploads",
+              "hash": "3d608193"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: open the watch period once the video's length is known",
+              "hash": "0cc2bb3a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: short videos can complete, edits match the server",
+              "hash": "275e28ca"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: shared types, edit helpers and the player",
+              "hash": "deec85a8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Issue log: open issues by default",
+              "hash": "5f303e99"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "an admin can edit their own scope restrictions",
+              "hash": "14e0376b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: SDK commands and the re-render route",
+              "hash": "1231b36f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: required-viewing notifications log failures and batch sends",
+              "hash": "48b117e8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: tell people when a video becomes required for them",
+              "hash": "8b4edc64"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: scratch cleanup never follows a symlink",
+              "hash": "76c1886c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: render only what this host may render, guard every claim",
+              "hash": "8f4cf942"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: render published videos in the background",
+              "hash": "ae6adca1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: render plan review fixes",
+              "hash": "dd1c9ed4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: build the ffmpeg render from the edits",
+              "hash": "c770a295"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: opaque session tags, cumulative progress bounds",
+              "hash": "c3cdc09b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: viewers never get a revealing original; bounded progress",
+              "hash": "daa5caef"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: playback, progress, required viewing and stats",
+              "hash": "2e1c39a6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: authors-only page registration, visible-only categories",
+              "hash": "6555ac99"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: library listing, per-screen lookup and page keys",
+              "hash": "31d11a67"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: draft edits save only over the version that was read",
+              "hash": "e578934a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "files download regression mocks the storage driver, not readFileBuffer",
+              "hash": "2f40c31d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: authoring routes and the video/version lifecycle",
+              "hash": "a75d600f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: recover uploads stuck in finalizing",
+              "hash": "1987aeb0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: harden recording uploads (review round 1)",
+              "hash": "7f4bdc40"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: chunked recording uploads and ffmpeg helpers",
+              "hash": "06762b0d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: make the edits hash test prove key-order independence",
+              "hash": "42147896"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: edit instructions, normalization and time mapping",
+              "hash": "009d45f6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "stream downloads and honour byte ranges",
+              "hash": "9680522d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: tables for videos, versions, contexts, views and uploads (migration 407)",
+              "hash": "c427118b"
+            }
+          ]
+        }
+      ],
+      "count": 66
+    },
     {
       "version": "0.2.27",
       "tag": "v0.2.27",
-      "date": "2026-10-08T12:22:32-04:00",
+      "date": "2026-10-08T12:22:44-04:00",
       "sections": [
         {
           "label": "Other",
