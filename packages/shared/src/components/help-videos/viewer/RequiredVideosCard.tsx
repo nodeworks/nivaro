@@ -55,6 +55,18 @@ export function RequiredVideosCard({ className }: { className?: string }) {
                     <span className='ml-[26px] shrink-0 text-[12px] text-muted-foreground sm:ml-0'>
                       {meta.text}
                     </span>
+                    {v.whats_new && (
+                      <span
+                        className='ml-[26px] basis-full truncate text-[12px] text-sky-800 dark:text-sky-300'
+                        data-hv-required-news={v.whats_new.kind}
+                      >
+                        {v.whats_new.note
+                          ? `What changed: ${v.whats_new.note}`
+                          : v.whats_new.kind === 'again'
+                            ? 'Asked to watch again'
+                            : 'Updated since you watched it'}
+                      </span>
+                    )}
                   </button>
                 </li>
               )

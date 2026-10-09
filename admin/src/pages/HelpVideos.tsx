@@ -13,7 +13,8 @@ import { useAuth } from '@/lib/auth'
 // Videos — tutorial recordings people watch from the library, from a record
 // form's Videos button and from My Work when a video is required. Authors
 // (admins + the roles chosen under "Who can record") record and edit here.
-// ?watch=<id> opens the player, ?edit=<id> the editor.
+// ?watch=<id> opens the player (&t=<seconds> or &c=<chapter id> start it at a
+// moment), ?edit=<id> the editor.
 const client = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
 export function HelpVideosPage() {
@@ -24,6 +25,8 @@ export function HelpVideosPage() {
     const next = new URLSearchParams(params)
     next.delete('watch')
     next.delete('edit')
+    next.delete('t')
+    next.delete('c')
     if (id) next.set(key, id)
     setParams(next, { replace: key === 'watch' })
   }
@@ -38,6 +41,8 @@ export function HelpVideosPage() {
           >
             <HelpVideoLibrary
               watchId={params.get('watch')}
+              watchAt={params.get('t')}
+              watchChapter={params.get('c')}
               editId={params.get('edit')}
               onWatch={(id) => set('watch', id)}
               onEdit={(id) => set('edit', id)}

@@ -2,7 +2,8 @@ import type { CSSProperties } from 'react'
 import { ANNOTATION_PALETTE, annotationUnit } from './annotationStyles'
 import { annotationOpacity } from './edits'
 import { activeAt, liveBlurPx, renderSize } from './playerMath'
-import type { Annotation, VideoEdits } from './types'
+import type { Annotation, CaptionStyle, VideoEdits } from './types'
+import { CAPTION_SIZE_SCALE } from './viewer/moments'
 
 /** Annotations, blur boxes and the caption line for one moment of SOURCE
  *  time. Visuals mirror the server's rasterizer
@@ -19,7 +20,8 @@ export function OverlayLayer({
   source,
   showAnnotations = true,
   showCaptions = true,
-  fade = false
+  fade = false,
+  captionStyle
 }: {
   edits: VideoEdits
   frame: { width: number; height: number }
@@ -31,6 +33,8 @@ export function OverlayLayer({
   /** Callouts, boxes and arrows fade in and out (#1553), as in the render.
    *  Off while paused, so something just drawn at the playhead is solid. */
   fade?: boolean
+  /** The viewer's caption settings (#1529); absent = the default look. */
+  captionStyle?: CaptionStyle
 }) {
   const { width: W, height: H } = frame
   const canvas = source?.width && source?.height ? renderSize(source.width, source.height) : frame
@@ -85,7 +89,9 @@ export function OverlayLayer({
           </div>
         )}
       </div>
-      {showCaptions && <CaptionLine edits={edits} srcMs={srcMs} frameWidth={W} />}
+      {showCaptions && (
+        <CaptionLine edits={edits} srcMs={srcMs} frameWidth={W} captionStyle={captionStyle} />
+      )}
     </>
   )
 }
@@ -202,26 +208,40 @@ function AnnotationShape({
   return null
 }
 
+const CAPTION_BG = {
+  none: 'bg-transparent [text-shadow:0_0_3px_#000,0_1px_2px_#000,0_0_1px_#000]',
+  shaded: 'bg-[#000000cc]',
+  solid: 'bg-[#000000]'
+} as const
+
 function CaptionLine({
   edits,
   srcMs,
-  frameWidth
+  frameWidth,
+  captionStyle
 }: {
   edits: VideoEdits
   srcMs: number
   frameWidth: number
+  captionStyle?: CaptionStyle
 }) {
   const c = activeAt(edits.captions, srcMs)[0]
   if (!c) return null
+  const size = captionStyle?.size ?? 'm'
+  const bg = captionStyle?.background ?? 'shaded'
+  const top = captionStyle?.position === 'top'
   // Scales with the picture so a caption never swamps a small (sheet-sized) player.
-  const fontSize = Math.round(Math.max(12, Math.min(20, frameWidth / 44)))
+  const fontSize = Math.round(
+    Math.max(11, Math.min(20, frameWidth / 44) * CAPTION_SIZE_SCALE[size])
+  )
   return (
     <div
-      className='pointer-events-none absolute inset-x-0 bottom-[6%] flex justify-center px-4'
+      className={`pointer-events-none absolute inset-x-0 flex justify-center px-4 ${top ? 'top-[6%]' : 'bottom-[6%]'}`}
       data-hv-caption
+      data-hv-caption-style={`${size} ${bg} ${top ? 'top' : 'bottom'}`}
     >
       <span
-        className='max-w-[80%] whitespace-pre-line rounded bg-[#000000cc] px-2 py-1 text-center font-medium leading-snug text-white'
+        className={`max-w-[80%] whitespace-pre-line rounded px-2 py-1 text-center font-medium leading-snug text-white ${CAPTION_BG[bg]}`}
         style={{ fontSize }}
       >
         {c.text}

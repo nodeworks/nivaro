@@ -7,6 +7,7 @@ import { Button } from '../../ui/button'
 import { Checkbox } from '../../ui/checkbox'
 import { Label } from '../../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { Textarea } from '../../ui/textarea'
 import { helpVideoApi, helpVideoKeys } from '../api'
 import type { HelpVideoDto, VideoEdits } from '../types'
 import {
@@ -58,6 +59,9 @@ export function PublishButton({
   const [busy, setBusy] = useState(false)
   const [unsaved, setUnsaved] = useState(false)
   const [note, setNote] = useState<string | null>(null)
+  // "What changed" (#1497): shown to people who watched the earlier version
+  // and carried in the watch-again notification.
+  const [changeNote, setChangeNote] = useState('')
   const missing = missingForPublish(video)
   const status = renderLabel(video.published)
   const live = video.status === 'published'
@@ -75,7 +79,7 @@ export function PublishButton({
     setUnsaved(false)
     try {
       const r = await whenSaved(beforePublish, () =>
-        helpVideoApi(client).publish(video.id, againOnly || again)
+        helpVideoApi(client).publish(video.id, againOnly || again, live ? changeNote : undefined)
       )
       if (!r.ok) {
         setUnsaved(true)
@@ -84,6 +88,7 @@ export function PublishButton({
       toast.success(againOnly ? 'Everyone who must watch it is asked again' : 'Published')
       setOpen(false)
       setAgain(false)
+      setChangeNote('')
       // The library and the video; the editor's draft sits outside `all`, so it reloads itself.
       void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
       void qc.invalidateQueries({ queryKey: helpVideoKeys.one(video.id) })
@@ -184,6 +189,30 @@ export function PublishButton({
                 </div>
               )}
             </>
+          )}
+          {live && (againOnly || !missing.length) && (
+            <div className='space-y-1'>
+              <Label
+                htmlFor={`hv-change-note-${video.id}`}
+                className='text-[12px] font-medium text-foreground'
+              >
+                What changed? <span className='font-normal text-muted-foreground'>(optional)</span>
+              </Label>
+              <Textarea
+                id={`hv-change-note-${video.id}`}
+                value={changeNote}
+                maxLength={500}
+                rows={3}
+                onChange={(e) => setChangeNote(e.target.value)}
+                placeholder='For example: the Approve button moved to the top of the form.'
+                className='min-h-[64px] text-[13px]'
+                data-hv-change-note
+              />
+              <p className='text-[11.5px] leading-snug text-muted-foreground'>
+                People who watched the earlier version see this with a link to the part that changed
+                {askAgain ? ', and it goes in the watch-again notification' : ''}.
+              </p>
+            </div>
           )}
           {unsaved && <UnsavedNote conflict={conflict} onReload={onReload} data-hv-publish-note />}
           {note && (

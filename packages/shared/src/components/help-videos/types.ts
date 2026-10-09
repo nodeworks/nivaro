@@ -280,6 +280,34 @@ export interface HelpVideoDto {
   download_urls: DownloadUrls | null
   updated_at: string
   my_progress: HelpVideoProgress | null
+  /** Ticketed plain-text transcript (captions under chapter headings) for
+   *  anyone who can watch, whatever the "Allow downloads" switch says. Null
+   *  when the published version has no captions. Optional: older servers. */
+  transcript_url?: string | null
+  /** What changed since this person last watched (#1497), else null. */
+  whats_new?: HelpVideoWhatsNew | null
+}
+
+/** `updated`: a newer version than the one watched is published; `again`: the
+ *  author asked everyone to watch the same version again. */
+export interface HelpVideoWhatsNew {
+  kind: 'updated' | 'again'
+  watched_version: number | null
+  version: number
+  /** The author's note for this version (system notes left out). */
+  note: string | null
+  /** Where "Jump to what changed" starts (edited time); null = nothing to jump to. */
+  jump_ms: number | null
+  chapter: { id: string; title: string } | null
+  /** The recording itself was replaced: watch it from the start. */
+  whole: boolean
+}
+
+/** How captions look in the player (#1529), remembered per person. */
+export interface CaptionStyle {
+  size: 's' | 'm' | 'l' | 'xl'
+  background: 'none' | 'shaded' | 'solid'
+  position: 'bottom' | 'top'
 }
 
 /** Error codes the help-video routes answer with (`{ error, code }`). */

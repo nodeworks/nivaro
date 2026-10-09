@@ -11,8 +11,21 @@ import type { DownloadUrls } from '../types'
 export type DownloadChoice = { key: string; label: string; hint: string; href: string }
 
 /** The files on offer, in order. `original` adds the author-only original
- *  recording (`source=1`). */
-export function downloadChoices(urls: DownloadUrls, opts: { original?: boolean } = {}) {
+ *  recording (`source=1`); `transcript` the plain-text transcript, which is
+ *  offered whatever the "Allow downloads" switch says (urls null). */
+export function downloadChoices(
+  urls: DownloadUrls | null,
+  opts: { original?: boolean; transcript?: string | null } = {}
+) {
+  const out: DownloadChoice[] = []
+  if (urls) out.push(...videoChoices(urls, opts))
+  if (opts.transcript) {
+    out.push({ key: 'transcript', label: 'Transcript', hint: '.txt', href: opts.transcript })
+  }
+  return out
+}
+
+function videoChoices(urls: DownloadUrls, opts: { original?: boolean }) {
   const out: DownloadChoice[] = [{ key: 'video', label: 'Video', hint: '', href: urls.video }]
   if (opts.original) {
     out.push({
@@ -36,6 +49,7 @@ const row =
 
 export function DownloadMenu({
   urls,
+  transcript = null,
   ready = true,
   original = false,
   variant = 'button',
@@ -43,7 +57,10 @@ export function DownloadMenu({
   where,
   triggerClassName
 }: {
-  urls: DownloadUrls
+  /** Null when this person may not download the video (the transcript may still be offered). */
+  urls: DownloadUrls | null
+  /** Ticketed transcript link (#1529): anyone who can watch, downloads on or off. */
+  transcript?: string | null
   /** False while a viewer would get "still being prepared". */
   ready?: boolean
   original?: boolean
@@ -56,9 +73,11 @@ export function DownloadMenu({
   const { apiBase } = useApiFetchConfig()
   const origin = apiBase.replace(/\/api$/, '')
   const [open, setOpen] = useState(false)
-  const choices = downloadChoices(urls, { original })
+  // Not ready: the video and captions wait for the render; the transcript is
+  // the author's text and never waits.
+  const choices = downloadChoices(ready ? urls : null, { original, transcript })
 
-  if (!ready) {
+  if (!choices.length) {
     if (variant === 'icon') return null
     return (
       <span
@@ -72,16 +91,19 @@ export function DownloadMenu({
     )
   }
 
+  // Only the transcript on offer (downloads off, or the video not ready yet).
+  const onlyTranscript = choices.length === 1 && choices[0].key === 'transcript'
+  const shown = onlyTranscript ? 'Download transcript' : label
   const trigger =
     variant === 'icon' ? (
       <>
         <Download className='h-4 w-4' aria-hidden />
-        <span className='sr-only'>{label}</span>
+        <span className='sr-only'>{shown}</span>
       </>
     ) : (
       <>
         <Download className='h-3.5 w-3.5' aria-hidden />
-        {label}
+        {onlyTranscript ? 'Transcript' : label}
       </>
     )
   const triggerCls =
@@ -95,10 +117,10 @@ export function DownloadMenu({
         href={`${origin}${choices[0].href}`}
         download
         className={triggerCls}
-        aria-label={variant === 'icon' ? label : undefined}
-        data-tip={variant === 'icon' ? label : undefined}
+        aria-label={variant === 'icon' ? shown : undefined}
+        data-tip={variant === 'icon' ? shown : undefined}
         data-hv-download={where}
-        data-hv-download-choice='video'
+        data-hv-download-choice={choices[0].key}
       >
         {trigger}
       </a>

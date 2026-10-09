@@ -1,4 +1,11 @@
-import { captionsToVtt, EditsError, normalizeEdits, type VideoEdits } from './help-video-edits.js'
+import {
+  captionsToVtt,
+  EditsError,
+  editedDuration,
+  normalizeEdits,
+  sourceToEdited,
+  type VideoEdits
+} from './help-video-edits.js'
 import { pickStreamFile, type StreamVersion } from './help-video-views.js'
 
 // Downloading a help video to the desktop. The same rule as playback decides
@@ -150,6 +157,71 @@ export function captionsVtt(version: DownloadVersion, timeline: 'edited' | 'sour
         `${i + 1}\n${cueTime(c.start_ms, '.')} --> ${cueTime(c.end_ms, '.')}\n${c.text.replace(/\n{2,}/g, '\n')}`
     )
   return `WEBVTT\n\n${cues.join('\n\n')}${cues.length ? '\n' : ''}`
+}
+
+function clock(ms: number): string {
+  const t = Math.max(0, Math.floor(ms / 1000))
+  const h = Math.floor(t / 3600)
+  const m = Math.floor((t % 3600) / 60)
+  const sec = String(t % 60).padStart(2, '0')
+  return h ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`
+}
+
+/** VTT cue start times (ms) and text, in file order. */
+function vttCues(vtt: string): Array<{ at: number; text: string }> {
+  const out: Array<{ at: number; text: string }> = []
+  for (const block of vtt.replace(/\r\n/g, '\n').split(/\n{2,}/)) {
+    const lines = block.split('\n')
+    const i = lines.findIndex((l) => l.includes('-->'))
+    if (i < 0) continue
+    const m = lines[i].match(/(\d+):(\d{2}):(\d{2})[.,](\d{3})/)
+    if (!m) continue
+    const at = ((Number(m[1]) * 60 + Number(m[2])) * 60 + Number(m[3])) * 1000 + Number(m[4])
+    const text = lines
+      .slice(i + 1)
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (text) out.push({ at, text })
+  }
+  return out
+}
+
+/** A plain-text transcript (#1529): the title, then every caption with its
+ *  time, under a heading for each chapter. On the timeline of the file this
+ *  person plays (see captionsVtt). Null when the version has no captions. */
+export function transcriptText(
+  version: DownloadVersion,
+  title: unknown,
+  timeline: 'edited' | 'source'
+): string | null {
+  const e = parseEdits(version)
+  if (!e?.captions.length) return null
+  const cues = vttCues(captionsVtt(version, timeline))
+  if (!cues.length) return null
+  const chapters = e.chapters
+    .map((c) => ({
+      title: c.title.trim() || 'Chapter',
+      at: timeline === 'edited' ? sourceToEdited(e, c.at_ms) : c.at_ms
+    }))
+    .filter((c): c is { title: string; at: number } => c.at !== null)
+    .sort((a, b) => a.at - b.at)
+  const name = String(title ?? '').trim() || 'Help video'
+  const length = timeline === 'edited' ? editedDuration(e) : Number(version.source_duration_ms ?? 0)
+  const lines: string[] = [name, `Transcript${length > 0 ? ` · ${clock(length)}` : ''}`, '']
+  let next = 0
+  for (const cue of cues) {
+    while (next < chapters.length && chapters[next].at <= cue.at) {
+      const c = chapters[next++]
+      if (lines[lines.length - 1] !== '') lines.push('')
+      lines.push(`${c.title} (${clock(c.at)})`, '')
+    }
+    lines.push(`[${clock(cue.at)}] ${cue.text}`)
+  }
+  return `${lines
+    .join('\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trimEnd()}\n`
 }
 
 /** WebVTT (as captionsVtt writes it) to SubRip: drop the header, number the

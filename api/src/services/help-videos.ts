@@ -5,6 +5,13 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import type { InstanceIdentity } from './branch-instances.js'
+import {
+  cleanVersionNote,
+  firstChange,
+  jumpTarget,
+  readEdits,
+  viewerNote
+} from './help-video-changes.js'
 import { downloadsAllowed, hasCaptions, withDownloads } from './help-video-download.js'
 import {
   EditsError,
@@ -107,6 +114,29 @@ export interface HelpVideoDto {
   download_urls: DownloadUrls | null
   updated_at: string
   my_progress: { position_ms: number; completed: boolean; percent: number } | null
+  /** Ticketed plain-text transcript (captions with chapter headings) for anyone
+   *  who can watch; independent of the "Allow downloads" switch. Null when the
+   *  published version has no captions. */
+  transcript_url: string | null
+  /** What changed since this person last watched (#1497), else null. */
+  whats_new: WhatsNew | null
+}
+
+/** `updated`: a newer version than the one this person watched is published.
+ *  `again`: the author asked everyone to watch the same version again. */
+export interface WhatsNew {
+  kind: 'updated' | 'again'
+  /** The version number this person watched (null when not recorded). */
+  watched_version: number | null
+  version: number
+  /** The author's note for the published version (system notes left out). */
+  note: string | null
+  /** Where "Jump to what changed" starts (edited time); null = nothing to jump to. */
+  jump_ms: number | null
+  /** The chapter the change falls in. */
+  chapter: { id: string; title: string } | null
+  /** The recording itself was replaced: watch it from the start. */
+  whole: boolean
 }
 
 export interface DownloadUrls {
@@ -502,6 +532,8 @@ export async function serializeVideo(
         }
       : null,
     updated_at: new Date(video.updated_at as string).toISOString(),
+    transcript_url: published && hasCaptions(published) ? `${base}/transcript.txt?st=${pt}` : null,
+    whats_new: published && view ? await whatsNewFor(video, published, view, stale) : null,
     my_progress: view
       ? {
           position_ms: stale ? 0 : Number(view.position_ms ?? 0),
@@ -529,6 +561,64 @@ export async function serializeVideo(
       : null
   }
   return dto
+}
+
+// Old version -> published version comparisons are immutable once both exist.
+const changeCache = new Map<string, ReturnType<typeof firstChange>>()
+
+/** What changed since this person watched (see help-video-changes.ts). */
+async function whatsNewFor(
+  video: VideoRow,
+  published: VersionRow,
+  view: Record<string, unknown>,
+  stale: boolean
+): Promise<WhatsNew | null> {
+  const note = viewerNote(published.note)
+  const version = Number(published.version)
+  const watchedId = view.version_id ? String(view.version_id) : null
+  if (watchedId && up(watchedId) !== up(published.id)) {
+    const old = (await db('nivaro_help_video_versions')
+      .where({ id: watchedId })
+      .first('id', 'video_id', 'version', 'source_file', 'edits', 'source_duration_ms')) as
+      | Record<string, unknown>
+      | undefined
+    if (old && up(old.video_id) === up(video.id) && Number(old.version) < version) {
+      const key = `${up(old.id)}:${up(published.id)}`
+      let change = changeCache.get(key)
+      if (change === undefined) {
+        const a = readEdits(old.edits, old.source_duration_ms)
+        const b = readEdits(published.edits, published.source_duration_ms)
+        const sameSource = up(old.source_file) === up(published.source_file)
+        change = b ? (a ? firstChange(a, b, sameSource) : { at_ms: 0, whole: true }) : null
+        if (changeCache.size > 500) changeCache.delete(changeCache.keys().next().value as string)
+        changeCache.set(key, change)
+      }
+      if (!change && !note) return null
+      const edits = readEdits(published.edits, published.source_duration_ms)
+      const jump = change && !change.whole && edits ? jumpTarget(edits, change.at_ms) : null
+      return {
+        kind: 'updated',
+        watched_version: Number(old.version),
+        version,
+        note,
+        jump_ms: jump && jump.jump_ms > 0 ? jump.jump_ms : null,
+        chapter: jump?.chapter ?? null,
+        whole: !!change?.whole
+      }
+    }
+  }
+  if (stale) {
+    return {
+      kind: 'again',
+      watched_version: version,
+      version,
+      note,
+      jump_ms: null,
+      chapter: null,
+      whole: false
+    }
+  }
+  return null
 }
 
 async function nextVersionNumber(videoId: string): Promise<number> {
@@ -814,17 +904,23 @@ const NOTHING_TO_PUBLISH = 'No changes since the last publish'
 export async function publishVideo(
   video: VideoRow,
   user: User,
-  opts: { watch_again?: boolean }
+  opts: { watch_again?: boolean; note?: unknown }
 ): Promise<string> {
   const draft = await loadVersion(video.draft_version_id)
   if (!draft) throw fail(409, 'HELP_VIDEO_NOTHING_TO_PUBLISH', NOTHING_TO_PUBLISH)
+  // "What changed" (#1497): shown to people who watched an earlier version and
+  // carried in the watch-again notification.
+  const note = cleanVersionNote(opts.note)
   // Opening the editor makes a draft, so a draft alone is no change. Publishing
   // an identical one would only make a new version that needs a fresh render —
   // and a video with blurs or cuts would show "Getting ready" until it lands.
   const published = await loadVersion(video.published_version_id)
   if (video.status === 'published' && sameContent(draft, published)) {
     if (opts.watch_again && (await hasRequirements(video.id))) {
-      await askToWatchAgain(video, user)
+      if (note && published) {
+        await db('nivaro_help_video_versions').where({ id: published.id }).update({ note })
+      }
+      await askToWatchAgain(video, user, note ?? viewerNote(published?.note))
       return String(published?.id)
     }
     throw fail(409, 'HELP_VIDEO_NOTHING_TO_PUBLISH', NOTHING_TO_PUBLISH)
@@ -840,6 +936,8 @@ export async function publishVideo(
   const edits = json<VideoEdits>(draft.edits, emptyEdits(0))
   const now = new Date()
   const firstPublish = video.published_version_id == null
+  if (note) await db('nivaro_help_video_versions').where({ id: draft.id }).update({ note })
+  const shownNote = firstPublish ? null : (note ?? viewerNote(draft.note))
   await db('nivaro_help_videos')
     .where({ id: video.id })
     .update({
@@ -860,7 +958,8 @@ export async function publishVideo(
         await notifyRequiredViewers(
           String(video.id),
           String(video.title ?? ''),
-          rows.map((r: { role_id: unknown }) => String(r.role_id))
+          rows.map((r: { role_id: unknown }) => String(r.role_id)),
+          { again: !firstPublish, note: shownNote }
         )
       } catch (err) {
         warnNotifyFailed(err, String(video.id))
@@ -888,7 +987,7 @@ async function hasRequirements(videoId: string): Promise<boolean> {
 /** "Ask everyone to watch again" with nothing else to publish: the same
  *  version stays published (no new version, no render); only the requirement
  *  is re-armed and the people who must watch it are told. */
-async function askToWatchAgain(video: VideoRow, user: User): Promise<void> {
+async function askToWatchAgain(video: VideoRow, user: User, note: string | null): Promise<void> {
   await db('nivaro_help_videos')
     .where({ id: video.id })
     .update({ required_since: new Date(), ...touch(user) })
@@ -900,7 +999,8 @@ async function askToWatchAgain(video: VideoRow, user: User): Promise<void> {
       await notifyRequiredViewers(
         String(video.id),
         String(video.title ?? ''),
-        rows.map((r: { role_id: unknown }) => String(r.role_id))
+        rows.map((r: { role_id: unknown }) => String(r.role_id)),
+        { again: true, note }
       )
     } catch (err) {
       warnNotifyFailed(err, String(video.id))
@@ -915,11 +1015,23 @@ async function askToWatchAgain(video: VideoRow, user: User): Promise<void> {
   })
 }
 
-export function requiredNotice(title: string): { subject: string; message: string; why: string } {
+export function requiredNotice(
+  title: string,
+  opts: { again?: boolean; note?: string | null } = {}
+): { subject: string; message: string; why: string } {
+  const where = 'It is on your dashboard under Required videos.'
+  if (opts.again) {
+    return {
+      subject: `Please watch again: ${title}`.slice(0, 250),
+      message: opts.note
+        ? `What changed: ${opts.note}\n\n${where}`
+        : `This video changed and your role is asked to watch it again. ${where}`,
+      why: 'This video is required for your role.'
+    }
+  }
   return {
     subject: `Please watch: ${title}`.slice(0, 250),
-    message:
-      'A short video your role is asked to watch. It is on your dashboard under Required videos.',
+    message: `A short video your role is asked to watch. ${where}`,
     why: 'This video is required for your role.'
   }
 }
@@ -935,7 +1047,8 @@ const NOTIFY_BATCH = 10
 export async function notifyRequiredViewers(
   videoId: string,
   title: string,
-  roleIds: string[]
+  roleIds: string[],
+  notice: { again?: boolean; note?: string | null } = {}
 ): Promise<number> {
   let roles = [...new Set(roleIds.filter(isUuid).map(up))]
   if (!roles.length) return 0
@@ -962,7 +1075,7 @@ export async function notifyRequiredViewers(
     )
   }
   const users = found.slice(0, NOTIFY_CAP)
-  const notice = requiredNotice(title || 'Untitled video')
+  const text = requiredNotice(title || 'Untitled video', notice)
   let delivered = 0
   let failed = 0
   let firstError: unknown = null
@@ -971,10 +1084,10 @@ export async function notifyRequiredViewers(
       users.slice(i, i + NOTIFY_BATCH).map(async (u: { id: unknown }) => {
         try {
           await notifyUser(app, String(u.id), {
-            subject: notice.subject,
-            message: notice.message,
+            subject: text.subject,
+            message: text.message,
             category: 'system',
-            why: notice.why,
+            why: text.why,
             target: { kind: 'home', focus: 'help-required' },
             source: { kind: 'help-video', label: sourceLabel, id: low(videoId) }
           })

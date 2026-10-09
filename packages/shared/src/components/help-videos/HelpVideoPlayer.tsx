@@ -28,6 +28,7 @@ import { fileMsForSource, fitFrame, liveStep, resolveDurationMs, zoomAt } from '
 import { createProgressBeats } from './progressBeats'
 import { playRippleTick, rippleTickTimes, ticksBetween } from './rippleSound'
 import type { HelpVideoDto, VideoEdits } from './types'
+import { CaptionSettingsButton, useCaptionStyle } from './viewer/CaptionSettings'
 import { DownloadMenu } from './viewer/DownloadMenu'
 
 export type PlayerHandle = {
@@ -161,6 +162,7 @@ function PlayerInner({
   const [started, setStarted] = useState(false)
   const [userRate, setUserRate] = useState(1)
   const [captions, setCaptions] = useState(true)
+  const [captionStyle, setCaptionStyle] = useCaptionStyle()
   const [fileDurMs, setFileDurMs] = useState(0)
   const [checking, setChecking] = useState(false)
   const resumeAt = useRef<number | null>(null)
@@ -730,6 +732,7 @@ function PlayerInner({
                 frame={frame}
                 srcMs={overlaySrcMs}
                 showAnnotations={false}
+                captionStyle={captionStyle}
               />
             )}
             {frame && phase === 'body' && children?.({ width: frame.width, height: frame.height })}
@@ -870,9 +873,15 @@ function PlayerInner({
             >
               <Captions className='h-4 w-4' />
             </button>
-            {!live && dto.download_urls && (
+            <CaptionSettingsButton
+              style={captionStyle}
+              onChange={setCaptionStyle}
+              className={`${iconButton} ${inkMuted}`}
+            />
+            {!live && (dto.download_urls || dto.transcript_url) && (
               <DownloadMenu
                 urls={dto.download_urls}
+                transcript={dto.transcript_url}
                 ready={author || dto.published?.playable !== false}
                 variant='icon'
                 where='player'

@@ -68,6 +68,25 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Required for: people in those roles get an in-app notification and, if their browser is subscribed, a browser push, and see the video in My Work until they have watched most of it (18 of its 20 five-percent sections). "Ask everyone to watch again" on a later publish resets that; when nothing else changed, Publish offers only that and the video itself is not published again. Marking a video required tells real people at once, so test it with a throwaway role.'
     },
+    { type: 'h3', text: 'Telling viewers what changed' },
+    {
+      type: 'p',
+      text: 'When you publish changes to a video people have already watched, Publish asks "What changed?" (optional, up to 500 characters). Anyone who watched an earlier version sees that note above the player — "Updated since you watched it" — with Jump to what changed, which starts at the chapter the first change falls in (or a couple of seconds before it when there are no chapters). A re-recorded video says so and has no jump: watch it from the start. "Ask everyone to watch again" carries the same note into the notification ("What changed: …") and shows it to the people asked; with nothing else to publish, the note is saved on the version already published. People who are required to watch also see the note in My Work.'
+    },
+    {
+      type: 'p',
+      text: 'How the first change is found, comparing the version they watched with the published one: a different recording changes the whole video; otherwise the earliest of — the intro card or background music changing (the start), the first kept piece that differs in start, end, speed or music level, any caption, chapter, callout, arrow, box, ripple, zoom or blur added, removed or changed (at its start; one inside a cut counts from the next kept moment), chapter banners switched on or off (the first chapter), and the end card (where it starts). Moving only the poster is not a change viewers see. The note disappears once the person watches the new version.'
+    },
+    { type: 'h3', text: 'Links to a moment' },
+    {
+      type: 'p',
+      text: 'Copy link under the player copies a link to the video at the current time, at the chapter playing now, or from the start. A link is the videos page with ?watch=<video id>&t=<whole seconds>, and a chapter link adds &c=<chapter id>; when both are present the chapter wins if it still exists, otherwise the time is used. Paste one into chat and it shows a card with the poster, title, length and where it starts — but only for people who can watch that video (the card is built for each reader with the same check as the library); everyone else sees the plain link. A card opens the video in the reader’s own app, whichever app the link was copied from.'
+    },
+    { type: 'h3', text: 'Captions and transcripts' },
+    {
+      type: 'p',
+      text: 'The settings button beside CC in the player sets caption size (Small to Largest), background (None, Shaded, Solid) and position (bottom or top). The choice is saved for the person and applies to every video. When a video has captions, Download offers a Transcript (.txt): the title, then every caption with its time under a heading for each chapter. Anyone who can watch the video can download the transcript, even when Downloads is turned off for the video file, and each transcript download is recorded in the activity log like other downloads.'
+    },
     { type: 'h3', text: 'Downloading' },
     {
       type: 'p',
@@ -117,7 +136,7 @@ export const helpVideosApi: DocSection = {
         [
           'GET /help-videos/:id',
           'viewers',
-          'One video; authors also get the draft, visibility and required roles'
+          'One video; authors also get the draft, visibility and required roles. whats_new (kind updated | again, note, jump_ms, chapter, whole) says what changed since this person last watched; transcript_url is the ticketed transcript'
         ],
         [
           'GET /help-videos/:id/stream | /captions.vtt | /poster',
@@ -153,7 +172,7 @@ export const helpVideosApi: DocSection = {
         [
           'POST /help-videos/:id/publish',
           'authors',
-          'Publish the draft; watch_again resets required viewing'
+          'Publish the draft; watch_again resets required viewing; note (≤ 500 characters) is what changed, shown to people who watched an earlier version and sent with watch_again'
         ],
         ['POST /help-videos/:id/render', 'authors', 'Queue a render again'],
         [
@@ -197,6 +216,11 @@ export const helpVideosApi: DocSection = {
           'GET /help-videos/:id/download?st=&file=video|captions.vtt|captions.srt',
           'signed link',
           'The file playback would give this person, as an attachment; 403 HELP_VIDEO_DOWNLOAD_OFF when downloads are off for viewers; authors may add source=1'
+        ],
+        [
+          'GET /help-videos/:id/transcript.txt?st=',
+          'signed link',
+          'Plain-text transcript (captions under chapter headings) for anyone who can watch; not gated by Downloads; 404 HELP_VIDEO_NO_CAPTIONS. The video’s transcript_url carries it'
         ],
         [
           'GET /help-videos/:id/download-link?file=&draft=',

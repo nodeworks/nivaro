@@ -224,10 +224,13 @@ export function helpVideoApi(client: NivaroClient) {
       r(put<{ data: VersionDto }>(`/help-videos/${id}/draft/edits`, { edits, base_hash })).then(
         (x) => x.data
       ),
-    publish: (id: string, watch_again: boolean) =>
-      r(post<{ data: HelpVideoDto }>(`/help-videos/${id}/publish`, { watch_again })).then(
-        (x) => x.data
-      ),
+    publish: (id: string, watch_again: boolean, note?: string) =>
+      r(
+        post<{ data: HelpVideoDto }>(`/help-videos/${id}/publish`, {
+          watch_again,
+          ...(note?.trim() ? { note: note.trim() } : {})
+        })
+      ).then((x) => x.data),
     rerecord: (id: string, upload_id: string) =>
       r(post<{ data: VersionDto }>(`/help-videos/${id}/rerecord`, { upload_id })).then(
         (x) => x.data

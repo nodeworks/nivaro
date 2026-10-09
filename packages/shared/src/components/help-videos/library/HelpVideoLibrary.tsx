@@ -20,6 +20,7 @@ import {
   showingLabel
 } from '../viewer/format'
 import { HelpVideoSheet } from '../viewer/HelpVideoSheet'
+import { momentFromParams } from '../viewer/moments'
 import { type PurgeOutcome, PurgeVideoDialog } from './PurgeVideoDialog'
 
 type Status = 'published' | 'draft' | 'archived'
@@ -32,9 +33,15 @@ export function HelpVideoLibrary({
   editId,
   onWatch,
   onEdit,
-  headerExtra
+  headerExtra,
+  watchAt = null,
+  watchChapter = null
 }: {
   watchId: string | null
+  /** A moment link's `t` (whole seconds) for watchId, as read from the URL. */
+  watchAt?: string | null
+  /** A moment link's `c` (chapter id); wins over `t` when the chapter exists. */
+  watchChapter?: string | null
   editId: string | null
   onWatch: (id: string | null) => void
   onEdit: (id: string | null) => void
@@ -48,6 +55,7 @@ export function HelpVideoLibrary({
   const { apiBase } = useApiFetchConfig()
   const mediaOrigin = apiBase.replace(/\/api$/, '')
   const recordable = canRecord()
+  const moment = momentFromParams(watchAt, watchChapter)
   const reasonId = useId()
   const [search, setSearch] = useState('')
   const [debounced, setDebounced] = useState('')
@@ -433,6 +441,8 @@ export function HelpVideoLibrary({
         open={!!watchId}
         onOpenChange={(o) => !o && onWatch(null)}
         returnFocusRef={opener}
+        startAtMs={moment.atMs}
+        startChapterId={moment.chapterId}
       />
       {recorder.fallback}
       {upload.ui}

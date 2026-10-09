@@ -1420,6 +1420,11 @@ export async function chatRoutes(app: FastifyInstance) {
   app.get('/app-card', async (req) => {
     const path = String((req.query as { path?: string }).path ?? '').slice(0, 1000)
     if (!path.startsWith('/')) return { data: null }
+    // A link to a moment in a help video (#1501): the card is built for the
+    // reader, with the same visibility check as watching.
+    const { parseMomentLink, helpVideoCardFor } = await import('../services/help-video-moments.js')
+    const moment = parseMomentLink(path)
+    if (moment) return { data: await helpVideoCardFor(req, moment).catch(() => null) }
     const { appCardFor } = await import('../services/chat-app-card.js')
     return { data: await appCardFor(req.user!, !!req.isAdmin, path).catch(() => null) }
   })

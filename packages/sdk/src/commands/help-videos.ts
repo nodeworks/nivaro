@@ -120,6 +120,24 @@ export interface HelpVideo {
   download_urls: HelpVideoDownloadUrls | null
   updated_at: string
   my_progress: HelpVideoProgress | null
+  /** Ticketed plain-text transcript (captions under chapter headings) for
+   *  anyone who can watch; null when the published version has no captions. */
+  transcript_url: string | null
+  /** What changed since this person last watched, else null. */
+  whats_new: HelpVideoWhatsNew | null
+}
+/** `updated`: a newer version than the one watched is published; `again`: the
+ *  author asked everyone to watch the same version again. */
+export interface HelpVideoWhatsNew {
+  kind: 'updated' | 'again'
+  watched_version: number | null
+  version: number
+  note: string | null
+  /** Where "Jump to what changed" starts (edited time); null = nothing to jump to. */
+  jump_ms: number | null
+  chapter: { id: string; title: string } | null
+  /** The recording itself was replaced. */
+  whole: boolean
 }
 /** An upload session, as returned by open, each part PUT and "my uploads". */
 export interface HelpVideoUploadSession {
@@ -225,10 +243,12 @@ export function saveHelpVideoDraft(
 /** 422 `HELP_VIDEO_NOT_READY` (body lists `missing`) or 409 `HELP_VIDEO_NOTHING_TO_PUBLISH`
  *  (no draft, or the draft equals what is published). With `watch_again` on an
  *  unchanged video someone must watch, the requirement is re-armed instead: no
- *  new version, no render. */
+ *  new version, no render. `note` (what changed, at most 500 characters) is
+ *  shown to people who watched an earlier version and rides the watch-again
+ *  notification. */
 export function publishHelpVideo(
   id: string,
-  opts?: { watch_again?: boolean }
+  opts?: { watch_again?: boolean; note?: string }
 ): Command<{ data: HelpVideo }> {
   return cmd('POST', `/help-videos/${id}/publish`, undefined, opts ?? {})
 }

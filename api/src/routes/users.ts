@@ -964,6 +964,37 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.chat_email_fallback = v === true ? true : null
     }
+    if ('help_video_captions' in body) {
+      // #1529 — how help-video captions look: size, background, position.
+      // Only the keys that differ from the default are stored.
+      const v = body.help_video_captions
+      const allowed: Record<string, string[]> = {
+        size: ['s', 'm', 'l', 'xl'],
+        background: ['none', 'shaded', 'solid'],
+        position: ['bottom', 'top']
+      }
+      const defaults: Record<string, string> = {
+        size: 'm',
+        background: 'shaded',
+        position: 'bottom'
+      }
+      if (v !== null && (typeof v !== 'object' || Array.isArray(v))) {
+        return reply.code(400).send({
+          error: 'help_video_captions must be an object of size, background and position, or null'
+        })
+      }
+      const out: Record<string, string> = {}
+      for (const [k, val] of Object.entries((v ?? {}) as Record<string, unknown>)) {
+        if (!allowed[k] || typeof val !== 'string' || !allowed[k].includes(val)) {
+          return reply.code(400).send({
+            error:
+              "help_video_captions: size is 's'|'m'|'l'|'xl', background is 'none'|'shaded'|'solid', position is 'bottom'|'top'"
+          })
+        }
+        if (val !== defaults[k]) out[k] = val
+      }
+      patch.help_video_captions = Object.keys(out).length ? out : null
+    }
     if ('traffic_digest' in body) {
       // #1128 — the Traffic Map section of the daily summary (administrators; opt-in).
       const v = body.traffic_digest

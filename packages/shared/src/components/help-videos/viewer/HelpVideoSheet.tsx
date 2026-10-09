@@ -1,5 +1,5 @@
-import { MousePointerClick } from 'lucide-react'
-import { type RefObject, useLayoutEffect, useRef } from 'react'
+import { MousePointerClick, Sparkles } from 'lucide-react'
+import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigation } from '../../../context'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../../ui/sheet'
 import { useHelpVideo, useHelpVideoWalk } from '../api'
@@ -8,8 +8,10 @@ import type { HelpVideoDto } from '../types'
 import { HelpVideoWalkHost } from '../walk/HelpVideoWalk'
 import { startHelpVideoWalk, useCurrentHelpVideoPage } from '../walk/store'
 import { stepMatchesHere } from '../walk/target'
+import { CopyMomentLink } from './CopyMomentLink'
 import { DownloadMenu } from './DownloadMenu'
 import { formatDuration, isGettingReady, visibleChapters } from './format'
+import { resolveMomentStart } from './moments'
 
 export function useHelpVideosPath(): (query?: string) => string {
   const nav = useNavigation()
@@ -27,6 +29,7 @@ export function HelpVideoSheet({
   onPick,
   returnFocusRef,
   startAtMs = null,
+  startChapterId = null,
   showMe = true
 }: {
   videoId: string | null
@@ -40,6 +43,8 @@ export function HelpVideoSheet({
   returnFocusRef?: RefObject<HTMLElement | null>
   /** Start the player here (edited time), e.g. a walk's "Watch this step". */
   startAtMs?: number | null
+  /** Start at this chapter (a moment link's `c`); wins over startAtMs when it exists. */
+  startChapterId?: string | null
   /** Offer "Show me on this page" when the video has steps for this screen. */
   showMe?: boolean
 }) {
@@ -49,6 +54,16 @@ export function HelpVideoSheet({
   const nav = useNavigation()
   const path = useHelpVideosPath()
   const chapters = video?.published ? visibleChapters(video.published.edits) : []
+  const startMs = resolveMomentStart(chapters, video?.duration_ms, startAtMs, startChapterId)
+  // The note stays up while the sheet is open: the first progress beat on the
+  // new version (or a render poll) refetches the video without it.
+  const [kept, setKept] = useState<{ id: string; news: HelpVideoDto['whats_new'] } | null>(null)
+  const live = video?.whats_new ?? null
+  useEffect(() => {
+    if (!open) setKept(null)
+    else if (video && live && kept?.id !== video.id) setKept({ id: video.id, news: live })
+  }, [open, video, live, kept?.id])
+  const news = live ?? (kept && kept.id === videoId ? kept.news : null) ?? null
   const walk = useHelpVideoWalk(showMe && open && video?.published ? videoId : null)
   const pageKey = useCurrentHelpVideoPage()
   const steps = walk.data?.steps ?? []
@@ -95,12 +110,21 @@ export function HelpVideoSheet({
           )}
           {video?.published && (
             <>
+              {news && (
+                <WhatsNewNote
+                  news={news}
+                  onJump={(ms) => {
+                    player.current?.seekEdited(ms)
+                    player.current?.play()
+                  }}
+                />
+              )}
               <HelpVideoPlayer
                 key={video.published.id}
                 video={video}
                 mode='viewer'
                 handleRef={player}
-                startAtMs={startAtMs}
+                startAtMs={startMs}
                 autoPlay
               />
               {showMe && firstHere >= 0 && video && (
@@ -188,16 +212,71 @@ export function HelpVideoSheet({
             >
               All videos
             </button>
-            {video?.published && video.download_urls && (
-              <DownloadMenu
-                urls={video.download_urls}
-                ready={!!video.visibility || video.published.playable !== false}
-                where='sheet'
-              />
-            )}
+            <div className='flex flex-wrap items-center gap-2'>
+              {video?.published && (
+                <CopyMomentLink
+                  videoId={video.id}
+                  chapters={chapters}
+                  currentMs={() => player.current?.editedMs() ?? 0}
+                />
+              )}
+              {video?.published && (video.download_urls || video.transcript_url) && (
+                <DownloadMenu
+                  urls={video.download_urls}
+                  transcript={video.transcript_url}
+                  ready={!!video.visibility || video.published.playable !== false}
+                  where='sheet'
+                />
+              )}
+            </div>
           </div>
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+/** What changed since this person last watched (#1497). */
+function WhatsNewNote({
+  news,
+  onJump
+}: {
+  news: NonNullable<HelpVideoDto['whats_new']>
+  onJump: (ms: number) => void
+}) {
+  const heading =
+    news.kind === 'again'
+      ? 'You are asked to watch this again'
+      : news.whole
+        ? 'This video was re-recorded since you watched it'
+        : 'Updated since you watched it'
+  return (
+    <section
+      aria-label='What changed'
+      className='flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-[13px] dark:border-sky-400/30 dark:bg-sky-400/10'
+      data-hv-whats-new={news.kind}
+    >
+      <Sparkles className='mt-0.5 h-4 w-4 shrink-0 text-sky-700 dark:text-sky-300' aria-hidden />
+      <div className='min-w-0 flex-1 space-y-0.5'>
+        <p className='font-medium text-sky-950 dark:text-sky-100'>{heading}</p>
+        {news.note && (
+          <p className='whitespace-pre-line text-sky-900 dark:text-sky-200' data-hv-whats-new-note>
+            {news.note}
+          </p>
+        )}
+      </div>
+      {news.jump_ms != null && (
+        <button
+          type='button'
+          className='inline-flex h-8 shrink-0 items-center rounded-md border border-sky-300 bg-white px-2.5 text-[12.5px] font-medium text-sky-900 transition-colors duration-150 hover:bg-sky-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none dark:border-sky-400/40 dark:bg-transparent dark:text-sky-100 dark:hover:bg-sky-400/15'
+          onClick={() => onJump(news.jump_ms as number)}
+          data-hv-whats-new-jump={news.jump_ms}
+        >
+          {news.chapter
+            ? `Jump to what changed: ${news.chapter.title}`
+            : `Jump to what changed (${formatDuration(news.jump_ms)})`}
+        </button>
+      )}
+    </section>
   )
 }

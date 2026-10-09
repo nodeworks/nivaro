@@ -16,6 +16,7 @@ import {
   pickDownloadFile,
   safeDownloadName,
   startsDownload,
+  transcriptText,
   videoExtension,
   vttToSrt
 } from '../services/help-video-download.js'
@@ -419,7 +420,11 @@ export async function helpVideosRoutes(app: FastifyInstance) {
   app.post('/:id/publish', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { video } = await loadVideoForUser(req, id)
-    await publishVideo(video, req.user!, (req.body ?? {}) as { watch_again?: boolean })
+    await publishVideo(
+      video,
+      req.user!,
+      (req.body ?? {}) as { watch_again?: boolean; note?: unknown }
+    )
     const fresh = await loadVideoForUser(req, id)
     return reply.send({ data: await serializeVideo(fresh.video, viewerCtx(req, true)) })
   })
@@ -713,6 +718,36 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
         contentDisposition(safeDownloadName(video.title, srt ? 'srt' : 'vtt'))
       )
       .send(srt ? vttToSrt(vtt) : vtt)
+  })
+
+  // A plain-text transcript (#1529) for anyone who can watch: captions with
+  // chapter headings. Not gated by "Allow downloads" — it is reading, not the
+  // video file. Logged like a download (data egress).
+  app.get('/:id/transcript.txt', async (req, reply) => {
+    const { video, version, draft, author, userId } = await resolve(req)
+    const pick = pickStreamFile(version, { author, forceSource: draft })
+    const text = transcriptText(version, video.title, pick?.kind === 'source' ? 'source' : 'edited')
+    if (!text) {
+      return reply
+        .code(404)
+        .send({ error: 'This video has no captions', code: 'HELP_VIDEO_NO_CAPTIONS' })
+    }
+    void logActivity({
+      action: 'help-video-download',
+      user: userId,
+      collection: 'nivaro_help_videos',
+      item: String(video.id).toLowerCase(),
+      comment: `v${Number(version.version)}${draft ? ' (draft)' : ''} · transcript (.txt)`
+    })
+    return reply
+      .header('Cache-Control', 'private, no-cache')
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Content-Type', 'text/plain; charset=utf-8')
+      .header(
+        'Content-Disposition',
+        contentDisposition(safeDownloadName(`${video.title || 'Help video'} transcript`, 'txt'))
+      )
+      .send(text)
   })
 
   // A help-video package (see POST /packages). The link names the admin who

@@ -1,9 +1,19 @@
 import { useQuery } from '@tanstack/react-query'
-import { ExternalLink, Gauge, LayoutDashboard, ListChecks, Table2, X } from 'lucide-react'
+import {
+  ExternalLink,
+  Gauge,
+  LayoutDashboard,
+  ListChecks,
+  PlayCircle,
+  Table2,
+  X
+} from 'lucide-react'
 import { Fragment, type ReactNode, useMemo } from 'react'
-import { useNivaroClient } from '../../context'
+import { useApiFetchConfig, useNavigation, useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
 import { cn, getDisplayTimezone } from '../../lib/utils'
+import { formatDuration } from '../help-videos/viewer/format'
+import { parseMomentUrl } from '../help-videos/viewer/moments'
 import { type MessageToken, splitMessageTokens } from './chat-core'
 import { useLinkPreview } from './chat-hooks'
 
@@ -558,6 +568,89 @@ function AppLinkCard({ path, navigate }: { path: string; navigate?: (u: string) 
   )
 }
 
+interface HelpVideoCardData {
+  kind: 'help-video'
+  id: string
+  title: string
+  duration_ms: number | null
+  poster_url: string | null
+  start_ms: number
+  chapter: { id: string; title: string } | null
+}
+
+/** A link to a moment in a help video (#1501). The server builds the card for
+ *  the READER (same check as watching); someone who may not watch it gets
+ *  null and sees the plain link. A click opens the reader's own videos page,
+ *  whichever app the link was copied from. */
+function HelpVideoLinkCard({
+  search,
+  navigate,
+  fallback
+}: {
+  search: string
+  navigate?: (u: string) => void
+  fallback?: ReactNode
+}) {
+  const client = useNivaroClient()
+  const nav = useNavigation()
+  const { apiBase } = useApiFetchConfig()
+  const origin = apiBase.replace(/\/api$/, '')
+  const path = `${nav.helpVideosPath ?? '/help-videos'}${search}`
+  const { data, isFetched } = useQuery({
+    queryKey: ['nvr-chat-app-card', path],
+    queryFn: () =>
+      client
+        .request<{ data: HelpVideoCardData | null }>(get('/chat/app-card', { path }))
+        .then((r) => (r.data?.kind === 'help-video' ? r.data : null)),
+    staleTime: 60_000,
+    retry: false
+  })
+  if (!data) return isFetched ? <>{fallback}</> : null
+  const startLabel =
+    data.chapter != null
+      ? `Starts at ${data.chapter.title} (${formatDuration(data.start_ms)})`
+      : data.start_ms >= 1000
+        ? `Starts at ${formatDuration(data.start_ms)}`
+        : null
+  return (
+    <button
+      type='button'
+      onClick={() => (navigate ? navigate(path) : nav.navigate(path))}
+      className='flex w-full max-w-[320px] items-center gap-2.5 rounded-lg border border-slate-200 bg-white p-1.5 pr-2.5 text-left text-slate-700 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-200'
+      data-chat-app-card='help-video'
+      data-chat-help-video={data.id}
+    >
+      <span className='relative h-12 w-20 shrink-0 overflow-hidden rounded bg-[#0b0f17]'>
+        {data.poster_url && (
+          <img
+            src={`${origin}${data.poster_url}`}
+            alt=''
+            className='h-full w-full object-cover'
+            loading='lazy'
+          />
+        )}
+        <PlayCircle className='absolute left-1/2 top-1/2 h-5 w-5 -translate-x-1/2 -translate-y-1/2 text-white drop-shadow' />
+      </span>
+      <span className='min-w-0 flex-1'>
+        <span className='block text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+          Video{data.duration_ms ? ` · ${formatDuration(data.duration_ms)}` : ''}
+        </span>
+        <span className='block truncate text-[12px] font-medium'>
+          {data.title || 'Untitled video'}
+        </span>
+        {startLabel && (
+          <span
+            className='block truncate text-[11px] text-slate-500 dark:text-slate-400'
+            data-chat-help-video-start={data.start_ms}
+          >
+            {startLabel}
+          </span>
+        )}
+      </span>
+    </button>
+  )
+}
+
 function ExternalLinkCard({ url }: { url: string }) {
   const p = useLinkPreview(url)
   if (!p?.ok) return null
@@ -600,6 +693,19 @@ export function LinkPreviews({
     <div className='group/prev relative mt-1 space-y-1' data-chat-previews>
       {urls.map((u) => {
         const inApp = appPath(u)
+        // A help-video moment link from ANY app (the videos page path differs
+        // per host): the reader's server decides whether they get a card.
+        const moment = parseMomentUrl(u)
+        if (moment) {
+          return (
+            <HelpVideoLinkCard
+              key={u}
+              search={moment.search}
+              navigate={navigate}
+              fallback={inApp ? null : <ExternalLinkCard url={u} />}
+            />
+          )
+        }
         return inApp ? (
           <AppLinkCard key={u} path={inApp} navigate={navigate} />
         ) : (
