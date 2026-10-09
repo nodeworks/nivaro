@@ -12,7 +12,7 @@ import {
   XAxis,
   YAxis
 } from 'recharts'
-import { useOptionalNivaroClient } from '../../context'
+import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { cn } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
 
@@ -196,7 +196,9 @@ export function renderInline(text: string, autolink = false): ReactNode[] {
       )
     else if (tok.startsWith('[')) {
       const lm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok)
-      if (lm && /^(https?:\/\/|\/)/.test(lm[2]))
+      if (lm && /^\/(?!\/)/.test(lm[2]))
+        out.push(<InAppLink key={k++} href={lm[2]} label={lm[1]} />)
+      else if (lm && /^https?:\/\//.test(lm[2]))
         out.push(
           <a
             key={k++}
@@ -214,6 +216,46 @@ export function renderInline(text: string, autolink = false): ReactNode[] {
   }
   if (last < text.length) out.push(plain(text.slice(last)))
   return out
+}
+
+/**
+ * A link to a page of THIS app (a path, e.g. Ask AI citing a help video
+ * moment `/help-videos?watch=…&t=42`): navigates through the host's router
+ * instead of opening a new tab. `/help-videos` follows the host's
+ * NavigationContext.helpVideosPath when it mounts the library elsewhere.
+ * Ctrl/⌘/middle click keep the browser's own new-tab behaviour.
+ */
+export function inAppHref(href: string, helpVideosPath?: string): string {
+  if (helpVideosPath && helpVideosPath !== '/help-videos' && /^\/help-videos(?=[?#/]|$)/.test(href))
+    return `${helpVideosPath}${href.slice('/help-videos'.length)}`
+  return href
+}
+
+function InAppLink({ href, label }: { href: string; label: string }) {
+  const nav = useNavigation()
+  const to = inAppHref(href, nav.helpVideosPath)
+  return (
+    <a
+      href={to}
+      data-ai-link='in-app'
+      className='underline underline-offset-2'
+      onClick={(e) => {
+        if (
+          e.defaultPrevented ||
+          e.button !== 0 ||
+          e.metaKey ||
+          e.ctrlKey ||
+          e.shiftKey ||
+          e.altKey
+        )
+          return
+        e.preventDefault()
+        nav.navigate(to)
+      }}
+    >
+      {label}
+    </a>
+  )
 }
 
 function TableBlock({

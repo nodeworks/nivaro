@@ -98,6 +98,33 @@ describe('test context', () => {
     await expect(ctx.invoke('GET', '/api/demo/nothing')).rejects.toThrow(/no route GET/)
   })
 
+  it('records help-video pages, starter packages and their screens (#1514)', async () => {
+    const ctx = createTestContext()
+    await defineExtension({
+      id: 'videos-demo',
+      register(c) {
+        c.helpVideos.declarePage({ key: 'orders.board', label: 'Orders board', app: 'admin' })
+        c.helpVideos.registerStarter({
+          package: 'videos/starters.tar',
+          contexts: [{ kind: 'collection', key: 'orders' }]
+        })
+        c.helpVideos.addContexts('11111111-1111-4111-8111-111111111111', [
+          { kind: 'collection', key: 'orders', state_key: 'review' }
+        ])
+      }
+    }).register(ctx)
+    expect(ctx.registered.helpVideos.pages).toEqual([
+      { key: 'orders.board', label: 'Orders board', app: 'admin' }
+    ])
+    expect(ctx.registered.helpVideos.starters.map((s) => s.package)).toEqual([
+      'videos/starters.tar'
+    ])
+    expect(ctx.registered.helpVideos.contexts[0]).toEqual({
+      videoId: '11111111-1111-4111-8111-111111111111',
+      contexts: [{ kind: 'collection', key: 'orders', state_key: 'review' }]
+    })
+  })
+
   it('the in-memory db supports the chain extensions use', async () => {
     const db = createTestDb({
       tables: {

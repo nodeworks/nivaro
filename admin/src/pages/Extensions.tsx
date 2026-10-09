@@ -1280,6 +1280,7 @@ const REGISTRATION_LABELS: Record<string, string> = {
   traffic_nodes: 'Traffic Map nodes',
   config_seeds: 'Config seeds',
   schema_steps: 'Schema steps (declared)',
+  help_videos: 'Help videos (pages, starters)',
   flow_operations: 'Flow operations',
   flow_triggers: 'Flow triggers',
   note_sources: 'Notes sources',

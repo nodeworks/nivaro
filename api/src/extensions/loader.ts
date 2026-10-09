@@ -79,6 +79,13 @@ export type {
   FlowTriggerRegistration
 } from '@nivaro/extension-kit'
 
+import {
+  addHelpVideoStarterContexts,
+  applyExtensionHelpVideos,
+  clearHelpVideoRegistrations,
+  declareHelpVideoPage,
+  registerHelpVideoStarter
+} from '../services/help-video-starters.js'
 import { registerTrafficNode, type TrafficNodeDef } from '../services/traffic-taps/nodes.js'
 export type Extension = ExtensionDefinition
 
@@ -550,9 +557,11 @@ export function registrationMembers(
     cronPrefix: string
     /** Run long SQL on the handed-in (tenant) connection, not the default pool. */
     runLongOnTenant?: boolean
+    /** The extension's folder — starter help-video packages resolve inside it. */
+    extDir?: string
   }
 ): Omit<ExtensionContext, 'app' | 'database' | 'logger' | 'settings' | 'cloud'> {
-  const { note, own, cronPrefix, runLongOnTenant } = opts
+  const { note, own, cronPrefix, runLongOnTenant, extDir } = opts
   return {
     events: {
       publish: (eventType, payload) => {
@@ -849,6 +858,40 @@ export function registrationMembers(
         declareSchemaStep(extId, { id, ...def })
       }
     },
+    // #1514: a bad declaration is logged and skipped, never a throw out of
+    // register(); the writes happen after register() returns.
+    helpVideos: {
+      declarePage: (def) => {
+        note('help-videos')
+        try {
+          const key = declareHelpVideoPage(extId, def)
+          own('help_videos', `page ${key} · ${def.label}`)
+        } catch (err) {
+          console.warn(`[extensions] ${extId}: help-video page skipped —`, (err as Error).message)
+        }
+      },
+      registerStarter: (def) => {
+        note('help-videos')
+        try {
+          const file = registerHelpVideoStarter(extId, extDir, def)
+          own('help_videos', `starter ${file}`)
+        } catch (err) {
+          console.warn(`[extensions] ${extId}: starter videos skipped —`, (err as Error).message)
+        }
+      },
+      addContexts: (videoId, contexts) => {
+        note('help-videos')
+        try {
+          const id = addHelpVideoStarterContexts(extId, videoId, contexts)
+          own('help_videos', `screens for ${id} · ${contexts.length}`)
+        } catch (err) {
+          console.warn(
+            `[extensions] ${extId}: help-video screens skipped —`,
+            (err as Error).message
+          )
+        }
+      }
+    },
     chain: buildChainContext(),
     integrations: {
       // #1114 (spread: the member is typed in the kit source; a build of the kit is not needed)
@@ -1117,6 +1160,7 @@ async function loadExtension(
     | 'tuning'
     | 'seeds'
     | 'schema'
+    | 'helpVideos'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1182,6 +1226,7 @@ async function loadExtension(
 
     const extId = ext.id
     extensionRoutes.delete(extId)
+    clearHelpVideoRegistrations(extId)
 
     // Capability manifest (#660): the ctx members register() touches are noted
     // as observed capabilities, compared against the declared list in the UI.
@@ -1201,7 +1246,12 @@ async function loadExtension(
         get: async (key: string) => (await readExtensionSettings(extId))[key] ?? null,
         getAll: () => readExtensionSettings(extId)
       },
-      ...registrationMembers(extId, ctx, { note, own, cronPrefix: `ext:${extId}:` })
+      ...registrationMembers(extId, ctx, {
+        note,
+        own,
+        cronPrefix: `ext:${extId}:`,
+        extDir: dirPath
+      })
     }
 
     await ext.register(withDeprecationWarnings(extId, scopedCtx, scopedCtx.logger))
@@ -1209,6 +1259,9 @@ async function loadExtension(
     // migration lock (#826) — a failure is recorded, logged and does not
     // stop the extension loading: its readiness check says what is wrong.
     await runSchemaSteps(extId, ctx.database, { logger: scopedCtx.logger })
+    // Help-video pages + starter videos (#1514): in the background — an
+    // import probes media and must never hold up the boot.
+    if (enabled) void applyExtensionHelpVideos(extId, scopedCtx.logger)
 
     // Respect initial enabled state from config
     if (!enabled) {
@@ -1331,6 +1384,7 @@ export async function loadExtensions(
     | 'tuning'
     | 'seeds'
     | 'schema'
+    | 'helpVideos'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1484,6 +1538,7 @@ export async function loadCloudExtensions(
     | 'tuning'
     | 'seeds'
     | 'schema'
+    | 'helpVideos'
     | 'integrations'
     | 'integrity'
     | 'mail'
@@ -1541,7 +1596,8 @@ export async function loadCloudExtensions(
           note: (cap) => noteCapability(extId, cap),
           own: (kind, label) => recordRegistration(extId, kind, label),
           cronPrefix: `cloud-ext:${extId}:`,
-          runLongOnTenant: true
+          runLongOnTenant: true,
+          extDir: dirPath
         })
       }
 
@@ -1671,6 +1727,7 @@ export async function scanNewExtensions(
     | 'tuning'
     | 'seeds'
     | 'schema'
+    | 'helpVideos'
     | 'integrations'
     | 'integrity'
     | 'mail'

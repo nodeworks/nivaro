@@ -15,6 +15,7 @@ export {
   watchDeprecatedMembers
 } from './deprecations.js'
 export type * from './flows.js'
+export type * from './help-videos.js'
 export type * from './hooks.js'
 export type * from './imports.js'
 export type * from './notifications.js'

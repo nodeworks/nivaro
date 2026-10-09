@@ -78,6 +78,11 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Content Promotion → Help videos moves published videos to another instance: record and polish on staging, then bring them to production. Export packages the chosen videos (each one’s published version with its edits, chapters and captions, the recording, the render, captions and poster, and where it shows) into one file. On the other instance, Choose package uploads it, checks it and shows what applying it would do before anything is written. A video keeps its id, so a later package of the same video adds a new version there instead of a second video. Who can watch and required viewing do not travel, because role ids differ between instances: a new video arrives published but visible to authors only until someone chooses who can watch, and an updated one keeps its settings there. Screens on a collection or step that does not exist there are listed and skipped, and the render is reused when it matches the edits, otherwise the video is rendered after the import. Administrators only, on both ends.'
     },
+    { type: 'h3', text: 'Ask AI answers with a video' },
+    {
+      type: 'p',
+      text: 'Ask AI searches the videos the person asking may watch — published videos only, by the same who-can-watch rules as the library — when a question is about how to do something in the app. It looks in titles, chapter names, the captions and descriptions, best matches first (title, then chapter, then caption, then description), and cites a video as a link such as "Watch 0:42 of How to submit to warehouse" that opens the player at that moment. A draft or a video the person may not watch is never offered. Extensions can ship starter videos of their own (see Extension Development → Help videos).'
+    },
     { type: 'h3', text: 'Stats' },
     {
       type: 'p',

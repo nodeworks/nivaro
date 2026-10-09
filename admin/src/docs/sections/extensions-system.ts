@@ -130,6 +130,31 @@ export default defineExtension({
         'The ledger is per database (RUNTIME in the config inventory) — a step runs once on every database the extension boots against, including a fresh one at cutover.'
       ]
     },
+    { type: 'h3', id: 'ext-overview-help-videos', text: 'Help videos' },
+    {
+      type: 'p',
+      text: "`ctx.helpVideos` lets an extension ship help videos with itself. `declarePage({ key, label, app })` names a page key in the registry the Videos button and the editor's Where picker use, so authors can place a video on the extension's own screens before anyone has opened them. `registerStarter({ package, ids, contexts })` points at a help-video package inside the extension folder — the file Content Promotion → Help videos exports — and `addContexts(videoId, contexts)` adds screens (a collection, a collection at one pipeline step, or a page) to one video of it."
+    },
+    {
+      type: 'pre',
+      code: `ctx.helpVideos.declarePage({ key: 'acme.orders.board', label: 'Orders board', app: 'admin' })
+ctx.helpVideos.registerStarter({
+  package: 'videos/starters.tar',             // relative to the extension folder
+  contexts: [{ kind: 'page', key: 'acme.orders.board' }]
+})
+ctx.helpVideos.addContexts('6f1c…', [{ kind: 'collection', key: 'orders', state_key: 'review' }])`
+    },
+    {
+      type: 'ul',
+      items: [
+        'A starter video is imported once per database, after `register()` returns and in the background, as a DRAFT: never published, visible to authors only, never required viewing, rendered only when someone publishes it. An author reviews it, chooses who can watch and publishes it.',
+        'The import runs the same checks as an administrator importing the package (manifest, sizes, checksums, media probes, edits re-normalized). Screens on a collection or step this instance does not have are skipped.',
+        'A video id that already exists here is left alone, and so is one that was imported once and deleted since: each import leaves a `help-video-starter-import` activity row naming the video, and a later boot reads it and does nothing.',
+        'The package path must stay inside the extension folder — an absolute path, `..`, or a link that leads outside is refused. A bad declaration is logged and skipped; it never stops the extension loading.',
+        'Music uploaded to a starter video is dropped (an uploaded music file needs an owner); library music is kept when this instance has the track.',
+        'Self-hosted only for now: in cloud mode the declarations are recorded on the registry sheet but nothing is written. Every declaration appears on the Extensions registry sheet under Help videos; `createTestContext()` records them under `registered.helpVideos`.'
+      ]
+    },
     { type: 'h3', id: 'ext-overview-kit', text: 'The extension kit' },
     {
       type: 'p',

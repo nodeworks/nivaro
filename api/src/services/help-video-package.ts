@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { appendFile, mkdir, open, readdir, rm, stat } from 'node:fs/promises'
+import { appendFile, copyFile, mkdir, open, readdir, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -651,66 +651,74 @@ export async function previewImport(user: User, id: string): Promise<ImportPrevi
   if (s.busy) throw fail(409, 'HELP_VIDEO_IMPORT_BUSY', 'This import is still working')
   s.busy = true
   try {
-    if (!s.checked) {
-      const tarPath = join(s.dir, 'package.tar')
-      if (!s.bytes) throw new PackageError('Nothing was uploaded')
-      let entries: TarEntry[]
-      try {
-        entries = await listTar(tarPath, 1000)
-      } catch (err) {
-        throw new PackageError((err as Error).message)
-      }
-      const manifestEntry = entries.find((e) => e.name === MANIFEST_ENTRY)
-      if (!manifestEntry) throw new PackageError('The package has no manifest (is it complete?)')
-      let raw: unknown
-      try {
-        raw = JSON.parse(
-          (await readTarEntry(tarPath, manifestEntry, MANIFEST_MAX_BYTES)).toString('utf8')
-        )
-      } catch {
-        throw new PackageError('The package manifest is not readable')
-      }
-      const sizes = new Map<string, number>()
-      for (const e of entries) if (e.name !== MANIFEST_ENTRY) sizes.set(e.name, e.size)
-      const checked = checkManifest(raw, sizes)
-      const byName = new Map(entries.map((e) => [e.name, e]))
-      const ok: PackageVideo[] = []
-      for (const v of checked.videos) {
-        const reasons: string[] = []
-        for (const role of FILE_ROLES) {
-          const f = v.files[role]
-          if (!f) continue
-          try {
-            const path = await extractEntry(s, byName.get(f.entry) as TarEntry, f)
-            const bad = await checkMedia(s, role, f, path)
-            if (bad) reasons.push(bad)
-          } catch (err) {
-            reasons.push((err as Error).message)
-          }
-        }
-        // The probed recording wins over what the package says about it.
-        const probe = v.files.source ? s.probes.get(v.files.source.entry) : undefined
-        if (probe) {
-          v.width = probe.width ?? v.width
-          v.height = probe.height ?? v.height
-        }
-        if (reasons.length) checked.rejected.push({ id: v.id, title: v.title, reasons })
-        else ok.push(v)
-      }
-      checked.videos = ok
-      s.checked = checked
-      // The archive is no longer needed: every usable file is extracted.
-      await rm(tarPath, { force: true })
-    }
+    await checkPackage(s)
+    const checked = s.checked as unknown as CheckedManifest
     return {
       id: s.id,
-      source: s.checked.source,
-      exported_at: s.checked.exported_at,
+      source: checked.source,
+      exported_at: checked.exported_at,
       bytes: s.bytes,
       videos: await plan(s)
     }
   } finally {
     s.busy = false
+  }
+}
+
+/** Reads and checks a session's package once: manifest, then every file a
+ *  video needs (extracted, checksummed, probed). Videos with a bad file move
+ *  to `rejected`. The archive is deleted afterwards. */
+async function checkPackage(s: ImportSession): Promise<void> {
+  if (!s.checked) {
+    const tarPath = join(s.dir, 'package.tar')
+    if (!s.bytes) throw new PackageError('Nothing was uploaded')
+    let entries: TarEntry[]
+    try {
+      entries = await listTar(tarPath, 1000)
+    } catch (err) {
+      throw new PackageError((err as Error).message)
+    }
+    const manifestEntry = entries.find((e) => e.name === MANIFEST_ENTRY)
+    if (!manifestEntry) throw new PackageError('The package has no manifest (is it complete?)')
+    let raw: unknown
+    try {
+      raw = JSON.parse(
+        (await readTarEntry(tarPath, manifestEntry, MANIFEST_MAX_BYTES)).toString('utf8')
+      )
+    } catch {
+      throw new PackageError('The package manifest is not readable')
+    }
+    const sizes = new Map<string, number>()
+    for (const e of entries) if (e.name !== MANIFEST_ENTRY) sizes.set(e.name, e.size)
+    const checked = checkManifest(raw, sizes)
+    const byName = new Map(entries.map((e) => [e.name, e]))
+    const ok: PackageVideo[] = []
+    for (const v of checked.videos) {
+      const reasons: string[] = []
+      for (const role of FILE_ROLES) {
+        const f = v.files[role]
+        if (!f) continue
+        try {
+          const path = await extractEntry(s, byName.get(f.entry) as TarEntry, f)
+          const bad = await checkMedia(s, role, f, path)
+          if (bad) reasons.push(bad)
+        } catch (err) {
+          reasons.push((err as Error).message)
+        }
+      }
+      // The probed recording wins over what the package says about it.
+      const probe = v.files.source ? s.probes.get(v.files.source.entry) : undefined
+      if (probe) {
+        v.width = probe.width ?? v.width
+        v.height = probe.height ?? v.height
+      }
+      if (reasons.length) checked.rejected.push({ id: v.id, title: v.title, reasons })
+      else ok.push(v)
+    }
+    checked.videos = ok
+    s.checked = checked
+    // The archive is no longer needed: every usable file is extracted.
+    await rm(tarPath, { force: true })
   }
 }
 
@@ -738,10 +746,14 @@ const EXT: Record<string, string> = {
 
 async function applyOne(
   s: ImportSession,
-  user: User,
+  actor: User | null,
   v: PackageVideo,
-  pages: PackagePage[]
+  pages: PackagePage[],
+  opts: { asDraft?: boolean } = {}
 ): Promise<ImportResult> {
+  // A starter video (#1514) is imported by the system: nobody is the actor.
+  const user = (actor ?? { id: null }) as User
+  const asDraft = opts.asDraft === true
   const created: string[] = []
   const ids: Partial<Record<FileRole, string>> = {}
   const short = v.id.slice(0, 8)
@@ -752,6 +764,8 @@ async function applyOne(
       // A music file this video already has here is not stored twice.
       if (role === 'music' && v.edits.music && (await videoMusicRow(v.id, v.edits.music.track)))
         continue
+      // An uploaded music row needs an owner: a system import drops the music.
+      if (role === 'music' && !actor) continue
       const path = s.extracted.get(f.entry)
       if (!path) throw new Error(`The ${role} file is no longer here`)
       const file = await uploadFileFromPath(
@@ -772,7 +786,10 @@ async function applyOne(
   // their hash and a packaged render stay as they are), else gets a new one.
   let edits: VideoEdits = v.edits
   let musicRow: Record<string, unknown> | null = null
-  if (edits.music?.source === 'library' && !(await libraryTrackFile(edits.music.track))) {
+  if (
+    (edits.music?.source === 'library' && !(await libraryTrackFile(edits.music.track))) ||
+    (edits.music?.source === 'upload' && !actor)
+  ) {
     const { music: _drop, ...rest } = edits
     edits = { ...rest, segments: rest.segments.map(({ music: _m, ...seg }) => seg) }
   } else if (edits.music?.source === 'upload' && ids.music && v.files.music) {
@@ -816,13 +833,15 @@ async function applyOne(
         .first()
       number = Number(max?.m ?? 0) + 1
       const authorsOnly = withDownloads({ mode: 'roles', role_ids: [] }, v.allow_downloads)
+      // A starter never touches a video that is already here.
+      if (existing && asDraft) throw new Error('A video with this id is already here')
       if (!existing) {
         await trx('nivaro_help_videos').insert({
           id: v.id,
           title: v.title,
           description: v.description,
           category: v.category,
-          status: 'published',
+          status: asDraft ? 'draft' : 'published',
           visibility: authorsOnly,
           created_by: user.id,
           updated_by: user.id,
@@ -857,15 +876,17 @@ async function applyOne(
         created_by: user.id,
         created_at: now
       })
-      const patch: Record<string, unknown> = {
-        title: v.title,
-        description: v.description,
-        category: v.category,
-        published_version_id: versionId,
-        duration_ms: editedDuration(edits),
-        updated_by: user.id,
-        updated_at: now
-      }
+      const patch: Record<string, unknown> = asDraft
+        ? { draft_version_id: versionId, updated_by: user.id, updated_at: now }
+        : {
+            title: v.title,
+            description: v.description,
+            category: v.category,
+            published_version_id: versionId,
+            duration_ms: editedDuration(edits),
+            updated_by: user.id,
+            updated_at: now
+          }
       if (ids.poster) patch.poster_file = ids.poster
       if (existing && existing.status !== 'archived') {
         if (!existing.published_version_id) {
@@ -912,20 +933,23 @@ async function applyOne(
     for (const f of created) await discardFile(user, f)
     throw err
   }
-  if (!reusable) await queueRender(versionId)
+  // A draft renders when it is published.
+  if (!reusable && !asDraft) await queueRender(versionId)
   await logActivity({
     action: 'help-video-import',
     user: user.id,
     collection: 'nivaro_help_videos',
     item: v.id,
-    comment: `${outcome} v${number} from ${s.checked?.source.instance ?? 'a package'} · render ${reusable ? 'reused' : 'queued'}${skipped.length ? ` · ${skipped.length} screen(s) skipped` : ''}`
+    comment: asDraft
+      ? `created v${number} as a draft from ${s.checked?.source.instance ?? 'a package'}${skipped.length ? ` · ${skipped.length} screen(s) skipped` : ''}`
+      : `${outcome} v${number} from ${s.checked?.source.instance ?? 'a package'} · render ${reusable ? 'reused' : 'queued'}${skipped.length ? ` · ${skipped.length} screen(s) skipped` : ''}`
   })
   return {
     id: v.id,
     title: v.title,
     outcome,
     version: number,
-    render: reusable ? 'reused' : 'queued',
+    ...(asDraft ? {} : { render: reusable ? ('reused' as const) : ('queued' as const) }),
     contexts_added: added,
     contexts_skipped: skipped.length
   }
@@ -977,4 +1001,91 @@ export async function applyImport(
       .slice(0, 1000)
   })
   return { results }
+}
+
+// ── Starter packages (#1514) ───────────────────────────────────────────────
+
+/** The video ids a package's manifest names (lower case), read from the tar
+ *  headers and the manifest alone — nothing is extracted. */
+export async function packageVideoIds(tarPath: string): Promise<string[]> {
+  const entries = await listTar(tarPath, 1000)
+  const m = entries.find((e) => e.name === MANIFEST_ENTRY)
+  if (!m) throw new PackageError('The package has no manifest (is it complete?)')
+  let raw: unknown
+  try {
+    raw = JSON.parse((await readTarEntry(tarPath, m, MANIFEST_MAX_BYTES)).toString('utf8'))
+  } catch {
+    throw new PackageError('The package manifest is not readable')
+  }
+  const videos = (raw as { videos?: Array<{ id?: unknown }> })?.videos
+  if (!Array.isArray(videos)) return []
+  return videos.map((v) => low(v?.id)).filter((id) => UUID_RE.test(id))
+}
+
+/** Imports the given videos of a package file as DRAFTS by the system (no
+ *  actor): never published, authors only, no required viewing, no render
+ *  until someone publishes. Same checks as an admin import (manifest, sizes,
+ *  checksums, media probes, edits re-normalized and re-hashed). A video id
+ *  that already exists is left alone (reported failed). `extraContexts`
+ *  adds screens to a video beside the package's own; unknown collections and
+ *  states are skipped like the package's. The package file is copied, never
+ *  modified. */
+export async function importStarterPackage(
+  tarPath: string,
+  opts: { onlyIds: string[]; extraContexts?: (videoId: string) => PackageContext[] }
+): Promise<ImportResult[]> {
+  const st = await stat(tarPath)
+  if (st.size > maxPackageBytes()) {
+    throw new PackageError(
+      `Packages may be at most ${Math.round(maxPackageBytes() / 1024 / 1024)} MB`
+    )
+  }
+  const id = randomUUID()
+  const dir = sessionDir(id)
+  await mkdir(dir, { recursive: true })
+  const s: ImportSession = {
+    id,
+    user: 'SYSTEM',
+    dir,
+    next_part: 0,
+    last_part_bytes: null,
+    bytes: st.size,
+    created: Date.now(),
+    busy: true,
+    checked: null,
+    extracted: new Map(),
+    probes: new Map()
+  }
+  const pick = new Set(opts.onlyIds.map(low))
+  const results: ImportResult[] = []
+  try {
+    await copyFile(tarPath, join(dir, 'package.tar'))
+    await checkPackage(s)
+    const checked = s.checked as unknown as CheckedManifest
+    for (const r of checked.rejected) {
+      if (pick.has(low(r.id)))
+        results.push({ id: r.id, title: r.title, outcome: 'failed', error: r.reasons.join('; ') })
+    }
+    for (const v of checked.videos) {
+      if (!pick.has(v.id)) continue
+      const extra = opts.extraContexts?.(v.id) ?? []
+      if (extra.length) {
+        const have = new Set(v.contexts.map(contextSig))
+        v.contexts = [...v.contexts, ...extra.filter((c) => !have.has(contextSig(c)))]
+      }
+      try {
+        results.push(await applyOne(s, null, v, checked.pages, { asDraft: true }))
+      } catch (err) {
+        results.push({
+          id: v.id,
+          title: v.title,
+          outcome: 'failed',
+          error: (err as Error).message.slice(0, 300)
+        })
+      }
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+  return results
 }

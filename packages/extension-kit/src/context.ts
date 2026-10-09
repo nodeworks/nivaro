@@ -1,6 +1,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { Knex } from 'knex'
 import type { FlowOpRegistration, FlowTriggerRegistration } from './flows.js'
+import type { HelpVideoContextDecl, HelpVideoPageDecl, HelpVideoStarterDef } from './help-videos.js'
 import type { ExtensionHookHandler, HookAction } from './hooks.js'
 import type { ImportProcessorDef } from './imports.js'
 import type {
@@ -232,6 +233,17 @@ export interface ExtensionContext {
   /** A versioned schema change the extension owns, run at load under the
    *  migration lock and recorded once per database (#826). */
   schema: { step(id: string, def: Omit<SchemaStepDef, 'id'>): void }
+  /** Help videos (#1514): page keys for the Videos button, starter videos
+   *  shipped with the extension, and screens to show them on. */
+  helpVideos: {
+    /** Name a page key (and its label) in the page registry authors pick from. */
+    declarePage(def: HelpVideoPageDecl): void
+    /** A package of starter videos, imported once per database as drafts. */
+    registerStarter(def: HelpVideoStarterDef): void
+    /** More screens for one starter video (by its id in a registered package),
+     *  added when it is imported. */
+    addContexts(videoId: string, contexts: HelpVideoContextDecl[]): void
+  }
   chain: {
     /** Start a chain for one feed event (e.g. one shipment) and run fn inside it. */
     begin<T>(root: { source: string; ref: string }, fn: () => Promise<T>): Promise<T>

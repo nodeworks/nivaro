@@ -25,6 +25,7 @@ import {
   watchDeprecatedMembers
 } from './deprecations.js'
 import type { FlowOpRegistration, FlowTriggerRegistration } from './flows.js'
+import type { HelpVideoContextDecl, HelpVideoPageDecl, HelpVideoStarterDef } from './help-videos.js'
 import type { ExtensionHookContext, ExtensionHookHandler, HookAction, HookTiming } from './hooks.js'
 import type { ImportProcessorDef } from './imports.js'
 import type {
@@ -430,6 +431,12 @@ export interface TestContext extends ExtensionContext {
     tuningObservers: TuningObserverDef[]
     seeds: ConfigSeedDef[]
     schemaSteps: SchemaStepDef[]
+    /** ctx.helpVideos: declared pages, starter packages, extra screens per starter video. */
+    helpVideos: {
+      pages: HelpVideoPageDecl[]
+      starters: HelpVideoStarterDef[]
+      contexts: Array<{ videoId: string; contexts: HelpVideoContextDecl[] }>
+    }
     obligationKinds: ObligationKindDef[]
     signals: IntegrationSignal[]
     signalActions: SignalActionHandler[]
@@ -542,6 +549,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     tuningObservers: [],
     seeds: [],
     schemaSteps: [],
+    helpVideos: { pages: [], starters: [], contexts: [] },
     obligationKinds: [],
     signals: [],
     signalActions: [],
@@ -719,6 +727,11 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     tuning: { registerObserver: (d) => registered.tuningObservers.push(d) },
     seeds: { register: (d) => registered.seeds.push(d) },
     schema: { step: (id, d) => registered.schemaSteps.push({ id, ...d }) },
+    helpVideos: {
+      declarePage: (d) => registered.helpVideos.pages.push(d),
+      registerStarter: (d) => registered.helpVideos.starters.push(d),
+      addContexts: (videoId, contexts) => registered.helpVideos.contexts.push({ videoId, contexts })
+    },
     chain: {
       begin: async (_root, fn) => fn(),
       current: () => null,
