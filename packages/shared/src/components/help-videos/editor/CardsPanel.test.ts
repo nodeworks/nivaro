@@ -99,23 +99,28 @@ describe('CardsPanel motion controls', () => {
 })
 
 describe('CardsPanel logo notice', () => {
-  it('tells an admin there is no logo and uploads one', async () => {
-    h.upload.mockResolvedValue({ id: 'F1' })
+  it('tells an admin there is no logo and stores the image in the setting', async () => {
     h.request.mockResolvedValue({})
     mount(setIntro(base, {}))
     expect(q('[data-hv-logo-missing]')).not.toBeNull()
     const input = host.querySelector('[data-hv-logo-missing] input[type=file]') as HTMLInputElement
-    const file = new File(['x'], 'logo.svg', { type: 'image/svg+xml' })
+    const file = new File(['<svg xmlns="http://www.w3.org/2000/svg"/>'], 'logo.svg', {
+      type: 'image/svg+xml'
+    })
     Object.defineProperty(input, 'files', { value: [file] })
     await act(async () => {
       input.dispatchEvent(new Event('change', { bubbles: true }))
+      await new Promise((r) => setTimeout(r, 20))
     })
-    expect(h.upload).toHaveBeenCalledWith(file)
+    // The image itself, not an uploaded file: it travels with the settings.
+    expect(h.upload).not.toHaveBeenCalled()
     expect(h.request).toHaveBeenCalledWith(
       expect.objectContaining({
         _method: 'PATCH',
         _path: '/settings',
-        _body: { help_video_card_logo: 'F1' }
+        _body: {
+          help_video_card_logo_image: expect.stringMatching(/^data:image\/svg\+xml;base64,/)
+        }
       })
     )
     expect(h.toastSuccess).toHaveBeenCalled()
@@ -127,7 +132,7 @@ describe('CardsPanel logo notice', () => {
       input.dispatchEvent(new Event('change', { bubbles: true }))
     })
   }
-  it('refuses a logo the render could not draw, before uploading it', async () => {
+  it('refuses a logo the render could not draw, before saving it', async () => {
     mount(setIntro(base, {}))
     await pick(new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' }))
     await pick(new File(['%PDF'], 'logo.pdf', { type: 'application/pdf' }))
@@ -137,18 +142,12 @@ describe('CardsPanel logo notice', () => {
       expect.stringMatching(/PNG, JPEG, GIF, WebP or SVG/)
     ])
   })
-  it('removes the uploaded file when the logo cannot be set', async () => {
-    h.upload.mockResolvedValue({ id: 'F2' })
-    h.request.mockImplementation(async (c: { _method: string }) => {
-      if (c._method === 'PATCH') throw new Error('nope')
-      return {}
-    })
+  it('says so when the logo cannot be saved', async () => {
+    h.request.mockRejectedValue(new Error('nope'))
     mount(setIntro(base, {}))
-    await pick(new File(['x'], 'logo.svg', { type: 'image/svg+xml' }))
-    expect(h.request).toHaveBeenCalledWith(
-      expect.objectContaining({ _method: 'DELETE', _path: '/files/F2' })
-    )
-    expect(h.toastError).toHaveBeenCalled()
+    await pick(new File(['<svg/>'], 'logo.svg', { type: 'image/svg+xml' }))
+    await act(async () => void (await new Promise((r) => setTimeout(r, 20))))
+    expect(h.toastError).toHaveBeenCalledWith(expect.stringMatching(/card logo/))
   })
   it('points everyone else to Settings', () => {
     h.isAdmin = false

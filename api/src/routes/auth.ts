@@ -19,6 +19,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api-logger.js'
 import { logActivity } from '../services/activity.js'
+import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import { recordLogin } from '../services/security.js'
 import { canSignIn, findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
@@ -172,17 +173,41 @@ export async function authRoutes(app: FastifyInstance) {
   // (default 'Microsoft' for backwards compatibility).
   /** Public branding (#21): what the login page needs before anyone is
    *  authenticated. Only display values — never configuration. */
+  /** The help-video cards' own logo (public, like the rest of the branding):
+   *  the image stored in the setting. `?v=` changes with the image, so it can
+   *  be cached for good. Sandboxed so an SVG opened on its own runs nothing. */
+  app.get('/branding/card-logo', async (req, reply) => {
+    const has = await hasColumn('nivaro_settings', 'help_video_card_logo_image').catch(() => false)
+    const row = has
+      ? ((await db('nivaro_settings')
+          .where({ id: 1 })
+          .first('help_video_card_logo_image')
+          .catch(() => undefined)) as Record<string, unknown> | undefined)
+      : undefined
+    const logo = parseCardLogo(row?.help_video_card_logo_image)
+    if (!logo) return reply.code(404).send({ error: 'No card logo', code: 'NOT_FOUND' })
+    const versioned = !!(req.query as { v?: string }).v
+    return reply
+      .header('Content-Type', logo.type)
+      .header('Content-Security-Policy', "default-src 'none'; style-src 'unsafe-inline'; sandbox")
+      .header('X-Content-Type-Options', 'nosniff')
+      .header('Cache-Control', versioned ? 'public, max-age=31536000, immutable' : 'no-cache')
+      .send(logo.bytes)
+  })
+
   app.get('/branding', async () => {
     try {
       // Help-video cards' own logo (migration 408), absent on a database behind it.
-      const cardLogo = await hasColumn('nivaro_settings', 'help_video_card_logo').catch(() => false)
+      const cardLogo = await hasColumn('nivaro_settings', 'help_video_card_logo_image').catch(
+        () => false
+      )
       const row = (await db('nivaro_settings')
         .where({ id: 1 })
         .first(
           'project_name',
           'project_color',
           'brand_logo',
-          ...(cardLogo ? ['help_video_card_logo'] : []),
+          ...(cardLogo ? ['help_video_card_logo_image'] : []),
           'brand_login_title',
           'brand_login_message',
           'login_links'
@@ -193,8 +218,8 @@ export async function authRoutes(app: FastifyInstance) {
           color: (row?.project_color as string | null) ?? null,
           logo_url: row?.brand_logo ? `/api/files/${row.brand_logo}` : null,
           // What help-video cards draw: their own logo, else the instance logo.
-          card_logo_url: row?.help_video_card_logo
-            ? `/api/files/${row.help_video_card_logo}`
+          card_logo_url: parseCardLogo(row?.help_video_card_logo_image)
+            ? `/api/auth/branding/card-logo?v=${cardLogoVersion(String(row?.help_video_card_logo_image))}`
             : row?.brand_logo
               ? `/api/files/${row.brand_logo}`
               : null,

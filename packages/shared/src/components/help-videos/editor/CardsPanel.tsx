@@ -3,7 +3,7 @@ import { Eye } from 'lucide-react'
 import { memo, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../../context'
-import { del, patch } from '../../../lib/commands'
+import { patch } from '../../../lib/commands'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Switch } from '../../ui/switch'
@@ -41,6 +41,16 @@ const TRANSITIONS: Array<{ value: CardTransition; label: string }> = [
  * time before or after the recording (it never covers any of it) and is drawn
  * in the instance's brand; the switches store nothing while they are off.
  */
+/** The picked file as a data URI (the stored form of the card logo). */
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result))
+    r.onerror = () => reject(r.error)
+    r.readAsDataURL(file)
+  })
+}
+
 /** What the render can draw as a logo (help-video-cards.ts). */
 const MAX_LOGO_BYTES = 2 * 1024 * 1024
 const LOGO_TYPES = /^image\/(png|jpe?g|gif|webp|svg\+xml)$/i
@@ -84,8 +94,10 @@ export const CardsPanel = memo(function CardsPanel({
   const qc = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
-  // A logo for the help-video cards only (help_video_card_logo): the
-  // instance logo (sign-in page, admin sidebar) is never changed from here.
+  // A logo for the help-video cards only, stored as the image itself
+  // (help_video_card_logo_image) so it travels with the settings to every
+  // environment. The instance logo (sign-in page, admin sidebar) is never
+  // changed from here.
   const uploadLogo = async (file: File | null) => {
     if (!file) return
     // The render draws only these (help-video-cards.ts): anything else would
@@ -101,18 +113,16 @@ export const CardsPanel = memo(function CardsPanel({
       return
     }
     setUploading(true)
-    let uploaded: string | null = null
     try {
-      const f = await client.upload(file)
-      uploaded = f.id
-      await client.request(patch('/settings', { help_video_card_logo: f.id }))
-      uploaded = null
+      const image = await readAsDataUrl(file)
+      await client.request(patch('/settings', { help_video_card_logo_image: image }))
       await qc.invalidateQueries({ queryKey: ['help-video-card-brand'] })
       toast.success('Logo set for the help-video cards.')
-    } catch {
-      // A file nobody points at would just sit in Files.
-      if (uploaded) await client.request(del(`/files/${uploaded}`)).catch(() => null)
-      toast.error('Could not set the card logo. Try again.')
+    } catch (err) {
+      const msg = (err as { response?: { error?: string } })?.response?.error
+      toast.error(
+        msg ? `Could not set the card logo: ${msg}` : 'Could not set the card logo. Try again.'
+      )
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''

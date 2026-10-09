@@ -122,8 +122,9 @@ const allowedSettingsKeys = [
   'integration_remediation_enabled',
   // Branding (#21)
   'brand_logo',
-  // Help-video cards' own logo (migration 408; NULL = the instance logo)
-  'help_video_card_logo',
+  // Help-video cards' own logo, the image itself (migration 409; NULL = the
+  // instance logo). Validated below.
+  'help_video_card_logo_image',
   'brand_login_title',
   'brand_login_message',
   // Where email links land for non-admins (services/app-links.ts)
@@ -281,6 +282,12 @@ export async function settingsRoutes(app: FastifyInstance) {
     }
 
     // Approved accent palette (#83): strict shape, stored as JSON text.
+    if ('help_video_card_logo_image' in patch) {
+      const { validateCardLogo } = await import('../services/help-video-card-logo.js')
+      const err = validateCardLogo(patch.help_video_card_logo_image)
+      if (err) return reply.code(400).send({ error: err })
+      if (patch.help_video_card_logo_image === '') patch.help_video_card_logo_image = null
+    }
     if ('theme_accents' in patch) {
       const { validateThemeAccents } = await import('../services/theme-accents.js')
       const err = validateThemeAccents(patch.theme_accents)

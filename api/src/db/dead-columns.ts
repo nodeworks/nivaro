@@ -33,6 +33,15 @@ export interface DeadColumn {
 
 export const DEAD_COLUMNS: DeadColumn[] = [
   {
+    table: 'nivaro_settings',
+    column: 'help_video_card_logo',
+    since: '2026-10-09',
+    replaced_by:
+      'help_video_card_logo_image (the image itself, which travels with the settings row)',
+    status: 'drop',
+    dropped_by: '409_help_video_card_logo_image'
+  },
+  {
     table: 'nivaro_queues',
     column: 'view_mode',
     since: '2026-07-06',

@@ -35,14 +35,14 @@ const logoOf = (b: { logo: string | null }) =>
 
 beforeEach(() => {
   h.row = { project_name: 'Acme', project_color: '#00ceff' }
-  h.columns = new Set(['help_video_card_logo'])
+  h.columns = new Set(['help_video_card_logo_image'])
 })
 
 describe('card logo', () => {
   it('uses the cards’ own logo before the instance logo', async () => {
     h.row.brand_logo = 'INSTANCE'
-    h.row.help_video_card_logo = 'CARDS'
-    expect(logoOf(await loadCardBrand())).toBe('CARDS.svg')
+    h.row.help_video_card_logo_image = `data:image/svg+xml;base64,${Buffer.from('<svg/>').toString('base64')}`
+    expect(logoOf(await loadCardBrand())).toBe('<svg/>')
   })
   it('falls back to the instance logo', async () => {
     h.row.brand_logo = 'INSTANCE'
@@ -52,6 +52,6 @@ describe('card logo', () => {
     h.columns = new Set()
     h.row.brand_logo = 'INSTANCE'
     expect(logoOf(await loadCardBrand())).toBe('INSTANCE.svg')
-    expect(h.selected).not.toContain('help_video_card_logo')
+    expect(h.selected).not.toContain('help_video_card_logo_image')
   })
 })

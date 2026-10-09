@@ -16,6 +16,7 @@ import {
   type OutroCardContent,
   outroTree
 } from './help-video-card-design.js'
+import { parseCardLogo } from './help-video-card-logo.js'
 import {
   chapterBannerWindows,
   editedDuration,
@@ -118,27 +119,32 @@ export function shownBrand(brand: CardBrand, e: VideoEdits): CardBrandShown {
 export async function loadCardBrand(): Promise<CardBrand> {
   let row: Record<string, unknown> | undefined
   try {
-    // The cards' own logo (migration 408) comes first; the instance logo is
-    // only the fallback. A database behind 408 has no such column.
-    const cardLogo = await hasColumn('nivaro_settings', 'help_video_card_logo').catch(() => false)
+    // The cards' own logo (an image stored in the setting, migration 409)
+    // comes first; the instance logo is only the fallback. A database behind
+    // 409 has no such column.
+    const cardLogo = await hasColumn('nivaro_settings', 'help_video_card_logo_image').catch(
+      () => false
+    )
     row = (await db('nivaro_settings')
       .where({ id: 1 })
       .first(
         'project_name',
         'project_color',
         'brand_logo',
-        ...(cardLogo ? ['help_video_card_logo'] : [])
+        ...(cardLogo ? ['help_video_card_logo_image'] : [])
       )) as Record<string, unknown> | undefined
   } catch {
     row = undefined
   }
   const name = String(row?.project_name ?? '').trim() || null
   const color = cardAccent(row?.project_color)
+  // A stored card logo is already the image the page draws (validated on save).
+  if (parseCardLogo(row?.help_video_card_logo_image))
+    return { name, color, logo: String(row?.help_video_card_logo_image) }
   let logo: string | null = null
-  const logoId = row?.help_video_card_logo || row?.brand_logo
-  if (logoId) {
+  if (row?.brand_logo) {
     try {
-      const f = await getFile(String(logoId))
+      const f = await getFile(String(row.brand_logo))
       const type = String(f?.type ?? '')
       if (f?.filename_disk && LOGO_TYPES.test(type)) {
         const opened = await openStoredObject(String(f.filename_disk))
