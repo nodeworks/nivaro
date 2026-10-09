@@ -59,7 +59,6 @@ import {
 import { setFormulaConstants } from '../lib/expression'
 import { setFiscalStartMonth } from '../lib/fiscal'
 import {
-  type FoldedCell,
   HEADER_BAND,
   HEADER_DOCK,
   HEADER_DOCK_CELL,
@@ -70,9 +69,7 @@ import {
   HEADER_TILES,
   HEADER_VALUE,
   HEADER_VALUE_HERO,
-  HEADER_VALUE_LINE,
-  headerFoldedCells,
-  headerNeedsDense
+  HEADER_VALUE_LINE
 } from '../lib/header-strip'
 import { extSlotKey } from '../lib/layout-slots'
 import { useRecordReader } from '../lib/record-loader'
@@ -123,8 +120,8 @@ import {
   OwnersInlineCompact,
   StripFieldValue
 } from './item-edit/GroupSection'
+import { HeaderTiles, useHeaderBand } from './item-edit/HeaderBand'
 import { HeaderFreshness } from './item-edit/HeaderFreshness'
-import { HeaderOverflowChip } from './item-edit/HeaderOverflowChip'
 import { HeaderRollupExplainer } from './item-edit/HeaderRollupExplainer'
 import { HeaderSummaryChip, type HeaderSummaryConfig } from './item-edit/HeaderSummaryChip'
 import { HeaderMenu, HeaderToolGroup, HeaderTools } from './item-edit/HeaderTools'
@@ -1518,71 +1515,8 @@ export function ItemEditForm({
   // Only condense when the body can still scroll past the expand threshold
   // AFTER the strip is gone; otherwise the header simply stays as it is.
   const headerStripRef = useRef<HTMLDivElement | null>(null)
-  // Stacked (label over value, 52px) while the tiles fit one row; dense
-  // (label · value inline, 34px, wrapping) the moment they would not —
-  // lib/header-strip.ts. Measured, not breakpointed: it is the record's own
-  // tile count and values that decide.
-  const [headerDense, setHeaderDense] = useState(false)
-  const headerDenseRef = useRef(false)
-  headerDenseRef.current = headerDense
-  // Dense and STILL past two rows: tile indices folded behind "+N more"
-  // (empties first). Empty = all shown.
-  const [headerFolded, setHeaderFolded] = useState<FoldedCell[]>([])
-  const headerFoldedRef = useRef<FoldedCell[]>([])
-  headerFoldedRef.current = headerFolded
-  const headerWidthCache = useRef(new Map<number, number>())
-  const headerStackedCache = useRef(new Map<number, number>())
-  // Callback ref: the band mounts only once the layout has loaded, so a
-  // mount-time effect would never see it.
-  const headerTilesCleanup = useRef<(() => void) | null>(null)
-  const headerTilesRef = useCallback((el: HTMLDivElement | null) => {
-    headerTilesCleanup.current?.()
-    headerTilesCleanup.current = null
-    if (!el || typeof ResizeObserver === 'undefined') return
-    let frame = 0
-    const measure = () => {
-      frame = 0
-      const dense = headerNeedsDense(el, headerDenseRef.current, headerStackedCache.current)
-      if (dense !== headerDenseRef.current) setHeaderDense(dense)
-      const folded = dense
-        ? headerFoldedCells(el, headerDenseRef.current, headerWidthCache.current)
-        : []
-      const key = (list: FoldedCell[]) => list.map((c) => `${c.index}${c.empty ? 'e' : ''}`).join()
-      if (key(folded) !== key(headerFoldedRef.current)) setHeaderFolded(folded)
-    }
-    const schedule = () => {
-      if (!frame) frame = window.requestAnimationFrame(measure)
-    }
-    const ro = new ResizeObserver(schedule)
-    ro.observe(el)
-    for (const child of el.children) ro.observe(child)
-    const mo = new MutationObserver((records) => {
-      for (const child of el.children) ro.observe(child)
-      // Something changed inside a cell (a value loaded, a rollup updated):
-      // its remembered widths are stale. Changes at the group level itself
-      // are our own folding; the "+N more" chip's count is not a cell.
-      if (
-        records.some((r) => {
-          if (r.target === el) return false
-          const node = r.target instanceof Element ? r.target : r.target.parentElement
-          return !node?.closest('[data-header-more]')
-        })
-      ) {
-        headerWidthCache.current.clear()
-        headerStackedCache.current.clear()
-      }
-      schedule()
-    })
-    mo.observe(el, { childList: true, subtree: true, characterData: true })
-    // Synchronous first pass: runs in the commit phase, so the first painted
-    // frame already has the right format (no stacked→dense jump on load).
-    measure()
-    headerTilesCleanup.current = () => {
-      ro.disconnect()
-      mo.disconnect()
-      if (frame) window.cancelAnimationFrame(frame)
-    }
-  }, [])
+  // Stacked / dense / folded stat band — components/item-edit/HeaderBand.tsx.
+  const { headerDense, headerFolded, headerTilesRef } = useHeaderBand()
   const condenseOnScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     const el = e.target as HTMLDivElement
     const top = el.scrollTop
@@ -10609,35 +10543,9 @@ export function ItemEditForm({
                                                 )
                                               })
                                             const foldedCells = headerDense ? headerFolded : []
-                                            const foldSet = new Set(foldedCells.map((c) => c.index))
-                                            const folded = tiles.filter((_, k) => foldSet.has(k))
                                             return (
                                               <>
-                                                {tiles.map((t, k) =>
-                                                  foldSet.has(k) ? (
-                                                    // Folded: out of flow but in the DOM, in place, so the
-                                                    // measurer's cell index stays the tile index.
-                                                    <div
-                                                      key={`__folded_${k}`}
-                                                      data-header-folded
-                                                      aria-hidden='true'
-                                                      className='pointer-events-none invisible absolute'
-                                                    >
-                                                      {t}
-                                                    </div>
-                                                  ) : (
-                                                    t
-                                                  )
-                                                )}
-                                                {folded.length > 0 && (
-                                                  <HeaderOverflowChip
-                                                    count={folded.length}
-                                                    allEmpty={foldedCells.every((c) => c.empty)}
-                                                    labels={foldedCells.map((c) => c.label)}
-                                                  >
-                                                    {folded}
-                                                  </HeaderOverflowChip>
-                                                )}
+                                                <HeaderTiles tiles={tiles} folded={foldedCells} />
                                                 {!isNew && itemId && (
                                                   // Below lg the Integrations chip ends the last row
                                                   // (the column dock is lg-only) — never a third shelf.
