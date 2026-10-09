@@ -20,18 +20,29 @@ export const PosterPicker = memo(function PosterPicker({
   headless,
   edits,
   onUse,
-  onSeek
+  onSeek,
+  onShowCard
 }: {
   /** The side panel shows the title itself (the heading stays for screen readers). */
   headless?: boolean
   edits: VideoEdits
-  /** Sets the poster to the playhead's frame: its time, or null when refused. */
-  onUse: () => number | null
+  /** Sets the poster to what the preview shows (a card, or the playhead's
+   *  frame): 'intro' / 'outro' / the frame's ms as text, or null when refused. */
+  onUse: () => string | null
   onSeek: (srcMs: number) => void
+  /** Moves the preview to the start of a card. */
+  onShowCard: (card: 'intro' | 'outro') => void
 }) {
   const headingId = useId()
-  const [justSet, setJustSet] = useState<number | null>(null)
+  const [justSet, setJustSet] = useState<string | null>(null)
+  const card = edits.poster_card
+  const current = card ?? String(edits.poster_ms)
   const at = sourceToEdited(edits, edits.poster_ms)
+  const says = card
+    ? `Viewers see the ${card === 'intro' ? 'title card' : 'end card'} before they press play.`
+    : at === null
+      ? 'The poster frame is in a part that is cut out, so viewers see the first frame instead.'
+      : `Viewers see the frame at ${clock(at)} before they press play.`
   return (
     <section className='space-y-2' aria-labelledby={headingId} data-hv-poster-picker>
       <h3
@@ -40,11 +51,14 @@ export const PosterPicker = memo(function PosterPicker({
       >
         Poster
       </h3>
-      <p className='text-[12px] leading-snug text-muted-foreground'>
-        {at === null
-          ? 'The poster frame is in a part that is cut out, so viewers see the first frame instead.'
-          : `Viewers see the frame at ${clock(at)} before they press play.`}
+      <p className='text-[12px] leading-snug text-muted-foreground' data-hv-poster-says>
+        {says}
       </p>
+      {(edits.intro || edits.outro) && (
+        <p className='text-[11.5px] leading-snug text-muted-foreground'>
+          Use this frame while a card shows makes that card the poster.
+        </p>
+      )}
       <div className='flex flex-wrap items-center gap-2'>
         <Button
           size='sm'
@@ -59,7 +73,7 @@ export const PosterPicker = memo(function PosterPicker({
           size='sm'
           variant='ghost'
           className='h-8 text-[12.5px]'
-          onClick={() => onSeek(edits.poster_ms)}
+          onClick={() => (card ? onShowCard(card) : onSeek(edits.poster_ms))}
           data-hv-poster-show
         >
           Show it
@@ -67,12 +81,17 @@ export const PosterPicker = memo(function PosterPicker({
       </div>
       <p role='status' className='min-h-[18px] text-[12px] text-foreground'>
         {/* Until the poster changes again (another frame, or undo). */}
-        {justSet !== null && justSet === edits.poster_ms && (
+        {justSet !== null && justSet === current && (
           <span className='inline-flex items-center gap-1'>
             <Check className='h-3.5 w-3.5 text-emerald-700 dark:text-emerald-400' aria-hidden />
-            Poster set to this frame.
+            {card
+              ? `Poster set to the ${card === 'intro' ? 'title card' : 'end card'}.`
+              : 'Poster set to this frame.'}
           </span>
         )}
+      </p>
+      <p className='text-[11.5px] leading-snug text-muted-foreground'>
+        The library shows the new poster once you publish and the video has rendered.
       </p>
     </section>
   )

@@ -34,7 +34,7 @@ export const helpVideosGuide: DocSection = {
       items: [
         'Cut: split at the playhead (S) and delete the piece; trim the ends by dragging. Silent stretches are suggested as cuts. You cannot cut everything — at least one second stays.',
         'Speed: play a piece at 1×, 1.5×, 2× or 4×.',
-        'Chapters and poster: add a chapter at the playhead; choose the frame the library shows.',
+        'Chapters and poster: add a chapter at the playhead; choose the frame the library shows. Use this frame while the preview shows the title card or end card makes that card the poster. The library shows a new poster once the video is published and rendered.',
         'Callouts, arrows, boxes and click ripples: draw on the preview, then set the text and how long it shows. "Add click ripples" places one at every click the recorder saw; a ripple from a recorded click says what was clicked (hover its bar, or select it). Each ripple makes a soft tick as it plays (one tick for ripples less than 0.08 s apart): the render mixes it into the finished sound, and the live preview plays it at the video’s volume.',
         'Jumping from the side panel (a chapter, a caption, Jump to it, Show it) offers Back to the spot you were at, with the selection you had, until you use it, close it or move the playhead on the timeline.',
         'Zoom: draw the area to zoom into; the video eases in and out.',

@@ -11,6 +11,7 @@ import { helpVideoApi, helpVideoKeys, useHelpVideo } from '../api'
 import {
   ALLOWED_SPEEDS,
   bodyDuration,
+  cardPhaseAt,
   introMs,
   removeSegment,
   segmentIndexAt,
@@ -184,6 +185,11 @@ function EditorBody({
   srcRef.current = src
   /** The playhead now (the video's own clock when it has one). */
   const playhead = useCallback(() => player.current?.sourceMs() ?? srcRef.current, [])
+  /** Which part the preview shows now: a card or the recording. */
+  const playheadPart = useCallback((): 'intro' | 'body' | 'outro' => {
+    const ms = player.current?.editedMs?.()
+    return ms == null ? 'body' : cardPhaseAt(editsRef.current, ms).phase
+  }, [])
   const [selection, setSelection] = useState<Selection>(null)
   const [viewerPreview, setViewerPreview] = useState(false)
   const [tool, setTool] = useState<Tool | null>(null)
@@ -502,6 +508,7 @@ function EditorBody({
               clicks={clicks}
               uploaded={uploaded}
               playhead={playhead}
+              playheadPart={playheadPart}
               onChange={set}
               onSelect={setSelection}
               onSeek={sideSeek}

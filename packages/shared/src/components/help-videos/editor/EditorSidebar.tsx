@@ -1,7 +1,7 @@
 import { CornerUpLeft, X } from 'lucide-react'
 import { memo, useCallback, useRef } from 'react'
 import { Button } from '../../ui/button'
-import { sourceToEdited, upsertItemChecked } from '../edits'
+import { setPoster, sourceToEdited, upsertItemChecked } from '../edits'
 import type { RecordedClick, VideoEdits } from '../types'
 import { CaptionsPanel } from './CaptionsPanel'
 import { CardsPanel } from './CardsPanel'
@@ -37,6 +37,7 @@ export const EditorSidebar = memo(function EditorSidebar({
   clicks,
   uploaded,
   playhead,
+  playheadPart,
   onChange,
   onSelect,
   onSeek,
@@ -58,6 +59,8 @@ export const EditorSidebar = memo(function EditorSidebar({
   uploaded?: boolean
   /** The playhead now (read when an action needs it, not every frame). */
   playhead: () => number
+  /** Which part the preview shows now: the intro card, the recording or the end card. */
+  playheadPart: () => 'intro' | 'body' | 'outro'
   onChange: (e: VideoEdits, key?: string) => void
   onSelect: (s: Selection) => void
   onSeek: (srcMs: number) => void
@@ -79,8 +82,15 @@ export const EditorSidebar = memo(function EditorSidebar({
   const editsRef = useRef(edits)
   editsRef.current = edits
 
-  const takePoster = useCallback((): number | null => {
+  /** Sets the poster from the preview: the card it shows, else the frame.
+   *  Returns what was set ('intro' / 'outro' / the frame's ms), or null. */
+  const takePoster = useCallback((): string | null => {
     const e = editsRef.current
+    const part = playheadPart()
+    if (part !== 'body') {
+      onChange(setPoster(e, { card: part }))
+      return part
+    }
     const at = Math.round(playhead())
     // The render takes the poster from the finished video.
     if (sourceToEdited(e, at) === null) {
@@ -89,9 +99,9 @@ export const EditorSidebar = memo(function EditorSidebar({
       )
       return null
     }
-    onChange({ ...e, poster_ms: at })
-    return at
-  }, [playhead, onNote, onChange])
+    onChange(setPoster(e, { srcMs: at }))
+    return String(at)
+  }, [playhead, playheadPart, onNote, onChange])
   const addRipples = useCallback(() => {
     const start = editsRef.current
     const ripples = clicksToRipples(clicks ?? null, start.annotations, sourceMs)
@@ -224,11 +234,25 @@ export const EditorSidebar = memo(function EditorSidebar({
       <SideSection
         id='poster'
         title='Poster'
-        summary={posterAt === null ? 'First frame' : clockShort(posterAt)}
+        summary={
+          edits.poster_card === 'intro'
+            ? 'Title card'
+            : edits.poster_card === 'outro'
+              ? 'End card'
+              : posterAt === null
+                ? 'First frame'
+                : clockShort(posterAt)
+        }
         open={open.has('poster')}
         onToggle={toggle}
       >
-        <PosterPicker headless edits={edits} onUse={takePoster} onSeek={onSeek} />
+        <PosterPicker
+          headless
+          edits={edits}
+          onUse={takePoster}
+          onSeek={onSeek}
+          onShowCard={onShowCard}
+        />
       </SideSection>
       <SideSection
         id='clicks'

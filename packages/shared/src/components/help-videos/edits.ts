@@ -138,7 +138,7 @@ export function chapterBannerWindows(
  *  server's normalizeIntro / normalizeOutro rules (off = absent). */
 export function setIntro(e: VideoEdits, intro: Partial<IntroCard> | null): VideoEdits {
   const { intro: _drop, ...rest } = e
-  if (!intro) return rest as VideoEdits
+  if (!intro) return dropPosterCard(rest as VideoEdits, 'intro')
   const cur = e.intro
   const next: IntroCard = {
     enabled: true,
@@ -151,7 +151,7 @@ export function setIntro(e: VideoEdits, intro: Partial<IntroCard> | null): Video
 }
 export function setOutro(e: VideoEdits, outro: Partial<OutroCard> | null): VideoEdits {
   const { outro: _drop, ...rest } = e
-  if (!outro) return rest as VideoEdits
+  if (!outro) return dropPosterCard(rest as VideoEdits, 'outro')
   const cur = e.outro
   const next: OutroCard = {
     enabled: true,
@@ -159,6 +159,21 @@ export function setOutro(e: VideoEdits, outro: Partial<OutroCard> | null): Video
     text: (outro.text ?? cur?.text ?? '').slice(0, EDIT_LIMITS.outroText)
   }
   return { ...rest, outro: next } as VideoEdits
+}
+function dropPosterCard(e: VideoEdits, card: 'intro' | 'outro'): VideoEdits {
+  if (e.poster_card !== card) return e
+  const { poster_card: _drop, ...rest } = e
+  return rest as VideoEdits
+}
+/** The poster: a card (while it is on), or a recording frame (`srcMs`),
+ *  which clears any card choice. Same rule as the server's normalizeEdits. */
+export function setPoster(
+  e: VideoEdits,
+  to: { card: 'intro' | 'outro' } | { srcMs: number }
+): VideoEdits {
+  const { poster_card: _drop, ...rest } = e
+  if ('card' in to) return (e[to.card] ? { ...rest, poster_card: to.card } : e) as VideoEdits
+  return { ...rest, poster_ms: Math.max(0, Math.round(to.srcMs)) } as VideoEdits
 }
 /** The cards' name override: blank removes it (the instance name shows). */
 export function setCardBrand(e: VideoEdits, name: string): VideoEdits {

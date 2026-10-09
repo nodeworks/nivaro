@@ -19,9 +19,8 @@ import {
 import {
   captionsToVtt,
   editedDuration,
-  introMs,
   normalizeEdits,
-  sourceToEdited,
+  posterEditedMs,
   type VideoEdits
 } from './help-video-edits.js'
 import { buildPosterArgs, buildRenderArgs, outputSize } from './help-video-render-plan.js'
@@ -304,8 +303,9 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const vttPath = join(dir, 'captions.vtt')
     await writeFile(vttPath, captionsToVtt(edits))
     const posterPath = join(dir, 'poster.jpg')
-    // A poster inside a cut falls back to the recording's first frame (after any intro).
-    const posterEdited = sourceToEdited(edits, edits.poster_ms) ?? introMs(edits)
+    // A chosen card, else the poster frame; one inside a cut falls back to
+    // the recording's first frame (after any intro).
+    const posterEdited = posterEditedMs(edits)
     await runFfmpeg(
       buildPosterArgs(out, Math.max(0, Math.min(posterEdited, total - 100)), posterPath),
       undefined,

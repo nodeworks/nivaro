@@ -80,6 +80,9 @@ export interface VideoEdits {
   /** The name drawn on the cards instead of the instance name (stored only
    *  when filled in). */
   card_brand?: string
+  /** The poster is this card instead of the frame at poster_ms (stored only
+   *  while that card is on). */
+  poster_card?: 'intro' | 'outro'
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }

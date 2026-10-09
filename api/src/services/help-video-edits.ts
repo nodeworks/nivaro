@@ -86,6 +86,9 @@ export interface VideoEdits {
   /** The name drawn on the cards instead of the instance name. Stored only
    *  when filled in. */
   card_brand?: string
+  /** The poster is this card instead of the frame at poster_ms. Stored only
+   *  while that card is switched on. */
+  poster_card?: 'intro' | 'outro'
 }
 
 export const ALLOWED_SPEEDS: Speed[] = [1, 1.5, 2, 4]
@@ -293,6 +296,8 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   if (o.chapter_banners === true) out.chapter_banners = true
   const cardBrand = oneLine(o.card_brand, EDIT_LIMITS.cardBrand)
   if (cardBrand) out.card_brand = cardBrand
+  if (o.poster_card === 'intro' && out.intro) out.poster_card = 'intro'
+  else if (o.poster_card === 'outro' && out.outro) out.poster_card = 'outro'
   return out
 }
 
@@ -377,6 +382,15 @@ export function sourceToEdited(e: VideoEdits, ms: number): number | null {
     acc += (s.end_ms - s.start_ms) / s.speed
   }
   return null
+}
+
+/** The EDITED moment the poster is taken from: a card the author chose
+ *  (just inside it — a card is one still), else the frame at poster_ms, else
+ *  (a frame inside a cut) the first recorded frame after any intro. */
+export function posterEditedMs(e: VideoEdits): number {
+  if (e.poster_card === 'intro' && e.intro) return 100
+  if (e.poster_card === 'outro' && e.outro) return introMs(e) + bodyDuration(e) + 100
+  return sourceToEdited(e, e.poster_ms) ?? introMs(e)
 }
 
 /** The source moment shown at an edited time. Inside the intro card: the first

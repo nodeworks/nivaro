@@ -11,6 +11,7 @@ import {
   setChapterBanners,
   setIntro,
   setOutro,
+  setPoster,
   sourceToEdited
 } from './edits'
 import { bucketIndex } from './playerMath'
@@ -187,5 +188,18 @@ describe('ripple ticks', () => {
     expect(ticksBetween([1000], 900, 1100, 4000)).toBe(1)
     expect(ticksBetween([1000], 1100, 900, 4000)).toBe(0)
     expect(ticksBetween([1000], 0, 9000, 4000)).toBe(0)
+  })
+})
+
+describe('poster on a card', () => {
+  it('sets a card while it is on, and a frame clears it', () => {
+    const withIntro = setIntro(base, {})
+    const card = setPoster(withIntro, { card: 'intro' })
+    expect(card.poster_card).toBe('intro')
+    expect(setPoster(base, { card: 'intro' })).toBe(base)
+    const frame = setPoster(card, { srcMs: 1234.4 })
+    expect('poster_card' in frame).toBe(false)
+    expect(frame.poster_ms).toBe(1234)
+    expect('poster_card' in setIntro(card, null)).toBe(false)
   })
 })

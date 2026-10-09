@@ -26,6 +26,7 @@ import {
   hashEdits,
   normalizeEdits,
   OUTRO_DEFAULT_TEXT,
+  posterEditedMs,
   sourceToEdited
 } from '../../../services/help-video-edits.js'
 import { buildRenderArgs } from '../../../services/help-video-render-plan.js'
@@ -359,5 +360,24 @@ describe('render plan with cards', () => {
     const g = fc(buildRenderArgs({ ...base, edits: normalizeEdits({}, 10_000) }))
     expect(g).toContain('setpts=PTS-STARTPTS[vout]')
     expect(g).not.toContain('vbody')
+  })
+})
+
+describe('poster on a card', () => {
+  const on = {
+    intro: { enabled: true, duration_ms: 2000 },
+    outro: { enabled: true, duration_ms: 3000 }
+  }
+  it('keeps a card poster only while that card is on', () => {
+    expect(normalizeEdits({ ...on, poster_card: 'intro' }, SRC).poster_card).toBe('intro')
+    expect('poster_card' in normalizeEdits({ poster_card: 'intro' }, SRC)).toBe(false)
+    expect('poster_card' in normalizeEdits({ ...on, poster_card: 'bogus' }, SRC)).toBe(false)
+  })
+  it('takes the poster from the chosen card, else the frame after the intro', () => {
+    const intro = normalizeEdits({ ...on, poster_card: 'intro', poster_ms: 5000 }, SRC)
+    expect(posterEditedMs(intro)).toBe(100)
+    const outro = normalizeEdits({ ...on, poster_card: 'outro' }, SRC)
+    expect(posterEditedMs(outro)).toBe(2000 + SRC + 100)
+    expect(posterEditedMs(normalizeEdits({ ...on, poster_ms: 0 }, SRC))).toBe(2000)
   })
 })
