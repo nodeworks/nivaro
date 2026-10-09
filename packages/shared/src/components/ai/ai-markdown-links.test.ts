@@ -1,6 +1,6 @@
 import { isValidElement, type ReactElement } from 'react'
 import { describe, expect, it } from 'vitest'
-import { inAppHref, renderInline } from './AiMarkdown'
+import { inAppHref, isSafeAppPath, renderInline } from './AiMarkdown'
 
 describe('links in Ask AI answers (#1503)', () => {
   it('a path becomes an in-app link, an absolute URL a new-tab link', () => {
@@ -24,5 +24,13 @@ describe('links in Ask AI answers (#1503)', () => {
     expect(inAppHref('/help-videos?watch=a', undefined)).toBe('/help-videos?watch=a')
     expect(inAppHref('/help-videos-old', '/help')).toBe('/help-videos-old')
     expect(inAppHref('/collections/x/1', '/help')).toBe('/collections/x/1')
+  })
+  it('never treats a path that leaves the origin as in-app', () => {
+    expect(isSafeAppPath('/help-videos?watch=a&t=3')).toBe(true)
+    expect(isSafeAppPath('//evil.example')).toBe(false)
+    expect(isSafeAppPath('/\\evil.example')).toBe(false)
+    expect(isSafeAppPath('/\t/evil.example')).toBe(false)
+    expect(isSafeAppPath('/a\\b')).toBe(false)
+    expect(isSafeAppPath('/a b')).toBe(false)
   })
 })

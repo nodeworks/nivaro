@@ -196,8 +196,7 @@ export function renderInline(text: string, autolink = false): ReactNode[] {
       )
     else if (tok.startsWith('[')) {
       const lm = /^\[([^\]]+)\]\(([^)]+)\)$/.exec(tok)
-      if (lm && /^\/(?!\/)/.test(lm[2]))
-        out.push(<InAppLink key={k++} href={lm[2]} label={lm[1]} />)
+      if (lm && isSafeAppPath(lm[2])) out.push(<InAppLink key={k++} href={lm[2]} label={lm[1]} />)
       else if (lm && /^https?:\/\//.test(lm[2]))
         out.push(
           <a
@@ -216,6 +215,21 @@ export function renderInline(text: string, autolink = false): ReactNode[] {
   }
   if (last < text.length) out.push(plain(text.slice(last)))
   return out
+}
+
+/**
+ * A path on THIS origin only. Browsers read `/\\host` and `/\thost` like
+ * `//host` (a protocol-relative URL to another site), so anything whose
+ * second character is a slash or backslash, or that carries a control
+ * character or whitespace, is refused; the link then renders as text.
+ */
+export function isSafeAppPath(href: string): boolean {
+  if (!/^\/(?![\\/])/.test(href)) return false
+  for (let i = 0; i < href.length; i++) {
+    const c = href.charCodeAt(i)
+    if (c <= 0x20 || c === 0x7f || c === 0x5c) return false
+  }
+  return true
 }
 
 /**
