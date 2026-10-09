@@ -106,6 +106,14 @@ run's log is `.release-runs/<id>.log`; resume it from a terminal with
 A chain started from a terminal is invisible to the card's lock — do not click
 Release while one runs.
 
+**Pinned deployments.** A deployment entry with `"version_file"` (e.g.
+`".docker/staging-version"`) gets the release version written into that file
+and committed with the deploy push. The deployment's own CI reads it to pick
+the image tag, so a deploy runs exactly the image the chain saw on the
+registry (never a stale `:latest`) and `/api/preflight` reports the tag as
+pinned. EFP staging does this; a `NIVARO_VERSION` CI variable still overrides
+it for a manual rollback.
+
 **The post-deploy gate (#1045).** Answering the new version only proves the
 process booted. For every verify entry whose URL ends in `/api/version`, the
 verify stage then runs `scripts/release-gate.mjs` against that API:

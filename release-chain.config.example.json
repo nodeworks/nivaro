@@ -21,7 +21,8 @@
       ],
       "commit_paths": [
         "src/extensions"
-      ]
+      ],
+      "version_file": ".docker/staging-version"
     }
   ],
   "verify": [

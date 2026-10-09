@@ -576,10 +576,18 @@ async function main() {
         }
         const cwd = expand(d.path)
         for (const step of d.prepare ?? []) sh('bash', ['-c', step], { cwd })
-        const changed = git(['status', '--short', ...(d.commit_paths ?? ['.'])], { cwd })
+        // The image tag the deployment runs, as a tracked file its deploy job
+        // reads — so a deploy can never race the image build onto a stale
+        // :latest, and the API reports a pinned version.
+        const paths = [...(d.commit_paths ?? ['.'])]
+        if (d.version_file) {
+          writeFileSync(resolve(cwd, d.version_file), `${V}\n`)
+          if (!paths.includes('.')) paths.push(d.version_file)
+        }
+        const changed = git(['status', '--short', ...paths], { cwd })
         if (changed) {
-          sh('git', ['add', ...(d.commit_paths ?? ['.'])], { cwd, quiet: true })
-          sh('git', ['commit', '-q', '-m', `chore: sync for nivaro ${V}`, '--', ...(d.commit_paths ?? ['.'])], { cwd, quiet: true })
+          sh('git', ['add', ...paths], { cwd, quiet: true })
+          sh('git', ['commit', '-q', '-m', `chore: sync for nivaro ${V}`, '--', ...paths], { cwd, quiet: true })
         } else {
           sh('git', ['commit', '-q', '--allow-empty', '-m', `chore: deploy nivaro ${V}`], { cwd, quiet: true })
         }
