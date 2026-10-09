@@ -427,7 +427,9 @@ export async function filesRoutes(app: FastifyInstance) {
       .update(`w=${width ?? ''}&h=${height ?? ''}&fit=${fit}&format=${format}&q=${quality}`)
       .digest('hex')
       .slice(0, 16)
-    const cacheKey = `transforms/${id}/${paramsHash}.${format}`
+    // Built from the resolved row only: the caller's string may carry path segments the
+    // database ignores when matching (SQL Server reads "<id>/../<other>" as "<id>").
+    const cacheKey = `transforms/${String(file.id).toLowerCase()}/${paramsHash}.${format}`
     const contentType = `image/${format}`
     const storage = getStorage()
 

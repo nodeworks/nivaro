@@ -439,7 +439,10 @@ export async function replaceFileContent(
 export async function deleteTransforms(fileId: string): Promise<void> {
   const storage = getStorage()
   if (!storage.list) return
-  const keys = await storage.list(`transforms/${fileId}/`).catch(() => [] as string[])
+  // Keys are written under the lower-cased row id; normalise the same way here.
+  const keys = await storage
+    .list(`transforms/${String(fileId).toLowerCase()}/`)
+    .catch(() => [] as string[])
   for (const key of keys) {
     await storage.delete(key).catch(() => null)
   }
