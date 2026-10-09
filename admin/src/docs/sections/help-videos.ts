@@ -50,7 +50,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Stats' },
     {
       type: 'p',
-      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video.'
+      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video. Administrators can also delete an archived video for good with Delete permanently on the Archived tab, which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
     }
   ]
 }
