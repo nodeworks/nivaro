@@ -43,6 +43,7 @@ export const EDIT_LIMITS = {
   introTitle: 120,
   introSubtitle: 200,
   outroText: 200,
+  cardBrand: 60,
   /** How long a chapter banner stays up, in edited time. */
   bannerMs: 2500
 } as const
@@ -158,6 +159,12 @@ export function setOutro(e: VideoEdits, outro: Partial<OutroCard> | null): Video
     text: (outro.text ?? cur?.text ?? '').slice(0, EDIT_LIMITS.outroText)
   }
   return { ...rest, outro: next } as VideoEdits
+}
+/** The cards' name override: blank removes it (the instance name shows). */
+export function setCardBrand(e: VideoEdits, name: string): VideoEdits {
+  const { card_brand: _drop, ...rest } = e
+  const v = name.slice(0, EDIT_LIMITS.cardBrand)
+  return (v.trim() ? { ...rest, card_brand: v } : rest) as VideoEdits
 }
 export function setChapterBanners(e: VideoEdits, on: boolean): VideoEdits {
   const { chapter_banners: _drop, ...rest } = e

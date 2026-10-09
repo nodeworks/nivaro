@@ -25,6 +25,7 @@ import {
 import { OverlayLayer } from './OverlayLayer'
 import { fileMsForSource, fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
 import { createProgressBeats } from './progressBeats'
+import { playRippleTick, rippleTickTimes, ticksBetween } from './rippleSound'
 import type { HelpVideoDto, VideoEdits } from './types'
 import { DownloadMenu } from './viewer/DownloadMenu'
 
@@ -196,6 +197,23 @@ function PlayerInner({
         : lead + bodyDuration(edits) + card.at
       : bodyEdited
   const overlaySrcMs = rendered && edits ? editedToSource(edits, srcMs) : srcMs
+  // Click ripples tick as playback passes them. A rendered file carries the
+  // tick in its own sound, so only edits drawn here (live) tick here.
+  const tickTimes = useMemo(
+    () => (liveEdits && edits ? rippleTickTimes(edits) : []),
+    [liveEdits, edits]
+  )
+  const tickPrev = useRef(srcMs)
+  useEffect(() => {
+    const prev = tickPrev.current
+    tickPrev.current = srcMs
+    const v = videoRef.current
+    if (!tickTimes.length || !playing || card || !v || v.muted) return
+    // Up to 4x speed at the viewer's rate between two clock updates; a longer
+    // step is a seek or a jump over a cut.
+    if (ticksBetween(tickTimes, prev, srcMs, 1000 * 4 * Math.max(1, v.playbackRate)))
+      playRippleTick(v.volume)
+  }, [srcMs, tickTimes, playing, card])
   // Captions and the overlays belong to the recording, not to a card.
   const phase = edits ? cardPhaseAt(edits, editedMs).phase : 'body'
   const isPlaying = card ? card.playing : playing

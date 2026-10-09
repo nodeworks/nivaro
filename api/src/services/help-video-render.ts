@@ -9,7 +9,13 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
 import { rasterizeAnnotations } from './help-video-annotations.js'
-import { bannerSourceSpans, cardText, loadCardBrand, rasterizeCards } from './help-video-cards.js'
+import {
+  bannerSourceSpans,
+  cardText,
+  loadCardBrand,
+  rasterizeCards,
+  shownBrand
+} from './help-video-cards.js'
 import {
   captionsToVtt,
   editedDuration,
@@ -248,7 +254,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     )
     const hasCards = !!(text.intro || text.outro || text.banners.length)
     const cardFiles = hasCards
-      ? await rasterizeCards(text, await loadCardBrand(), size, dir)
+      ? await rasterizeCards(text, shownBrand(await loadCardBrand(), edits), size, dir)
       : { intro: null, outro: null, banners: [] as string[] }
     const banners = bannerSourceSpans(edits, text.banners).map((s) => ({
       path: cardFiles.banners[s.index],

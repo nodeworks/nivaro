@@ -1,12 +1,17 @@
-import { chapterBannerWindows, OUTRO_DEFAULT_TEXT } from './edits'
+import type {
+  BannerContent,
+  CardBrandShown,
+  IntroCardContent,
+  OutroCardContent
+} from './cardDesign'
+import { chapterBannerWindows, editedDuration, OUTRO_DEFAULT_TEXT } from './edits'
 import type { VideoEdits } from './types'
 import { visibleChapters } from './viewer/format'
 
-// The intro card, outro card and chapter banner, as words and measurements.
-// The server draws the same cards into the render
-// (api/src/services/help-video-cards.ts — keep the two in step): sizes are in
-// canvas pixels at 1280 px wide (`cardUnit` scales them), colours and text
-// rules are the same.
+// What the intro card, end card and chapter banner SAY. How they look is
+// cardDesign.ts (shared byte for byte with the render). The server's
+// cardText (api/src/services/help-video-cards.ts) says the same words — keep
+// the two in step.
 
 export type CardBrand = {
   /** The instance name, shown when there is no logo. */
@@ -17,16 +22,7 @@ export type CardBrand = {
   logo: string | null
 }
 
-/** The card ground and inks: dark, so any brand accent reads on it. */
-export const CARD_COLORS = {
-  ground: '#0f172a',
-  title: '#ffffff',
-  body: '#cbd5e1',
-  label: '#94a3b8',
-  item: '#e2e8f0',
-  banner: 'rgba(15, 23, 42, 0.88)'
-} as const
-export const CARD_FONT = 'Arial, Helvetica, sans-serif'
+export { CARD_FONT } from './cardDesign'
 export const DEFAULT_CARD_ACCENT = '#00ceff'
 /** At most this many chapters are listed on the intro card. */
 export const INTRO_CHAPTER_MAX = 6
@@ -56,7 +52,7 @@ export function firstLine(text: string | null | undefined, max = 200): string {
 export function introContent(
   e: VideoEdits,
   video: { title: string | null | undefined; description: string | null | undefined }
-): { title: string; subtitle: string; chapters: string[]; more: number } {
+): IntroCardContent {
   const title = e.intro?.title?.trim() || String(video.title ?? '').trim() || 'Untitled video'
   const subtitle = e.intro?.subtitle?.trim() || firstLine(video.description)
   const all = e.intro?.show_chapters ? visibleChapters(e).map((c) => c.title) : []
@@ -64,16 +60,37 @@ export function introContent(
     title,
     subtitle,
     chapters: all.slice(0, INTRO_CHAPTER_MAX),
-    more: Math.max(0, all.length - INTRO_CHAPTER_MAX)
+    more: Math.max(0, all.length - INTRO_CHAPTER_MAX),
+    duration_ms: editedDuration(e)
   }
 }
 
-export function outroContent(e: VideoEdits): string {
-  return e.outro?.text?.trim() || OUTRO_DEFAULT_TEXT
+export function outroContent(
+  e: VideoEdits,
+  video?: { title: string | null | undefined }
+): OutroCardContent {
+  return {
+    text: e.outro?.text?.trim() || OUTRO_DEFAULT_TEXT,
+    title: String(video?.title ?? '').trim()
+  }
 }
 
-/** The banner showing at an edited time, if any. */
-export function bannerAt(e: VideoEdits, editedMs: number): { id: string; title: string } | null {
+/** The banner showing at an edited time, if any, with its place among the
+ *  chapters viewers see. */
+export function bannerAt(e: VideoEdits, editedMs: number): (BannerContent & { id: string }) | null {
   const w = chapterBannerWindows(e).find((b) => editedMs >= b.start_ms && editedMs < b.end_ms)
-  return w ? { id: w.id, title: w.title } : null
+  if (!w) return null
+  const seen = visibleChapters(e)
+  return {
+    id: w.id,
+    title: w.title,
+    index: seen.findIndex((c) => c.id === w.id) + 1,
+    total: seen.length
+  }
+}
+
+/** The brand as the cards draw it for this video: its own name
+ *  (card_brand) beats the instance name; the logo and colour stay. */
+export function shownBrand(brand: CardBrand, e: VideoEdits): CardBrandShown {
+  return { name: e.card_brand?.trim() || brand.name, color: brand.color, logo: brand.logo }
 }

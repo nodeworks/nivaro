@@ -83,6 +83,9 @@ export interface VideoEdits {
   intro?: IntroCard
   outro?: OutroCard
   chapter_banners?: true
+  /** The name drawn on the cards instead of the instance name. Stored only
+   *  when filled in. */
+  card_brand?: string
 }
 
 export const ALLOWED_SPEEDS: Speed[] = [1, 1.5, 2, 4]
@@ -105,6 +108,7 @@ export const EDIT_LIMITS = {
   introTitle: 120,
   introSubtitle: 200,
   outroText: 200,
+  cardBrand: 60,
   /** How long a chapter banner stays up, in edited time. */
   bannerMs: 2500
 } as const
@@ -287,6 +291,8 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   const outro = normalizeOutro(o.outro)
   if (outro) out.outro = outro
   if (o.chapter_banners === true) out.chapter_banners = true
+  const cardBrand = oneLine(o.card_brand, EDIT_LIMITS.cardBrand)
+  if (cardBrand) out.card_brand = cardBrand
   return out
 }
 

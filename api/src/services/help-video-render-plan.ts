@@ -1,5 +1,5 @@
 import { lockedInputArgs } from './ffmpeg.js'
-import type { Rect, VideoEdits } from './help-video-edits.js'
+import { editedDuration, type Rect, sourceToEdited, type VideoEdits } from './help-video-edits.js'
 
 // Builds the single ffmpeg pass that bakes a help video's edits into an MP4.
 // Everything is applied in SOURCE time — blur, annotation overlays, zoom — and
@@ -53,6 +53,37 @@ function atempo(speed: number): string {
   if (speed === 4) return 'atempo=2,atempo=2'
   if (speed === 1) return 'anull'
   return `atempo=${speed}`
+}
+
+// The soft tick a click ripple makes: the shared player's rippleSound.ts
+// (RIPPLE_TICK_TONES / RIPPLE_TICK_SECONDS / RIPPLE_TICK_MERGE_MS) — keep the
+// two in step. Each tone is a·e^(−k·t)·sin(2πf·t).
+const RIPPLE_TICK_TONES: ReadonlyArray<readonly [number, number, number]> = [
+  [1800, 0.12, 140],
+  [600, 0.06, 60]
+]
+const RIPPLE_TICK_SECONDS = 0.06
+const RIPPLE_TICK_MERGE_MS = 80
+/** More ripples than this still tick, but only the first this many. */
+const RIPPLE_TICK_MAX = 200
+
+/** The EDITED moments the finished video ticks at: each ripple's start that
+ *  viewers see (cut-out ones dropped), merged when closer than the merge gap. */
+export function rippleTickEditedTimes(e: VideoEdits): number[] {
+  const at = e.annotations
+    .filter((a) => a.type === 'ripple')
+    .map((a) => sourceToEdited(e, a.start_ms))
+    .filter((t): t is number => t !== null)
+    .sort((a, b) => a - b)
+  const out: number[] = []
+  for (const t of at)
+    if (!out.length || t - out[out.length - 1] >= RIPPLE_TICK_MERGE_MS) out.push(t)
+  return out.slice(0, RIPPLE_TICK_MAX)
+}
+
+function tickExpr(): string {
+  const one = RIPPLE_TICK_TONES.map(([f, a, k]) => `${a}*exp(-${k}*t)*sin(2*PI*${f}*t)`).join('+')
+  return `'${one}|${one}'`
 }
 
 /** Passes beyond which a small blurred field is already uniform. */
@@ -158,10 +189,16 @@ export function buildRenderArgs(input: RenderInput): string[] {
   const segs = e.segments
   const untouched = segs.length === 1 && segs[0].start_ms === 0 && segs[0].speed === 1
   const maps: string[] = ['-map', '[vout]']
+  // Ripple ticks are mixed over the finished sound: the edits' audio then
+  // lands on [amain] and the mix makes [aout]. A silent recording gets a
+  // silent track to carry them.
+  const ticks = rippleTickEditedTimes(e)
+  const aFinal = ticks.length ? 'amain' : 'aout'
+  const withAudio = input.hasAudio || ticks.length > 0
   // With a card the kept recording is one piece of a final concat.
   const cards = [input.intro, input.outro].filter(Boolean).length > 0
   const vb = cards ? 'vbody' : 'vout'
-  const ab = cards ? 'abody' : 'aout'
+  const ab = cards ? 'abody' : aFinal
   if (untouched) {
     // A single full piece still bounds the end, so a recording whose header
     // claims a little more time than the edits keep never runs past them.
@@ -215,7 +252,26 @@ export function buildRenderArgs(input: RenderInput): string[] {
     } else pieces.push('[vbody]')
     if (input.outro) card(input.outro, 'co')
     parts.push(
-      `${pieces.join('')}concat=n=${pieces.length}:v=1:a=${input.hasAudio ? 1 : 0}[vout]${input.hasAudio ? '[aout]' : ''}`
+      `${pieces.join('')}concat=n=${pieces.length}:v=1:a=${input.hasAudio ? 1 : 0}[vout]${input.hasAudio ? `[${aFinal}]` : ''}`
+    )
+  }
+
+  if (ticks.length) {
+    if (!input.hasAudio) {
+      parts.push(
+        `anullsrc=r=48000:cl=stereo,atrim=duration=${sec(editedDuration(e))},${AUDIO_FORMAT}[amain]`
+      )
+      maps.push('-map', '[aout]')
+    }
+    const n = ticks.length
+    parts.push(
+      `aevalsrc=exprs=${tickExpr()}:s=48000:d=${RIPPLE_TICK_SECONDS},${AUDIO_FORMAT}${n > 1 ? `,asplit=${n}` : ''}${ticks.map((_, i) => `[tk${i}]`).join('')}`
+    )
+    ticks.forEach((t, i) => {
+      parts.push(`[tk${i}]adelay=delays=${Math.round(t)}:all=1[td${i}]`)
+    })
+    parts.push(
+      `[amain]${AUDIO_FORMAT}[amainf];[amainf]${ticks.map((_, i) => `[td${i}]`).join('')}amix=inputs=${n + 1}:duration=first:dropout_transition=0:normalize=0[aout]`
     )
   }
 
@@ -251,7 +307,7 @@ export function buildRenderArgs(input: RenderInput): string[] {
     'yuv420p',
     '-threads',
     String(input.threads),
-    ...(input.hasAudio ? ['-c:a', 'aac', '-b:a', '128k'] : []),
+    ...(withAudio ? ['-c:a', 'aac', '-b:a', '128k'] : []),
     '-movflags',
     '+faststart',
     input.outputPath

@@ -1,4 +1,6 @@
+import { CornerUpLeft, X } from 'lucide-react'
 import { memo, useCallback, useRef } from 'react'
+import { Button } from '../../ui/button'
 import { sourceToEdited, upsertItemChecked } from '../edits'
 import type { RecordedClick, VideoEdits } from '../types'
 import { CaptionsPanel } from './CaptionsPanel'
@@ -13,6 +15,13 @@ import { clicksToRipples } from './tools'
 
 const clockShort = (ms: number) =>
   `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`
+
+/** A source moment as the viewer's clock (the edited time), or the source
+ *  clock with "cut" when that moment is cut out. */
+function spotLabel(e: VideoEdits, srcMs: number): string {
+  const at = sourceToEdited(e, srcMs)
+  return at === null ? `${clockShort(srcMs)} (cut)` : clockShort(at)
+}
 
 /**
  * The editor's right-hand column: the Inspector for the selection, then
@@ -31,6 +40,9 @@ export const EditorSidebar = memo(function EditorSidebar({
   onChange,
   onSelect,
   onSeek,
+  returnTo,
+  onReturn,
+  onForgetReturn,
   onNote,
   onAddChapter,
   videoTitle,
@@ -49,6 +61,11 @@ export const EditorSidebar = memo(function EditorSidebar({
   onChange: (e: VideoEdits, key?: string) => void
   onSelect: (s: Selection) => void
   onSeek: (srcMs: number) => void
+  /** Where the playhead was before a jump made from this panel (source ms),
+   *  or null: shown as a Back button until used or forgotten. */
+  returnTo: number | null
+  onReturn: () => void
+  onForgetReturn: () => void
   /** The editor's note, for every change that can't be made. */
   onNote: (n: string | null) => void
   /** Adds a chapter at the playhead (the editor's M). */
@@ -107,6 +124,37 @@ export const EditorSidebar = memo(function EditorSidebar({
 
   return (
     <aside aria-label='Selected item, chapters, captions and cards' data-hvx-side data-hv-sidebar>
+      {returnTo !== null && (
+        <div
+          className='flex items-center gap-1 border-b border-border px-3 py-1.5'
+          data-hv-side-return
+        >
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-7 min-w-0 flex-1 justify-start px-2 text-[12.5px]'
+            onClick={onReturn}
+            data-hv-side-return-go
+          >
+            <CornerUpLeft className='!size-3.5' aria-hidden />
+            <span className='truncate'>
+              Back to {spotLabel(edits, returnTo)}
+              <span className='text-muted-foreground'>, where you were</span>
+            </span>
+          </Button>
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-7 w-7 shrink-0 px-0 text-muted-foreground'
+            onClick={onForgetReturn}
+            aria-label='Stay here'
+            title='Stay here'
+            data-hv-side-return-forget
+          >
+            <X className='!size-3.5' aria-hidden />
+          </Button>
+        </div>
+      )}
       <div
         className={`border-b border-border px-4 py-3 ${selection ? 'bg-muted/40' : ''}`}
         data-hv-side-inspector

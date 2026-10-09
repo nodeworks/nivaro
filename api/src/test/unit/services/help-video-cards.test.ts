@@ -1,4 +1,8 @@
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
+import { accentOnDark, inkOnAccent } from '../../../services/help-video-card-design.js'
 import {
   bannerSourceSpans,
   bannerTree,
@@ -7,7 +11,8 @@ import {
   cardText,
   firstLine,
   introTree,
-  outroTree
+  outroTree,
+  shownBrand
 } from '../../../services/help-video-cards.js'
 import {
   bodyDuration,
@@ -164,7 +169,12 @@ describe('time mapping with cards', () => {
       { start_ms: 10_000, end_ms: 12_000 }
     ])
     expect(editedSpanToSource(e, 0, 2000)).toEqual([])
-    expect(bannerSourceSpans(e, chapterBannerWindows(e))).toEqual([
+    expect(
+      bannerSourceSpans(
+        e,
+        chapterBannerWindows(e).map((b, i) => ({ ...b, index: i + 1, total: 3 }))
+      )
+    ).toEqual([
       { index: 0, start_ms: 0, end_ms: 1000 },
       { index: 1, start_ms: 1000, end_ms: 3500 },
       { index: 2, start_ms: 16_000, end_ms: 18_000 }
@@ -194,9 +204,10 @@ describe('card text', () => {
       title: 'Approve a request',
       subtitle: 'Who signs off.',
       chapters: ['Step 1', 'Step 2', 'Step 3', 'Step 4', 'Step 5', 'Step 6'],
-      more: 2
+      more: 2,
+      duration_ms: editedDuration(e)
     })
-    expect(t.outro).toBe(OUTRO_DEFAULT_TEXT)
+    expect(t.outro).toEqual({ text: OUTRO_DEFAULT_TEXT, title: 'Approve a request' })
     expect(t.banners).toEqual([])
   })
   it('prefers the card’s own words', () => {
@@ -211,7 +222,7 @@ describe('card text', () => {
     expect(t.intro?.title).toBe('Own')
     expect(t.intro?.subtitle).toBe('Sub')
     expect(t.intro?.chapters).toEqual([])
-    expect(t.outro).toBe('Bye')
+    expect(t.outro?.text).toBe('Bye')
   })
   it('keeps the accent a #rrggbb colour and reads the first line', () => {
     expect(cardAccent('#AB12CD')).toBe('#ab12cd')
@@ -229,12 +240,19 @@ describe('card trees', () => {
   ]
   it('carries author text only as text, never markup', () => {
     const t = introTree(
-      { title: '<img src=x onerror=1>', subtitle: 's', chapters: ['<b>c</b>'], more: 1 },
+      {
+        title: '<img src=x onerror=1>',
+        subtitle: 's',
+        chapters: ['<b>c</b>'],
+        more: 1,
+        duration_ms: 125_000
+      },
       brand,
       1280
     )
     expect(texts(t)).toEqual([
       'Acme',
+      '2 min',
       '<img src=x onerror=1>',
       's',
       'In this video',
@@ -245,11 +263,41 @@ describe('card trees', () => {
     const all = JSON.stringify(t)
     expect(all).not.toContain('"tag":"img"')
   })
-  it('uses the logo when there is one, and scales with the frame', () => {
-    const t = outroTree('Bye', { ...brand, logo: 'data:image/png;base64,AAAA' }, 1920)
-    expect(t.children?.[0]).toMatchObject({ tag: 'img', src: 'data:image/png;base64,AAAA' })
-    expect(t.children?.[2].css).toContain('font-size:63px')
-    expect(bannerTree('Chapter', brand, 640).css).toContain('left:26px')
+  it('shows the logo with the name, and scales with the frame', () => {
+    const t = outroTree(
+      { text: 'Bye', title: 'Approve' },
+      { ...brand, logo: 'data:image/png;base64,AAAA' },
+      1920
+    )
+    const foot = t.children?.[2]
+    expect(foot?.children?.[0]).toMatchObject({ tag: 'img', src: 'data:image/png;base64,AAAA' })
+    expect(foot?.children?.[1]).toMatchObject({ text: 'Acme' })
+    expect(JSON.stringify(t)).toContain('font-size:69px')
+    const b = bannerTree({ title: 'Chapter', index: 2, total: 5 }, brand, 640)
+    expect(b.css).toContain('left:28px')
+    expect(texts(b)).toEqual(['2', 'Chapter 2 of 5', 'Chapter'])
+  })
+  it('uses the video’s own name over the instance name', () => {
+    const e = normalizeEdits({ card_brand: '  Field Ops  ' }, SRC)
+    expect(e.card_brand).toBe('Field Ops')
+    expect(shownBrand(brand, e).name).toBe('Field Ops')
+    expect(shownBrand(brand, normalizeEdits({ card_brand: '  ' }, SRC)).name).toBe('Acme')
+    expect('card_brand' in normalizeEdits({ card_brand: '' }, SRC)).toBe(false)
+  })
+  it('keeps a dark brand colour readable on the card ground', () => {
+    expect(accentOnDark('#00ceff')).toBe('#00ceff')
+    expect(accentOnDark('#172940')).not.toBe('#172940')
+    expect(inkOnAccent('#00ceff')).toBe('#0b1120')
+    expect(inkOnAccent('#172940')).toBe('#ffffff')
+  })
+  it('draws from the same layout file as the player', () => {
+    const here = dirname(fileURLToPath(import.meta.url))
+    const api = readFileSync(resolve(here, '../../../services/help-video-card-design.ts'), 'utf8')
+    const shared = readFileSync(
+      resolve(here, '../../../../../packages/shared/src/components/help-videos/cardDesign.ts'),
+      'utf8'
+    )
+    expect(api).toBe(shared)
   })
 })
 

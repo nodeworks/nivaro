@@ -77,6 +77,9 @@ export interface VideoEdits {
   intro?: IntroCard
   outro?: OutroCard
   chapter_banners?: true
+  /** The name drawn on the cards instead of the instance name (stored only
+   *  when filled in). */
+  card_brand?: string
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }

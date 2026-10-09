@@ -468,7 +468,12 @@ export async function serializeVideo(
     category: (video.category as string | null) ?? null,
     status: video.status as HelpVideoDto['status'],
     duration_ms: video.duration_ms == null ? null : Number(video.duration_ms),
-    poster_url: video.poster_file ? `${base}/poster?st=${pt}` : null,
+    // `v` names the poster file: a re-render makes a new URL, so a page that
+    // already showed the old poster loads the new one (an <img> with the same
+    // URL is reused from the page's memory cache, no-cache or not).
+    poster_url: video.poster_file
+      ? `${base}/poster?st=${pt}&v=${String(video.poster_file).slice(0, 8).toLowerCase()}`
+      : null,
     stream_url: published ? `${base}/stream?st=${pt}` : null,
     captions_url: published ? `${base}/captions.vtt?st=${pt}` : null,
     contexts: contexts.map(

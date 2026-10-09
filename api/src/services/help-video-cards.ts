@@ -2,7 +2,19 @@ import { join } from 'node:path'
 import { db } from '../db/index.js'
 import { getFile } from './files.js'
 import {
+  type BannerContent,
+  bannerTree,
+  CARD_FONT,
+  type CardBrandShown,
+  type CardNode,
+  type IntroCardContent,
+  introTree,
+  type OutroCardContent,
+  outroTree
+} from './help-video-card-design.js'
+import {
   chapterBannerWindows,
+  editedDuration,
   editedSpanToSource,
   OUTRO_DEFAULT_TEXT,
   sourceToEdited,
@@ -12,21 +24,14 @@ import { getBrowser } from './pdf-layout.js'
 import { openStoredObject } from './stored-object-stream.js'
 
 // Draws a help video's intro card, outro card and chapter banners as PNGs for
-// the render, with the same layout as the shared player's CardLayer
-// (packages/shared/src/components/help-videos/CardLayer.tsx + cards.ts — keep
-// them in step). Like the annotations: every author string goes in through
+// the render. The layout itself is help-video-card-design.ts, a copy of the
+// shared player's packages/shared/src/components/help-videos/cardDesign.ts
+// (a test fails when they differ); the words come from cardText, which
+// mirrors the player's cards.ts. Like the annotations: every author string goes in through
 // textContent, the page fetches nothing (setContent + every request other
 // than the blank document or a data: URI is aborted), and the logo is handed
 // over as a data URI read from storage here.
 
-export const CARD_COLORS = {
-  ground: '#0f172a',
-  title: '#ffffff',
-  body: '#cbd5e1',
-  label: '#94a3b8',
-  item: '#e2e8f0',
-  banner: 'rgba(15, 23, 42, 0.88)'
-} as const
 export const DEFAULT_CARD_ACCENT = '#00ceff'
 export const INTRO_CHAPTER_MAX = 6
 /** A logo larger than this is left out (the card shows the name instead). */
@@ -41,10 +46,13 @@ export interface CardBrand {
   logo: string | null
 }
 
+export type { CardNode } from './help-video-card-design.js'
+export { bannerTree, introTree, outroTree } from './help-video-card-design.js'
+
 export interface CardText {
-  intro: { title: string; subtitle: string; chapters: string[]; more: number } | null
-  outro: string | null
-  banners: Array<{ id: string; title: string; start_ms: number; end_ms: number }>
+  intro: IntroCardContent | null
+  outro: OutroCardContent | null
+  banners: Array<BannerContent & { id: string; start_ms: number; end_ms: number }>
 }
 
 export function cardAccent(v: unknown): string {
@@ -62,29 +70,42 @@ export function firstLine(text: unknown, max = 200): string {
 }
 
 /** What the cards say: the shared player's introContent / outroContent /
- *  chapterBannerWindows. */
+ *  bannerAt. */
 export function cardText(e: VideoEdits, video: { title: unknown; description: unknown }): CardText {
+  const videoTitle = String(video.title ?? '').trim()
+  const kept = e.chapters
+    .map((c) => ({ id: c.id, title: c.title, at: sourceToEdited(e, c.at_ms) }))
+    .filter((c): c is { id: string; title: string; at: number } => c.at !== null)
+    .sort((a, b) => a.at - b.at)
   let intro: CardText['intro'] = null
   if (e.intro?.enabled) {
-    const all = e.intro.show_chapters
-      ? e.chapters
-          .map((c) => ({ title: c.title, at: sourceToEdited(e, c.at_ms) }))
-          .filter((c) => c.at !== null)
-          .sort((a, b) => (a.at as number) - (b.at as number))
-          .map((c) => c.title)
-      : []
+    const all = e.intro.show_chapters ? kept.map((c) => c.title) : []
     intro = {
-      title: e.intro.title.trim() || String(video.title ?? '').trim() || 'Untitled video',
+      title: e.intro.title.trim() || videoTitle || 'Untitled video',
       subtitle: e.intro.subtitle.trim() || firstLine(video.description),
       chapters: all.slice(0, INTRO_CHAPTER_MAX),
-      more: Math.max(0, all.length - INTRO_CHAPTER_MAX)
+      more: Math.max(0, all.length - INTRO_CHAPTER_MAX),
+      duration_ms: editedDuration(e)
     }
   }
   return {
     intro,
-    outro: e.outro?.enabled ? e.outro.text.trim() || OUTRO_DEFAULT_TEXT : null,
-    banners: chapterBannerWindows(e)
+    outro: e.outro?.enabled
+      ? { text: e.outro.text.trim() || OUTRO_DEFAULT_TEXT, title: videoTitle }
+      : null,
+    banners: chapterBannerWindows(e).map((b) => ({
+      ...b,
+      index: kept.findIndex((c) => c.id === b.id) + 1,
+      total: kept.length
+    }))
   }
+}
+
+/** The brand as the cards draw it for one video: the video's own name
+ *  (card_brand) beats the instance name; the logo and colour stay. */
+export function shownBrand(brand: CardBrand, e: VideoEdits): CardBrandShown {
+  const own = e.card_brand?.trim()
+  return { name: own || brand.name, color: brand.color, logo: brand.logo }
 }
 
 /** The instance brand (name, accent, logo) the cards are drawn in. Never
@@ -138,145 +159,6 @@ export function bannerSourceSpans(
   )
 }
 
-// ── the card as a tree of plain nodes ────────────────────────────────────────
-// Built here in Node (so it is testable), then materialised inside Chromium by
-// a loop with no helper functions: author strings only ever become text nodes.
-
-export interface CardNode {
-  tag: 'div' | 'span' | 'img'
-  css: string
-  text?: string
-  /** img only: a data: URI. */
-  src?: string
-  children?: CardNode[]
-}
-
-const clampLines = (n: number) =>
-  `display:-webkit-box;-webkit-line-clamp:${n};-webkit-box-orient:vertical;overflow:hidden;`
-
-function brandMark(brand: CardBrand, u: number, center: boolean): CardNode | null {
-  if (brand.logo) {
-    return {
-      tag: 'img',
-      src: brand.logo,
-      css: `height:${56 * u}px;max-width:${360 * u}px;object-fit:contain;object-position:${center ? 'center' : 'left center'};display:block;${center ? 'margin:0 auto;' : ''}`
-    }
-  }
-  if (!brand.name) return null
-  return {
-    tag: 'div',
-    text: brand.name,
-    css: `color:${CARD_COLORS.label};font-size:${20 * u}px;font-weight:700;letter-spacing:${2 * u}px;text-transform:uppercase;`
-  }
-}
-
-function rule(brand: CardBrand, u: number, center: boolean): CardNode {
-  return {
-    tag: 'div',
-    css: `width:${72 * u}px;height:${6 * u}px;border-radius:${3 * u}px;background:${brand.color};margin:${28 * u}px ${center ? 'auto' : '0'};`
-  }
-}
-
-/** The intro card (opaque, full frame). */
-export function introTree(
-  intro: NonNullable<CardText['intro']>,
-  brand: CardBrand,
-  width: number
-): CardNode {
-  const u = width / 1280
-  const kids: CardNode[] = []
-  const mark = brandMark(brand, u, false)
-  if (mark) kids.push(mark)
-  kids.push(rule(brand, u, false))
-  kids.push({
-    tag: 'div',
-    text: intro.title,
-    css: `color:${CARD_COLORS.title};font-size:${54 * u}px;font-weight:700;line-height:1.15;${clampLines(2)}`
-  })
-  if (intro.subtitle) {
-    kids.push({
-      tag: 'div',
-      text: intro.subtitle,
-      css: `color:${CARD_COLORS.body};font-size:${26 * u}px;line-height:1.35;margin-top:${16 * u}px;${clampLines(2)}`
-    })
-  }
-  if (intro.chapters.length) {
-    const list: CardNode[] = [
-      {
-        tag: 'div',
-        text: 'In this video',
-        css: `color:${CARD_COLORS.label};font-size:${16 * u}px;font-weight:700;letter-spacing:${1.5 * u}px;text-transform:uppercase;margin-bottom:${10 * u}px;`
-      },
-      ...intro.chapters.map(
-        (t, i): CardNode => ({
-          tag: 'div',
-          css: `color:${CARD_COLORS.item};font-size:${21 * u}px;line-height:1.5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`,
-          children: [
-            {
-              tag: 'span',
-              text: String(i + 1),
-              css: `color:${brand.color};font-weight:700;margin-right:${12 * u}px;`
-            },
-            { tag: 'span', text: t, css: '' }
-          ]
-        })
-      )
-    ]
-    if (intro.more > 0) {
-      list.push({
-        tag: 'div',
-        text: `and ${intro.more} more`,
-        css: `color:${CARD_COLORS.label};font-size:${18 * u}px;margin-top:${4 * u}px;`
-      })
-    }
-    kids.push({ tag: 'div', css: `margin-top:${34 * u}px;`, children: list })
-  }
-  return {
-    tag: 'div',
-    css: `position:absolute;inset:0;background:${CARD_COLORS.ground};display:flex;flex-direction:column;justify-content:center;padding:0 ${110 * u}px;`,
-    children: kids
-  }
-}
-
-/** The outro card (opaque, full frame). */
-export function outroTree(text: string, brand: CardBrand, width: number): CardNode {
-  const u = width / 1280
-  const kids: CardNode[] = []
-  const mark = brandMark(brand, u, true)
-  if (mark) kids.push(mark)
-  kids.push(rule(brand, u, true))
-  kids.push({
-    tag: 'div',
-    text,
-    css: `color:${CARD_COLORS.title};font-size:${42 * u}px;font-weight:700;line-height:1.25;${clampLines(3)}`
-  })
-  return {
-    tag: 'div',
-    css: `position:absolute;inset:0;background:${CARD_COLORS.ground};display:flex;flex-direction:column;justify-content:center;text-align:center;padding:0 ${140 * u}px;`,
-    children: kids
-  }
-}
-
-/** A chapter banner: a lower-third panel on a transparent frame. */
-export function bannerTree(title: string, brand: CardBrand, width: number): CardNode {
-  const u = width / 1280
-  return {
-    tag: 'div',
-    css: `position:absolute;left:${52 * u}px;bottom:${130 * u}px;max-width:${760 * u}px;display:flex;align-items:center;gap:${14 * u}px;background:${CARD_COLORS.banner};border-radius:${10 * u}px;padding:${14 * u}px ${24 * u}px;box-shadow:0 ${4 * u}px ${18 * u}px rgba(0,0,0,0.35);box-sizing:border-box;`,
-    children: [
-      {
-        tag: 'span',
-        css: `width:${12 * u}px;height:${12 * u}px;border-radius:50%;background:${brand.color};flex-shrink:0;`
-      },
-      {
-        tag: 'span',
-        text: title,
-        css: `color:${CARD_COLORS.title};font-size:${28 * u}px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;`
-      }
-    ]
-  }
-}
-
 // The api compiles without the DOM lib; this is the slice the page callback touches.
 interface PageNode {
   style: Record<string, string>
@@ -291,7 +173,7 @@ interface PageDocument {
 }
 
 const PAGE = `<!doctype html><html><head><style>
-html,body{margin:0;background:transparent;overflow:hidden;font-family:Arial,Helvetica,sans-serif}
+html,body{margin:0;background:transparent;overflow:hidden;font-family:${CARD_FONT}}
 #root{position:relative;overflow:hidden}
 </style></head><body><div id="root"></div></body></html>`
 
@@ -303,7 +185,7 @@ function isAllowed(url: string): boolean {
  *  banners full-frame transparent overlays (one per banner, in order). */
 export async function rasterizeCards(
   text: CardText,
-  brand: CardBrand,
+  brand: CardBrandShown,
   size: { width: number; height: number },
   dir: string
 ): Promise<{ intro: string | null; outro: string | null; banners: string[] }> {
@@ -324,7 +206,7 @@ export async function rasterizeCards(
   text.banners.forEach((b, i) => {
     const path = join(dir, `card-banner-${i + 1}.png`)
     out.banners.push(path)
-    jobs.push({ tree: bannerTree(b.title, brand, size.width), path, opaque: false })
+    jobs.push({ tree: bannerTree(b, brand, size.width), path, opaque: false })
   })
   if (!jobs.length) return out
   const browser = await getBrowser()

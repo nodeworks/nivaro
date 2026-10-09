@@ -117,6 +117,7 @@ describe('mirrors the server EDIT_LIMITS', () => {
       introTitle: 120,
       introSubtitle: 200,
       outroText: 200,
+      cardBrand: 60,
       bannerMs: 2500
     })
   })

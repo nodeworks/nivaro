@@ -179,7 +179,6 @@ function EditorBody({
   })
   const playerVideo = usePinnedVideo(video, draft)
   const player = useRef<PlayerHandle | null>(null)
-  const seek = useCallback((ms: number) => player.current?.seekSource(ms), [])
   const [src, setSrc] = useState(0)
   const srcRef = useRef(src)
   srcRef.current = src
@@ -233,10 +232,46 @@ function EditorBody({
     if (r.id) setSelection({ lane: 'chapters', id: r.id })
   }, [playhead, showNote, set])
   const stopDrawing = useCallback(() => setTool(null), [])
-  const showCard = useCallback((card: 'intro' | 'outro') => {
-    const e = editsRef.current
-    player.current?.seekEdited(card === 'intro' ? 0 : introMs(e) + bodyDuration(e))
+  // A jump made from the side panel (a chapter, a caption, Jump to it, Show
+  // it) remembers where the playhead and selection were, so one click takes
+  // the author back. Consecutive panel jumps keep the FIRST spot; moving the
+  // playhead from the timeline or the picture forgets it.
+  const [returnTo, setReturnTo] = useState<{ ms: number; selection: Selection } | null>(null)
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  const rememberSpot = useCallback(() => {
+    const ms = playhead()
+    setReturnTo((cur) => cur ?? { ms, selection: selectionRef.current })
+  }, [playhead])
+  const sideSeek = useCallback(
+    (ms: number) => {
+      if (Math.abs(ms - playhead()) >= 500) rememberSpot()
+      player.current?.seekSource(ms)
+    },
+    [playhead, rememberSpot]
+  )
+  const timelineSeek = useCallback((ms: number) => {
+    setReturnTo(null)
+    player.current?.seekSource(ms)
   }, [])
+  const goBack = useCallback(() => {
+    setReturnTo((cur) => {
+      if (cur) {
+        player.current?.seekSource(cur.ms)
+        setSelection(cur.selection)
+      }
+      return null
+    })
+  }, [])
+  const forgetSpot = useCallback(() => setReturnTo(null), [])
+  const showCard = useCallback(
+    (card: 'intro' | 'outro') => {
+      const e = editsRef.current
+      rememberSpot()
+      player.current?.seekEdited(card === 'intro' ? 0 : introMs(e) + bodyDuration(e))
+    },
+    [rememberSpot]
+  )
 
   useEditorShortcuts(tab === 'edit', {
     undo: () => dispatch({ type: 'undo' }),
@@ -398,7 +433,7 @@ function EditorBody({
               silent={silent}
               edits={edits}
               onChange={set}
-              onSeek={seek}
+              onSeek={sideSeek}
               onRefused={showNote}
             />
             <div className='ml-auto flex items-center gap-0.5'>
@@ -469,7 +504,10 @@ function EditorBody({
               playhead={playhead}
               onChange={set}
               onSelect={setSelection}
-              onSeek={seek}
+              onSeek={sideSeek}
+              returnTo={returnTo?.ms ?? null}
+              onReturn={goBack}
+              onForgetReturn={forgetSpot}
               onNote={showNote}
               onAddChapter={addChapter}
               videoTitle={video.title}
@@ -487,7 +525,7 @@ function EditorBody({
               silences={silent}
               selection={selection}
               onSelect={setSelection}
-              onSeek={seek}
+              onSeek={timelineSeek}
               onChange={set}
               note={note}
               onNote={showNote}

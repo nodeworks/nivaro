@@ -3,8 +3,16 @@ import { memo, useId } from 'react'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Switch } from '../../ui/switch'
+import { useCardBrand } from '../api'
 import { firstLine } from '../cards'
-import { EDIT_LIMITS, OUTRO_DEFAULT_TEXT, setChapterBanners, setIntro, setOutro } from '../edits'
+import {
+  EDIT_LIMITS,
+  OUTRO_DEFAULT_TEXT,
+  setCardBrand,
+  setChapterBanners,
+  setIntro,
+  setOutro
+} from '../edits'
 import type { VideoEdits } from '../types'
 
 const SECONDS = [2, 3, 4, 5, 6]
@@ -39,11 +47,14 @@ export const CardsPanel = memo(function CardsPanel({
     introCh: useId(),
     outro: useId(),
     outroText: useId(),
-    banners: useId()
+    banners: useId(),
+    brand: useId()
   }
   const intro = edits.intro
   const outro = edits.outro
   const descLine = firstLine(videoDescription)
+  // The instance name: what a blank "Name on the cards" shows.
+  const instance = useCardBrand(!!(intro || outro), '')
   return (
     <section className='space-y-3' aria-labelledby={headingId} data-hv-cards>
       <div>
@@ -157,6 +168,29 @@ export const CardsPanel = memo(function CardsPanel({
           </div>
         )}
       </div>
+
+      {(intro || outro) && (
+        <div className='space-y-1' data-hv-card-brand>
+          <label htmlFor={ids.brand} className='text-[12px] font-medium text-foreground'>
+            Name on the cards
+          </label>
+          <Input
+            id={ids.brand}
+            value={edits.card_brand ?? ''}
+            maxLength={EDIT_LIMITS.cardBrand}
+            placeholder={instance.name || 'None'}
+            onChange={(e) => onChange(setCardBrand(edits, e.target.value), 'card:brand')}
+            className='h-8 text-[13px]'
+            aria-describedby={`${ids.brand}-hint`}
+            data-hv-card-brand-input
+          />
+          <p id={`${ids.brand}-hint`} className='text-[11.5px] leading-snug text-muted-foreground'>
+            {instance.name
+              ? `Left blank, the cards show ${instance.name}. Your logo and colour stay either way.`
+              : 'Shown beside your logo on the title and end cards.'}
+          </p>
+        </div>
+      )}
 
       <ToggleRow
         id={ids.banners}
