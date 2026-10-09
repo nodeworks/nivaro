@@ -3,6 +3,8 @@ import type {
   Blur,
   Caption,
   Chapter,
+  IntroCard,
+  OutroCard,
   Point,
   Rect,
   Speed,
@@ -34,8 +36,18 @@ export const EDIT_LIMITS = {
   minItemMs: 200,
   minSegmentMs: 100,
   /** Smallest zoom rect side (fraction of the frame): at most 4x magnification. */
-  zoomMinSide: 0.25
+  zoomMinSide: 0.25,
+  cardMinMs: 2000,
+  cardMaxMs: 6000,
+  cardDefaultMs: 3000,
+  introTitle: 120,
+  introSubtitle: 200,
+  outroText: 200,
+  /** How long a chapter banner stays up, in edited time. */
+  bannerMs: 2500
 } as const
+/** Same text as the server's OUTRO_DEFAULT_TEXT. */
+export const OUTRO_DEFAULT_TEXT = 'Questions? Ask your administrator.'
 export const MIN_KEPT_MS = EDIT_LIMITS.minKeptMs
 const MIN_SEGMENT_MS = EDIT_LIMITS.minSegmentMs
 export type ListKey = 'chapters' | 'annotations' | 'zooms' | 'blurs' | 'captions'
@@ -45,28 +57,115 @@ const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n
 export function newId(): string {
   return globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
 }
-export function editedDuration(e: VideoEdits): number {
+// Edited time = intro card + the kept pieces (at their speeds) + outro card.
+
+/** The intro card's length in edited time (0 when it is off). */
+export function introMs(e: VideoEdits): number {
+  return e.intro?.enabled ? e.intro.duration_ms : 0
+}
+/** The outro card's length in edited time (0 when it is off). */
+export function outroMs(e: VideoEdits): number {
+  return e.outro?.enabled ? e.outro.duration_ms : 0
+}
+/** The kept recording alone, at its speeds. */
+export function bodyDuration(e: VideoEdits): number {
   return Math.round(e.segments.reduce((t, s) => t + (s.end_ms - s.start_ms) / s.speed, 0))
+}
+export function editedDuration(e: VideoEdits): number {
+  return introMs(e) + bodyDuration(e) + outroMs(e)
 }
 export function keptMs(e: VideoEdits): number {
   return e.segments.reduce((t, s) => t + (s.end_ms - s.start_ms), 0)
 }
 export function sourceToEdited(e: VideoEdits, ms: number): number | null {
+  const lead = introMs(e)
   let acc = 0
   for (const s of e.segments) {
-    if (ms >= s.start_ms && ms < s.end_ms) return Math.round(acc + (ms - s.start_ms) / s.speed)
+    if (ms >= s.start_ms && ms < s.end_ms)
+      return Math.round(lead + acc + (ms - s.start_ms) / s.speed)
     acc += (s.end_ms - s.start_ms) / s.speed
   }
   return null
 }
+/** The source moment shown at an edited time. Inside the intro card: the first
+ *  kept frame; inside the outro card: the last. */
 export function editedToSource(e: VideoEdits, ms: number): number {
+  const m = ms - introMs(e)
+  if (m < 0) return e.segments.length ? e.segments[0].start_ms : 0
   let acc = 0
   for (const s of e.segments) {
     const len = (s.end_ms - s.start_ms) / s.speed
-    if (ms < acc + len) return Math.round(s.start_ms + (ms - acc) * s.speed)
+    if (m < acc + len) return Math.round(s.start_ms + (m - acc) * s.speed)
     acc += len
   }
   return e.segments.length ? e.segments[e.segments.length - 1].end_ms : 0
+}
+/** Which part of the edited timeline a moment falls in, and how far into it. */
+export function cardPhaseAt(
+  e: VideoEdits,
+  ms: number
+): { phase: 'intro' | 'body' | 'outro'; at: number } {
+  const lead = introMs(e)
+  if (ms < lead) return { phase: 'intro', at: Math.max(0, ms) }
+  const bodyEnd = lead + bodyDuration(e)
+  if (outroMs(e) > 0 && ms >= bodyEnd) return { phase: 'outro', at: ms - bodyEnd }
+  return { phase: 'body', at: ms - lead }
+}
+/** Chapter banners in edited time: one per chapter viewers see (a chapter
+ *  inside a cut gets none), up for EDIT_LIMITS.bannerMs or until the next
+ *  banner or the end of the recording. Empty when banners are off. Same rule
+ *  as the server's render. */
+export function chapterBannerWindows(
+  e: VideoEdits
+): Array<{ id: string; title: string; start_ms: number; end_ms: number }> {
+  if (e.chapter_banners !== true) return []
+  const bodyEnd = introMs(e) + bodyDuration(e)
+  const kept = e.chapters
+    .map((c) => ({ id: c.id, title: c.title, at: sourceToEdited(e, c.at_ms) }))
+    .filter((c): c is { id: string; title: string; at: number } => c.at !== null)
+    .sort((a, b) => a.at - b.at)
+  const out: Array<{ id: string; title: string; start_ms: number; end_ms: number }> = []
+  kept.forEach((c, i) => {
+    const next = kept[i + 1]?.at ?? Number.POSITIVE_INFINITY
+    const end = Math.min(c.at + EDIT_LIMITS.bannerMs, next, bodyEnd)
+    if (end - c.at >= EDIT_LIMITS.minItemMs)
+      out.push({ id: c.id, title: c.title, start_ms: c.at, end_ms: end })
+  })
+  return out
+}
+/** The intro / outro the server would store for an editor change: the
+ *  server's normalizeIntro / normalizeOutro rules (off = absent). */
+export function setIntro(e: VideoEdits, intro: Partial<IntroCard> | null): VideoEdits {
+  const { intro: _drop, ...rest } = e
+  if (!intro) return rest as VideoEdits
+  const cur = e.intro
+  const next: IntroCard = {
+    enabled: true,
+    duration_ms: clampCardMs(intro.duration_ms ?? cur?.duration_ms),
+    show_chapters: (intro.show_chapters ?? cur?.show_chapters) === true,
+    title: (intro.title ?? cur?.title ?? '').slice(0, EDIT_LIMITS.introTitle),
+    subtitle: (intro.subtitle ?? cur?.subtitle ?? '').slice(0, EDIT_LIMITS.introSubtitle)
+  }
+  return { ...rest, intro: next } as VideoEdits
+}
+export function setOutro(e: VideoEdits, outro: Partial<OutroCard> | null): VideoEdits {
+  const { outro: _drop, ...rest } = e
+  if (!outro) return rest as VideoEdits
+  const cur = e.outro
+  const next: OutroCard = {
+    enabled: true,
+    duration_ms: clampCardMs(outro.duration_ms ?? cur?.duration_ms),
+    text: (outro.text ?? cur?.text ?? '').slice(0, EDIT_LIMITS.outroText)
+  }
+  return { ...rest, outro: next } as VideoEdits
+}
+export function setChapterBanners(e: VideoEdits, on: boolean): VideoEdits {
+  const { chapter_banners: _drop, ...rest } = e
+  return (on ? { ...rest, chapter_banners: true } : rest) as VideoEdits
+}
+function clampCardMs(v: number | undefined): number {
+  const n = typeof v === 'number' && Number.isFinite(v) ? v : EDIT_LIMITS.cardDefaultMs
+  return Math.round(clamp(n, EDIT_LIMITS.cardMinMs, EDIT_LIMITS.cardMaxMs))
 }
 export function isHiddenByCuts(e: VideoEdits, start: number, end: number): boolean {
   return !e.segments.some((s) => start < s.end_ms && end > s.start_ms)

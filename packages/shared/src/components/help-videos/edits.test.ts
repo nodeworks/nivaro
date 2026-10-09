@@ -110,7 +110,14 @@ describe('mirrors the server EDIT_LIMITS', () => {
       minKeptMs: 1000,
       minItemMs: 200,
       minSegmentMs: 100,
-      zoomMinSide: 0.25
+      zoomMinSide: 0.25,
+      cardMinMs: 2000,
+      cardMaxMs: 6000,
+      cardDefaultMs: 3000,
+      introTitle: 120,
+      introSubtitle: 200,
+      outroText: 200,
+      bannerMs: 2500
     })
   })
   it('squares a zoom rect and clamps its side to at least 0.25', () => {

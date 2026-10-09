@@ -8,7 +8,15 @@ import { Skeleton } from '../../ui/skeleton'
 import { Switch } from '../../ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs'
 import { helpVideoApi, helpVideoKeys, useHelpVideo } from '../api'
-import { ALLOWED_SPEEDS, removeSegment, segmentIndexAt, setSpeed, splitAt } from '../edits'
+import {
+  ALLOWED_SPEEDS,
+  bodyDuration,
+  introMs,
+  removeSegment,
+  segmentIndexAt,
+  setSpeed,
+  splitAt
+} from '../edits'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
 import { addChapterAt } from './ChaptersPanel'
@@ -222,6 +230,10 @@ function EditorBody({
     if (r.id) setSelection({ lane: 'chapters', id: r.id })
   }, [playhead, showNote, set])
   const stopDrawing = useCallback(() => setTool(null), [])
+  const showCard = useCallback((card: 'intro' | 'outro') => {
+    const e = editsRef.current
+    player.current?.seekEdited(card === 'intro' ? 0 : introMs(e) + bodyDuration(e))
+  }, [])
 
   useEditorShortcuts(tab === 'edit', {
     undo: () => dispatch({ type: 'undo' }),
@@ -448,6 +460,9 @@ function EditorBody({
                 onSeek={seek}
                 onNote={showNote}
                 onAddChapter={addChapter}
+                videoTitle={video.title}
+                videoDescription={video.description}
+                onShowCard={showCard}
               />
             )}
           </div>

@@ -52,6 +52,23 @@ export interface Caption {
   end_ms: number
   text: string
 }
+/** A title card played BEFORE the recording: real extra time on the edited
+ *  timeline. Blank `title` / `subtitle` mean the video's own title and the
+ *  first line of its description. */
+export interface IntroCard {
+  enabled: true
+  duration_ms: number
+  show_chapters: boolean
+  title: string
+  subtitle: string
+}
+/** An end card played AFTER the recording. Blank `text` shows OUTRO_DEFAULT_TEXT
+ *  (kept blank in storage, so clearing the field to retype it never refills it). */
+export interface OutroCard {
+  enabled: true
+  duration_ms: number
+  text: string
+}
 export interface VideoEdits {
   v: 1
   segments: Segment[]
@@ -61,6 +78,11 @@ export interface VideoEdits {
   zooms: Zoom[]
   blurs: Blur[]
   captions: Caption[]
+  // Optional and stored only when switched on: a video without them keeps the
+  // exact edits (and edits_hash) it always had.
+  intro?: IntroCard
+  outro?: OutroCard
+  chapter_banners?: true
 }
 
 export const ALLOWED_SPEEDS: Speed[] = [1, 1.5, 2, 4]
@@ -76,8 +98,18 @@ export const EDIT_LIMITS = {
   minItemMs: 200,
   minSegmentMs: 100,
   /** Smallest zoom rect side (fraction of the frame): at most 4x magnification. */
-  zoomMinSide: 0.25
+  zoomMinSide: 0.25,
+  cardMinMs: 2000,
+  cardMaxMs: 6000,
+  cardDefaultMs: 3000,
+  introTitle: 120,
+  introSubtitle: 200,
+  outroText: 200,
+  /** How long a chapter banner stays up, in edited time. */
+  bannerMs: 2500
 } as const
+
+export const OUTRO_DEFAULT_TEXT = 'Questions? Ask your administrator.'
 
 export class EditsError extends Error {
   statusCode = 422
@@ -239,7 +271,7 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   }
   captions.sort((a, b) => a.start_ms - b.start_ms)
 
-  return {
+  const out: VideoEdits = {
     v: 1,
     segments,
     poster_ms: Math.round(clamp(num(o.poster_ms), 0, src)),
@@ -248,6 +280,49 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
     zooms,
     blurs,
     captions
+  }
+  // Cards and banners are stored only while switched on; never added otherwise.
+  const intro = normalizeIntro(o.intro)
+  if (intro) out.intro = intro
+  const outro = normalizeOutro(o.outro)
+  if (outro) out.outro = outro
+  if (o.chapter_banners === true) out.chapter_banners = true
+  return out
+}
+
+function cardMs(v: unknown): number {
+  return Math.round(
+    clamp(num(v, EDIT_LIMITS.cardDefaultMs), EDIT_LIMITS.cardMinMs, EDIT_LIMITS.cardMaxMs)
+  )
+}
+function oneLine(v: unknown, max: number): string {
+  return text(v, max * 2)
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, max)
+}
+
+export function normalizeIntro(v: unknown): IntroCard | null {
+  if (!v || typeof v !== 'object') return null
+  const r = v as Record<string, unknown>
+  if (r.enabled !== true) return null
+  return {
+    enabled: true,
+    duration_ms: cardMs(r.duration_ms),
+    show_chapters: r.show_chapters === true,
+    title: oneLine(r.title, EDIT_LIMITS.introTitle),
+    subtitle: oneLine(r.subtitle, EDIT_LIMITS.introSubtitle)
+  }
+}
+
+export function normalizeOutro(v: unknown): OutroCard | null {
+  if (!v || typeof v !== 'object') return null
+  const r = v as Record<string, unknown>
+  if (r.enabled !== true) return null
+  return {
+    enabled: true,
+    duration_ms: cardMs(r.duration_ms),
+    text: oneLine(r.text, EDIT_LIMITS.outroText)
   }
 }
 
@@ -269,27 +344,105 @@ export function hashEdits(e: VideoEdits): string {
     .digest('hex')
 }
 
-export function editedDuration(e: VideoEdits): number {
+// Edited time = intro card + the kept pieces (at their speeds) + outro card.
+
+/** The intro card's length in edited time (0 when it is off). */
+export function introMs(e: VideoEdits): number {
+  return e.intro?.enabled ? e.intro.duration_ms : 0
+}
+/** The outro card's length in edited time (0 when it is off). */
+export function outroMs(e: VideoEdits): number {
+  return e.outro?.enabled ? e.outro.duration_ms : 0
+}
+/** The kept recording alone, at its speeds. */
+export function bodyDuration(e: VideoEdits): number {
   return Math.round(e.segments.reduce((t, s) => t + (s.end_ms - s.start_ms) / s.speed, 0))
+}
+export function editedDuration(e: VideoEdits): number {
+  return introMs(e) + bodyDuration(e) + outroMs(e)
 }
 
 export function sourceToEdited(e: VideoEdits, ms: number): number | null {
+  const lead = introMs(e)
   let acc = 0
   for (const s of e.segments) {
-    if (ms >= s.start_ms && ms < s.end_ms) return Math.round(acc + (ms - s.start_ms) / s.speed)
+    if (ms >= s.start_ms && ms < s.end_ms)
+      return Math.round(lead + acc + (ms - s.start_ms) / s.speed)
     acc += (s.end_ms - s.start_ms) / s.speed
   }
   return null
 }
 
+/** The source moment shown at an edited time. Inside the intro card: the first
+ *  kept frame; inside the outro card: the last. */
 export function editedToSource(e: VideoEdits, ms: number): number {
+  const m = ms - introMs(e)
+  if (m < 0) return e.segments.length ? e.segments[0].start_ms : 0
   let acc = 0
   for (const s of e.segments) {
     const len = (s.end_ms - s.start_ms) / s.speed
-    if (ms < acc + len) return Math.round(s.start_ms + (ms - acc) * s.speed)
+    if (m < acc + len) return Math.round(s.start_ms + (m - acc) * s.speed)
     acc += len
   }
   return e.segments.length ? e.segments[e.segments.length - 1].end_ms : 0
+}
+
+/** Which part of the edited timeline a moment falls in, and how far into it. */
+export function cardPhaseAt(
+  e: VideoEdits,
+  ms: number
+): { phase: 'intro' | 'body' | 'outro'; at: number } {
+  const lead = introMs(e)
+  if (ms < lead) return { phase: 'intro', at: Math.max(0, ms) }
+  const bodyEnd = lead + bodyDuration(e)
+  if (outroMs(e) > 0 && ms >= bodyEnd) return { phase: 'outro', at: ms - bodyEnd }
+  return { phase: 'body', at: ms - lead }
+}
+
+/** Chapter banners in edited time: one per chapter viewers see (a chapter
+ *  inside a cut gets none), up for EDIT_LIMITS.bannerMs or until the next
+ *  banner or the end of the recording. Empty when banners are off. */
+export function chapterBannerWindows(
+  e: VideoEdits
+): Array<{ id: string; title: string; start_ms: number; end_ms: number }> {
+  if (e.chapter_banners !== true) return []
+  const bodyEnd = introMs(e) + bodyDuration(e)
+  const kept = e.chapters
+    .map((c) => ({ id: c.id, title: c.title, at: sourceToEdited(e, c.at_ms) }))
+    .filter((c): c is { id: string; title: string; at: number } => c.at !== null)
+    .sort((a, b) => a.at - b.at)
+  const out: Array<{ id: string; title: string; start_ms: number; end_ms: number }> = []
+  kept.forEach((c, i) => {
+    const next = kept[i + 1]?.at ?? Number.POSITIVE_INFINITY
+    const end = Math.min(c.at + EDIT_LIMITS.bannerMs, next, bodyEnd)
+    if (end - c.at >= EDIT_LIMITS.minItemMs)
+      out.push({ id: c.id, title: c.title, start_ms: c.at, end_ms: end })
+  })
+  return out
+}
+
+/** The source spans an edited-time window covers inside the recording: one per
+ *  kept piece it crosses (cards contribute none). */
+export function editedSpanToSource(
+  e: VideoEdits,
+  start: number,
+  end: number
+): Array<{ start_ms: number; end_ms: number }> {
+  const out: Array<{ start_ms: number; end_ms: number }> = []
+  let acc = introMs(e)
+  for (const s of e.segments) {
+    const len = (s.end_ms - s.start_ms) / s.speed
+    const a = Math.max(start, acc)
+    const b = Math.min(end, acc + len)
+    if (b > a) {
+      out.push({
+        start_ms: Math.round(s.start_ms + (a - acc) * s.speed),
+        end_ms: Math.round(s.start_ms + (b - acc) * s.speed)
+      })
+    }
+    acc += len
+  }
+  return out
 }
 
 export function isHiddenByCuts(e: VideoEdits, start: number, end: number): boolean {
@@ -301,7 +454,7 @@ export function isHiddenByCuts(e: VideoEdits, start: number, end: number): boole
 function snapToEdited(e: VideoEdits, ms: number, dir: 1 | -1): number | null {
   const direct = sourceToEdited(e, ms)
   if (direct !== null) return direct
-  let acc = 0
+  let acc = introMs(e)
   let prevEnd: number | null = null
   for (const s of e.segments) {
     const len = (s.end_ms - s.start_ms) / s.speed

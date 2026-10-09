@@ -119,4 +119,21 @@ describe('viewersWaitForRender (mirror of the server rule)', () => {
     ).toBe(true)
     expect(viewersWaitForRender(base, null)).toBe(true)
   })
+  it('an intro, an outro or chapter banners mean waiting (the original has none)', () => {
+    const intro = {
+      enabled: true as const,
+      duration_ms: 3000,
+      show_chapters: false,
+      title: '',
+      subtitle: ''
+    }
+    expect(viewersWaitForRender({ ...base, intro }, 10_000)).toBe(true)
+    expect(
+      viewersWaitForRender(
+        { ...base, outro: { enabled: true, duration_ms: 3000, text: '' } },
+        10_000
+      )
+    ).toBe(true)
+    expect(viewersWaitForRender({ ...base, chapter_banners: true }, 10_000)).toBe(true)
+  })
 })

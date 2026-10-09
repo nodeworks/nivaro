@@ -11,8 +11,17 @@ import {
   useState
 } from 'react'
 import { useApiFetchConfig, useNivaroClient } from '../../context'
-import { fetchHelpVideo, helpVideoApi, helpVideoKeys } from './api'
-import { editedDuration, editedToSource, sourceToEdited } from './edits'
+import { fetchHelpVideo, helpVideoApi, helpVideoKeys, useCardBrand } from './api'
+import { CardLayer } from './CardLayer'
+import {
+  bodyDuration,
+  cardPhaseAt,
+  editedDuration,
+  editedToSource,
+  introMs,
+  outroMs,
+  sourceToEdited
+} from './edits'
 import { OverlayLayer } from './OverlayLayer'
 import { fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
 import { createProgressBeats } from './progressBeats'
@@ -29,6 +38,10 @@ export type PlayerHandle = {
 }
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2]
+
+/** The intro or outro card on screen while the edits play live: the video
+ *  waits (paused on the first or last kept frame) and this clock runs. */
+type Card = { kind: 'intro' | 'outro'; at: number; playing: boolean }
 const fmt = (ms: number) => {
   const s = Math.max(0, Math.floor(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
@@ -145,6 +158,21 @@ function PlayerInner({
   const [fileDurMs, setFileDurMs] = useState(0)
   const [checking, setChecking] = useState(false)
   const resumeAt = useRef<number | null>(null)
+  // Edits played live (no render): the intro and outro cards are drawn here
+  // and run on their own clock. A rendered file already contains them.
+  const liveEdits = !rendered && !!edits
+  const lead = edits ? introMs(edits) : 0
+  const tail = edits ? outroMs(edits) : 0
+  const hasCards = !!edits && (lead > 0 || tail > 0 || edits.chapter_banners === true)
+  const brand = useCardBrand(hasCards && !rendered, origin)
+  const [card, setCardState] = useState<Card | null>(() =>
+    liveEdits && lead > 0 ? { kind: 'intro', at: 0, playing: false } : null
+  )
+  const cardRef = useRef(card)
+  const setCard = useCallback((c: Card | null) => {
+    cardRef.current = c
+    setCardState(c)
+  }, [])
 
   const status: 'ok' | 'processing' | 'error' | 'unavailable' =
     (!live && viewerMustWait(dto)) || failure === 'processing'
@@ -156,8 +184,33 @@ function PlayerInner({
           : 'unavailable'
 
   const totalMs = rendered ? fileDurMs : edits ? editedDuration(edits) : 0
-  const editedMs = rendered ? srcMs : edits ? (sourceToEdited(edits, srcMs) ?? 0) : srcMs
+  const bodyEdited = rendered ? srcMs : edits ? (sourceToEdited(edits, srcMs) ?? lead) : srcMs
+  const editedMs =
+    card && edits
+      ? card.kind === 'intro'
+        ? card.at
+        : lead + bodyDuration(edits) + card.at
+      : bodyEdited
   const overlaySrcMs = rendered && edits ? editedToSource(edits, srcMs) : srcMs
+  // Captions and the overlays belong to the recording, not to a card.
+  const phase = edits ? cardPhaseAt(edits, editedMs).phase : 'body'
+  const isPlaying = card ? card.playing : playing
+
+  // The cards come and go with the edits (the editor switches them on and
+  // off): a card that is no longer there gives way; a new intro shows only
+  // before playback starts.
+  useEffect(() => {
+    const c = cardRef.current
+    if (!liveEdits) {
+      if (c) setCard(null)
+      return
+    }
+    if (c?.kind === 'intro' && lead <= 0) setCard(null)
+    else if (c?.kind === 'outro' && tail <= 0) setCard(null)
+    else if (!c && lead > 0 && !started && (videoRef.current?.paused ?? true)) {
+      setCard({ kind: 'intro', at: 0, playing: false })
+    }
+  }, [liveEdits, lead, tail, started, setCard])
 
   // Measure the visible picture (object-fit: contain letterboxing).
   useEffect(() => {
@@ -183,12 +236,34 @@ function PlayerInner({
     const v = videoEl
     if (!v) return
     let raf = 0
-    const tick = () => {
+    let last = performance.now()
+    const tick = (now: number) => {
+      const dt = Math.max(0, now - last)
+      last = now
+      const c = cardRef.current
+      if (!rendered && edits && c?.playing) {
+        const len = c.kind === 'intro' ? introMs(edits) : outroMs(edits)
+        const at = c.at + dt * userRate
+        if (at < len) setCard({ ...c, at })
+        else if (c.kind === 'intro') {
+          // The intro is over: the recording starts at its first kept frame.
+          setCard(null)
+          v.currentTime = (edits.segments[0]?.start_ms ?? 0) / 1000
+          void v.play().catch(() => null)
+        } else {
+          setCard({ ...c, at: len, playing: false })
+          cardEndedRef.current()
+        }
+      }
       const ms = v.currentTime * 1000
       if (!rendered && edits && !v.paused) {
         const step = liveStep(edits, ms)
         if (step.action === 'end') {
           v.pause()
+          // The recording is over: the outro card plays, then the video ends.
+          if (outroMs(edits) > 0 && !cardRef.current) {
+            setCard({ kind: 'outro', at: 0, playing: true })
+          }
         } else {
           if (v.playbackRate !== step.rate * userRate) v.playbackRate = step.rate * userRate
           if (step.action === 'seek') v.currentTime = step.toMs / 1000
@@ -199,7 +274,7 @@ function PlayerInner({
     }
     raf = requestAnimationFrame(tick)
     return () => cancelAnimationFrame(raf)
-  }, [videoEl, rendered, edits, userRate])
+  }, [videoEl, rendered, edits, userRate, setCard])
 
   useEffect(() => {
     if (rendered && videoEl) videoEl.playbackRate = userRate
@@ -213,27 +288,80 @@ function PlayerInner({
     (ms: number) => {
       const v = videoRef.current
       if (!v) return
-      v.currentTime = (rendered || !edits ? ms : editedToSource(edits, ms)) / 1000
+      if (rendered || !edits) {
+        v.currentTime = ms / 1000
+        return
+      }
+      const c = cardRef.current
+      const wasPlaying = c ? c.playing : !v.paused
+      const p = cardPhaseAt(edits, ms)
+      if (p.phase === 'body') {
+        if (c) setCard(null)
+        v.currentTime = editedToSource(edits, ms) / 1000
+        if (c && wasPlaying && v.paused) void v.play().catch(() => null)
+        return
+      }
+      // Inside a card: the video waits on the frame next to it.
+      const segs = edits.segments
+      const at = p.phase === 'intro' ? segs[0]?.start_ms : segs[segs.length - 1]?.end_ms
+      if (!v.paused) v.pause()
+      v.currentTime = (at ?? 0) / 1000
+      setCard({ kind: p.phase, at: p.at, playing: wasPlaying })
     },
-    [rendered, edits]
+    [rendered, edits, setCard]
   )
-  const seekSource = useCallback((ms: number) => {
-    if (videoRef.current) videoRef.current.currentTime = ms / 1000
-  }, [])
+  const seekSource = useCallback(
+    (ms: number) => {
+      // A source moment is always in the recording, never on a card.
+      if (cardRef.current) setCard(null)
+      if (videoRef.current) videoRef.current.currentTime = ms / 1000
+    },
+    [setCard]
+  )
   const togglePlay = useCallback(() => {
     const v = videoRef.current
     if (!v) return
+    const c = cardRef.current
+    if (c && edits && !rendered) {
+      const ended = c.kind === 'outro' && !c.playing && c.at >= outroMs(edits)
+      if (ended) {
+        // Play again from the very start.
+        if (introMs(edits) > 0) setCard({ kind: 'intro', at: 0, playing: true })
+        else {
+          setCard(null)
+          v.currentTime = (edits.segments[0]?.start_ms ?? 0) / 1000
+          void v.play().catch(() => null)
+        }
+        return
+      }
+      setCard({ ...c, playing: !c.playing })
+      if (!c.playing) {
+        setStarted(true)
+        openWatchRef.current()
+      } else sendRef.current()
+      return
+    }
     if (v.paused) void v.play().catch(() => null)
     else v.pause()
-  }, [])
+  }, [edits, rendered, setCard])
   const fullscreen = () => void rootRef.current?.requestFullscreen?.().catch(() => null)
 
   if (handleRef) {
     handleRef.current = {
       seekEdited,
       seekSource,
-      play: () => void videoRef.current?.play().catch(() => null),
-      pause: () => videoRef.current?.pause(),
+      play: () => {
+        const c = cardRef.current
+        if (c) {
+          if (!c.playing) togglePlay()
+        } else void videoRef.current?.play().catch(() => null)
+      },
+      pause: () => {
+        const c = cardRef.current
+        if (c) {
+          if (c.playing) togglePlay()
+        } else videoRef.current?.pause()
+      },
       sourceMs: () => (videoRef.current?.currentTime ?? 0) * 1000,
       editedMs: () => editedMs,
       frame: () => (frame ? { width: frame.width, height: frame.height } : null)
@@ -250,12 +378,22 @@ function PlayerInner({
       resumed.current = true
       if (at > 5000) seekEdited(at)
       if (!rendered && edits?.segments[0] && v.currentTime * 1000 < edits.segments[0].start_ms) {
-        seekSource(edits.segments[0].start_ms)
+        // Straight to the first kept frame (an intro card stays up meanwhile).
+        v.currentTime = edits.segments[0].start_ms / 1000
       }
     }
     v.addEventListener('loadedmetadata', onMeta, { once: true })
     return () => v.removeEventListener('loadedmetadata', onMeta)
-  }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited, seekSource])
+  }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited])
+
+  // Autoplay with an intro card: the card's clock starts instead of the video.
+  const autoStarted = useRef(false)
+  useEffect(() => {
+    if (!autoPlay || autoStarted.current || !card || card.kind !== 'intro' || started) return
+    autoStarted.current = true
+    setCard({ ...card, playing: true })
+    setStarted(true)
+  }, [autoPlay, card, started, setCard])
 
   // Progress: one beat the moment watching starts (it opens the server's
   // watch period), then the sections seen every 10 s, on pause, at the end
@@ -293,7 +431,7 @@ function PlayerInner({
     })
   )
   useEffect(() => {
-    if (!playing || !totalMs) {
+    if (!isPlaying || !totalMs) {
       beats.idle()
       return
     }
@@ -303,7 +441,7 @@ function PlayerInner({
       void beats.tryOpen(editedMs, latest.current.dto.published?.id, totalMs)
     }
     beats.see(editedMs, totalMs, performance.now())
-  }, [beats, playing, editedMs, totalMs])
+  }, [beats, isPlaying, editedMs, totalMs])
   const send = useCallback(
     (keepalive = false) => {
       const l = latest.current
@@ -317,13 +455,17 @@ function PlayerInner({
     if (!isTracking(l) || beats.opened) return
     void beats.play(l.editedMs, l.dto.published?.id, l.totalMs)
   }
+  const openWatchRef = useRef(openWatch)
+  openWatchRef.current = openWatch
   const sendRef = useRef(send)
   sendRef.current = send
+  // The outro card finished: the video has ended.
+  const cardEndedRef = useRef(() => sendRef.current())
   useEffect(() => {
-    if (!playing) return
+    if (!isPlaying) return
     const t = setInterval(() => sendRef.current(), 10_000)
     return () => clearInterval(t)
-  }, [playing])
+  }, [isPlaying])
   useEffect(() => {
     const onHide = () => sendRef.current(true)
     window.addEventListener('pagehide', onHide)
@@ -474,7 +616,8 @@ function PlayerInner({
                 ref={setVideoEl}
                 src={src ?? undefined}
                 poster={poster}
-                autoPlay={autoPlay}
+                // With an intro card up, the card's clock starts first (see above).
+                autoPlay={autoPlay && !(liveEdits && lead > 0)}
                 playsInline
                 preload='metadata'
                 crossOrigin='use-credentials'
@@ -491,7 +634,10 @@ function PlayerInner({
                 }}
                 onEnded={() => {
                   setPlaying(false)
-                  send()
+                  // The file ran out before the live step saw the end: the outro still plays.
+                  if (liveEdits && tail > 0 && !cardRef.current) {
+                    setCard({ kind: 'outro', at: 0, playing: true })
+                  } else send()
                 }}
                 onLoadedMetadata={() => {
                   if (resumeAt.current !== null) {
@@ -511,7 +657,7 @@ function PlayerInner({
                 }
                 onClick={togglePlay}
               />
-              {frame && edits && !rendered && (
+              {frame && edits && !rendered && phase === 'body' && (
                 <OverlayLayer
                   edits={edits}
                   frame={frame}
@@ -521,7 +667,19 @@ function PlayerInner({
                 />
               )}
             </div>
-            {frame && edits && captions && (
+            {/* Cards and chapter banners: drawn here only when the edits play
+                live; a rendered file already has them in the picture. */}
+            {frame && edits && liveEdits && hasCards && (
+              <CardLayer
+                edits={edits}
+                editedMs={editedMs}
+                frame={frame}
+                source={natural}
+                video={dto}
+                brand={brand}
+              />
+            )}
+            {frame && edits && captions && phase === 'body' && (
               <OverlayLayer
                 edits={{ ...edits, annotations: [], blurs: [] }}
                 frame={frame}
@@ -529,7 +687,7 @@ function PlayerInner({
                 showAnnotations={false}
               />
             )}
-            {frame && children?.({ width: frame.width, height: frame.height })}
+            {frame && phase === 'body' && children?.({ width: frame.width, height: frame.height })}
           </div>
         )}
         {playable && !started && !checking && (
@@ -641,12 +799,12 @@ function PlayerInner({
           <div className='flex items-center gap-1'>
             <button
               type='button'
-              aria-label={playing ? 'Pause' : 'Play'}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
               className={`${iconButton} ${inkStrong}`}
               onClick={togglePlay}
               data-hv-play
             >
-              {playing ? (
+              {isPlaying ? (
                 <Pause className='h-4 w-4 fill-current' />
               ) : (
                 <Play className='h-4 w-4 fill-current' />

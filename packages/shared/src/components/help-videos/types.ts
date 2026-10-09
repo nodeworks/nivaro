@@ -48,6 +48,22 @@ export interface Caption {
   end_ms: number
   text: string
 }
+/** A title card before the recording (real extra edited time). Blank
+ *  `title` / `subtitle` mean the video's title and the first line of its
+ *  description. */
+export interface IntroCard {
+  enabled: true
+  duration_ms: number
+  show_chapters: boolean
+  title: string
+  subtitle: string
+}
+/** An end card after the recording. Blank `text` means OUTRO_DEFAULT_TEXT. */
+export interface OutroCard {
+  enabled: true
+  duration_ms: number
+  text: string
+}
 export interface VideoEdits {
   v: 1
   segments: Segment[]
@@ -57,6 +73,10 @@ export interface VideoEdits {
   zooms: Zoom[]
   blurs: Blur[]
   captions: Caption[]
+  /** Stored only while switched on (absent = off). */
+  intro?: IntroCard
+  outro?: OutroCard
+  chapter_banners?: true
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }
