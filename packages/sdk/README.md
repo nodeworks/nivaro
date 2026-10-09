@@ -2530,6 +2530,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | recordHelpVideoProgress(id, body) | POST /help-videos/:id/progress | Authenticated |
 | readRequiredHelpVideos() | GET /help-videos/required/mine | Authenticated |
 | readHelpVideoAnalytics(id) | GET /help-videos/:id/analytics | Author |
+| readHelpVideoWalk(id) | GET /help-videos/:id/walk | Authenticated |
 | openHelpVideoUpload(mime) | POST /help-videos/uploads | Author |
 | finalizeHelpVideoUpload(id, meta?) | POST /help-videos/uploads/:id/finalize | Author |
 | listMyHelpVideoUploads() | GET /help-videos/uploads/mine | Author |

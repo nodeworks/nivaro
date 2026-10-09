@@ -2,7 +2,7 @@ import { Check, Image as ImageIcon, MousePointerClick } from 'lucide-react'
 import { memo, useId, useState } from 'react'
 import { Button } from '../../ui/button'
 import { sourceToEdited } from '../edits'
-import type { VideoEdits } from '../types'
+import type { RecordedClick, VideoEdits } from '../types'
 import { clicksToRipples } from './tools'
 
 /** 0:09.5: to the tenth, as the frame is picked. */
@@ -84,7 +84,7 @@ export const ClickRipples = memo(function ClickRipples({
   sourceMs,
   onAdd
 }: {
-  clicks: Array<{ t_ms: number; x: number; y: number }> | null | undefined
+  clicks: RecordedClick[] | null | undefined
   uploaded?: boolean
   edits: VideoEdits
   sourceMs: number
@@ -102,6 +102,7 @@ export const ClickRipples = memo(function ClickRipples({
           : fresh === 0
             ? `Every one of the ${clicks.length} recorded clicks has a ripple.`
             : `The recording caught ${clicks.length} ${clicks.length === 1 ? 'click' : 'clicks'}. Add a ripple where each one happened.`
+  const labelled = clicks?.filter((c) => c.label).length ?? 0
   return (
     <section className='space-y-2' aria-labelledby={headingId} data-hv-clicks>
       <h3 id={headingId} className='text-[13px] font-semibold text-foreground'>
@@ -110,6 +111,13 @@ export const ClickRipples = memo(function ClickRipples({
       <p className='text-[12px] leading-snug text-muted-foreground' data-hv-clicks-state>
         {text}
       </p>
+      {labelled > 0 && (
+        <p className='text-[12px] leading-snug text-muted-foreground' data-hv-clicks-labelled>
+          {labelled === clicks?.length
+            ? 'Each click says what was clicked: once published, viewers can use "Show me on this page".'
+            : `${labelled} of them say what was clicked: once published, viewers can use "Show me on this page".`}
+        </p>
+      )}
       {!!clicks?.length && fresh > 0 && (
         <Button
           size='sm'

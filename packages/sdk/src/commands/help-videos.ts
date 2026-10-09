@@ -40,9 +40,41 @@ export interface HelpVideoVersion {
   created_at: string
   /** Draft, re-record and restore results only (recorder data). Clicks on the
    *  recorded tab: `t_ms` source time, `x`/`y` fractions (0–1) of the frame. */
-  clicks?: Array<{ t_ms: number; x: number; y: number }> | null
+  clicks?: HelpVideoClick[] | null
   /** Microphone loudness 0–1, one value per 100 ms of source time. */
   levels?: number[] | null
+}
+/**
+ * One recorded click. Recorded on the author's own tab, a click also says
+ * what was clicked: `label` (accessible name, ≤ 80 chars, never an input's
+ * value), `role` (button, link, tab…), `hook` (nearest `data-*` attribute as
+ * `data-name` or `data-name=value`), `page_key` (the help-video page key of
+ * the screen, when one is registered), `path` (no query string) and `origin`.
+ */
+export interface HelpVideoClick {
+  t_ms: number
+  x: number
+  y: number
+  label?: string
+  role?: string
+  hook?: string
+  page_key?: string
+  path?: string
+  /** The app's origin (`https://host`) the click happened on. */
+  origin?: string
+}
+/** One step of "Show me on this page": a labelled click of the published version. */
+export interface HelpVideoWalkStep {
+  label: string
+  role: string | null
+  hook: string | null
+  page_key: string | null
+  path: string | null
+  origin: string | null
+  /** Where the step happens in the finished video (edited time). */
+  edited_ms: number
+  /** The callout or box text shown around the click, else null. */
+  text: string | null
 }
 export interface HelpVideoProgress {
   position_ms: number
@@ -154,6 +186,16 @@ export function setHelpVideoRequirements(
 /** Archives the video; `purge: true` deletes it for good (administrators only, and only once it is archived). */
 export function archiveHelpVideo(id: string, opts?: { purge?: boolean }): Command<void> {
   return cmd('DELETE', `/help-videos/${id}`, opts?.purge ? { purge: 1 } : undefined)
+}
+/**
+ * The guided walk of the published version: its labelled clicks that viewers
+ * see, in order. Same visibility as watching; a draft is never walked, so a
+ * video without a published version (or recorded without labels) has none.
+ */
+export function readHelpVideoWalk(
+  id: string
+): Command<{ data: { version_id: string | null; steps: HelpVideoWalkStep[] } }> {
+  return cmd('GET', `/help-videos/${id}/walk`)
 }
 export function readHelpVideoDraft(id: string): Command<{ data: HelpVideoVersion }> {
   return cmd('GET', `/help-videos/${id}/draft/edits`)

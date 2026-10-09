@@ -3,6 +3,7 @@ export {
   helpVideoKeys,
   useHelpVideo,
   useHelpVideosFor,
+  useHelpVideoWalk,
   useRequiredVideos
 } from './api'
 export { HelpVideoEditor } from './editor/HelpVideoEditor'
@@ -25,7 +26,27 @@ export {
   type StartRecordingOptions,
   useHelpVideoRecording
 } from './recorder/HelpVideoRecordingProvider'
-export type { HelpVideoContext, HelpVideoDto, VideoEdits } from './types'
+export type {
+  HelpVideoContext,
+  HelpVideoDto,
+  RecordedClick,
+  VideoEdits,
+  WalkStep
+} from './types'
 export { HelpVideoButton } from './viewer/HelpVideoButton'
 export { HelpVideoSheet } from './viewer/HelpVideoSheet'
 export { RequiredVideosCard } from './viewer/RequiredVideosCard'
+export { HelpVideoWalkHost } from './walk/HelpVideoWalk'
+export {
+  endHelpVideoWalk,
+  registerHelpVideoPage,
+  startHelpVideoWalk,
+  useCurrentHelpVideoPage
+} from './walk/store'
+export {
+  accessibleName,
+  describeClickTarget,
+  findStepElement,
+  normalizePath,
+  stepMatchesHere
+} from './walk/target'

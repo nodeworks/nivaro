@@ -3,8 +3,10 @@ import { EDIT_LIMITS, upsertItemChecked } from '../edits'
 import type { Annotation, VideoEdits, Zoom } from '../types'
 import {
   arrowTailFor,
+  clickForRipple,
   clickRect,
   clicksToRipples,
+  clickTargetText,
   editsForPreview,
   newItemFor,
   rectFromPoints,
@@ -277,5 +279,29 @@ describe('reshapeItem', () => {
     const tail = reshapeItem(arrow, 'annotations', 'tail', 0.1, 0)
     expect(tail.rect.x).toBeCloseTo(0.3)
     expect(tail.to).toEqual(arrow.to)
+  })
+})
+
+describe('clickForRipple', () => {
+  const clicks = [
+    { t_ms: 1000, x: 0.5, y: 0.5, label: 'Approve', role: 'button' },
+    { t_ms: 1100, x: 0.9, y: 0.9, label: 'Elsewhere' },
+    { t_ms: 5000, x: 0.2, y: 0.2 }
+  ]
+  const ripple = (start: number, x: number, y: number) => ({
+    type: 'ripple' as const,
+    start_ms: start,
+    rect: { x: x - 0.025, y: y - 0.025, w: 0.05, h: 0.05 }
+  })
+
+  it('finds the click a ripple was made from, by time and place', () => {
+    const hit = clickForRipple(ripple(1050, 0.5, 0.5), clicks)
+    expect(hit?.label).toBe('Approve')
+    expect(clickTargetText(hit)).toBe('Approve (button)')
+  })
+  it('is null for a ripple placed by hand, or a click without a label', () => {
+    expect(clickForRipple(ripple(3000, 0.5, 0.5), clicks)).toBeNull()
+    expect(clickTargetText(clickForRipple(ripple(5000, 0.2, 0.2), clicks))).toBeNull()
+    expect(clickForRipple({ ...ripple(1000, 0.5, 0.5), type: 'box' as never }, clicks)).toBeNull()
   })
 })

@@ -19,6 +19,7 @@ import {
   sniffContainer,
   type UploadContainer
 } from './help-video-upload-media.js'
+import { normalizeClicks, normalizeLevels } from './help-video-walk.js'
 import { deleteStoredObject } from './storage-drivers.js'
 
 // The host name, not the per-boot INSTANCE_ID: a restarted container keeps its
@@ -329,6 +330,8 @@ export async function finalizeUpload(
   meta: { duration_ms?: number; clicks?: unknown; levels?: unknown }
 ): Promise<FinalizedUpload | ProcessingUpload> {
   const rid = assertId(id)
+  const clicks = normalizeClicks(meta.clicks)
+  const levels = normalizeLevels(meta.levels)
   // Claim: only one finalize can flip open -> finalizing; appends are serialized
   // on the same lock so none is mid-write when the claim lands.
   const row = await withLock(rid, async () => {
@@ -415,10 +418,8 @@ export async function finalizeUpload(
         width: probe.width,
         height: probe.height,
         has_audio: probe.has_audio,
-        meta: JSON.stringify({ clicks: meta.clicks ?? null, levels: meta.levels ?? null }).slice(
-          0,
-          2_000_000
-        ),
+        // Bounded by the normalizers (≈1.5 MB at most), so never cut mid-JSON.
+        meta: JSON.stringify({ clicks, levels }),
         updated_at: new Date()
       })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
@@ -431,8 +432,8 @@ export async function finalizeUpload(
       width: probe.width,
       height: probe.height,
       has_audio: probe.has_audio,
-      clicks: meta.clicks ?? null,
-      levels: meta.levels ?? null
+      clicks,
+      levels
     }
   } catch (err) {
     if (createdFile && !recorded) {

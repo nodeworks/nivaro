@@ -6,7 +6,8 @@ import {
   trimSegment,
   upsertItemChecked
 } from '../../edits'
-import type { VideoEdits } from '../../types'
+import type { Annotation, RecordedClick, VideoEdits } from '../../types'
+import { clickForRipple, clickTargetText } from '../tools'
 import { LANE_H, type laneLayout, type Packed, SUB_H } from './packRows'
 import type { useBarDrag } from './useBarDrag'
 
@@ -149,7 +150,8 @@ export const Lanes = memo(function Lanes({
   drag,
   nudge,
   hintId,
-  layout
+  layout,
+  clicks
 }: {
   edits: VideoEdits
   sourceMs: number
@@ -162,6 +164,8 @@ export const Lanes = memo(function Lanes({
   hintId: string
   /** Sub-rows and heights (Timeline memoises it on the edits). */
   layout: Layout
+  /** The recorder's clicks: a ripple's tip says what its click hit. */
+  clicks?: RecordedClick[] | null
 }) {
   const toPx = (ms: number) => (ms / 1000) * pps
   const selectedIn = (k: ListKey) =>
@@ -311,6 +315,10 @@ export const Lanes = memo(function Lanes({
                   end_ms: en
                 } as never)
               const barW = Math.max(6, toPx(it.end_ms - it.start_ms))
+              const hit =
+                k === 'annotations'
+                  ? clickTargetText(clickForRipple(it as unknown as Annotation, clicks))
+                  : null
               return (
                 <button
                   key={it.id}
@@ -318,9 +326,16 @@ export const Lanes = memo(function Lanes({
                   data-hv-item={`${k}:${it.id}`}
                   data-hv-order={order.get(it.id)}
                   data-hv-hidden={hidden || undefined}
-                  data-tip={hidden ? 'Hidden: this sits entirely inside a cut' : undefined}
+                  data-tip={
+                    hidden
+                      ? 'Hidden: this sits entirely inside a cut'
+                      : hit
+                        ? `Click on ${hit}`
+                        : undefined
+                  }
+                  data-hv-ripple-target={hit ?? undefined}
                   tabIndex={it.id === stop ? 0 : -1}
-                  aria-label={`${itemName(k, it)}, ${clock(it.start_ms)} to ${clock(it.end_ms)}${hidden ? ', hidden by a cut' : ''}`}
+                  aria-label={`${itemName(k, it)}${hit ? ` on ${hit}` : ''}, ${clock(it.start_ms)} to ${clock(it.end_ms)}${hidden ? ', hidden by a cut' : ''}`}
                   aria-describedby={hintId}
                   aria-pressed={isSelected(k, it.id)}
                   onPointerDown={(e) => {

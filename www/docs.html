@@ -6670,6 +6670,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
               <tr><td>recordHelpVideoProgress(id, body)</td><td>POST /help-videos/:id/progress</td><td>Authenticated</td></tr>
               <tr><td>readRequiredHelpVideos()</td><td>GET /help-videos/required/mine</td><td>Authenticated</td></tr>
               <tr><td>readHelpVideoAnalytics(id)</td><td>GET /help-videos/:id/analytics</td><td>Author</td></tr>
+              <tr><td>readHelpVideoWalk(id)</td><td>GET /help-videos/:id/walk</td><td>Authenticated</td></tr>
               <tr><td>openHelpVideoUpload(mime)</td><td>POST /help-videos/uploads</td><td>Author</td></tr>
               <tr><td>finalizeHelpVideoUpload(id, meta?)</td><td>POST /help-videos/uploads/:id/finalize</td><td>Author</td></tr>
               <tr><td>listMyHelpVideoUploads()</td><td>GET /help-videos/uploads/mine</td><td>Author</td></tr>
@@ -15117,13 +15118,16 @@ POST /api/message-actions/callback
             <li>Cut: split at the playhead (S) and delete the piece; trim the ends by dragging. Silent stretches are suggested as cuts. You cannot cut everything — at least one second stays.</li>
             <li>Speed: play a piece at 1×, 1.5×, 2× or 4×.</li>
             <li>Chapters and poster: add a chapter at the playhead; choose the frame the library shows.</li>
-            <li>Callouts, arrows, boxes and click ripples: draw on the preview, then set the text and how long it shows. "Add click ripples" places one at every click the recorder saw.</li>
+            <li>Callouts, arrows, boxes and click ripples: draw on the preview, then set the text and how long it shows. "Add click ripples" places one at every click the recorder saw; a ripple from a recorded click says what was clicked (hover its bar, or select it).</li>
             <li>Zoom: draw the area to zoom into; the video eases in and out.</li>
             <li>Blur: hide part of the screen (or the whole frame) for a stretch of time.</li>
             <li>Captions: type them along the timeline; viewers turn them on with CC.</li>
             <li>Intro, outro and banners: a title card before the recording (title, first line of the description and, if you like, the chapter list), an end card after it with a closing line you write, and chapter banners — each chapter’s title as a lower-third for a few seconds as it starts. Cards are 2 to 6 seconds each and add their own time; they never cover any of the recording. All three use the instance brand (logo, name and colour from Settings) and are off until you switch them on.</li>
             <li>Undo and redo cover every change (Ctrl/Cmd+Z, Shift for redo). Edits save as you go; nothing reaches viewers until you publish.</li>
           </ul>
+          <h3 class="doc-h3">Show me on this page</h3>
+          <p class="doc-p">When you record this tab with "Capture my clicks" on, each click also notes what was clicked: the button, link, tab or field by its name and kind, a stable marker on the page when there is one, and which screen it was on. Once the video is published, a viewer who opens it on that screen gets "Show me on this page": the video closes and a guided walk rings each thing to click on the real screen, in order, with the text of the callout or box you placed beside that click (else "Click Approve"). Clicking the ringed element moves on — the click works as usual — or use Next, Back, Skip and Exit (Esc). A step the screen does not show after a few seconds says so and offers "Watch this step", which opens the video at that moment; a step recorded on another screen says so, with Go there when it was this app. Clicks you cut out of the video are left out of the walk.</p>
+          <div class="doc-note">Privacy: only the name of a field is noted, never its value or what was typed, and nothing at all is noted inside an area marked nvr-no-record (the same mask session replay uses) — there the click keeps only its position. Window and whole-screen recordings keep positions only. Videos recorded before this have no walk.</div>
           <h3 class="doc-h3">Where a video shows</h3>
           <p class="doc-p">Details → Where it shows. Pick record forms (a collection) and, optionally, the pipeline steps a video applies to. Choosing steps limits the video to those steps — a video for the Manager Approval step shows on records in that step and nowhere else — and one with no steps picked shows at every step. Other pages appear in the list once they have been opened with a Videos button on them.</p>
           <h3 class="doc-h3">Publishing, versions and required viewing</h3>
@@ -15152,6 +15156,7 @@ POST /api/message-actions/callback
               <tr><td>PUT /help-videos/:id/draft/edits</td><td>authors</td><td>Save the draft; send base_hash to get 409 HELP_VIDEO_EDITS_CONFLICT when someone else saved first</td></tr>
               <tr><td>POST /help-videos/:id/publish</td><td>authors</td><td>Publish the draft; watch_again resets required viewing</td></tr>
               <tr><td>POST /help-videos/:id/render</td><td>authors</td><td>Queue a render again</td></tr>
+              <tr><td>GET /help-videos/:id/walk</td><td>viewers</td><td>"Show me on this page": the published version’s labelled clicks inside kept pieces, in order — label, role, hook, page_key, path, origin, edited_ms and the nearby callout/box text. Never the draft</td></tr>
               <tr><td>GET /help-videos/:id/analytics</td><td>authors</td><td>Viewers, completion, hours, drop-off</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">Clean recording in a host app</h3>

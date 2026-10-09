@@ -105,13 +105,47 @@ export interface VersionDto {
   note: string | null
   created_at: string
   /** Draft, re-record and restore results only (recorder data). */
-  /** Clicks on the recorded tab: `t_ms` source time, `x`/`y` frame fractions (0–1). */
-  clicks?: Array<{ t_ms: number; x: number; y: number }> | null
+  /** Clicks on the recorded tab: `t_ms` source time, `x`/`y` frame fractions (0–1);
+   *  recorded since #1486, also what was clicked (see RecordedClick). */
+  clicks?: RecordedClick[] | null
   /** Microphone loudness 0–1, one value per 100 ms of source time. */
   levels?: number[] | null
   /** Draft load only: 'upload' when the source is a video file someone picked
    *  (it has no clicks and no microphone levels), else 'recording'. */
   source_kind?: 'recording' | 'upload'
+}
+
+/**
+ * One click on the recorded tab: recording time and frame fractions (0–1).
+ * When the recorder captured its own tab, also what was clicked: accessible
+ * name (≤ 80 chars, never an input's value), role, nearest data-* hook
+ * (`data-name` or `data-name=value`), the screen's page key, path and origin.
+ * Inside `.nvr-no-record` only the position is kept.
+ */
+export type RecordedClick = {
+  t_ms: number
+  x: number
+  y: number
+  label?: string
+  role?: string
+  hook?: string
+  page_key?: string
+  path?: string
+  origin?: string
+}
+
+/** One step of "Show me on this page" (GET /help-videos/:id/walk). */
+export interface WalkStep {
+  label: string
+  role: string | null
+  hook: string | null
+  page_key: string | null
+  path: string | null
+  origin: string | null
+  /** Where the step happens in the finished video (edited time). */
+  edited_ms: number
+  /** The callout or box text shown around the click, else null. */
+  text: string | null
 }
 
 export interface HelpVideoProgress {

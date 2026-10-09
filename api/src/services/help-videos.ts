@@ -15,6 +15,7 @@ import {
 import { queueRender } from './help-video-render.js'
 import { releaseFinalizedUpload, takeFinalizedUpload } from './help-video-uploads.js'
 import { viewerCanPlay } from './help-video-views.js'
+import { buildWalkSteps, type RecordedClick, type WalkStep } from './help-video-walk.js'
 import { getApp } from './io-holder.js'
 
 // Help videos: who may author and watch, and the video/version lifecycle.
@@ -62,7 +63,8 @@ export interface VersionDto {
   playable?: boolean
   note: string | null
   created_at: string
-  clicks?: Array<{ t_ms: number; x: number; y: number }> | null
+  /** Recorded clicks; labelled ones carry what was clicked (see help-video-walk.ts). */
+  clicks?: RecordedClick[] | null
   levels?: number[] | null
   /** Draft load only: 'upload' when the source was a picked file (no clicks
    *  or microphone levels exist for it), else 'recording'. */
@@ -673,6 +675,20 @@ export async function ensureDraft(video: VideoRow, user: User): Promise<VersionR
   })
   await db('nivaro_help_videos').where({ id: video.id }).update({ draft_version_id: id })
   return (await loadVersion(id)) as VersionRow
+}
+
+/**
+ * The guided walk of the PUBLISHED version ("Show me on this page"): its
+ * labelled clicks inside kept pieces. A draft is never walked; a video with
+ * no published version, or one recorded without labels, has no steps.
+ */
+export async function walkStepsFor(
+  video: VideoRow
+): Promise<{ version_id: string | null; steps: WalkStep[] }> {
+  const pub = await loadVersion(video.published_version_id)
+  if (!pub) return { version_id: null, steps: [] }
+  const edits = json<VideoEdits>(pub.edits, emptyEdits(Number(pub.source_duration_ms ?? 0)))
+  return { version_id: low(pub.id), steps: buildWalkSteps(edits, json(pub.clicks, null)) }
 }
 
 const UNKNOWN_DURATION_MS = 30 * 60_000

@@ -77,6 +77,8 @@ export type HelpVideoPlayerProps = {
   trackProgress?: boolean
   autoPlay?: boolean
   handleRef?: MutableRefObject<PlayerHandle | null>
+  /** Start here (edited time) instead of the viewer's resume point. */
+  startAtMs?: number | null
   className?: string
   /** Rendered in frame coordinates above the video, outside the zoom (editor tools). */
   children?: (frame: { width: number; height: number }) => ReactNode
@@ -97,6 +99,7 @@ function PlayerInner({
   trackProgress = true,
   autoPlay = false,
   handleRef,
+  startAtMs = null,
   className,
   children
 }: HelpVideoPlayerProps) {
@@ -373,10 +376,11 @@ function PlayerInner({
   useEffect(() => {
     const v = videoEl
     if (!v || resumed.current || useDraft) return
-    const at = dto.my_progress && !dto.my_progress.completed ? dto.my_progress.position_ms : 0
+    const at =
+      startAtMs ?? (dto.my_progress && !dto.my_progress.completed ? dto.my_progress.position_ms : 0)
     const onMeta = () => {
       resumed.current = true
-      if (at > 5000) seekEdited(at)
+      if (startAtMs != null || at > 5000) seekEdited(at)
       if (!rendered && edits?.segments[0] && v.currentTime * 1000 < edits.segments[0].start_ms) {
         // Straight to the first kept frame (an intro card stays up meanwhile).
         v.currentTime = edits.segments[0].start_ms / 1000
@@ -384,7 +388,7 @@ function PlayerInner({
     }
     v.addEventListener('loadedmetadata', onMeta, { once: true })
     return () => v.removeEventListener('loadedmetadata', onMeta)
-  }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited])
+  }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited, seekSource, startAtMs])
 
   // Autoplay with an intro card: the card's clock starts instead of the video.
   const autoStarted = useRef(false)

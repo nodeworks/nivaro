@@ -56,7 +56,8 @@ import {
   validateContexts,
   verifyMediaTicket,
   videosForContext,
-  viewerMaySee
+  viewerMaySee,
+  walkStepsFor
 } from '../services/help-videos.js'
 import { sendStoredObject } from '../services/stored-object-stream.js'
 import type { User } from '../types.js'
@@ -166,6 +167,14 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const { video, author } = await loadVideoForUser(req, id)
     return reply.send({ data: await serializeVideo(video, viewerCtx(req, author)) })
+  })
+
+  // "Show me on this page": the published version's labelled clicks as steps.
+  // Same visibility as watching; a draft is never served.
+  app.get('/:id/walk', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    return reply.send({ data: await walkStepsFor(video) })
   })
 
   app.patch('/:id', { preHandler: requireAuthor }, async (req, reply) => {
