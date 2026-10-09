@@ -37,12 +37,15 @@ const viewerClock = (ms: number | null) =>
  * choosing one jumps there and opens it in the Inspector to rename.
  */
 export const ChaptersPanel = memo(function ChaptersPanel({
+  headless,
   edits,
   selectedId,
   onAdd,
   onSeek,
   onSelect
 }: {
+  /** The side panel shows the title itself (the heading stays for screen readers). */
+  headless?: boolean
   edits: VideoEdits
   selectedId: string | null
   /** Adds a chapter at the playhead (the editor's M). */
@@ -54,7 +57,10 @@ export const ChaptersPanel = memo(function ChaptersPanel({
   return (
     <section className='space-y-2' aria-labelledby={headingId} data-hv-chapters>
       <div className='flex items-center justify-between gap-2'>
-        <h3 id={headingId} className='text-[13px] font-semibold text-foreground'>
+        <h3
+          id={headingId}
+          className={headless ? 'sr-only' : 'text-[13px] font-semibold text-foreground'}
+        >
           Chapters
         </h3>
         <Button

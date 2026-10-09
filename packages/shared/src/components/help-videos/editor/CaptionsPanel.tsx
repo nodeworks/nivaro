@@ -18,6 +18,7 @@ const stamp = (ms: number) => {
  * panel does not redraw on every frame of playback.
  */
 export const CaptionsPanel = memo(function CaptionsPanel({
+  headless,
   edits,
   sourceMs,
   selectedId,
@@ -27,6 +28,8 @@ export const CaptionsPanel = memo(function CaptionsPanel({
   onSeek,
   onSelect
 }: {
+  /** The side panel shows the title itself (the heading stays for screen readers). */
+  headless?: boolean
   edits: VideoEdits
   sourceMs: number
   selectedId: string | null
@@ -54,7 +57,10 @@ export const CaptionsPanel = memo(function CaptionsPanel({
   }
   return (
     <section className='space-y-2' aria-labelledby={headingId} data-hv-captions>
-      <h3 id={headingId} className='text-[13px] font-semibold text-foreground'>
+      <h3
+        id={headingId}
+        className={headless ? 'sr-only' : 'text-[13px] font-semibold text-foreground'}
+      >
         Captions
       </h3>
       <div className='flex gap-1.5'>

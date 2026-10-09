@@ -17,10 +17,13 @@ const clock = (ms: number) => {
  * from the finished video, so a frame inside a cut can't be used.
  */
 export const PosterPicker = memo(function PosterPicker({
+  headless,
   edits,
   onUse,
   onSeek
 }: {
+  /** The side panel shows the title itself (the heading stays for screen readers). */
+  headless?: boolean
   edits: VideoEdits
   /** Sets the poster to the playhead's frame: its time, or null when refused. */
   onUse: () => number | null
@@ -31,7 +34,10 @@ export const PosterPicker = memo(function PosterPicker({
   const at = sourceToEdited(edits, edits.poster_ms)
   return (
     <section className='space-y-2' aria-labelledby={headingId} data-hv-poster-picker>
-      <h3 id={headingId} className='text-[13px] font-semibold text-foreground'>
+      <h3
+        id={headingId}
+        className={headless ? 'sr-only' : 'text-[13px] font-semibold text-foreground'}
+      >
         Poster
       </h3>
       <p className='text-[12px] leading-snug text-muted-foreground'>
@@ -78,12 +84,15 @@ export const PosterPicker = memo(function PosterPicker({
  * made ([]), or the video was uploaded as a file (no clicks exist for it).
  */
 export const ClickRipples = memo(function ClickRipples({
+  headless,
   clicks,
   uploaded,
   edits,
   sourceMs,
   onAdd
 }: {
+  /** The side panel shows the title itself (the heading stays for screen readers). */
+  headless?: boolean
   clicks: RecordedClick[] | null | undefined
   uploaded?: boolean
   edits: VideoEdits
@@ -105,7 +114,10 @@ export const ClickRipples = memo(function ClickRipples({
   const labelled = clicks?.filter((c) => c.label).length ?? 0
   return (
     <section className='space-y-2' aria-labelledby={headingId} data-hv-clicks>
-      <h3 id={headingId} className='text-[13px] font-semibold text-foreground'>
+      <h3
+        id={headingId}
+        className={headless ? 'sr-only' : 'text-[13px] font-semibold text-foreground'}
+      >
         Click ripples
       </h3>
       <p className='text-[12px] leading-snug text-muted-foreground' data-hv-clicks-state>

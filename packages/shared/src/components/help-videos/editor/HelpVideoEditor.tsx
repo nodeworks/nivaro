@@ -22,6 +22,7 @@ import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
 import { addChapterAt } from './ChaptersPanel'
 import { EditorSidebar } from './EditorSidebar'
 import { historyReducer, initHistory } from './history'
+import { EditorLayoutStyle, ToolSep } from './layout'
 import { ManagePanels } from './ManagePanels'
 import { PreviewTools } from './PreviewTools'
 import { PublishButton } from './PublishButton'
@@ -265,14 +266,20 @@ function EditorBody({
     <div
       ref={root}
       className='flex h-full min-h-0 flex-col bg-background'
+      data-hvx-root
       data-hv-editor={video.id}
     >
-      <header className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-4 py-2.5'>
-        <h2 className='min-w-0 max-w-full truncate text-[15px] font-semibold text-foreground'>
-          {video.title || 'Untitled video'}
-        </h2>
-        <SaveState save={save} onReload={onReload} />
-        <div className='ml-auto flex w-full min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:w-auto sm:justify-end'>
+      <EditorLayoutStyle />
+      <header data-hvx-head>
+        <div data-hvx-head-title>
+          <h2 className='min-w-0 max-w-full truncate text-[15px] font-semibold text-foreground'>
+            {video.title || 'Untitled video'}
+          </h2>
+          <span className='text-[12px]'>
+            <SaveState save={save} onReload={onReload} />
+          </span>
+        </div>
+        <div data-hvx-head-actions>
           <div className='flex items-center gap-2'>
             <Switch
               id={`hv-viewer-preview-${video.id}`}
@@ -330,36 +337,37 @@ function EditorBody({
         <TabsContent
           value='edit'
           forceMount
-          className='mt-0 flex min-h-0 flex-1 flex-col overflow-y-auto data-[state=inactive]:hidden lg:overflow-y-visible'
+          className='mt-2 data-[state=inactive]:hidden'
+          data-hvx-edit
+          data-hvx-noside={viewerPreview ? '' : undefined}
         >
-          <div
-            className='flex shrink-0 flex-wrap items-center gap-x-2 gap-y-2 px-4 py-2'
-            role='toolbar'
-            aria-label='Edit tools'
-          >
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-8 px-2.5 text-[12.5px]'
-              onClick={split}
-              disabled={segIndex < 0}
-              data-hv-split
-              title='Split at the playhead (S)'
-            >
-              <Scissors className='!size-3.5' /> Split
-            </Button>
-            <Button
-              size='sm'
-              variant='outline'
-              className='h-8 px-2.5 text-[12.5px]'
-              onClick={deletePiece}
-              disabled={pieceIndex < 0}
-              data-hv-delete-piece
-              title='Cut out this piece (Delete)'
-            >
-              <Trash2 className='!size-3.5' /> Cut piece
-            </Button>
-            <div className='flex items-center gap-1.5'>
+          <div data-hvx-tools role='toolbar' aria-label='Edit tools'>
+            <div data-hvx-group>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8 px-2.5 text-[12.5px]'
+                onClick={split}
+                disabled={segIndex < 0}
+                data-hv-split
+                title='Split at the playhead (S)'
+              >
+                <Scissors className='!size-3.5' /> Split
+              </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8 px-2.5 text-[12.5px]'
+                onClick={deletePiece}
+                disabled={pieceIndex < 0}
+                data-hv-delete-piece
+                title='Cut out this piece (Delete)'
+              >
+                <Trash2 className='!size-3.5' /> Cut piece
+              </Button>
+            </div>
+            <ToolSep />
+            <div data-hvx-group>
               <span className='pl-1 text-[12px] text-muted-foreground' aria-hidden>
                 Speed
               </span>
@@ -383,6 +391,8 @@ function EditorBody({
                 })}
               </div>
             </div>
+            <ToolSep />
+            {!viewerPreview && <ToolPicker tool={tool} onTool={setTool} />}
             <SilenceSuggestions
               uploaded={uploaded}
               silent={silent}
@@ -391,7 +401,6 @@ function EditorBody({
               onSeek={seek}
               onRefused={showNote}
             />
-            {!viewerPreview && <ToolPicker tool={tool} onTool={setTool} />}
             <div className='ml-auto flex items-center gap-0.5'>
               <ShortcutsCard open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
               <Button
@@ -420,71 +429,71 @@ function EditorBody({
               </Button>
             </div>
           </div>
-          <div className='flex shrink-0 flex-col lg:min-h-[180px] lg:flex-1 lg:shrink lg:flex-row'>
-            <div className='h-[min(56vw,360px)] shrink-0 px-3 pb-3 lg:h-auto lg:min-w-0 lg:flex-1 lg:shrink'>
-              <HelpVideoPlayer
-                video={playerVideo}
-                mode='live'
-                useDraft
-                edits={playerEdits}
-                trackProgress={false}
-                handleRef={player}
-                onTime={(s) => setSrc(s)}
-                className='h-full'
-              >
-                {(frame) =>
-                  !viewerPreview && (
-                    <PreviewTools
-                      frame={frame}
-                      edits={edits}
-                      srcMs={src}
-                      sourceMs={sourceMs}
-                      tool={tool}
-                      selection={selection}
-                      onSelect={setSelection}
-                      onChange={set}
-                      onRefused={showNote}
-                      onDone={stopDrawing}
-                      note={note}
-                    />
-                  )
-                }
-              </HelpVideoPlayer>
-            </div>
-            {!viewerPreview && (
-              <EditorSidebar
-                edits={edits}
-                selection={selection}
-                sourceMs={sourceMs}
-                clicks={clicks}
-                uploaded={uploaded}
-                playhead={playhead}
-                onChange={set}
-                onSelect={setSelection}
-                onSeek={seek}
-                onNote={showNote}
-                onAddChapter={addChapter}
-                videoTitle={video.title}
-                videoDescription={video.description}
-                onShowCard={showCard}
-              />
-            )}
+          <div data-hvx-stage>
+            <HelpVideoPlayer
+              video={playerVideo}
+              mode='live'
+              useDraft
+              edits={playerEdits}
+              trackProgress={false}
+              handleRef={player}
+              onTime={(s) => setSrc(s)}
+              className='h-full'
+            >
+              {(frame) =>
+                !viewerPreview && (
+                  <PreviewTools
+                    frame={frame}
+                    edits={edits}
+                    srcMs={src}
+                    sourceMs={sourceMs}
+                    tool={tool}
+                    selection={selection}
+                    onSelect={setSelection}
+                    onChange={set}
+                    onRefused={showNote}
+                    onDone={stopDrawing}
+                    note={note}
+                  />
+                )
+              }
+            </HelpVideoPlayer>
           </div>
-          <Timeline
-            edits={edits}
-            sourceMs={sourceMs}
-            playheadSrcMs={src}
-            levels={draft.levels ?? null}
-            uploaded={uploaded}
-            silences={silent}
-            selection={selection}
-            onSelect={setSelection}
-            onSeek={seek}
-            onChange={set}
-            note={note}
-            onNote={showNote}
-            clicks={clicks}
-          />
+          {!viewerPreview && (
+            <EditorSidebar
+              edits={edits}
+              selection={selection}
+              sourceMs={sourceMs}
+              clicks={clicks}
+              uploaded={uploaded}
+              playhead={playhead}
+              onChange={set}
+              onSelect={setSelection}
+              onSeek={seek}
+              onNote={showNote}
+              onAddChapter={addChapter}
+              videoTitle={video.title}
+              videoDescription={video.description}
+              onShowCard={showCard}
+            />
+          )}
+          <div data-hvx-timeline>
+            <Timeline
+              edits={edits}
+              sourceMs={sourceMs}
+              playheadSrcMs={src}
+              levels={draft.levels ?? null}
+              uploaded={uploaded}
+              silences={silent}
+              selection={selection}
+              onSelect={setSelection}
+              onSeek={seek}
+              onChange={set}
+              note={note}
+              onNote={showNote}
+              clicks={clicks}
+            />
+          </div>
         </TabsContent>
         <ManagePanels
           video={video}

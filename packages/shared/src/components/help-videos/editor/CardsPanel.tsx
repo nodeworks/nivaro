@@ -15,12 +15,15 @@ const SECONDS = [2, 3, 4, 5, 6]
  * in the instance's brand; the switches store nothing while they are off.
  */
 export const CardsPanel = memo(function CardsPanel({
+  headless,
   edits,
   videoTitle,
   videoDescription,
   onChange,
   onShow
 }: {
+  /** The side panel shows the title itself (the heading stays for screen readers). */
+  headless?: boolean
   edits: VideoEdits
   videoTitle: string
   videoDescription: string | null
@@ -44,7 +47,10 @@ export const CardsPanel = memo(function CardsPanel({
   return (
     <section className='space-y-3' aria-labelledby={headingId} data-hv-cards>
       <div>
-        <h3 id={headingId} className='text-[13px] font-semibold text-foreground'>
+        <h3
+          id={headingId}
+          className={headless ? 'sr-only' : 'text-[13px] font-semibold text-foreground'}
+        >
           Intro, outro and banners
         </h3>
         <p className='mt-1 text-[12px] leading-snug text-muted-foreground'>

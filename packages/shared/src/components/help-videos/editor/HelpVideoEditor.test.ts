@@ -359,7 +359,6 @@ describe('HelpVideoEditor click ripples', () => {
     )
     expect(q('[data-hv-add-ripples]')).toBeNull()
     expect(q('[data-hv-sound-empty]').getAttribute('data-hv-sound-empty')).toBe('upload')
-    expect(q('[data-hv-suggestions-none]').textContent).toBe('No pause suggestions')
     expect(q('[data-hv-suggestions]')).toBeNull()
   })
 

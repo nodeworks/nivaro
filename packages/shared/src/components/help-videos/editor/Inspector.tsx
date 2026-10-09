@@ -96,13 +96,22 @@ export const Inspector = memo(function Inspector({
   )
 
   if (!selection)
-    return frame(
-      'Nothing selected',
-      'none',
-      <p className={hint}>
-        Select something on the timeline or the picture to change it. Pick a tool above to draw on
-        the picture.
-      </p>
+    return (
+      <section
+        ref={root}
+        tabIndex={-1}
+        aria-labelledby={headingId}
+        className='outline-none'
+        data-hv-inspector='none'
+      >
+        <h3 id={headingId} className='sr-only'>
+          Nothing selected
+        </h3>
+        <p className={hint}>
+          Select something on the timeline or the picture to change it, or pick a Draw tool to add
+          one.
+        </p>
+      </section>
     )
 
   // Focus stays in the panel when what it showed goes away.

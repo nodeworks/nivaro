@@ -5,10 +5,14 @@ import { CaptionsPanel } from './CaptionsPanel'
 import { CardsPanel } from './CardsPanel'
 import { ChaptersPanel } from './ChaptersPanel'
 import { Inspector } from './Inspector'
+import { SideSection, useOpenSections } from './layout'
 import { ClickRipples, PosterPicker } from './PosterAndClicks'
 import type { Selection } from './Timeline'
 import { sentence } from './timeline/useBarDrag'
 import { clicksToRipples } from './tools'
+
+const clockShort = (ms: number) =>
+  `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`
 
 /**
  * The editor's right-hand column: the Inspector for the selection, then
@@ -92,13 +96,21 @@ export const EditorSidebar = memo(function EditorSidebar({
   const selectChapter = useCallback((id: string) => onSelect({ lane: 'chapters', id }), [onSelect])
   const selectCaption = useCallback((id: string) => onSelect({ lane: 'captions', id }), [onSelect])
 
+  const [open, toggle] = useOpenSections()
+  const plural = (n: number, one: string, many: string) =>
+    n === 0 ? 'None' : `${n} ${n === 1 ? one : many}`
+  const cards = [edits.intro && 'Intro', edits.outro && 'End', edits.chapter_banners && 'Banners']
+    .filter(Boolean)
+    .join(' · ')
+  const posterAt = sourceToEdited(edits, edits.poster_ms)
+  const ripples = edits.annotations.filter((a) => a.type === 'ripple').length
+
   return (
-    <aside
-      aria-label='Selected item, chapters, captions and cards'
-      className='divide-y divide-border border-t border-border px-3 lg:w-[300px] lg:shrink-0 lg:overflow-y-auto lg:border-t-0 lg:border-l'
-      data-hv-sidebar
-    >
-      <div className='py-3'>
+    <aside aria-label='Selected item, chapters, captions and cards' data-hvx-side data-hv-sidebar>
+      <div
+        className={`border-b border-border px-4 py-3 ${selection ? 'bg-muted/40' : ''}`}
+        data-hv-side-inspector
+      >
         <Inspector
           edits={edits}
           selection={selection}
@@ -110,17 +122,31 @@ export const EditorSidebar = memo(function EditorSidebar({
           clicks={clicks}
         />
       </div>
-      <div className='py-3'>
+      <SideSection
+        id='chapters'
+        title='Chapters'
+        summary={plural(edits.chapters.length, 'chapter', 'chapters')}
+        open={open.has('chapters')}
+        onToggle={toggle}
+      >
         <ChaptersPanel
+          headless
           edits={edits}
           selectedId={selection?.lane === 'chapters' ? selection.id : null}
           onAdd={onAddChapter}
           onSeek={onSeek}
           onSelect={selectChapter}
         />
-      </div>
-      <div className='py-3'>
+      </SideSection>
+      <SideSection
+        id='captions'
+        title='Captions'
+        summary={plural(edits.captions.length, 'caption', 'captions')}
+        open={open.has('captions')}
+        onToggle={toggle}
+      >
         <CaptionsPanel
+          headless
           edits={edits}
           sourceMs={sourceMs}
           selectedId={selection?.lane === 'captions' ? selection.id : null}
@@ -130,28 +156,54 @@ export const EditorSidebar = memo(function EditorSidebar({
           onSeek={onSeek}
           onSelect={selectCaption}
         />
-      </div>
-      <div className='py-3'>
+      </SideSection>
+      <SideSection
+        id='cards'
+        title='Intro, end card and banners'
+        summary={cards || 'Off'}
+        open={open.has('cards')}
+        onToggle={toggle}
+      >
         <CardsPanel
+          headless
           edits={edits}
           videoTitle={videoTitle}
           videoDescription={videoDescription}
           onChange={onChange}
           onShow={onShowCard}
         />
-      </div>
-      <div className='py-3'>
-        <PosterPicker edits={edits} onUse={takePoster} onSeek={onSeek} />
-      </div>
-      <div className='py-3'>
+      </SideSection>
+      <SideSection
+        id='poster'
+        title='Poster'
+        summary={posterAt === null ? 'First frame' : clockShort(posterAt)}
+        open={open.has('poster')}
+        onToggle={toggle}
+      >
+        <PosterPicker headless edits={edits} onUse={takePoster} onSeek={onSeek} />
+      </SideSection>
+      <SideSection
+        id='clicks'
+        title='Click ripples'
+        summary={
+          clicks?.length
+            ? `${ripples} of ${clicks.length} clicks`
+            : ripples
+              ? `${ripples} added`
+              : 'None'
+        }
+        open={open.has('clicks')}
+        onToggle={toggle}
+      >
         <ClickRipples
+          headless
           clicks={clicks}
           uploaded={uploaded}
           edits={edits}
           sourceMs={sourceMs}
           onAdd={addRipples}
         />
-      </div>
+      </SideSection>
     </aside>
   )
 })

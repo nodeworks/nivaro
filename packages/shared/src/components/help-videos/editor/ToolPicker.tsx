@@ -21,7 +21,7 @@ export const TOOLS: Array<{ tool: Tool; label: string; icon: LucideIcon; what: s
 
 /** One toggle per drawing tool. Pressing the active one (or Escape) puts it
  *  down; drawing a shape puts it down too. Labels show on wide screens; the
- *  icons carry the name everywhere else. */
+ *  icons carry the name everywhere else (editor layout.tsx decides the width). */
 export const ToolPicker = memo(function ToolPicker({
   tool,
   onTool
@@ -30,7 +30,7 @@ export const ToolPicker = memo(function ToolPicker({
   onTool: (t: Tool | null) => void
 }) {
   return (
-    <div className='flex items-center gap-1.5'>
+    <div data-hvx-group>
       <span className='pl-1 text-[12px] text-muted-foreground' aria-hidden>
         Draw
       </span>
@@ -52,7 +52,7 @@ export const ToolPicker = memo(function ToolPicker({
               data-hv-tool={t}
             >
               <Icon className='h-3.5 w-3.5 shrink-0' aria-hidden />
-              <span className='hidden xl:inline'>{label}</span>
+              <span data-hvx-tool-label>{label}</span>
             </button>
           )
         })}
