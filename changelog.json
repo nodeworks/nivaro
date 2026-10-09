@@ -1,10 +1,113 @@
 {
-  "generated_at": "2026-10-09T16:27:24.428Z",
+  "generated_at": "2026-10-09T20:42:42.335Z",
   "releases": [
+    {
+      "version": "0.2.31",
+      "tag": "v0.2.31",
+      "date": "2026-10-09T16:42:26-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: the cards have a logo of their own",
+              "hash": "62ab0426"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video editor: check a logo before uploading it",
+              "hash": "62d50362"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video editor: Play it plays the card",
+              "hash": "15b8c0d9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: moving banners play at a steady 30 fps",
+              "hash": "26c50013"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: keep the end card when the picture ends early",
+              "hash": "057f39ee"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: keep one ffmpeg graph across a card sequence",
+              "hash": "4e699786"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video editor: card animation, transitions and a missing-logo notice",
+              "hash": "764039a3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video render: moving cards over the recording, banners in edited time",
+              "hash": "2184c358"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video player: cards and banners move with the card clock",
+              "hash": "94578710"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video cards: store animation and transition choices",
+              "hash": "30021543"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video cards: motion as a function of time",
+              "hash": "b1d536ca"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs/",
+              "hash": "69574b69"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: find free music on Openverse",
+              "hash": "1c87c4ed"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: background music that ducks, gentle entrances",
+              "hash": "20efdc73"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release chain: write a deployment's pinned image version",
+              "hash": "ff74b059"
+            }
+          ]
+        }
+      ],
+      "count": 15
+    },
     {
       "version": "0.2.30",
       "tag": "v0.2.30",
-      "date": "2026-10-09T12:27:10-04:00",
+      "date": "2026-10-09T12:27:24-04:00",
       "sections": [
         {
           "label": "Other",
