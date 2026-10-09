@@ -14,7 +14,9 @@ import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
 import { addChapterAt } from './ChaptersPanel'
 import { EditorSidebar } from './EditorSidebar'
 import { historyReducer, initHistory } from './history'
+import { ManagePanels } from './ManagePanels'
 import { PreviewTools } from './PreviewTools'
+import { PublishButton } from './PublishButton'
 import { SaveState } from './SaveState'
 import { ShortcutsCard } from './ShortcutsCard'
 import { SilenceSuggestions } from './SilenceSuggestions'
@@ -264,7 +266,11 @@ function EditorBody({
               Viewer preview
             </Label>
           </div>
-          {/* Publish button arrives in Task 16 (PublishButton). */}
+          <PublishButton
+            video={{ ...video, draft }}
+            beforePublish={save.flush}
+            onPublished={onReload}
+          />
           {onClose && (
             <Button
               size='sm'
@@ -447,9 +453,7 @@ function EditorBody({
             onNote={showNote}
           />
         </TabsContent>
-        <TabsContent value='details' />
-        <TabsContent value='versions' />
-        <TabsContent value='stats' />
+        <ManagePanels video={video} flush={save.flush} onReload={onReload} />
       </Tabs>
     </div>
   )
