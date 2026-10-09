@@ -373,6 +373,13 @@ export function buildRenderArgs(input: RenderInput): string[] {
   // held PNG or a frame sequence, offset so its first frame lands there.
   if (banners.length) {
     let cur = finalV
+    // Overlay only draws when the picture has a frame, and a recording has
+    // gaps (and 4x pieces run faster): a moving banner gets a steady 30 fps
+    // to play on, so its entrance plays as smoothly as in the live player.
+    if (banners.some((b) => b.sequence)) {
+      parts.push(`[${finalV}]fps=${CARD_FPS}[${finalV}r]`)
+      cur = `${finalV}r`
+    }
     banners.forEach((b, i) => {
       const k = bannerBase + i
       const to = i === banners.length - 1 ? 'vout' : `vbn${i}`

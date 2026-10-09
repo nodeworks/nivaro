@@ -404,6 +404,22 @@ describe('render plan with cards', () => {
     )
     expect(g).toContain('[2:v]format=rgba,setpts=PTS-STARTPTS+4.000/TB')
   })
+  it('gives a moving banner a steady frame rate to play on', () => {
+    // Overlay only draws when the picture has a frame; a recording with gaps
+    // would show a banner's entrance in jumps.
+    const moving = fc(
+      buildRenderArgs({
+        ...base,
+        ...cards,
+        edits: e,
+        banners: [{ ...seq('d/card-banner-1/f%05d.png', 75), start_ms: 4000, end_ms: 6500 }]
+      })
+    )
+    expect(moving).toContain('[vcards]fps=30[vcardsr]')
+    expect(moving).toMatch(/\[vcardsr\]\[bn0\]overlay/)
+    const still = fc(buildRenderArgs({ ...base, ...cards, edits: e }))
+    expect(still).not.toContain('fps=30[vcardsr]')
+  })
   it('works without sound and with only an outro', () => {
     const args = buildRenderArgs({
       ...base,
