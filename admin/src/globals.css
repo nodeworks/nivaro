@@ -587,3 +587,23 @@ tr.nvr-row-flash > td {
 @media (prefers-reduced-motion: reduce) {
   .traffic-map .tm-ev-fresh { animation: none; }
 }
+
+/* Clean help-video recording: the recorder puts data-nvr-recording-clean on
+   <html> from the countdown to the stop. Tagged chrome (notification counts,
+   chat, banners, floating chips) and Sonner toasts leave the frame;
+   ="keep-space" hides an element but keeps its box so nothing shifts. A
+   pinned chat panel stops narrowing the page while it is hidden. */
+html[data-nvr-recording-clean] [data-nvr-recording-hide]:not([data-nvr-recording-hide='keep-space']),
+html[data-nvr-recording-clean] [data-sonner-toaster] {
+  display: none !important;
+}
+html[data-nvr-recording-clean] [data-nvr-recording-hide='keep-space'] {
+  visibility: hidden !important;
+}
+html[data-nvr-recording-clean] body[data-nvr-chat-pinned] {
+  padding-right: 0 !important;
+}
+html[data-nvr-recording-clean] body[data-nvr-chat-pinned] [data-nvr-dock-aware],
+html[data-nvr-recording-clean] body[data-nvr-chat-pinned] [data-sonner-toaster] {
+  margin-right: 0 !important;
+}

@@ -112,6 +112,7 @@ export function DevStaleBanner() {
   return (
     <div
       data-dev-stale
+      data-nvr-recording-hide
       className='flex items-start gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2 text-[12.5px] text-amber-900 dark:border-amber-500/40 dark:bg-amber-400/10 dark:text-amber-200'
     >
       <span className='mt-px font-semibold'>Dev</span>

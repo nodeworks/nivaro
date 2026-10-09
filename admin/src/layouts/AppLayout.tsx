@@ -1,5 +1,6 @@
 import {
   AutofillRunsChip,
+  DEMO_USER,
   ForceReloadBanner,
   parseThemeAccents,
   registerViewAsOpener,
@@ -7,9 +8,11 @@ import {
   rumRouteChange,
   setDisplayTimezone,
   setNumberFormat,
+  setRecordingSelf,
   setTimeDisplay,
   startRum,
-  UserAvatar
+  UserAvatar,
+  useCleanRecording
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -255,6 +258,9 @@ export function AppLayout() {
   const { user } = useAuth()
   // "View as" on a person's page (#640) opens a new tab as them.
   useEffect(() => registerViewAsOpener(openViewAsTab), [])
+  // A clean help-video recording shows the signed-in person as Demo User.
+  const cleanRecording = useCleanRecording()
+  useEffect(() => setRecordingSelf(user?.id), [user?.id])
   const { data: settings } = useSettings()
   useQuery({
     queryKey: ['health'],
@@ -472,12 +478,15 @@ export function AppLayout() {
           ]
         : activeCat.items
 
-  const displayName =
-    [user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.email || '?'
-  const initials =
-    [user?.first_name?.[0], user?.last_name?.[0]].filter(Boolean).join('').toUpperCase() ||
-    user?.email?.[0]?.toUpperCase() ||
-    '?'
+  const displayName = cleanRecording
+    ? DEMO_USER.name
+    : [user?.first_name, user?.last_name].filter(Boolean).join(' ') || user?.email || '?'
+  const initials = cleanRecording
+    ? DEMO_USER.initials
+    : [user?.first_name?.[0], user?.last_name?.[0]].filter(Boolean).join('').toUpperCase() ||
+      user?.email?.[0]?.toUpperCase() ||
+      '?'
+  const displayEmail = cleanRecording ? DEMO_USER.email : user?.email
 
   return (
     <RealtimeContext.Provider value={adminRealtime}>
@@ -695,7 +704,7 @@ export function AppLayout() {
                           <p className='truncate text-[13px] font-medium text-slate-900'>
                             {displayName}
                           </p>
-                          <p className='truncate text-[11px] text-slate-500'>{user?.email}</p>
+                          <p className='truncate text-[11px] text-slate-500'>{displayEmail}</p>
                         </div>
                       </div>
                       <div className='my-2.5 border-t border-slate-100' />
@@ -975,6 +984,7 @@ function RecorderBadge() {
       className='fixed bottom-4 right-4 z-[120] inline-flex items-center gap-2 rounded-full border border-red-200 bg-white px-3 py-1.5 text-[11.5px] font-medium text-red-600 shadow-lg hover:bg-red-50 dark:border-red-500/30 dark:bg-card dark:text-red-300'
       data-e2e-recorder
       data-e2e-badge={rec.steps.length}
+      data-nvr-recording-hide
     >
       <span className='h-2 w-2 animate-pulse rounded-full bg-red-500' />
       Recording · {rec.steps.length} step{rec.steps.length === 1 ? '' : 's'}
@@ -1020,6 +1030,7 @@ function ViewAsBar() {
   return (
     <div
       data-view-as-bar
+      data-nvr-recording-hide
       role='status'
       className='flex shrink-0 items-center gap-3 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-[12.5px] text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100'
     >

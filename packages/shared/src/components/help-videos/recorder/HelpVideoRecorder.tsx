@@ -4,6 +4,7 @@ import { Dialog, DialogContent } from '../../ui/dialog'
 import { modalHostOf } from '../../ui/popover'
 import { fetchHelpVideo, helpVideoApi } from '../api'
 import type { HelpVideoContext, HelpVideoDto } from '../types'
+import { readCleanPref, useCleanScreen, writeCleanPref } from './cleanRecording'
 import { type Failure, plainFailure, stopsRecording } from './failure'
 import { findLeftovers, type Leftover, planResume } from './leftovers'
 import { idbPartStore, PartUploader, type UploadState } from './partQueue'
@@ -69,7 +70,14 @@ export function HelpVideoRecorder({
   const sendPart = partSender(useApiFetchConfig())
   const [supported] = useState(canRecord)
   const [stage, setStage] = useState<Stage>('setup')
-  const [options, setOptions] = useState<SetupOptions>(DEFAULT_SETUP)
+  const [options, setOptionsState] = useState<SetupOptions>(() => ({
+    ...DEFAULT_SETUP,
+    cleanScreen: readCleanPref()
+  }))
+  const setOptions = (next: SetupOptions) => {
+    if (next.cleanScreen !== options.cleanScreen) writeCleanPref(next.cleanScreen)
+    setOptionsState(next)
+  }
   const [setupError, setSetupError] = useState<string | null>(null)
   const [failure, setFailure] = useState<Failure | null>(null)
   const [leftovers, setLeftovers] = useState<Leftover[]>([])
@@ -112,6 +120,9 @@ export function HelpVideoRecorder({
   })
 
   useLeaveWarning(leaveWarningActive(open, stage))
+  // A clean screen from the countdown to the stop (paused included). Leaving
+  // these stages, closing or unmounting the recorder brings everything back.
+  useCleanScreen(open && options.cleanScreen && (stage === 'countdown' || stage === 'recording'))
 
   // A fresh start every time the recorder opens (unless a recording is live).
   // biome-ignore lint/correctness/useExhaustiveDependencies: runs on open only

@@ -573,6 +573,7 @@ export function NotificationBell({
           <Bell className='h-4 w-4' strokeWidth={1.8} />
           {badge > 0 && (
             <span
+              data-nvr-recording-hide
               className={`absolute -right-0.5 -top-0.5 flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[9.5px] font-bold ${
                 lanes.critical > 0 ? 'bg-red-500 text-white' : 'bg-nvr-cyan text-nvr-navy'
               }`}

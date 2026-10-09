@@ -4363,6 +4363,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
       style={pinned ? { width: PINNED_WIDTH } : undefined}
       onClick={pinned ? undefined : onClose}
       data-chat-panel
+      data-nvr-recording-hide
       data-chat-pinned={pinned ? '1' : undefined}
     >
       <aside

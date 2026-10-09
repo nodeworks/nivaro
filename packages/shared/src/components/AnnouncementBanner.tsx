@@ -11,9 +11,7 @@ import { get, post } from '../lib/commands'
 export function AnnouncementBanner() {
   const client = useOptionalNivaroClient()
   const qc = useQueryClient()
-  const { data: items = [] } = useQuery<
-    Array<{ id: number; message: string; severity: string }>
-  >({
+  const { data: items = [] } = useQuery<Array<{ id: number; message: string; severity: string }>>({
     queryKey: ['announcements-active'],
     queryFn: () =>
       client!
@@ -35,7 +33,7 @@ export function AnnouncementBanner() {
       ?.request(post(`/announcements/${id}/ack`, {}))
       .then(() => qc.invalidateQueries({ queryKey: ['announcements-active'] }))
   return (
-    <div data-announcements className='shrink-0'>
+    <div data-announcements data-nvr-recording-hide className='shrink-0'>
       {mustAck.length > 0 && (
         <div className='fixed inset-0 z-[140] flex items-center justify-center bg-black/50 p-6'>
           <div className='w-full max-w-[520px] rounded-xl border border-slate-200 bg-white p-6 shadow-2xl dark:border-border dark:bg-card'>

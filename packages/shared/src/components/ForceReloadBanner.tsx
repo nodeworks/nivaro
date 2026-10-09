@@ -56,6 +56,7 @@ export function ForceReloadBanner() {
     <div
       role='alert'
       data-nvr-force-reload={remaining}
+      data-nvr-recording-hide
       className='fixed inset-x-0 top-0 z-[150] flex items-center justify-center gap-3 border-b border-amber-300 bg-amber-50 px-4 py-2.5 text-[13px] text-amber-900 dark:border-amber-500/40 dark:bg-[#3a2e10] dark:text-amber-200'
     >
       <RotateCw className='h-4 w-4 animate-spin' />
