@@ -511,7 +511,7 @@ export async function filesRoutes(app: FastifyInstance) {
       }
     }
 
-    const file = await updateFileMeta(id, patch, req.user?.id)
+    const file = await updateFileMeta(String(existing.id), patch, req.user?.id)
     await logActivity({
       action: 'update',
       collection: 'nivaro_files',
@@ -534,7 +534,7 @@ export async function filesRoutes(app: FastifyInstance) {
     const mimeType =
       multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream'
     const file = await replaceFileContent(
-      id,
+      String(existing.id),
       buffer,
       multipart.filename,
       String(mimeType),

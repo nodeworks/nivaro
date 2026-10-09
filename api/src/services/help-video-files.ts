@@ -57,9 +57,15 @@ export async function isHelpVideoFile(id: unknown): Promise<boolean> {
   return (await helpVideoFileIds([id])).size > 0
 }
 
-/** The files table under either name a query may use. */
-export function isFilesCollection(collection: string): boolean {
-  return /^(nivaro|directus)_files$/i.test(collection)
+/** The files table under any name a query could resolve to it: either name,
+ *  any case, with brackets, quotes, whitespace or a schema prefix
+ *  ('dbo.NIVARO_FILES'). Fails closed for every spelling SQL Server accepts. */
+export function isFilesCollection(collection: unknown): boolean {
+  const bare = String(collection ?? '')
+    .replace(/[[\]"`\s]/g, '')
+    .split('.')
+    .pop()
+  return /^(nivaro|directus)_files$/i.test(bare ?? '')
 }
 
 /** Adds "and this file is not a help-video file" to a nivaro_files query.

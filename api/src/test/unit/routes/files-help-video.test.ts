@@ -360,4 +360,21 @@ describe('/api/files hides help-video files', () => {
     })
     expect(c.json().data).toEqual({ [`${SOURCE}xyz`]: 0 })
   })
+
+  it('PATCH never writes a storage key: filename_disk, storage and friends are ignored', async () => {
+    const a = await app()
+    const res = await a.inject({
+      method: 'PATCH',
+      url: `/api/files/${PLAIN}`,
+      payload: {
+        title: 'Quote',
+        filename_disk: `${SOURCE}.webm`,
+        storage: 'local',
+        storage_provider: 's3',
+        id: SOURCE
+      }
+    })
+    expect(res.statusCode).toBe(200)
+    expect(files.updateFileMeta).toHaveBeenCalledWith(PLAIN.toUpperCase(), { title: 'Quote' }, 'U1')
+  })
 })
