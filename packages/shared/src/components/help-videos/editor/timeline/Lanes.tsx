@@ -73,8 +73,10 @@ export const clock = (ms: number) => {
 }
 const ANNOTATION_NAMES: Record<string, string> = {
   callout: 'Callout',
+  step: 'Step',
   arrow: 'Arrow',
   box: 'Box',
+  spotlight: 'Spotlight',
   ripple: 'Click ripple'
 }
 function itemLabel(k: TimedKey, it: TimedItem): string {

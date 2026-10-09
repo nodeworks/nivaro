@@ -1,5 +1,12 @@
 import { join } from 'node:path'
-import { type Annotation, annotationFade } from './help-video-edits.js'
+import {
+  type Annotation,
+  annotationFade,
+  SPOTLIGHT_DIM,
+  STEP_BADGE_UNITS,
+  STEP_STYLE_DEFAULTS,
+  type StepStyle
+} from './help-video-edits.js'
 import { getBrowser } from './pdf-layout.js'
 
 // Draws each annotation as a full-frame transparent PNG with the same look as
@@ -49,12 +56,23 @@ function isBlankDocument(url: string): boolean {
   return url === 'about:blank' || url.startsWith('data:')
 }
 
+/** Spotlights first, so the dim they lay over the frame never covers another
+ *  annotation (the live overlay draws them in the same order). */
+export function drawOrder(annotations: Annotation[]): Annotation[] {
+  return [
+    ...annotations.filter((a) => a.type === 'spotlight'),
+    ...annotations.filter((a) => a.type !== 'spotlight')
+  ]
+}
+
 export async function rasterizeAnnotations(
   annotations: Annotation[],
   size: { width: number; height: number },
-  dir: string
+  dir: string,
+  opts: { steps?: Map<string, number>; stepStyle?: StepStyle } = {}
 ): Promise<Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }>> {
   if (!annotations.length) return []
+  const style = opts.stepStyle ?? STEP_STYLE_DEFAULTS
   const browser = await getBrowser()
   const page = await browser.newPage()
   const out: Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }> = []
@@ -68,14 +86,14 @@ export async function rasterizeAnnotations(
     await page.setViewport({ width: size.width, height: size.height })
     await page.setContent(PAGE, { waitUntil: 'load', timeout: SET_CONTENT_TIMEOUT_MS })
     let n = 0
-    for (const a of annotations) {
+    for (const a of drawOrder(annotations)) {
       for (const frame of annotationOverlayFrames(a)) {
         // This callback runs inside Chromium as source text: it must not
         // declare named functions (tsx's keepNames would wrap them in a
         // __name helper the page does not have) or reach anything outside it.
         await page.evaluate(
           (data) => {
-            const { a, scale, W, H, palette } = data
+            const { a, scale, W, H, palette, step, badgeUnits, square, dim } = data
             const document = (globalThis as unknown as { document: PageDocument }).document
             const root = document.getElementById('root') as PageNode
             root.style.width = `${W}px`
@@ -99,6 +117,35 @@ export async function rasterizeAnnotations(
                 el.style.boxShadow = '0 2px 10px rgba(0,0,0,0.35)'
               }
               el.textContent = a.text
+              root.appendChild(el)
+            } else if (a.type === 'step') {
+              // A number badge; with text, inside a callout-like pill.
+              const d = badgeUnits * unit
+              const badge = document.createElement('div')
+              badge.style.cssText = `flex:none;width:${d}px;height:${d}px;box-sizing:border-box;border-radius:${square ? `${Math.round(d * 0.22)}px` : '50%'};display:flex;align-items:center;justify-content:center;font-weight:700;font-size:${Math.round(d * 0.55)}px;line-height:1;`
+              badge.textContent = step === null ? '' : String(step)
+              if (a.text) {
+                const el = document.createElement('div')
+                el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;box-sizing:border-box;border-radius:${4 * unit}px;display:flex;align-items:center;gap:${3 * unit}px;text-align:left;padding:${3 * unit}px;font-weight:600;font-size:${Math.max(12, Math.min(h * 0.45, 9 * unit))}px;line-height:1.2;color:#ffffff;box-shadow:0 2px 10px rgba(0,0,0,0.35);background:${color};`
+                badge.style.background = '#ffffff'
+                badge.style.color = color
+                const label = document.createElement('span')
+                label.textContent = a.text
+                el.append(badge, label)
+                root.appendChild(el)
+              } else {
+                badge.style.position = 'absolute'
+                badge.style.left = `${x + w / 2 - d / 2}px`
+                badge.style.top = `${y + h / 2 - d / 2}px`
+                badge.style.background = color
+                badge.style.color = '#ffffff'
+                badge.style.boxShadow = '0 2px 10px rgba(0,0,0,0.35)'
+                root.appendChild(badge)
+              }
+            } else if (a.type === 'spotlight') {
+              // Everything but the rect dimmed: one huge shadow around it.
+              const el = document.createElement('div')
+              el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;border-radius:${3 * unit}px;box-shadow:0 0 0 ${2 * Math.max(W, H)}px rgba(0,0,0,${dim});`
               root.appendChild(el)
             } else if (a.type === 'ripple') {
               const r = (Math.min(w, h) / 2) * scale
@@ -141,7 +188,17 @@ export async function rasterizeAnnotations(
               root.appendChild(svg)
             }
           },
-          { a, scale: frame.scale, W: size.width, H: size.height, palette: PALETTE }
+          {
+            a,
+            scale: frame.scale,
+            W: size.width,
+            H: size.height,
+            palette: PALETTE,
+            step: opts.steps?.get(a.id) ?? null,
+            badgeUnits: STEP_BADGE_UNITS[style.size],
+            square: style.shape === 'square',
+            dim: SPOTLIGHT_DIM
+          }
         )
         const path = join(dir, `annot-${++n}.png`)
         await page.screenshot({ path: path as `${string}.png`, omitBackground: true, type: 'png' })

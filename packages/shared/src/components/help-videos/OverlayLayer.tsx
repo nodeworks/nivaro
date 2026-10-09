@@ -1,15 +1,22 @@
-import type { CSSProperties } from 'react'
+import { type CSSProperties, useMemo } from 'react'
 import { ANNOTATION_PALETTE, annotationUnit } from './annotationStyles'
-import { annotationOpacity } from './edits'
-import { activeAt, liveBlurPx, renderSize } from './playerMath'
-import type { Annotation, CaptionStyle, VideoEdits } from './types'
+import {
+  annotationOpacity,
+  SPOTLIGHT_DIM,
+  STEP_BADGE_UNITS,
+  stepNumbers,
+  stepStyleOf
+} from './edits'
+import { activeAt, liveBlurPx, renderSizes } from './playerMath'
+import type { Annotation, CaptionStyle, StepStyle, VideoEdits } from './types'
 import { CAPTION_SIZE_SCALE } from './viewer/moments'
 
 /** Annotations, blur boxes and the caption line for one moment of SOURCE
  *  time. Visuals mirror the server's rasterizer
  *  (api/src/services/help-video-annotations.ts): annotations are laid out on
- *  a canvas the size of the rendered file (`renderSize` of the recording's
- *  `source` size) and scaled down to the frame, so text and line widths keep
+ *  the canvas the render draws them on (`renderSizes(...).work` of the
+ *  recording's `source` size: the whole recorded frame, before any crop)
+ *  and scaled down to `frame` (the whole recorded frame on screen), so text and line widths keep
  *  the same proportions in a live preview and in the render. Without
  *  `source` they are laid out in frame pixels. Annotation text is always a
  *  React text node. */
@@ -37,10 +44,22 @@ export function OverlayLayer({
   captionStyle?: CaptionStyle
 }) {
   const { width: W, height: H } = frame
-  const canvas = source?.width && source?.height ? renderSize(source.width, source.height) : frame
+  const canvas =
+    source?.width && source?.height
+      ? renderSizes(source.width, source.height, edits.crop).work
+      : frame
   const kx = canvas.width ? W / canvas.width : 1
   const ky = canvas.height ? H / canvas.height : 1
   const unit = annotationUnit(canvas.width)
+  const steps = useMemo(() => stepNumbers(edits), [edits])
+  const stepStyle = stepStyleOf(edits)
+  // Spotlights first, so their dim never covers another annotation (the
+  // render's drawOrder).
+  const shown = activeAt(edits.annotations, srcMs)
+  const ordered = [
+    ...shown.filter((a) => a.type === 'spotlight'),
+    ...shown.filter((a) => a.type !== 'spotlight')
+  ]
   return (
     <>
       <div className='pointer-events-none absolute inset-0' data-hv-overlay>
@@ -75,7 +94,7 @@ export function OverlayLayer({
               transformOrigin: '0 0'
             }}
           >
-            {activeAt(edits.annotations, srcMs).map((a) => (
+            {ordered.map((a) => (
               <AnnotationShape
                 key={a.id}
                 a={a}
@@ -84,6 +103,8 @@ export function OverlayLayer({
                 unit={unit}
                 srcMs={srcMs}
                 opacity={fade ? annotationOpacity(a, srcMs) : 1}
+                step={steps.get(a.id) ?? null}
+                stepStyle={stepStyle}
               />
             ))}
           </div>
@@ -102,7 +123,9 @@ function AnnotationShape({
   H,
   unit,
   srcMs,
-  opacity
+  opacity,
+  step,
+  stepStyle
 }: {
   a: Annotation
   W: number
@@ -110,6 +133,8 @@ function AnnotationShape({
   unit: number
   srcMs: number
   opacity: number
+  step: number | null
+  stepStyle: StepStyle
 }) {
   const color = ANNOTATION_PALETTE[a.tone]
   const x = a.rect.x * W
@@ -148,6 +173,93 @@ function AnnotationShape({
       <div data-hv-annotation={a.id} style={style}>
         {a.text}
       </div>
+    )
+  }
+  if (a.type === 'step') {
+    const d = STEP_BADGE_UNITS[stepStyle.size] * unit
+    const badge: CSSProperties = {
+      flex: 'none',
+      width: d,
+      height: d,
+      boxSizing: 'border-box',
+      borderRadius: stepStyle.shape === 'square' ? Math.round(d * 0.22) : '50%',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontWeight: 700,
+      fontSize: Math.round(d * 0.55),
+      lineHeight: 1,
+      fontFamily: 'Arial, Helvetica, sans-serif'
+    }
+    const n = step === null ? '' : String(step)
+    if (!a.text) {
+      return (
+        <div
+          data-hv-annotation={a.id}
+          data-hv-step={n}
+          style={{
+            ...badge,
+            position: 'absolute',
+            left: x + w / 2 - d / 2,
+            top: y + h / 2 - d / 2,
+            background: color,
+            color: '#ffffff',
+            boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+            opacity
+          }}
+        >
+          {n}
+        </div>
+      )
+    }
+    return (
+      <div
+        data-hv-annotation={a.id}
+        data-hv-step={n}
+        style={{
+          position: 'absolute',
+          left: x,
+          top: y,
+          width: w,
+          height: h,
+          boxSizing: 'border-box',
+          borderRadius: 4 * unit,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 3 * unit,
+          textAlign: 'left',
+          padding: 3 * unit,
+          fontWeight: 600,
+          lineHeight: 1.2,
+          fontFamily: 'Arial, Helvetica, sans-serif',
+          fontSize: Math.max(12, Math.min(h * 0.45, 9 * unit)),
+          color: '#ffffff',
+          background: color,
+          boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
+          opacity
+        }}
+      >
+        <span style={{ ...badge, background: '#ffffff', color }}>{n}</span>
+        <span>{a.text}</span>
+      </div>
+    )
+  }
+  if (a.type === 'spotlight') {
+    return (
+      <div
+        data-hv-annotation={a.id}
+        data-hv-spotlight
+        style={{
+          position: 'absolute',
+          left: x,
+          top: y,
+          width: w,
+          height: h,
+          borderRadius: 3 * unit,
+          boxShadow: `0 0 0 ${2 * Math.max(W, H)}px rgba(0,0,0,${SPOTLIGHT_DIM})`,
+          opacity
+        }}
+      />
     )
   }
   if (a.type === 'ripple') {

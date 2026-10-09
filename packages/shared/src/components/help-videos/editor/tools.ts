@@ -1,11 +1,22 @@
-import { EDIT_LIMITS, type ListKey, newId, upsertItemChecked } from '../edits'
+import { EDIT_LIMITS, type ListKey, newId, textDurationMs, upsertItemChecked } from '../edits'
 import type { Annotation, Blur, Point, RecordedClick, Rect, VideoEdits, Zoom } from '../types'
 import type { Selection } from './timeline/Lanes'
 
 // The editor's drawing tools, kept pure. Rects and points are frame
 // fractions (0–1), the same space the render uses.
 
-export type Tool = 'callout' | 'arrow' | 'box' | 'ripple' | 'zoom' | 'blur'
+export type Tool =
+  | 'callout'
+  | 'step'
+  | 'arrow'
+  | 'box'
+  | 'spotlight'
+  | 'ripple'
+  | 'zoom'
+  | 'blur'
+  | 'crop'
+/** The tools that draw a timed item (everything but the crop). */
+export type ItemTool = Exclude<Tool, 'crop'>
 const DEFAULT_MS = 3000
 const RIPPLE_MS = 900
 /** A ripple already within this of a click stands for it. */
@@ -34,15 +45,17 @@ export function squareRect(r: Rect): Rect {
 }
 
 /** Default shapes for a click (no drag), centred on it. */
-const CLICK_SIZE: Record<Tool, { w: number; h: number }> = {
+const CLICK_SIZE: Record<ItemTool, { w: number; h: number }> = {
   callout: { w: 0.22, h: 0.08 },
+  step: { w: 0.22, h: 0.08 },
+  spotlight: { w: 0.3, h: 0.2 },
   box: { w: 0.24, h: 0.14 },
   ripple: { w: 0.05, h: 0.05 },
   blur: { w: 0.2, h: 0.1 },
   zoom: { w: 0.4, h: 0.4 },
   arrow: { w: 0.02, h: 0.02 }
 }
-export function clickRect(tool: Tool, p: Point): Rect {
+export function clickRect(tool: ItemTool, p: Point): Rect {
   const { w, h } = CLICK_SIZE[tool]
   const r = {
     x: r3(clamp(p.x - w / 2, 0, 1 - w)),
@@ -64,9 +77,11 @@ export function arrowTailFor(tip: Point): Point {
 }
 
 /** A new item for a tool, starting at the playhead: 3 seconds long (a
- *  ripple 0.9 s), cut short by the end of the recording. */
+ *  ripple 0.9 s; a callout or step as long as its text needs, see
+ *  textDurationMs), cut short by the end of the recording. A callout or step
+ *  keeps following its text's length while it is typed (markAutoLength). */
 export function newItemFor(
-  tool: Tool,
+  tool: ItemTool,
   rect: Rect,
   srcMs: number,
   sourceMs: number,
@@ -81,19 +96,65 @@ export function newItemFor(
     }
   if (tool === 'blur')
     return { key: 'blurs', item: { id: newId(), start_ms: start, end_ms: end, rect, strength: 12 } }
-  return {
-    key: 'annotations',
-    item: {
-      id: newId(),
-      type: tool,
-      start_ms: start,
-      end_ms: tool === 'ripple' ? Math.min(sourceMs, start + RIPPLE_MS) : end,
-      rect,
-      to: tool === 'arrow' ? (arrowTo ?? { x: rect.x + rect.w, y: rect.y + rect.h }) : null,
-      text: tool === 'callout' ? 'Click here' : '',
-      tone: 'accent'
-    }
+  const text = tool === 'callout' ? 'Click here' : ''
+  const byText = tool === 'callout' || tool === 'step'
+  const item: Annotation = {
+    id: newId(),
+    type: tool,
+    start_ms: start,
+    end_ms:
+      tool === 'ripple'
+        ? Math.min(sourceMs, start + RIPPLE_MS)
+        : byText
+          ? Math.round(Math.min(sourceMs, start + textDurationMs(text)))
+          : end,
+    rect,
+    to: tool === 'arrow' ? (arrowTo ?? { x: rect.x + rect.w, y: rect.y + rect.h }) : null,
+    text,
+    tone: 'accent'
   }
+  if (byText) markAutoLength(item)
+  return { key: 'annotations', item }
+}
+
+// Length from text (#1554). A callout, step or caption made in this editor
+// session follows its text's reading time (textDurationMs) while it is typed,
+// until the author sets its length by hand: the length it was last given here
+// is remembered, and once the item's length is anything else (a timeline
+// drag, a typed end time, undo) it stops for good. Items from earlier
+// sessions never change length on their own.
+const autoLength = new Map<string, number>()
+export function markAutoLength(item: { id: string; start_ms: number; end_ms: number }): void {
+  autoLength.set(item.id, item.end_ms - item.start_ms)
+}
+export function isAutoLength(item: { id: string; start_ms: number; end_ms: number }): boolean {
+  return autoLength.get(item.id) === item.end_ms - item.start_ms
+}
+/** The item with new text; still following its text, also the length that
+ *  text needs (never past `maxEnd`). */
+export function withTypedText<T extends { id: string; start_ms: number; end_ms: number }>(
+  item: T,
+  text: string,
+  maxEnd: number
+): T & { text: string } {
+  if (!isAutoLength(item)) {
+    autoLength.delete(item.id)
+    return { ...item, text }
+  }
+  const end = Math.round(Math.min(maxEnd, item.start_ms + textDurationMs(text)))
+  if (end - item.start_ms < EDIT_LIMITS.minItemMs) return { ...item, text }
+  autoLength.set(item.id, end - item.start_ms)
+  return { ...item, text, end_ms: end }
+}
+/** Seconds a text needs when the item is shorter than that (else null). */
+export function shortForText(item: {
+  start_ms: number
+  end_ms: number
+  text: string
+}): number | null {
+  if (!item.text.trim()) return null
+  const need = textDurationMs(item.text)
+  return item.end_ms - item.start_ms < need ? need : null
 }
 
 /**
@@ -166,8 +227,9 @@ export function clickTargetText(c: RecordedClick | null): string | null {
 }
 
 /**
- * Type-along captioning: a caption starts at the playhead and runs 3 s, or
- * until the next caption or the end of the recording. Every caption showing
+ * Type-along captioning: a caption starts at the playhead and runs as long as
+ * its text needs (textDurationMs), or until the next caption or the end of
+ * the recording. Every caption showing
  * at the playhead ends there (they can overlap). Refused (edits unchanged,
  * with the reason) when that would leave any of them shorter than 0.2 s.
  */
@@ -196,7 +258,7 @@ export function typeAlongCaptionChecked(
     Number.POSITIVE_INFINITY
   )
   const last = sourceMs ?? Number.POSITIVE_INFINITY
-  const end = Math.min(at + DEFAULT_MS, next, last)
+  const end = Math.min(at + textDurationMs(text), next, last)
   if (end - at < EDIT_LIMITS.minItemMs)
     return {
       edits,
@@ -205,8 +267,11 @@ export function typeAlongCaptionChecked(
           ? 'The next caption starts too soon after the playhead to fit another one'
           : 'The recording ends too soon after the playhead to fit a caption'
     }
-  const added = upsertItemChecked(e, 'captions', { id: newId(), start_ms: at, end_ms: end, text })
-  return added.refused ? { edits, refused: added.refused } : added
+  const caption = { id: newId(), start_ms: at, end_ms: end, text }
+  const added = upsertItemChecked(e, 'captions', caption)
+  if (added.refused) return { edits, refused: added.refused }
+  markAutoLength(caption)
+  return added
 }
 
 /** typeAlongCaptionChecked without the reason: refused returns `edits`. */
@@ -264,8 +329,18 @@ export function reshapeItem<T extends { rect: Rect; to?: Point | null }>(
 }
 
 /** What the preview plays: while a zoom is selected it shows the whole
- *  picture (that zoom left out), so the zoom's area can be seen and placed. */
-export function editsForPreview(edits: VideoEdits, selection: Selection): VideoEdits {
+ *  picture (that zoom left out), so the zoom's area can be seen and placed;
+ *  with the crop tool up, the whole recorded frame (no crop, no zoom), so a
+ *  new crop can be drawn over all of it. */
+export function editsForPreview(
+  edits: VideoEdits,
+  selection: Selection,
+  tool?: Tool | null
+): VideoEdits {
+  if (tool === 'crop') {
+    const { crop: _drop, ...rest } = edits
+    return { ...rest, zooms: [] } as VideoEdits
+  }
   if (selection?.lane !== 'zooms') return edits
   const id = selection.id
   return edits.zooms.some((z) => z.id === id)

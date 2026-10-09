@@ -10,6 +10,7 @@ import type {
   Point,
   Rect,
   Speed,
+  StepStyle,
   VideoEdits,
   Zoom
 } from './types'
@@ -24,7 +25,7 @@ import type {
 // it), turning a blank chapter title into "Chapter", and dropping a caption
 // whose text is blank.
 
-export const ALLOWED_SPEEDS: Speed[] = [1, 1.5, 2, 4]
+export const ALLOWED_SPEEDS: Speed[] = [0.5, 1, 1.5, 2, 4]
 /** Same values as the server's EDIT_LIMITS — keep them in step. */
 export const EDIT_LIMITS = {
   annotations: 200,
@@ -52,8 +53,23 @@ export const EDIT_LIMITS = {
   musicMinVolume: 0.05,
   musicDefaultVolume: 0.25,
   /** Callouts, boxes and arrows fade in and out over this long (source time). */
-  fadeMs: 200
+  fadeMs: 200,
+  /** Smallest crop side (fraction of the frame). */
+  cropMinSide: 0.2
 } as const
+/** The annotation types that carry text (the server's TEXT_TYPES). */
+export const TEXT_TYPES: Annotation['type'][] = ['callout', 'box', 'step']
+/** Step badge look when nothing is stored (the server's STEP_STYLE_DEFAULTS).
+ *  A later house style sets instance defaults from this. */
+export const STEP_STYLE_DEFAULTS: Readonly<StepStyle> = { shape: 'circle', size: 'medium' }
+/** A step badge's diameter in annotation units (the server's STEP_BADGE_UNITS). */
+export const STEP_BADGE_UNITS: Record<StepStyle['size'], number> = {
+  small: 10,
+  medium: 13,
+  large: 17
+}
+/** How dark a spotlight makes everything outside its rect (the server's SPOTLIGHT_DIM). */
+export const SPOTLIGHT_DIM = 0.6
 /** Same text as the server's OUTRO_DEFAULT_TEXT. */
 export const OUTRO_DEFAULT_TEXT = 'Questions? Ask your administrator.'
 export const MIN_KEPT_MS = EDIT_LIMITS.minKeptMs
@@ -399,8 +415,8 @@ function normalizeItem<K extends ListKey>(key: K, item: Item<K>): Item<K> {
       ...span(a),
       rect: clampRect(a.rect),
       to: arrow ? clampPoint(a.to ?? { x: 0.5, y: 0.5 }) : null,
-      // only callouts and boxes carry text; the server stores '' for the rest
-      text: a.type === 'callout' || a.type === 'box' ? a.text.slice(0, EDIT_LIMITS.text) : ''
+      // only callouts, boxes and steps carry text; the server stores '' for the rest
+      text: TEXT_TYPES.includes(a.type) ? a.text.slice(0, EDIT_LIMITS.text) : ''
     } as Item<K>
   }
   const c = item as Caption
@@ -456,4 +472,69 @@ export function removeItem(e: VideoEdits, key: ListKey, id: string): VideoEdits 
     ...e,
     [key]: (e[key] as Array<{ id: string }>).filter((x) => x.id !== id)
   } as VideoEdits
+}
+
+const r4 = (n: number) => Math.round(n * 10000) / 10000
+
+/** The crop the server stores (normalizeCrop): sides at least
+ *  EDIT_LIMITS.cropMinSide, inside the frame, 4 places; null = the whole frame. */
+export function normalizeCrop(v: Rect | null | undefined): Rect | null {
+  if (!v) return null
+  const w = r4(clamp(v.w, EDIT_LIMITS.cropMinSide, 1))
+  const h = r4(clamp(v.h, EDIT_LIMITS.cropMinSide, 1))
+  const x = r4(clamp(v.x, 0, 1 - w))
+  const y = r4(clamp(v.y, 0, 1 - h))
+  if (x <= 0.0005 && y <= 0.0005 && w >= 0.9995 && h >= 0.9995) return null
+  return { x, y, w, h }
+}
+/** Set (or with null / the whole frame, remove) the video's crop. */
+export function setCrop(e: VideoEdits, crop: Rect | null): VideoEdits {
+  const { crop: _drop, ...rest } = e
+  const c = normalizeCrop(crop)
+  return (c ? { ...rest, crop: c } : rest) as VideoEdits
+}
+/** The crop in effect: the stored one, else the whole frame. */
+export function cropOf(e: VideoEdits): Rect {
+  return e.crop ?? { x: 0, y: 0, w: 1, h: 1 }
+}
+/** A zoom inside the crop (the server's zoomInView): its magnification of the
+ *  cropped picture (at least 1) and its centre as a fraction of it. */
+export function zoomInView(e: VideoEdits, rect: Rect): { mag: number; cx: number; cy: number } {
+  const c = cropOf(e)
+  const w = rect.w / c.w
+  const h = rect.h / c.h
+  return {
+    mag: Math.max(1, 1 / Math.max(w, h)),
+    cx: (rect.x - c.x) / c.w + w / 2,
+    cy: (rect.y - c.y) / c.h + h / 2
+  }
+}
+/** The step style in effect (stored or default). */
+export function stepStyleOf(e: VideoEdits): StepStyle {
+  return { ...STEP_STYLE_DEFAULTS, ...(e.step_style ?? {}) }
+}
+/** Change the step style; the defaults are stored as nothing (the server rule). */
+export function setStepStyle(e: VideoEdits, patch: Partial<StepStyle>): VideoEdits {
+  const { step_style: _drop, ...rest } = e
+  const next = { ...stepStyleOf(e), ...patch }
+  const isDefault =
+    next.shape === STEP_STYLE_DEFAULTS.shape && next.size === STEP_STYLE_DEFAULTS.size
+  return (isDefault ? rest : { ...rest, step_style: next }) as VideoEdits
+}
+/** Each step's number (the server's stepNumbers): steps viewers see, in
+ *  timeline order (start, then top to bottom, then left to right), from 1. */
+export function stepNumbers(e: VideoEdits): Map<string, number> {
+  const steps = e.annotations
+    .filter((a) => a.type === 'step' && !isHiddenByCuts(e, a.start_ms, a.end_ms))
+    .sort((a, b) => a.start_ms - b.start_ms || a.rect.y - b.rect.y || a.rect.x - b.rect.x)
+  return new Map(steps.map((a, i) => [a.id, i + 1]))
+}
+/** How long a callout, step or caption should stay up for its text: about 3
+ *  words a second, never under 2 seconds, in 0.1-second steps. */
+export const READ_WORDS_PER_SECOND = 3
+export const READ_MIN_MS = 2000
+export function textDurationMs(text: string): number {
+  const words = text.trim().split(/\s+/).filter(Boolean).length
+  const ms = Math.ceil((words / READ_WORDS_PER_SECOND) * 10) * 100
+  return Math.max(READ_MIN_MS, ms)
 }

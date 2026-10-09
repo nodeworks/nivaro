@@ -67,8 +67,8 @@ export function blindRequiredRoles(visibility: Visibility, required: string[]): 
  * Client mirror of the server's viewerMayPlaySource (help-video-views.ts —
  * keep the two in step): viewers can't be handed the original recording when
  * the edits hide or cut something, so they wait for the render. Blurs,
- * callouts (opaque panels), boxes (their label can cover a field), a trim or
- * a cut each mean waiting; so do intro/outro cards, chapter banners and
+ * callouts (opaque panels), boxes (their label can cover a field), steps
+ * (opaque badges), a crop, a trim or a cut each mean waiting; so do intro/outro cards, chapter banners and
  * background music (the original has none), and an unknown length.
  */
 export function viewersWaitForRender(edits: VideoEdits, sourceMs: number | null): boolean {
@@ -77,7 +77,9 @@ export function viewersWaitForRender(edits: VideoEdits, sourceMs: number | null)
   if (edits.blurs.length) return true
   if (edits.intro || edits.outro || edits.chapter_banners) return true
   if (edits.music) return true
-  if (edits.annotations.some((a) => a.type === 'callout' || a.type === 'box')) return true
+  if (edits.annotations.some((a) => a.type === 'callout' || a.type === 'box' || a.type === 'step'))
+    return true
+  if (edits.crop) return true
   const segs = edits.segments
   if (!segs.length) return true
   if (segs[0].start_ms > 0 || segs[segs.length - 1].end_ms < src) return true

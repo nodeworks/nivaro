@@ -59,13 +59,13 @@ describe('rectFromPoints / squareRect', () => {
 })
 
 describe('newItemFor', () => {
-  it('makes a 3-second callout at the playhead', () => {
+  it('makes a callout at the playhead as long as its text needs (2 s at least)', () => {
     const r = newItemFor('callout', { x: 0, y: 0, w: 0.2, h: 0.1 }, 5000, 20_000)
     expect(r.key).toBe('annotations')
     expect(r.item).toMatchObject({
       type: 'callout',
       start_ms: 5000,
-      end_ms: 8000,
+      end_ms: 7000,
       text: 'Click here',
       tone: 'accent'
     })
@@ -172,7 +172,7 @@ describe('typeAlongCaption', () => {
     e = typeAlongCaption(e, 2500, 'Second')
     expect(e.captions.map((c) => [c.start_ms, c.end_ms, c.text])).toEqual([
       [1000, 2500, 'First'],
-      [2500, 5500, 'Second']
+      [2500, 4500, 'Second']
     ])
   })
   it('stops a new caption where the next one starts and at the end of the recording', () => {
@@ -180,7 +180,7 @@ describe('typeAlongCaption', () => {
     e = typeAlongCaption(e, 3000, 'Earlier')
     expect(e.captions.map((c) => [c.start_ms, c.end_ms])).toEqual([
       [3000, 5000],
-      [5000, 8000]
+      [5000, 7000]
     ])
     const end = typeAlongCaptionChecked(empty, 19_000, 'Last', 20_000)
     expect(end.edits.captions[0]).toMatchObject({ start_ms: 19_000, end_ms: 20_000 })
@@ -199,7 +199,7 @@ describe('typeAlongCaption', () => {
     ).toEqual([
       ['k1', 1000, 4000],
       ['k2', 2000, 4000],
-      ['new', 4000, 7000]
+      ['new', 4000, 6000]
     ])
     const tooSoon = typeAlongCaptionChecked(two, 2100, 'Three')
     expect(tooSoon.refused).toMatch(/0\.2 seconds/)

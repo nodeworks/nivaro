@@ -138,7 +138,7 @@ const sameTarget = (a: RecordedClick, b: RecordedClick) =>
 export function buildWalkSteps(edits: VideoEdits, rawClicks: unknown): WalkStep[] {
   const clicks = normalizeClicks(rawClicks) ?? []
   const notes = edits.annotations.filter(
-    (a) => (a.type === 'callout' || a.type === 'box') && a.text.trim()
+    (a) => (a.type === 'callout' || a.type === 'box' || a.type === 'step') && a.text.trim()
   )
   const kept: Array<{ c: RecordedClick; edited: number }> = []
   let prev: RecordedClick | null = null

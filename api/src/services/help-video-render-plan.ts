@@ -6,13 +6,17 @@ import {
   musicShare,
   type Rect,
   sourceToEdited,
-  type VideoEdits
+  type VideoEdits,
+  zoomInView
 } from './help-video-edits.js'
 
 // Builds the single ffmpeg pass that bakes a help video's edits into an MP4.
-// Everything is applied in SOURCE time — blur, annotation overlays, zoom — and
-// the cut/speed step runs last, so every timed item can use the times stored
-// in the edits unchanged. Expressions are single-quoted inside the graph so
+// Everything is applied in SOURCE time — blur, annotation overlays, crop, zoom
+// — and the cut/speed step runs last, so every timed item can use the times
+// stored in the edits unchanged. Blurs and annotations are drawn on the whole
+// recorded frame (their rects are fractions of it); the crop (#1544) then cuts
+// the picture down to what viewers see, and zooms move inside the cropped
+// picture. Cards and banners are full frames of the cropped output size. Expressions are single-quoted inside the graph so
 // commas and colons stay literal; ffmpeg receives the graph as one argument.
 
 export interface RenderInput {
@@ -60,6 +64,30 @@ export function outputSize(width: number, height: number): { width: number; heig
   return { width: even(width * scale), height: even(height * scale) }
 }
 
+/** The frame the edits are drawn on (`work`: blurs, annotations) and the
+ *  finished file (`out`: the cropped picture, cards, banners). Without a crop
+ *  both are outputSize. With one, the recording is scaled so the cropped part
+ *  comes out at most 1920x1080 and never enlarged; `crop` is that part in
+ *  `work` pixels and `out` is exactly its size. */
+export function renderSizes(
+  width: number,
+  height: number,
+  crop: Rect | null | undefined
+): {
+  work: { width: number; height: number }
+  out: { width: number; height: number }
+  crop: { x: number; y: number; w: number; h: number } | null
+} {
+  if (!crop) {
+    const o = outputSize(width, height)
+    return { work: o, out: o, crop: null }
+  }
+  const scale = Math.min(1, 1920 / (crop.w * width), 1080 / (crop.h * height))
+  const work = { width: even(width * scale), height: even(height * scale) }
+  const px = pixelRect(crop, work)
+  return { work, out: { width: px.w, height: px.h }, crop: px }
+}
+
 export function pixelRect(
   r: Rect,
   size: { width: number; height: number }
@@ -72,6 +100,7 @@ export function pixelRect(
 }
 
 function atempo(speed: number): string {
+  // atempo keeps the pitch; one stage takes 0.5–2 (slow motion is 0.5 itself).
   if (speed === 4) return 'atempo=2,atempo=2'
   if (speed === 1) return 'anull'
   return `atempo=${speed}`
@@ -166,21 +195,23 @@ export function buildRenderArgs(input: RenderInput): string[] {
   if (!sourceLock.includes('-f')) {
     throw new Error(`Unsupported recording format: ${input.sourceMime}`)
   }
-  const out = outputSize(input.width, input.height)
   const e = input.edits
+  const sizes = renderSizes(input.width, input.height, e.crop)
+  const work = sizes.work
+  const out = sizes.out
   const parts: string[] = []
   let label = 'v0'
   let n = 0
   const next = () => `v${++n}`
-  parts.push(`[0:v]scale=${out.width}:${out.height},format=yuv420p,setsar=1[${label}]`)
+  parts.push(`[0:v]scale=${work.width}:${work.height},format=yuv420p,setsar=1[${label}]`)
 
   for (const b of e.blurs) {
-    const pr = pixelRect(b.rect, out)
+    const pr = pixelRect(b.rect, work)
     // Chroma planes are half size and need room for a radius-1 box blur, so
     // a blur box is never smaller than 4x4 pixels (ffmpeg fails below that).
-    const w = Math.min(Math.max(pr.w, 4), out.width)
-    const h = Math.min(Math.max(pr.h, 4), out.height)
-    const r = { x: Math.min(pr.x, out.width - w), y: Math.min(pr.y, out.height - h), w, h }
+    const w = Math.min(Math.max(pr.w, 4), work.width)
+    const h = Math.min(Math.max(pr.h, 4), work.height)
+    const r = { x: Math.min(pr.x, work.width - w), y: Math.min(pr.y, work.height - h), w, h }
     // boxblur's radius applies to the half-size chroma planes too, so it is
     // bounded by a quarter of the smaller side; more passes make up for it.
     const strength = Math.max(1, Math.min(b.strength, Math.floor(Math.min(r.w, r.h) / 4) - 1))
@@ -220,19 +251,30 @@ export function buildRenderArgs(input: RenderInput): string[] {
     label = to
   })
 
+  // The crop: what viewers see of the recording, already in `out` pixels.
+  if (sizes.crop) {
+    const c = sizes.crop
+    const to = next()
+    parts.push(`[${label}]crop=${c.w}:${c.h}:${c.x}:${c.y},setsar=1[${to}]`)
+    label = to
+  }
+
   if (e.zooms.length) {
     const p = (a: number, b: number, ease: number) =>
       ease > 0
         ? `clip(min((t-${sec(a)})/${sec(ease)},(${sec(b)}-t)/${sec(ease)}),0,1)`
         : `between(t,${sec(a)},${sec(b)})`
-    const zTerms = e.zooms.map(
-      (z) => `(${(1 / z.rect.w - 1).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
+    // Zoom rects are fractions of the whole recorded frame; inside a crop
+    // they are re-expressed in the cropped picture (zoomInView).
+    const views = e.zooms.map((z) => ({ z, v: zoomInView(e, z.rect) }))
+    const zTerms = views.map(
+      ({ z, v }) => `(${(v.mag - 1).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
     )
-    const cxTerms = e.zooms.map(
-      (z) => `(${(z.rect.x + z.rect.w / 2 - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
+    const cxTerms = views.map(
+      ({ z, v }) => `(${(v.cx - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
     )
-    const cyTerms = e.zooms.map(
-      (z) => `(${(z.rect.y + z.rect.h / 2 - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
+    const cyTerms = views.map(
+      ({ z, v }) => `(${(v.cy - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
     )
     const Z = `(1+${zTerms.join('+')})`
     const CX = `(0.5+${cxTerms.join('+')})`

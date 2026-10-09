@@ -74,7 +74,11 @@ export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boole
   // blur. A box is an outline, but its label is drawn inside it and can cover
   // a small field, so it counts too (the conservative choice). Arrows,
   // ripples (translucent) and zooms only draw attention.
-  if (e.annotations.some((a) => a.type === 'callout' || a.type === 'box')) return false
+  // A step's badge is opaque like a callout. A spotlight only dims.
+  if (e.annotations.some((a) => a.type === 'callout' || a.type === 'box' || a.type === 'step'))
+    return false
+  // A crop is there to leave something out of the picture (#1544).
+  if (e.crop) return false
   const segs = e.segments
   if (!segs.length) return false
   if (segs[0].start_ms > 0 || segs[segs.length - 1].end_ms < src) return false // trimmed

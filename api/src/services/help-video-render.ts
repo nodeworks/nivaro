@@ -21,10 +21,12 @@ import {
   editedDuration,
   normalizeEdits,
   posterEditedMs,
+  stepNumbers,
+  stepStyleOf,
   type VideoEdits
 } from './help-video-edits.js'
 import { musicForRender } from './help-video-music.js'
-import { buildPosterArgs, buildRenderArgs, outputSize } from './help-video-render-plan.js'
+import { buildPosterArgs, buildRenderArgs, renderSizes } from './help-video-render-plan.js'
 import { discardFile, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
 import { isCancelled } from './job-cancel.js'
@@ -240,8 +242,13 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const probe = await probeVideo(sourcePath, sourceMime)
     const width = probe.width ?? Number(v.width ?? 1280)
     const height = probe.height ?? Number(v.height ?? 720)
-    const size = outputSize(width, height)
-    const overlays = await rasterizeAnnotations(edits.annotations, size, dir)
+    // Blurs and annotations are drawn on the whole recorded frame (`work`);
+    // the finished file, its cards and banners are the cropped size (`size`).
+    const { work, out: size } = renderSizes(width, height, edits.crop)
+    const overlays = await rasterizeAnnotations(edits.annotations, work, dir, {
+      steps: stepNumbers(edits),
+      stepStyle: stepStyleOf(edits)
+    })
     // Intro / outro cards and chapter banners, in the instance brand. The
     // card text falls back to the video's title and description as they are
     // now, at render time.

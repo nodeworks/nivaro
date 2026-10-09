@@ -283,7 +283,7 @@ describe('HelpVideoEditor tools', () => {
     expect(added).toMatchObject({
       type: 'callout',
       start_ms: 1000,
-      end_ms: 4000,
+      end_ms: 3000,
       text: 'Click here',
       rect: { x: 0.39, y: 0.46, w: 0.22, h: 0.08 }
     })
@@ -337,7 +337,7 @@ describe('HelpVideoEditor tools', () => {
     })
     expect(edits().captions.map((c) => [c.start_ms, c.end_ms, c.text])).toEqual([
       [500, 1500, 'Hello'],
-      [1500, 4500, 'Next line']
+      [1500, 3500, 'Next line']
     ])
     expect(input.value).toBe('')
   })

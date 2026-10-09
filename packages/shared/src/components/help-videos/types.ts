@@ -5,8 +5,15 @@
 
 export type Rect = { x: number; y: number; w: number; h: number }
 export type Point = { x: number; y: number }
-export type Speed = 1 | 1.5 | 2 | 4
-export type AnnotationType = 'callout' | 'arrow' | 'box' | 'ripple'
+export type Speed = 0.5 | 1 | 1.5 | 2 | 4
+/** A `step` is a callout with a number badge (numbered in timeline order);
+ *  a `spotlight` dims the whole frame except its rect. */
+export type AnnotationType = 'callout' | 'arrow' | 'box' | 'ripple' | 'step' | 'spotlight'
+/** How every step badge looks (stored only when not STEP_STYLE_DEFAULTS). */
+export interface StepStyle {
+  shape: 'circle' | 'square'
+  size: 'small' | 'medium' | 'large'
+}
 export type Tone = 'accent' | 'warning' | 'neutral'
 export interface Segment {
   start_ms: number
@@ -158,6 +165,12 @@ export interface VideoEdits {
   poster_card?: 'intro' | 'outro'
   /** Background music (stored only while switched on). */
   music?: MusicBed
+  /** What viewers see of the recording (frame fractions); stored only when
+   *  smaller than the whole frame. Other rects stay relative to the whole
+   *  recorded frame; cards are always full frame. */
+  crop?: Rect
+  /** Step badge look; stored only when not STEP_STYLE_DEFAULTS. */
+  step_style?: StepStyle
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }

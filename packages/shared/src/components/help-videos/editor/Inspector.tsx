@@ -13,8 +13,12 @@ import {
   removeSegment,
   setPieceMusic,
   setSpeed,
+  setStepStyle,
+  stepNumbers,
+  stepStyleOf,
   trimSegment,
-  upsertItemChecked
+  upsertItemChecked,
+  zoomInView
 } from '../edits'
 import type {
   Annotation,
@@ -22,13 +26,14 @@ import type {
   Caption,
   Chapter,
   RecordedClick,
+  StepStyle,
   Tone,
   VideoEdits,
   Zoom
 } from '../types'
 import { seconds, TimeField } from './TimeField'
 import type { Selection } from './Timeline'
-import { clickForRipple, clickTargetText } from './tools'
+import { clickForRipple, clickTargetText, shortForText, withTypedText } from './tools'
 
 const TONES: Array<{ value: Tone; label: string }> = [
   { value: 'accent', label: 'Blue' },
@@ -37,10 +42,21 @@ const TONES: Array<{ value: Tone; label: string }> = [
 ]
 const KIND: Record<Annotation['type'], string> = {
   callout: 'Callout',
+  step: 'Step',
   arrow: 'Arrow',
   box: 'Box',
+  spotlight: 'Spotlight',
   ripple: 'Click ripple'
 }
+const STEP_SHAPE_CHOICES: Array<{ value: StepStyle['shape']; label: string }> = [
+  { value: 'circle', label: 'Circle' },
+  { value: 'square', label: 'Square' }
+]
+const STEP_SIZE_CHOICES: Array<{ value: StepStyle['size']; label: string }> = [
+  { value: 'small', label: 'Small' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'large', label: 'Large' }
+]
 const MIN = EDIT_LIMITS.minItemMs
 /** A piece's music share, as a share of the video's music volume. */
 const PIECE_MUSIC = [
@@ -389,10 +405,37 @@ export const Inspector = memo(function Inspector({
     </div>
   )
 
+  /** "Short for its text" with a one-click fix, when it is. */
+  const readTime = (x: { id: string; start_ms: number; end_ms: number; text: string }) => {
+    const need = shortForText(x)
+    if (need === null) return null
+    const fits = Math.min(sourceMs, x.start_ms + need)
+    return (
+      <p
+        className='text-[12px] leading-snug text-amber-800 dark:text-amber-300'
+        data-hv-short-for-text
+      >
+        Short for its text: about {seconds(need)} s reads comfortably.{' '}
+        {fits - x.start_ms > x.end_ms - x.start_ms && (
+          <button
+            type='button'
+            className='font-medium text-foreground underline underline-offset-2 hover:no-underline'
+            onClick={() => update({ end_ms: fits }, `time:${x.id}`)}
+            data-hv-lengthen
+          >
+            Make it {seconds(fits - x.start_ms)} s
+          </button>
+        )}
+      </p>
+    )
+  }
+
   if (lane === 'annotations') {
     const a = item as Annotation
+    const stepNo = a.type === 'step' ? (stepNumbers(edits).get(a.id) ?? null) : null
+    const style = stepStyleOf(edits)
     return frame(
-      KIND[a.type],
+      a.type === 'step' && stepNo !== null ? `Step ${stepNo}` : KIND[a.type],
       'annotations',
       <>
         {a.type === 'ripple' && (
@@ -412,49 +455,114 @@ export const Inspector = memo(function Inspector({
             })()}
           </p>
         )}
-        {(a.type === 'callout' || a.type === 'box') && (
+        {a.type === 'spotlight' && (
+          <p className={hint}>Dims everything outside the outlined area while it shows.</p>
+        )}
+        {a.type === 'step' && (
+          <p className={hint}>
+            {stepNo === null
+              ? 'Inside a cut, so viewers never see it and it has no number.'
+              : 'Steps number themselves in the order they appear.'}
+          </p>
+        )}
+        {(a.type === 'callout' || a.type === 'box' || a.type === 'step') && (
           <div className='flex flex-col gap-1'>
             <label htmlFor={`${headingId}-text`} className={label}>
-              Text
+              Text{a.type === 'step' ? ' (optional)' : ''}
             </label>
             <Textarea
               id={`${headingId}-text`}
               value={a.text}
               maxLength={EDIT_LIMITS.text}
               rows={2}
-              onChange={(e) => update({ text: e.target.value }, `text:${a.id}`)}
+              onChange={(e) => {
+                // A new callout or step follows its text's length until the
+                // length is set by hand (tools.ts withTypedText).
+                const next =
+                  a.type === 'box'
+                    ? { text: e.target.value }
+                    : withTypedText(a, e.target.value, sourceMs)
+                update(
+                  { text: next.text, end_ms: 'end_ms' in next ? next.end_ms : a.end_ms },
+                  `text:${a.id}`
+                )
+              }}
               className='min-h-[56px] rounded-md px-2.5 py-1.5 text-[13px]'
               data-hv-annotation-text
             />
+            {a.type !== 'box' && readTime(a)}
           </div>
         )}
-        <div className='space-y-1'>
-          <p className={label} id={`${headingId}-tone`}>
-            Colour
-          </p>
-          <fieldset
-            className='inline-flex overflow-hidden rounded-md border border-input'
-            aria-labelledby={`${headingId}-tone`}
-          >
-            {TONES.map((tone) => (
-              <button
-                key={tone.value}
-                type='button'
-                aria-pressed={a.tone === tone.value}
-                onClick={() => update({ tone: tone.value })}
-                className={`${segment} inline-flex items-center gap-1.5 ${a.tone === tone.value ? on : off}`}
-                data-hv-tone={tone.value}
+        {a.type === 'step' && (
+          <div className='space-y-2' data-hv-step-style>
+            <p className={hint}>Badge style, for every step in this video.</p>
+            <div className='flex flex-wrap gap-2'>
+              <fieldset
+                className='inline-flex overflow-hidden rounded-md border border-input'
+                aria-label='Badge shape'
               >
-                <span
-                  className='h-3 w-3 rounded-full ring-1 ring-black/10 dark:ring-white/25'
-                  style={{ background: ANNOTATION_PALETTE[tone.value] }}
-                  aria-hidden
-                />
-                {tone.label}
-              </button>
-            ))}
-          </fieldset>
-        </div>
+                {STEP_SHAPE_CHOICES.map((c) => (
+                  <button
+                    key={c.value}
+                    type='button'
+                    aria-pressed={style.shape === c.value}
+                    onClick={() => onChange(setStepStyle(edits, { shape: c.value }))}
+                    className={`${segment} ${style.shape === c.value ? on : off}`}
+                    data-hv-step-shape={c.value}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </fieldset>
+              <fieldset
+                className='inline-flex overflow-hidden rounded-md border border-input'
+                aria-label='Badge size'
+              >
+                {STEP_SIZE_CHOICES.map((c) => (
+                  <button
+                    key={c.value}
+                    type='button'
+                    aria-pressed={style.size === c.value}
+                    onClick={() => onChange(setStepStyle(edits, { size: c.value }))}
+                    className={`${segment} ${style.size === c.value ? on : off}`}
+                    data-hv-step-size={c.value}
+                  >
+                    {c.label}
+                  </button>
+                ))}
+              </fieldset>
+            </div>
+          </div>
+        )}
+        {a.type !== 'spotlight' && (
+          <div className='space-y-1'>
+            <p className={label} id={`${headingId}-tone`}>
+              Colour
+            </p>
+            <fieldset
+              className='inline-flex overflow-hidden rounded-md border border-input'
+              aria-labelledby={`${headingId}-tone`}
+            >
+              {TONES.map((tone) => (
+                <button
+                  key={tone.value}
+                  type='button'
+                  aria-pressed={a.tone === tone.value}
+                  onClick={() => update({ tone: tone.value })}
+                  className={`${segment} inline-flex items-center gap-1.5 ${a.tone === tone.value ? on : off}`}
+                  data-hv-tone={tone.value}
+                >
+                  <span
+                    className='h-3 w-3 rounded-full ring-1 ring-black/10 dark:ring-white/25'
+                    style={{ background: ANNOTATION_PALETTE[tone.value] }}
+                    aria-hidden
+                  />
+                  {tone.label}
+                </button>
+              ))}
+            </fieldset>
+          </div>
+        )}
         {timing}
         {actions}
       </>
@@ -468,8 +576,8 @@ export const Inspector = memo(function Inspector({
       'zooms',
       <>
         <p className={hint}>
-          Shows the outlined area {(1 / z.rect.w).toFixed(1)} times larger. While it is selected the
-          preview shows the whole picture, so you can place it.
+          Shows the outlined area {zoomInView(edits, z.rect).mag.toFixed(1)} times larger. While it
+          is selected the preview shows the whole picture, so you can place it.
         </p>
         <div className='flex flex-col gap-1'>
           <label htmlFor={`${headingId}-ease`} className={label}>
@@ -548,10 +656,19 @@ export const Inspector = memo(function Inspector({
           value={c.text}
           maxLength={EDIT_LIMITS.text}
           rows={2}
-          onChange={(e) => update({ text: e.target.value }, `cap:${c.id}`)}
+          onChange={(e) => {
+            // A caption typed along follows its text's length until it is set
+            // by hand, and never runs into the next caption.
+            const after = edits.captions
+              .filter((x) => x.id !== c.id && x.start_ms > c.start_ms)
+              .map((x) => x.start_ms)
+            const next = withTypedText(c, e.target.value, Math.min(sourceMs, ...after))
+            update({ text: next.text, end_ms: next.end_ms }, `cap:${c.id}`)
+          }}
           className='min-h-[56px] rounded-md px-2.5 py-1.5 text-[13px]'
           data-hv-caption-text
         />
+        {readTime(c)}
       </div>
       {timing}
       {actions}

@@ -1,5 +1,12 @@
-import { editedDuration, outroMs, segmentIndexAt, sourceToEdited } from './edits'
-import type { VideoEdits } from './types'
+import {
+  cropOf,
+  editedDuration,
+  outroMs,
+  segmentIndexAt,
+  sourceToEdited,
+  zoomInView
+} from './edits'
+import type { Rect, VideoEdits } from './types'
 
 // The live player's arithmetic, kept pure so it can be tested in node.
 
@@ -26,6 +33,27 @@ export function renderSize(width: number, height: number): { width: number; heig
   return { width: even(width * scale), height: even(height * scale) }
 }
 
+/** The render's sizes for a recording and crop (the server's renderSizes):
+ *  `work` is the frame blurs and annotations are drawn on, `out` the finished
+ *  file (the cropped picture, cards, banners). Without a crop both are
+ *  renderSize. */
+export function renderSizes(
+  width: number,
+  height: number,
+  crop: Rect | null | undefined
+): { work: { width: number; height: number }; out: { width: number; height: number } } {
+  if (!crop) {
+    const o = renderSize(width, height)
+    return { work: o, out: o }
+  }
+  const scale = Math.min(1, 1920 / (crop.w * width), 1080 / (crop.h * height))
+  const work = { width: even(width * scale), height: even(height * scale) }
+  // the server's pixelRect sides
+  const w = Math.min(even(crop.w * work.width), work.width)
+  const h = Math.min(even(crop.h * work.height), work.height)
+  return { work, out: { width: w, height: h } }
+}
+
 /** ffmpeg's boxblur (radius r) looks about as soft as a CSS blur of r / 1.7. */
 const BOX_TO_CSS_BLUR = 1.7
 /** The CSS blur radius (frame pixels) that looks like the render's blur box.
@@ -44,8 +72,10 @@ export function liveBlurPx(
   return (r * k) / BOX_TO_CSS_BLUR
 }
 
-/** Zoom as CSS: transform-origin 0 0, translate(tx·100%, ty·100%) scale(z).
- *  Same maths as the render's crop: offset = clamp(0.5 − centre·z, 1 − z, 0). */
+/** Zoom inside the (cropped) picture as CSS: transform-origin 0 0,
+ *  translate(tx·100%, ty·100%) scale(z). Same maths as the render's crop:
+ *  offset = clamp(0.5 − centre·z, 1 − z, 0). Zoom rects are mapped into the
+ *  crop first (zoomInView), as the render does. */
 export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; ty: number } {
   for (const zm of e.zooms) {
     if (srcMs < zm.start_ms || srcMs > zm.end_ms) continue
@@ -57,13 +87,32 @@ export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; t
             1
           )
         : 1
-    const z = 1 + (1 / zm.rect.w - 1) * p
-    const cx = 0.5 + (zm.rect.x + zm.rect.w / 2 - 0.5) * p
-    const cy = 0.5 + (zm.rect.y + zm.rect.h / 2 - 0.5) * p
+    const v = zoomInView(e, zm.rect)
+    const z = 1 + (v.mag - 1) * p
+    const cx = 0.5 + (v.cx - 0.5) * p
+    const cy = 0.5 + (v.cy - 0.5) * p
     return { z, tx: clamp(0.5 - cx * z, 1 - z, 0), ty: clamp(0.5 - cy * z, 1 - z, 0) }
   }
   return { z: 1, tx: 0, ty: 0 }
 }
+
+/** What the viewer sees at a moment: crop, then zoom. A point at fraction p
+ *  of the whole recorded frame shows at fraction (p·sx + ox, p·sy + oy) of
+ *  the picture; `z` is the uniform scale the whole frame is drawn at, in
+ *  units of the picture (a frame without a crop or zoom: z 1, offsets 0). */
+export interface View {
+  z: number
+  sx: number
+  sy: number
+  ox: number
+  oy: number
+}
+export function viewAt(e: VideoEdits, srcMs: number): View {
+  const c = cropOf(e)
+  const { z, tx, ty } = zoomAt(e, srcMs)
+  return { z, sx: z / c.w, sy: z / c.h, ox: tx - (c.x * z) / c.w, oy: ty - (c.y * z) / c.h }
+}
+export const NO_VIEW: View = { z: 1, sx: 1, sy: 1, ox: 0, oy: 0 }
 
 const LOOKAHEAD_MS = 40 // jump a frame early so the cut part never flashes
 

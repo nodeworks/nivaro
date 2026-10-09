@@ -203,10 +203,11 @@ function EditorBody({
   const uploaded = draft.source_kind === 'upload'
   const segIndex = segmentIndexAt(edits, src)
   const silent = useMemo(() => suggestCuts(draft.levels ?? null, edits), [draft.levels, edits])
-  // While a zoom is selected the preview shows the whole picture, to place it.
+  // While a zoom is selected (or the crop tool is up) the preview shows the
+  // whole picture, to place it.
   const playerEdits = useMemo(
-    () => (viewerPreview ? edits : editsForPreview(edits, selection)),
-    [edits, selection, viewerPreview]
+    () => (viewerPreview ? edits : editsForPreview(edits, selection, tool)),
+    [edits, selection, viewerPreview, tool]
   )
   // The piece the speed and cut tools act on: the selected one, else the one
   // under the playhead.

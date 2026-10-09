@@ -11,7 +11,7 @@ import {
   shownBrand
 } from './cards'
 import { cardPhaseAt } from './edits'
-import { renderSize } from './playerMath'
+import { renderSizes } from './playerMath'
 import type { VideoEdits } from './types'
 
 /**
@@ -42,7 +42,11 @@ export function CardLayer({
   const { phase, at } = cardPhaseAt(edits, editedMs)
   const banner = phase === 'body' && showBanner ? bannerAt(edits, editedMs) : null
   if (phase === 'body' && !banner) return null
-  const canvas = source?.width && source?.height ? renderSize(source.width, source.height) : frame
+  // The finished file's size: the cropped picture (cards are full frames of it).
+  const canvas =
+    source?.width && source?.height
+      ? renderSizes(source.width, source.height, edits.crop).out
+      : frame
   const kx = canvas.width ? frame.width / canvas.width : 1
   const ky = canvas.height ? frame.height / canvas.height : 1
   const shown = shownBrand(brand, edits)

@@ -24,7 +24,14 @@ import {
 } from './edits'
 import { useLiveMusic } from './musicMix'
 import { OverlayLayer } from './OverlayLayer'
-import { fileMsForSource, fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
+import {
+  fileMsForSource,
+  fitFrame,
+  liveStep,
+  NO_VIEW,
+  resolveDurationMs,
+  viewAt
+} from './playerMath'
 import { createProgressBeats } from './progressBeats'
 import { playRippleTick, rippleTickTimes, ticksBetween } from './rippleSound'
 import type { HelpVideoDto, VideoEdits } from './types'
@@ -169,6 +176,10 @@ function PlayerInner({
   // Edits played live (no render): the intro and outro cards are drawn here
   // and run on their own clock. A rendered file already contains them.
   const liveEdits = !rendered && !!edits
+  // Played live, a crop (#1544) shows only part of the recording: the stage
+  // takes the cropped shape. A rendered file is already cropped.
+  const liveCrop = liveEdits ? edits?.crop : undefined
+  const cropKey = liveCrop ? `${liveCrop.x},${liveCrop.y},${liveCrop.w},${liveCrop.h}` : ''
   const lead = edits ? introMs(edits) : 0
   const tail = edits ? outroMs(edits) : 0
   const hasCards = !!edits && (lead > 0 || tail > 0 || edits.chapter_banners === true)
@@ -251,14 +262,16 @@ function PlayerInner({
     }
   }, [liveEdits, lead, tail, started, setCard])
 
-  // Measure the visible picture (object-fit: contain letterboxing).
+  // Measure the visible picture (object-fit: contain letterboxing), in the
+  // crop's shape when there is one.
   useEffect(() => {
     const box = boxRef.current
     if (!box) return
+    const [, , cw, ch] = cropKey ? cropKey.split(',').map(Number) : [0, 0, 1, 1]
     const measure = () => {
       const w = videoEl?.videoWidth || version?.width || 16
       const h = videoEl?.videoHeight || version?.height || 9
-      setFrame(fitFrame(box.clientWidth, box.clientHeight, w, h))
+      setFrame(fitFrame(box.clientWidth, box.clientHeight, w * cw, h * ch))
     }
     const ro = new ResizeObserver(measure)
     ro.observe(box)
@@ -268,7 +281,7 @@ function PlayerInner({
       ro.disconnect()
       videoEl?.removeEventListener('loadedmetadata', measure)
     }
-  }, [videoEl, version?.width, version?.height])
+  }, [videoEl, version?.width, version?.height, cropKey])
 
   // Live mode: skip cuts and apply each piece's speed on every frame.
   useEffect(() => {
@@ -591,7 +604,15 @@ function PlayerInner({
       : version?.width && version.height
         ? { width: version.width, height: version.height }
         : null
-  const zoom = !rendered && edits ? zoomAt(edits, overlaySrcMs) : { z: 1, tx: 0, ty: 0 }
+  // Crop then zoom (the render's order). The whole recorded frame is laid
+  // out at `whole` size and placed so the cropped, zoomed part fills `frame`.
+  const view = liveEdits && edits ? viewAt(edits, overlaySrcMs) : NO_VIEW
+  const whole = frame
+    ? {
+        width: frame.width / (liveCrop?.w ?? 1),
+        height: frame.height / (liveCrop?.h ?? 1)
+      }
+    : null
   const chapters = useMemo(
     () =>
       (edits?.chapters ?? [])
@@ -648,10 +669,17 @@ function PlayerInner({
             }
           >
             <div
-              className='absolute inset-0 origin-top-left transition-transform duration-75 motion-reduce:transition-none'
-              style={{
-                transform: `translate(${zoom.tx * 100}%, ${zoom.ty * 100}%) scale(${zoom.z})`
-              }}
+              className='absolute left-0 top-0 origin-top-left transition-transform duration-75 motion-reduce:transition-none'
+              style={
+                frame && whole
+                  ? {
+                      width: whole.width,
+                      height: whole.height,
+                      transform: `translate(${view.ox * frame.width}px, ${view.oy * frame.height}px) scale(${view.z})`
+                    }
+                  : { right: 0, bottom: 0 }
+              }
+              data-hv-picture
             >
               {/* biome-ignore lint/a11y/useMediaCaption: captions are drawn by OverlayLayer from the edits */}
               <video
@@ -703,10 +731,10 @@ function PlayerInner({
               />
               {/* Under a card too: its transition shows the paused first /
                   last frame with the annotations the render bakes into it. */}
-              {frame && edits && !rendered && (
+              {whole && edits && !rendered && (
                 <OverlayLayer
                   edits={edits}
-                  frame={frame}
+                  frame={whole}
                   srcMs={overlaySrcMs}
                   source={natural}
                   showCaptions={false}

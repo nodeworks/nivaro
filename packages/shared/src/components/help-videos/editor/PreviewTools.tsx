@@ -6,8 +6,8 @@ import {
   useRef,
   useState
 } from 'react'
-import { removeItem, upsertItemChecked } from '../edits'
-import { activeAt, zoomAt } from '../playerMath'
+import { cropOf, removeItem, setCrop, upsertItemChecked } from '../edits'
+import { activeAt, viewAt } from '../playerMath'
 import type { Annotation, Point, Rect, VideoEdits } from '../types'
 import type { Selection } from './Timeline'
 import {
@@ -35,6 +35,9 @@ type Shape = {
 
 const TOOL_NAMES: Record<Tool, string> = {
   callout: 'a callout',
+  step: 'a numbered step',
+  spotlight: 'the area to keep lit',
+  crop: 'what viewers see of the recording',
   arrow: 'an arrow',
   box: 'a box',
   ripple: 'a click ripple',
@@ -48,17 +51,23 @@ const clamp01 = (n: number) => Math.min(1, Math.max(0, n))
 function shapeName(lane: ShapeLane, s: Shape): string {
   if (lane === 'zooms') return 'Zoom area'
   if (lane === 'blurs') return 'Blur area'
-  const kind = { callout: 'Callout', arrow: 'Arrow', box: 'Box', ripple: 'Click ripple' }[
-    s.type ?? 'callout'
-  ]
+  const kind = {
+    callout: 'Callout',
+    step: 'Step',
+    arrow: 'Arrow',
+    box: 'Box',
+    spotlight: 'Spotlight',
+    ripple: 'Click ripple'
+  }[s.type ?? 'callout']
   return s.text?.trim() ? `${kind} “${s.text.trim()}”` : kind
 }
 
 /**
  * Drawing and direct manipulation on the preview. Laid out in frame pixels
- * but stored as frame fractions, the same space the render uses. The
- * picture may be zoomed (a zoom at the playhead): pointer positions are
- * mapped back to the unzoomed picture, so shapes land where they are drawn.
+ * but stored as fractions of the whole recorded frame, the same space the
+ * render uses. The picture may be cropped and zoomed: pointer positions are
+ * mapped back to the whole frame, so shapes land where they are drawn. With
+ * the crop tool up the preview shows the whole frame and a drag sets the crop.
  *
  * - With a tool: drag to draw (a click places the tool's default shape).
  * - Without one: click a shape on the picture to select it; drag it to move
@@ -102,20 +111,20 @@ export function PreviewTools({
   const W = frame.width
   const H = frame.height
 
-  // The zoom the player shows at this moment (same edits the player gets).
-  const view = zoomAt(editsForPreview(edits, selection), srcMs)
-  /** Pointer → picture fraction, through the zoom. */
+  // The crop and zoom the player shows at this moment (same edits it gets).
+  const view = viewAt(editsForPreview(edits, selection, tool), srcMs)
+  /** Pointer → whole-frame fraction, through the crop and zoom. */
   const frac = (e: { clientX: number; clientY: number }): Point => {
     const r = (layer.current as HTMLDivElement).getBoundingClientRect()
     const fx = r.width ? (e.clientX - r.left) / r.width : 0
     const fy = r.height ? (e.clientY - r.top) / r.height : 0
-    return { x: clamp01((fx - view.tx) / view.z), y: clamp01((fy - view.ty) / view.z) }
+    return { x: clamp01((fx - view.ox) / view.sx), y: clamp01((fy - view.oy) / view.sy) }
   }
-  /** Picture fraction → layer pixels, through the zoom. */
-  const px = (p: Point) => ({ x: (p.x * view.z + view.tx) * W, y: (p.y * view.z + view.ty) * H })
+  /** Whole-frame fraction → layer pixels, through the crop and zoom. */
+  const px = (p: Point) => ({ x: (p.x * view.sx + view.ox) * W, y: (p.y * view.sy + view.oy) * H })
   const box = (r: Rect) => {
     const tl = px(r)
-    return { left: tl.x, top: tl.y, width: r.w * view.z * W, height: r.h * view.z * H }
+    return { left: tl.x, top: tl.y, width: r.w * view.sx * W, height: r.h * view.sy * H }
   }
 
   const write = (base: VideoEdits, lane: ShapeLane, item: Shape, key?: string) => {
@@ -140,6 +149,13 @@ export function PreviewTools({
     if (!draft || !tool) return
     setDraft(null)
     const click = Math.hypot(e.clientX - draft.x0, e.clientY - draft.y0) < CLICK_PX
+    if (tool === 'crop') {
+      // A click is not a crop: keep the tool up to try again.
+      if (click) return
+      onChange(setCrop(edits, rectFromPoints(draft.a, draft.b)))
+      onDone()
+      return
+    }
     let rect: Rect
     let to: Point | undefined
     if (tool === 'arrow') {
@@ -299,8 +315,32 @@ export function PreviewTools({
           className='pointer-events-none absolute top-2 left-1/2 w-max max-w-[calc(100%-16px)] -translate-x-1/2 rounded-md bg-[#020617]/80 px-2.5 py-1 text-center text-[12px] leading-snug font-medium text-white'
           data-hv-tool-hint
         >
-          Drag on the picture to draw {TOOL_NAMES[tool]}. Esc to stop.
+          {tool === 'crop'
+            ? 'Drag over the part of the recording viewers should see. Esc to stop.'
+            : `Drag on the picture to draw ${TOOL_NAMES[tool]}. Esc to stop.`}
         </p>
+      )}
+      {tool === 'crop' && edits.crop && !draft && (
+        <>
+          <div
+            aria-hidden
+            className='pointer-events-none absolute rounded-[2px] border-2 border-dashed border-white shadow-[0_0_0_9999px_rgb(0_0_0/0.45)]'
+            style={box(cropOf(edits))}
+            data-hv-crop-outline
+          />
+          <button
+            type='button'
+            className='pointer-events-auto absolute bottom-2 left-1/2 -translate-x-1/2 rounded-md bg-[#020617]/85 px-2.5 py-1 text-[12px] font-medium text-white hover:bg-[#020617] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={() => {
+              onChange(setCrop(edits, null))
+              onDone()
+            }}
+            data-hv-crop-clear
+          >
+            Show the whole frame
+          </button>
+        </>
       )}
       {note && (
         <p

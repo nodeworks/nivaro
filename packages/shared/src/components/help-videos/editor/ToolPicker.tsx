@@ -1,5 +1,8 @@
 import {
+  Crop,
   EyeOff,
+  Focus,
+  ListOrdered,
   type LucideIcon,
   MessageSquareText,
   MousePointerClick,
@@ -12,11 +15,24 @@ import type { Tool } from './tools'
 
 export const TOOLS: Array<{ tool: Tool; label: string; icon: LucideIcon; what: string }> = [
   { tool: 'callout', label: 'Callout', icon: MessageSquareText, what: 'a label with text' },
+  { tool: 'step', label: 'Step', icon: ListOrdered, what: 'a step numbered in order' },
   { tool: 'arrow', label: 'Arrow', icon: MoveUpRight, what: 'an arrow, from tail to tip' },
   { tool: 'box', label: 'Box', icon: Square, what: 'an outline around something' },
+  {
+    tool: 'spotlight',
+    label: 'Spotlight',
+    icon: Focus,
+    what: 'the one area to keep lit (the rest dims)'
+  },
   { tool: 'ripple', label: 'Ripple', icon: MousePointerClick, what: 'a click ripple' },
   { tool: 'zoom', label: 'Zoom', icon: Scan, what: 'an area to zoom into' },
-  { tool: 'blur', label: 'Blur', icon: EyeOff, what: 'an area to blur out' }
+  { tool: 'blur', label: 'Blur', icon: EyeOff, what: 'an area to blur out' },
+  {
+    tool: 'crop',
+    label: 'Crop',
+    icon: Crop,
+    what: 'the part of the recording viewers see, for the whole video'
+  }
 ]
 
 /** One toggle per drawing tool. Pressing the active one (or Escape) puts it

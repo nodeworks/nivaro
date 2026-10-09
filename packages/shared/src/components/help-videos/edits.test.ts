@@ -126,7 +126,8 @@ describe('mirrors the server EDIT_LIMITS', () => {
       musicName: 120,
       musicMinVolume: 0.05,
       musicDefaultVolume: 0.25,
-      fadeMs: 200
+      fadeMs: 200,
+      cropMinSide: 0.2
     })
   })
   it('squares a zoom rect and clamps its side to at least 0.25', () => {

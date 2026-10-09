@@ -10,8 +10,10 @@ import { type CardMotion, settledMs } from './help-video-card-design.js'
 
 export type Rect = { x: number; y: number; w: number; h: number }
 export type Point = { x: number; y: number }
-export type Speed = 1 | 1.5 | 2 | 4
-export type AnnotationType = 'callout' | 'arrow' | 'box' | 'ripple'
+export type Speed = 0.5 | 1 | 1.5 | 2 | 4
+/** A `step` is a callout with a number badge (numbered in timeline order);
+ *  a `spotlight` dims the whole frame except its rect. */
+export type AnnotationType = 'callout' | 'arrow' | 'box' | 'ripple' | 'step' | 'spotlight'
 export type Tone = 'accent' | 'warning' | 'neutral'
 export interface Segment {
   start_ms: number
@@ -80,6 +82,23 @@ const cardAnimation = (v: unknown): StoredAnimation | null =>
   (CARD_ANIMATIONS as readonly unknown[]).includes(v) ? (v as StoredAnimation) : null
 const cardTransition = (v: unknown): StoredTransition | null =>
   (CARD_TRANSITIONS as readonly unknown[]).includes(v) ? (v as StoredTransition) : null
+/** How every step badge looks. Stored only when it differs from
+ *  STEP_STYLE_DEFAULTS (a later house style sets instance defaults). */
+export interface StepStyle {
+  shape: 'circle' | 'square'
+  size: 'small' | 'medium' | 'large'
+}
+export const STEP_SHAPES = ['circle', 'square'] as const
+export const STEP_SIZES = ['small', 'medium', 'large'] as const
+export const STEP_STYLE_DEFAULTS: Readonly<StepStyle> = { shape: 'circle', size: 'medium' }
+/** A step badge's diameter in annotation units (annotationUnit of the frame). */
+export const STEP_BADGE_UNITS: Record<StepStyle['size'], number> = {
+  small: 10,
+  medium: 13,
+  large: 17
+}
+/** How dark a spotlight makes everything outside its rect. */
+export const SPOTLIGHT_DIM = 0.6
 /** A music bed under the whole video (cards included), looped to length and
  *  lowered while someone speaks. `track` is a library key (MUSIC_TRACK_RE)
  *  or, for an uploaded file, the music row's id. */
@@ -130,9 +149,15 @@ export interface VideoEdits {
   poster_card?: 'intro' | 'outro'
   /** Background music. Stored only when switched on. */
   music?: MusicBed
+  /** What viewers see of the recording (frame fractions). Stored only when
+   *  it is smaller than the whole frame. Every other rect stays relative to
+   *  the whole recorded frame; cards are always full frame. */
+  crop?: Rect
+  /** Step badge look. Stored only when it differs from STEP_STYLE_DEFAULTS. */
+  step_style?: StepStyle
 }
 
-export const ALLOWED_SPEEDS: Speed[] = [1, 1.5, 2, 4]
+export const ALLOWED_SPEEDS: Speed[] = [0.5, 1, 1.5, 2, 4]
 export const EDIT_LIMITS = {
   annotations: 200,
   zooms: 50,
@@ -159,7 +184,9 @@ export const EDIT_LIMITS = {
   musicMinVolume: 0.05,
   musicDefaultVolume: 0.25,
   /** Callouts, boxes and arrows fade in and out over this long (source time). */
-  fadeMs: 200
+  fadeMs: 200,
+  /** Smallest crop side (fraction of the frame). */
+  cropMinSide: 0.2
 } as const
 
 /** A library track key, or an uploaded music row's id. */
@@ -174,7 +201,9 @@ export class EditsError extends Error {
 }
 
 const ID_RE = /^[A-Za-z0-9_-]{1,40}$/
-const TYPES: AnnotationType[] = ['callout', 'arrow', 'box', 'ripple']
+const TYPES: AnnotationType[] = ['callout', 'arrow', 'box', 'ripple', 'step', 'spotlight']
+/** The annotation types that carry text. */
+export const TEXT_TYPES: AnnotationType[] = ['callout', 'box', 'step']
 const TONES: Tone[] = ['accent', 'warning', 'neutral']
 
 function makeId(): string {
@@ -287,7 +316,7 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
       ...s,
       rect: rect(a.rect),
       to: t === 'arrow' ? (point(a.to) ?? { x: 0.5, y: 0.5 }) : null,
-      text: t === 'callout' || t === 'box' ? text(a.text, EDIT_LIMITS.text) : '',
+      text: TEXT_TYPES.includes(t) ? text(a.text, EDIT_LIMITS.text) : '',
       tone: TONES.find((x) => x === a.tone) ?? 'accent'
     })
   }
@@ -359,7 +388,76 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   if (music) out.music = music
   // A piece's music share means nothing without music: never stored then.
   else for (const seg of out.segments) delete seg.music
+  const crop = normalizeCrop(o.crop)
+  if (crop) out.crop = crop
+  const stepStyle = normalizeStepStyle(o.step_style)
+  if (stepStyle) out.step_style = stepStyle
   return out
+}
+
+const r4 = (n: number) => Math.round(n * 10000) / 10000
+
+/** The crop the server stores: sides at least EDIT_LIMITS.cropMinSide, inside
+ *  the frame, rounded to 4 places; null (stored as absent) when it is missing
+ *  or covers the whole frame. */
+export function normalizeCrop(v: unknown): Rect | null {
+  if (!v || typeof v !== 'object') return null
+  const r = v as Record<string, unknown>
+  const w = r4(clamp(num(r.w, 1), EDIT_LIMITS.cropMinSide, 1))
+  const h = r4(clamp(num(r.h, 1), EDIT_LIMITS.cropMinSide, 1))
+  const x = r4(clamp(num(r.x), 0, 1 - w))
+  const y = r4(clamp(num(r.y), 0, 1 - h))
+  if (x <= 0.0005 && y <= 0.0005 && w >= 0.9995 && h >= 0.9995) return null
+  return { x, y, w, h }
+}
+
+/** The step style the server stores: null (absent) when it is the default. */
+export function normalizeStepStyle(v: unknown): StepStyle | null {
+  if (!v || typeof v !== 'object') return null
+  const r = v as Record<string, unknown>
+  const shape = (STEP_SHAPES as readonly unknown[]).includes(r.shape)
+    ? (r.shape as StepStyle['shape'])
+    : STEP_STYLE_DEFAULTS.shape
+  const size = (STEP_SIZES as readonly unknown[]).includes(r.size)
+    ? (r.size as StepStyle['size'])
+    : STEP_STYLE_DEFAULTS.size
+  if (shape === STEP_STYLE_DEFAULTS.shape && size === STEP_STYLE_DEFAULTS.size) return null
+  return { shape, size }
+}
+
+/** The step style in effect (stored or default). */
+export function stepStyleOf(e: VideoEdits): StepStyle {
+  return { ...STEP_STYLE_DEFAULTS, ...(e.step_style ?? {}) }
+}
+
+/** Each step's number: the steps viewers see (not inside a cut), in timeline
+ *  order (start, then top to bottom, then left to right), from 1. A step
+ *  inside a cut has no number. */
+export function stepNumbers(e: VideoEdits): Map<string, number> {
+  const steps = e.annotations
+    .filter((a) => a.type === 'step' && !isHiddenByCuts(e, a.start_ms, a.end_ms))
+    .sort((a, b) => a.start_ms - b.start_ms || a.rect.y - b.rect.y || a.rect.x - b.rect.x)
+  return new Map(steps.map((a, i) => [a.id, i + 1]))
+}
+
+/** The crop in effect: the stored one, else the whole frame. */
+export function cropOf(e: VideoEdits): Rect {
+  return e.crop ?? { x: 0, y: 0, w: 1, h: 1 }
+}
+
+/** A zoom as seen inside the crop: how much it magnifies the cropped picture
+ *  (at least 1: a zoom larger than the crop shows the whole crop) and its
+ *  centre as a fraction of the cropped picture. Without a crop this is
+ *  exactly 1 / rect.w and the rect's centre. */
+export function zoomInView(e: VideoEdits, rect: Rect): { mag: number; cx: number; cy: number } {
+  const c = cropOf(e)
+  const w = rect.w / c.w
+  const h = rect.h / c.h
+  return {
+    mag: Math.max(1, 1 / Math.max(w, h)),
+    cx: (rect.x - c.x) / c.w + w / 2,
+    cy: (rect.y - c.y) / c.h + h / 2
+  }
 }
 
 /** A piece's music share: 0–1 in steps of 0.05, 1 when missing or unreadable. */
