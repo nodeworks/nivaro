@@ -89,6 +89,9 @@ export interface VersionDto {
   clicks?: Array<{ t_ms: number; x: number; y: number }> | null
   /** Microphone loudness 0–1, one value per 100 ms of source time. */
   levels?: number[] | null
+  /** Draft load only: 'upload' when the source is a video file someone picked
+   *  (it has no clicks and no microphone levels), else 'recording'. */
+  source_kind?: 'recording' | 'upload'
 }
 
 export interface HelpVideoProgress {

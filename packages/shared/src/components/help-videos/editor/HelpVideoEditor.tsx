@@ -183,6 +183,8 @@ function EditorBody({
   const root = useRef<HTMLDivElement | null>(null)
   const sourceMs = draft.source_duration_ms ?? 0
   const clicks = draft.clicks
+  /** A picked file, not a browser recording: it never has clicks or mic levels. */
+  const uploaded = draft.source_kind === 'upload'
   const segIndex = segmentIndexAt(edits, src)
   const silent = useMemo(() => suggestCuts(draft.levels ?? null, edits), [draft.levels, edits])
   // While a zoom is selected the preview shows the whole picture, to place it.
@@ -370,6 +372,7 @@ function EditorBody({
               </div>
             </div>
             <SilenceSuggestions
+              uploaded={uploaded}
               silent={silent}
               edits={edits}
               onChange={set}
@@ -442,6 +445,7 @@ function EditorBody({
                 selection={selection}
                 sourceMs={sourceMs}
                 clicks={clicks}
+                uploaded={uploaded}
                 playhead={playhead}
                 onChange={set}
                 onSelect={setSelection}
@@ -456,6 +460,7 @@ function EditorBody({
             sourceMs={sourceMs}
             playheadSrcMs={src}
             levels={draft.levels ?? null}
+            uploaded={uploaded}
             silences={silent}
             selection={selection}
             onSelect={setSelection}

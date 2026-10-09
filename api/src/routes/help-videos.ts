@@ -17,7 +17,9 @@ import {
   finalizeUpload,
   listOpenUploads,
   MAX_PART_BYTES,
-  openUpload
+  openUpload,
+  sourceKindOfFile,
+  uploadStatus
 } from '../services/help-video-uploads.js'
 import {
   pickStreamFile,
@@ -86,8 +88,15 @@ export async function helpVideosRoutes(app: FastifyInstance) {
 
   // ── Uploads ────────────────────────────────────────────────────────────────
   app.post('/uploads', { preHandler: requireAuthor }, async (req, reply) => {
-    const { mime } = (req.body ?? {}) as { mime?: string }
-    return reply.code(201).send({ data: await openUpload(req.user!, String(mime ?? '')) })
+    const { mime, source, name, size } = (req.body ?? {}) as {
+      mime?: string
+      source?: string
+      name?: unknown
+      size?: unknown
+    }
+    return reply
+      .code(201)
+      .send({ data: await openUpload(req.user!, String(mime ?? ''), { source, name, size }) })
   })
   app.put('/uploads/:id/parts/:n', { preHandler: requireAuthor }, async (req, reply) => {
     const { id, n } = req.params as { id: string; n: string }
@@ -100,10 +109,18 @@ export async function helpVideosRoutes(app: FastifyInstance) {
   app.post('/uploads/:id/finalize', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const meta = (req.body ?? {}) as { duration_ms?: number; clicks?: unknown; levels?: unknown }
-    return reply.send({ data: await finalizeUpload(req.user!, id, meta) })
+    const result = await finalizeUpload(req.user!, id, meta)
+    // An uploaded file is checked (and maybe converted) in the background:
+    // poll GET /uploads/:id until it is finalized.
+    if ('processing' in result) return reply.code(202).send({ data: result })
+    return reply.send({ data: result })
   })
   app.get('/uploads/mine', { preHandler: requireAuthor }, async (req, reply) => {
     return reply.send({ data: await listOpenUploads(req.user!) })
+  })
+  app.get('/uploads/:id', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    return reply.send({ data: await uploadStatus(req.user!, id) })
   })
   app.delete('/uploads/:id', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -234,8 +251,12 @@ export async function helpVideosRoutes(app: FastifyInstance) {
   app.get('/:id/draft/edits', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { video } = await loadVideoForUser(req, id)
+    const draft = await ensureDraft(video, req.user!)
     return reply.send({
-      data: serializeVersion(await ensureDraft(video, req.user!), { withRecorderData: true })
+      data: {
+        ...serializeVersion(draft, { withRecorderData: true }),
+        source_kind: await sourceKindOfFile(draft.source_file)
+      }
     })
   })
   app.put('/:id/draft/edits', { preHandler: requireAuthor }, async (req, reply) => {

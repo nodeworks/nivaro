@@ -7,12 +7,13 @@ export function partSender(cfg: {
   authHeaders: Record<string, string>
   credentials: RequestCredentials
 }) {
-  return async (uploadId: string, n: number, blob: Blob): Promise<void> => {
+  return async (uploadId: string, n: number, blob: Blob, signal?: AbortSignal): Promise<void> => {
     const res = await fetch(`${cfg.apiBase}/help-videos/uploads/${uploadId}/parts/${n}`, {
       method: 'PUT',
       credentials: cfg.credentials,
       headers: { 'Content-Type': 'application/octet-stream', ...cfg.authHeaders },
-      body: blob
+      body: blob,
+      signal
     })
     if (res.ok) return
     const body = (await res.json().catch(() => ({}))) as {

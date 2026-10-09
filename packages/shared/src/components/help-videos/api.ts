@@ -127,6 +127,31 @@ export function useHelpVideoPages() {
   })
 }
 
+/** An upload session as `/help-videos/uploads/*` returns it. */
+export type UploadRow = {
+  id: string
+  bytes_received: number
+  next_part: number
+  /** `open`, `finalizing`, `finalized` (uploaded, not yet a video), `used`
+   *  or `abandoned`. */
+  status: string
+  duration_ms: number | null
+  created_at: string
+  updated_at: string
+  /** 'recording' from the recorder, 'upload' for a picked video file. */
+  source?: 'recording' | 'upload'
+  /** Picked files: the file's name and size. */
+  name?: string | null
+  size?: number | null
+  /** Picked files while finishing: 'checking' | 'converting' | 'saving'. */
+  phase?: string | null
+  /** Picked files while converting: 0–100. */
+  progress?: number | null
+  /** Why a picked file was not kept (`abandoned`), or why saving failed (`open`). */
+  error?: string | null
+  error_code?: string | null
+}
+
 /** One click on the recorded tab: recording time and frame fractions (0–1). */
 export type RecordedClick = { t_ms: number; x: number; y: number }
 
@@ -207,6 +232,25 @@ export function helpVideoApi(client: NivaroClient) {
       r(post<{ data: { id: string; next_part: number } }>('/help-videos/uploads', { mime })).then(
         (x) => x.data
       ),
+    /** Opens an upload for a video file someone picked. The server ignores the
+     *  browser's type: the first part's bytes decide the container (MP4/MOV or
+     *  WebM; 422 UPLOAD_NOT_VIDEO otherwise). 503 UPLOAD_NO_FFMPEG when the
+     *  server cannot read videos, 413 past 1.2 GB. */
+    openFileUpload: (file: { name: string; size: number; type: string }) =>
+      r(
+        post<{ data: { id: string; next_part: number } }>('/help-videos/uploads', {
+          mime: file.type,
+          source: 'upload',
+          name: file.name,
+          size: file.size
+        })
+      ).then((x) => x.data),
+    /** Closes a picked file's upload. The server checks (and if needed
+     *  converts) it in the background: poll uploadStatus until `finalized`. */
+    finalizeFileUpload: (id: string) =>
+      r(post<{ data: unknown }>(`/help-videos/uploads/${id}/finalize`, {})),
+    uploadStatus: (id: string) =>
+      r(get<{ data: UploadRow }>(`/help-videos/uploads/${id}`)).then((x) => x.data),
     /**
      * Closes an upload and stores the recorder's data with it, as given.
      * - `duration_ms`: recording time without pauses (the server prefers its
@@ -230,21 +274,7 @@ export function helpVideoApi(client: NivaroClient) {
           meta
         )
       ).then((x) => x.data),
-    myUploads: () =>
-      r(
-        get<{
-          data: Array<{
-            id: string
-            bytes_received: number
-            next_part: number
-            /** `open`, or `finalized`: uploaded but never saved as a video. */
-            status: string
-            duration_ms: number | null
-            created_at: string
-            updated_at: string
-          }>
-        }>('/help-videos/uploads/mine')
-      ).then((x) => x.data),
+    myUploads: () => r(get<{ data: UploadRow[] }>('/help-videos/uploads/mine')).then((x) => x.data),
     abandonUpload: (id: string) => r(del(`/help-videos/uploads/${id}`)),
     registerPage: (key: string, label: string, app?: string) =>
       r(post('/help-videos/pages', { key, label, app })),

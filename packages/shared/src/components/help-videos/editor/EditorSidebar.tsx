@@ -21,6 +21,7 @@ export const EditorSidebar = memo(function EditorSidebar({
   selection,
   sourceMs,
   clicks,
+  uploaded,
   playhead,
   onChange,
   onSelect,
@@ -33,6 +34,8 @@ export const EditorSidebar = memo(function EditorSidebar({
   sourceMs: number
   /** The recorder's captured clicks: null when click capture was off. */
   clicks: Array<{ t_ms: number; x: number; y: number }> | null | undefined
+  /** The source is an uploaded file (it never has captured clicks). */
+  uploaded?: boolean
   /** The playhead now (read when an action needs it, not every frame). */
   playhead: () => number
   onChange: (e: VideoEdits, key?: string) => void
@@ -122,7 +125,13 @@ export const EditorSidebar = memo(function EditorSidebar({
         <PosterPicker edits={edits} onUse={takePoster} onSeek={onSeek} />
       </div>
       <div className='py-3'>
-        <ClickRipples clicks={clicks} edits={edits} sourceMs={sourceMs} onAdd={addRipples} />
+        <ClickRipples
+          clicks={clicks}
+          uploaded={uploaded}
+          edits={edits}
+          sourceMs={sourceMs}
+          onAdd={addRipples}
+        />
       </div>
     </aside>
   )

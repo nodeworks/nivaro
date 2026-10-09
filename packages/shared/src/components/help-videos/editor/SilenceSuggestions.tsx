@@ -29,12 +29,16 @@ type Action = 'cut' | 'speed'
  * somewhere to land.
  */
 export const SilenceSuggestions = memo(function SilenceSuggestions({
+  uploaded,
   silent,
   edits,
   onChange,
   onSeek,
   onRefused
 }: {
+  /** The source is an uploaded file: pauses are found from the recorder's
+   *  microphone levels, which a file does not have. */
+  uploaded?: boolean
   silent: Stretch[]
   edits: VideoEdits
   onChange: (e: VideoEdits) => void
@@ -80,7 +84,19 @@ export const SilenceSuggestions = memo(function SilenceSuggestions({
   const splitAll = () =>
     onChange(silent.reduce((e, r) => splitAt(splitAt(e, r.start_ms), r.end_ms), edits))
 
-  if (!everHad.current) return null
+  if (!everHad.current) {
+    if (!uploaded) return null
+    return (
+      <span
+        className='inline-flex h-8 items-center gap-1.5 px-1 text-[12px] text-muted-foreground'
+        title="Pauses are found from a recording's microphone levels, which an uploaded file does not have"
+        data-hv-suggestions-none='upload'
+      >
+        <AudioLines className='size-3.5' aria-hidden />
+        No pause suggestions
+      </span>
+    )
+  }
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
