@@ -6659,7 +6659,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
               <tr><td>updateHelpVideo(id, body)</td><td>PATCH /help-videos/:id</td><td>Author</td></tr>
               <tr><td>setHelpVideoContexts(id, contexts)</td><td>PUT /help-videos/:id/contexts</td><td>Author</td></tr>
               <tr><td>setHelpVideoRequirements(id, role_ids)</td><td>PUT /help-videos/:id/requirements</td><td>Author</td></tr>
-              <tr><td>archiveHelpVideo(id, opts?)</td><td>DELETE /help-videos/:id</td><td>Author (purge: admin)</td></tr>
+              <tr><td>archiveHelpVideo(id, opts?)</td><td>DELETE /help-videos/:id</td><td>Author (purge: admin, archived videos only)</td></tr>
               <tr><td>readHelpVideoDraft(id)</td><td>GET /help-videos/:id/draft/edits</td><td>Author</td></tr>
               <tr><td>saveHelpVideoDraft(id, edits, base_hash?)</td><td>PUT /help-videos/:id/draft/edits</td><td>Author</td></tr>
               <tr><td>publishHelpVideo(id, opts?)</td><td>POST /help-videos/:id/publish</td><td>Author</td></tr>
@@ -15126,7 +15126,7 @@ POST /api/message-actions/callback
           <p class="doc-p">Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. Opening the editor makes a draft, so Publish stays off, with "No changes since the last publish" beside it, while the draft is exactly what is published. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim and no callouts or boxes (a callout is an opaque panel and the label inside a box can cover a field; arrows, ripples and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.</p>
           <p class="doc-p">Required for: people in those roles get an in-app notification and, if their browser is subscribed, a browser push, and see the video in My Work until they have watched most of it (18 of its 20 five-percent sections). "Ask everyone to watch again" on a later publish resets that; when nothing else changed, Publish offers only that and the video itself is not published again. Marking a video required tells real people at once, so test it with a throwaway role.</p>
           <h3 class="doc-h3">Stats</h3>
-          <p class="doc-p">Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video.</p>
+          <p class="doc-p">Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video. Administrators can also delete an archived video for good with Delete permanently on the Archived tab (only archived videos can be deleted permanently), which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.</p>
           <!-- /SYNC:help-videos -->
         </div>
 

@@ -6,7 +6,7 @@ import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../../co
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { modalHostOf } from '../../ui/popover'
-import { helpVideoApi, helpVideoKeys, useHelpVideoLibrary } from '../api'
+import { helpVideoApi, helpVideoError, helpVideoKeys, useHelpVideoLibrary } from '../api'
 import { HelpVideoEditor } from '../editor/HelpVideoEditor'
 import { canRecord, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
 import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
@@ -112,14 +112,28 @@ export function HelpVideoLibrary({
       await helpVideoApi(client).purge(v.id)
       toast.success(`"${v.title}" deleted`)
     } catch (e) {
+      const err = helpVideoError(e)
       // Another administrator got there first: the video is gone, which is the goal.
-      if ((e as { status?: number }).status !== 404) {
+      // Any other 404 (a stale API with no such route) is a real failure.
+      if (!(err?.status === 404 && err.code === 'HELP_VIDEO_NOT_FOUND')) {
+        // The list was stale (it was published again): show what it is now.
+        if (err?.code === 'HELP_VIDEO_NOT_ARCHIVED') {
+          void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+        }
         return { ok: false, message: `It could not be deleted. ${(e as Error).message}` }
       }
     }
     focusAfter.current = { gone: v.id, next: next?.id ?? null }
-    void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
     setPurgeTarget(null)
+    // Once the list has refreshed, a row that is still there (or a refetch that failed)
+    // must not leave a stale hand-off behind for the next Cancel.
+    void qc.invalidateQueries({ queryKey: helpVideoKeys.all }).then(() =>
+      window.setTimeout(() => {
+        if (!focusAfter.current) return
+        focusAfter.current = null
+        if (purgeTrigger.current?.isConnected) purgeTrigger.current.focus()
+      }, 0)
+    )
     return { ok: true }
   }
 
@@ -358,7 +372,7 @@ export function HelpVideoLibrary({
                           purgeTrigger.current = e.currentTarget
                           setPurgeTarget(v)
                         }}
-                        aria-label={`Delete ${v.title || 'untitled video'} permanently`}
+                        aria-label={`Delete permanently: ${v.title || 'Untitled video'}`}
                         data-hv-purge={v.id}
                       >
                         <Trash2 className='h-3.5 w-3.5' /> Delete permanently

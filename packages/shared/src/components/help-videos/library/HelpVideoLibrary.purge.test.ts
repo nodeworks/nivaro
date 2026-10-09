@@ -21,21 +21,25 @@ vi.mock('../../../context', () => ({
   useApiFetchConfig: () => ({ apiBase: '/api' })
 }))
 vi.mock('sonner', () => ({ toast: { success: h.toastSuccess, error: h.toastError } }))
-vi.mock('../api', () => ({
-  helpVideoApi: () => ({ archive: h.archive, purge: h.purge }),
-  helpVideoKeys: { all: ['help-videos'] },
-  useHelpVideoLibrary: (p: { status: string }) => {
-    const data = h.rows.filter((r) => r.status === p.status)
-    return {
-      isLoading: false,
-      isError: false,
-      hasNextPage: false,
-      isFetchingNextPage: false,
-      fetchNextPage: vi.fn(),
-      data: { data, total: data.length, categories: [], can_author: true }
+vi.mock('../api', async () => {
+  const { useQuery } = await import('@tanstack/react-query')
+  const actual = await vi.importActual<typeof import('../api')>('../api')
+  return {
+    helpVideoError: actual.helpVideoError,
+    helpVideoApi: () => ({ archive: h.archive, purge: h.purge }),
+    helpVideoKeys: { all: ['help-videos'] },
+    useHelpVideoLibrary: (p: { status: string }) => {
+      const q = useQuery({
+        queryKey: ['help-videos', p.status],
+        queryFn: async () => {
+          const data = h.rows.filter((r) => r.status === p.status)
+          return { data, total: data.length, categories: [], can_author: true }
+        }
+      })
+      return { ...q, hasNextPage: false, isFetchingNextPage: false, fetchNextPage: vi.fn() }
     }
   }
-}))
+})
 vi.mock('../editor/HelpVideoEditor', () => ({ HelpVideoEditor: () => null }))
 vi.mock('../viewer/HelpVideoSheet', () => ({ HelpVideoSheet: () => null }))
 vi.mock('../recorder/HelpVideoRecorder', () => ({
@@ -90,12 +94,15 @@ async function mount() {
       )
     )
   })
+  await flush()
+  await flush()
 }
 const q = (sel: string) => document.querySelector<HTMLElement>(sel)
 const click = async (sel: string) => {
   await act(async () => {
     q(sel)?.click()
   })
+  await flush()
   await flush()
 }
 const openArchivedDialog = async (id = 'A1') => {
@@ -167,7 +174,7 @@ describe('Delete permanently', () => {
     })
     expect(h.purge).toHaveBeenCalledTimes(1)
     expect(h.purge).toHaveBeenCalledWith('A1')
-    expect(q('[data-hv-purge-confirm]')?.hasAttribute('disabled')).toBe(true)
+    expect(q('[data-hv-purge-confirm]')?.getAttribute('aria-disabled')).toBe('true')
     await act(async () => release())
     await flush()
     expect(q('[role="alertdialog"]')).toBeNull()
@@ -184,11 +191,16 @@ describe('Delete permanently', () => {
     expect(alert?.textContent).toContain('Boom')
     expect(h.toastError).not.toHaveBeenCalled()
     expect(h.toastSuccess).not.toHaveBeenCalled()
-    expect(q('[data-hv-purge-confirm]')?.hasAttribute('disabled')).toBe(false)
+    expect(q('[data-hv-purge-confirm]')?.getAttribute('aria-disabled')).toBe('false')
   })
 
   it('treats a 404 as already gone: closes quietly and refreshes', async () => {
-    h.purge.mockRejectedValue(Object.assign(new Error('Not found'), { status: 404 }))
+    h.purge.mockRejectedValue(
+      Object.assign(new Error('Video not found'), {
+        status: 404,
+        response: { code: 'HELP_VIDEO_NOT_FOUND' }
+      })
+    )
     await mount()
     await openArchivedDialog()
     await click('[data-hv-purge-confirm]')
@@ -196,6 +208,101 @@ describe('Delete permanently', () => {
     expect(q('[role="alert"]')).toBeNull()
     expect(h.toastError).not.toHaveBeenCalled()
     expect(qc.invalidateQueries).toHaveBeenCalledWith({ queryKey: ['help-videos'] })
+  })
+
+  it('shows an inline note for any other 404, such as a route a stale API lacks', async () => {
+    h.purge.mockRejectedValue(Object.assign(new Error('Route not found'), { status: 404 }))
+    await mount()
+    await openArchivedDialog()
+    await click('[data-hv-purge-confirm]')
+    expect(q('[role="alertdialog"] [role="alert"]')?.textContent).toContain('Route not found')
+  })
+
+  it('shows the server message when the video is no longer archived (409)', async () => {
+    h.purge.mockRejectedValue(
+      Object.assign(
+        new Error('Only archived videos can be deleted permanently. Archive it first.'),
+        {
+          status: 409,
+          response: { code: 'HELP_VIDEO_NOT_ARCHIVED' }
+        }
+      )
+    )
+    await mount()
+    await openArchivedDialog()
+    await click('[data-hv-purge-confirm]')
+    expect(q('[role="alertdialog"] [role="alert"]')?.textContent).toContain(
+      'Only archived videos can be deleted permanently'
+    )
+    expect(q('[role="alertdialog"]')).not.toBeNull()
+  })
+
+  it('gives the row action a name that starts with its visible words', async () => {
+    await mount()
+    await click('[data-hv-status-tab="archived"]')
+    expect(q('[data-hv-purge="A1"]')?.getAttribute('aria-label')).toBe(
+      'Delete permanently: Old tour'
+    )
+  })
+
+  it('says "Deleting…" while pending, keeps focus on the button, and ignores Escape and outside clicks', async () => {
+    let release: () => void = () => {}
+    h.purge.mockImplementation(() => new Promise<void>((r) => (release = r)))
+    await mount()
+    await openArchivedDialog()
+    const btn = q('[data-hv-purge-confirm]') as HTMLElement
+    btn.focus()
+    await act(async () => btn.click())
+    expect(btn.textContent).toBe('Deleting…')
+    expect(btn.hasAttribute('disabled')).toBe(false)
+    expect(document.activeElement).toBe(btn)
+    expect(q('[data-hv-purge-status]')?.textContent).toContain('Deleting')
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await act(async () => {
+      document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }))
+      document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    })
+    await click('[data-hv-purge-cancel]')
+    expect(q('[role="alertdialog"]')).not.toBeNull()
+    await act(async () => release())
+    await flush()
+    expect(q('[role="alertdialog"]')).toBeNull()
+  })
+
+  it('moves focus to the next row after a delete', async () => {
+    h.purge.mockImplementation(async (id: string) => {
+      h.rows = h.rows.filter((r) => r.id !== id)
+    })
+    await mount()
+    await openArchivedDialog('A1')
+    await click('[data-hv-purge-confirm]')
+    await flush()
+    expect(document.activeElement).toBe(q('[data-hv-purge="A2"]'))
+  })
+
+  it('moves focus to the list after deleting the last row', async () => {
+    h.rows = h.rows.filter((r) => r.id !== 'A2')
+    h.purge.mockImplementation(async (id: string) => {
+      h.rows = h.rows.filter((r) => r.id !== id)
+    })
+    await mount()
+    await openArchivedDialog('A1')
+    await click('[data-hv-purge-confirm]')
+    await flush()
+    expect(document.activeElement).toBe(q('[data-hv-list]'))
+  })
+
+  it('does not carry a focus hand-off past a refetch that still lists the row', async () => {
+    await mount() // the purge succeeds but the list still shows both rows
+    await openArchivedDialog('A1')
+    await click('[data-hv-purge-confirm]')
+    await flush()
+    await flush()
+    await click('[data-hv-purge="A2"]')
+    await click('[data-hv-purge-cancel]')
+    expect(document.activeElement).toBe(q('[data-hv-purge="A2"]'))
   })
 
   it('Cancel closes without deleting', async () => {

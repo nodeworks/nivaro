@@ -2519,7 +2519,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | updateHelpVideo(id, body) | PATCH /help-videos/:id | Author |
 | setHelpVideoContexts(id, contexts) | PUT /help-videos/:id/contexts | Author |
 | setHelpVideoRequirements(id, role_ids) | PUT /help-videos/:id/requirements | Author |
-| archiveHelpVideo(id, opts?) | DELETE /help-videos/:id | Author (purge: admin) |
+| archiveHelpVideo(id, opts?) | DELETE /help-videos/:id | Author (purge: admin, archived videos only) |
 | readHelpVideoDraft(id) | GET /help-videos/:id/draft/edits | Author |
 | saveHelpVideoDraft(id, edits, base_hash?) | PUT /help-videos/:id/draft/edits | Author |
 | publishHelpVideo(id, opts?) | POST /help-videos/:id/publish | Author |

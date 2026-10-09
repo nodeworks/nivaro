@@ -47,7 +47,7 @@ export function PurgeVideoDialog({
   const [error, setError] = useState<string | null>(null)
 
   const confirm = async () => {
-    if (inflight.current) return
+    if (inflight.current || pending) return
     inflight.current = true
     setPending(true)
     setError(null)
@@ -61,6 +61,9 @@ export function PurgeVideoDialog({
     <Dialog open onOpenChange={(o) => !o && !pending && onClose()}>
       <DialogContent
         role='alertdialog'
+        onEscapeKeyDown={(e) => pending && e.preventDefault()}
+        onPointerDownOutside={(e) => pending && e.preventDefault()}
+        onInteractOutside={(e) => pending && e.preventDefault()}
         container={container}
         hideClose={pending}
         className='w-[calc(100vw-2rem)] max-w-[480px] dark:bg-card'
@@ -91,14 +94,18 @@ export function PurgeVideoDialog({
           <p className='text-[13px] text-muted-foreground'>
             To keep it but out of the way, leave it in the archive.
           </p>
+          <p className='sr-only' role='status' aria-live='polite' data-hv-purge-status>
+            {pending ? `Deleting “${title}”…` : ''}
+          </p>
           {error && <ErrorNote data-hv-purge-error>{error}</ErrorNote>}
         </DialogBody>
         <DialogFooter className='flex-wrap border-border'>
           <Button
             ref={cancelRef}
             variant='outline'
-            onClick={onClose}
-            disabled={pending}
+            onClick={() => !pending && onClose()}
+            aria-disabled={pending}
+            className={pending ? 'opacity-50' : undefined}
             data-hv-purge-cancel
           >
             Cancel
@@ -106,16 +113,16 @@ export function PurgeVideoDialog({
           <Button
             variant='destructive'
             // The light destructive token is 3.8:1 under white text; red-700 clears 4.5:1.
-            className='bg-red-700 hover:bg-red-800 dark:bg-destructive dark:hover:bg-destructive/90'
+            className={`bg-red-700 hover:bg-red-800 dark:bg-destructive dark:hover:bg-destructive/90 ${pending ? 'opacity-70' : ''}`}
             onClick={() => void confirm()}
-            disabled={pending}
-            aria-busy={pending}
+            // Not `disabled`: that would drop keyboard focus to the page while the request runs.
+            aria-disabled={pending}
             data-hv-purge-confirm
           >
             {pending ? (
               <Loader2 className='h-4 w-4 animate-spin motion-reduce:animate-none' />
             ) : null}
-            Delete permanently
+            {pending ? 'Deleting…' : 'Delete permanently'}
           </Button>
         </DialogFooter>
       </DialogContent>

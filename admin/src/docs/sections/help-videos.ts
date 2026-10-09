@@ -50,7 +50,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Stats' },
     {
       type: 'p',
-      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video. Administrators can also delete an archived video for good with Delete permanently on the Archived tab, which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
+      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video. Administrators can also delete an archived video for good with Delete permanently on the Archived tab (only archived videos can be deleted permanently), which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
     }
   ]
 }
@@ -243,7 +243,11 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
         ['updateHelpVideo(id, body)', 'PATCH /help-videos/:id', 'Author'],
         ['setHelpVideoContexts(id, contexts)', 'PUT /help-videos/:id/contexts', 'Author'],
         ['setHelpVideoRequirements(id, role_ids)', 'PUT /help-videos/:id/requirements', 'Author'],
-        ['archiveHelpVideo(id, opts?)', 'DELETE /help-videos/:id', 'Author (purge: admin)'],
+        [
+          'archiveHelpVideo(id, opts?)',
+          'DELETE /help-videos/:id',
+          'Author (purge: admin, archived videos only)'
+        ],
         ['readHelpVideoDraft(id)', 'GET /help-videos/:id/draft/edits', 'Author'],
         ['saveHelpVideoDraft(id, edits, base_hash?)', 'PUT /help-videos/:id/draft/edits', 'Author'],
         ['publishHelpVideo(id, opts?)', 'POST /help-videos/:id/publish', 'Author'],
