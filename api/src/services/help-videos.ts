@@ -25,7 +25,12 @@ import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
 import { releaseFinalizedUpload, takeFinalizedUpload } from './help-video-uploads.js'
 import { viewerCanPlay } from './help-video-views.js'
-import { buildWalkSteps, type RecordedClick, type WalkStep } from './help-video-walk.js'
+import {
+  type ActivitySpan,
+  buildWalkSteps,
+  type RecordedClick,
+  type WalkStep
+} from './help-video-walk.js'
 import { getApp } from './io-holder.js'
 
 // Help videos: who may author and watch, and the video/version lifecycle.
@@ -79,6 +84,9 @@ export interface VersionDto {
   /** Draft load only: 'upload' when the source was a picked file (no clicks
    *  or microphone levels exist for it), else 'recording'. */
   source_kind?: 'recording' | 'upload'
+  /** Draft load only: typing and idle spans the recorder logged (#1518), read
+   *  from the source's upload row; null when there are none. */
+  activity?: ActivitySpan[] | null
 }
 export interface HelpVideoDto {
   id: string

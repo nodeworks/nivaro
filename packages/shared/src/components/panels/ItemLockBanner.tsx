@@ -377,6 +377,9 @@ export function useItemLock(
       // always, plus roles in settings.lock_takeover_roles. A 403 explains.
       await client.request(post(`/item-locks/${collection}/${item}/lock/force`, {}))
       toast.success('You now hold the edit lock')
+      // The server already gave us the lock: refreshing it clears the holder
+      // (so the read-only state lifts) and starts the heartbeat.
+      await acquire()
     } catch (err) {
       const msg =
         (err as { response?: { error?: string }; message?: string })?.response?.error ??
@@ -385,7 +388,7 @@ export function useItemLock(
     } finally {
       setTakingOver(false)
     }
-  }, [client, collection, item])
+  }, [client, collection, item, acquire])
 
   return {
     lockHolder,
@@ -554,8 +557,14 @@ export function ItemLockBanner({
   myPosition,
   onJoinQueue,
   onLeaveQueue,
-  joining
+  joining,
+  noun = 'this item',
+  readOnlyText = 'fields are read-only'
 }: {
+  /** What is being edited ("this video"). */
+  noun?: string
+  /** What being locked out means here ("the editor is read-only"). */
+  readOnlyText?: string
   lockHolder: LockHolder | null
   onTakeOver: () => void
   takingOver: boolean
@@ -572,10 +581,13 @@ export function ItemLockBanner({
   const name = lockHolder.locked_by_name || 'Another user'
   const ahead = queue?.length ?? 0
   return (
-    <div className='mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'>
+    <div
+      className='mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-100'
+      data-lock-banner
+    >
       <Lock className='h-4 w-4 shrink-0 text-amber-500' />
       <span className='min-w-0 flex-1'>
-        <span className='font-medium'>{name}</span> is editing this item — fields are read-only
+        <span className='font-medium'>{name}</span> is editing {noun} — {readOnlyText}
         {lockHolder.idle_minutes != null && lockHolder.idle_minutes >= 2 && (
           <span
             className='ml-1.5 rounded bg-amber-100 px-1 py-px text-[10px] font-semibold text-amber-700 dark:bg-amber-500/20 dark:text-amber-200'
@@ -584,7 +596,7 @@ export function ItemLockBanner({
           >
             idle {lockHolder.idle_minutes}m
           </span>
-        )}
+        )}{' '}
         until the lock is released.
         {lockHolder.note && (
           <span className='mt-0.5 block text-[12.5px] text-amber-800/90 dark:text-amber-200/90'>

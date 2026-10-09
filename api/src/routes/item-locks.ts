@@ -1,7 +1,64 @@
 import type { FastifyInstance } from 'fastify'
+import { adminBaseUrl } from '../admin-base.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isAuthor, isUuid } from '../services/help-videos.js'
+
+/** The help-video editor locks a video under this name (#1523). */
+export const HELP_VIDEO_LOCK_COLLECTION = 'nivaro_help_videos'
+
+/**
+ * Who may lock what. Records of business collections as before. Of the
+ * system tables only help videos: the editor holds a lock per video, and the
+ * gate is the help-video author check (the items API has no policy for that
+ * table). Every other nivaro_ / directus_ table is refused — a lock row is
+ * not a place to park arbitrary keys, and a lock notification names the item.
+ */
+export async function lockRefusal(
+  user: Parameters<typeof isAuthor>[0],
+  isAdmin: boolean,
+  collection: string,
+  item: string | undefined
+): Promise<{ status: number; error: string } | null> {
+  if (collection === HELP_VIDEO_LOCK_COLLECTION) {
+    if (item !== undefined && !isUuid(item)) return { status: 404, error: 'Video not found' }
+    if (!(await isAuthor(user, isAdmin)))
+      return { status: 403, error: 'Only help-video authors can edit videos' }
+    return null
+  }
+  if (/^(nivaro_|directus_)/i.test(collection))
+    return { status: 403, error: 'Edit locks are not available for this table' }
+  return null
+}
+
+/** How a lock notification names the item and where it takes the reader. */
+async function lockSubject(
+  collection: string,
+  item: string
+): Promise<{
+  label: string
+  target: { kind: 'record'; collection: string; id: string } | { kind: 'external'; url: string }
+}> {
+  if (collection === HELP_VIDEO_LOCK_COLLECTION) {
+    const row = (await db('nivaro_help_videos')
+      .where({ id: item })
+      .first('title')
+      .catch(() => null)) as { title?: string | null } | null | undefined
+    const title = String(row?.title ?? '').trim()
+    return {
+      label: title ? `the video “${title}”` : 'a help video',
+      target: {
+        kind: 'external',
+        url: `${(adminBaseUrl() ?? '').replace(/\/$/, '')}/help-videos?edit=${encodeURIComponent(item)}`
+      }
+    }
+  }
+  return {
+    label: `${collection}/${item}`,
+    target: { kind: 'record', collection, id: String(item) }
+  }
+}
 
 const LOCK_TTL_MS = 5 * 60 * 1000 // 5 minutes
 
@@ -107,13 +164,14 @@ async function handOffToQueue(app: FastifyInstance, collection: string, item: st
       .delete()
     app.io?.to(`user:${next.user}`).emit('lock:available', { collection, item: String(item) })
     const { notifyUser } = await import('../services/notification-channels.js')
+    const what = await lockSubject(collection, String(item))
     await notifyUser(app, next.user, {
-      subject: `It's your turn to edit ${collection}/${item}`,
-      message: `The edit lock on ${collection}/${item} was released and you were next in line.`,
+      subject: `It's your turn to edit ${what.label}`,
+      message: `The edit lock on ${what.label} was released and you were next in line.`,
       collection,
       item: String(item),
       category: 'system',
-      target: { kind: 'record', collection, id: String(item) }
+      target: what.target
     }).catch(() => {})
   } catch {
     /* hand-off is best-effort */
@@ -178,6 +236,14 @@ function emitLockEvent(
 export async function itemLocksRoutes(app: FastifyInstance) {
   _app = app
   app.addHook('preHandler', authenticate)
+  // Every route naming a collection: may this person lock in it at all?
+  // (Signed-out requests fall through to the routes' own requireAuth.)
+  app.addHook('preHandler', async (req, reply) => {
+    const p = (req.params ?? {}) as { collection?: string; item?: string }
+    if (!p.collection || !req.user) return
+    const refused = await lockRefusal(req.user, !!req.isAdmin, p.collection, p.item)
+    if (refused) return reply.code(refused.status).send({ error: refused.error })
+  })
 
   // ── Config: GET/PATCH locking enabled flag per collection (admin) ─────────
 
@@ -438,14 +504,15 @@ export async function itemLocksRoutes(app: FastifyInstance) {
           from: { id: me.id, name: fromName }
         })
         const { notifyUser } = await import('../services/notification-channels.js')
+        const what = await lockSubject(collection, String(item))
         await notifyUser(app, existing.user, {
           subject: 'Someone is waiting to edit',
-          message: `${fromName} is waiting for ${collection}/${item} (position ${position} in line).`,
+          message: `${fromName} is waiting for ${what.label} (position ${position} in line).`,
           collection,
           item: String(item),
           sender: me.id,
           category: 'system',
-          target: { kind: 'record', collection, id: String(item) }
+          target: what.target
         }).catch(() => {})
       }
       return reply.send({ data: { position, queue } })
@@ -497,12 +564,14 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       if (existing && existing.user !== req.user!.id) {
         await db('nivaro_item_locks').where({ collection, item }).del()
         const { notifyUser } = await import('../services/notification-channels.js')
+        const what = await lockSubject(collection, String(item))
         void notifyUser(app, existing.user, {
           subject: 'Your edit lock was taken over',
-          message: `${[req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ') || 'An authorized user'} took over editing ${collection}/${item}. Unsaved changes there may conflict.`,
+          message: `${[req.user?.first_name, req.user?.last_name].filter(Boolean).join(' ') || 'An authorized user'} took over editing ${what.label}. Unsaved changes there may conflict.`,
           collection,
           item,
-          sender: req.user?.id ?? null
+          sender: req.user?.id ?? null,
+          ...(collection === HELP_VIDEO_LOCK_COLLECTION ? { target: what.target } : {})
         }).catch(() => {})
       }
       await db('nivaro_item_locks').insert({
@@ -630,12 +699,14 @@ export async function itemLocksRoutes(app: FastifyInstance) {
         from: { id: me.id, name: fromName }
       })
       const { notifyUser } = await import('../services/notification-channels.js')
+      const what = await lockSubject(collection, String(item))
       await notifyUser(app, existing.user, {
         subject: 'Edit lock requested',
-        message: `${fromName} is asking you to release ${collection}/${item} so they can edit it.`,
+        message: `${fromName} is asking you to release ${what.label} so they can edit it.`,
         collection,
         item: String(item),
-        sender: me.id
+        sender: me.id,
+        ...(collection === HELP_VIDEO_LOCK_COLLECTION ? { target: what.target } : {})
       }).catch(() => {})
       return { data: { requested: true } }
     }
@@ -679,15 +750,17 @@ export async function itemLocksRoutes(app: FastifyInstance) {
       from: { id: me.id, name: myName }
     })
     const { notifyUser } = await import('../services/notification-channels.js')
+    const what = await lockSubject(collection, String(item))
     await notifyUser(app, to, {
       subject: action === 'release' ? 'Lock released for you' : 'Lock request declined',
       message:
         action === 'release'
-          ? `${myName} released ${collection}/${item} — it's yours.`
-          : `${myName} declined to release ${collection}/${item}${note ? `: "${note}"` : '.'}`,
+          ? `${myName} released ${what.label} — it's yours.`
+          : `${myName} declined to release ${what.label}${note ? `: "${note}"` : '.'}`,
       collection,
       item: String(item),
-      sender: me.id
+      sender: me.id,
+      ...(collection === HELP_VIDEO_LOCK_COLLECTION ? { target: what.target } : {})
     }).catch(() => {})
     return { data: { responded: action } }
   })

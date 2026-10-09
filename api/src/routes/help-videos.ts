@@ -58,6 +58,7 @@ import {
 import { queueRender } from '../services/help-video-render.js'
 import {
   abandonUpload,
+  activityOfFile,
   appendPart,
   finalizeUpload,
   listOpenUploads,
@@ -164,7 +165,12 @@ export async function helpVideosRoutes(app: FastifyInstance) {
   })
   app.post('/uploads/:id/finalize', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const meta = (req.body ?? {}) as { duration_ms?: number; clicks?: unknown; levels?: unknown }
+    const meta = (req.body ?? {}) as {
+      duration_ms?: number
+      clicks?: unknown
+      levels?: unknown
+      activity?: unknown
+    }
     const result = await finalizeUpload(req.user!, id, meta)
     // An uploaded file is checked (and maybe converted) in the background:
     // poll GET /uploads/:id until it is finalized.
@@ -397,7 +403,8 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.send({
       data: {
         ...serializeVersion(draft, { withRecorderData: true }),
-        source_kind: await sourceKindOfFile(draft.source_file)
+        source_kind: await sourceKindOfFile(draft.source_file),
+        activity: await activityOfFile(draft.source_file)
       }
     })
   })

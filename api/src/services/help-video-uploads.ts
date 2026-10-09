@@ -19,7 +19,12 @@ import {
   sniffContainer,
   type UploadContainer
 } from './help-video-upload-media.js'
-import { normalizeClicks, normalizeLevels } from './help-video-walk.js'
+import {
+  type ActivitySpan,
+  normalizeActivity,
+  normalizeClicks,
+  normalizeLevels
+} from './help-video-walk.js'
 import { deleteStoredObject } from './storage-drivers.js'
 
 // The host name, not the per-boot INSTANCE_ID: a restarted container keeps its
@@ -327,11 +332,12 @@ export async function appendPart(
 export async function finalizeUpload(
   user: User,
   id: string,
-  meta: { duration_ms?: number; clicks?: unknown; levels?: unknown }
+  meta: { duration_ms?: number; clicks?: unknown; levels?: unknown; activity?: unknown }
 ): Promise<FinalizedUpload | ProcessingUpload> {
   const rid = assertId(id)
   const clicks = normalizeClicks(meta.clicks)
   const levels = normalizeLevels(meta.levels)
+  const activity = normalizeActivity(meta.activity)
   // Claim: only one finalize can flip open -> finalizing; appends are serialized
   // on the same lock so none is mid-write when the claim lands.
   const row = await withLock(rid, async () => {
@@ -419,7 +425,9 @@ export async function finalizeUpload(
         height: probe.height,
         has_audio: probe.has_audio,
         // Bounded by the normalizers (≈1.5 MB at most), so never cut mid-JSON.
-        meta: JSON.stringify({ clicks, levels }),
+        // Activity (#1518) is read back by activityOfFile: the version table
+        // has no column for it, the upload row stays for as long as the video.
+        meta: JSON.stringify({ clicks, levels, activity }),
         updated_at: new Date()
       })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
@@ -706,6 +714,26 @@ export async function sourceKindOfFile(fileId: unknown): Promise<'recording' | '
   return String((row as { meta?: unknown } | null)?.meta ?? '').startsWith(UPLOAD_META_HEAD)
     ? 'upload'
     : 'recording'
+}
+
+/** The typing and idle spans the recorder logged for a version's source file
+ *  (#1518), read from the upload row that produced it. Null for an uploaded
+ *  file, a recording made before #1518 or of another window, and a recording
+ *  that arrived in a package (its upload row lives on the other instance). */
+export async function activityOfFile(fileId: unknown): Promise<ActivitySpan[] | null> {
+  if (!fileId) return null
+  const row = (await db('nivaro_help_video_uploads')
+    .where({ file_id: fileId })
+    .whereIn('status', ['used', 'finalized'])
+    .first('meta')
+    .catch(() => null)) as { meta?: unknown } | null | undefined
+  const raw = row?.meta == null ? '' : String(row.meta)
+  if (!raw || raw.startsWith(UPLOAD_META_HEAD) || !raw.includes('"activity"')) return null
+  try {
+    return normalizeActivity((JSON.parse(raw) as { activity?: unknown }).activity)
+  } catch {
+    return null
+  }
 }
 
 /** Deletes a file nothing references (bytes and row). When the delete fails the

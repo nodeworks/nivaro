@@ -63,9 +63,12 @@ vi.mock('../HelpVideoPlayer', async () => {
 })
 
 const request = vi.fn()
+// One client for every render, as a real NivaroProvider gives (the editor
+// lock's effect keys on it).
+const client = { request }
 vi.mock('../../../context', () => ({
   useItemEditAuth: () => ({ isAdmin: false, userId: 'U1' }),
-  useNivaroClient: () => ({ request }),
+  useNivaroClient: () => client,
   useNavigation: () => ({ navigate: () => {} }),
   useApiFetchConfig: () => ({ apiBase: '/api', authHeaders: {}, credentials: 'include' })
 }))
@@ -159,9 +162,16 @@ const video = {
 
 let root: Root
 let host: HTMLDivElement
+/** Someone else holds the editor lock (#1523) when set. */
+let lockedBy: { locked_by: string; locked_by_name: string } | null = null
 async function mount(clicks: Clicks = null, extra: Partial<VersionDto> = {}) {
   const draft = { ...draftFor(clicks), ...extra }
   request.mockImplementation(async (c: { _method: string; _path: string; _body?: unknown }) => {
+    if (c._path.startsWith('/item-locks/') && lockedBy) {
+      if (c._method === 'POST' && c._path.endsWith('/lock'))
+        throw Object.assign(new Error('locked'), { status: 409, response: lockedBy })
+      if (c._method === 'GET') return { data: { ...lockedBy, queue: [], my_position: null } }
+    }
     if (c._method === 'GET' && c._path.endsWith('/draft/edits')) return { data: draft }
     if (c._method === 'GET') return { data: { ...video, draft } }
     if (c._method === 'PUT') {
@@ -197,6 +207,7 @@ beforeEach(() => {
   vi.mocked(editsModule.isHiddenByCuts).mockClear()
   vi.mocked(editsModule.sourceToEdited).mockClear()
   request.mockReset()
+  lockedBy = null
 })
 afterEach(async () => {
   await act(async () => root.unmount())
@@ -473,5 +484,56 @@ describe('HelpVideoEditor card previews', () => {
     // Subtle entrance: 900 ms, the server poster's moment.
     expect(fake.seekEdited).toEqual([900])
     expect(fake.plays).toBe(0)
+  })
+})
+
+describe('HelpVideoEditor typing and idle suggestions (#1518)', () => {
+  it('lists typing and idle stretches beside the pauses', async () => {
+    await mount(null, {
+      activity: [
+        { kind: 'idle', start_ms: 1000, end_ms: 5000 },
+        { kind: 'typing', start_ms: 6000, end_ms: 9000 }
+      ]
+    })
+    expect(q('[data-hv-suggestions]').textContent).toContain('2 suggestions')
+    await click(q('[data-hv-suggestions]'))
+    const rows = [...document.querySelectorAll('[data-hv-suggestion-kind]')]
+    expect(rows.map((r) => r.getAttribute('data-hv-suggestion-kind'))).toEqual(['idle', 'typing'])
+    // Dismissing a suggestion takes it off the list.
+    await click(rows[1].querySelector('[data-hv-suggestion-dismiss]') as Element)
+    expect(document.querySelectorAll('[data-hv-suggestion-kind]')).toHaveLength(1)
+    // Speeding up the idle stretch handles it (4× piece).
+    await click(document.querySelector('[data-hv-suggestion-speed]') as Element)
+    expect(edits().segments.some((s) => s.speed === 4)).toBe(true)
+  })
+})
+
+describe('HelpVideoEditor lock (#1523)', () => {
+  it('goes read-only while someone else edits, and offers to ask for it', async () => {
+    lockedBy = { locked_by: 'U2', locked_by_name: 'Beth Jones' }
+    await mount()
+    for (let i = 0; i < 5 && !q('[data-hv-editor-locked]'); i++)
+      await act(async () => void (await new Promise((r) => setTimeout(r, 0))))
+    expect(q('[data-lock-banner]').textContent).toContain(
+      'Beth Jones is editing this video — the editor is read-only'
+    )
+    expect(q('[data-hvx-edit]').closest('[inert]')).not.toBeNull()
+    expect(q('[data-hv-publish]')).toBeNull()
+    // Shortcuts do nothing while locked out.
+    fake.now = 7000
+    await press('m')
+    expect(edits().chapters).toHaveLength(1)
+  })
+
+  it('holds the lock while editing', async () => {
+    await mount()
+    for (let i = 0; i < 5 && !q('[data-lock-holder]'); i++)
+      await act(async () => void (await new Promise((r) => setTimeout(r, 0))))
+    expect(q('[data-lock-holder]')).not.toBeNull()
+    expect(q('[data-hv-editor-locked]')).toBeNull()
+    const lockCalls = request.mock.calls.filter(
+      ([c]) => c._method === 'POST' && c._path === '/item-locks/nivaro_help_videos/v1/lock'
+    )
+    expect(lockCalls).toHaveLength(1)
   })
 })

@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertCircle, Redo2, RotateCw, Scissors, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
+import { ItemLockBanner, LockHolderButton, useItemLock } from '../../panels/ItemLockBanner'
 import { Button } from '../../ui/button'
 import { Label } from '../../ui/label'
 import { Skeleton } from '../../ui/skeleton'
@@ -32,7 +33,7 @@ import { PublishButton } from './PublishButton'
 import { SaveState } from './SaveState'
 import { ShortcutsCard } from './ShortcutsCard'
 import { SilenceSuggestions } from './SilenceSuggestions'
-import { suggestCuts } from './suggestCuts'
+import { suggestCuts, suggestEdits } from './suggestCuts'
 import { type Selection, Timeline } from './Timeline'
 import { ToolPicker } from './ToolPicker'
 import { sentence } from './timeline/useBarDrag'
@@ -54,6 +55,10 @@ function usePinnedVideo(video: HelpVideoDto, draft: VersionDto): HelpVideoDto {
     pinned.current = { key, dto: { ...video, draft } }
   return pinned.current.dto
 }
+
+/** The editor lock (#1523) rides the record lock machinery under this name. */
+export const HELP_VIDEO_LOCK_COLLECTION = 'nivaro_help_videos'
+type EditorLock = ReturnType<typeof useItemLock>
 
 export function HelpVideoEditor({ videoId, onClose }: { videoId: string; onClose?: () => void }) {
   const client = useNivaroClient()
@@ -84,6 +89,20 @@ export function HelpVideoEditor({ videoId, onClose }: { videoId: string; onClose
     ? (draftQuery.error as Error).message || 'The draft could not load.'
     : null
   const reload = useCallback(() => setLoads((n) => n + 1), [])
+  // One edit lock per open editor (#1523): taken on open, released on close,
+  // unmount or idling; while someone else holds it the editor is read-only.
+  // Held here, not in the body, so a reload (which remounts the body) keeps it.
+  const lock = useItemLock(HELP_VIDEO_LOCK_COLLECTION, videoId, true)
+  // Back from read-only: the other author may have saved meanwhile, so the
+  // draft is loaded again before this person edits it.
+  const wasBlocked = useRef(false)
+  useEffect(() => {
+    if (lock.lockHolder) wasBlocked.current = true
+    else if (lock.acquired && wasBlocked.current) {
+      wasBlocked.current = false
+      reload()
+    }
+  }, [lock.lockHolder, lock.acquired, reload])
 
   const failed = draftError ?? (videoError ? (videoError as Error).message : null)
   if (failed && !(video && draft))
@@ -122,6 +141,7 @@ export function HelpVideoEditor({ videoId, onClose }: { videoId: string; onClose
       onClose={onClose}
       tab={tab}
       onTab={setTab}
+      lock={lock}
     />
   )
 }
@@ -154,7 +174,8 @@ function EditorBody({
   onReload,
   onClose,
   tab,
-  onTab
+  onTab,
+  lock
 }: {
   video: HelpVideoDto
   draft: VersionDto
@@ -162,6 +183,7 @@ function EditorBody({
   onClose?: () => void
   tab: string
   onTab: (tab: string) => void
+  lock: EditorLock
 }) {
   const [h, dispatch] = useReducer(historyReducer, draft.edits, initHistory)
   const edits = h.present
@@ -169,12 +191,18 @@ function EditorBody({
   // they keep one identity and the panels skip playback frames.
   const editsRef = useRef(edits)
   editsRef.current = edits
+  // Someone else holds the editor lock: nothing here may change (#1523).
+  const blocked = !!lock.lockHolder
+  // After "Release lock", the next change takes the lock back.
+  const relockRef = useRef<(() => void) | null>(null)
+  relockRef.current = lock.released && !lock.lockHolder ? () => void lock.relock() : null
   // One note beside the timeline for every change that can't be made
   // (overlapping zooms, too short, cutting the last second away).
   const [note, setNote] = useState<string | null>(null)
   const showNote = useCallback((n: string | null) => setNote(n && sentence(n)), [])
   const set = useCallback((e: VideoEdits, key?: string) => {
     setNote(null)
+    relockRef.current?.()
     dispatch({ type: 'set', edits: e, key, now: Date.now() })
   }, [])
   const save = useAutosave(video.id, edits, draft.edits_hash, {
@@ -203,6 +231,12 @@ function EditorBody({
   const uploaded = draft.source_kind === 'upload'
   const segIndex = segmentIndexAt(edits, src)
   const silent = useMemo(() => suggestCuts(draft.levels ?? null, edits), [draft.levels, edits])
+  // Pauses plus, on a recording of the author's own tab, idle stretches and
+  // typing (#1518) — the toolbar's suggestion list.
+  const suggestions = useMemo(
+    () => suggestEdits(draft.levels ?? null, draft.activity ?? null, edits),
+    [draft.levels, draft.activity, edits]
+  )
   // While a zoom is selected (or the crop tool is up) the preview shows the
   // whole picture, to place it.
   const playerEdits = useMemo(
@@ -292,7 +326,7 @@ function EditorBody({
     [rememberSpot]
   )
 
-  useEditorShortcuts(tab === 'edit', {
+  useEditorShortcuts(tab === 'edit' && !blocked, {
     undo: () => dispatch({ type: 'undo' }),
     redo: () => dispatch({ type: 'redo' }),
     split,
@@ -349,15 +383,30 @@ function EditorBody({
               Viewer preview
             </Label>
           </div>
-          <PublishButton
-            video={{ ...video, draft }}
-            edits={edits}
-            pending={save.unsaved || save.refreshing}
-            beforePublish={save.flush}
-            onPublished={onReload}
-            conflict={save.status === 'conflict'}
-            onReload={onReload}
-          />
+          {(lock.acquired || lock.released) && (
+            <span className='inline-flex overflow-hidden rounded-md border border-input'>
+              <LockHolderButton
+                note={lock.myNote}
+                onSave={lock.saveNote}
+                waiting={lock.queue}
+                onRelease={() => void lock.release()}
+                releasing={lock.releasing}
+                released={lock.released}
+                onRelock={() => void lock.relock()}
+              />
+            </span>
+          )}
+          {!blocked && (
+            <PublishButton
+              video={{ ...video, draft }}
+              edits={edits}
+              pending={save.unsaved || save.refreshing}
+              beforePublish={save.flush}
+              onPublished={onReload}
+              conflict={save.status === 'conflict'}
+              onReload={onReload}
+            />
+          )}
           {onClose && (
             <Button
               size='sm'
@@ -371,7 +420,32 @@ function EditorBody({
           )}
         </div>
       </header>
-      <Tabs value={tab} onValueChange={onTab} className='flex min-h-0 flex-1 flex-col'>
+      {blocked && (
+        <div className='px-4 pt-3 [&>[data-lock-banner]]:mb-0' data-hv-editor-locked>
+          <ItemLockBanner
+            noun='this video'
+            readOnlyText='the editor is read-only'
+            lockHolder={lock.lockHolder}
+            onTakeOver={() => void lock.takeOver()}
+            takingOver={lock.takingOver}
+            isAdmin={lock.isAdmin}
+            onRequestLock={() => void lock.requestLock()}
+            requesting={lock.requesting}
+            queue={lock.queue}
+            myPosition={lock.myPosition}
+            onJoinQueue={() => void lock.joinQueue()}
+            onLeaveQueue={() => void lock.leaveQueue()}
+            joining={lock.joining}
+          />
+        </div>
+      )}
+      <Tabs
+        value={tab}
+        onValueChange={onTab}
+        className={`flex min-h-0 flex-1 flex-col ${blocked ? 'opacity-60' : ''}`}
+        inert={blocked}
+        aria-disabled={blocked || undefined}
+      >
         <TabsList className='mx-4 mt-2 h-9 self-start'>
           <TabsTrigger value='edit' className='text-[13px]'>
             Edit
@@ -449,7 +523,7 @@ function EditorBody({
             {!viewerPreview && <ToolPicker tool={tool} onTool={setTool} />}
             <SilenceSuggestions
               uploaded={uploaded}
-              silent={silent}
+              silent={suggestions}
               edits={edits}
               onChange={set}
               onSeek={sideSeek}

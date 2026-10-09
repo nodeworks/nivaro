@@ -207,6 +207,18 @@ export interface VersionDto {
   /** Draft load only: 'upload' when the source is a video file someone picked
    *  (it has no clicks and no microphone levels), else 'recording'. */
   source_kind?: 'recording' | 'upload'
+  /** Draft load only (#1518): when the author was typing in a text field or
+   *  idle (no input for 3 s+) on the recorded tab, in source time. Null for
+   *  uploaded files and recordings made without it. */
+  activity?: ActivitySpan[] | null
+}
+
+/** A stretch of the recording where the author was typing in a text field,
+ *  or touched nothing at all (#1518). Never what was typed. */
+export type ActivitySpan = {
+  kind: 'typing' | 'idle'
+  start_ms: number
+  end_ms: number
 }
 
 /**

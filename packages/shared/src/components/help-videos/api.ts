@@ -4,6 +4,7 @@ import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { type CardBrand, cardAccent } from './cards'
 import type {
+  ActivitySpan,
   HelpVideoContext,
   HelpVideoDto,
   HelpVideoErrorCode,
@@ -303,12 +304,19 @@ export function helpVideoApi(client: NivaroClient) {
      * - `levels`: microphone loudness, one number from 0 (silence) to 1 every
      *   100 ms of recording time (10 per second), so `levels[i]` covers
      *   `i * 100` ms. Null without a microphone.
+     * - `activity` (optional): `{ kind: 'typing' | 'idle', start_ms, end_ms }`
+     *   spans on the recorded tab — never what was typed. Null when not captured.
      * Matches `HelpVideoVersion.clicks` / `.levels` in @nivaro/sdk.
      * 422 UPLOAD_TOO_LONG past 31 minutes, 409 UPLOAD_CLOSED when finished.
      */
     finalizeUpload: (
       id: string,
-      meta: { duration_ms: number; clicks: RecordedClick[] | null; levels: number[] | null }
+      meta: {
+        duration_ms: number
+        clicks: RecordedClick[] | null
+        levels: number[] | null
+        activity?: ActivitySpan[] | null
+      }
     ) =>
       r(
         post<{ data: { file_id: string; duration_ms: number | null } }>(

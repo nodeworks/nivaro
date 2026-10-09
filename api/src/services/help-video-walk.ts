@@ -103,6 +103,64 @@ export function normalizeLevels(raw: unknown): number[] | null {
   })
 }
 
+/**
+ * What the author's hands were doing while recording their own tab (#1518):
+ * `typing` = keys pressed in a text field, `idle` = no pointer, wheel or key
+ * input for 3 seconds or more. Only THAT it happened is kept, never what was
+ * typed or which keys. The editor offers typing as 4× pieces and idle
+ * stretches as cuts. Recordings of another window or screen, and uploaded
+ * files, have none. The client mirror: recorder/activity.ts.
+ */
+export interface ActivitySpan {
+  kind: 'typing' | 'idle'
+  start_ms: number
+  end_ms: number
+}
+
+export const ACTIVITY_LIMITS = {
+  /** Spans kept per recording (the earliest win): ~50 KB of meta at most. */
+  spans: 1000,
+  /** Shorter spans say nothing an editor could act on. */
+  minMs: 500
+}
+
+/**
+ * The recorder's activity spans as stored: unknown kinds and broken spans are
+ * dropped, times are clamped to the recording, overlapping spans of one kind
+ * are merged, the list is sorted and capped. Null stays null (capture was off).
+ */
+export function normalizeActivity(raw: unknown): ActivitySpan[] | null {
+  if (raw == null || !Array.isArray(raw)) return null
+  const spans: ActivitySpan[] = []
+  for (const a of raw.slice(0, ACTIVITY_LIMITS.spans * 4)) {
+    if (!a || typeof a !== 'object') continue
+    const o = a as Record<string, unknown>
+    if (o.kind !== 'typing' && o.kind !== 'idle') continue
+    const s = Number(o.start_ms)
+    const e = Number(o.end_ms)
+    if (!Number.isFinite(s) || !Number.isFinite(e)) continue
+    const start = Math.round(Math.min(Math.max(0, s), CLICK_LIMITS.maxMs))
+    const end = Math.round(Math.min(Math.max(0, e), CLICK_LIMITS.maxMs))
+    if (end - start < ACTIVITY_LIMITS.minMs) continue
+    spans.push({ kind: o.kind, start_ms: start, end_ms: end })
+  }
+  spans.sort((a, b) => a.start_ms - b.start_ms || a.end_ms - b.end_ms)
+  const out: ActivitySpan[] = []
+  const last: Record<ActivitySpan['kind'], ActivitySpan | null> = { typing: null, idle: null }
+  for (const sp of spans) {
+    const prev = last[sp.kind]
+    if (prev && sp.start_ms <= prev.end_ms) {
+      prev.end_ms = Math.max(prev.end_ms, sp.end_ms)
+      continue
+    }
+    if (out.length >= ACTIVITY_LIMITS.spans) break
+    const copy = { ...sp }
+    out.push(copy)
+    last[sp.kind] = copy
+  }
+  return out
+}
+
 export interface WalkStep {
   label: string
   role: string | null

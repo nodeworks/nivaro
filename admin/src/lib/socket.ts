@@ -130,6 +130,8 @@ const RELAYED_EVENTS = new Set([
   'traffic-map:viewer',
   'lock:requested',
   'lock:response',
+  'lock:available',
+  'lock:queued',
   'record:uploading'
 ])
 

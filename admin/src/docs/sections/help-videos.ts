@@ -32,7 +32,9 @@ export const helpVideosGuide: DocSection = {
     {
       type: 'ul',
       items: [
-        'Cut: split at the playhead (S) and delete the piece; trim the ends by dragging. Silent stretches are suggested as cuts. You cannot cut everything — at least one second stays.',
+        'Cut: split at the playhead (S) and delete the piece; trim the ends by dragging. You cannot cut everything — at least one second stays.',
+        'Suggested edits (the toolbar button beside the drawing tools): long pauses in the narration (3 seconds or more of quiet microphone), and on a recording of your own tab also stretches where nothing happens (no mouse, scroll or key for 3 seconds or more) and typing in a text field. Pauses and still stretches are suggested as cuts, typing as 4× so viewers still see what was entered; each row offers both, or dismiss it for this session. The recorder notes only that you typed, never what or which keys, and nothing inside an area marked .nvr-no-record. Stretches where you speak are never suggested, a cut wins where a cut and a speed-up overlap, and a stretch you have already cut or sped up leaves the list. An uploaded file, and a recording of another window or the screen, has no typing or stillness to suggest.',
+        'One author at a time: opening a video in the editor takes its edit lock (the lock icon in the header — add a note for others, or release it). Anyone else who opens it sees who is editing and a read-only editor, and can ask them to wrap up, ask to be next (the lock comes to them when it frees) or, as an administrator or a role allowed to take over locks, take over. Closing the editor releases the lock, and an editor left idle past the lock idle limit lets it go. When the lock comes back to you the editor loads the latest draft; if two people still save the same draft, the save that arrives second is told and offered a reload.',
         'Speed: play a piece at 0.5× (slow motion, for a fast menu or drag), 1×, 1.5×, 2× or 4×. Narration under a slowed or sped-up piece keeps its pitch.',
         'Chapters and poster: add a chapter at the playhead; choose the frame the library shows. Use this frame while the preview shows the title card or end card makes that card the poster. The library shows a new poster once the video is published and rendered.',
         'Callouts, arrows, boxes and click ripples: draw on the preview, then set the text and how long it shows. Callouts, boxes and arrows fade in and out over a fifth of a second (half their length when shorter), in the published video and in the preview while it plays; paused, they show solid so what you just drew is easy to see. "Add click ripples" places one at every click the recorder saw; a ripple from a recorded click says what was clicked (hover its bar, or select it). Each ripple makes a soft tick as it plays (one tick for ripples less than 0.08 s apart): the render mixes it into the finished sound, and the live preview plays it at the video’s volume.',
@@ -160,7 +162,12 @@ export const helpVideosApi: DocSection = {
         [
           'POST /help-videos/uploads, PUT …/parts/:n, POST …/finalize',
           'authors',
-          'Chunked upload (parts ≤ 8 MB, total ≤ 1.2 GB). A recording sends mime webm/mp4; a picked file sends source "upload" with its name and size, the first part decides its container, and finalize answers 202 while the file is checked or converted'
+          'Chunked upload (parts ≤ 8 MB, total ≤ 1.2 GB). A recording sends mime webm/mp4; a picked file sends source "upload" with its name and size, the first part decides its container, and finalize answers 202 while the file is checked or converted. A recording’s finalize may carry `activity`: `[{ kind: "typing" | "idle", start_ms, end_ms }]` (only that it happened, never what was typed; checked, merged and capped at 1,000 spans); GET …/draft/edits returns it as `activity`'
+        ],
+        [
+          'GET · POST · DELETE /item-locks/nivaro_help_videos/:id/lock (+ /heartbeat, /lock/request, /lock/queue, /lock/force)',
+          'authors',
+          'The editor’s lock: the record lock routes under the name nivaro_help_videos, gated by the help-video author check (404 for an id that is not a uuid). No other nivaro_ or directus_ table can be locked (403)'
         ],
         [
           'GET /help-videos/uploads/:id',

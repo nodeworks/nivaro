@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { RecordedClick } from '../api'
 import { currentHelpVideoPage } from '../walk/store'
 import { describeClickTarget } from '../walk/target'
+import { type ActivitySpan, createActivityTracker, isTypingTarget } from './activity'
 
 export const WARN_MS = 25 * 60_000
 /** From here the bar counts down the time that is left. */
@@ -23,6 +24,8 @@ export type CaptureMeta = {
   duration_ms: number
   clicks: RecordedClick[] | null
   levels: number[] | null
+  /** Typing / idle spans on this tab (#1518); null when click capture was off. */
+  activity?: ActivitySpan[] | null
 }
 
 type Refs = {
@@ -42,10 +45,13 @@ type Refs = {
   pausedTotal: number
   clicks: RecordedClick[]
   levels: number[]
+  /** Typing and idle stretches (#1518), on this tab only, like clicks. */
+  activity: ReturnType<typeof createActivityTracker>
   timers: number[]
 }
 
 const fresh = (): Refs => ({
+  activity: createActivityTracker(),
   live: false,
   clickCapture: false,
   cancelled: false,
@@ -111,6 +117,17 @@ export function useScreenCapture(events: {
     })
   }).current
 
+  // Typing and idle stretches (#1518): any pointer, wheel or key input marks
+  // the moment; a key into a text field is typing. Never the key itself.
+  const onActivity = useRef((e: Event) => {
+    const s = r.current
+    if (!s.live || s.pausedAt || !s.startedAt) return
+    const at = Math.round(Math.max(0, performance.now() - s.startedAt - s.pausedTotal))
+    if (e.type === 'keydown') s.activity.key(at, isTypingTarget(e.target))
+    else s.activity.input(at)
+  }).current
+  const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'wheel', 'keydown'] as const
+
   /** Stops every track, timer and listener. */
   const release = useRef(() => {
     const s = r.current
@@ -121,6 +138,7 @@ export function useScreenCapture(events: {
     s.ctx = undefined
     s.analyser = undefined
     window.removeEventListener('pointerdown', onPointer, true)
+    for (const ev of ACTIVITY_EVENTS) window.removeEventListener(ev, onActivity, true)
   }).current
 
   useEffect(() => () => release(), [release])
@@ -225,6 +243,8 @@ export function useScreenCapture(events: {
     if (captureClicks && surface === 'browser') {
       s.clickCapture = true
       window.addEventListener('pointerdown', onPointer, true)
+      for (const ev of ACTIVITY_EVENTS)
+        window.addEventListener(ev, onActivity, { capture: true, passive: true })
     }
     s.timers.push(
       window.setInterval(() => {
@@ -259,7 +279,8 @@ export function useScreenCapture(events: {
     return {
       duration_ms: Math.min(MAX_MS, Math.round(elapsedMs())),
       clicks: s.clickCapture ? s.clicks : null,
-      levels: s.levels.length ? s.levels : null
+      levels: s.levels.length ? s.levels : null,
+      activity: s.clickCapture ? s.activity.spans(Math.round(elapsedMs())) : null
     }
   }
 
