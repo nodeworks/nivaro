@@ -380,4 +380,22 @@ describe('poster on a card', () => {
     expect(posterEditedMs(outro)).toBe(2000 + SRC + 100)
     expect(posterEditedMs(normalizeEdits({ ...on, poster_ms: 0 }, SRC))).toBe(2000)
   })
+  it('takes an animated card poster once the card has settled', () => {
+    const animated = normalizeEdits(
+      {
+        intro: { enabled: true, duration_ms: 3000, animation: 'subtle', transition: 'fade' },
+        poster_card: 'intro'
+      },
+      SRC
+    )
+    expect(posterEditedMs(animated)).toBe(900)
+    const end = normalizeEdits(
+      {
+        outro: { enabled: true, duration_ms: 3000, animation: 'subtle', transition: 'fade' },
+        poster_card: 'outro'
+      },
+      SRC
+    )
+    expect(posterEditedMs(end)).toBe(SRC + 1200)
+  })
 })

@@ -97,7 +97,9 @@ describe('switching cards on and off', () => {
       duration_ms: 3000,
       show_chapters: false,
       title: '',
-      subtitle: ''
+      subtitle: '',
+      animation: 'subtle',
+      transition: 'fade'
     })
     const off = setIntro(on, null)
     expect('intro' in off).toBe(false)

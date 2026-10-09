@@ -6,6 +6,10 @@ import {
   removeItem,
   removeSegment,
   segmentIndexAt,
+  setBannerAnimation,
+  setChapterBanners,
+  setIntro,
+  setOutro,
   setSpeed,
   sourceToEdited,
   splitAt,
@@ -277,5 +281,39 @@ describe('upsertItem follows normalizeEdits', () => {
       title: 'T'
     })
     expect(r.refused).toBe('There can be at most 100 of these')
+  })
+})
+
+describe('card motion setters', () => {
+  it('starts a new card subtle with a fade', () => {
+    const e = setIntro(base, {})
+    expect(e.intro).toMatchObject({ animation: 'subtle', transition: 'fade' })
+  })
+  it('keeps an old card without motion when another field changes', () => {
+    const old = {
+      ...base,
+      intro: {
+        enabled: true as const,
+        duration_ms: 3000,
+        show_chapters: false,
+        title: '',
+        subtitle: ''
+      }
+    }
+    const e = setIntro(old, { title: 'x' })
+    expect('animation' in (e.intro ?? {})).toBe(false)
+    expect('transition' in (e.intro ?? {})).toBe(false)
+  })
+  it('stores none / cut as absent', () => {
+    const e = setOutro(setOutro(base, {}), { animation: 'none', transition: 'cut' })
+    expect('animation' in (e.outro ?? {})).toBe(false)
+    expect('transition' in (e.outro ?? {})).toBe(false)
+  })
+  it('turns banner animation on with banners and drops it with them', () => {
+    const on = setChapterBanners(base, true)
+    expect(on.banner_animation).toBe('subtle')
+    expect(setBannerAnimation(on, 'lively').banner_animation).toBe('lively')
+    expect('banner_animation' in setBannerAnimation(on, 'none')).toBe(false)
+    expect('banner_animation' in setChapterBanners(on, false)).toBe(false)
   })
 })

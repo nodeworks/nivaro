@@ -60,6 +60,10 @@ export interface IntroCard {
   show_chapters: boolean
   title: string
   subtitle: string
+  /** How the card's elements arrive (absent = none, a still card). */
+  animation?: 'subtle' | 'lively'
+  /** How the card hands over to the recording (absent = a cut). */
+  transition?: 'fade' | 'fade_black' | 'slide' | 'zoom' | 'wipe'
 }
 /** A music bed under the whole video, looped and lowered under narration.
  *  `track` is a library key or an uploaded music file's id. */
@@ -125,6 +129,10 @@ export interface OutroCard {
   enabled: true
   duration_ms: number
   text: string
+  /** How the card's elements arrive (absent = none, a still card). */
+  animation?: 'subtle' | 'lively'
+  /** How the card takes over from the recording (absent = a cut). */
+  transition?: 'fade' | 'fade_black' | 'slide' | 'zoom' | 'wipe'
 }
 export interface VideoEdits {
   v: 1
@@ -139,6 +147,9 @@ export interface VideoEdits {
   intro?: IntroCard
   outro?: OutroCard
   chapter_banners?: true
+  /** How chapter banners arrive and leave (stored only while banners are on;
+   *  absent = they pop on and off). */
+  banner_animation?: 'subtle' | 'lively'
   /** The name drawn on the cards instead of the instance name (stored only
    *  when filled in). */
   card_brand?: string

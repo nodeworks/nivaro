@@ -205,3 +205,40 @@ describe('captionsToVtt', () => {
     )
   })
 })
+
+describe('card motion settings', () => {
+  const SRC = 10_000
+  it('keeps chosen motion and drops none / cut / junk', () => {
+    const e = normalizeEdits(
+      {
+        intro: { enabled: true, duration_ms: 3000, animation: 'lively', transition: 'wipe' },
+        outro: { enabled: true, duration_ms: 3000, animation: 'none', transition: 'cut' },
+        chapter_banners: true,
+        banner_animation: 'subtle'
+      },
+      SRC
+    )
+    expect(e.intro).toMatchObject({ animation: 'lively', transition: 'wipe' })
+    expect('animation' in (e.outro ?? {})).toBe(false)
+    expect('transition' in (e.outro ?? {})).toBe(false)
+    expect(e.banner_animation).toBe('subtle')
+    const junk = normalizeEdits(
+      { intro: { enabled: true, animation: 'spin', transition: 'iris' } },
+      SRC
+    )
+    expect('animation' in (junk.intro ?? {})).toBe(false)
+    expect('transition' in (junk.intro ?? {})).toBe(false)
+  })
+  it('drops banner_animation while banners are off', () => {
+    expect('banner_animation' in normalizeEdits({ banner_animation: 'lively' }, SRC)).toBe(false)
+  })
+  it('hashes old edits exactly as before', () => {
+    const old = normalizeEdits(
+      { intro: { enabled: true, duration_ms: 3000 }, chapter_banners: true },
+      SRC
+    )
+    expect(JSON.stringify(old)).not.toMatch(/animation|transition/)
+    // The literal hash pins the stored shape: record it from main before this change.
+    expect(hashEdits(old)).toBe('8ffba52fe95cab2f2f6ce11e2c970342fa48375b')
+  })
+})

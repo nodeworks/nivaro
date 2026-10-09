@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { type CardMotion, settledMs } from './help-video-card-design.js'
 
 // The stored form of everything an author does in the help-video editor.
 // All times are SOURCE time (the original recording's clock): `segments` are
@@ -64,7 +65,21 @@ export interface IntroCard {
   show_chapters: boolean
   title: string
   subtitle: string
+  /** How the card's elements arrive. Absent = none (a still card). */
+  animation?: StoredAnimation
+  /** How the card hands over to the recording. Absent = a cut. */
+  transition?: StoredTransition
 }
+// Card motion values as stored: 'none' and 'cut' are never stored, so a card
+// that chose nothing keeps the exact edits (and edits_hash) it always had.
+export const CARD_ANIMATIONS = ['subtle', 'lively'] as const
+export const CARD_TRANSITIONS = ['fade', 'fade_black', 'slide', 'zoom', 'wipe'] as const
+export type StoredAnimation = (typeof CARD_ANIMATIONS)[number]
+export type StoredTransition = (typeof CARD_TRANSITIONS)[number]
+const cardAnimation = (v: unknown): StoredAnimation | null =>
+  (CARD_ANIMATIONS as readonly unknown[]).includes(v) ? (v as StoredAnimation) : null
+const cardTransition = (v: unknown): StoredTransition | null =>
+  (CARD_TRANSITIONS as readonly unknown[]).includes(v) ? (v as StoredTransition) : null
 /** A music bed under the whole video (cards included), looped to length and
  *  lowered while someone speaks. `track` is a library key (MUSIC_TRACK_RE)
  *  or, for an uploaded file, the music row's id. */
@@ -85,6 +100,10 @@ export interface OutroCard {
   enabled: true
   duration_ms: number
   text: string
+  /** How the card's elements arrive. Absent = none (a still card). */
+  animation?: StoredAnimation
+  /** How the card takes over from the recording. Absent = a cut. */
+  transition?: StoredTransition
 }
 export interface VideoEdits {
   v: 1
@@ -100,6 +119,9 @@ export interface VideoEdits {
   intro?: IntroCard
   outro?: OutroCard
   chapter_banners?: true
+  /** How chapter banners arrive and leave. Stored only while chapter_banners
+   *  is on; absent = they pop on and off. */
+  banner_animation?: StoredAnimation
   /** The name drawn on the cards instead of the instance name. Stored only
    *  when filled in. */
   card_brand?: string
@@ -327,6 +349,8 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   const outro = normalizeOutro(o.outro)
   if (outro) out.outro = outro
   if (o.chapter_banners === true) out.chapter_banners = true
+  const bannerAnimation = out.chapter_banners ? cardAnimation(o.banner_animation) : null
+  if (bannerAnimation) out.banner_animation = bannerAnimation
   const cardBrand = oneLine(o.card_brand, EDIT_LIMITS.cardBrand)
   if (cardBrand) out.card_brand = cardBrand
   if (o.poster_card === 'intro' && out.intro) out.poster_card = 'intro'
@@ -385,24 +409,35 @@ export function normalizeIntro(v: unknown): IntroCard | null {
   if (!v || typeof v !== 'object') return null
   const r = v as Record<string, unknown>
   if (r.enabled !== true) return null
-  return {
+  const out: IntroCard = {
     enabled: true,
     duration_ms: cardMs(r.duration_ms),
     show_chapters: r.show_chapters === true,
     title: oneLine(r.title, EDIT_LIMITS.introTitle),
     subtitle: oneLine(r.subtitle, EDIT_LIMITS.introSubtitle)
   }
+  return withCardMotion(out, r)
+}
+
+/** Adds the card's animation and transition when they are real choices. */
+function withCardMotion<T extends IntroCard | OutroCard>(out: T, r: Record<string, unknown>): T {
+  const a = cardAnimation(r.animation)
+  if (a) out.animation = a
+  const t = cardTransition(r.transition)
+  if (t) out.transition = t
+  return out
 }
 
 export function normalizeOutro(v: unknown): OutroCard | null {
   if (!v || typeof v !== 'object') return null
   const r = v as Record<string, unknown>
   if (r.enabled !== true) return null
-  return {
+  const out: OutroCard = {
     enabled: true,
     duration_ms: cardMs(r.duration_ms),
     text: oneLine(r.text, EDIT_LIMITS.outroText)
   }
+  return withCardMotion(out, r)
 }
 
 /** How visible a callout, box or arrow is at a SOURCE moment: it fades in
@@ -459,12 +494,28 @@ export function sourceToEdited(e: VideoEdits, ms: number): number | null {
   return null
 }
 
-/** The EDITED moment the poster is taken from: a card the author chose
- *  (just inside it — a card is one still), else the frame at poster_ms, else
+/** How long a card takes to finish arriving (0 for a still card). */
+function cardSettledMs(e: VideoEdits, side: 'intro' | 'outro'): number {
+  const c = e[side]
+  if (!c) return 0
+  const m: CardMotion = {
+    t_ms: 0,
+    duration_ms: c.duration_ms,
+    animation: c.animation ?? 'none',
+    transition: c.transition ?? 'cut',
+    side
+  }
+  return settledMs(m)
+}
+
+/** The EDITED moment the poster is taken from: a card the author chose, once
+ *  it has finished arriving (a still card: just inside it), else the frame at poster_ms, else
  *  (a frame inside a cut) the first recorded frame after any intro. */
 export function posterEditedMs(e: VideoEdits): number {
-  if (e.poster_card === 'intro' && e.intro) return 100
-  if (e.poster_card === 'outro' && e.outro) return introMs(e) + bodyDuration(e) + 100
+  if (e.poster_card === 'intro' && e.intro)
+    return Math.max(100, Math.round(cardSettledMs(e, 'intro')))
+  if (e.poster_card === 'outro' && e.outro)
+    return introMs(e) + bodyDuration(e) + Math.max(100, Math.round(cardSettledMs(e, 'outro')))
   return sourceToEdited(e, e.poster_ms) ?? introMs(e)
 }
 

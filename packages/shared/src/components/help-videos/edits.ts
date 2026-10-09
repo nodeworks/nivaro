@@ -1,3 +1,4 @@
+import type { CardAnimation, CardTransition } from './cardDesign'
 import type {
   Annotation,
   Blur,
@@ -140,9 +141,30 @@ export function chapterBannerWindows(
   })
   return out
 }
+/** A card change from the editor: any field, plus motion choices where
+ *  'none' / 'cut' mean "nothing stored". */
+export type CardPatch<T> = Partial<Omit<T, 'animation' | 'transition'>> & {
+  animation?: CardAnimation
+  transition?: CardTransition
+}
+/** A new card starts subtle with a fade; an existing card keeps what it has
+ *  (absent = none / cut). 'none' and 'cut' are never stored, the server's
+ *  rule, so a card that chose nothing keeps its exact edits. */
+function withMotion<T extends IntroCard | OutroCard>(
+  next: T,
+  patch: CardPatch<T>,
+  cur: T | undefined
+): T {
+  const a = patch.animation ?? (cur ? (cur.animation ?? 'none') : 'subtle')
+  const t = patch.transition ?? (cur ? (cur.transition ?? 'cut') : 'fade')
+  const out: T = { ...next }
+  if (a !== 'none') out.animation = a
+  if (t !== 'cut') out.transition = t
+  return out
+}
 /** The intro / outro the server would store for an editor change: the
  *  server's normalizeIntro / normalizeOutro rules (off = absent). */
-export function setIntro(e: VideoEdits, intro: Partial<IntroCard> | null): VideoEdits {
+export function setIntro(e: VideoEdits, intro: CardPatch<IntroCard> | null): VideoEdits {
   const { intro: _drop, ...rest } = e
   if (!intro) return dropPosterCard(rest as VideoEdits, 'intro')
   const cur = e.intro
@@ -153,9 +175,9 @@ export function setIntro(e: VideoEdits, intro: Partial<IntroCard> | null): Video
     title: (intro.title ?? cur?.title ?? '').slice(0, EDIT_LIMITS.introTitle),
     subtitle: (intro.subtitle ?? cur?.subtitle ?? '').slice(0, EDIT_LIMITS.introSubtitle)
   }
-  return { ...rest, intro: next } as VideoEdits
+  return { ...rest, intro: withMotion(next, intro, cur) } as VideoEdits
 }
-export function setOutro(e: VideoEdits, outro: Partial<OutroCard> | null): VideoEdits {
+export function setOutro(e: VideoEdits, outro: CardPatch<OutroCard> | null): VideoEdits {
   const { outro: _drop, ...rest } = e
   if (!outro) return dropPosterCard(rest as VideoEdits, 'outro')
   const cur = e.outro
@@ -164,7 +186,7 @@ export function setOutro(e: VideoEdits, outro: Partial<OutroCard> | null): Video
     duration_ms: clampCardMs(outro.duration_ms ?? cur?.duration_ms),
     text: (outro.text ?? cur?.text ?? '').slice(0, EDIT_LIMITS.outroText)
   }
-  return { ...rest, outro: next } as VideoEdits
+  return { ...rest, outro: withMotion(next, outro, cur) } as VideoEdits
 }
 function dropPosterCard(e: VideoEdits, card: 'intro' | 'outro'): VideoEdits {
   if (e.poster_card !== card) return e
@@ -187,9 +209,17 @@ export function setCardBrand(e: VideoEdits, name: string): VideoEdits {
   const v = name.slice(0, EDIT_LIMITS.cardBrand)
   return (v.trim() ? { ...rest, card_brand: v } : rest) as VideoEdits
 }
+/** Banners switched on start with the subtle animation; off drops it too. */
 export function setChapterBanners(e: VideoEdits, on: boolean): VideoEdits {
-  const { chapter_banners: _drop, ...rest } = e
-  return (on ? { ...rest, chapter_banners: true } : rest) as VideoEdits
+  const { chapter_banners: _drop, banner_animation: _anim, ...rest } = e
+  return (
+    on ? { ...rest, chapter_banners: true, banner_animation: e.banner_animation ?? 'subtle' } : rest
+  ) as VideoEdits
+}
+/** How banners arrive and leave; 'none' stores nothing. Ignored while off. */
+export function setBannerAnimation(e: VideoEdits, a: CardAnimation): VideoEdits {
+  const { banner_animation: _drop, ...rest } = e
+  return (e.chapter_banners && a !== 'none' ? { ...rest, banner_animation: a } : rest) as VideoEdits
 }
 function clampCardMs(v: number | undefined): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? v : EDIT_LIMITS.cardDefaultMs
