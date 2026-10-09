@@ -9,8 +9,9 @@ import { StatsTab } from './StatsTab'
 import { VersionsTab } from './VersionsTab'
 
 /**
- * The editor's Details, Versions and Stats tabs, and the re-record recorder
- * the Versions tab opens (mounted only while it is open). Rendered inside the editor's Tabs.
+ * The editor's Details, Versions and Stats tabs. The Versions tab's Re-record
+ * starts the app's one recorder (useHelpVideoRecording); the editor reloads its
+ * draft when that recording is saved. Rendered inside the editor's Tabs.
  */
 export function ManagePanels({
   video,
@@ -57,7 +58,7 @@ export function ManagePanels({
       <TabsContent value='stats' className={scroll}>
         <StatsTab video={video} />
       </TabsContent>
-      {busy && (
+      {busy && recorder.active && (
         <p role='status' className='px-4 py-2 text-[12px] text-rose-700 dark:text-rose-300'>
           {RECORDING_BUSY}
         </p>

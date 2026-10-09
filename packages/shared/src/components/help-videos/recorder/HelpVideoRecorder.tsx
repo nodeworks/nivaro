@@ -11,6 +11,7 @@ import { RecorderBar } from './RecorderBar'
 import { DEFAULT_SETUP, RecorderSetup, type SetupOptions } from './RecorderSetup'
 import { DoneView, ErrorView, LimitView, SavingView, UnsupportedView } from './RecorderStatus'
 import { partSender } from './sendPart'
+import { useConnectedHost } from './useConnectedHost'
 import { leaveWarningActive, useLeaveWarning } from './useLeaveWarning'
 import { type CaptureMeta, useScreenCapture } from './useScreenCapture'
 
@@ -49,7 +50,8 @@ export function HelpVideoRecorder({
   onDone,
   videoId,
   contexts,
-  defaultTitle
+  defaultTitle,
+  barHost: hostOverride
 }: {
   open: boolean
   onClose: () => void
@@ -57,6 +59,10 @@ export function HelpVideoRecorder({
   videoId?: string
   contexts?: HelpVideoContext[]
   defaultTitle?: string
+  /** Mount the setup dialog and the recording bar inside this element (the
+   *  modal the recording was started from) while it is connected; document.body
+   *  after it goes. Without it the recorder follows its own place in the tree. */
+  barHost?: HTMLElement | null
 }) {
   const client = useNivaroClient()
   const api = helpVideoApi(client)
@@ -82,7 +88,9 @@ export function HelpVideoRecorder({
   // recorder was opened inside one (a drill sheet's modal lock makes anything
   // under document.body unclickable), else document.body. Same rule as popovers.
   const [marker, setMarker] = useState<HTMLSpanElement | null>(null)
+  const override = useConnectedHost(hostOverride, open)
   const barHost =
+    override ??
     (marker ? modalHostOf(marker) : undefined) ??
     (typeof document !== 'undefined' ? document.body : null)
 
@@ -366,6 +374,7 @@ export function HelpVideoRecorder({
         <DialogContent
           className='w-[calc(100vw-2rem)] max-w-[520px] font-sans dark:bg-card'
           hideClose={saving}
+          container={override}
           data-hv-recorder
           data-hv-stage={supported ? stage : 'unsupported'}
         >

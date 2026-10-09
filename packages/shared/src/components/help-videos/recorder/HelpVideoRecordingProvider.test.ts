@@ -11,6 +11,7 @@ import type { HelpVideoDto } from '../types'
 type RecProps = {
   open: boolean
   videoId?: string
+  barHost?: HTMLElement | null
   onClose: () => void
   onDone: (v: HelpVideoDto) => void
 }
@@ -166,5 +167,56 @@ describe('without a provider', () => {
     act(() => recorder?.onClose())
     expect(mounts).toBe(0)
     h.unmount()
+  })
+})
+
+describe("the recorder's host", () => {
+  it('is the modal the caller sits in', () => {
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    const button = document.createElement('button')
+    dialog.appendChild(button)
+    document.body.appendChild(dialog)
+    function Starter() {
+      api = useHelpVideoRecording()
+      return null
+    }
+    const h = mount(() => createElement(HelpVideoRecordingProvider, null, createElement(Starter)))
+    act(() => {
+      api?.start({ from: button })
+    })
+    expect(recorder?.barHost).toBe(dialog)
+    act(() => recorder?.onClose())
+    // no modal around the caller: the recorder follows the tree (body)
+    act(() => {
+      api?.start({ from: document.body })
+    })
+    expect(recorder?.barHost).toBeNull()
+    h.unmount()
+    dialog.remove()
+  })
+
+  it('ends the session when a recording is saved, in both modes', () => {
+    function Starter() {
+      api = useHelpVideoRecording()
+      return api.fallback
+    }
+    const hp = mount(() => createElement(HelpVideoRecordingProvider, null, createElement(Starter)))
+    act(() => {
+      api?.start({})
+    })
+    act(() => recorder?.onDone(video))
+    expect(api?.active).toBe(false)
+    expect(recorder?.open).toBe(false)
+    hp.unmount()
+    const hl = mount(() => createElement(Starter))
+    act(() => {
+      api?.start({})
+    })
+    expect(api?.start({})).toBe(false)
+    act(() => recorder?.onDone(video))
+    expect(api?.active).toBe(false)
+    expect(mounts).toBe(0)
+    hl.unmount()
   })
 })

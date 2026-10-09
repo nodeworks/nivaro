@@ -190,6 +190,10 @@ describe('listVideos', () => {
       if (t !== 'nivaro_help_videos') return chain([])
       n += 1
       const q = chain(n === 1 ? videos : cats)
+      q.orderBy = vi.fn((...a: unknown[]) => {
+        calls.push({ method: 'orderBy', args: a })
+        return q
+      })
       const orig = q.where as (...a: unknown[]) => unknown
       q.where = vi.fn((...a: unknown[]) => {
         calls.push({ method: 'where', args: a })
@@ -234,6 +238,16 @@ describe('listVideos', () => {
     )
     const out = await listVideos(nonAuthor, {})
     expect(out.categories).toEqual(['Basics'])
+  })
+
+  it('orders by title then id, so equal titles page stably', async () => {
+    setup([pub('A')])
+    await listVideos(nonAuthor, { page: 2, limit: 1 })
+    const order = calls.find((c) => c.method === 'orderBy')
+    expect(order?.args[0]).toEqual([
+      { column: 'title', order: 'asc' },
+      { column: 'id', order: 'asc' }
+    ])
   })
 
   it('escapes %, _ and [ in the search term', async () => {

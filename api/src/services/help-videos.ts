@@ -1020,7 +1020,11 @@ export async function listVideos(
     const s = `%${String(q.search).replace(/[%_[]/g, (c) => `[${c}]`)}%`
     base.where((w) => w.where('title', 'like', s).orWhere('description', 'like', s))
   }
-  const rows = (await base.clone().orderBy('title', 'asc')) as VideoRow[]
+  // `id` breaks title ties, so "Show more" pages never repeat or skip a row.
+  const rows = (await base.clone().orderBy([
+    { column: 'title', order: 'asc' },
+    { column: 'id', order: 'asc' }
+  ])) as VideoRow[]
   const visible = rows.filter((v) => viewerMaySee(v, req.user!.role, author))
   const pageRows = visible.slice((page - 1) * limit, page * limit)
   const data = await Promise.all(

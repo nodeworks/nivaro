@@ -336,6 +336,7 @@ export {
   PlanGridHostContext,
   type PlanGridRowHistoryArgs,
   type PlayerHandle,
+  type StartRecordingOptions,
   ProfileFieldsCard,
   ProfileSectionCard,
   ProfileView,

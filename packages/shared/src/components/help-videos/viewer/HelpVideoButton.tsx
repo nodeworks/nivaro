@@ -168,7 +168,7 @@ export function HelpVideoButton({
                     aria-describedby={recordable ? undefined : reasonId}
                     className={`rounded text-[12px] font-medium text-[#2563eb] hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:no-underline dark:text-sky-300 ${focusRing}`}
                     onClick={() => {
-                      if (recorder.start({ contexts })) {
+                      if (recorder.start({ contexts, from: trigger.current })) {
                         setBusyNote(false)
                         setOpen(false)
                       } else {
@@ -187,7 +187,7 @@ export function HelpVideoButton({
                       {RECORD_UNSUPPORTED}
                     </p>
                   )}
-                  {busyNote && (
+                  {busyNote && recorder.active && (
                     <p
                       role='status'
                       className='mt-0.5 max-w-[220px] text-right text-[12px] text-rose-700 dark:text-rose-300'

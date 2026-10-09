@@ -55,6 +55,7 @@ export function HelpVideoLibrary({
   const [archiveError, setArchiveError] = useState<string | null>(null)
   const [archiving, setArchiving] = useState<Set<string>>(() => new Set())
   const opener = useRef<HTMLElement | null>(null)
+  const root = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(search.trim()), 300)
     return () => window.clearTimeout(t)
@@ -98,7 +99,7 @@ export function HelpVideoLibrary({
   }
 
   return (
-    <div className='flex min-h-0 flex-1 flex-col' data-hv-library>
+    <div ref={root} className='flex min-h-0 flex-1 flex-col' data-hv-library>
       <header className='flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-5 py-3'>
         <h1 className='text-[16px] font-semibold'>Videos</h1>
         <div className='relative min-w-[180px] flex-1 basis-full sm:basis-auto sm:max-w-[320px]'>
@@ -126,7 +127,7 @@ export function HelpVideoLibrary({
                 aria-pressed={status === s}
                 onClick={() => setStatus(s)}
                 className={`rounded-md px-2.5 py-1 text-[12.5px] transition-colors ${focusRing} ${status === s ? 'bg-nvr-cyan/10 font-medium' : 'hover:bg-muted'}`}
-                data-hv-status={s}
+                data-hv-status-tab={s}
               >
                 {s === 'published' ? 'Published' : s === 'draft' ? 'Drafts' : 'Archived'}
               </button>
@@ -145,7 +146,9 @@ export function HelpVideoLibrary({
               <Button
                 size='sm'
                 onClick={() =>
-                  setBusyNote(!recorder.start({ onDone: (video) => onEdit(video.id) }))
+                  setBusyNote(
+                    !recorder.start({ onDone: (video) => onEdit(video.id), from: root.current })
+                  )
                 }
                 disabled={!recordable}
                 aria-describedby={recordable ? undefined : reasonId}
@@ -172,7 +175,7 @@ export function HelpVideoLibrary({
           ))}
         </div>
       )}
-      {busyNote && (
+      {busyNote && recorder.active && (
         <p role='status' className='mx-5 mt-3 text-[13px] text-rose-700 dark:text-rose-300'>
           {RECORDING_BUSY}
         </p>
@@ -204,7 +207,9 @@ export function HelpVideoLibrary({
                   size='sm'
                   variant='outline'
                   onClick={() =>
-                    setBusyNote(!recorder.start({ onDone: (video) => onEdit(video.id) }))
+                    setBusyNote(
+                      !recorder.start({ onDone: (video) => onEdit(video.id), from: root.current })
+                    )
                   }
                 >
                   <Plus className='h-4 w-4' /> Record one
