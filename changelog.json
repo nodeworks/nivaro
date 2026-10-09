@@ -1,10 +1,83 @@
 {
-  "generated_at": "2026-10-09T21:12:03.604Z",
+  "generated_at": "2026-10-09T21:56:55.097Z",
   "releases": [
+    {
+      "version": "0.2.33",
+      "tag": "v0.2.33",
+      "date": "2026-10-09T17:56:43-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release chain: build the extension kit before typechecking api",
+              "hash": "26a77c4b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: what changed knows text size and caption look",
+              "hash": "cda92b11"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: house style (#1551)",
+              "hash": "366bba48"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: what changed knows crop, cleaned narration and step style",
+              "hash": "fb29f858"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: Improve audio, encoder settings, render queue with cancel",
+              "hash": "5ca49473"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: typing/idle suggestions and an editor lock (#1518, #1523)",
+              "hash": "6ecb5bdc"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: slow motion, crop, numbered steps, spotlight, length from text",
+              "hash": "674b4edc"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: what changed, links to a moment, caption settings",
+              "hash": "64a51dbb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI links: refuse paths that leave the origin",
+              "hash": "e6a511e7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: Ask AI cites videos; extensions ship starter videos",
+              "hash": "71a0d9cb"
+            }
+          ]
+        }
+      ],
+      "count": 10
+    },
     {
       "version": "0.2.32",
       "tag": "v0.2.32",
-      "date": "2026-10-09T17:11:49-04:00",
+      "date": "2026-10-09T17:12:03-04:00",
       "sections": [
         {
           "label": "Other",
