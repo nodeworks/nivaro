@@ -7,7 +7,9 @@ import type {
   HelpVideoContext,
   HelpVideoDto,
   HelpVideoErrorCode,
+  MusicTrack,
   RecordedClick,
+  UploadedMusic,
   VersionDto,
   VideoEdits,
   Visibility,
@@ -317,6 +319,13 @@ export function helpVideoApi(client: NivaroClient) {
       r(
         get<{ data: { version_id: string | null; steps: WalkStep[] } }>(`/help-videos/${id}/walk`)
       ).then((x) => x.data),
+    /** The music library: generated tracks, then any an administrator added. */
+    musicLibrary: () => r(get<{ data: MusicTrack[] }>('/help-videos/music')).then((x) => x.data),
+    /** Music files uploaded to this video, newest first. */
+    videoMusic: (id: string) =>
+      r(get<{ data: UploadedMusic[] }>(`/help-videos/${id}/music`)).then((x) => x.data),
+    /** 409 MUSIC_IN_USE while any version of the video uses it. */
+    deleteMusic: (id: string, musicId: string) => r(del(`/help-videos/${id}/music/${musicId}`)),
     registerPage: (key: string, label: string, app?: string) =>
       r(post('/help-videos/pages', { key, label, app })),
     authorRoles: () =>
@@ -325,6 +334,42 @@ export function helpVideoApi(client: NivaroClient) {
       ),
     setAuthorRoles: (ids: string[]) => r(patch('/settings', { help_video_author_roles: ids }))
   }
+}
+
+/**
+ * Uploads an audio file as this video's music (multipart: the SDK's request
+ * sends JSON only). The server converts it to AAC; 422 MUSIC_NOT_AUDIO /
+ * MUSIC_TOO_LONG, 413 MUSIC_TOO_LARGE (40 MB), 503 MUSIC_NO_FFMPEG.
+ */
+export async function uploadMusicFile(
+  cfg: { apiBase: string; authHeaders?: Record<string, string>; credentials?: RequestCredentials },
+  videoId: string,
+  file: File
+): Promise<UploadedMusic> {
+  const body = new FormData()
+  body.append('file', file, file.name)
+  const res = await fetch(`${cfg.apiBase}/help-videos/${encodeURIComponent(videoId)}/music`, {
+    method: 'POST',
+    headers: cfg.authHeaders,
+    credentials: cfg.credentials,
+    body
+  })
+  const json = (await res.json().catch(() => ({}))) as {
+    data?: UploadedMusic
+    error?: string
+    message?: string
+    code?: string
+  }
+  if (!res.ok || !json.data) {
+    // Thrown route errors carry the sentence in `message` (`error` is the
+    // status text); our own answers carry it in `error`.
+    const said = json.message || json.error
+    throw Object.assign(new Error(said || 'The music could not be uploaded'), {
+      status: res.status,
+      code: json.code
+    })
+  }
+  return json.data
 }
 
 /** The `{ status, code }` of a failed help-video request (the SDK throws an

@@ -51,7 +51,14 @@ function lastLine(s: string): string {
 // concat script posing as a recording could read local files or fetch URLs.
 const INPUT_FORMATS: Record<string, string> = {
   'video/webm': 'matroska,webm',
-  'video/mp4': 'mov,mp4,m4a,3gp,3g2,mj2'
+  'video/mp4': 'mov,mp4,m4a,3gp,3g2,mj2',
+  // Background music (#1547): library files and authors' uploads.
+  'audio/mp4': 'mov,mp4,m4a,3gp,3g2,mj2',
+  'audio/wav': 'wav',
+  'audio/mpeg': 'mp3',
+  'audio/ogg': 'ogg',
+  'audio/flac': 'flac',
+  'audio/webm': 'matroska,webm'
 }
 export function lockedInputArgs(mime?: string): string[] {
   const fmt = mime ? INPUT_FORMATS[mime.split(';')[0].trim().toLowerCase()] : undefined

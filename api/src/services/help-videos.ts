@@ -7,12 +7,14 @@ import { logActivity } from './activity.js'
 import type { InstanceIdentity } from './branch-instances.js'
 import { downloadsAllowed, hasCaptions, withDownloads } from './help-video-download.js'
 import {
+  EditsError,
   editedDuration,
   emptyEdits,
   hashEdits,
   normalizeEdits,
   type VideoEdits
 } from './help-video-edits.js'
+import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
 import { releaseFinalizedUpload, takeFinalizedUpload } from './help-video-uploads.js'
 import { viewerCanPlay } from './help-video-views.js'
@@ -767,6 +769,13 @@ export async function saveDraftEdits(
     )
   }
   const edits = normalizeEdits(input, Number(draft.source_duration_ms ?? UNKNOWN_DURATION_MS))
+  // Music names a library track or a file uploaded to THIS video, never
+  // another video's file.
+  try {
+    await assertMusicBelongs(String(video.id), edits.music)
+  } catch (err) {
+    throw new EditsError((err as Error).message)
+  }
   const hash = hashEdits(edits)
   // Conditional write: only if nobody saved since we read it (same hash) AND it
   // is still the video's draft — a save that lands after Publish moved this
@@ -1116,6 +1125,8 @@ export async function purgeVideo(video: VideoRow, user: User): Promise<void> {
   await db('nivaro_help_videos')
     .where({ id: video.id })
     .update({ poster_file: null, published_version_id: null, draft_version_id: null })
+  // Music uploaded to this video: its rows go here, its files below.
+  for (const f of await takeVideoMusicFiles(String(video.id))) fileIds.add(f)
   await db('nivaro_help_videos').where({ id: video.id }).delete()
   // The upload rows that produced these recordings still reference the files
   // (nivaro_help_video_uploads.file_id, status 'used'); drop them first or the

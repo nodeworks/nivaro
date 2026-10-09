@@ -23,6 +23,7 @@ import {
   posterEditedMs,
   type VideoEdits
 } from './help-video-edits.js'
+import { musicForRender } from './help-video-music.js'
 import { buildPosterArgs, buildRenderArgs, outputSize } from './help-video-render-plan.js'
 import { discardFile, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
@@ -260,6 +261,8 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
       start_ms: s.start_ms,
       end_ms: s.end_ms
     }))
+    // Background music (#1547): a library track or the video's own file.
+    const music = edits.music ? await musicForRender(String(v.video_id), edits.music, dir) : null
     const total = Math.max(1, editedDuration(edits))
     let lastWrite = 0
     const out = join(dir, 'video.mp4')
@@ -281,6 +284,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
           cardFiles.outro && edits.outro
             ? { path: cardFiles.outro, duration_ms: edits.outro.duration_ms }
             : null,
+        music,
         outputPath: out,
         threads: renderThreads()
       }),

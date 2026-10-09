@@ -13,15 +13,17 @@ export const MAX_PACKAGE_VIDEOS = 50
 export const MANIFEST_ENTRY = 'manifest.json'
 export const MANIFEST_MAX_BYTES = 16 * 1024 * 1024
 
-export type FileRole = 'source' | 'rendered' | 'captions' | 'poster'
-export const FILE_ROLES: readonly FileRole[] = ['source', 'rendered', 'captions', 'poster']
+export type FileRole = 'source' | 'rendered' | 'captions' | 'poster' | 'music'
+export const FILE_ROLES: readonly FileRole[] = ['source', 'rendered', 'captions', 'poster', 'music']
 
 const GB = 1024 * 1024 * 1024
 export const ROLE_RULES: Record<FileRole, { mimes: string[]; max: number }> = {
   source: { mimes: ['video/webm', 'video/mp4'], max: Math.round(1.2 * GB) },
   rendered: { mimes: ['video/mp4'], max: 2 * GB },
   captions: { mimes: ['text/vtt'], max: 5 * 1024 * 1024 },
-  poster: { mimes: ['image/jpeg', 'image/png'], max: 10 * 1024 * 1024 }
+  poster: { mimes: ['image/jpeg', 'image/png'], max: 10 * 1024 * 1024 },
+  /** An author's background music (#1547), already converted to AAC. */
+  music: { mimes: ['audio/mp4'], max: 40 * 1024 * 1024 }
 }
 const MAX_SOURCE_MS = 31 * 60_000
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -276,6 +278,12 @@ export function checkManifest(raw: unknown, entries: Map<string, number>): Check
         if (!(err instanceof EditsError)) throw err
         reasons.push(`Its edits are not usable: ${err.message}`)
       }
+    }
+    // Uploaded music travels as its own file; music from the library does not.
+    if (edits?.music?.source === 'upload') {
+      if (!files.music) reasons.push('Its music file is missing from the package')
+    } else if (files.music) {
+      delete files.music
     }
     const ctx = checkContexts(r.contexts)
     if (reasons.length || !edits) {

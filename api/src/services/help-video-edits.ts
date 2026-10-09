@@ -16,6 +16,9 @@ export interface Segment {
   start_ms: number
   end_ms: number
   speed: Speed
+  /** This piece's music level, a share of the video's music volume: 0 = no
+   *  music under it. Stored only when the music is on and the share is not 1. */
+  music?: number
 }
 export interface Chapter {
   id: string
@@ -62,6 +65,20 @@ export interface IntroCard {
   title: string
   subtitle: string
 }
+/** A music bed under the whole video (cards included), looped to length and
+ *  lowered while someone speaks. `track` is a library key (MUSIC_TRACK_RE)
+ *  or, for an uploaded file, the music row's id. */
+export interface MusicBed {
+  enabled: true
+  source: 'library' | 'upload'
+  track: string
+  /** Shown to authors: the library title or the uploaded file's name. */
+  name: string
+  /** Music level while nobody speaks, 0.05–1. */
+  volume: number
+  /** Lower the music under narration. */
+  duck: boolean
+}
 /** An end card played AFTER the recording. Blank `text` shows OUTRO_DEFAULT_TEXT
  *  (kept blank in storage, so clearing the field to retype it never refills it). */
 export interface OutroCard {
@@ -89,6 +106,8 @@ export interface VideoEdits {
   /** The poster is this card instead of the frame at poster_ms. Stored only
    *  while that card is switched on. */
   poster_card?: 'intro' | 'outro'
+  /** Background music. Stored only when switched on. */
+  music?: MusicBed
 }
 
 export const ALLOWED_SPEEDS: Speed[] = [1, 1.5, 2, 4]
@@ -113,8 +132,17 @@ export const EDIT_LIMITS = {
   outroText: 200,
   cardBrand: 60,
   /** How long a chapter banner stays up, in edited time. */
-  bannerMs: 2500
+  bannerMs: 2500,
+  musicName: 120,
+  musicMinVolume: 0.05,
+  musicDefaultVolume: 0.25,
+  /** Callouts, boxes and arrows fade in and out over this long (source time). */
+  fadeMs: 200
 } as const
+
+/** A library track key, or an uploaded music row's id. */
+export const MUSIC_TRACK_RE =
+  /^(?:[a-z][a-z0-9-]{0,39}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i
 
 export const OUTRO_DEFAULT_TEXT = 'Questions? Ask your administrator.'
 
@@ -194,11 +222,16 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
     segments = emptyEdits(src).segments
   } else {
     const raw = arr(o.segments)
-      .map((s) => ({
-        start_ms: Math.round(clamp(num(s.start_ms), 0, src)),
-        end_ms: Math.round(clamp(num(s.end_ms), 0, src)),
-        speed: speed(s.speed)
-      }))
+      .map((s) => {
+        const seg: Segment = {
+          start_ms: Math.round(clamp(num(s.start_ms), 0, src)),
+          end_ms: Math.round(clamp(num(s.end_ms), 0, src)),
+          speed: speed(s.speed)
+        }
+        const share = musicShare(s.music)
+        if (share !== 1) seg.music = share
+        return seg
+      })
       .sort((a, b) => a.start_ms - b.start_ms)
     segments = []
     for (const s of raw) {
@@ -298,7 +331,42 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   if (cardBrand) out.card_brand = cardBrand
   if (o.poster_card === 'intro' && out.intro) out.poster_card = 'intro'
   else if (o.poster_card === 'outro' && out.outro) out.poster_card = 'outro'
+  const music = normalizeMusic(o.music)
+  if (music) out.music = music
+  // A piece's music share means nothing without music: never stored then.
+  else for (const seg of out.segments) delete seg.music
   return out
+}
+
+/** A piece's music share: 0–1 in steps of 0.05, 1 when missing or unreadable. */
+export function musicShare(v: unknown): number {
+  if (v === undefined || v === null || v === '') return 1
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 1
+  return Math.round(clamp(n, 0, 1) * 20) / 20
+}
+
+export function normalizeMusic(v: unknown): MusicBed | null {
+  if (!v || typeof v !== 'object') return null
+  const r = v as Record<string, unknown>
+  if (r.enabled !== true) return null
+  const source = r.source === 'upload' ? 'upload' : r.source === 'library' ? 'library' : null
+  const track = typeof r.track === 'string' ? r.track.trim() : ''
+  if (!source || !MUSIC_TRACK_RE.test(track)) return null
+  // An upload is named by its row id, a library track by its key: never mixed.
+  const isId = /^[0-9a-f]{8}-/i.test(track) && track.length === 36
+  if ((source === 'upload') !== isId) return null
+  return {
+    enabled: true,
+    source,
+    track: track.toLowerCase(),
+    name: oneLine(r.name, EDIT_LIMITS.musicName),
+    volume:
+      Math.round(
+        clamp(num(r.volume, EDIT_LIMITS.musicDefaultVolume), EDIT_LIMITS.musicMinVolume, 1) * 100
+      ) / 100,
+    duck: r.duck !== false
+  }
 }
 
 function cardMs(v: unknown): number {
@@ -335,6 +403,13 @@ export function normalizeOutro(v: unknown): OutroCard | null {
     duration_ms: cardMs(r.duration_ms),
     text: oneLine(r.text, EDIT_LIMITS.outroText)
   }
+}
+
+/** How visible a callout, box or arrow is at a SOURCE moment: it fades in
+ *  over its first EDIT_LIMITS.fadeMs and out over its last (half its length
+ *  each when shorter). The render's overlay fade and the live player use it. */
+export function annotationFade(start: number, end: number): number {
+  return Math.min(EDIT_LIMITS.fadeMs, Math.max(0, (end - start) / 2))
 }
 
 function stable(v: unknown): unknown {

@@ -4,6 +4,7 @@ import type {
   Caption,
   Chapter,
   IntroCard,
+  MusicBed,
   OutroCard,
   Point,
   Rect,
@@ -45,7 +46,12 @@ export const EDIT_LIMITS = {
   outroText: 200,
   cardBrand: 60,
   /** How long a chapter banner stays up, in edited time. */
-  bannerMs: 2500
+  bannerMs: 2500,
+  musicName: 120,
+  musicMinVolume: 0.05,
+  musicDefaultVolume: 0.25,
+  /** Callouts, boxes and arrows fade in and out over this long (source time). */
+  fadeMs: 200
 } as const
 /** Same text as the server's OUTRO_DEFAULT_TEXT. */
 export const OUTRO_DEFAULT_TEXT = 'Questions? Ask your administrator.'
@@ -188,6 +194,74 @@ export function setChapterBanners(e: VideoEdits, on: boolean): VideoEdits {
 function clampCardMs(v: number | undefined): number {
   const n = typeof v === 'number' && Number.isFinite(v) ? v : EDIT_LIMITS.cardDefaultMs
   return Math.round(clamp(n, EDIT_LIMITS.cardMinMs, EDIT_LIMITS.cardMaxMs))
+}
+/** Same rule as the server's musicShare: 0–1 in steps of 0.05, 1 when unset. */
+export function musicShare(v: unknown): number {
+  if (v === undefined || v === null || v === '') return 1
+  const n = Number(v)
+  if (!Number.isFinite(n)) return 1
+  return Math.round(clamp(n, 0, 1) * 20) / 20
+}
+/** The music the server would store (null = off). Turning music off also
+ *  drops every piece's share, as the server does. */
+export function setMusic(e: VideoEdits, music: Partial<MusicBed> | null): VideoEdits {
+  const { music: _drop, ...rest } = e
+  if (!music) {
+    return {
+      ...rest,
+      segments: e.segments.map(({ music: _m, ...seg }) => seg)
+    } as VideoEdits
+  }
+  const cur = e.music
+  const source = music.source ?? cur?.source
+  const track = (music.track ?? cur?.track ?? '').toLowerCase()
+  if (!source || !track) return e
+  const next: MusicBed = {
+    enabled: true,
+    source,
+    track,
+    name: (music.name ?? cur?.name ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, EDIT_LIMITS.musicName),
+    volume:
+      Math.round(
+        clamp(
+          music.volume ?? cur?.volume ?? EDIT_LIMITS.musicDefaultVolume,
+          EDIT_LIMITS.musicMinVolume,
+          1
+        ) * 100
+      ) / 100,
+    duck: (music.duck ?? cur?.duck ?? true) !== false
+  }
+  return { ...rest, music: next } as VideoEdits
+}
+/** One piece's music share (1 removes the key, as the server stores it). */
+export function setPieceMusic(e: VideoEdits, index: number, share: number): VideoEdits {
+  const v = musicShare(share)
+  return {
+    ...e,
+    segments: e.segments.map((s, i) => {
+      if (i !== index) return s
+      const { music: _m, ...rest } = s
+      return v === 1 ? rest : { ...rest, music: v }
+    })
+  }
+}
+/** How long a callout, box or arrow fades in and out (the server's
+ *  annotationFade): EDIT_LIMITS.fadeMs, or half its length when shorter. */
+export function annotationFade(start: number, end: number): number {
+  return Math.min(EDIT_LIMITS.fadeMs, Math.max(0, (end - start) / 2))
+}
+/** A callout, box or arrow's opacity at a SOURCE moment (ripples: always 1). */
+export function annotationOpacity(
+  a: { type: string; start_ms: number; end_ms: number },
+  srcMs: number
+): number {
+  if (a.type === 'ripple') return 1
+  const f = annotationFade(a.start_ms, a.end_ms)
+  if (f <= 0) return 1
+  return clamp(Math.min(srcMs - a.start_ms, a.end_ms - srcMs) / f, 0, 1)
 }
 export function isHiddenByCuts(e: VideoEdits, start: number, end: number): boolean {
   return !e.segments.some((s) => start < s.end_ms && end > s.start_ms)

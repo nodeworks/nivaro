@@ -22,6 +22,7 @@ import {
   outroMs,
   sourceToEdited
 } from './edits'
+import { useLiveMusic } from './musicMix'
 import { OverlayLayer } from './OverlayLayer'
 import { fileMsForSource, fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
 import { createProgressBeats } from './progressBeats'
@@ -217,6 +218,20 @@ function PlayerInner({
   // Captions and the overlays belong to the recording, not to a card.
   const phase = edits ? cardPhaseAt(edits, editedMs).phase : 'body'
   const isPlaying = card ? card.playing : playing
+  // Background music: a rendered file has it in its sound; edits drawn here
+  // mix it live, lowered on the recording's microphone levels.
+  useLiveMusic({
+    enabled: liveEdits && !!edits?.music,
+    videoId: dto.id,
+    edits,
+    levels: version?.levels ?? null,
+    editedMs,
+    srcMs,
+    phase,
+    playing: isPlaying,
+    video: videoEl,
+    rate: userRate
+  })
 
   // The cards come and go with the edits (the editor switches them on and
   // off): a card that is no longer there gives way; a new intro shows only
@@ -691,6 +706,7 @@ function PlayerInner({
                   srcMs={overlaySrcMs}
                   source={natural}
                   showCaptions={false}
+                  fade={playing}
                 />
               )}
             </div>

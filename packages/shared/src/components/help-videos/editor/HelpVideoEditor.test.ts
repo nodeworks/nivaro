@@ -57,7 +57,8 @@ vi.mock('../HelpVideoPlayer', async () => {
 const request = vi.fn()
 vi.mock('../../../context', () => ({
   useNivaroClient: () => ({ request }),
-  useNavigation: () => ({ navigate: () => {} })
+  useNavigation: () => ({ navigate: () => {} }),
+  useApiFetchConfig: () => ({ apiBase: '/api', authHeaders: {}, credentials: 'include' })
 }))
 
 // The side panels are memoised components. Each is wrapped in a memo with

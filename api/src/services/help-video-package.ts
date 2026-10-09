@@ -10,7 +10,8 @@ import { logActivity } from './activity.js'
 import { hasFfmpeg, probeVideo } from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import { downloadsAllowed, withDownloads } from './help-video-download.js'
-import { editedDuration } from './help-video-edits.js'
+import { editedDuration, hashEdits, type VideoEdits } from './help-video-edits.js'
+import { libraryTrackFile, musicRowMeta, videoMusicRow } from './help-video-music.js'
 import {
   type CheckedManifest,
   checkManifest,
@@ -143,11 +144,17 @@ export async function exportPackageStream(
       .select('kind', 'key', 'state_key')) as PackageContext[]
     for (const c of contexts) if (c.kind === 'page') pageKeys.add(c.key)
     const renderCurrent = !!ver.rendered_file && ver.rendered_hash === ver.edits_hash
+    const verEdits = parse(ver.edits) as { music?: { source?: string; track?: string } } | null
+    const musicRow =
+      verEdits?.music?.source === 'upload' && verEdits.music.track
+        ? await videoMusicRow(String(v.id), String(verEdits.music.track))
+        : null
     const roleFile: Partial<Record<FileRole, unknown>> = {
       source: ver.source_file,
       rendered: renderCurrent ? ver.rendered_file : null,
       captions: renderCurrent ? ver.captions_file : null,
-      poster: ver.poster_file ?? v.poster_file
+      poster: ver.poster_file ?? v.poster_file,
+      music: musicRow?.file_id ?? null
     }
     const index = manifest.videos.length
     manifest.videos.push({
@@ -463,6 +470,19 @@ async function checkMedia(
   }
   if (role === 'captions')
     return h.toString('utf8').startsWith('WEBVTT') ? null : 'The captions are not WebVTT'
+  if (role === 'music') {
+    if (h.subarray(4, 8).toString('latin1') !== 'ftyp') return 'The music file is not AAC audio'
+    if (await hasFfmpeg()) {
+      try {
+        const p = await probeVideo(path, 'audio/mp4')
+        if (!p.has_audio || !p.duration_ms) return 'The music file has no sound'
+        if (p.duration_ms > 21 * 60_000) return 'The music file is over 20 minutes'
+      } catch {
+        return 'The music file could not be read'
+      }
+    }
+    return null
+  }
   return IMAGE_MAGIC[f.mime]?.(h) ? null : `The poster is not a ${f.mime} image`
 }
 
@@ -577,6 +597,11 @@ async function plan(s: ImportSession): Promise<ImportPreviewVideo[]> {
     }
     if (t?.draft_version_id) notes.push('The draft being edited here is left alone.')
     if (!v.render_reusable) notes.push('The video will be rendered here after the import.')
+    if (v.edits.music?.source === 'library' && !(await libraryTrackFile(v.edits.music.track))) {
+      notes.push(
+        `Its music "${v.edits.music.name || v.edits.music.track}" is not in this library: it arrives without music.`
+      )
+    }
     const unknownPages = v.contexts.filter(
       (c) => c.kind === 'page' && !checked.pages.some((p) => p.key === c.key)
     )
@@ -701,7 +726,8 @@ const EXT: Record<string, string> = {
   'video/mp4': 'mp4',
   'text/vtt': 'vtt',
   'image/jpeg': 'jpg',
-  'image/png': 'png'
+  'image/png': 'png',
+  'audio/mp4': 'm4a'
 }
 
 async function applyOne(
@@ -717,6 +743,9 @@ async function applyOne(
     for (const role of FILE_ROLES) {
       const f = v.files[role]
       if (!f) continue
+      // A music file this video already has here is not stored twice.
+      if (role === 'music' && v.edits.music && (await videoMusicRow(v.id, v.edits.music.track)))
+        continue
       const path = s.extracted.get(f.entry)
       if (!path) throw new Error(`The ${role} file is no longer here`)
       const file = await uploadFileFromPath(
@@ -732,6 +761,35 @@ async function applyOne(
     for (const f of created) await discardFile(user, f)
     throw err
   }
+  // Background music (#1547): a library track this instance lacks is dropped;
+  // an uploaded file keeps its id when that id is free here (so the edits,
+  // their hash and a packaged render stay as they are), else gets a new one.
+  let edits: VideoEdits = v.edits
+  let musicRow: Record<string, unknown> | null = null
+  if (edits.music?.source === 'library' && !(await libraryTrackFile(edits.music.track))) {
+    const { music: _drop, ...rest } = edits
+    edits = { ...rest, segments: rest.segments.map(({ music: _m, ...seg }) => seg) }
+  } else if (edits.music?.source === 'upload' && ids.music && v.files.music) {
+    const taken = await db('nivaro_help_video_uploads').where({ id: edits.music.track }).first('id')
+    const rowId = taken ? randomUUID() : edits.music.track
+    if (taken) edits = { ...edits, music: { ...edits.music, track: rowId } }
+    musicRow = {
+      id: rowId,
+      user: user.id,
+      mime: 'audio/mp4',
+      bytes_received: v.files.music.size,
+      next_part: 0,
+      status: 'music',
+      file_id: ids.music,
+      duration_ms: null,
+      has_audio: true,
+      meta: musicRowMeta(v.id, edits.music?.name || 'Music'),
+      created_at: new Date(),
+      updated_at: new Date()
+    }
+  }
+  const editsHash = edits === v.edits ? v.edits_hash : hashEdits(edits)
+  const reusable = v.render_reusable && editsHash === v.edits_hash
   const here = await whatIsHere(v.contexts)
   const { matched, skipped } = matchContexts(v.contexts, here)
   const versionId = randomUUID()
@@ -778,13 +836,13 @@ async function applyOne(
         height: v.height,
         clicks: v.clicks == null ? null : JSON.stringify(v.clicks),
         levels: v.levels == null ? null : JSON.stringify(v.levels),
-        edits: JSON.stringify(v.edits),
-        edits_hash: v.edits_hash,
-        render_status: v.render_reusable ? 'ready' : 'none',
-        render_progress: v.render_reusable ? 100 : null,
-        rendered_hash: v.render_reusable ? v.edits_hash : null,
-        rendered_file: v.render_reusable ? (ids.rendered ?? null) : null,
-        captions_file: v.render_reusable ? (ids.captions ?? null) : null,
+        edits: JSON.stringify(edits),
+        edits_hash: editsHash,
+        render_status: reusable ? 'ready' : 'none',
+        render_progress: reusable ? 100 : null,
+        rendered_hash: reusable ? v.edits_hash : null,
+        rendered_file: reusable ? (ids.rendered ?? null) : null,
+        captions_file: reusable ? (ids.captions ?? null) : null,
         poster_file: ids.poster ?? null,
         note: `Imported from ${s.checked?.source.instance ?? 'another instance'} (v${v.number})`.slice(
           0,
@@ -798,7 +856,7 @@ async function applyOne(
         description: v.description,
         category: v.category,
         published_version_id: versionId,
-        duration_ms: editedDuration(v.edits),
+        duration_ms: editedDuration(edits),
         updated_by: user.id,
         updated_at: now
       }
@@ -825,6 +883,7 @@ async function applyOne(
         .filter((c) => !have.has(contextSig(c)))
         .map((c) => ({ video_id: v.id, kind: c.kind, key: c.key, state_key: c.state_key }))
       if (rows.length) await trx('nivaro_help_video_contexts').insert(rows)
+      if (musicRow) await trx('nivaro_help_video_uploads').insert(musicRow)
       added = rows.length
       const pageKeys = matched.filter((c) => c.kind === 'page').map((c) => c.key)
       if (pageKeys.length) {
@@ -847,20 +906,20 @@ async function applyOne(
     for (const f of created) await discardFile(user, f)
     throw err
   }
-  if (!v.render_reusable) await queueRender(versionId)
+  if (!reusable) await queueRender(versionId)
   await logActivity({
     action: 'help-video-import',
     user: user.id,
     collection: 'nivaro_help_videos',
     item: v.id,
-    comment: `${outcome} v${number} from ${s.checked?.source.instance ?? 'a package'} · render ${v.render_reusable ? 'reused' : 'queued'}${skipped.length ? ` · ${skipped.length} screen(s) skipped` : ''}`
+    comment: `${outcome} v${number} from ${s.checked?.source.instance ?? 'a package'} · render ${reusable ? 'reused' : 'queued'}${skipped.length ? ` · ${skipped.length} screen(s) skipped` : ''}`
   })
   return {
     id: v.id,
     title: v.title,
     outcome,
     version: number,
-    render: v.render_reusable ? 'reused' : 'queued',
+    render: reusable ? 'reused' : 'queued',
     contexts_added: added,
     contexts_skipped: skipped.length
   }

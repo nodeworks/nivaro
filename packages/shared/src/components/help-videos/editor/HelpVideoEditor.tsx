@@ -520,6 +520,8 @@ function EditorBody({
               videoTitle={video.title}
               videoDescription={video.description}
               onShowCard={showCard}
+              videoId={video.id}
+              hasLevels={!!draft.levels?.length}
             />
           )}
           <div data-hvx-timeline>

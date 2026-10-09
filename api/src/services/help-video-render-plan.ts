@@ -1,5 +1,12 @@
 import { lockedInputArgs } from './ffmpeg.js'
-import { editedDuration, type Rect, sourceToEdited, type VideoEdits } from './help-video-edits.js'
+import {
+  editedDuration,
+  introMs,
+  musicShare,
+  type Rect,
+  sourceToEdited,
+  type VideoEdits
+} from './help-video-edits.js'
 
 // Builds the single ffmpeg pass that bakes a help video's edits into an MP4.
 // Everything is applied in SOURCE time — blur, annotation overlays, zoom — and
@@ -15,13 +22,16 @@ export interface RenderInput {
   sourcePath: string
   /** Mime of the uploaded recording; pins the demuxer so the plan fails closed. */
   sourceMime: string
-  overlays: Array<{ path: string; start_ms: number; end_ms: number }>
+  /** `fade_ms`: the overlay fades in and out over that long (#1553). */
+  overlays: Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }>
   /** Chapter banners: full-frame PNGs over the finished picture (after the
    *  zoom, so they never move with it), each enabled over a SOURCE span. */
   banners?: Array<{ path: string; start_ms: number; end_ms: number }>
   /** Opaque full-frame cards played before / after the kept recording. */
   intro?: { path: string; duration_ms: number } | null
   outro?: { path: string; duration_ms: number } | null
+  /** Background music (#1547): looped under the whole edited timeline. */
+  music?: { path: string; mime: string } | null
   outputPath: string
   threads: number
 }
@@ -86,6 +96,42 @@ function tickExpr(): string {
   return `'${one}|${one}'`
 }
 
+// Background music (#1547). The shared player's musicMix.ts holds the live
+// twin of these (MUSIC_FADE_IN_S / MUSIC_FADE_OUT_S) — keep them in step.
+export const MUSIC_FADE_IN_S = 1
+export const MUSIC_FADE_OUT_S = 1.5
+/** Narration louder than this (sidechain level) lowers the music. */
+const MUSIC_DUCK_THRESHOLD = 0.03
+const MUSIC_DUCK_RATIO = 8
+const MUSIC_DUCK_ATTACK_MS = 30
+const MUSIC_DUCK_RELEASE_MS = 400
+
+/** Each kept piece's music share in EDITED time: one window per piece whose
+ *  share is not 1. Cards always carry the music at its full volume. */
+export function musicShareWindows(
+  e: VideoEdits
+): Array<{ start_ms: number; end_ms: number; share: number }> {
+  const out: Array<{ start_ms: number; end_ms: number; share: number }> = []
+  let acc = introMs(e)
+  for (const s of e.segments) {
+    const len = (s.end_ms - s.start_ms) / s.speed
+    const share = musicShare(s.music)
+    if (share !== 1) out.push({ start_ms: acc, end_ms: acc + len, share })
+    acc += len
+  }
+  return out
+}
+
+/** The music's volume expression over the edited timeline: its base volume
+ *  times each piece's share. */
+export function musicVolumeExpr(e: VideoEdits): string {
+  const terms = musicShareWindows(e).map(
+    (w) =>
+      `(${(w.share - 1).toFixed(2)})*between(t,${sec(w.start_ms)},${sec(Math.max(w.start_ms, w.end_ms - 1))})`
+  )
+  return terms.length ? `1+${terms.join('+')}` : '1'
+}
+
 /** Passes beyond which a small blurred field is already uniform. */
 const MAX_BLUR_POWER = 50
 
@@ -141,9 +187,24 @@ export function buildRenderArgs(input: RenderInput): string[] {
 
   input.overlays.forEach((o, i) => {
     const to = next()
-    parts.push(
-      `[${label}][${i + 1}:v]overlay=0:0:enable='between(t,${sec(o.start_ms)},${sec(o.end_ms)})'[${to}]`
-    )
+    const fade = Math.max(0, Math.min(o.fade_ms ?? 0, (o.end_ms - o.start_ms) / 2))
+    if (fade >= 20) {
+      // One image held over its span (timestamps in source time), its alpha
+      // ramped in and out, so the callout fades instead of popping.
+      const frames = Math.max(1, Math.ceil(((o.end_ms - o.start_ms) / 1000) * CARD_FPS) + 1)
+      const ov = `ov${i}`
+      parts.push(
+        `[${i + 1}:v]format=rgba,loop=loop=${frames - 1}:size=1:start=0,setpts=N/(${CARD_FPS}*TB)+${sec(o.start_ms)}/TB,` +
+          `fade=t=in:st=${sec(o.start_ms)}:d=${sec(fade)}:alpha=1,fade=t=out:st=${sec(o.end_ms - fade)}:d=${sec(fade)}:alpha=1[${ov}]`
+      )
+      parts.push(
+        `[${label}][${ov}]overlay=0:0:eof_action=pass:enable='between(t,${sec(o.start_ms)},${sec(o.end_ms)})'[${to}]`
+      )
+    } else {
+      parts.push(
+        `[${label}][${i + 1}:v]overlay=0:0:enable='between(t,${sec(o.start_ms)},${sec(o.end_ms)})'[${to}]`
+      )
+    }
     label = to
   })
 
@@ -189,23 +250,29 @@ export function buildRenderArgs(input: RenderInput): string[] {
   const segs = e.segments
   const untouched = segs.length === 1 && segs[0].start_ms === 0 && segs[0].speed === 1
   const maps: string[] = ['-map', '[vout]']
-  // Ripple ticks are mixed over the finished sound: the edits' audio then
-  // lands on [amain] and the mix makes [aout]. A silent recording gets a
-  // silent track to carry them.
+  // The finished sound is built in steps: the edits' narration lands on
+  // [anar], ripple ticks are mixed over it, then background music (lowered
+  // under the narration) is mixed over that, giving [aout]. With nothing to
+  // mix, the narration IS [aout]. A silent recording gets a silent track to
+  // carry ticks or music.
   const ticks = rippleTickEditedTimes(e)
-  const aFinal = ticks.length ? 'amain' : 'aout'
-  const withAudio = input.hasAudio || ticks.length > 0
+  const music = e.music && input.music ? { ...e.music, ...input.music } : null
+  if (music && !lockedInputArgs(music.mime).includes('-f')) {
+    throw new Error(`Unsupported music format: ${music.mime}`)
+  }
+  const needsMix = ticks.length > 0 || !!music
+  const nar = needsMix ? 'anar' : 'aout'
+  const withAudio = input.hasAudio || needsMix
   // With a card the kept recording is one piece of a final concat.
   const cards = [input.intro, input.outro].filter(Boolean).length > 0
   const vb = cards ? 'vbody' : 'vout'
-  const ab = cards ? 'abody' : aFinal
+  const ab = cards ? 'abody' : nar
   if (untouched) {
     // A single full piece still bounds the end, so a recording whose header
     // claims a little more time than the edits keep never runs past them.
     parts.push(`[${label}]trim=end=${sec(segs[0].end_ms)},setpts=PTS-STARTPTS[${vb}]`)
     if (input.hasAudio) {
       parts.push(`[0:a]atrim=end=${sec(segs[0].end_ms)},asetpts=PTS-STARTPTS[${ab}]`)
-      maps.push('-map', '[aout]')
     }
   } else {
     const k = segs.length
@@ -225,8 +292,8 @@ export function buildRenderArgs(input: RenderInput): string[] {
     parts.push(
       `${ins}concat=n=${k}:v=1:a=${input.hasAudio ? 1 : 0}[${vb}]${input.hasAudio ? `[${ab}]` : ''}`
     )
-    if (input.hasAudio) maps.push('-map', '[aout]')
   }
+  if (withAudio) maps.push('-map', '[aout]')
 
   if (cards) {
     // Each card is its PNG held for its length at CARD_FPS, with silence when
@@ -252,27 +319,57 @@ export function buildRenderArgs(input: RenderInput): string[] {
     } else pieces.push('[vbody]')
     if (input.outro) card(input.outro, 'co')
     parts.push(
-      `${pieces.join('')}concat=n=${pieces.length}:v=1:a=${input.hasAudio ? 1 : 0}[vout]${input.hasAudio ? `[${aFinal}]` : ''}`
+      `${pieces.join('')}concat=n=${pieces.length}:v=1:a=${input.hasAudio ? 1 : 0}[vout]${input.hasAudio ? `[${nar}]` : ''}`
     )
   }
 
-  if (ticks.length) {
+  if (needsMix) {
     if (!input.hasAudio) {
       parts.push(
-        `anullsrc=r=48000:cl=stereo,atrim=duration=${sec(editedDuration(e))},${AUDIO_FORMAT}[amain]`
+        `anullsrc=r=48000:cl=stereo,atrim=duration=${sec(editedDuration(e))},${AUDIO_FORMAT}[anar]`
       )
-      maps.push('-map', '[aout]')
     }
-    const n = ticks.length
-    parts.push(
-      `aevalsrc=exprs=${tickExpr()}:s=48000:d=${RIPPLE_TICK_SECONDS},${AUDIO_FORMAT}${n > 1 ? `,asplit=${n}` : ''}${ticks.map((_, i) => `[tk${i}]`).join('')}`
-    )
-    ticks.forEach((t, i) => {
-      parts.push(`[tk${i}]adelay=delays=${Math.round(t)}:all=1[td${i}]`)
-    })
-    parts.push(
-      `[amain]${AUDIO_FORMAT}[amainf];[amainf]${ticks.map((_, i) => `[td${i}]`).join('')}amix=inputs=${n + 1}:duration=first:dropout_transition=0:normalize=0[aout]`
-    )
+    // The music is lowered by the narration alone (never by the ticks).
+    const duck = !!music && music.duck && input.hasAudio
+    let cur = 'anar'
+    if (duck) {
+      parts.push(`[anar]${AUDIO_FORMAT},asplit=2[anarm][asc]`)
+      cur = 'anarm'
+    }
+    if (ticks.length) {
+      const n = ticks.length
+      const to = music ? 'atk' : 'aout'
+      parts.push(
+        `aevalsrc=exprs=${tickExpr()}:s=48000:d=${RIPPLE_TICK_SECONDS},${AUDIO_FORMAT}${n > 1 ? `,asplit=${n}` : ''}${ticks.map((_, i) => `[tk${i}]`).join('')}`
+      )
+      ticks.forEach((t, i) => {
+        parts.push(`[tk${i}]adelay=delays=${Math.round(t)}:all=1[td${i}]`)
+      })
+      parts.push(
+        `[${cur}]${AUDIO_FORMAT}[amainf];[amainf]${ticks.map((_, i) => `[td${i}]`).join('')}amix=inputs=${n + 1}:duration=first:dropout_transition=0:normalize=0[${to}]`
+      )
+      cur = to
+    }
+    if (music) {
+      const total = editedDuration(e)
+      const outAt = Math.max(0, total / 1000 - MUSIC_FADE_OUT_S)
+      const mi = bannerBase + banners.length + (input.intro ? 1 : 0) + (input.outro ? 1 : 0)
+      parts.push(
+        `[${mi}:a]${AUDIO_FORMAT},atrim=duration=${sec(total)},asetpts=PTS-STARTPTS,` +
+          `volume=${music.volume.toFixed(2)},volume='${musicVolumeExpr(e)}':eval=frame,` +
+          `afade=t=in:d=${MUSIC_FADE_IN_S},afade=t=out:st=${outAt.toFixed(3)}:d=${MUSIC_FADE_OUT_S}[mus]`
+      )
+      let bed = 'mus'
+      if (duck) {
+        parts.push(
+          `[asc]${AUDIO_FORMAT}[ascf];[mus][ascf]sidechaincompress=threshold=${MUSIC_DUCK_THRESHOLD}:ratio=${MUSIC_DUCK_RATIO}:attack=${MUSIC_DUCK_ATTACK_MS}:release=${MUSIC_DUCK_RELEASE_MS}[mduck]`
+        )
+        bed = 'mduck'
+      }
+      parts.push(
+        `[${cur}]${AUDIO_FORMAT}[amixin];[amixin][${bed}]amix=inputs=2:duration=first:dropout_transition=0:normalize=0[aout]`
+      )
+    }
   }
 
   return [
@@ -294,6 +391,8 @@ export function buildRenderArgs(input: RenderInput): string[] {
       ...(input.intro ? [input.intro] : []),
       ...(input.outro ? [input.outro] : [])
     ].flatMap((o) => ['-protocol_whitelist', 'file', '-f', 'png_pipe', '-i', o.path]),
+    // Music last, looped for as long as the graph reads it (atrim bounds it).
+    ...(music ? ['-stream_loop', '-1', ...lockedInputArgs(music.mime), '-i', music.path] : []),
     '-filter_complex',
     parts.join(';'),
     ...maps,

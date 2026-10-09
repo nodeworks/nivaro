@@ -68,6 +68,8 @@ export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boole
   // Intro / outro cards and chapter banners exist only in the render (or the
   // live player): the original recording alone would leave them out.
   if (e.intro || e.outro || e.chapter_banners) return false
+  // Background music is mixed into the render; the original has none.
+  if (e.music) return false
   // A callout is an opaque filled panel: it hides what is under it, like a
   // blur. A box is an outline, but its label is drawn inside it and can cover
   // a small field, so it counts too (the conservative choice). Arrows,

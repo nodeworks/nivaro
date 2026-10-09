@@ -8,6 +8,7 @@ import { CardsPanel } from './CardsPanel'
 import { ChaptersPanel } from './ChaptersPanel'
 import { Inspector } from './Inspector'
 import { SideSection, useOpenSections } from './layout'
+import { MusicPanel } from './MusicPanel'
 import { ClickRipples, PosterPicker } from './PosterAndClicks'
 import type { Selection } from './Timeline'
 import { sentence } from './timeline/useBarDrag'
@@ -48,7 +49,9 @@ export const EditorSidebar = memo(function EditorSidebar({
   onAddChapter,
   videoTitle,
   videoDescription,
-  onShowCard
+  onShowCard,
+  videoId,
+  hasLevels
 }: {
   edits: VideoEdits
   selection: Selection
@@ -78,6 +81,10 @@ export const EditorSidebar = memo(function EditorSidebar({
   videoDescription: string | null
   /** Moves the preview to the start of the intro or outro card. */
   onShowCard: (card: 'intro' | 'outro') => void
+  /** For the music panel: the video's own files and track links. */
+  videoId: string
+  /** The recording has microphone levels (the preview can duck the music). */
+  hasLevels: boolean
 }) {
   const editsRef = useRef(edits)
   editsRef.current = edits
@@ -133,7 +140,11 @@ export const EditorSidebar = memo(function EditorSidebar({
   const ripples = edits.annotations.filter((a) => a.type === 'ripple').length
 
   return (
-    <aside aria-label='Selected item, chapters, captions and cards' data-hvx-side data-hv-sidebar>
+    <aside
+      aria-label='Selected item, chapters, captions, cards and music'
+      data-hvx-side
+      data-hv-sidebar
+    >
       {returnTo !== null && (
         <div
           className='flex items-center gap-1 border-b border-border px-3 py-1.5'
@@ -229,6 +240,23 @@ export const EditorSidebar = memo(function EditorSidebar({
           videoDescription={videoDescription}
           onChange={onChange}
           onShow={onShowCard}
+        />
+      </SideSection>
+      <SideSection
+        id='music'
+        title='Background music'
+        summary={edits.music ? edits.music.name || 'On' : 'Off'}
+        open={open.has('music')}
+        onToggle={toggle}
+      >
+        <MusicPanel
+          headless
+          videoId={videoId}
+          edits={edits}
+          uploaded={uploaded}
+          hasLevels={hasLevels}
+          onChange={onChange}
+          onNote={onNote}
         />
       </SideSection>
       <SideSection

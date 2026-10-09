@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto'
+import { createReadStream } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
@@ -23,6 +25,15 @@ import {
   emptyEdits,
   normalizeEdits
 } from '../services/help-video-edits.js'
+import {
+  deleteVideoMusic,
+  libraryTrackFile,
+  listVideoMusic,
+  MUSIC_MAX_BYTES,
+  musicLibrary,
+  uploadMusic,
+  videoMusicRow
+} from '../services/help-video-music.js'
 import {
   appendImportPart,
   applyImport,
@@ -439,6 +450,68 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const { id, vid } = req.params as { id: string; vid: string }
     const { video } = await loadVideoForUser(req, id)
     return reply.send({ data: await restoreVersion(video, req.user!, vid) })
+  })
+
+  // ── Background music (#1547) ──────────────────────────────────────────────
+  // Authors only: the editor previews the mix itself; viewers always get the
+  // render, which has the music baked in.
+  app.get('/music', { preHandler: requireAuthor }, async (_req, reply) => {
+    return reply.send({ data: await musicLibrary() })
+  })
+  app.get('/music/:key', { preHandler: requireAuthor }, async (req, reply) => {
+    const { key } = req.params as { key: string }
+    const t = /^[a-z][a-z0-9-]{0,39}$/i.test(key) ? await libraryTrackFile(key) : null
+    if (!t) return reply.code(404).send({ error: 'Music not found', code: 'HELP_VIDEO_NOT_FOUND' })
+    const s = await stat(t.path)
+    return reply
+      .header('Content-Type', t.mime)
+      .header('Content-Length', String(s.size))
+      .header('Cache-Control', 'private, max-age=3600')
+      .send(createReadStream(t.path))
+  })
+  app.get('/:id/music', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    return reply.send({ data: await listVideoMusic(String(video.id)) })
+  })
+  app.post('/:id/music', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const file = await req.file({ limits: { fileSize: MUSIC_MAX_BYTES, files: 1 } })
+    if (!file) return reply.code(400).send({ error: 'No file provided', code: 'MUSIC_EMPTY' })
+    const music = await uploadMusic(req.user!, String(video.id), {
+      filename: file.filename,
+      stream: file.file,
+      truncated: () => file.file.truncated
+    })
+    await logActivity({
+      action: 'help-video-music-upload',
+      user: req.user!.id,
+      collection: 'nivaro_help_videos',
+      item: String(video.id).toLowerCase(),
+      comment: music.name
+    })
+    return reply.code(201).send({ data: music })
+  })
+  app.get('/:id/music/:musicId', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id, musicId } = req.params as { id: string; musicId: string }
+    const { video } = await loadVideoForUser(req, id)
+    const row = await videoMusicRow(String(video.id), musicId)
+    const file = row?.file_id ? await getFile(String(row.file_id)) : undefined
+    if (!file?.filename_disk) {
+      return reply.code(404).send({ error: 'Music not found', code: 'HELP_VIDEO_NOT_FOUND' })
+    }
+    reply.header('Cache-Control', 'private, max-age=3600')
+    return sendStoredObject(reply, file.filename_disk, {
+      rangeHeader: req.headers.range,
+      contentType: 'audio/mp4'
+    })
+  })
+  app.delete('/:id/music/:musicId', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id, musicId } = req.params as { id: string; musicId: string }
+    const { video } = await loadVideoForUser(req, id)
+    await deleteVideoMusic(req.user!, String(video.id), musicId)
+    return reply.code(204).send()
   })
 }
 

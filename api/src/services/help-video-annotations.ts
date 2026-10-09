@@ -1,5 +1,5 @@
 import { join } from 'node:path'
-import type { Annotation } from './help-video-edits.js'
+import { type Annotation, annotationFade } from './help-video-edits.js'
 import { getBrowser } from './pdf-layout.js'
 
 // Draws each annotation as a full-frame transparent PNG with the same look as
@@ -53,11 +53,11 @@ export async function rasterizeAnnotations(
   annotations: Annotation[],
   size: { width: number; height: number },
   dir: string
-): Promise<Array<{ path: string; start_ms: number; end_ms: number }>> {
+): Promise<Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }>> {
   if (!annotations.length) return []
   const browser = await getBrowser()
   const page = await browser.newPage()
-  const out: Array<{ path: string; start_ms: number; end_ms: number }> = []
+  const out: Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }> = []
   try {
     await page.setRequestInterception(true)
     page.on('request', (req) => {
@@ -145,7 +145,15 @@ export async function rasterizeAnnotations(
         )
         const path = join(dir, `annot-${++n}.png`)
         await page.screenshot({ path: path as `${string}.png`, omitBackground: true, type: 'png' })
-        out.push({ path, start_ms: frame.start_ms, end_ms: frame.end_ms })
+        // Callouts, boxes and arrows fade in and out (#1553); a ripple's own
+        // growth is its entrance.
+        const fade = a.type === 'ripple' ? 0 : annotationFade(a.start_ms, a.end_ms)
+        out.push({
+          path,
+          start_ms: frame.start_ms,
+          end_ms: frame.end_ms,
+          ...(fade > 0 ? { fade_ms: fade } : {})
+        })
       }
     }
   } finally {

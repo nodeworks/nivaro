@@ -118,7 +118,11 @@ describe('mirrors the server EDIT_LIMITS', () => {
       introSubtitle: 200,
       outroText: 200,
       cardBrand: 60,
-      bannerMs: 2500
+      bannerMs: 2500,
+      musicName: 120,
+      musicMinVolume: 0.05,
+      musicDefaultVolume: 0.25,
+      fadeMs: 200
     })
   })
   it('squares a zoom rect and clamps its side to at least 0.25', () => {

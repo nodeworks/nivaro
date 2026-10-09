@@ -1,5 +1,6 @@
 import type { CSSProperties } from 'react'
 import { ANNOTATION_PALETTE, annotationUnit } from './annotationStyles'
+import { annotationOpacity } from './edits'
 import { activeAt, liveBlurPx, renderSize } from './playerMath'
 import type { Annotation, VideoEdits } from './types'
 
@@ -17,7 +18,8 @@ export function OverlayLayer({
   srcMs,
   source,
   showAnnotations = true,
-  showCaptions = true
+  showCaptions = true,
+  fade = false
 }: {
   edits: VideoEdits
   frame: { width: number; height: number }
@@ -26,6 +28,9 @@ export function OverlayLayer({
   source?: { width: number; height: number } | null
   showAnnotations?: boolean
   showCaptions?: boolean
+  /** Callouts, boxes and arrows fade in and out (#1553), as in the render.
+   *  Off while paused, so something just drawn at the playhead is solid. */
+  fade?: boolean
 }) {
   const { width: W, height: H } = frame
   const canvas = source?.width && source?.height ? renderSize(source.width, source.height) : frame
@@ -74,6 +79,7 @@ export function OverlayLayer({
                 H={canvas.height}
                 unit={unit}
                 srcMs={srcMs}
+                opacity={fade ? annotationOpacity(a, srcMs) : 1}
               />
             ))}
           </div>
@@ -89,13 +95,15 @@ function AnnotationShape({
   W,
   H,
   unit,
-  srcMs
+  srcMs,
+  opacity
 }: {
   a: Annotation
   W: number
   H: number
   unit: number
   srcMs: number
+  opacity: number
 }) {
   const color = ANNOTATION_PALETTE[a.tone]
   const x = a.rect.x * W
@@ -119,7 +127,8 @@ function AnnotationShape({
       fontWeight: 600,
       lineHeight: 1.2,
       fontFamily: 'Arial, Helvetica, sans-serif',
-      fontSize: Math.max(12, Math.min(h * 0.45, 9 * unit))
+      fontSize: Math.max(12, Math.min(h * 0.45, 9 * unit)),
+      opacity
     }
     if (a.type === 'box') Object.assign(style, { border: `${1.5 * unit}px solid ${color}`, color })
     else {
@@ -167,7 +176,7 @@ function AnnotationShape({
         data-hv-annotation={a.id}
         width={W}
         height={H}
-        style={{ position: 'absolute', left: 0, top: 0 }}
+        style={{ position: 'absolute', left: 0, top: 0, opacity }}
         aria-hidden='true'
       >
         <line

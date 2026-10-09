@@ -8,8 +8,10 @@ import {
   ALLOWED_SPEEDS,
   EDIT_LIMITS,
   type ListKey,
+  musicShare,
   removeItem,
   removeSegment,
+  setPieceMusic,
   setSpeed,
   trimSegment,
   upsertItemChecked
@@ -40,6 +42,13 @@ const KIND: Record<Annotation['type'], string> = {
   ripple: 'Click ripple'
 }
 const MIN = EDIT_LIMITS.minItemMs
+/** A piece's music share, as a share of the video's music volume. */
+const PIECE_MUSIC = [
+  { value: 0, label: 'Off' },
+  { value: 0.25, label: 'Low' },
+  { value: 0.5, label: 'Half' },
+  { value: 1, label: 'Full' }
+]
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
 const label = 'text-[12px] font-medium text-foreground'
@@ -188,6 +197,33 @@ export const Inspector = memo(function Inspector({
             ))}
           </fieldset>
         </div>
+        {edits.music && (
+          <div className='space-y-1'>
+            <p className={label} id={`${headingId}-music`}>
+              Music under this piece
+            </p>
+            <fieldset
+              className='inline-flex overflow-hidden rounded-md border border-input'
+              aria-labelledby={`${headingId}-music`}
+            >
+              {PIECE_MUSIC.map((m) => {
+                const cur = musicShare(s.music)
+                return (
+                  <button
+                    key={m.value}
+                    type='button'
+                    aria-pressed={cur === m.value}
+                    onClick={() => onChange(setPieceMusic(edits, i, m.value))}
+                    className={`${segment} ${cur === m.value ? on : off}`}
+                    data-hv-piece-music={m.value}
+                  >
+                    {m.label}
+                  </button>
+                )
+              })}
+            </fieldset>
+          </div>
+        )}
         <div className='flex flex-wrap gap-2'>
           {jump(s.start_ms)}
           <Button
