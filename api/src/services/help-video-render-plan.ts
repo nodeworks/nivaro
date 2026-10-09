@@ -447,6 +447,9 @@ export function buildRenderArgs(input: RenderInput): string[] {
     // Annotation and card images are our own PNGs; pin them so nothing else is
     // probed. Order: annotations, banners, intro card, outro card (the graph's
     // indexes). A moving card or banner is a numbered sequence (image2).
+    // Chromium writes opaque frames as rgb24 and see-through ones as rgba, so
+    // a sequence switches format mid-stream; -reinit_filter 0 keeps the graph
+    // (a rebuild restarts every frame counter and the timeline jumps back).
     ...input.overlays.flatMap((o) => [
       '-protocol_whitelist',
       'file',
@@ -462,6 +465,8 @@ export function buildRenderArgs(input: RenderInput): string[] {
     ].flatMap((c) =>
       c.sequence
         ? [
+            '-reinit_filter',
+            '0',
             '-protocol_whitelist',
             'file',
             '-f',

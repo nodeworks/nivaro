@@ -346,6 +346,25 @@ describe('render plan with cards', () => {
     expect(g).toContain('loop=loop=89:size=1:start=0')
     expect(g).toMatch(/\[cibg\]\[cifr\]overlay=0:0/)
   })
+  it('keeps one graph while a sequence switches between opaque and transparent frames', () => {
+    // Chromium writes opaque frames as rgb24 and see-through ones as rgba; a
+    // rebuilt graph restarts every frame counter and the timeline jumps back.
+    const args = buildRenderArgs({
+      ...base,
+      ...cards,
+      edits: e,
+      banners: [{ ...seq('d/card-banner-1/f%05d.png', 75), start_ms: 4000, end_ms: 6500 }],
+      intro: { ...seq('d/card-intro/f%05d.png', 90), duration_ms: 3000, over_frame: true },
+      outro: { ...seq('d/card-outro/f%05d.png', 60), duration_ms: 2000, over_frame: true }
+    })
+    const flat = args.join(' ')
+    for (const d of ['card-banner-1', 'card-intro', 'card-outro']) {
+      expect(flat).toContain(
+        `-reinit_filter 0 -protocol_whitelist file -f image2 -framerate 30 -start_number 1 -i d/${d}/f%05d.png`
+      )
+    }
+    expect(flat).not.toMatch(/-reinit_filter 0 -protocol_whitelist file -f (mov|png_pipe)/)
+  })
   it('puts a moving end card over the recording’s last frame', () => {
     const g = fc(
       buildRenderArgs({
