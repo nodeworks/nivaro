@@ -1,5 +1,11 @@
-import { type ReactElement, useCallback, useRef, useState } from 'react'
-import { type FoldedCell, headerFoldedCells, headerNeedsDense } from '../../lib/header-strip'
+import { cloneElement, type ReactElement, useCallback, useRef, useState } from 'react'
+import {
+  type FoldedCell,
+  type HeaderWidthCache,
+  headerChangedCells,
+  headerFoldedCells,
+  headerNeedsDense
+} from '../../lib/header-strip'
 import { HeaderOverflowChip } from './HeaderOverflowChip'
 
 /**
@@ -18,8 +24,8 @@ export function useHeaderBand() {
   const [headerFolded, setHeaderFolded] = useState<FoldedCell[]>([])
   const headerFoldedRef = useRef<FoldedCell[]>([])
   headerFoldedRef.current = headerFolded
-  const headerWidthCache = useRef(new Map<number, number>())
-  const headerStackedCache = useRef(new Map<number, number>())
+  const headerWidthCache = useRef<HeaderWidthCache>(new Map())
+  const headerStackedCache = useRef<HeaderWidthCache>(new Map())
   // Callback ref: the band mounts only once the layout has loaded, so a
   // mount-time effect would never see it.
   const headerTilesCleanup = useRef<(() => void) | null>(null)
@@ -46,18 +52,14 @@ export function useHeaderBand() {
     for (const child of el.children) ro.observe(child)
     const mo = new MutationObserver((records) => {
       for (const child of el.children) ro.observe(child)
-      // Something changed inside a cell (a value loaded, a rollup updated):
-      // its remembered widths are stale. Changes at the group level itself
-      // are our own folding; the "+N more" chip's count is not a cell.
-      if (
-        records.some((r) => {
-          if (r.target === el) return false
-          const node = r.target instanceof Element ? r.target : r.target.parentElement
-          return !node?.closest('[data-header-more]')
-        })
-      ) {
-        headerWidthCache.current.clear()
-        headerStackedCache.current.clear()
+      // Something changed inside a shown cell (a value loaded, a rollup
+      // updated): THAT cell's remembered widths are stale. A folded cell's
+      // are kept — it cannot be re-measured, and clearing every width let a
+      // folded five-figure widget be costed as one figure, so the band
+      // unfolded, refolded, and looped until React threw (headerChangedCells).
+      for (const key of headerChangedCells(el, records)) {
+        headerWidthCache.current.delete(key)
+        headerStackedCache.current.delete(key)
       }
       schedule()
     })
@@ -77,7 +79,8 @@ export function useHeaderBand() {
 /**
  * The band's tiles in sort order, the folded ones (`folded`, from
  * `useHeaderBand`) behind the "+N more" chip. Each tile is one keyed element
- * that renders one cell.
+ * that renders one cell and passes `data-header-cell` / `data-header-folded`
+ * / `aria-hidden` to it (HEADER_TILE styles the folded state).
  */
 export function HeaderTiles({ tiles, folded }: { tiles: ReactElement[]; folded: FoldedCell[] }) {
   const foldSet = new Set(folded.map((c) => c.index))
@@ -85,19 +88,19 @@ export function HeaderTiles({ tiles, folded }: { tiles: ReactElement[]; folded: 
   return (
     <>
       {tiles.map((t, k) =>
-        foldSet.has(k) ? (
-          // Folded: out of flow but in the DOM, in place, so the
-          // measurer's cell index stays the tile index.
-          <div
-            key={`__folded_${k}`}
-            data-header-folded
-            aria-hidden='true'
-            className='pointer-events-none invisible absolute'
-          >
-            {t}
-          </div>
-        ) : (
-          t
+        // Folded: marked on the tile itself, which keeps its own key — a
+        // wrapper changed the key and remounted the tile on every fold, so a
+        // widget refetched and re-rendered each time. Out of flow but in the
+        // DOM, in place, so the measurer's cell index stays the tile index.
+        cloneElement(
+          t as ReactElement<Record<string, unknown>>,
+          foldSet.has(k)
+            ? {
+                'data-header-cell': String(t.key ?? k),
+                'data-header-folded': '',
+                'aria-hidden': 'true'
+              }
+            : { 'data-header-cell': String(t.key ?? k) }
         )
       )}
       {foldedTiles.length > 0 && (

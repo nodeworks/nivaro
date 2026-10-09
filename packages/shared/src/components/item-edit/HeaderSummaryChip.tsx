@@ -44,6 +44,10 @@ interface Props {
     rowId: string
     field: string
   }) => void
+  /** Set by the band (HeaderTiles): its cell key and fold mark land on the tile. */
+  'data-header-cell'?: string
+  'data-header-folded'?: string
+  'aria-hidden'?: 'true'
 }
 
 interface Summary {
@@ -56,7 +60,7 @@ interface Summary {
   fk_field: string
 }
 
-export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }: Props) {
+export function HeaderSummaryChip({ collection, itemId, field, config, onOpen, ...cell }: Props) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   // A grid WRITE on this record refreshes the figure: a rows query of this
@@ -142,6 +146,7 @@ export function HeaderSummaryChip({ collection, itemId, field, config, onOpen }:
           data-tip={canOpen ? `Which ${countLabel} contribute` : undefined}
           data-header-summary={field}
           data-header-money=''
+          {...cell}
         >
           <span className={HEADER_LABEL} data-header-label>
             {config.label}
