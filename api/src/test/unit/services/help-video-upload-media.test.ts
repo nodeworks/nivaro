@@ -140,4 +140,18 @@ describe('buildUploadArgs', () => {
     expect(args.slice(-3)).toEqual(['-f', 'webm', 'o'])
     expect(args).not.toContain('-movflags')
   })
+  it('bounds the output length and size after the input when limits are given', () => {
+    const args = buildUploadArgs(
+      ok(plan(v({ codec_name: 'hevc' }), a('aac'))),
+      { path: 'in', inputLock: lock },
+      'o',
+      2,
+      { maxSeconds: 1861, maxBytes: 2_000_000 }
+    )
+    const i = args.indexOf('-i')
+    expect(args.indexOf('-t')).toBeGreaterThan(i)
+    expect(args[args.indexOf('-t') + 1]).toBe('1861')
+    expect(args[args.indexOf('-fs') + 1]).toBe('2000000')
+    expect(args.at(-1)).toBe('o')
+  })
 })

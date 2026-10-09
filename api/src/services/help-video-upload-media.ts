@@ -113,9 +113,14 @@ export function buildUploadArgs(
   plan: UploadPlan,
   input: { path: string; inputLock: string[] },
   output: string,
-  threads: number
+  threads: number,
+  limits: { maxSeconds?: number; maxBytes?: number } = {}
 ): string[] {
   const args = ['-y', '-v', 'error', ...input.inputLock, '-i', input.path]
+  // Bound the work whatever the probe said: a file whose duration cannot be
+  // read would otherwise be converted in full before the length check runs.
+  if (limits.maxSeconds && limits.maxSeconds > 0) args.push('-t', String(limits.maxSeconds))
+  if (limits.maxBytes && limits.maxBytes > 0) args.push('-fs', String(Math.floor(limits.maxBytes)))
   args.push('-map', `0:${plan.video.index}`)
   if (plan.audio) args.push('-map', `0:${plan.audio.index}`)
   if (plan.video.mode === 'copy') {

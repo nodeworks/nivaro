@@ -467,6 +467,42 @@ function uploadThreads(): number {
   return Number.isFinite(n) && n >= 1 ? Math.min(8, Math.floor(n)) : 2
 }
 
+/** Conversions run one at a time per process: each is a full-CPU ffmpeg
+ *  encode, and an author starting several must not starve renders and
+ *  requests. Copies (no re-encode) do not wait for the slot. */
+let conversionTail: Promise<void> = Promise.resolve()
+async function withConversionSlot<T>(
+  onWait: () => Promise<unknown>,
+  work: () => Promise<T>
+): Promise<T> {
+  const prev = conversionTail
+  let release!: () => void
+  conversionTail = new Promise<void>((r) => {
+    release = r
+  })
+  let waiting = true
+  const refresh = setInterval(() => {
+    // Keep the finalizing claim fresh while queued so it is never reclaimed.
+    if (waiting) void onWait().catch(() => undefined)
+  }, 300_000)
+  refresh.unref?.()
+  try {
+    await onWait().catch(() => undefined)
+    await prev
+    waiting = false
+    return await work()
+  } finally {
+    clearInterval(refresh)
+    release()
+  }
+}
+
+/** The longest an output may run, in seconds (just past the duration cap, so
+ *  an over-long file still fails the length check after the bounded run). */
+const MAX_OUTPUT_SECONDS = Math.ceil(MAX_DURATION_MS / 1000) + 1
+/** The largest output file ffmpeg may write. */
+const MAX_OUTPUT_BYTES = MAX_UPLOAD_BYTES * 2
+
 const UNREADABLE =
   "That video could not be read. It may be damaged, or saved in a format this server can't open."
 
@@ -528,18 +564,19 @@ export async function processFile(
     const converting = plan.kind !== 'copy'
     await setFileMeta(dbId, {
       ...keep,
-      phase: converting ? 'converting' : 'checking',
-      progress: converting ? 0 : null
+      phase: converting ? 'waiting' : 'checking',
+      progress: null
     })
     const total = probed.duration_ms
     let beat = 0
-    try {
-      await runFfmpeg(
+    const encode = () =>
+      runFfmpeg(
         buildUploadArgs(
           plan,
           { path: raw, inputLock: lockedInputArgs(mime) },
-          out,
-          uploadThreads()
+          out as string,
+          uploadThreads(),
+          { maxSeconds: MAX_OUTPUT_SECONDS, maxBytes: MAX_OUTPUT_BYTES }
         ),
         converting && total
           ? (ms) => {
@@ -555,12 +592,32 @@ export async function processFile(
         signal,
         { lowPriority: converting }
       )
+    try {
+      if (converting) {
+        await withConversionSlot(
+          () => setFileMeta(dbId, { ...keep, phase: 'waiting', progress: null }),
+          async () => {
+            if (signal.aborted) throw new Error('cancelled while waiting')
+            await setFileMeta(dbId, { ...keep, phase: 'converting', progress: 0 })
+            await encode()
+          }
+        )
+      } else {
+        await encode()
+      }
     } catch (err) {
       if (signal.aborted) throw fail(409, 'UPLOAD_CANCELLED', 'The upload was cancelled')
       console.warn(
         `help-video upload ${String(dbId).toLowerCase()}: ffmpeg (${plan.kind}) failed: ${(err as Error).message}`
       )
       throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+    }
+    const outBytes = await stat(out)
+      .then((x) => x.size)
+      .catch(() => 0)
+    if (outBytes >= MAX_OUTPUT_BYTES * 0.99) {
+      // ffmpeg stopped at the size bound: the result would be cut short.
+      throw fail(422, 'UPLOAD_TOO_BIG', 'That video is too large once converted')
     }
     const probe = await probeVideo(out, plan.container).catch(() => null)
     if (!probe?.width) throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)

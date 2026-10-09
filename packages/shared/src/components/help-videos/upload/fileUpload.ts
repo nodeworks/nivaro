@@ -77,6 +77,7 @@ export function phaseText(phase: string | null | undefined, progress: number | n
   if (phase === 'converting') {
     return `Converting it so every browser can play it${progress != null ? ` · ${progress}%` : ''}`
   }
+  if (phase === 'waiting') return 'Waiting for another video to finish converting'
   if (phase === 'saving') return 'Saving the video'
   return 'Checking the video'
 }
