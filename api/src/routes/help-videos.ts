@@ -173,7 +173,10 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const token = randomUUID()
     await app.redis.set(
       `${EXPORT_TICKET_PREFIX}${token}`,
-      JSON.stringify({ user: req.user!.id, ids }),
+      // Bound to the asking session (dies with it, like media tickets) and
+      // spent on first use: the link sits in a URL, so it must not be a
+      // reusable bearer for every exported video.
+      JSON.stringify({ user: req.user!.id, ids, tag: sessionTag(req) }),
       'EX',
       EXPORT_TICKET_TTL_S
     )
@@ -589,15 +592,31 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
         code: 'HELP_VIDEO_PACKAGE_LINK_EXPIRED'
       })
     if (!isUuid(token)) return gone()
-    const raw = await app.redis.get(`${EXPORT_TICKET_PREFIX}${token}`).catch(() => null)
+    const key = `${EXPORT_TICKET_PREFIX}${token}`
+    // Single use: read and delete in one step so a second request finds nothing.
+    const raw = await app.redis
+      .multi()
+      .get(key)
+      .del(key)
+      .exec()
+      .then((r) => (r?.[0]?.[1] as string | null) ?? null)
+      .catch(() => null)
     if (!raw) return gone()
-    let ticket: { user?: string; ids?: string[] }
+    let ticket: { user?: string; ids?: string[]; tag?: string | null }
     try {
       ticket = JSON.parse(raw)
     } catch {
       return gone()
     }
     if (!isUuid(ticket.user) || !Array.isArray(ticket.ids)) return gone()
+    if (ticket.tag) {
+      // The session that asked has signed out: the link dies with it. Unlike
+      // media tickets this fails CLOSED — an export is every chosen video.
+      const sid = await app.redis.get(`${SIDTAG_PREFIX}${ticket.tag}`).catch(() => null)
+      if (!sid) return gone()
+      const revoked = await app.redis.exists(`${REVOKED_PREFIX}${sid}`).catch(() => 1)
+      if (revoked) return gone()
+    }
     const user = (await db('nivaro_users').where({ id: ticket.user, status: 'active' }).first()) as
       | (User & { is_redacted?: unknown })
       | undefined
