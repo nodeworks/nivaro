@@ -2,6 +2,7 @@ import { memo, useCallback, useRef } from 'react'
 import { sourceToEdited, upsertItemChecked } from '../edits'
 import type { VideoEdits } from '../types'
 import { CaptionsPanel } from './CaptionsPanel'
+import { CardsPanel } from './CardsPanel'
 import { ChaptersPanel } from './ChaptersPanel'
 import { Inspector } from './Inspector'
 import { ClickRipples, PosterPicker } from './PosterAndClicks'
@@ -26,7 +27,10 @@ export const EditorSidebar = memo(function EditorSidebar({
   onSelect,
   onSeek,
   onNote,
-  onAddChapter
+  onAddChapter,
+  videoTitle,
+  videoDescription,
+  onShowCard
 }: {
   edits: VideoEdits
   selection: Selection
@@ -42,6 +46,11 @@ export const EditorSidebar = memo(function EditorSidebar({
   onNote: (n: string | null) => void
   /** Adds a chapter at the playhead (the editor's M). */
   onAddChapter: () => void
+  /** The video's title and description: what a blank intro card shows. */
+  videoTitle: string
+  videoDescription: string | null
+  /** Moves the preview to the start of the intro or outro card. */
+  onShowCard: (card: 'intro' | 'outro') => void
 }) {
   const editsRef = useRef(edits)
   editsRef.current = edits
@@ -82,7 +91,7 @@ export const EditorSidebar = memo(function EditorSidebar({
 
   return (
     <aside
-      aria-label='Selected item, chapters and captions'
+      aria-label='Selected item, chapters, captions and cards'
       className='divide-y divide-border border-t border-border px-3 lg:w-[300px] lg:shrink-0 lg:overflow-y-auto lg:border-t-0 lg:border-l'
       data-hv-sidebar
     >
@@ -116,6 +125,15 @@ export const EditorSidebar = memo(function EditorSidebar({
           onRefused={onNote}
           onSeek={onSeek}
           onSelect={selectCaption}
+        />
+      </div>
+      <div className='py-3'>
+        <CardsPanel
+          edits={edits}
+          videoTitle={videoTitle}
+          videoDescription={videoDescription}
+          onChange={onChange}
+          onShow={onShowCard}
         />
       </div>
       <div className='py-3'>

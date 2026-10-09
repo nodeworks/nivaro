@@ -2,6 +2,7 @@ import type { NivaroClient } from '@nivaro/sdk'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { type CardBrand, cardAccent } from './cards'
 import type {
   HelpVideoContext,
   HelpVideoDto,
@@ -287,4 +288,29 @@ export function parseRoleIdList(raw: unknown): string[] {
     }
   })()
   return list.filter((v): v is string => typeof v === 'string' && v.length > 0)
+}
+
+/** The instance brand the intro/outro cards and chapter banners are drawn in
+ *  (the public login branding: name, colour, logo). `origin` turns the
+ *  logo's API path into a URL the player's <img> can load. Only fetched while
+ *  the video has a card or banner on. */
+export function useCardBrand(enabled: boolean, origin: string): CardBrand {
+  const client = useNivaroClient()
+  const q = useQuery({
+    queryKey: ['help-video-card-brand'],
+    enabled,
+    staleTime: 5 * 60_000,
+    queryFn: () =>
+      client.request(
+        get<{ data: { name: string | null; color: string | null; logo_url: string | null } }>(
+          '/auth/branding'
+        )
+      )
+  })
+  const d = q.data?.data
+  return {
+    name: d?.name?.trim() || null,
+    color: cardAccent(d?.color),
+    logo: d?.logo_url ? `${origin}${d.logo_url}` : null
+  }
 }

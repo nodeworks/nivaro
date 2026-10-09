@@ -9,9 +9,11 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
 import { rasterizeAnnotations } from './help-video-annotations.js'
+import { bannerSourceSpans, cardText, loadCardBrand, rasterizeCards } from './help-video-cards.js'
 import {
   captionsToVtt,
   editedDuration,
+  introMs,
   normalizeEdits,
   sourceToEdited,
   type VideoEdits
@@ -234,6 +236,25 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const height = probe.height ?? Number(v.height ?? 720)
     const size = outputSize(width, height)
     const overlays = await rasterizeAnnotations(edits.annotations, size, dir)
+    // Intro / outro cards and chapter banners, in the instance brand. The
+    // card text falls back to the video's title and description as they are
+    // now, at render time.
+    const wantsCards = !!(edits.intro || edits.outro || edits.chapter_banners)
+    const text = cardText(
+      edits,
+      ((wantsCards
+        ? await db('nivaro_help_videos').where({ id: v.video_id }).first('title', 'description')
+        : null) ?? {}) as { title: unknown; description: unknown }
+    )
+    const hasCards = !!(text.intro || text.outro || text.banners.length)
+    const cardFiles = hasCards
+      ? await rasterizeCards(text, await loadCardBrand(), size, dir)
+      : { intro: null, outro: null, banners: [] as string[] }
+    const banners = bannerSourceSpans(edits, text.banners).map((s) => ({
+      path: cardFiles.banners[s.index],
+      start_ms: s.start_ms,
+      end_ms: s.end_ms
+    }))
     const total = Math.max(1, editedDuration(edits))
     let lastWrite = 0
     const out = join(dir, 'video.mp4')
@@ -246,6 +267,15 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
         sourcePath,
         sourceMime,
         overlays,
+        banners,
+        intro:
+          cardFiles.intro && edits.intro
+            ? { path: cardFiles.intro, duration_ms: edits.intro.duration_ms }
+            : null,
+        outro:
+          cardFiles.outro && edits.outro
+            ? { path: cardFiles.outro, duration_ms: edits.outro.duration_ms }
+            : null,
         outputPath: out,
         threads: renderThreads()
       }),
@@ -268,7 +298,8 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const vttPath = join(dir, 'captions.vtt')
     await writeFile(vttPath, captionsToVtt(edits))
     const posterPath = join(dir, 'poster.jpg')
-    const posterEdited = sourceToEdited(edits, edits.poster_ms) ?? 0
+    // A poster inside a cut falls back to the recording's first frame (after any intro).
+    const posterEdited = sourceToEdited(edits, edits.poster_ms) ?? introMs(edits)
     await runFfmpeg(
       buildPosterArgs(out, Math.max(0, Math.min(posterEdited, total - 100)), posterPath),
       undefined,

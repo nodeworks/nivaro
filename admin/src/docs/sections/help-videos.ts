@@ -30,6 +30,7 @@ export const helpVideosGuide: DocSection = {
         'Zoom: draw the area to zoom into; the video eases in and out.',
         'Blur: hide part of the screen (or the whole frame) for a stretch of time.',
         'Captions: type them along the timeline; viewers turn them on with CC.',
+        'Intro, outro and banners: a title card before the recording (title, first line of the description and, if you like, the chapter list), an end card after it with a closing line you write, and chapter banners — each chapter’s title as a lower-third for a few seconds as it starts. Cards are 2 to 6 seconds each and add their own time; they never cover any of the recording. All three use the instance brand (logo, name and colour from Settings) and are off until you switch them on.',
         'Undo and redo cover every change (Ctrl/Cmd+Z, Shift for redo). Edits save as you go; nothing reaches viewers until you publish.'
       ]
     },
@@ -41,7 +42,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Publishing, versions and required viewing' },
     {
       type: 'p',
-      text: 'Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. Opening the editor makes a draft, so Publish stays off, with "No changes since the last publish" beside it, while the draft is exactly what is published. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim and no callouts or boxes (a callout is an opaque panel and the label inside a box can cover a field; arrows, ripples and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.'
+      text: 'Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. Opening the editor makes a draft, so Publish stays off, with "No changes since the last publish" beside it, while the draft is exactly what is published. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim, no intro or end card, no chapter banners and no callouts or boxes (a callout is an opaque panel and the label inside a box can cover a field; arrows, ripples and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.'
     },
     {
       type: 'p',
@@ -62,7 +63,7 @@ export const helpVideosApi: DocSection = {
     { type: 'h1', id: 'help-videos-api', text: 'Help Videos API' },
     {
       type: 'p',
-      text: 'Everything the library, editor and player do goes through /api/help-videos, and @nivaro/sdk carries a command for each route (listHelpVideos, helpVideosFor, readHelpVideo, saveHelpVideoDraft, publishHelpVideo, recordHelpVideoProgress, …). Edits are stored as instructions, not as a new video file: kept segments with speeds, chapters, annotations, zooms, blurs, captions and a poster frame, all timed in the recording’s own clock.'
+      text: 'Everything the library, editor and player do goes through /api/help-videos, and @nivaro/sdk carries a command for each route (listHelpVideos, helpVideosFor, readHelpVideo, saveHelpVideoDraft, publishHelpVideo, recordHelpVideoProgress, …). Edits are stored as instructions, not as a new video file: kept segments with speeds, chapters, annotations, zooms, blurs, captions and a poster frame, all timed in the recording’s own clock — plus, only while switched on, an `intro` card, an `outro` card and `chapter_banners`. The cards add edited time: edited time = intro + the kept pieces at their speeds + outro, so every edited position (chapter ticks, captions, progress) starts after the intro.'
     },
     {
       type: 'table',
@@ -121,7 +122,7 @@ export const helpVideosApi: DocSection = {
     { type: 'h3', text: 'Rendering' },
     {
       type: 'p',
-      text: 'A publish queues one render: Chromium draws the callouts, ffmpeg composites cuts, speed, zoom, blur and the drawings in one pass to H.264 MP4 (1080p at most), plus WebVTT captions and a poster. Each render is a Background Jobs run of kind render, and it holds the heavy job slot for its whole run. ffmpeg runs at the lowest CPU priority with a thread cap so a render never starves requests on the same server. VIDEO_RENDER_THREADS (default 2) sets the cap.'
+      text: 'A publish queues one render: Chromium draws the callouts, the intro and end cards and the chapter banners (in the instance brand), ffmpeg composites cuts, speed, zoom, blur and the drawings in one pass to H.264 MP4 (1080p at most) with the cards joined before and after (silent when the recording has sound), plus WebVTT captions and a poster. A blank card title or subtitle uses the video’s title and description as they are when the render runs: renaming a video later does not re-render it. Each render is a Background Jobs run of kind render, and it holds the heavy job slot for its whole run. ffmpeg runs at the lowest CPU priority with a thread cap so a render never starves requests on the same server. VIDEO_RENDER_THREADS (default 2) sets the cap.'
     },
     {
       type: 'p',

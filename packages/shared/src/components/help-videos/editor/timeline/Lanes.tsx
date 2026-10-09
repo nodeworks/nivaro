@@ -95,6 +95,9 @@ function orderOf<T extends { id: string }>(list: T[], start: (x: T) => number) {
 }
 
 const selectedRing = 'z-10 ring-2 ring-nvr-cyan'
+/** A card marker on the cuts lane: a label only (drags pass through it). */
+const bookend =
+  'pointer-events-none absolute top-1.5 z-[5] flex h-[16px] items-center whitespace-nowrap rounded-[3px] border border-slate-500 bg-white px-1 text-[10px] font-semibold leading-none text-slate-900 dark:border-slate-400 dark:bg-slate-900 dark:text-slate-50'
 const barBase =
   'absolute cursor-grab touch-none overflow-hidden rounded-[4px] border text-left text-[11px] font-medium leading-none outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan active:cursor-grabbing'
 const edgeHandles = (
@@ -231,6 +234,26 @@ export const Lanes = memo(function Lanes({
             </button>
           )
         })}
+        {/* The intro and outro cards add time outside the recording: marked at
+            its two ends, never as source time (they hold none). */}
+        {edits.intro && edits.segments.length > 0 && (
+          <span
+            className={bookend}
+            style={{ left: toPx(edits.segments[0].start_ms) }}
+            data-hv-bookend='intro'
+          >
+            Intro {Math.round(edits.intro.duration_ms / 1000)}s
+          </span>
+        )}
+        {edits.outro && edits.segments.length > 0 && (
+          <span
+            className={`${bookend} -translate-x-full`}
+            style={{ left: toPx(edits.segments[edits.segments.length - 1].end_ms) }}
+            data-hv-bookend='outro'
+          >
+            Outro {Math.round(edits.outro.duration_ms / 1000)}s
+          </span>
+        )}
       </div>
       {/* chapters: a point in time each */}
       <div {...laneProps('chapters', edits.chapters.length)}>
