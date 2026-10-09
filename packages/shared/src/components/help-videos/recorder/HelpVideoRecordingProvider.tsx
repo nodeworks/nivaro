@@ -14,6 +14,7 @@ import { modalHostOf } from '../../ui/popover'
 import { helpVideoKeys } from '../api'
 import type { HelpVideoContext, HelpVideoDto } from '../types'
 import { useHelpVideosPath } from '../viewer/HelpVideoSheet'
+import { HelpVideoWalkHost } from '../walk/HelpVideoWalk'
 import { HelpVideoRecorder } from './HelpVideoRecorder'
 
 export type StartRecordingOptions = {
@@ -106,6 +107,8 @@ export function HelpVideoRecordingProvider({ children }: { children: ReactNode }
           setSession(null)
         }}
       />
+      {/* The guided walk outlives the sheet that starts it when a provider hosts it. */}
+      <HelpVideoWalkHost />
     </RecordingContext.Provider>
   )
 }

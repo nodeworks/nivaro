@@ -14,9 +14,19 @@ import {
   trimSegment,
   upsertItemChecked
 } from '../edits'
-import type { Annotation, Blur, Caption, Chapter, Tone, VideoEdits, Zoom } from '../types'
+import type {
+  Annotation,
+  Blur,
+  Caption,
+  Chapter,
+  RecordedClick,
+  Tone,
+  VideoEdits,
+  Zoom
+} from '../types'
 import { seconds, TimeField } from './TimeField'
 import type { Selection } from './Timeline'
+import { clickForRipple, clickTargetText } from './tools'
 
 const TONES: Array<{ value: Tone; label: string }> = [
   { value: 'accent', label: 'Blue' },
@@ -55,11 +65,14 @@ export const Inspector = memo(function Inspector({
   onChange,
   onSelect,
   onSeek,
-  onError
+  onError,
+  clicks
 }: {
   edits: VideoEdits
   selection: Selection
   sourceMs: number
+  /** The recorder's clicks: a ripple says what its click hit. */
+  clicks?: RecordedClick[] | null
   onChange: (e: VideoEdits, key?: string) => void
   onSelect: (s: Selection) => void
   onSeek: (srcMs: number) => void
@@ -337,6 +350,23 @@ export const Inspector = memo(function Inspector({
       KIND[a.type],
       'annotations',
       <>
+        {a.type === 'ripple' && (
+          <p className={hint} data-hv-ripple-click>
+            {(() => {
+              const hit = clickForRipple(a, clicks)
+              const what = clickTargetText(hit)
+              return what ? (
+                <>
+                  Recorded click on <span className='font-medium text-foreground'>{what}</span>.
+                </>
+              ) : hit ? (
+                'A recorded click; what it hit was not recorded.'
+              ) : (
+                'Placed by hand, not from a recorded click.'
+              )
+            })()}
+          </p>
+        )}
         {(a.type === 'callout' || a.type === 'box') && (
           <div className='flex flex-col gap-1'>
             <label htmlFor={`${headingId}-text`} className={label}>

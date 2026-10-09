@@ -26,12 +26,21 @@ export const helpVideosGuide: DocSection = {
         'Cut: split at the playhead (S) and delete the piece; trim the ends by dragging. Silent stretches are suggested as cuts. You cannot cut everything — at least one second stays.',
         'Speed: play a piece at 1×, 1.5×, 2× or 4×.',
         'Chapters and poster: add a chapter at the playhead; choose the frame the library shows.',
-        'Callouts, arrows, boxes and click ripples: draw on the preview, then set the text and how long it shows. "Add click ripples" places one at every click the recorder saw.',
+        'Callouts, arrows, boxes and click ripples: draw on the preview, then set the text and how long it shows. "Add click ripples" places one at every click the recorder saw; a ripple from a recorded click says what was clicked (hover its bar, or select it).',
         'Zoom: draw the area to zoom into; the video eases in and out.',
         'Blur: hide part of the screen (or the whole frame) for a stretch of time.',
         'Captions: type them along the timeline; viewers turn them on with CC.',
         'Undo and redo cover every change (Ctrl/Cmd+Z, Shift for redo). Edits save as you go; nothing reaches viewers until you publish.'
       ]
+    },
+    { type: 'h3', text: 'Show me on this page' },
+    {
+      type: 'p',
+      text: 'When you record this tab with "Capture my clicks" on, each click also notes what was clicked: the button, link, tab or field by its name and kind, a stable marker on the page when there is one, and which screen it was on. Once the video is published, a viewer who opens it on that screen gets "Show me on this page": the video closes and a guided walk rings each thing to click on the real screen, in order, with the text of the callout or box you placed beside that click (else "Click Approve"). Clicking the ringed element moves on — the click works as usual — or use Next, Back, Skip and Exit (Esc). A step the screen does not show after a few seconds says so and offers "Watch this step", which opens the video at that moment; a step recorded on another screen says so, with Go there when it was this app. Clicks you cut out of the video are left out of the walk.'
+    },
+    {
+      type: 'note',
+      text: 'Privacy: only the name of a field is noted, never its value or what was typed, and nothing at all is noted inside an area marked nvr-no-record (the same mask session replay uses) — there the click keeps only its position. Window and whole-screen recordings keep positions only. Videos recorded before this have no walk.'
     },
     { type: 'h3', text: 'Where a video shows' },
     {
@@ -115,6 +124,11 @@ export const helpVideosApi: DocSection = {
           'Publish the draft; watch_again resets required viewing'
         ],
         ['POST /help-videos/:id/render', 'authors', 'Queue a render again'],
+        [
+          'GET /help-videos/:id/walk',
+          'viewers',
+          '"Show me on this page": the published version’s labelled clicks inside kept pieces, in order — label, role, hook, page_key, path, origin, edited_ms and the nearby callout/box text. Never the draft'
+        ],
         ['GET /help-videos/:id/analytics', 'authors', 'Viewers, completion, hours, drop-off']
       ]
     },
@@ -262,6 +276,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
         ['recordHelpVideoProgress(id, body)', 'POST /help-videos/:id/progress', 'Authenticated'],
         ['readRequiredHelpVideos()', 'GET /help-videos/required/mine', 'Authenticated'],
         ['readHelpVideoAnalytics(id)', 'GET /help-videos/:id/analytics', 'Author'],
+        ['readHelpVideoWalk(id)', 'GET /help-videos/:id/walk', 'Authenticated'],
         ['openHelpVideoUpload(mime)', 'POST /help-videos/uploads', 'Author'],
         ['finalizeHelpVideoUpload(id, meta?)', 'POST /help-videos/uploads/:id/finalize', 'Author'],
         ['listMyHelpVideoUploads()', 'GET /help-videos/uploads/mine', 'Author'],

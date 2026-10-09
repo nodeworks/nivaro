@@ -1,5 +1,5 @@
 import { EDIT_LIMITS, type ListKey, newId, upsertItemChecked } from '../edits'
-import type { Annotation, Blur, Point, Rect, VideoEdits, Zoom } from '../types'
+import type { Annotation, Blur, Point, RecordedClick, Rect, VideoEdits, Zoom } from '../types'
 import type { Selection } from './timeline/Lanes'
 
 // The editor's drawing tools, kept pure. Rects and points are frame
@@ -105,7 +105,7 @@ export function newItemFor(
  * shorter than 0.2 s are dropped.
  */
 export function clicksToRipples(
-  clicks: Array<{ t_ms: number; x: number; y: number }> | null,
+  clicks: RecordedClick[] | null,
   existing: Annotation[],
   sourceMs?: number
 ): Annotation[] {
@@ -135,6 +135,34 @@ export function clicksToRipples(
     })
   }
   return out
+}
+
+/**
+ * The recorded click a ripple stands for: one within SAME_CLICK_MS of its
+ * start whose point lies on (or right next to) the ripple. Null when none,
+ * or the ripple is not one.
+ */
+export function clickForRipple(
+  a: Pick<Annotation, 'type' | 'start_ms' | 'rect'>,
+  clicks: RecordedClick[] | null | undefined
+): RecordedClick | null {
+  if (a.type !== 'ripple' || !clicks?.length) return null
+  const cx = a.rect.x + a.rect.w / 2
+  const cy = a.rect.y + a.rect.h / 2
+  let best: { c: RecordedClick; d: number } | null = null
+  for (const c of clicks) {
+    if (Math.abs(c.t_ms - a.start_ms) > SAME_CLICK_MS) continue
+    const d = Math.hypot(c.x - cx, c.y - cy)
+    if (d > 0.06) continue
+    if (!best || d < best.d) best = { c, d }
+  }
+  return best?.c ?? null
+}
+
+/** "Approve (button)": what a labelled click hit, or null without a label. */
+export function clickTargetText(c: RecordedClick | null): string | null {
+  if (!c?.label) return null
+  return c.role ? `${c.label} (${c.role})` : c.label
 }
 
 /**

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RecordedClick } from '../api'
+import { currentHelpVideoPage } from '../walk/store'
+import { describeClickTarget } from '../walk/target'
 
 export const WARN_MS = 25 * 60_000
 /** From here the bar counts down the time that is left. */
@@ -98,7 +100,14 @@ export function useScreenCapture(events: {
     s.clicks.push({
       t_ms: Math.round(at),
       x: Math.round(Math.min(1, Math.max(0, e.clientX / window.innerWidth)) * 10_000) / 10_000,
-      y: Math.round(Math.min(1, Math.max(0, e.clientY / window.innerHeight)) * 10_000) / 10_000
+      y: Math.round(Math.min(1, Math.max(0, e.clientY / window.innerHeight)) * 10_000) / 10_000,
+      // What was clicked (this tab only: the listener only runs on it). Never
+      // a value or typed text; nothing inside .nvr-no-record.
+      ...describeClickTarget(e.target, {
+        pageKey: currentHelpVideoPage(),
+        path: window.location.pathname,
+        origin: window.location.origin
+      })
     })
   }).current
 

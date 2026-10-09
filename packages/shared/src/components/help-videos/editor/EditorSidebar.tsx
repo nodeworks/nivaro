@@ -1,6 +1,6 @@
 import { memo, useCallback, useRef } from 'react'
 import { sourceToEdited, upsertItemChecked } from '../edits'
-import type { VideoEdits } from '../types'
+import type { RecordedClick, VideoEdits } from '../types'
 import { CaptionsPanel } from './CaptionsPanel'
 import { ChaptersPanel } from './ChaptersPanel'
 import { Inspector } from './Inspector'
@@ -32,7 +32,7 @@ export const EditorSidebar = memo(function EditorSidebar({
   selection: Selection
   sourceMs: number
   /** The recorder's captured clicks: null when click capture was off. */
-  clicks: Array<{ t_ms: number; x: number; y: number }> | null | undefined
+  clicks: RecordedClick[] | null | undefined
   /** The playhead now (read when an action needs it, not every frame). */
   playhead: () => number
   onChange: (e: VideoEdits, key?: string) => void
@@ -95,6 +95,7 @@ export const EditorSidebar = memo(function EditorSidebar({
           onSelect={onSelect}
           onSeek={onSeek}
           onError={onNote}
+          clicks={clicks}
         />
       </div>
       <div className='py-3'>

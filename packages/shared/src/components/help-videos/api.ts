@@ -6,9 +6,11 @@ import type {
   HelpVideoContext,
   HelpVideoDto,
   HelpVideoErrorCode,
+  RecordedClick,
   VersionDto,
   VideoEdits,
-  Visibility
+  Visibility,
+  WalkStep
 } from './types'
 
 export const helpVideoKeys = {
@@ -18,6 +20,7 @@ export const helpVideoKeys = {
   library: (p: Record<string, unknown>) => ['help-videos', 'library', p] as const,
   required: ['help-videos', 'required'] as const,
   pages: ['help-videos', 'pages'] as const,
+  walk: (id: string) => ['help-videos', 'walk', id] as const,
   /** The editor's draft load. Outside the `all` prefix on purpose: GET
    *  /draft/edits creates a missing draft, so a broad invalidation must
    *  never refetch it. `n` bumps on Reload. */
@@ -111,6 +114,22 @@ export function useRequiredVideos() {
   })
 }
 
+/** "Show me on this page": the published version's labelled clicks. */
+export function useHelpVideoWalk(id: string | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.walk(id ?? ''),
+    enabled: !!id,
+    staleTime: 300_000,
+    queryFn: async () =>
+      (
+        await client.request(
+          get<{ data: { version_id: string | null; steps: WalkStep[] } }>(`/help-videos/${id}/walk`)
+        )
+      ).data
+  })
+}
+
 export function useHelpVideoPages() {
   const client = useNivaroClient()
   return useQuery({
@@ -127,8 +146,7 @@ export function useHelpVideoPages() {
   })
 }
 
-/** One click on the recorded tab: recording time and frame fractions (0–1). */
-export type RecordedClick = { t_ms: number; x: number; y: number }
+export type { RecordedClick }
 
 /** Every mutation, as plain functions over the client. */
 export function helpVideoApi(client: NivaroClient) {
@@ -212,8 +230,9 @@ export function helpVideoApi(client: NivaroClient) {
      * - `duration_ms`: recording time without pauses (the server prefers its
      *   own probe of the file; 0 when unknown).
      * - `clicks`: `{ t_ms, x, y }` per click on the recorded tab: `t_ms` is
-     *   recording time, `x`/`y` are fractions (0–1) of the captured frame.
-     *   Null when clicks were not captured.
+     *   recording time, `x`/`y` are fractions (0–1) of the captured frame;
+     *   plus what was clicked (label, role, hook, page_key, path, origin —
+     *   see RecordedClick). Null when clicks were not captured.
      * - `levels`: microphone loudness, one number from 0 (silence) to 1 every
      *   100 ms of recording time (10 per second), so `levels[i]` covers
      *   `i * 100` ms. Null without a microphone.
@@ -246,6 +265,11 @@ export function helpVideoApi(client: NivaroClient) {
         }>('/help-videos/uploads/mine')
       ).then((x) => x.data),
     abandonUpload: (id: string) => r(del(`/help-videos/uploads/${id}`)),
+    /** The published version's walk steps (none for a draft-only video). */
+    walk: (id: string) =>
+      r(
+        get<{ data: { version_id: string | null; steps: WalkStep[] } }>(`/help-videos/${id}/walk`)
+      ).then((x) => x.data),
     registerPage: (key: string, label: string, app?: string) =>
       r(post('/help-videos/pages', { key, label, app })),
     authorRoles: () =>

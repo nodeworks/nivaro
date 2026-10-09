@@ -8,7 +8,7 @@ import {
   useRef,
   useState
 } from 'react'
-import type { VideoEdits } from '../types'
+import type { RecordedClick, VideoEdits } from '../types'
 import type { Stretch } from './suggestCuts'
 import { clock, LANES, Lanes, type Selection } from './timeline/Lanes'
 import { Playhead } from './timeline/Playhead'
@@ -37,7 +37,8 @@ export function Timeline({
   onSeek,
   onChange,
   note: noteProp,
-  onNote
+  onNote,
+  clicks
 }: {
   edits: VideoEdits
   sourceMs: number
@@ -53,6 +54,8 @@ export function Timeline({
    *  `onNote` the timeline keeps its note itself. */
   note?: string | null
   onNote?: (n: string | null) => void
+  /** The recorder's clicks: ripple bars say what their click hit. */
+  clicks?: RecordedClick[] | null
 }) {
   const scroller = useRef<HTMLDivElement | null>(null)
   const [viewW, setViewW] = useState(0)
@@ -258,6 +261,7 @@ export function Timeline({
               nudge={nudge}
               hintId={hintId}
               layout={layout}
+              clicks={clicks}
             />
             <Playhead srcMs={playheadSrcMs} pps={pps} scroller={scroller} dragging={dragging} />
           </div>

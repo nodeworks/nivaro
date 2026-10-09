@@ -6,6 +6,7 @@ import { helpVideoApi, useHelpVideosFor } from '../api'
 import { canRecord, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
 import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
 import type { HelpVideoContext } from '../types'
+import { registerHelpVideoPage } from '../walk/store'
 import { isGettingReady, listMeta, progressLabel, showButton } from './format'
 import { HelpVideoSheet, useHelpVideosPath } from './HelpVideoSheet'
 
@@ -42,6 +43,9 @@ export function HelpVideoButton({
 
   const videos = q.data?.data ?? []
   const canAuthor = !!q.data?.can_author
+
+  // The screen's page key, for click labels and "Show me on this page".
+  useEffect(() => (page ? registerHelpVideoPage(page) : undefined), [page])
 
   // Page keys become pickable in the editor once a page has rendered a button.
   // Only authors may register one (the route answers 403 to everyone else).

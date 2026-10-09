@@ -463,6 +463,7 @@ function EditorBody({
             onChange={set}
             note={note}
             onNote={showNote}
+            clicks={clicks}
           />
         </TabsContent>
         <ManagePanels
