@@ -63,10 +63,10 @@ export function StatsTab({ video }: { video: HelpVideoDto }) {
       </dl>
       <section>
         <h3 className='mb-2 text-[13px] font-semibold text-foreground'>Where people stop</h3>
+        <p className='sr-only'>Share of viewers who reached each part of the video.</p>
         <div
           className='flex h-28 items-end gap-1 border-b border-border'
-          role='img'
-          aria-label='Share of viewers who reached each part of the video'
+          aria-hidden
           data-hv-dropoff
         >
           {a.drop_off.map((v, i) => (
@@ -79,6 +79,14 @@ export function StatsTab({ video }: { video: HelpVideoDto }) {
             />
           ))}
         </div>
+        <ul className='sr-only' data-hv-dropoff-list>
+          {a.drop_off.map((v, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: fixed 5% sections
+            <li key={i}>
+              {i * 5}–{i * 5 + 5}% of the video: {Math.round(v * 100)}% of viewers still watching
+            </li>
+          ))}
+        </ul>
         <div className='mt-1 flex justify-between text-[12px] text-muted-foreground'>
           <span>Start</span>
           <span>End</span>

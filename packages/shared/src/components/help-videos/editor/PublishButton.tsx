@@ -9,7 +9,8 @@ import { Label } from '../../ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { helpVideoApi, helpVideoKeys } from '../api'
 import type { HelpVideoDto } from '../types'
-import { describeMissing, missingForPublish, renderLabel, UNSAVED_NOTE, whenSaved } from './publish'
+import { describeMissing, missingForPublish, renderLabel, whenSaved } from './publish'
+import { UnsavedNote } from './UnsavedNote'
 
 const TONES = {
   neutral: 'text-muted-foreground',
@@ -21,19 +22,25 @@ const TONES = {
 export function PublishButton({
   video,
   beforePublish,
-  onPublished
+  onPublished,
+  conflict = false,
+  onReload = () => {}
 }: {
   video: HelpVideoDto
   // Lands the editor's pending save. False means it failed: nothing is published.
   beforePublish: () => Promise<boolean>
   // The editor reloads its draft here: publishing consumes the draft.
   onPublished: () => void
+  /** The editor's draft changed elsewhere: the note offers Reload, not waiting. */
+  conflict?: boolean
+  onReload?: () => void
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
   const [again, setAgain] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [unsaved, setUnsaved] = useState(false)
   const [note, setNote] = useState<string | null>(null)
   const missing = missingForPublish(video)
   const status = renderLabel(video.published)
@@ -43,10 +50,11 @@ export function PublishButton({
   const publish = async () => {
     setBusy(true)
     setNote(null)
+    setUnsaved(false)
     try {
       const r = await whenSaved(beforePublish, () => helpVideoApi(client).publish(video.id, again))
       if (!r.ok) {
-        setNote(UNSAVED_NOTE)
+        setUnsaved(true)
         return
       }
       toast.success('Published')
@@ -63,26 +71,29 @@ export function PublishButton({
     }
   }
 
+  const renderAgain = () => {
+    setNote(null)
+    setUnsaved(false)
+    helpVideoApi(client)
+      .rerender(video.id)
+      .then(() => qc.invalidateQueries({ queryKey: helpVideoKeys.one(video.id) }))
+      .catch((e) => {
+        setNote(`The render couldn't start. ${(e as Error).message}`)
+        setOpen(true)
+      })
+  }
+
   return (
-    <div className='flex items-center gap-2'>
+    <div className='flex min-w-0 flex-1 flex-wrap items-center justify-end gap-x-2 gap-y-1 sm:flex-none'>
       <span
-        className={`text-[12px] ${TONES[status.tone]}`}
+        className={`min-w-0 basis-full text-right text-[12px] sm:basis-auto ${TONES[status.tone]}`}
+        title={status.text}
         data-hv-render-status={video.published?.render_status ?? 'none'}
       >
         {status.text}
       </span>
       {video.published?.render_status === 'failed' && (
-        <Button
-          size='sm'
-          variant='ghost'
-          className='h-8'
-          onClick={() =>
-            void helpVideoApi(client)
-              .rerender(video.id)
-              .then(() => qc.invalidateQueries({ queryKey: helpVideoKeys.one(video.id) }))
-              .catch((e) => toast.error((e as Error).message))
-          }
-        >
+        <Button size='sm' variant='ghost' className='h-8' onClick={renderAgain}>
           Render again
         </Button>
       )}
@@ -90,7 +101,10 @@ export function PublishButton({
         open={open}
         onOpenChange={(o) => {
           setOpen(o)
-          if (o) setNote(null)
+          if (o) {
+            setNote(null)
+            setUnsaved(false)
+          }
         }}
       >
         <PopoverTrigger asChild>
@@ -124,25 +138,28 @@ export function PublishButton({
                   </Label>
                 </div>
               )}
-              {note && (
-                <p
-                  className='flex items-start gap-1.5 text-[12px] text-rose-700 dark:text-rose-300'
-                  role='alert'
-                  data-hv-publish-note
-                >
-                  <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
-                  {note}
-                </p>
-              )}
-              <Button
-                className='w-full'
-                disabled={busy}
-                onClick={() => void publish()}
-                data-hv-publish-confirm
-              >
-                {busy ? 'Publishing…' : 'Publish'}
-              </Button>
             </>
+          )}
+          {unsaved && <UnsavedNote conflict={conflict} onReload={onReload} data-hv-publish-note />}
+          {note && (
+            <p
+              className='flex items-start gap-1.5 text-[12px] text-rose-700 dark:text-rose-300'
+              role='alert'
+              data-hv-publish-note
+            >
+              <AlertCircle className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
+              {note}
+            </p>
+          )}
+          {!missing.length && (
+            <Button
+              className='w-full'
+              disabled={busy}
+              onClick={() => void publish()}
+              data-hv-publish-confirm
+            >
+              {busy ? 'Publishing…' : 'Publish'}
+            </Button>
           )}
         </PopoverContent>
       </Popover>

@@ -11,12 +11,15 @@ export function PickerCombo({
   options,
   onPick,
   placeholder,
-  ariaLabel
+  ariaLabel,
+  emptyText = 'Nothing matches.'
 }: {
   options: Array<{ value: string; label: string; hint?: string }>
   onPick: (value: string) => void
   placeholder: string
   ariaLabel: string
+  /** What the list says when it has no rows ("Loading…", or why it could not load). */
+  emptyText?: string
 }) {
   const [open, setOpen] = useState(false)
   return (
@@ -34,7 +37,7 @@ export function PickerCombo({
         <Command>
           <CommandInput placeholder='Search…' />
           <CommandList>
-            <CommandEmpty>Nothing matches.</CommandEmpty>
+            <CommandEmpty>{emptyText}</CommandEmpty>
             {options.map((o) => (
               <CommandItem
                 key={o.value}
@@ -70,7 +73,7 @@ export function RemovableChip({
 } & Record<`data-${string}`, string | undefined>) {
   return (
     <span
-      className='inline-flex h-7 items-center gap-1 rounded-full border border-border bg-muted/40 pl-2.5 pr-1 text-[12px] text-foreground'
+      className='inline-flex h-7 items-center gap-1 rounded-full border border-border bg-muted/40 pl-2.5 pr-0.5 text-[12px] text-foreground'
       {...rest}
     >
       {children}
@@ -78,7 +81,7 @@ export function RemovableChip({
         type='button'
         aria-label={removeLabel}
         onClick={onRemove}
-        className={`grid h-5 w-5 place-content-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none ${focusRing}`}
+        className={`grid h-6 w-6 place-content-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground motion-reduce:transition-none ${focusRing}`}
       >
         <X className='h-3 w-3' aria-hidden />
       </button>
@@ -92,7 +95,8 @@ export function RoleChips({
   selected,
   onChange,
   roleName,
-  addLabel
+  addLabel,
+  emptyText
 }: {
   roles: Array<{ id: string; name: string }>
   selected: string[]
@@ -100,6 +104,7 @@ export function RoleChips({
   roleName: (id: string) => string
   /** Names the add button for a screen reader (two lists sit on one page). */
   addLabel: string
+  emptyText?: string
 }) {
   const up = selected.map((s) => s.toUpperCase())
   return (
@@ -115,6 +120,7 @@ export function RoleChips({
       ))}
       <PickerCombo
         ariaLabel={addLabel}
+        emptyText={emptyText}
         placeholder='Add a role'
         options={roles
           .filter((r) => !up.includes(r.id.toUpperCase()))

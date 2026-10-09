@@ -44,14 +44,22 @@ afterEach(() => {
   document.body.replaceChildren()
 })
 
-async function publishWith(flush: () => Promise<boolean>) {
+const reload = vi.fn()
+
+async function publishWith(flush: () => Promise<boolean>, conflict = false) {
   const onPublished = vi.fn()
   await act(async () => {
     root.render(
       createElement(
         QueryClientProvider,
         { client: new QueryClient() },
-        createElement(PublishButton, { video, beforePublish: flush, onPublished })
+        createElement(PublishButton, {
+          video,
+          beforePublish: flush,
+          onPublished,
+          conflict,
+          onReload: reload
+        })
       )
     )
   })
@@ -82,5 +90,16 @@ describe('PublishButton', () => {
     expect(document.querySelector('[data-hv-publish-note]')?.textContent).toContain(
       "Your latest edits haven't saved yet"
     )
+  })
+
+  it('after a conflict it says the draft changed elsewhere and offers Reload', async () => {
+    await publishWith(async () => false, true)
+    expect(document.querySelector('[data-hv-publish-note]')?.textContent).toContain(
+      'changed somewhere else'
+    )
+    await act(async () => {
+      document.querySelector<HTMLButtonElement>('[data-hv-reload]')?.click()
+    })
+    expect(reload).toHaveBeenCalledTimes(1)
   })
 })

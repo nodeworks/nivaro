@@ -7,7 +7,8 @@ import { Button } from '../../ui/button'
 import { Skeleton } from '../../ui/skeleton'
 import { helpVideoApi, helpVideoKeys } from '../api'
 import type { HelpVideoDto } from '../types'
-import { renderLabel, UNSAVED_NOTE, whenSaved } from './publish'
+import { renderLabel, whenSaved } from './publish'
+import { UnsavedNote } from './UnsavedNote'
 
 const pill = 'rounded-full px-2 py-0.5 text-[11px] font-medium'
 
@@ -15,7 +16,9 @@ export function VersionsTab({
   video,
   onRerecord,
   onRestored,
-  beforeChange
+  beforeChange,
+  conflict = false,
+  onReload = () => {}
 }: {
   video: HelpVideoDto
   onRerecord: () => void
@@ -23,10 +26,14 @@ export function VersionsTab({
   // Lands the editor's pending autosave first, so the old draft's last edits never
   // overwrite a new draft. Resolves false when the save failed: nothing changes then.
   beforeChange: () => Promise<boolean>
+  /** The draft changed elsewhere: the note offers Reload instead of waiting. */
+  conflict?: boolean
+  onReload?: () => void
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
   const [note, setNote] = useState<string | null>(null)
+  const [unsaved, setUnsaved] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
   const versions = useQuery({
     queryKey: ['help-videos', 'versions', video.id],
@@ -35,17 +42,19 @@ export function VersionsTab({
 
   const rerecord = async () => {
     setNote(null)
+    setUnsaved(false)
     const r = await whenSaved(beforeChange, async () => undefined)
-    if (!r.ok) setNote(UNSAVED_NOTE)
+    if (!r.ok) setUnsaved(true)
     else onRerecord()
   }
   const restore = async (id: string, version: number) => {
     setNote(null)
+    setUnsaved(false)
     setRestoring(id)
     try {
       const r = await whenSaved(beforeChange, () => helpVideoApi(client).restore(video.id, id))
       if (!r.ok) {
-        setNote(UNSAVED_NOTE)
+        setUnsaved(true)
         return
       }
       toast.success(`Version ${version} copied into a new draft`)
@@ -76,6 +85,7 @@ export function VersionsTab({
           Re-record
         </Button>
       </div>
+      {unsaved && <UnsavedNote conflict={conflict} onReload={onReload} data-hv-versions-note />}
       <div role='status' aria-live='polite'>
         {note && (
           <p
@@ -146,6 +156,7 @@ export function VersionsTab({
                   className='h-8'
                   disabled={restoring !== null}
                   onClick={() => void restore(v.id, v.version)}
+                  aria-label={`Restore version ${v.version}`}
                   data-hv-restore={v.version}
                 >
                   {restoring === v.id ? 'Restoring…' : 'Restore'}

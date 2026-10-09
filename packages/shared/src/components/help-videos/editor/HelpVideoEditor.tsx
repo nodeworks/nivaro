@@ -50,6 +50,9 @@ export function HelpVideoEditor({ videoId, onClose }: { videoId: string; onClose
   // Bumped by Reload (after a conflict) and Try again: a new key loads the
   // draft afresh and remounts the editor body on it.
   const [loads, setLoads] = useState(0)
+  // Here, not in the body: a reload (after a publish or a restore) remounts the
+  // body, and the person stays on the tab they were on.
+  const [tab, setTab] = useState('edit')
   // A query, not an effect: GET /draft/edits creates the draft when there is
   // none, and two calls at once (StrictMode mounts twice) could create two.
   const draftQuery = useQuery({
@@ -105,6 +108,8 @@ export function HelpVideoEditor({ videoId, onClose }: { videoId: string; onClose
       draft={draft}
       onReload={reload}
       onClose={onClose}
+      tab={tab}
+      onTab={setTab}
     />
   )
 }
@@ -135,12 +140,16 @@ function EditorBody({
   video,
   draft,
   onReload,
-  onClose
+  onClose,
+  tab,
+  onTab
 }: {
   video: HelpVideoDto
   draft: VersionDto
   onReload: () => void
   onClose?: () => void
+  tab: string
+  onTab: (tab: string) => void
 }) {
   const [h, dispatch] = useReducer(historyReducer, draft.edits, initHistory)
   const edits = h.present
@@ -169,7 +178,6 @@ function EditorBody({
   const playhead = useCallback(() => player.current?.sourceMs() ?? srcRef.current, [])
   const [selection, setSelection] = useState<Selection>(null)
   const [viewerPreview, setViewerPreview] = useState(false)
-  const [tab, setTab] = useState('edit')
   const [tool, setTool] = useState<Tool | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const root = useRef<HTMLDivElement | null>(null)
@@ -250,7 +258,7 @@ function EditorBody({
           {video.title || 'Untitled video'}
         </h2>
         <SaveState save={save} onReload={onReload} />
-        <div className='ml-auto flex items-center gap-3'>
+        <div className='ml-auto flex w-full min-w-0 flex-wrap items-center justify-between gap-x-3 gap-y-1.5 sm:w-auto sm:justify-end'>
           <div className='flex items-center gap-2'>
             <Switch
               id={`hv-viewer-preview-${video.id}`}
@@ -270,6 +278,8 @@ function EditorBody({
             video={{ ...video, draft }}
             beforePublish={save.flush}
             onPublished={onReload}
+            conflict={save.status === 'conflict'}
+            onReload={onReload}
           />
           {onClose && (
             <Button
@@ -284,7 +294,7 @@ function EditorBody({
           )}
         </div>
       </header>
-      <Tabs value={tab} onValueChange={setTab} className='flex min-h-0 flex-1 flex-col'>
+      <Tabs value={tab} onValueChange={onTab} className='flex min-h-0 flex-1 flex-col'>
         <TabsList className='mx-4 mt-2 h-9 self-start'>
           <TabsTrigger value='edit' className='text-[13px]'>
             Edit
@@ -453,7 +463,12 @@ function EditorBody({
             onNote={showNote}
           />
         </TabsContent>
-        <ManagePanels video={video} flush={save.flush} onReload={onReload} />
+        <ManagePanels
+          video={video}
+          flush={save.flush}
+          conflict={save.status === 'conflict'}
+          onReload={onReload}
+        />
       </Tabs>
     </div>
   )

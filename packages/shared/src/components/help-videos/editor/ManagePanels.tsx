@@ -15,11 +15,14 @@ import { VersionsTab } from './VersionsTab'
 export function ManagePanels({
   video,
   flush,
+  conflict,
   onReload
 }: {
   video: HelpVideoDto
   /** Lands the editor's pending save; false when it failed. */
   flush: () => Promise<boolean>
+  /** The editor's draft changed elsewhere. */
+  conflict: boolean
   /** Loads the draft afresh (after a restore or a re-record). */
   onReload: () => void
 }) {
@@ -37,6 +40,8 @@ export function ManagePanels({
           onRerecord={() => setRecording(true)}
           onRestored={onReload}
           beforeChange={flush}
+          conflict={conflict}
+          onReload={onReload}
         />
       </TabsContent>
       <TabsContent value='stats' className={scroll}>
