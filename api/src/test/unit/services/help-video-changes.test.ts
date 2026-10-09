@@ -61,6 +61,13 @@ describe('firstChange (#1497)', () => {
     expect(firstChange(before, after, true)).toEqual({ at_ms: 30_000, whole: false })
   })
 
+  it('a new caption look counts from the first caption', () => {
+    expect(firstChange(base(), base({ caption_style: { size: 'xl' } }), true)).toEqual({
+      at_ms: 1000,
+      whole: false
+    })
+  })
+
   it('only the poster moving is not a visible change', () => {
     expect(firstChange(base(), base({ poster_ms: 40_000 }), true)).toBeNull()
   })

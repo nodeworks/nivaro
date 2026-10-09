@@ -19,6 +19,8 @@ import {
 //     - the crop or the narration cleanup changed: 0 (both cover the whole
 //       recording);
 //     - the step badge style changed: the first step on screen;
+//     - the callout text size changed: the first callout, box or step;
+//     - the caption look changed: the first caption;
 //     - the kept pieces: walking both lists in order, the first piece that
 //       differs (start, end, speed or its music level). When both start at the
 //       same source moment at the same speed, the shared part plays the same,
@@ -125,6 +127,15 @@ export function firstChange(oldE: VideoEdits, newE: VideoEdits, sameSource: bool
   if (!same(oldE.step_style ?? null, newE.step_style ?? null)) {
     const steps = newE.annotations.filter((a) => a.type === 'step').map((a) => a.start_ms)
     if (steps.length) points.push(snapForward(newE, Math.min(...steps)))
+  }
+  if ((oldE.callout_text ?? null) !== (newE.callout_text ?? null)) {
+    const texts = newE.annotations
+      .filter((a) => a.type === 'callout' || a.type === 'box' || a.type === 'step')
+      .map((a) => a.start_ms)
+    if (texts.length) points.push(snapForward(newE, Math.min(...texts)))
+  }
+  if (!same(oldE.caption_style ?? null, newE.caption_style ?? null) && newE.captions.length) {
+    points.push(snapForward(newE, Math.min(...newE.captions.map((c) => c.start_ms))))
   }
   const piece = firstPieceChange(oldE, newE)
   if (piece !== null) points.push(piece)
