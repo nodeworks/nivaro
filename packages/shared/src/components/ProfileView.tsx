@@ -43,6 +43,7 @@ import { TeamLoadCard } from './profile/PersonExtras'
 export { DelegationCard }
 
 import { NotificationSourcesCard } from './NotificationSourcesCard'
+import { UserScopesCard } from './profile/PersonAccess'
 import { PersonProfile } from './profile/PersonProfile'
 import { ConfirmButton, Field, SectionCard, Toggle } from './profile/primitives'
 import { SimpleSelectXs } from './ui/SimpleSelect'
@@ -1734,7 +1735,14 @@ function OwnProfile({
           <TimezoneCard />
           <DisplayPrefsCard />
           <LinkAppCard />
-          <ScopeDefaultsCard />
+          {/* An admin may set their OWN restrictions too — the self-serve card
+              only edits defaults, so without this an admin's own row could be
+              changed from nowhere in the UI. */}
+          {ownAuth.isAdmin && me?.id ? (
+            <UserScopesCard userId={String(me.id)} />
+          ) : (
+            <ScopeDefaultsCard />
+          )}
           <RemindersCard />
           {/* Renders nothing for someone with no direct reports. */}
           <TeamLoadCard userId='me' />

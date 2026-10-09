@@ -510,7 +510,8 @@ function IssueRows({
 
 export function IssuesPage() {
   const qc = useQueryClient()
-  const [statusFilter, setStatusFilter] = useState('')
+  // Open by default — the page is a triage list; resolved history is a filter away.
+  const [statusFilter, setStatusFilter] = useState('open')
   const [severityFilter, setSeverityFilter] = useState('')
   const [collectionFilter, setCollectionFilter] = useState('')
   const [sourceFilter, setSourceFilter] = useState('')
@@ -758,9 +759,13 @@ export function IssuesPage() {
         ) : rows.length === 0 ? (
           <div className='flex flex-col items-center justify-center py-24 text-center'>
             <AlertOctagon className='mb-3 h-10 w-10 text-muted-foreground/40' />
-            <p className='mb-1 text-sm font-medium'>No issues found</p>
+            <p className='mb-1 text-sm font-medium'>
+              {statusFilter ? `No ${statusLabel(statusFilter)} issues` : 'No issues found'}
+            </p>
             <p className='text-xs text-muted-foreground'>
-              Raise an issue to track data or process problems.
+              {statusFilter || severityFilter || collectionFilter || sourceFilter
+                ? 'Clear the filters to see everything that was logged.'
+                : 'Raise an issue to track data or process problems.'}
             </p>
           </div>
         ) : (

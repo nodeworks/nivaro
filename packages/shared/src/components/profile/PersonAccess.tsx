@@ -422,6 +422,10 @@ export function UserScopesCard({ userId }: { userId: string }) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-user-scopes', userId] })
       void qc.invalidateQueries({ queryKey: ['nvr-person-profile', userId] })
+      // When the admin edits their OWN row, the filter seeding and the
+      // self-serve defaults card read these keys.
+      void qc.invalidateQueries({ queryKey: ['nvr-my-scopes'] })
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-scopes'] })
     },
     onError: (e) => toast.error(errorText(e, 'Could not save scopes'))
   })
