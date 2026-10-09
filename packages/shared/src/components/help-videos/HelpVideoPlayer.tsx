@@ -23,7 +23,7 @@ import {
   sourceToEdited
 } from './edits'
 import { OverlayLayer } from './OverlayLayer'
-import { fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
+import { fileMsForSource, fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
 import { createProgressBeats } from './progressBeats'
 import type { HelpVideoDto, VideoEdits } from './types'
 import { DownloadMenu } from './viewer/DownloadMenu'
@@ -318,9 +318,11 @@ function PlayerInner({
     (ms: number) => {
       // A source moment is always in the recording, never on a card.
       if (cardRef.current) setCard(null)
-      if (videoRef.current) videoRef.current.currentTime = ms / 1000
+      // A rendered file runs on edited time (intro, cuts, speed): map first.
+      if (videoRef.current)
+        videoRef.current.currentTime = fileMsForSource(edits, rendered, ms) / 1000
     },
-    [setCard]
+    [setCard, edits, rendered]
   )
   const togglePlay = useCallback(() => {
     const v = videoRef.current
@@ -644,9 +646,11 @@ function PlayerInner({
                     setCard({ kind: 'outro', at: 0, playing: true })
                   } else send()
                 }}
-                onLoadedMetadata={() => {
+                onLoadedMetadata={(e) => {
                   if (resumeAt.current !== null) {
-                    seekSource(resumeAt.current)
+                    // resumeAt is the file's own position, so it goes back as is.
+                    if (cardRef.current) setCard(null)
+                    e.currentTarget.currentTime = resumeAt.current / 1000
                     resumeAt.current = null
                   }
                 }}

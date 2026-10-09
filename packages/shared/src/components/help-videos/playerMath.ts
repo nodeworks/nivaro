@@ -1,4 +1,4 @@
-import { segmentIndexAt } from './edits'
+import { editedDuration, outroMs, segmentIndexAt, sourceToEdited } from './edits'
 import type { VideoEdits } from './types'
 
 // The live player's arithmetic, kept pure so it can be tested in node.
@@ -101,4 +101,23 @@ export function activeAt<T extends { start_ms: number; end_ms: number }>(
   srcMs: number
 ): T[] {
   return items.filter((x) => srcMs >= x.start_ms && srcMs <= x.end_ms)
+}
+
+/**
+ * Where in the playing FILE a source moment sits. The source file runs on
+ * recording time; a rendered file runs on edited time (intro card, cuts and
+ * speed changes already applied), so a chapter's source moment has to be
+ * mapped first. A moment that was cut out lands on the next kept frame.
+ */
+export function fileMsForSource(
+  e: VideoEdits | null | undefined,
+  rendered: boolean,
+  srcMs: number
+): number {
+  if (!rendered || !e) return srcMs
+  const exact = sourceToEdited(e, srcMs)
+  if (exact !== null) return exact
+  const next = e.segments.find((s) => s.start_ms >= srcMs)
+  if (next) return sourceToEdited(e, next.start_ms) ?? srcMs
+  return editedDuration(e) - outroMs(e)
 }

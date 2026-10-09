@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   activeAt,
   bucketIndex,
+  fileMsForSource,
   fitFrame,
   liveBlurPx,
   liveStep,
@@ -96,4 +97,33 @@ describe('liveBlurPx', () => {
     expect(liveBlurPx(40, { w: 0.5, h: 0.05 }, canvas, 1280)).toBeCloseTo(8 / 1.7))
   it('never goes below radius 1', () =>
     expect(liveBlurPx(12, { w: 0.001, h: 0.001 }, canvas, 1280)).toBeCloseTo(1 / 1.7))
+})
+
+describe('fileMsForSource', () => {
+  // The published "Testing" video: a 2 s intro, a 4x stretch, two chapters.
+  const t: VideoEdits = {
+    ...e,
+    zooms: [],
+    segments: [
+      { start_ms: 0, end_ms: 300, speed: 1 },
+      { start_ms: 300, end_ms: 7100, speed: 4 },
+      { start_ms: 7100, end_ms: 7355, speed: 1 }
+    ],
+    intro: { enabled: true, duration_ms: 2000, show_chapters: true, title: '', subtitle: '' }
+  } as VideoEdits
+
+  it('maps a chapter onto the rendered file (intro + speed)', () => {
+    expect(fileMsForSource(t, true, 2300)).toBe(2800)
+    expect(fileMsForSource(t, true, 7100)).toBe(4000)
+  })
+  it('leaves source playback on recording time', () => {
+    expect(fileMsForSource(t, false, 2300)).toBe(2300)
+    expect(fileMsForSource(null, true, 2300)).toBe(2300)
+  })
+  it('a cut-out moment lands on the next kept frame', () => {
+    // e cuts 2000..4000; 3000 is gone, so it lands where 4000 plays.
+    expect(fileMsForSource(e, true, 3000)).toBe(2000)
+    // Past the last kept frame: the end of the recording part.
+    expect(fileMsForSource(e, true, 9000)).toBe(4000)
+  })
 })
