@@ -234,6 +234,9 @@ export function helpVideoApi(client: NivaroClient) {
             id: string
             bytes_received: number
             next_part: number
+            /** `open`, or `finalized`: uploaded but never saved as a video. */
+            status: string
+            duration_ms: number | null
             created_at: string
             updated_at: string
           }>

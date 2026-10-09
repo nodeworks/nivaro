@@ -1,4 +1,4 @@
-import { AppWindow, ArchiveX, History, Monitor, PanelTop } from 'lucide-react'
+import { AppWindow, ArchiveX, FileVideo, History, Monitor, PanelTop } from 'lucide-react'
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '../../ui/button'
 import { Checkbox } from '../../ui/checkbox'
@@ -11,6 +11,7 @@ import {
 } from '../../ui/dialog'
 import { Label } from '../../ui/label'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import { formatDuration } from '../viewer/format'
 import type { Leftover } from './leftovers'
 import { ConfirmDiscard, ErrorNote, ghostBtn, primaryBtn } from './RecorderStatus'
 import type { Source } from './useScreenCapture'
@@ -64,6 +65,7 @@ export function RecorderSetup({
   confirmDiscard,
   onConfirmDiscard,
   onKeep,
+  onSaveFinished,
   onDiscard,
   error,
   onCancel,
@@ -78,6 +80,8 @@ export function RecorderSetup({
   confirmDiscard: string | null
   onConfirmDiscard: (id: string | null) => void
   onKeep: (id: string) => void
+  /** Saves a finished recording as a video (or as the re-recording). */
+  onSaveFinished: (id: string) => void
   onDiscard: (id: string) => void
   error: string | null
   onCancel: () => void
@@ -116,6 +120,8 @@ export function RecorderSetup({
           confirmDiscard={confirmDiscard}
           onConfirmDiscard={onConfirmDiscard}
           onKeep={onKeep}
+          onSaveFinished={onSaveFinished}
+          saveLabel={rerecord ? 'Use it' : 'Save it'}
           onDiscard={onDiscard}
         />
 
@@ -257,14 +263,16 @@ function SourcePicker({
   )
 }
 
-/** Interrupted recordings (keep or discard) and copies the server can no
- *  longer take (discard only). */
+/** Finished recordings never saved (save or discard), interrupted ones (keep
+ *  or discard) and copies the server can no longer take (discard only). */
 function LeftoverList({
   leftovers,
   busy,
   confirmDiscard,
   onConfirmDiscard,
   onKeep,
+  onSaveFinished,
+  saveLabel,
   onDiscard
 }: {
   leftovers: Leftover[]
@@ -272,9 +280,12 @@ function LeftoverList({
   confirmDiscard: string | null
   onConfirmDiscard: (id: string | null) => void
   onKeep: (id: string) => void
+  onSaveFinished: (id: string) => void
+  saveLabel: string
   onDiscard: (id: string) => void
 }) {
   const ids = useId()
+  const finished = leftovers.filter((l) => l.kind === 'finished')
   const interrupted = leftovers.filter((l) => l.kind === 'interrupted')
   const unsaveable = leftovers.filter((l) => l.kind === 'unsaveable')
   const discard = (l: Leftover) => (
@@ -290,6 +301,53 @@ function LeftoverList({
   )
   return (
     <>
+      {finished.length > 0 && (
+        <section
+          aria-labelledby={`${ids}-done`}
+          className='rounded-lg border border-border bg-muted/40 px-3.5 py-3 dark:bg-transparent'
+          data-hv-finished
+        >
+          <div className='flex items-start gap-2.5'>
+            <FileVideo className='mt-0.5 h-4 w-4 shrink-0 text-foreground' aria-hidden />
+            <div className='min-w-0 flex-1'>
+              <p id={`${ids}-done`} className='font-medium text-foreground'>
+                {finished.length === 1
+                  ? 'A recording is ready to save'
+                  : `${finished.length} recordings are ready to save`}
+              </p>
+              <ul className='mt-2 space-y-2.5'>
+                {finished.map((l) => (
+                  <li
+                    key={l.id}
+                    className='flex flex-col items-start gap-2'
+                    data-hv-leftover={l.id}
+                  >
+                    <span className='text-muted-foreground'>
+                      Recorded {when(l.created_at as string)}
+                      {l.duration_ms ? `, ${formatDuration(l.duration_ms)} long` : ''}. It finished
+                      uploading but was never saved.
+                    </span>
+                    <span className='flex flex-wrap items-center gap-1.5'>
+                      {confirmDiscard !== l.id && (
+                        <Button
+                          size='sm'
+                          className={`h-8 text-[12.5px] ${primaryBtn}`}
+                          disabled={!!busy}
+                          onClick={() => onSaveFinished(l.id)}
+                          data-hv-save-finished
+                        >
+                          {busy === l.id ? 'Saving…' : saveLabel}
+                        </Button>
+                      )}
+                      {discard(l)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+        </section>
+      )}
       {interrupted.length > 0 && (
         <section
           aria-labelledby={`${ids}-left`}

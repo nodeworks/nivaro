@@ -52,4 +52,23 @@ describe('findLeftovers', () => {
       { id: 'gone', kind: 'unsaveable', created_at: null, bytes: 10, gap: false }
     ])
   })
+  it('lists a finished upload never saved as a video as finished, not as unsaveable', async () => {
+    const store = new MemoryPartStore()
+    await store.put('done', 0, blob(7)) // parts a closed tab never cleared
+    const finished = { ...open('done', 3, 300), status: 'finalized', duration_ms: 65_000 }
+    expect(await findLeftovers([finished], store, NOW)).toEqual([
+      {
+        id: 'done',
+        kind: 'finished',
+        created_at: ago(20 * 60_000),
+        bytes: 300,
+        gap: false,
+        duration_ms: 65_000
+      }
+    ])
+  })
+  it('skips a finished upload another tab is saving right now', async () => {
+    const fresh = { ...open('done', 3, 300, 5_000), status: 'finalized', duration_ms: 1 }
+    expect(await findLeftovers([fresh], new MemoryPartStore(), NOW)).toEqual([])
+  })
 })

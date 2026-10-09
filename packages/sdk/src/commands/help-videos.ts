@@ -80,7 +80,11 @@ export interface HelpVideoUploadSession {
   mime: string
   bytes_received: number
   next_part: number
+  /** `open` while parts arrive; `finalized` once uploaded (listed by
+   *  `listMyHelpVideoUploads` only while no video uses it). */
   status: string
+  /** Probed length of a finalized recording; null while open. */
+  duration_ms: number | null
   created_at: string
   updated_at: string
 }
@@ -225,9 +229,13 @@ export function finalizeHelpVideoUpload(
 ): Command<{ data: HelpVideoFinalizedUpload }> {
   return cmd('POST', `/help-videos/uploads/${id}/finalize`, undefined, meta ?? {})
 }
+/** Your unfinished uploads and finished recordings never saved as a video
+ *  (save one with `createHelpVideo` / `rerecordHelpVideo`, no finalize). */
 export function listMyHelpVideoUploads(): Command<{ data: HelpVideoUploadSession[] }> {
   return cmd('GET', '/help-videos/uploads/mine')
 }
+/** Discards an open upload, or a finished recording no video uses (its file
+ *  is deleted). 409 `UPLOAD_CLOSED` for anything else. */
 export function abandonHelpVideoUpload(id: string): Command<void> {
   return cmd('DELETE', `/help-videos/uploads/${id}`)
 }

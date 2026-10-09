@@ -1,11 +1,12 @@
 import { randomUUID } from 'node:crypto'
-import { appendFile, mkdir, rm, stat, truncate } from 'node:fs/promises'
+import { appendFile, mkdir, readdir, rm, stat, truncate } from 'node:fs/promises'
 import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { hasFfmpeg, probeVideo, remuxToFile } from './ffmpeg.js'
-import { uploadFileFromPath } from './files.js'
+import { deleteFile, getFile, uploadFileFromPath } from './files.js'
+import { deleteStoredObject } from './storage-drivers.js'
 
 // The host name, not the per-boot INSTANCE_ID: a restarted container keeps its
 // temp files and must keep accepting parts for uploads it opened before.
@@ -20,6 +21,8 @@ export const MAX_PART_BYTES = 8 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = Math.round(1.2 * 1024 * 1024 * 1024)
 export const ALLOWED_MIME = ['video/webm', 'video/mp4']
 const STALE_HOURS = 24
+/** A recording uploaded but never saved as a video is kept this long. */
+const UNUSED_RECORDING_DAYS = 7
 const FINALIZING_STALE_MS = 3_600_000 // a 1.2 GB remux finishes well inside this
 export const MAX_DURATION_MS = 31 * 60_000 // 30 minutes + 1 minute slack
 const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -30,6 +33,8 @@ export interface UploadSession {
   bytes_received: number
   next_part: number
   status: string
+  /** Probed length of a finalized recording; null while open. */
+  duration_ms: number | null
   created_at: string
   updated_at: string
 }
@@ -121,17 +126,22 @@ function shape(r: Record<string, unknown>): UploadSession {
     bytes_received: Number(r.bytes_received),
     next_part: Number(r.next_part),
     status: String(r.status),
+    duration_ms: r.duration_ms == null ? null : Number(r.duration_ms),
     created_at: new Date(r.created_at as string).toISOString(),
     updated_at: new Date(r.updated_at as string).toISOString()
   }
 }
 
-async function own(user: User, id: string): Promise<Record<string, unknown>> {
+async function own(
+  user: User,
+  id: string,
+  opts: { anyHost?: boolean } = {}
+): Promise<Record<string, unknown>> {
   id = assertId(id)
   const row = await db('nivaro_help_video_uploads').where({ id }).first()
   if (!row || String(row.user).toLowerCase() !== user.id.toLowerCase())
     throw fail(404, 'UPLOAD_NOT_FOUND', 'Upload not found')
-  if (row.instance && row.instance !== HOST) {
+  if (!opts.anyHost && row.instance && row.instance !== HOST) {
     throw fail(409, 'UPLOAD_ELSEWHERE', 'This upload is held by another server — retry shortly')
   }
   return row
@@ -345,19 +355,92 @@ export async function takeFinalizedUpload(user: User, uploadId: string): Promise
   }
 }
 
-export async function listOpenUploads(user: User): Promise<UploadSession[]> {
-  const rows = await db('nivaro_help_video_uploads')
-    .where({ user: user.id, status: 'open' })
-    .orderBy('created_at', 'desc')
-  return rows.map((r) => shape(r as Record<string, unknown>))
+/** A finalized upload whose recording no video version uses: the recorder
+ *  finished uploading but the video was never created (a closed tab, a
+ *  failed create). Narrows a nivaro_help_video_uploads query. */
+function whereRecordingUnused(q: ReturnType<typeof db>): ReturnType<typeof db> {
+  return q
+    .where('nivaro_help_video_uploads.status', 'finalized')
+    .whereNotNull('nivaro_help_video_uploads.file_id')
+    .whereNotExists(function () {
+      this.select(db.raw('1'))
+        .from('nivaro_help_video_versions')
+        .whereRaw('nivaro_help_video_versions.source_file = nivaro_help_video_uploads.file_id')
+    })
+    .whereNotExists(function () {
+      this.select(db.raw('1'))
+        .from('nivaro_help_videos')
+        .whereRaw('nivaro_help_videos.poster_file = nivaro_help_video_uploads.file_id')
+    })
 }
 
+/** This person's unfinished uploads (status `open`) and finished recordings
+ *  that were never saved as a video (status `finalized`), newest first. */
+export async function listOpenUploads(user: User): Promise<UploadSession[]> {
+  const [open, finished] = await Promise.all([
+    db('nivaro_help_video_uploads').where({ user: user.id, status: 'open' }),
+    whereRecordingUnused(
+      db('nivaro_help_video_uploads').where('nivaro_help_video_uploads.user', user.id)
+    )
+  ])
+  return [...open, ...finished]
+    .map((r) => shape(r as Record<string, unknown>))
+    .sort((a, b) => b.created_at.localeCompare(a.created_at))
+}
+
+/** Deletes a finished recording's file. The stored bytes go first, while the
+ *  upload row still names the file (so the files API keeps hiding it); then
+ *  the row lets go and the file row is deleted. On a failure the row keeps
+ *  (or gets back) the file id, and purgeStaleUploads tries again. */
+async function deleteRecording(uploadId: unknown, fileId: string): Promise<boolean> {
+  try {
+    const file = await getFile(fileId)
+    if (file?.filename_disk) await deleteStoredObject(file.filename_disk)
+    await db('nivaro_help_video_uploads')
+      .where({ id: uploadId })
+      .update({ file_id: null, updated_at: new Date() })
+    await deleteFile(fileId)
+    return true
+  } catch (err) {
+    await db('nivaro_help_video_uploads')
+      .where({ id: uploadId })
+      .whereNull('file_id')
+      .update({ file_id: fileId })
+      .catch(() => undefined)
+    console.warn(
+      `help-video upload ${String(uploadId).toLowerCase()}: could not delete recording ${fileId}: ${(err as Error).message}`
+    )
+    return false
+  }
+}
+
+/** Discards an open upload, or a finished recording no video uses. Anything
+ *  else (finishing, used, already discarded) is refused with 409. */
 export async function abandonUpload(user: User, id: string): Promise<void> {
-  const row = await own(user, id)
-  await db('nivaro_help_video_uploads')
-    .where({ id: row.id })
-    .update({ status: 'abandoned', updated_at: new Date() })
-  await rm(partPath(String(row.id)), { force: true })
+  const row = await own(user, id, { anyHost: true })
+  if (row.status === 'open') {
+    if (row.instance && row.instance !== HOST) {
+      throw fail(409, 'UPLOAD_ELSEWHERE', 'This upload is held by another server — retry shortly')
+    }
+    const done = await db('nivaro_help_video_uploads')
+      .where({ id: row.id, status: 'open' })
+      .update({ status: 'abandoned', updated_at: new Date() })
+    if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
+    await rm(partPath(String(row.id)), { force: true })
+    return
+  }
+  if (row.status === 'finalized' && row.file_id) {
+    // Claimed first (finalized -> abandoned) so a save racing this discard
+    // can't take the recording while its file is being deleted.
+    const claimed = await whereRecordingUnused(
+      db('nivaro_help_video_uploads').where('nivaro_help_video_uploads.id', String(row.id))
+    ).update({ status: 'abandoned', updated_at: new Date() })
+    if (claimed) {
+      await deleteRecording(row.id, String(row.file_id))
+      return
+    }
+  }
+  throw fail(409, 'UPLOAD_CLOSED', 'This upload is already finished')
 }
 
 export async function purgeStaleUploads(): Promise<number> {
@@ -375,5 +458,43 @@ export async function purgeStaleUploads(): Promise<number> {
       )
       .update({ status: 'abandoned', updated_at: new Date() })
   }
-  return rows.length
+  // Finished recordings never saved as a video: kept a week, then deleted.
+  const oldCutoff = new Date(Date.now() - UNUSED_RECORDING_DAYS * 86_400_000)
+  const unused = await whereRecordingUnused(db('nivaro_help_video_uploads'))
+    .where('nivaro_help_video_uploads.updated_at', '<', oldCutoff)
+    .select('nivaro_help_video_uploads.id', 'nivaro_help_video_uploads.file_id')
+  let recordings = 0
+  for (const r of unused) {
+    const claimed = await whereRecordingUnused(
+      db('nivaro_help_video_uploads').where('nivaro_help_video_uploads.id', r.id)
+    ).update({ status: 'abandoned', updated_at: new Date() })
+    if (claimed && (await deleteRecording(r.id, String(r.file_id)))) recordings++
+  }
+  // A discard whose file delete failed left the file id on the row: retry.
+  const retry = await db('nivaro_help_video_uploads')
+    .where({ status: 'abandoned' })
+    .whereNotNull('file_id')
+    .select('id', 'file_id')
+  for (const r of retry) if (await deleteRecording(r.id, String(r.file_id))) recordings++
+  await purgeTempFiles()
+  return rows.length + recordings
+}
+
+/** Remux output (`<id>.fixed.<ext>`) left behind by a finalize that died. A
+ *  live finalize finishes well inside FINALIZING_STALE_MS, so only older
+ *  files go. */
+export async function purgeTempFiles(now = Date.now()): Promise<number> {
+  const dir = join(videoWorkDir(), 'uploads')
+  const names = await readdir(dir).catch(() => [] as string[])
+  let removed = 0
+  for (const name of names) {
+    if (!/^[0-9a-f-]{36}\.fixed\.(webm|mp4)$/i.test(name)) continue
+    const path = join(dir, name)
+    const s = await stat(path).catch(() => null)
+    if (s && now - s.mtimeMs > FINALIZING_STALE_MS) {
+      await rm(path, { force: true })
+      removed++
+    }
+  }
+  return removed
 }

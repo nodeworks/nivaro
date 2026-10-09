@@ -312,6 +312,28 @@ export function HelpVideoRecorder({
     setBusyLeftover(null)
   }
 
+  /** A finished recording the server already holds: no parts to send and
+   *  nothing to finalize, only the save (create, or re-record into this video). */
+  async function saveFinished(id: string) {
+    setBusyLeftover(id)
+    setAutoStopped(false)
+    setFailure(null)
+    setSavePhase('finish')
+    setStage('saving')
+    r.current.finalized.add(id)
+    try {
+      const video = await finish(id, emptyMeta())
+      setSaved(video)
+      setStage('done')
+      props.current.onDone(video)
+    } catch (err) {
+      setFailure({ ...plainFailure(err), uploadId: id })
+      setStage('error')
+    } finally {
+      setBusyLeftover(null)
+    }
+  }
+
   async function discard(id: string) {
     setBusyLeftover(id)
     await api.abandonUpload(id).catch(() => null)
@@ -421,6 +443,7 @@ export function HelpVideoRecorder({
               confirmDiscard={confirmDiscard}
               onConfirmDiscard={setConfirmDiscard}
               onKeep={(id) => void keepLeftover(id)}
+              onSaveFinished={(id) => void saveFinished(id)}
               onDiscard={(id) => void discard(id)}
               error={setupError}
               onCancel={onClose}
