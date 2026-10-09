@@ -2,6 +2,7 @@ import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowRightLeft, Check, Download, FileUp, Loader2 } from 'lucide-react'
 import { useRef, useState } from 'react'
 import { toast } from 'sonner'
+import { HelpVideoPromotion } from '@/components/help-video-promotion'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -569,6 +570,8 @@ export function ContentPromotionPage() {
               </div>
             </div>
           </section>
+
+          <HelpVideoPromotion />
         </div>
       </div>
     </div>

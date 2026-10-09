@@ -5,6 +5,7 @@ import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { Input } from '../../ui/input'
 import { Label } from '../../ui/label'
+import { Switch } from '../../ui/switch'
 import { Textarea } from '../../ui/textarea'
 import { helpVideoApi, helpVideoKeys, useHelpVideoPages } from '../api'
 import type { HelpVideoContext, HelpVideoDto, Visibility } from '../types'
@@ -19,6 +20,7 @@ type Confirmed = {
   contexts: HelpVideoContext[]
   visibility: Visibility
   required: string[]
+  downloads: boolean
 }
 
 const chipBase =
@@ -76,6 +78,7 @@ export function DetailsTab({ video }: { video: HelpVideoDto }) {
     video.visibility ?? { mode: 'everyone', role_ids: [] }
   )
   const [required, setRequired] = useState<string[]>(video.required_role_ids ?? [])
+  const [downloads, setDownloads] = useState<boolean>(video.allow_downloads !== false)
   // One inline line for a change that did not save (the control keeps what was typed).
   const [problem, setProblem] = useState<string | null>(null)
 
@@ -152,7 +155,7 @@ export function DetailsTab({ video }: { video: HelpVideoDto }) {
 
   // Saves of the lists go one after another, and a failure goes back to the
   // last value the server confirmed (not to what an earlier, overlapping save left).
-  const confirmed = useRef<Confirmed>({ contexts, visibility, required })
+  const confirmed = useRef<Confirmed>({ contexts, visibility, required, downloads })
   const chain = useRef<Promise<void>>(Promise.resolve())
   const persist = <K extends keyof Confirmed>(
     key: K,
@@ -189,6 +192,14 @@ export function DetailsTab({ video }: { video: HelpVideoDto }) {
       setVisibility,
       () => helpVideoApi(client).update(video.id, { visibility: next }),
       'Who can watch'
+    )
+  const saveDownloads = (next: boolean) =>
+    persist(
+      'downloads',
+      next,
+      setDownloads,
+      () => helpVideoApi(client).update(video.id, { allow_downloads: next }),
+      'Downloads'
     )
   const saveRequired = (next: string[]) =>
     persist(
@@ -465,6 +476,23 @@ export function DetailsTab({ video }: { video: HelpVideoDto }) {
             Pick at least one role. Until then, only video authors can watch it.
           </p>
         )}
+      </Section>
+
+      <Section
+        title='Downloads'
+        hint='People who can watch it can save the video and its captions to their computer. Authors can always download.'
+      >
+        <div className='flex items-center gap-2.5'>
+          <Switch
+            id={`hv-downloads-${video.id}`}
+            checked={downloads}
+            onCheckedChange={(v) => saveDownloads(v)}
+            data-hv-allow-downloads={downloads ? 'on' : 'off'}
+          />
+          <Label htmlFor={`hv-downloads-${video.id}`} className='text-[13px] font-normal'>
+            Allow downloads
+          </Label>
+        </div>
       </Section>
 
       <Section

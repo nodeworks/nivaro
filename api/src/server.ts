@@ -680,6 +680,9 @@ export async function buildServer() {
           await import('./services/help-video-render.js')
             .then((m) => m.pruneOldRenders())
             .catch(() => 0)
+          await import('./services/help-video-package.js')
+            .then((m) => m.purgeStaleImports())
+            .catch(() => 0)
           // #528 — ERP push payloads/responses past the configured window lose their bytes, never their history.
           await import('./services/erp-retention.js')
             .then((m) => m.pruneErpSubmissionPayloads())

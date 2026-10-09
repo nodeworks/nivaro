@@ -26,6 +26,7 @@ import { OverlayLayer } from './OverlayLayer'
 import { fitFrame, liveStep, resolveDurationMs, zoomAt } from './playerMath'
 import { createProgressBeats } from './progressBeats'
 import type { HelpVideoDto, VideoEdits } from './types'
+import { DownloadMenu } from './viewer/DownloadMenu'
 
 export type PlayerHandle = {
   seekEdited(ms: number): void
@@ -829,6 +830,15 @@ function PlayerInner({
             >
               <Captions className='h-4 w-4' />
             </button>
+            {!live && dto.download_urls && (
+              <DownloadMenu
+                urls={dto.download_urls}
+                ready={author || dto.published?.playable !== false}
+                variant='icon'
+                where='player'
+                triggerClassName={`${iconButton} ${inkMuted}`}
+              />
+            )}
             <button
               type='button'
               aria-label='Full screen'

@@ -76,6 +76,12 @@ export interface HelpVideoWalkStep {
   /** The callout or box text shown around the click, else null. */
   text: string | null
 }
+/** Ticketed download links (`attachment`), relative to the API origin. */
+export interface HelpVideoDownloadUrls {
+  video: string
+  captions_vtt: string | null
+  captions_srt: string | null
+}
 export interface HelpVideoProgress {
   position_ms: number
   completed: boolean
@@ -105,7 +111,13 @@ export interface HelpVideo {
   draft_matches_published?: boolean
   draft_stream_url?: string | null
   draft_captions_url?: string | null
+  /** Author-only: viewers may download (authors always may). */
+  allow_downloads?: boolean
+  /** Author-only: the draft's downloads. */
+  draft_download_urls?: HelpVideoDownloadUrls | null
   created_by_name?: string | null
+  /** Null when this person may not download the published version. */
+  download_urls: HelpVideoDownloadUrls | null
   updated_at: string
   my_progress: HelpVideoProgress | null
 }
@@ -167,6 +179,8 @@ export function updateHelpVideo(
     description?: string | null
     category?: string | null
     visibility?: HelpVideoVisibility
+    /** Viewers may download (authors always may). */
+    allow_downloads?: boolean
   }
 ): Command<{ data: HelpVideo }> {
   return cmd('PATCH', `/help-videos/${id}`, undefined, body)
@@ -298,4 +312,66 @@ export function registerHelpVideoPage(body: {
   app?: string
 }): Command<void> {
   return cmd('POST', '/help-videos/pages', undefined, body)
+}
+
+/** A fresh ticketed download link for the published version (or the draft,
+ *  authors only). The link answers with the file as an attachment: the
+ *  current render, or the original only when the edits hide nothing; 409
+ *  `HELP_VIDEO_PROCESSING` while a viewer's video is being prepared.
+ *  403 `HELP_VIDEO_DOWNLOAD_OFF` when downloads are off for this viewer. */
+export function readHelpVideoDownloadLink(
+  id: string,
+  opts?: { file?: 'video' | 'captions.vtt' | 'captions.srt'; draft?: boolean }
+): Command<{ data: { url: string } }> {
+  return cmd('GET', `/help-videos/${id}/download-link`, {
+    file: opts?.file ?? 'video',
+    ...(opts?.draft ? { draft: 1 } : {})
+  })
+}
+
+/** Administrators: a 10-minute link to a package (tar) of these published
+ *  videos — files plus a manifest — to import on another instance. */
+export function exportHelpVideoPackage(
+  ids: string[]
+): Command<{ data: { url: string; count: number } }> {
+  return cmd('POST', '/help-videos/packages', undefined, { ids })
+}
+/** Administrators: start an import. Send the package as raw
+ *  application/octet-stream PUTs of at most 8 MB to
+ *  /help-videos/packages/imports/:id/parts/:n (n from 0), then preview. */
+export function openHelpVideoPackageImport(): Command<{
+  data: { id: string; next_part: number; max_bytes: number }
+}> {
+  return cmd('POST', '/help-videos/packages/imports')
+}
+/** Checks the uploaded package and says what applying it would do; writes nothing.
+ *  422 `HELP_VIDEO_PACKAGE_INVALID` when the package is unusable as a whole. */
+export function previewHelpVideoPackageImport(id: string): Command<{ data: unknown }> {
+  return cmd('POST', `/help-videos/packages/imports/${id}/preview`)
+}
+/** Applies a previewed package (every usable video, or only `video_ids`). */
+export function applyHelpVideoPackageImport(
+  id: string,
+  video_ids?: string[]
+): Command<{
+  data: {
+    results: Array<{
+      id: string
+      title: string
+      outcome: 'created' | 'updated' | 'failed' | 'skipped'
+      version?: number
+      render?: 'reused' | 'queued'
+      error?: string
+    }>
+  }
+}> {
+  return cmd(
+    'POST',
+    `/help-videos/packages/imports/${id}/apply`,
+    undefined,
+    video_ids ? { video_ids } : {}
+  )
+}
+export function discardHelpVideoPackageImport(id: string): Command<void> {
+  return cmd('DELETE', `/help-videos/packages/imports/${id}`)
 }

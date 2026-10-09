@@ -7,6 +7,7 @@ import { Button } from '../../ui/button'
 import { Skeleton } from '../../ui/skeleton'
 import { helpVideoApi, helpVideoKeys } from '../api'
 import type { HelpVideoDto } from '../types'
+import { DownloadMenu } from '../viewer/DownloadMenu'
 import { renderLabel, whenSaved } from './publish'
 import { UnsavedNote } from './UnsavedNote'
 
@@ -75,15 +76,25 @@ export function VersionsTab({
           Every published cut is kept. Restoring copies an older cut into a new draft, so nothing is
           overwritten.
         </p>
-        <Button
-          size='sm'
-          variant='outline'
-          className='h-8'
-          onClick={() => void rerecord()}
-          data-hv-rerecord
-        >
-          Re-record
-        </Button>
+        <div className='flex items-center gap-2'>
+          {video.draft_download_urls && (
+            <DownloadMenu
+              urls={video.draft_download_urls}
+              original
+              label='Download draft'
+              where='versions'
+            />
+          )}
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8'
+            onClick={() => void rerecord()}
+            data-hv-rerecord
+          >
+            Re-record
+          </Button>
+        </div>
       </div>
       {unsaved && <UnsavedNote conflict={conflict} onReload={onReload} data-hv-versions-note />}
       <div role='status' aria-live='polite'>

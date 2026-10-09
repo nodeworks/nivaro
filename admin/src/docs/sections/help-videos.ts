@@ -66,6 +66,16 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Required for: people in those roles get an in-app notification and, if their browser is subscribed, a browser push, and see the video in My Work until they have watched most of it (18 of its 20 five-percent sections). "Ask everyone to watch again" on a later publish resets that; when nothing else changed, Publish offers only that and the video itself is not published again. Marking a video required tells real people at once, so test it with a throwaway role.'
     },
+    { type: 'h3', text: 'Downloading' },
+    {
+      type: 'p',
+      text: 'People who can watch a video can save it to their computer from Download in the player or under it: the video and, when it has captions, the captions as .vtt or .srt. They get the same file the player gives them — the finished render, or the original only when nothing in it is hidden — so a video still being rendered says it can be downloaded once it is ready. Details → Downloads turns this off for one video; authors and administrators can always download, and Versions → Download draft also offers the original recording. Every download is recorded in the activity log.'
+    },
+    { type: 'h3', text: 'Moving videos to another instance' },
+    {
+      type: 'p',
+      text: 'Content Promotion → Help videos moves published videos to another instance: record and polish on staging, then bring them to production. Export packages the chosen videos (each one’s published version with its edits, chapters and captions, the recording, the render, captions and poster, and where it shows) into one file. On the other instance, Choose package uploads it, checks it and shows what applying it would do before anything is written. A video keeps its id, so a later package of the same video adds a new version there instead of a second video. Who can watch and required viewing do not travel, because role ids differ between instances: a new video arrives published but visible to authors only until someone chooses who can watch, and an updated one keeps its settings there. Screens on a collection or step that does not exist there are listed and skipped, and the render is reused when it matches the edits, otherwise the video is rendered after the import. Administrators only, on both ends.'
+    },
     { type: 'h3', text: 'Stats' },
     {
       type: 'p',
@@ -144,7 +154,27 @@ export const helpVideosApi: DocSection = {
           'viewers',
           '"Show me on this page": the published version’s labelled clicks inside kept pieces, in order — label, role, hook, page_key, path, origin, edited_ms and the nearby callout/box text. Never the draft'
         ],
-        ['GET /help-videos/:id/analytics', 'authors', 'Viewers, completion, hours, drop-off']
+        ['GET /help-videos/:id/analytics', 'authors', 'Viewers, completion, hours, drop-off'],
+        [
+          'GET /help-videos/:id/download?st=&file=video|captions.vtt|captions.srt',
+          'signed link',
+          'The file playback would give this person, as an attachment; 403 HELP_VIDEO_DOWNLOAD_OFF when downloads are off for viewers; authors may add source=1'
+        ],
+        [
+          'GET /help-videos/:id/download-link?file=&draft=',
+          'viewers',
+          'A fresh ticketed download link'
+        ],
+        [
+          'POST /help-videos/packages',
+          'administrators',
+          'A 10-minute link to a package (tar) of published videos'
+        ],
+        [
+          'POST /help-videos/packages/imports, PUT …/parts/:n, POST …/preview, POST …/apply',
+          'administrators',
+          'Upload a package in 8 MB parts (4 GB at most; HELP_VIDEO_PACKAGE_MAX_MB), check and preview it, then apply'
+        ]
       ]
     },
     { type: 'h3', text: 'Clean recording in a host app' },
@@ -217,7 +247,8 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
         '`published.playable` is `false` when a viewer’s stream would answer 409 (the video is still being prepared); authors always get `true`.',
         '`required` is true when the video is required for the caller’s own role. Authors also get `required_role_ids`. `my_progress` is the caller’s own progress (or `null`).',
         '`recordHelpVideoProgress` takes `buckets` as a 20-character `0`/`1` string (the 5% sections seen) and answers `{ data: { completed } }`, or no body (204) for a masquerade session.',
-        '`listHelpVideos` and `helpVideosFor` carry `can_author`, so a screen can offer "Add a video" without a second call.'
+        '`listHelpVideos` and `helpVideosFor` carry `can_author`, so a screen can offer "Add a video" without a second call.',
+        '`download_urls` (`video`, `captions_vtt`, `captions_srt`) are ticketed attachment links, or `null` when the caller may not download. Authors also get `allow_downloads` and `draft_download_urls`.'
       ]
     },
     { type: 'h3', text: 'Errors callers must handle' },
@@ -263,6 +294,16 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
           '`rerenderHelpVideo` for a version that does not exist.'
         ],
         ['403', '`HELP_VIDEO_AUTHOR_ONLY`', 'An authoring command by a non-author.'],
+        [
+          '403',
+          '`HELP_VIDEO_DOWNLOAD_OFF`',
+          'A viewer asked for a download of a video whose downloads are turned off (`download_urls` is `null` then).'
+        ],
+        [
+          '422',
+          '`HELP_VIDEO_PACKAGE_INVALID`',
+          'A package that is not a help-video package, is damaged or holds no usable video.'
+        ],
         ['404', '`HELP_VIDEO_NOT_FOUND`', 'Unknown id, or a video the caller may not see.']
       ]
     },
@@ -302,7 +343,25 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
         ['listMyHelpVideoUploads()', 'GET /help-videos/uploads/mine', 'Author'],
         ['abandonHelpVideoUpload(id)', 'DELETE /help-videos/uploads/:id', 'Author'],
         ['listHelpVideoPages()', 'GET /help-videos/pages', 'Authenticated'],
-        ['registerHelpVideoPage(body)', 'POST /help-videos/pages', 'Author']
+        ['registerHelpVideoPage(body)', 'POST /help-videos/pages', 'Author'],
+        [
+          'readHelpVideoDownloadLink(id, opts?)',
+          'GET /help-videos/:id/download-link',
+          'Authenticated (draft: author)'
+        ],
+        ['exportHelpVideoPackage(ids)', 'POST /help-videos/packages', 'Admin'],
+        ['openHelpVideoPackageImport()', 'POST /help-videos/packages/imports', 'Admin'],
+        [
+          'previewHelpVideoPackageImport(id)',
+          'POST /help-videos/packages/imports/:id/preview',
+          'Admin'
+        ],
+        [
+          'applyHelpVideoPackageImport(id, video_ids?)',
+          'POST /help-videos/packages/imports/:id/apply',
+          'Admin'
+        ],
+        ['discardHelpVideoPackageImport(id)', 'DELETE /help-videos/packages/imports/:id', 'Admin']
       ]
     }
   ]

@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { REVOKED_PREFIX } from '../auth/session.js'
 import { db } from '../db/index.js'
@@ -5,11 +6,35 @@ import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getFile } from '../services/files.js'
 import {
+  captionsVtt,
+  contentDisposition,
+  downloadsAllowed,
+  hasCaptions,
+  isDownloadFile,
+  pickDownloadFile,
+  safeDownloadName,
+  startsDownload,
+  videoExtension,
+  vttToSrt
+} from '../services/help-video-download.js'
+import {
   captionsToVtt,
   EditsError,
   emptyEdits,
   normalizeEdits
 } from '../services/help-video-edits.js'
+import {
+  appendImportPart,
+  applyImport,
+  discardImport,
+  EXPORT_TICKET_PREFIX,
+  EXPORT_TICKET_TTL_S,
+  exportableVideos,
+  exportIds,
+  exportPackageStream,
+  openImport,
+  previewImport
+} from '../services/help-video-package.js'
 import { queueRender } from '../services/help-video-render.js'
 import {
   abandonUpload,
@@ -38,6 +63,7 @@ import {
   listVideos,
   loadVersion,
   loadVideoForUser,
+  mediaTicket,
   notifyRequiredViewersSafely,
   publishVideo,
   purgeVideo,
@@ -72,6 +98,15 @@ async function requireAuthor(req: FastifyRequest, reply: FastifyReply): Promise<
     return reply
       .code(403)
       .send({ error: 'Only video authors can do this', code: 'HELP_VIDEO_AUTHOR_ONLY' })
+  }
+}
+
+// Moving videos between instances is an administrator's job. The plugin's
+// authenticate hook has already run; a key limited to named collections stays
+// out (the same rule as requireAdmin).
+async function requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<void> {
+  if (!req.isAdmin || req.user?.api_key_scopes) {
+    return reply.code(403).send({ error: 'Only administrators can do this', code: 'ADMIN_ONLY' })
   }
 }
 
@@ -129,6 +164,47 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
+  // ── Moving videos between instances (administrators) ─────────────────────
+  // Export: a short-lived one-purpose link (10 min) the browser downloads
+  // directly, so a multi-GB package never passes through page memory.
+  app.post('/packages', { preHandler: requireAdmin }, async (req, reply) => {
+    const ids = exportIds((req.body as { ids?: unknown } | undefined)?.ids)
+    await exportableVideos(ids)
+    const token = randomUUID()
+    await app.redis.set(
+      `${EXPORT_TICKET_PREFIX}${token}`,
+      JSON.stringify({ user: req.user!.id, ids }),
+      'EX',
+      EXPORT_TICKET_TTL_S
+    )
+    return reply.send({ data: { url: `/api/help-videos/packages/${token}`, count: ids.length } })
+  })
+  // Import: open, send 8 MB parts, preview (checks + extracts), apply.
+  app.post('/packages/imports', { preHandler: requireAdmin }, async (req, reply) => {
+    return reply.code(201).send({ data: await openImport(req.user!) })
+  })
+  app.put('/packages/imports/:id/parts/:n', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id, n } = req.params as { id: string; n: string }
+    if (!Buffer.isBuffer(req.body)) {
+      return reply.code(415).send({ error: 'Send the part as application/octet-stream' })
+    }
+    return reply.send({ data: await appendImportPart(req.user!, id, Number(n), req.body) })
+  })
+  app.post('/packages/imports/:id/preview', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    return reply.send({ data: await previewImport(req.user!, id) })
+  })
+  app.post('/packages/imports/:id/apply', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as { video_ids?: unknown }
+    return reply.send({ data: await applyImport(req.user!, id, body.video_ids) })
+  })
+  app.delete('/packages/imports/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    await discardImport(req.user!, id)
+    return reply.code(204).send()
+  })
+
   // ── Authoring ──────────────────────────────────────────────────────────────
   app.post('/', { preHandler: requireAuthor }, async (req, reply) => {
     const id = await createVideo(req.user!, (req.body ?? {}) as Record<string, string>)
@@ -175,6 +251,40 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const { video } = await loadVideoForUser(req, id)
     return reply.send({ data: await walkStepsFor(video) })
+  })
+
+  // A fresh ticketed download link (the DTO's download_urls carry the same
+  // links; this is the SDK command for hosts that build their own UI).
+  app.get('/:id/download-link', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const q = req.query as { file?: string; draft?: string }
+    const file = q.file ?? 'video'
+    if (!isDownloadFile(file)) {
+      return reply
+        .code(400)
+        .send({ error: 'Unknown download', code: 'HELP_VIDEO_DOWNLOAD_UNKNOWN' })
+    }
+    const { video, author } = await loadVideoForUser(req, id)
+    const draft = q.draft === '1'
+    if (draft && !author) {
+      return reply
+        .code(403)
+        .send({ error: 'Only video authors can do this', code: 'HELP_VIDEO_AUTHOR_ONLY' })
+    }
+    if (!author && !downloadsAllowed(video.visibility)) {
+      return reply.code(403).send({
+        error: 'Downloads are turned off for this video.',
+        code: 'HELP_VIDEO_DOWNLOAD_OFF'
+      })
+    }
+    if (!(draft ? video.draft_version_id : video.published_version_id)) {
+      return reply.code(404).send({ error: 'Video not found', code: 'HELP_VIDEO_NOT_FOUND' })
+    }
+    const vid = String(video.id).toLowerCase()
+    const t = mediaTicket(vid, req.user!.id, draft ? 'd' : 'p', Date.now(), sessionTag(req))
+    return reply.send({
+      data: { url: `/api/help-videos/${vid}/download?st=${t}&file=${encodeURIComponent(file)}` }
+    })
   })
 
   app.patch('/:id', { preHandler: requireAuthor }, async (req, reply) => {
@@ -372,7 +482,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       t.scope === 'd' ? video.draft_version_id : video.published_version_id
     )
     if (!version) throw notFound
-    return { video, version, draft: t.scope === 'd', author }
+    return { video, version, draft: t.scope === 'd', author, userId: String(user.id) }
   }
 
   // no-cache on every media answer: a browser may keep the bytes but must ask
@@ -399,6 +509,111 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       rangeHeader: req.headers.range,
       contentType: pick.kind === 'rendered' ? 'video/mp4' : String(file.type ?? 'video/webm')
     })
+  })
+
+  // Download to the desktop: the file playback would give this person (see
+  // pickDownloadFile), as an attachment. Viewers are refused when the video's
+  // "Allow downloads" switch is off; authors and admins always may. Each
+  // download (not each resumed range) is an activity row — data egress.
+  app.get('/:id/download', async (req, reply) => {
+    const { video, version, draft, author, userId } = await resolve(req)
+    const q = req.query as { file?: string; source?: string }
+    const file = q.file ?? 'video'
+    if (!isDownloadFile(file)) {
+      return reply
+        .code(400)
+        .send({ error: 'Unknown download', code: 'HELP_VIDEO_DOWNLOAD_UNKNOWN' })
+    }
+    if (!author && !downloadsAllowed(video.visibility)) {
+      return reply.code(403).send({
+        error: 'Downloads are turned off for this video.',
+        code: 'HELP_VIDEO_DOWNLOAD_OFF'
+      })
+    }
+    const pick = pickDownloadFile(version, { author, source: q.source === '1' })
+    const log = (what: string) =>
+      logActivity({
+        action: 'help-video-download',
+        user: userId,
+        collection: 'nivaro_help_videos',
+        item: String(video.id).toLowerCase(),
+        comment: `v${Number(version.version)}${draft ? ' (draft)' : ''} · ${what}`
+      })
+    reply.header('Cache-Control', 'private, no-cache').header('X-Content-Type-Options', 'nosniff')
+    if (file === 'video') {
+      if (!pick) {
+        return reply.code(409).send({
+          error: 'This video is still being prepared. It can be downloaded once it is ready.',
+          code: 'HELP_VIDEO_PROCESSING'
+        })
+      }
+      const stored = await getFile(pick.fileId)
+      if (!stored?.filename_disk) return reply.code(404).send({ error: 'Recording not found' })
+      const name = safeDownloadName(video.title, videoExtension(pick.kind, stored.type))
+      if (startsDownload(req.headers.range)) {
+        void log(pick.kind === 'rendered' ? 'video (rendered MP4)' : 'video (original recording)')
+      }
+      return sendStoredObject(reply, stored.filename_disk, {
+        rangeHeader: req.headers.range,
+        contentType: pick.kind === 'rendered' ? 'video/mp4' : String(stored.type ?? 'video/webm'),
+        disposition: contentDisposition(name)
+      })
+    }
+    if (!hasCaptions(version)) {
+      return reply
+        .code(404)
+        .send({ error: 'This video has no captions', code: 'HELP_VIDEO_NO_CAPTIONS' })
+    }
+    const vtt = captionsVtt(version, pick?.kind === 'source' ? 'source' : 'edited')
+    const srt = file === 'captions.srt'
+    void log(srt ? 'captions (.srt)' : 'captions (.vtt)')
+    return reply
+      .header(
+        'Content-Type',
+        srt ? 'application/x-subrip; charset=utf-8' : 'text/vtt; charset=utf-8'
+      )
+      .header(
+        'Content-Disposition',
+        contentDisposition(safeDownloadName(video.title, srt ? 'srt' : 'vtt'))
+      )
+      .send(srt ? vttToSrt(vtt) : vtt)
+  })
+
+  // A help-video package (see POST /packages). The link names the admin who
+  // asked; that person must still be an active administrator now.
+  app.get('/packages/:token', async (req, reply) => {
+    const { token } = req.params as { token: string }
+    const gone = () =>
+      reply.code(404).send({
+        error: 'This download link has expired. Export again.',
+        code: 'HELP_VIDEO_PACKAGE_LINK_EXPIRED'
+      })
+    if (!isUuid(token)) return gone()
+    const raw = await app.redis.get(`${EXPORT_TICKET_PREFIX}${token}`).catch(() => null)
+    if (!raw) return gone()
+    let ticket: { user?: string; ids?: string[] }
+    try {
+      ticket = JSON.parse(raw)
+    } catch {
+      return gone()
+    }
+    if (!isUuid(ticket.user) || !Array.isArray(ticket.ids)) return gone()
+    const user = (await db('nivaro_users').where({ id: ticket.user, status: 'active' }).first()) as
+      | (User & { is_redacted?: unknown })
+      | undefined
+    const role = user?.role
+      ? await db('nivaro_roles').where({ id: user.role }).first('admin_access')
+      : null
+    if (!user || user.is_redacted === true || user.is_redacted === 1 || !role?.admin_access) {
+      return gone()
+    }
+    const { stream, filename } = await exportPackageStream(ticket.ids, user)
+    return reply
+      .header('Content-Type', 'application/x-tar')
+      .header('Content-Disposition', contentDisposition(filename))
+      .header('Cache-Control', 'private, no-store')
+      .header('X-Content-Type-Options', 'nosniff')
+      .send(stream)
   })
 
   app.get('/:id/captions.vtt', async (req, reply) => {
