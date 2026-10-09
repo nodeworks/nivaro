@@ -426,23 +426,32 @@ export function parseRoleIdList(raw: unknown): string[] {
  *  (the public login branding: name, colour, logo). `origin` turns the
  *  logo's API path into a URL the player's <img> can load. Only fetched while
  *  the video has a card or banner on. */
+/** Public branding as the cards see it (GET /auth/branding). */
+export interface CardBranding {
+  name: string | null
+  color: string | null
+  logo_url: string | null
+  /** The cards' own logo, else the instance logo (absent on older servers). */
+  card_logo_url?: string | null
+}
+
+/** The cards draw their own logo; the instance logo is only the fallback. */
+export function cardBrandFrom(d: CardBranding | undefined, origin: string): CardBrand {
+  const logo = d ? (d.card_logo_url ?? d.logo_url) : null
+  return {
+    name: d?.name?.trim() || null,
+    color: cardAccent(d?.color),
+    logo: logo ? `${origin}${logo}` : null
+  }
+}
+
 export function useCardBrand(enabled: boolean, origin: string): CardBrand {
   const client = useNivaroClient()
   const q = useQuery({
     queryKey: ['help-video-card-brand'],
     enabled,
     staleTime: 5 * 60_000,
-    queryFn: () =>
-      client.request(
-        get<{ data: { name: string | null; color: string | null; logo_url: string | null } }>(
-          '/auth/branding'
-        )
-      )
+    queryFn: () => client.request(get<{ data: CardBranding }>('/auth/branding'))
   })
-  const d = q.data?.data
-  return {
-    name: d?.name?.trim() || null,
-    color: cardAccent(d?.color),
-    logo: d?.logo_url ? `${origin}${d.logo_url}` : null
-  }
+  return cardBrandFrom(q.data?.data, origin)
 }

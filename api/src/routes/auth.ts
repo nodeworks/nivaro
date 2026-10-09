@@ -15,6 +15,7 @@ import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
 import { revokeSessions } from '../auth/session.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api-logger.js'
 import { logActivity } from '../services/activity.js'
@@ -173,12 +174,15 @@ export async function authRoutes(app: FastifyInstance) {
    *  authenticated. Only display values — never configuration. */
   app.get('/branding', async () => {
     try {
+      // Help-video cards' own logo (migration 408), absent on a database behind it.
+      const cardLogo = await hasColumn('nivaro_settings', 'help_video_card_logo').catch(() => false)
       const row = (await db('nivaro_settings')
         .where({ id: 1 })
         .first(
           'project_name',
           'project_color',
           'brand_logo',
+          ...(cardLogo ? ['help_video_card_logo'] : []),
           'brand_login_title',
           'brand_login_message',
           'login_links'
@@ -188,6 +192,12 @@ export async function authRoutes(app: FastifyInstance) {
           name: (row?.project_name as string | null) ?? null,
           color: (row?.project_color as string | null) ?? null,
           logo_url: row?.brand_logo ? `/api/files/${row.brand_logo}` : null,
+          // What help-video cards draw: their own logo, else the instance logo.
+          card_logo_url: row?.help_video_card_logo
+            ? `/api/files/${row.help_video_card_logo}`
+            : row?.brand_logo
+              ? `/api/files/${row.brand_logo}`
+              : null,
           login_title: (row?.brand_login_title as string | null) ?? null,
           login_message: (row?.brand_login_message as string | null) ?? null,
           login_links: (() => {

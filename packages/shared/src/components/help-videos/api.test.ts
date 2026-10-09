@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { helpVideoError, parseRoleIdList } from './api'
+import { cardBrandFrom, helpVideoError, parseRoleIdList } from './api'
 
 describe('parseRoleIdList', () => {
   it('reads the stored JSON string', () => expect(parseRoleIdList('["A","B"]')).toEqual(['A', 'B']))
@@ -28,5 +28,19 @@ describe('helpVideoError', () => {
   it('is null for anything that is not a request failure', () => {
     expect(helpVideoError(new Error('x'))).toBeNull()
     expect(helpVideoError(null)).toBeNull()
+  })
+})
+
+describe('cardBrandFrom', () => {
+  it('draws the cards’ own logo, not the instance logo', () => {
+    const b = cardBrandFrom(
+      { name: 'Acme', color: '#00ceff', logo_url: '/api/files/I', card_logo_url: '/api/files/C' },
+      'https://x'
+    )
+    expect(b.logo).toBe('https://x/api/files/C')
+  })
+  it('falls back to the instance logo on an older server', () => {
+    const b = cardBrandFrom({ name: 'Acme', color: null, logo_url: '/api/files/I' }, '')
+    expect(b.logo).toBe('/api/files/I')
   })
 })

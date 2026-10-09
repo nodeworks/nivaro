@@ -122,6 +122,8 @@ const allowedSettingsKeys = [
   'integration_remediation_enabled',
   // Branding (#21)
   'brand_logo',
+  // Help-video cards' own logo (migration 408; NULL = the instance logo)
+  'help_video_card_logo',
   'brand_login_title',
   'brand_login_message',
   // Where email links land for non-admins (services/app-links.ts)

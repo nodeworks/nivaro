@@ -84,7 +84,8 @@ export const CardsPanel = memo(function CardsPanel({
   const qc = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
-  // The same logo Settings → Project sets: the cards and the sign-in page.
+  // A logo for the help-video cards only (help_video_card_logo): the
+  // instance logo (sign-in page, admin sidebar) is never changed from here.
   const uploadLogo = async (file: File | null) => {
     if (!file) return
     // The render draws only these (help-video-cards.ts): anything else would
@@ -104,14 +105,14 @@ export const CardsPanel = memo(function CardsPanel({
     try {
       const f = await client.upload(file)
       uploaded = f.id
-      await client.request(patch('/settings', { brand_logo: f.id }))
+      await client.request(patch('/settings', { help_video_card_logo: f.id }))
       uploaded = null
       await qc.invalidateQueries({ queryKey: ['help-video-card-brand'] })
-      toast.success('Logo set. The cards and the sign-in page use it now.')
+      toast.success('Logo set for the help-video cards.')
     } catch {
       // A file nobody points at would just sit in Files.
       if (uploaded) await client.request(del(`/files/${uploaded}`)).catch(() => null)
-      toast.error('Could not set the logo. Try again, or set it in Settings → Project.')
+      toast.error('Could not set the card logo. Try again.')
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ''
@@ -287,7 +288,7 @@ export const CardsPanel = memo(function CardsPanel({
           className='rounded-md border border-dashed border-border p-2.5 text-[11.5px] leading-snug text-muted-foreground'
           data-hv-logo-missing
         >
-          No logo is set for this instance, so the cards show the name instead.
+          The cards have no logo, so they show the name instead.
           {isAdmin ? (
             <>
               {' '}
@@ -311,7 +312,7 @@ export const CardsPanel = memo(function CardsPanel({
               />
             </>
           ) : (
-            ' An administrator can add one in Settings → Project.'
+            ' An administrator can add one here.'
           )}
         </div>
       )}

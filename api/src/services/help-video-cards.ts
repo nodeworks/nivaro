@@ -1,6 +1,7 @@
 import { copyFile, link, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { getFile } from './files.js'
 import {
   type BannerContent,
@@ -117,18 +118,27 @@ export function shownBrand(brand: CardBrand, e: VideoEdits): CardBrandShown {
 export async function loadCardBrand(): Promise<CardBrand> {
   let row: Record<string, unknown> | undefined
   try {
+    // The cards' own logo (migration 408) comes first; the instance logo is
+    // only the fallback. A database behind 408 has no such column.
+    const cardLogo = await hasColumn('nivaro_settings', 'help_video_card_logo').catch(() => false)
     row = (await db('nivaro_settings')
       .where({ id: 1 })
-      .first('project_name', 'project_color', 'brand_logo')) as Record<string, unknown> | undefined
+      .first(
+        'project_name',
+        'project_color',
+        'brand_logo',
+        ...(cardLogo ? ['help_video_card_logo'] : [])
+      )) as Record<string, unknown> | undefined
   } catch {
     row = undefined
   }
   const name = String(row?.project_name ?? '').trim() || null
   const color = cardAccent(row?.project_color)
   let logo: string | null = null
-  if (row?.brand_logo) {
+  const logoId = row?.help_video_card_logo || row?.brand_logo
+  if (logoId) {
     try {
-      const f = await getFile(String(row.brand_logo))
+      const f = await getFile(String(logoId))
       const type = String(f?.type ?? '')
       if (f?.filename_disk && LOGO_TYPES.test(type)) {
         const opened = await openStoredObject(String(f.filename_disk))

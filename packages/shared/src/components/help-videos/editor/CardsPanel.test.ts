@@ -112,7 +112,11 @@ describe('CardsPanel logo notice', () => {
     })
     expect(h.upload).toHaveBeenCalledWith(file)
     expect(h.request).toHaveBeenCalledWith(
-      expect.objectContaining({ _method: 'PATCH', _path: '/settings', _body: { brand_logo: 'F1' } })
+      expect.objectContaining({
+        _method: 'PATCH',
+        _path: '/settings',
+        _body: { help_video_card_logo: 'F1' }
+      })
     )
     expect(h.toastSuccess).toHaveBeenCalled()
   })
@@ -149,7 +153,7 @@ describe('CardsPanel logo notice', () => {
   it('points everyone else to Settings', () => {
     h.isAdmin = false
     mount(setIntro(base, {}))
-    expect(q('[data-hv-logo-missing]')?.textContent).toMatch(/Settings → Project/)
+    expect(q('[data-hv-logo-missing]')?.textContent).toMatch(/administrator/)
     expect(q('[data-hv-logo-upload]')).toBeNull()
   })
   it('stays quiet when a logo is set', () => {
