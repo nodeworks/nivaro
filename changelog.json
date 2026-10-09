@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-09T20:42:42.335Z",
+  "generated_at": "2026-10-09T21:12:03.604Z",
   "releases": [
+    {
+      "version": "0.2.32",
+      "tag": "v0.2.32",
+      "date": "2026-10-09T17:11:49-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: store the card logo as the image itself",
+              "hash": "40cf13c9"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.31",
       "tag": "v0.2.31",
-      "date": "2026-10-09T16:42:26-04:00",
+      "date": "2026-10-09T16:42:42-04:00",
       "sections": [
         {
           "label": "Other",
