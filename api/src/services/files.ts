@@ -264,6 +264,9 @@ export async function listFiles(
   } = {}
 ) {
   const { folder, limit = 50, offset = 0, search, ids, tag } = opts
+  // Help-video recordings, renders, captions and posters never list here:
+  // they are served only through the ticketed help-video media routes.
+  const { whereNotHelpVideoFile } = await import('./help-videos.js')
   const q = db('nivaro_files as f')
     .select(
       'f.*',
@@ -287,7 +290,9 @@ export async function listFiles(
   if (tag) {
     q.where('f.tags', 'like', `%"${tag.replace(/[%_["]/g, '')}"%`)
   }
+  whereNotHelpVideoFile(q, 'f.id')
   const countQ = db('nivaro_files')
+  whereNotHelpVideoFile(countQ, 'nivaro_files.id')
   if (folder) countQ.where({ folder })
   if (ids && ids.length > 0) countQ.whereIn('id', ids)
   if (search) {
