@@ -1,6 +1,7 @@
 import type {
   BannerContent,
   CardBrandShown,
+  CardMotion,
   IntroCardContent,
   OutroCardContent
 } from './cardDesign'
@@ -77,12 +78,17 @@ export function outroContent(
 
 /** The banner showing at an edited time, if any, with its place among the
  *  chapters viewers see. */
-export function bannerAt(e: VideoEdits, editedMs: number): (BannerContent & { id: string }) | null {
+export function bannerAt(
+  e: VideoEdits,
+  editedMs: number
+): (BannerContent & { id: string; start_ms: number; end_ms: number }) | null {
   const w = chapterBannerWindows(e).find((b) => editedMs >= b.start_ms && editedMs < b.end_ms)
   if (!w) return null
   const seen = visibleChapters(e)
   return {
     id: w.id,
+    start_ms: w.start_ms,
+    end_ms: w.end_ms,
     title: w.title,
     index: seen.findIndex((c) => c.id === w.id) + 1,
     total: seen.length
@@ -93,4 +99,38 @@ export function bannerAt(e: VideoEdits, editedMs: number): (BannerContent & { id
  *  (card_brand) beats the instance name; the logo and colour stay. */
 export function shownBrand(brand: CardBrand, e: VideoEdits): CardBrandShown {
   return { name: e.card_brand?.trim() || brand.name, color: brand.color, logo: brand.logo }
+}
+
+/** The motion of a card at `t_ms` into it (undefined when the card is off).
+ *  A card stored without motion reads none / cut: today's still card. The
+ *  server's twin is cardMotionAt in api/src/services/help-video-cards.ts. */
+export function cardMotionAt(
+  e: VideoEdits,
+  side: 'intro' | 'outro',
+  t_ms: number
+): CardMotion | undefined {
+  const c = e[side]
+  if (!c) return undefined
+  return {
+    t_ms,
+    duration_ms: c.duration_ms,
+    animation: c.animation ?? 'none',
+    transition: c.transition ?? 'cut',
+    side
+  }
+}
+
+/** A banner's motion: its time since its window began. */
+export function bannerMotionAt(
+  e: VideoEdits,
+  w: { start_ms: number; end_ms: number },
+  editedMs: number
+): CardMotion {
+  return {
+    t_ms: editedMs - w.start_ms,
+    duration_ms: w.end_ms - w.start_ms,
+    animation: e.banner_animation ?? 'none',
+    transition: 'cut',
+    side: 'banner'
+  }
 }

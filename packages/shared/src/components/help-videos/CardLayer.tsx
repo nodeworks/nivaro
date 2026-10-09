@@ -2,8 +2,10 @@ import { createElement, type ReactNode, useCallback } from 'react'
 import { bannerTree, type CardNode, introTree, outroTree } from './cardDesign'
 import {
   bannerAt,
+  bannerMotionAt,
   CARD_FONT,
   type CardBrand,
+  cardMotionAt,
   introContent,
   outroContent,
   shownBrand
@@ -37,7 +39,7 @@ export function CardLayer({
   /** Off where the banner is already in the picture (the rendered file). */
   showBanner?: boolean
 }) {
-  const { phase } = cardPhaseAt(edits, editedMs)
+  const { phase, at } = cardPhaseAt(edits, editedMs)
   const banner = phase === 'body' && showBanner ? bannerAt(edits, editedMs) : null
   if (phase === 'body' && !banner) return null
   const canvas = source?.width && source?.height ? renderSize(source.width, source.height) : frame
@@ -46,11 +48,16 @@ export function CardLayer({
   const shown = shownBrand(brand, edits)
   const tree =
     phase === 'intro'
-      ? introTree(introContent(edits, video), shown, canvas.width)
+      ? introTree(introContent(edits, video), shown, canvas.width, cardMotionAt(edits, 'intro', at))
       : phase === 'outro'
-        ? outroTree(outroContent(edits, video), shown, canvas.width)
+        ? outroTree(
+            outroContent(edits, video),
+            shown,
+            canvas.width,
+            cardMotionAt(edits, 'outro', at)
+          )
         : banner
-          ? bannerTree(banner, shown, canvas.width)
+          ? bannerTree(banner, shown, canvas.width, bannerMotionAt(edits, banner, editedMs))
           : null
   if (!tree) return null
   const kind = banner ? 'banner' : phase

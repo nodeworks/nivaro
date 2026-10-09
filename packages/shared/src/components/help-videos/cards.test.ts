@@ -1,11 +1,21 @@
 import { describe, expect, it } from 'vitest'
-import { bannerAt, cardAccent, firstLine, introContent, outroContent, shownBrand } from './cards'
+import {
+  bannerAt,
+  bannerMotionAt,
+  cardAccent,
+  cardMotionAt,
+  firstLine,
+  introContent,
+  outroContent,
+  shownBrand
+} from './cards'
 import {
   bodyDuration,
   cardPhaseAt,
   chapterBannerWindows,
   editedDuration,
   editedToSource,
+  introMs,
   OUTRO_DEFAULT_TEXT,
   setCardBrand,
   setChapterBanners,
@@ -76,7 +86,7 @@ describe('time mapping with cards (twin of the server)', () => {
       { id: 'b', title: 'Close by', start_ms: 4000, end_ms: 6500 },
       { id: 'd', title: 'Late', start_ms: 10_000, end_ms: 11_000 }
     ])
-    expect(bannerAt(e, 5000)).toEqual({ id: 'b', title: 'Close by', index: 2, total: 3 })
+    expect(bannerAt(e, 5000)).toMatchObject({ id: 'b', title: 'Close by', index: 2, total: 3 })
     expect(bannerAt(e, 7000)).toBeNull()
     expect(bannerAt({ ...e, chapter_banners: undefined }, 5000)).toBeNull()
   })
@@ -203,5 +213,50 @@ describe('poster on a card', () => {
     expect('poster_card' in frame).toBe(false)
     expect(frame.poster_ms).toBe(1234)
     expect('poster_card' in setIntro(card, null)).toBe(false)
+  })
+})
+
+describe('card motion in the player', () => {
+  const withCards = setChapterBanners(
+    setOutro(setIntro({ ...base, chapters: [{ id: 'c1', at_ms: 2000, title: 'One' }] }, {}), {}),
+    true
+  )
+  it('builds the intro motion from the edits', () => {
+    expect(cardMotionAt(withCards, 'intro', 500)).toEqual({
+      t_ms: 500,
+      duration_ms: withCards.intro?.duration_ms,
+      animation: 'subtle',
+      transition: 'fade',
+      side: 'intro'
+    })
+    expect(cardMotionAt(base, 'intro', 0)).toBeUndefined()
+  })
+  it('reads none / cut for an old card', () => {
+    const old = {
+      ...base,
+      intro: {
+        enabled: true as const,
+        duration_ms: 3000,
+        show_chapters: false,
+        title: '',
+        subtitle: ''
+      }
+    }
+    expect(cardMotionAt(old, 'intro', 0)).toMatchObject({ animation: 'none', transition: 'cut' })
+  })
+  it('times a banner from its own window', () => {
+    const b = bannerAt(withCards, introMs(withCards) + 2100)
+    expect(b).toMatchObject({ start_ms: introMs(withCards) + 2000 })
+    expect(
+      bannerMotionAt(
+        withCards,
+        b as { start_ms: number; end_ms: number },
+        introMs(withCards) + 2100
+      )
+    ).toMatchObject({
+      t_ms: 100,
+      animation: 'subtle',
+      side: 'banner'
+    })
   })
 })

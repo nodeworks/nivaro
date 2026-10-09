@@ -699,7 +699,9 @@ function PlayerInner({
                 }
                 onClick={togglePlay}
               />
-              {frame && edits && !rendered && phase === 'body' && (
+              {/* Under a card too: its transition shows the paused first /
+                  last frame with the annotations the render bakes into it. */}
+              {frame && edits && !rendered && (
                 <OverlayLayer
                   edits={edits}
                   frame={frame}
