@@ -16,6 +16,9 @@ import {
 //     edited time, and the earliest one wins:
 //     - the intro card (or the name drawn on the cards) changed: 0;
 //     - background music changed: 0 (it plays under the whole video);
+//     - the crop or the narration cleanup changed: 0 (both cover the whole
+//       recording);
+//     - the step badge style changed: the first step on screen;
 //     - the kept pieces: walking both lists in order, the first piece that
 //       differs (start, end, speed or its music level). When both start at the
 //       same source moment at the same speed, the shared part plays the same,
@@ -117,6 +120,12 @@ export function firstChange(oldE: VideoEdits, newE: VideoEdits, sameSource: bool
   if ((oldE.card_brand ?? '') !== (newE.card_brand ?? '') && (newE.intro || newE.outro))
     points.push(0)
   if (!same(oldE.music ?? null, newE.music ?? null)) points.push(0)
+  if (!same(oldE.crop ?? null, newE.crop ?? null)) points.push(0)
+  if (!same(oldE.audio ?? null, newE.audio ?? null)) points.push(0)
+  if (!same(oldE.step_style ?? null, newE.step_style ?? null)) {
+    const steps = newE.annotations.filter((a) => a.type === 'step').map((a) => a.start_ms)
+    if (steps.length) points.push(snapForward(newE, Math.min(...steps)))
+  }
   const piece = firstPieceChange(oldE, newE)
   if (piece !== null) points.push(piece)
   for (const key of ['captions', 'chapters', 'annotations', 'zooms', 'blurs'] as const) {

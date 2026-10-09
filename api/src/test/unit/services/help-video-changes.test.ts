@@ -35,6 +35,32 @@ describe('firstChange (#1497)', () => {
     expect(firstChange(base(), base(), true)).toBeNull()
   })
 
+  it('a crop or the narration cleanup changing covers the whole video', () => {
+    expect(firstChange(base(), base({ crop: { x: 0, y: 0, w: 0.5, h: 1 } }), true)).toEqual({
+      at_ms: 0,
+      whole: false
+    })
+    expect(firstChange(base(), base({ audio: { improve: true } }), true)).toEqual({
+      at_ms: 0,
+      whole: false
+    })
+  })
+
+  it('a new step badge style counts from the first step on screen', () => {
+    const step = {
+      id: 's1',
+      type: 'step',
+      start_ms: 40_000,
+      end_ms: 42_000,
+      rect: { x: 0.1, y: 0.1, w: 0.2, h: 0.1 },
+      text: 'Save',
+      tone: 'accent'
+    }
+    const before = base({ annotations: [step] })
+    const after = base({ annotations: [step], step_style: { shape: 'square', size: 'large' } })
+    expect(firstChange(before, after, true)).toEqual({ at_ms: 30_000, whole: false })
+  })
+
   it('only the poster moving is not a visible change', () => {
     expect(firstChange(base(), base({ poster_ms: 40_000 }), true)).toBeNull()
   })
