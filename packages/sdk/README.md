@@ -2493,6 +2493,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 - `required` is true when the video is required for the caller’s own role. Authors also get `required_role_ids`. `my_progress` is the caller’s own progress (or `null`).
 - `recordHelpVideoProgress` takes `buckets` as a 20-character `0`/`1` string (the 5% sections seen) and answers `{ data: { completed } }`, or no body (204) for a masquerade session.
 - `listHelpVideos` and `helpVideosFor` carry `can_author`, so a screen can offer "Add a video" without a second call.
+- `download_urls` (`video`, `captions_vtt`, `captions_srt`) are ticketed attachment links, or `null` when the caller may not download. Authors also get `allow_downloads` and `draft_download_urls`.
 
 #### Errors callers must handle
 
@@ -2508,6 +2509,8 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | 422 | `HELP_VIDEO_EDITS_INVALID` | `saveHelpVideoDraft` with edits that cannot be kept, such as cuts that leave less than a second. The message says why; the stored draft is unchanged. |
 | 409 | `HELP_VIDEO_NOTHING_TO_RENDER` | `rerenderHelpVideo` for a version that does not exist. |
 | 403 | `HELP_VIDEO_AUTHOR_ONLY` | An authoring command by a non-author. |
+| 403 | `HELP_VIDEO_DOWNLOAD_OFF` | A viewer asked for a download of a video whose downloads are turned off (`download_urls` is `null` then). |
+| 422 | `HELP_VIDEO_PACKAGE_INVALID` | A package that is not a help-video package, is damaged or holds no usable video. |
 | 404 | `HELP_VIDEO_NOT_FOUND` | Unknown id, or a video the caller may not see. |
 
 | Command | Route | Auth |
@@ -2537,6 +2540,12 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | abandonHelpVideoUpload(id) | DELETE /help-videos/uploads/:id | Author |
 | listHelpVideoPages() | GET /help-videos/pages | Authenticated |
 | registerHelpVideoPage(body) | POST /help-videos/pages | Author |
+| readHelpVideoDownloadLink(id, opts?) | GET /help-videos/:id/download-link | Authenticated (draft: author) |
+| exportHelpVideoPackage(ids) | POST /help-videos/packages | Admin |
+| openHelpVideoPackageImport() | POST /help-videos/packages/imports | Admin |
+| previewHelpVideoPackageImport(id) | POST /help-videos/packages/imports/:id/preview | Admin |
+| applyHelpVideoPackageImport(id, video_ids?) | POST /help-videos/packages/imports/:id/apply | Admin |
+| discardHelpVideoPackageImport(id) | DELETE /help-videos/packages/imports/:id | Admin |
 
 ---
 

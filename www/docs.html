@@ -6634,6 +6634,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
             <li><code class="doc-code">required</code> is true when the video is required for the caller’s own role. Authors also get <code class="doc-code">required_role_ids</code>. <code class="doc-code">my_progress</code> is the caller’s own progress (or <code class="doc-code">null</code>).</li>
             <li><code class="doc-code">recordHelpVideoProgress</code> takes <code class="doc-code">buckets</code> as a 20-character <code class="doc-code">0</code>/<code class="doc-code">1</code> string (the 5% sections seen) and answers <code class="doc-code">{ data: { completed } }</code>, or no body (204) for a masquerade session.</li>
             <li><code class="doc-code">listHelpVideos</code> and <code class="doc-code">helpVideosFor</code> carry <code class="doc-code">can_author</code>, so a screen can offer "Add a video" without a second call.</li>
+            <li><code class="doc-code">download_urls</code> (<code class="doc-code">video</code>, <code class="doc-code">captions_vtt</code>, <code class="doc-code">captions_srt</code>) are ticketed attachment links, or <code class="doc-code">null</code> when the caller may not download. Authors also get <code class="doc-code">allow_downloads</code> and <code class="doc-code">draft_download_urls</code>.</li>
           </ul>
           <h3 class="doc-h3">Errors callers must handle</h3>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -6648,6 +6649,8 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
               <tr><td>422</td><td><code class="doc-code">HELP_VIDEO_EDITS_INVALID</code></td><td><code class="doc-code">saveHelpVideoDraft</code> with edits that cannot be kept, such as cuts that leave less than a second. The message says why; the stored draft is unchanged.</td></tr>
               <tr><td>409</td><td><code class="doc-code">HELP_VIDEO_NOTHING_TO_RENDER</code></td><td><code class="doc-code">rerenderHelpVideo</code> for a version that does not exist.</td></tr>
               <tr><td>403</td><td><code class="doc-code">HELP_VIDEO_AUTHOR_ONLY</code></td><td>An authoring command by a non-author.</td></tr>
+              <tr><td>403</td><td><code class="doc-code">HELP_VIDEO_DOWNLOAD_OFF</code></td><td>A viewer asked for a download of a video whose downloads are turned off (<code class="doc-code">download_urls</code> is <code class="doc-code">null</code> then).</td></tr>
+              <tr><td>422</td><td><code class="doc-code">HELP_VIDEO_PACKAGE_INVALID</code></td><td>A package that is not a help-video package, is damaged or holds no usable video.</td></tr>
               <tr><td>404</td><td><code class="doc-code">HELP_VIDEO_NOT_FOUND</code></td><td>Unknown id, or a video the caller may not see.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -6676,7 +6679,13 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
               <tr><td>listMyHelpVideoUploads()</td><td>GET /help-videos/uploads/mine</td><td>Author</td></tr>
               <tr><td>abandonHelpVideoUpload(id)</td><td>DELETE /help-videos/uploads/:id</td><td>Author</td></tr>
               <tr><td>listHelpVideoPages()</td><td>GET /help-videos/pages</td><td>Authenticated</td></tr>
-              <tr><td>registerHelpVideoPage(body)</td><td>POST /help-videos/pages</td><td>Author</td></tr></tr></tbody>
+              <tr><td>registerHelpVideoPage(body)</td><td>POST /help-videos/pages</td><td>Author</td></tr>
+              <tr><td>readHelpVideoDownloadLink(id, opts?)</td><td>GET /help-videos/:id/download-link</td><td>Authenticated (draft: author)</td></tr>
+              <tr><td>exportHelpVideoPackage(ids)</td><td>POST /help-videos/packages</td><td>Admin</td></tr>
+              <tr><td>openHelpVideoPackageImport()</td><td>POST /help-videos/packages/imports</td><td>Admin</td></tr>
+              <tr><td>previewHelpVideoPackageImport(id)</td><td>POST /help-videos/packages/imports/:id/preview</td><td>Admin</td></tr>
+              <tr><td>applyHelpVideoPackageImport(id, video_ids?)</td><td>POST /help-videos/packages/imports/:id/apply</td><td>Admin</td></tr>
+              <tr><td>discardHelpVideoPackageImport(id)</td><td>DELETE /help-videos/packages/imports/:id</td><td>Admin</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:sdk-help-videos -->
         </div>
