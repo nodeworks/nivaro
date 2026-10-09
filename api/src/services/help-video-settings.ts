@@ -5,7 +5,7 @@ import { hasColumn } from '../lib/column-probe.js'
 // nivaro_settings.help_video_settings (migration 410; NULL = every default).
 //
 //   { "encoder": { ... } }       — how renders are encoded (#1561), this file
-//   { "house_style": { ... } }   — #1551, added later by its own module
+//   { "house_style": { ... } }   — #1551, help-video-house-style.ts
 //
 // This module owns `encoder` only. Every save rewrites ONLY the keys it is
 // handed and keeps every other top-level key exactly as stored, so a later

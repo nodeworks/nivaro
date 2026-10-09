@@ -8,6 +8,12 @@ export {
 } from './api'
 export { HelpVideoEditor } from './editor/HelpVideoEditor'
 export { HelpVideoPlayer, type PlayerHandle } from './HelpVideoPlayer'
+export {
+  applyHouseStyle,
+  HOUSE_STYLE_DEFAULTS,
+  type HouseStyle,
+  houseStyleChanges
+} from './houseStyle'
 export { AuthorRolesButton } from './library/AuthorRolesButton'
 export { HelpVideoLibrary } from './library/HelpVideoLibrary'
 export {
@@ -28,11 +34,13 @@ export {
 } from './recorder/HelpVideoRecordingProvider'
 export {
   type HelpVideoSettingsDto,
+  type HouseStyleDto,
   helpVideoSettingsApi,
   helpVideoSettingsKeys,
   type RenderQueueDto,
   type RenderQueueItem
 } from './settings/api'
+export { HouseStyleButton } from './settings/HouseStyleButton'
 export { RenderSettingsButton } from './settings/RenderSettingsButton'
 export type {
   HelpVideoContext,

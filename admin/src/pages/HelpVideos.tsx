@@ -3,6 +3,7 @@ import {
   AuthorRolesButton,
   defaultItemUrl,
   HelpVideoLibrary,
+  HouseStyleButton,
   ItemEditAuthContext,
   NavigationContext,
   NivaroProvider,
@@ -51,6 +52,7 @@ export function HelpVideosPage() {
                 <>
                   <AuthorRolesButton />
                   <RenderSettingsButton />
+                  <HouseStyleButton />
                 </>
               }
             />

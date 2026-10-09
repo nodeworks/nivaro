@@ -2,13 +2,93 @@ import { X } from 'lucide-react'
 import { memo, useId, useRef, useState } from 'react'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
-import { EDIT_LIMITS, removeItem } from '../edits'
-import type { VideoEdits } from '../types'
+import { captionLookOf, EDIT_LIMITS, removeItem, setCaptionLook } from '../edits'
+import type { CaptionStyle, VideoEdits } from '../types'
 import { typeAlongCaptionChecked } from './tools'
 
 const stamp = (ms: number) => {
   const s = Math.max(0, ms) / 1000
   return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, '0')}`
+}
+
+const segment =
+  'h-7 min-w-[36px] border-l border-input px-2 text-[12px] transition-colors duration-150 first:border-l-0 focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan motion-reduce:transition-none'
+const on = 'bg-nvr-cyan/15 font-semibold text-foreground'
+const off = 'bg-background text-foreground hover:bg-muted'
+const LOOK: Array<{
+  key: keyof CaptionStyle
+  label: string
+  choices: Array<{ value: string; label: string }>
+}> = [
+  {
+    key: 'size',
+    label: 'Size',
+    choices: [
+      { value: 's', label: 'S' },
+      { value: 'm', label: 'M' },
+      { value: 'l', label: 'L' },
+      { value: 'xl', label: 'XL' }
+    ]
+  },
+  {
+    key: 'background',
+    label: 'Background',
+    choices: [
+      { value: 'none', label: 'None' },
+      { value: 'shaded', label: 'Shaded' },
+      { value: 'solid', label: 'Solid' }
+    ]
+  },
+  {
+    key: 'position',
+    label: 'Position',
+    choices: [
+      { value: 'bottom', label: 'Bottom' },
+      { value: 'top', label: 'Top' }
+    ]
+  }
+]
+
+/** How this video's captions look to viewers who have not chosen their own
+ *  (#1551). Viewers can still change it for themselves in the player. */
+function CaptionLook({
+  edits,
+  onChange
+}: {
+  edits: VideoEdits
+  onChange: (e: VideoEdits) => void
+}) {
+  const look = captionLookOf(edits)
+  return (
+    <div className='space-y-1.5 border-t border-border pt-2' data-hv-caption-look-panel>
+      <p className='text-[12px] font-medium text-foreground'>Caption look</p>
+      {LOOK.map((row) => (
+        <div key={row.key} className='flex items-center justify-between gap-2'>
+          <span className='text-[12px] text-muted-foreground'>{row.label}</span>
+          <fieldset
+            className='inline-flex overflow-hidden rounded-md border border-input'
+            aria-label={`Caption ${row.label.toLowerCase()}`}
+          >
+            {row.choices.map((c) => (
+              <button
+                key={c.value}
+                type='button'
+                aria-pressed={look[row.key] === c.value}
+                onClick={() => onChange(setCaptionLook(edits, { [row.key]: c.value }))}
+                className={`${segment} ${look[row.key] === c.value ? on : off}`}
+                data-hv-caption-look={`${row.key}:${c.value}`}
+              >
+                {c.label}
+              </button>
+            ))}
+          </fieldset>
+        </div>
+      ))}
+      <p className='text-[12px] leading-snug text-muted-foreground'>
+        Viewers who set their own caption look in the player keep theirs.
+      </p>
+    </div>
+  )
 }
 
 /**
@@ -141,6 +221,7 @@ export const CaptionsPanel = memo(function CaptionsPanel({
           })}
         </ul>
       )}
+      <CaptionLook edits={edits} onChange={onChange} />
     </section>
   )
 })

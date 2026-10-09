@@ -245,6 +245,16 @@ export const helpVideosApi: DocSection = {
           'Render settings: `{encoder: {preset, crf, two_pass_over_minutes, hardware}}`, with where each value comes from and the hardware encoders this server can use (`?fresh=1` checks again). A key set to null goes back to the environment / default; 409 HELP_VIDEO_SETTINGS_MIGRATION_PENDING before migration 410'
         ],
         [
+          'GET /help-videos/house-style',
+          'authors',
+          'The house style: `{migrated, house_style, is_default, defaults}`. The editor uses it for new callouts and for Apply house style'
+        ],
+        [
+          'PATCH /help-videos/house-style',
+          'administrators',
+          'Body `{house_style}`: an object is merged over the stored style (every bad key is named, 400), null goes back to the standard look. 409 HELP_VIDEO_SETTINGS_MIGRATION_PENDING before migration 410'
+        ],
+        [
           'GET /help-videos/render-queue',
           'administrators',
           'Renders running and waiting: place in the queue, progress, encoder, and estimates from past renders'
@@ -288,6 +298,15 @@ export const helpVideosApi: DocSection = {
     {
       type: 'p',
       text: 'Each value can also come from the server environment, used when the setting is not set: HELP_VIDEO_ENCODER_PRESET, HELP_VIDEO_ENCODER_CRF, HELP_VIDEO_TWO_PASS_OVER_MINUTES, HELP_VIDEO_HARDWARE_ENCODER (off or auto). HELP_VIDEO_VAAPI_DEVICE names the VAAPI device (default /dev/dri/renderD128).'
+    },
+    { type: 'h3', text: 'House style' },
+    {
+      type: 'p',
+      text: "Videos → House style (administrators) sets the look every new video starts from: the colour new callouts, steps, boxes and arrows start in, the text size in callouts, boxes and steps, the step badge shape and size, how captions look, an intro card (length, a list of chapters, motion and transition; it shows the video's own title and description), an end card (length, text, motion and transition) and Improve audio. A video gets these when it is created, from a recording or an uploaded file. A video that already exists keeps its own choices: nothing changes it until an author opens it in the editor and presses Apply house style (the House style section in the right-hand column), which lists exactly what will change first and is one undo step. Applying never removes a card the house style leaves off, and keeps any card text the video already has. Before migration 410 the house style is the standard look and cannot be saved."
+    },
+    {
+      type: 'p',
+      text: "Two of these are per-video settings an author can also change by hand: Text size in the Inspector for a callout, box or step (it sizes the text in all of them), and Caption look under Captions. The caption look is what viewers see until they choose their own in the player; a viewer's own choice wins, setting by setting."
     },
     { type: 'h3', text: 'The render queue' },
     {

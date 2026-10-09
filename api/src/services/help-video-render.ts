@@ -17,6 +17,8 @@ import {
   shownBrand
 } from './help-video-cards.js'
 import {
+  CALLOUT_TEXT_SCALE,
+  calloutTextOf,
   captionsToVtt,
   editedDuration,
   normalizeEdits,
@@ -288,7 +290,8 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const { work, out: size } = renderSizes(width, height, edits.crop)
     const overlays = await rasterizeAnnotations(edits.annotations, work, dir, {
       steps: stepNumbers(edits),
-      stepStyle: stepStyleOf(edits)
+      stepStyle: stepStyleOf(edits),
+      textScale: CALLOUT_TEXT_SCALE[calloutTextOf(edits)]
     })
     stopIfCancelled()
     // Intro / outro cards and chapter banners, in the instance brand. The

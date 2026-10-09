@@ -2,6 +2,9 @@ import { type CSSProperties, useMemo } from 'react'
 import { ANNOTATION_PALETTE, annotationUnit } from './annotationStyles'
 import {
   annotationOpacity,
+  CALLOUT_TEXT_SCALE,
+  calloutTextOf,
+  captionLookOf,
   SPOTLIGHT_DIM,
   STEP_BADGE_UNITS,
   stepNumbers,
@@ -53,6 +56,7 @@ export function OverlayLayer({
   const unit = annotationUnit(canvas.width)
   const steps = useMemo(() => stepNumbers(edits), [edits])
   const stepStyle = stepStyleOf(edits)
+  const textScale = CALLOUT_TEXT_SCALE[calloutTextOf(edits)]
   // Spotlights first, so their dim never covers another annotation (the
   // render's drawOrder).
   const shown = activeAt(edits.annotations, srcMs)
@@ -105,6 +109,7 @@ export function OverlayLayer({
                 opacity={fade ? annotationOpacity(a, srcMs) : 1}
                 step={steps.get(a.id) ?? null}
                 stepStyle={stepStyle}
+                textScale={textScale}
               />
             ))}
           </div>
@@ -125,7 +130,8 @@ function AnnotationShape({
   srcMs,
   opacity,
   step,
-  stepStyle
+  stepStyle,
+  textScale
 }: {
   a: Annotation
   W: number
@@ -135,6 +141,8 @@ function AnnotationShape({
   opacity: number
   step: number | null
   stepStyle: StepStyle
+  /** The video's callout text size (#1551): 1 = medium. */
+  textScale: number
 }) {
   const color = ANNOTATION_PALETTE[a.tone]
   const x = a.rect.x * W
@@ -158,7 +166,7 @@ function AnnotationShape({
       fontWeight: 600,
       lineHeight: 1.2,
       fontFamily: 'Arial, Helvetica, sans-serif',
-      fontSize: Math.max(12, Math.min(h * 0.45, 9 * unit)),
+      fontSize: Math.max(12 * textScale, Math.min(h * 0.45, 9 * unit) * textScale),
       opacity
     }
     if (a.type === 'box') Object.assign(style, { border: `${1.5 * unit}px solid ${color}`, color })
@@ -232,7 +240,7 @@ function AnnotationShape({
           fontWeight: 600,
           lineHeight: 1.2,
           fontFamily: 'Arial, Helvetica, sans-serif',
-          fontSize: Math.max(12, Math.min(h * 0.45, 9 * unit)),
+          fontSize: Math.max(12 * textScale, Math.min(h * 0.45, 9 * unit) * textScale),
           color: '#ffffff',
           background: color,
           boxShadow: '0 2px 10px rgba(0,0,0,0.35)',
@@ -339,9 +347,11 @@ function CaptionLine({
 }) {
   const c = activeAt(edits.captions, srcMs)[0]
   if (!c) return null
-  const size = captionStyle?.size ?? 'm'
-  const bg = captionStyle?.background ?? 'shaded'
-  const top = captionStyle?.position === 'top'
+  // The viewer's look when the host passes one, else the video's own (#1551).
+  const look = captionStyle ?? captionLookOf(edits)
+  const size = look.size
+  const bg = look.background
+  const top = look.position === 'top'
   // Scales with the picture so a caption never swamps a small (sheet-sized) player.
   const fontSize = Math.round(
     Math.max(11, Math.min(20, frameWidth / 44) * CAPTION_SIZE_SCALE[size])

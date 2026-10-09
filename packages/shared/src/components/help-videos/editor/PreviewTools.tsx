@@ -8,6 +8,7 @@ import {
 } from 'react'
 import { cropOf, removeItem, setCrop, upsertItemChecked } from '../edits'
 import { activeAt, viewAt } from '../playerMath'
+import { useHouseStyle } from '../settings/useHouseStyle'
 import type { Annotation, Point, Rect, VideoEdits } from '../types'
 import type { Selection } from './Timeline'
 import {
@@ -104,6 +105,8 @@ export function PreviewTools({
   note?: string | null
 }) {
   const layer = useRef<HTMLDivElement | null>(null)
+  // New callouts, steps, boxes and arrows start in the house colour (#1551).
+  const house = useHouseStyle().style
   const selectedEl = useRef<HTMLButtonElement | null>(null)
   const focusSelected = useRef(false)
   const hintId = useId()
@@ -164,7 +167,7 @@ export function PreviewTools({
       rect = { x: tail.x, y: tail.y, w: 0.02, h: 0.02 }
       to = click ? draft.a : draft.b
     } else rect = click ? clickRect(tool, draft.a) : rectFromPoints(draft.a, draft.b)
-    const { key, item } = newItemFor(tool, rect, srcMs, sourceMs, to)
+    const { key, item } = newItemFor(tool, rect, srcMs, sourceMs, to, house.callout_tone)
     // A refused shape (an overlapping zoom) keeps the tool up to try again.
     if (!write(edits, key as ShapeLane, item)) return
     onSelect({ lane: key, id: item.id })

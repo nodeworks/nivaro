@@ -1,5 +1,5 @@
 import { EDIT_LIMITS, type ListKey, newId, textDurationMs, upsertItemChecked } from '../edits'
-import type { Annotation, Blur, Point, RecordedClick, Rect, VideoEdits, Zoom } from '../types'
+import type { Annotation, Blur, Point, RecordedClick, Rect, Tone, VideoEdits, Zoom } from '../types'
 import type { Selection } from './timeline/Lanes'
 
 // The editor's drawing tools, kept pure. Rects and points are frame
@@ -85,7 +85,9 @@ export function newItemFor(
   rect: Rect,
   srcMs: number,
   sourceMs: number,
-  arrowTo?: Point
+  arrowTo?: Point,
+  /** The house style's callout colour (#1551); default blue. */
+  tone: Tone = 'accent'
 ): { key: ListKey; item: Annotation | Zoom | Blur } {
   const start = Math.round(clamp(srcMs, 0, Math.max(0, sourceMs - EDIT_LIMITS.minItemMs)))
   const end = Math.round(Math.min(sourceMs, start + DEFAULT_MS))
@@ -111,7 +113,7 @@ export function newItemFor(
     rect,
     to: tool === 'arrow' ? (arrowTo ?? { x: rect.x + rect.w, y: rect.y + rect.h }) : null,
     text,
-    tone: 'accent'
+    tone
   }
   if (byText) markAutoLength(item)
   return { key: 'annotations', item }

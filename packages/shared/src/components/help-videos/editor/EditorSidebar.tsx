@@ -6,6 +6,7 @@ import type { RecordedClick, VideoEdits } from '../types'
 import { CaptionsPanel } from './CaptionsPanel'
 import { CardsPanel } from './CardsPanel'
 import { ChaptersPanel } from './ChaptersPanel'
+import { HouseStyleSection } from './HouseStylePanel'
 import { Inspector } from './Inspector'
 import { SideSection, useOpenSections } from './layout'
 import { MusicPanel } from './MusicPanel'
@@ -292,6 +293,12 @@ export const EditorSidebar = memo(function EditorSidebar({
           onShowCard={onShowCard}
         />
       </SideSection>
+      <HouseStyleSection
+        edits={edits}
+        open={open.has('house')}
+        onToggle={toggle}
+        onChange={onChange}
+      />
       <SideSection
         id='clicks'
         title='Click ripples'

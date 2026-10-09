@@ -15,6 +15,7 @@ import { fetchHelpVideo, helpVideoApi, helpVideoKeys, useCardBrand } from './api
 import { CardLayer } from './CardLayer'
 import {
   bodyDuration,
+  captionLookOf,
   cardPhaseAt,
   editedDuration,
   editedToSource,
@@ -169,7 +170,7 @@ function PlayerInner({
   const [started, setStarted] = useState(false)
   const [userRate, setUserRate] = useState(1)
   const [captions, setCaptions] = useState(true)
-  const [captionStyle, setCaptionStyle] = useCaptionStyle()
+  const [captionStyle, setCaptionStyle] = useCaptionStyle(edits ? captionLookOf(edits) : undefined)
   const [fileDurMs, setFileDurMs] = useState(0)
   const [checking, setChecking] = useState(false)
   const resumeAt = useRef<number | null>(null)

@@ -6,11 +6,14 @@ import { Textarea } from '../../ui/textarea'
 import { ANNOTATION_PALETTE } from '../annotationStyles'
 import {
   ALLOWED_SPEEDS,
+  type CalloutText,
+  calloutTextOf,
   EDIT_LIMITS,
   type ListKey,
   musicShare,
   removeItem,
   removeSegment,
+  setCalloutText,
   setPieceMusic,
   setSpeed,
   setStepStyle,
@@ -53,6 +56,11 @@ const STEP_SHAPE_CHOICES: Array<{ value: StepStyle['shape']; label: string }> = 
   { value: 'square', label: 'Square' }
 ]
 const STEP_SIZE_CHOICES: Array<{ value: StepStyle['size']; label: string }> = [
+  { value: 'small', label: 'Small' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'large', label: 'Large' }
+]
+const CALLOUT_TEXT_CHOICES: Array<{ value: CalloutText; label: string }> = [
   { value: 'small', label: 'Small' },
   { value: 'medium', label: 'Medium' },
   { value: 'large', label: 'Large' }
@@ -532,6 +540,31 @@ export const Inspector = memo(function Inspector({
                 ))}
               </fieldset>
             </div>
+          </div>
+        )}
+        {(a.type === 'callout' || a.type === 'box' || a.type === 'step') && (
+          <div className='space-y-1' data-hv-callout-text>
+            <p className={label} id={`${headingId}-textsize`}>
+              Text size
+            </p>
+            <fieldset
+              className='inline-flex overflow-hidden rounded-md border border-input'
+              aria-labelledby={`${headingId}-textsize`}
+            >
+              {CALLOUT_TEXT_CHOICES.map((c) => (
+                <button
+                  key={c.value}
+                  type='button'
+                  aria-pressed={calloutTextOf(edits) === c.value}
+                  onClick={() => onChange(setCalloutText(edits, c.value))}
+                  className={`${segment} ${calloutTextOf(edits) === c.value ? on : off}`}
+                  data-hv-callout-text-size={c.value}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </fieldset>
+            <p className={hint}>For every callout, box and step in this video.</p>
           </div>
         )}
         {a.type !== 'spotlight' && (

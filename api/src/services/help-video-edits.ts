@@ -158,6 +158,12 @@ export interface VideoEdits {
   /** Narration cleanup (#1519): the render levels its loudness and reduces
    *  noise. Stored only while on; live playback plays the recording as is. */
   audio?: AudioEdits
+  /** Text size in callouts, boxes and steps (#1551). Stored only when it is
+   *  not CALLOUT_TEXT_DEFAULT. */
+  callout_text?: 'small' | 'large'
+  /** How captions look to viewers who have not chosen their own (#1551).
+   *  Only the keys that differ from CAPTION_LOOK_DEFAULTS are stored. */
+  caption_style?: Partial<CaptionLook>
 }
 
 /** The narration cleanup switch (#1519). Only `{ improve: true }` is ever
@@ -174,6 +180,59 @@ export const AUDIO_IMPROVE_DEFAULT = false
 export function normalizeAudio(v: unknown): AudioEdits | null {
   if (!v || typeof v !== 'object' || Array.isArray(v)) return null
   return (v as { improve?: unknown }).improve === true ? { improve: true } : null
+}
+
+/** Text size in callouts, boxes and steps, for the whole video (#1551). The
+ *  live overlay and the render multiply their font size by the scale. */
+export const CALLOUT_TEXT_SIZES = ['small', 'medium', 'large'] as const
+export type CalloutText = (typeof CALLOUT_TEXT_SIZES)[number]
+export const CALLOUT_TEXT_DEFAULT: CalloutText = 'medium'
+export const CALLOUT_TEXT_SCALE: Record<CalloutText, number> = {
+  small: 0.8,
+  medium: 1,
+  large: 1.25
+}
+
+/** 'small' / 'large', or null (the default / unreadable: stored as absent). */
+export function normalizeCalloutText(v: unknown): 'small' | 'large' | null {
+  return v === 'small' || v === 'large' ? v : null
+}
+export function calloutTextOf(e: VideoEdits): CalloutText {
+  return e.callout_text ?? CALLOUT_TEXT_DEFAULT
+}
+
+/** How captions look in the player (the viewer's own settings, #1529, win
+ *  key by key over the video's). Captions are never burned into the file. */
+export interface CaptionLook {
+  size: 's' | 'm' | 'l' | 'xl'
+  background: 'none' | 'shaded' | 'solid'
+  position: 'bottom' | 'top'
+}
+export const CAPTION_LOOK_DEFAULTS: Readonly<CaptionLook> = {
+  size: 'm',
+  background: 'shaded',
+  position: 'bottom'
+}
+export const CAPTION_LOOK_CHOICES: { [K in keyof CaptionLook]: readonly CaptionLook[K][] } = {
+  size: ['s', 'm', 'l', 'xl'],
+  background: ['none', 'shaded', 'solid'],
+  position: ['bottom', 'top']
+}
+
+/** The keys that differ from CAPTION_LOOK_DEFAULTS, or null when none. */
+export function normalizeCaptionLook(v: unknown): Partial<CaptionLook> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const r = v as Record<string, unknown>
+  const out: Partial<CaptionLook> = {}
+  for (const k of Object.keys(CAPTION_LOOK_DEFAULTS) as Array<keyof CaptionLook>) {
+    const val = r[k]
+    if (
+      (CAPTION_LOOK_CHOICES[k] as readonly unknown[]).includes(val) &&
+      val !== CAPTION_LOOK_DEFAULTS[k]
+    )
+      (out as Record<string, unknown>)[k] = val
+  }
+  return Object.keys(out).length ? out : null
 }
 
 export const ALLOWED_SPEEDS: Speed[] = [0.5, 1, 1.5, 2, 4]
@@ -413,6 +472,10 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   if (stepStyle) out.step_style = stepStyle
   const audio = normalizeAudio(o.audio)
   if (audio) out.audio = audio
+  const calloutText = normalizeCalloutText(o.callout_text)
+  if (calloutText) out.callout_text = calloutText
+  const captionStyle = normalizeCaptionLook(o.caption_style)
+  if (captionStyle) out.caption_style = captionStyle
   return out
 }
 

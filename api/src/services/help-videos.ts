@@ -21,6 +21,7 @@ import {
   normalizeEdits,
   type VideoEdits
 } from './help-video-edits.js'
+import { applyHouseStyleToNew, currentHouseStyle } from './help-video-house-style.js'
 import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
 import { releaseFinalizedUpload, takeFinalizedUpload } from './help-video-uploads.js'
@@ -685,6 +686,9 @@ export async function createVideo(
   const upload = await takeFinalizedUpload(user, body.upload_id)
   const id = randomUUID()
   const now = new Date()
+  // A new video starts from the house style (#1551); a read failure = the
+  // defaults, never a failed create.
+  const house = await currentHouseStyle()
   let versionId: string
   try {
     await db('nivaro_help_videos').insert({
@@ -704,7 +708,7 @@ export async function createVideo(
       height: upload.height,
       clicks: upload.clicks,
       levels: upload.levels,
-      edits: emptyEdits(upload.duration_ms ?? 0)
+      edits: applyHouseStyleToNew(emptyEdits(upload.duration_ms ?? 0), house.style)
     })
   } catch (err) {
     // Nothing references the recording yet: give it back to its author (and

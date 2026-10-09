@@ -174,6 +174,12 @@ export interface VideoEdits {
   /** Narration cleanup (#1519): loudness levelling + noise reduction in the
    *  render. Stored only while on; live playback plays the recording as is. */
   audio?: { improve: true }
+  /** Text size in callouts, boxes and steps (#1551); stored only when not
+   *  'medium'. */
+  callout_text?: 'small' | 'large'
+  /** How captions look to viewers who have not chosen their own (#1551);
+   *  only the keys that differ from the default look are stored. */
+  caption_style?: Partial<CaptionStyle>
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }

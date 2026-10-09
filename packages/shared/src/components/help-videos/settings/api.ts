@@ -1,5 +1,6 @@
 import type { NivaroClient } from '@nivaro/sdk'
 import { get, patch, post } from '../../../lib/commands'
+import type { HouseStyle } from '../houseStyle'
 
 // Instance-wide help-video settings (#1561) and the render queue (#1532).
 // Administrators only (the server refuses everyone else).
@@ -68,9 +69,19 @@ export interface RenderQueueDto {
   sample: number
 }
 
+/** The house style (#1551). Authors read it; administrators change it. */
+export interface HouseStyleDto {
+  /** false = migration 410 has not run: the defaults, saving refused. */
+  migrated: boolean
+  house_style: HouseStyle
+  is_default: boolean
+  defaults: HouseStyle
+}
+
 export const helpVideoSettingsKeys = {
   settings: ['help-video-settings'] as const,
-  queue: ['help-video-render-queue'] as const
+  queue: ['help-video-render-queue'] as const,
+  houseStyle: ['help-video-house-style'] as const
 }
 
 export function helpVideoSettingsApi(client: NivaroClient) {
@@ -84,6 +95,14 @@ export function helpVideoSettingsApi(client: NivaroClient) {
      *  HELP_VIDEO_SETTINGS_MIGRATION_PENDING before migration 410. */
     saveEncoder: (encoder: Partial<Record<keyof EncoderSettings, unknown>>) =>
       r(patch<{ data: HelpVideoSettingsDto }>('/help-videos/settings', { encoder })).then(
+        (x) => x.data
+      ),
+    houseStyle: () =>
+      r(get<{ data: HouseStyleDto }>('/help-videos/house-style')).then((x) => x.data),
+    /** null = back to the defaults; a partial object is merged over the
+     *  stored style. 409 HELP_VIDEO_SETTINGS_MIGRATION_PENDING before 410. */
+    saveHouseStyle: (house_style: Partial<HouseStyle> | null) =>
+      r(patch<{ data: HouseStyleDto }>('/help-videos/house-style', { house_style })).then(
         (x) => x.data
       ),
     queue: () => r(get<{ data: RenderQueueDto }>('/help-videos/render-queue')).then((x) => x.data),

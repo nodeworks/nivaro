@@ -69,10 +69,12 @@ export async function rasterizeAnnotations(
   annotations: Annotation[],
   size: { width: number; height: number },
   dir: string,
-  opts: { steps?: Map<string, number>; stepStyle?: StepStyle } = {}
+  opts: { steps?: Map<string, number>; stepStyle?: StepStyle; textScale?: number } = {}
 ): Promise<Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }>> {
   if (!annotations.length) return []
   const style = opts.stepStyle ?? STEP_STYLE_DEFAULTS
+  // The video's callout text size (#1551): 1 = the text exactly as before.
+  const textScale = opts.textScale ?? 1
   const browser = await getBrowser()
   const page = await browser.newPage()
   const out: Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }> = []
@@ -93,7 +95,7 @@ export async function rasterizeAnnotations(
         // __name helper the page does not have) or reach anything outside it.
         await page.evaluate(
           (data) => {
-            const { a, scale, W, H, palette, step, badgeUnits, square, dim } = data
+            const { a, scale, W, H, palette, step, badgeUnits, square, dim, ts } = data
             const document = (globalThis as unknown as { document: PageDocument }).document
             const root = document.getElementById('root') as PageNode
             root.style.width = `${W}px`
@@ -107,7 +109,7 @@ export async function rasterizeAnnotations(
             const unit = Math.max(2, Math.round(W / 640)) // scales line widths with the frame
             if (a.type === 'box' || a.type === 'callout') {
               const el = document.createElement('div')
-              el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;box-sizing:border-box;border-radius:${4 * unit}px;display:flex;align-items:center;justify-content:center;text-align:center;padding:${3 * unit}px;font-weight:600;font-size:${Math.max(12, Math.min(h * 0.45, 9 * unit))}px;line-height:1.2;`
+              el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;box-sizing:border-box;border-radius:${4 * unit}px;display:flex;align-items:center;justify-content:center;text-align:center;padding:${3 * unit}px;font-weight:600;font-size:${Math.max(12 * ts, Math.min(h * 0.45, 9 * unit) * ts)}px;line-height:1.2;`
               if (a.type === 'box') {
                 el.style.border = `${1.5 * unit}px solid ${color}`
                 el.style.color = color
@@ -126,7 +128,7 @@ export async function rasterizeAnnotations(
               badge.textContent = step === null ? '' : String(step)
               if (a.text) {
                 const el = document.createElement('div')
-                el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;box-sizing:border-box;border-radius:${4 * unit}px;display:flex;align-items:center;gap:${3 * unit}px;text-align:left;padding:${3 * unit}px;font-weight:600;font-size:${Math.max(12, Math.min(h * 0.45, 9 * unit))}px;line-height:1.2;color:#ffffff;box-shadow:0 2px 10px rgba(0,0,0,0.35);background:${color};`
+                el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${w}px;height:${h}px;box-sizing:border-box;border-radius:${4 * unit}px;display:flex;align-items:center;gap:${3 * unit}px;text-align:left;padding:${3 * unit}px;font-weight:600;font-size:${Math.max(12 * ts, Math.min(h * 0.45, 9 * unit) * ts)}px;line-height:1.2;color:#ffffff;box-shadow:0 2px 10px rgba(0,0,0,0.35);background:${color};`
                 badge.style.background = '#ffffff'
                 badge.style.color = color
                 const label = document.createElement('span')
@@ -197,7 +199,8 @@ export async function rasterizeAnnotations(
             step: opts.steps?.get(a.id) ?? null,
             badgeUnits: STEP_BADGE_UNITS[style.size],
             square: style.shape === 'square',
-            dim: SPOTLIGHT_DIM
+            dim: SPOTLIGHT_DIM,
+            ts: textScale
           }
         )
         const path = join(dir, `annot-${++n}.png`)

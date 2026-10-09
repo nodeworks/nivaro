@@ -1,8 +1,14 @@
 import type { FastifyInstance, FastifyReply } from 'fastify'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { detectHardwareEncoders } from '../services/help-video-encoder.js'
+import {
+  currentHouseStyle,
+  HOUSE_STYLE_DEFAULTS,
+  isDefaultHouseStyle,
+  saveHouseStyle
+} from '../services/help-video-house-style.js'
 import { cancelRender } from '../services/help-video-render.js'
 import { listRenderQueue } from '../services/help-video-render-queue.js'
 import {
@@ -18,9 +24,12 @@ import {
   storedEncoder,
   TWO_PASS_MAX_MINUTES
 } from '../services/help-video-settings.js'
+import { isAuthor } from '../services/help-videos.js'
 
 // Administrator routes for help videos that are not about one video:
 //   GET/PATCH /help-videos/settings           — render encoder (#1561)
+//   GET       /help-videos/house-style        — house style (#1551), authors
+//   PATCH     /help-videos/house-style        — house style, administrators
 //   GET       /help-videos/render-queue       — the queue (#1532)
 //   POST      /help-videos/render-queue/:versionId/cancel
 // Registered beside helpVideosRoutes under the same prefix; these static
@@ -46,6 +55,16 @@ async function settingsBody(fresh: boolean) {
     },
     // What THIS process can use; another replica may differ.
     hardware: hardware ?? { available: [], failed: [], checked_at: null }
+  }
+}
+
+async function houseStyleBody() {
+  const { migrated, style } = await currentHouseStyle()
+  return {
+    migrated,
+    house_style: style,
+    is_default: isDefaultHouseStyle(style),
+    defaults: HOUSE_STYLE_DEFAULTS
   }
 }
 
@@ -78,6 +97,40 @@ export async function helpVideoAdminRoutes(app: FastifyInstance): Promise<void> 
       req
     })
     return reply.send({ data: await settingsBody(false) })
+  })
+
+  // Authors read it (the editor gives new callouts its tone and offers
+  // "Apply house style"); administrators change it.
+  app.get('/house-style', { preHandler: authenticate }, async (req, reply) => {
+    if (!(await isAuthor(req.user!, !!req.isAdmin))) {
+      return reply
+        .code(403)
+        .send({ error: 'Only video authors can do this', code: 'HELP_VIDEO_AUTHOR_ONLY' })
+    }
+    return reply.send({ data: await houseStyleBody() })
+  })
+
+  app.patch('/house-style', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as { house_style?: unknown }
+    if (!('house_style' in body)) {
+      return reply
+        .code(400)
+        .send({ error: 'house_style is required', code: 'HELP_VIDEO_SETTINGS_INVALID' })
+    }
+    try {
+      await saveHouseStyle(body.house_style)
+    } catch (err) {
+      return refuse(reply, err)
+    }
+    await logActivity({
+      action: 'help-video-house-style',
+      user: req.user!.id,
+      collection: 'nivaro_settings',
+      item: '1',
+      comment: `house_style: ${JSON.stringify(body.house_style ?? null).slice(0, 400)}`,
+      req
+    })
+    return reply.send({ data: await houseStyleBody() })
   })
 
   app.get('/render-queue', { preHandler: requireAdmin }, async (_req, reply) => {

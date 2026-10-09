@@ -78,18 +78,49 @@ export const CAPTION_SIZE_SCALE: Record<CaptionStyle['size'], number> = {
   xl: 1.65
 }
 
-/** The person's saved caption settings (preferences.help_video_captions) over the defaults. */
-export function captionStyleFrom(prefs: Record<string, unknown> | null | undefined): CaptionStyle {
+/** The person's saved caption settings (preferences.help_video_captions)
+ *  over `base`: the video's own caption look (#1551), else the defaults. A
+ *  key the person set wins; a key they never set follows the video. */
+export function captionStyleFrom(
+  prefs: Record<string, unknown> | null | undefined,
+  base: CaptionStyle = CAPTION_DEFAULTS
+): CaptionStyle {
   const raw = (prefs?.help_video_captions ?? null) as Record<string, unknown> | null
   const pick = <K extends keyof CaptionStyle>(k: K, allowed: readonly CaptionStyle[K][]) =>
-    raw && allowed.includes(raw[k] as CaptionStyle[K])
-      ? (raw[k] as CaptionStyle[K])
-      : CAPTION_DEFAULTS[k]
+    raw && allowed.includes(raw[k] as CaptionStyle[K]) ? (raw[k] as CaptionStyle[K]) : base[k]
   return {
     size: pick('size', ['s', 'm', 'l', 'xl']),
     background: pick('background', ['none', 'shaded', 'solid']),
     position: pick('position', ['bottom', 'top'])
   }
+}
+
+/** What to store after the person changes `current` to `next` while watching
+ *  a video whose own look is `base`: the keys they changed are kept as their
+ *  choice (even when that is the default, so it beats a video's look), the
+ *  keys they set before stay, and a key equal to both the default and the
+ *  video's look is dropped. Null when nothing is left. */
+export function captionPrefsAfter(
+  prefs: Record<string, unknown> | null | undefined,
+  current: CaptionStyle,
+  next: CaptionStyle,
+  base: CaptionStyle = CAPTION_DEFAULTS
+): Partial<CaptionStyle> | null {
+  const kept = captionStyleFrom(prefs, {
+    size: null,
+    background: null,
+    position: null
+  } as unknown as CaptionStyle)
+  const out: Partial<CaptionStyle> = {}
+  for (const k of Object.keys(CAPTION_DEFAULTS) as Array<keyof CaptionStyle>) {
+    // What the person set before (null when they never set this key).
+    const was = kept[k] ?? undefined
+    const v = next[k] !== current[k] ? next[k] : was
+    if (v === undefined) continue
+    if (v === CAPTION_DEFAULTS[k] && v === base[k]) continue
+    ;(out as Record<string, string>)[k] = v
+  }
+  return Object.keys(out).length ? out : null
 }
 
 /** What to store: only the keys that differ from the defaults (null when none). */

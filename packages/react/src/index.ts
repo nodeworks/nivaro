@@ -224,6 +224,7 @@ export {
   HelpVideoRecordingProvider,
   HelpVideoSheet,
   HelpVideoWalkHost,
+  HouseStyleButton,
   HScrollProxy,
   helpVideoApi,
   helpVideoKeys,

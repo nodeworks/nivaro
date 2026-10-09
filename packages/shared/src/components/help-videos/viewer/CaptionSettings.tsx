@@ -3,17 +3,30 @@ import { useMemo } from 'react'
 import { useMyPreferences, useSetMyPreferences } from '../../chat/chat-core'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import type { CaptionStyle } from '../types'
-import { captionStyleFrom, captionStylePatch } from './moments'
+import { CAPTION_DEFAULTS, captionPrefsAfter, captionStyleFrom } from './moments'
 
 // Caption size, background and position (#1529), remembered per person in
 // preferences.help_video_captions (only what differs from the default).
 
-/** The signed-in person's caption settings and a setter that saves them. */
-export function useCaptionStyle(): [CaptionStyle, (next: CaptionStyle) => void] {
+/** The caption look for this person on this video: their own settings over
+ *  the video's look (`base`, #1551), and a setter that saves what they change. */
+export function useCaptionStyle(
+  base: CaptionStyle = CAPTION_DEFAULTS
+): [CaptionStyle, (next: CaptionStyle) => void] {
   const prefs = useMyPreferences()
   const save = useSetMyPreferences()
-  const style = useMemo(() => captionStyleFrom(prefs), [prefs])
-  return [style, (next) => save.mutate({ help_video_captions: captionStylePatch(next) })]
+  const { size, background, position } = base
+  const style = useMemo(
+    () => captionStyleFrom(prefs, { size, background, position }),
+    [prefs, size, background, position]
+  )
+  return [
+    style,
+    (next) =>
+      save.mutate({
+        help_video_captions: captionPrefsAfter(prefs, style, next, { size, background, position })
+      })
+  ]
 }
 
 const OPTIONS: {

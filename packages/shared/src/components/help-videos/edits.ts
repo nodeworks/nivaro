@@ -3,6 +3,7 @@ import type {
   Annotation,
   Blur,
   Caption,
+  CaptionStyle,
   Chapter,
   IntroCard,
   MusicBed,
@@ -291,6 +292,42 @@ export const AUDIO_IMPROVE_DEFAULT = false
 export function setImproveAudio(e: VideoEdits, on: boolean): VideoEdits {
   const { audio: _drop, ...rest } = e
   return (on ? { ...rest, audio: { improve: true } } : rest) as VideoEdits
+}
+/** Text size in callouts, boxes and steps for the whole video (#1551): the
+ *  server's CALLOUT_TEXT_SCALE. 'medium' is stored as nothing. */
+export type CalloutText = 'small' | 'medium' | 'large'
+export const CALLOUT_TEXT_SCALE: Record<CalloutText, number> = {
+  small: 0.8,
+  medium: 1,
+  large: 1.25
+}
+export function calloutTextOf(e: VideoEdits): CalloutText {
+  return e.callout_text ?? 'medium'
+}
+export function setCalloutText(e: VideoEdits, size: CalloutText): VideoEdits {
+  const { callout_text: _drop, ...rest } = e
+  return (size === 'medium' ? rest : { ...rest, callout_text: size }) as VideoEdits
+}
+/** The default caption look (the server's CAPTION_LOOK_DEFAULTS). */
+export const CAPTION_LOOK_DEFAULTS: Readonly<CaptionStyle> = {
+  size: 'm',
+  background: 'shaded',
+  position: 'bottom'
+}
+/** The video's caption look: what viewers see until they choose their own. */
+export function captionLookOf(e: VideoEdits): CaptionStyle {
+  return { ...CAPTION_LOOK_DEFAULTS, ...(e.caption_style ?? {}) }
+}
+/** Change the video's caption look; only keys that differ from the default
+ *  are stored, and none at all = the key is absent (the server's rule). */
+export function setCaptionLook(e: VideoEdits, patch: Partial<CaptionStyle>): VideoEdits {
+  const { caption_style: _drop, ...rest } = e
+  const next = { ...captionLookOf(e), ...patch }
+  const stored: Partial<CaptionStyle> = {}
+  for (const k of Object.keys(CAPTION_LOOK_DEFAULTS) as Array<keyof CaptionStyle>) {
+    if (next[k] !== CAPTION_LOOK_DEFAULTS[k]) (stored as Record<string, string>)[k] = next[k]
+  }
+  return (Object.keys(stored).length ? { ...rest, caption_style: stored } : rest) as VideoEdits
 }
 /** One piece's music share (1 removes the key, as the server stores it). */
 export function setPieceMusic(e: VideoEdits, index: number, share: number): VideoEdits {
