@@ -61,13 +61,22 @@ export const HEADER_CELL_DENSE =
 export const HEADER_CELL_LIST =
   '[[data-header-list]_&]:h-8 [[data-header-list]_&]:min-h-0 [[data-header-list]_&]:w-full [[data-header-list]_&]:max-w-none [[data-header-list]_&]:flex-row [[data-header-list]_&]:items-center [[data-header-list]_&]:justify-between [[data-header-list]_&]:gap-x-6 [[data-header-list]_&]:rounded-sm [[data-header-list]_&]:px-2 [[data-header-list]_&]:py-0 [[data-header-list]_&]:shadow-none'
 
+/**
+ * FOLDED: a tile behind the "+N more" chip stays in the band, in place and
+ * mounted, but out of flow and unseen (HeaderTiles sets the attribute on the
+ * tile itself — a wrapper would change the tile's key and remount it).
+ * Attribute-qualified so it outranks the tile's own `relative`.
+ */
+export const HEADER_CELL_FOLDED =
+  '[&[data-header-folded]]:pointer-events-none [&[data-header-folded]]:invisible [&[data-header-folded]]:absolute'
+
 /** One cell: exactly content-wide (never grows — the quiet space to the
  *  right of the cluster is the point), a floor for rhythm on short values,
  *  none for an empty one, a cap as the truncation guard. Draws its own
  *  left + BOTTOM hairline: the row under a wrapped first row is then drawn
  *  by that row's own tiles across the whole populated width, and the
  *  container clips the last row's line so the band border takes over. */
-export const HEADER_TILE = `group relative flex min-h-[52px] min-w-[96px] max-w-[264px] flex-none flex-col justify-start gap-1 px-4 pt-[9px] pb-2 shadow-[-1px_1px_0_0_#e2e8f0] data-[empty=true]:min-w-0 data-[empty=true]:px-3 data-[empty=true]:opacity-60 dark:shadow-[-1px_1px_0_0_hsl(var(--border))] ${HEADER_CELL_DENSE} ${HEADER_CELL_LIST}`
+export const HEADER_TILE = `group relative flex min-h-[52px] min-w-[96px] max-w-[264px] flex-none flex-col justify-start gap-1 px-4 pt-[9px] pb-2 shadow-[-1px_1px_0_0_#e2e8f0] data-[empty=true]:min-w-0 data-[empty=true]:px-3 data-[empty=true]:opacity-60 dark:shadow-[-1px_1px_0_0_hsl(var(--border))] ${HEADER_CELL_DENSE} ${HEADER_CELL_LIST} ${HEADER_CELL_FOLDED}`
 
 /** A money / count figure: same 13px as everything else (Rob, 2026-09-25 —
  *  one size across the band, stacked or dense), set apart by weight,
@@ -115,6 +124,74 @@ export const HEADER_VALUE_LINE =
   'flex h-5 items-end gap-x-1.5 [[data-header-dense]_&]:h-auto [[data-header-dense]_&]:items-center [[data-header-list]_&]:h-auto [[data-header-list]_&]:items-baseline [[data-header-list]_&]:justify-end [[data-header-list]_&]:text-right'
 
 /**
+ * Remembered widths, per cell: keyed by the tile's own key
+ * (`data-header-cell`, set by HeaderTiles) so an entry follows its tile, by
+ * position for an untagged cell (`headerCellKeys`).
+ */
+export type HeaderWidthCache = Map<string | number, number>
+
+/**
+ * The band's cells, in order: the tiles tagged `data-header-cell` when there
+ * are any — a popover's hidden marker span, the "+N more" chip and the
+ * inline dock are not cells — else every child but the chip and the dock.
+ * A cell's position here is its tile index.
+ */
+export function headerCells(group: HTMLElement): Element[] {
+  const kids = Array.from(group.children).filter(
+    (k) => !k.hasAttribute('data-header-more') && !k.hasAttribute('data-header-tail')
+  )
+  const tagged = kids.filter((k) => k.hasAttribute('data-header-cell'))
+  return tagged.length > 0 ? tagged : kids
+}
+
+/**
+ * Each cell's cache key: its `data-header-cell`, its position when untagged,
+ * and `key#position` for a key already taken by an earlier cell — two cells
+ * never share a remembered width.
+ */
+export function headerCellKeys(cells: Element[]): Array<string | number> {
+  const seen = new Set<string | number>()
+  return cells.map((cell, i) => {
+    let key: string | number = cell.hasAttribute('data-header-cell')
+      ? (cell.getAttribute('data-header-cell') ?? i)
+      : i
+    if (seen.has(key)) key = `${key}#${i}`
+    seen.add(key)
+    return key
+  })
+}
+
+/**
+ * Which remembered widths a MutationObserver batch makes stale. `shown`:
+ * the keys of the visible cells whose content changed (a value loaded, a
+ * rollup updated) — every width of theirs is stale. `folded`: cells that
+ * changed while folded — they cannot be re-measured, so their DENSE width
+ * is kept (dropping it left only an estimate, the fold decision flipped,
+ * and the band folded and unfolded every frame); only their stacked width,
+ * possibly taken from a loading skeleton, is dropped. Changes at the group
+ * level are the band's own folding; the "+N more" chip is not a cell.
+ */
+export function headerChangedCells(
+  group: HTMLElement,
+  records: readonly MutationRecord[]
+): { shown: Array<string | number>; folded: Array<string | number> } {
+  const cells = headerCells(group)
+  const keys = headerCellKeys(cells)
+  const shown = new Set<string | number>()
+  const folded = new Set<string | number>()
+  for (const r of records) {
+    if (r.target === group) continue
+    let node: Element | null = r.target instanceof Element ? r.target : r.target.parentElement
+    if (!node || node.closest('[data-header-more]')) continue
+    while (node && node.parentElement !== group) node = node.parentElement
+    const i = node ? cells.indexOf(node) : -1
+    if (!node || i < 0) continue
+    ;(node.hasAttribute('data-header-folded') ? folded : shown).add(keys[i])
+  }
+  return { shown: [...shown], folded: [...folded] }
+}
+
+/**
  * Would the stacked tiles fit one row? Each cell's stacked width (widest of
  * label and value plus the stacked gutters, 96px floor for a populated
  * cell) is measured while the band IS stacked and remembered per cell
@@ -129,12 +206,11 @@ export const HEADER_VALUE_LINE =
 export function headerNeedsDense(
   group: HTMLElement,
   currentlyDense: boolean,
-  cache: Map<number, number>
+  cache: HeaderWidthCache
 ): boolean {
-  const cells = Array.from(group.children).filter(
-    (k) => !k.hasAttribute('data-header-more') && !k.hasAttribute('data-header-tail')
-  )
+  const cells = headerCells(group)
   if (cells.length === 0) return false
+  const keys = headerCellKeys(cells)
   const tail = group.querySelector<HTMLElement>(':scope > [data-header-tail]')
   let needed = 0
   cells.forEach((cell, i) => {
@@ -143,9 +219,9 @@ export function headerNeedsDense(
       // The rendered stacked tile IS the truth (min widths, widget tiles
       // with several figures, avatars — all included).
       w = cell.getBoundingClientRect().width
-      cache.set(i, w)
+      cache.set(keys[i], w)
     } else {
-      w = cache.get(i) ?? estimateStackedWidth(cell)
+      w = cache.get(keys[i]) ?? estimateStackedWidth(cell)
     }
     needed += w
   })
@@ -170,14 +246,28 @@ function estimateStackedWidth(cell: Element): number {
 /** The band never runs past this many rows of dense chips. */
 export const HEADER_MAX_ROWS = 2
 
-function estimateDenseWidth(cell: Element): number {
-  const label = cell.querySelector<HTMLElement>('[data-header-label]')
-  const value = cell.querySelector<HTMLElement>('[data-header-value]')
-  if (!label) return cell.getBoundingClientRect().width
-  return label.scrollWidth + (value?.scrollWidth ?? 0) + 8 + 28
+/** Dense-width guess for a cell not measured while shown: every label ·
+ *  value pair in it (a widget tile holds several figures), each label +
+ *  value + gap-x-2 + pl-4 + pr-3. Text only — a rendered cell can be wider
+ *  (a widget's own chrome), so a measured width always wins. */
+export function headerEstimateDenseWidth(cell: Element): number {
+  const labels = cell.querySelectorAll<HTMLElement>('[data-header-label]')
+  if (labels.length === 0) return cell.getBoundingClientRect().width
+  const values = cell.querySelectorAll<HTMLElement>('[data-header-value]')
+  let w = 0
+  let i = 0
+  for (const label of labels) {
+    const value =
+      label.parentElement?.querySelector<HTMLElement>(':scope > [data-header-value]') ?? values[i]
+    w += label.scrollWidth + (value?.scrollWidth ?? 0) + 8 + 28
+    i++
+  }
+  return w
 }
 
-export type FoldedCell = { index: number; label: string; empty: boolean }
+/** A folded cell: `key` is its tile key (`headerCellKeys`), which is what
+ *  HeaderTiles folds by; `index` its position among the cells. */
+export type FoldedCell = { index: number; key: string | number; label: string; empty: boolean }
 
 /** A cell with no value: flagged `data-empty`, or showing only the dash. */
 export function headerCellIsEmpty(cell: Element): boolean {
@@ -192,33 +282,36 @@ export function headerCellIsEmpty(cell: Element): boolean {
  * empty cells ("—") first, right to left, then populated text, then money
  * (`data-header-money`) only if still needed: data never hides behind a
  * dash, and a figure never hides behind a word. [] when everything fits.
- * Indices are cell positions among the group's children minus the chip and
- * the inline dock (`data-header-tail`, counted at the end of the row);
- * folded cells stay in the DOM in place as out-of-flow children
- * (`data-header-folded`) so the index is stable and the text can still be
- * sized. Before the band has flipped to dense the widths are estimated
- * from that text; the next observer pass measures them.
+ * Cells are `headerCells` (the tagged tiles, or the group's children minus
+ * the chip and the inline dock, `data-header-tail`, counted at the end of
+ * the row), each named by its tile key — a tile that renders nothing (an
+ * empty summary chip) shifts positions, never keys. Folded cells stay in
+ * the DOM in place as out-of-flow children (`data-header-folded`) so the
+ * text can still be sized. Before the band has flipped to dense the widths
+ * are estimated from that text; the next observer pass measures them.
  */
 export function headerFoldedCells(
   group: HTMLElement,
   denseNow: boolean,
-  // Dense width per cell index, remembered from when that cell was shown.
-  // Folding a cell must not change the numbers the fold was decided on —
-  // measuring the folded copy (out of flow, collapsed) did, and the band
-  // flickered between two and three rows.
-  cache: Map<number, number>
+  // Dense width per cell (headerCells' key), remembered from when that cell
+  // was shown. Folding a cell must not change the numbers the fold was
+  // decided on — measuring the folded copy (out of flow, collapsed) did, and
+  // the band flickered between two and three rows.
+  cache: HeaderWidthCache
 ): FoldedCell[] {
   const kids = Array.from(group.children)
   const chip = kids.find((k) => k.hasAttribute('data-header-more'))
   const tail = kids.find((k) => k.hasAttribute('data-header-tail'))
-  const cells = kids.filter((k) => k !== chip && k !== tail)
+  const cells = headerCells(group)
   if (cells.length === 0) return []
+  const keys = headerCellKeys(cells)
   const widths = cells.map((c, i) => {
+    const key = keys[i]
     if (denseNow && !c.hasAttribute('data-header-folded')) {
       const w = c.getBoundingClientRect().width
-      if (w > 0) cache.set(i, w)
+      if (w > 0) cache.set(key, w)
     }
-    return cache.get(i) ?? estimateDenseWidth(c)
+    return cache.get(key) ?? headerEstimateDenseWidth(c)
   })
   const available = group.clientWidth
   const chipWidth = chip ? chip.getBoundingClientRect().width : 96
@@ -262,6 +355,7 @@ export function headerFoldedCells(
     .sort((a, b) => a - b)
     .map((index) => ({
       index,
+      key: keys[index],
       empty: empty[index],
       label: cells[index].querySelector('[data-header-label]')?.textContent?.trim() ?? ''
     }))

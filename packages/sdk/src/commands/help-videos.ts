@@ -151,7 +151,7 @@ export function setHelpVideoRequirements(
 ): Command<{ data: { ok: true; added: string[] } }> {
   return cmd('PUT', `/help-videos/${id}/requirements`, undefined, { role_ids })
 }
-/** Archives the video; `purge: true` deletes it for good (administrators only). */
+/** Archives the video; `purge: true` deletes it for good (administrators only, and only once it is archived). */
 export function archiveHelpVideo(id: string, opts?: { purge?: boolean }): Command<void> {
   return cmd('DELETE', `/help-videos/${id}`, opts?.purge ? { purge: 1 } : undefined)
 }

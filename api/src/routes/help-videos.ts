@@ -194,6 +194,14 @@ export async function helpVideosRoutes(app: FastifyInstance) {
           .code(403)
           .send({ error: 'Only administrators can delete videos', code: 'ADMIN_ONLY' })
       }
+      // Deleting for good is the second step after archiving; a stale tab or a
+      // re-publish must never take a live video with it.
+      if (video.status !== 'archived') {
+        return reply.code(409).send({
+          error: 'Only archived videos can be deleted permanently. Archive it first.',
+          code: 'HELP_VIDEO_NOT_ARCHIVED'
+        })
+      }
       await purgeVideo(video, req.user!)
     } else {
       await archiveVideo(video, req.user!)

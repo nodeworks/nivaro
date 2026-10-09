@@ -1,11 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Pencil, Plus, Search } from 'lucide-react'
+import { Archive, Pencil, Plus, Search, Trash2 } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useApiFetchConfig, useNivaroClient } from '../../../context'
+import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../../context'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
-import { helpVideoApi, helpVideoKeys, useHelpVideoLibrary } from '../api'
+import { modalHostOf } from '../../ui/popover'
+import { helpVideoApi, helpVideoError, helpVideoKeys, useHelpVideoLibrary } from '../api'
 import { HelpVideoEditor } from '../editor/HelpVideoEditor'
 import { canRecord, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
 import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
@@ -18,6 +19,7 @@ import {
   showingLabel
 } from '../viewer/format'
 import { HelpVideoSheet } from '../viewer/HelpVideoSheet'
+import { type PurgeOutcome, PurgeVideoDialog } from './PurgeVideoDialog'
 
 type Status = 'published' | 'draft' | 'archived'
 
@@ -54,6 +56,12 @@ export function HelpVideoLibrary({
   const [busyNote, setBusyNote] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
   const [archiving, setArchiving] = useState<Set<string>>(() => new Set())
+  const { isAdmin } = useItemEditAuth()
+  const [purgeTarget, setPurgeTarget] = useState<HelpVideoDto | null>(null)
+  const purgeTrigger = useRef<HTMLElement | null>(null)
+  // After a delete the row is gone: focus moves to the next row's action (or the list).
+  const focusAfter = useRef<{ gone: string; next: string | null } | null>(null)
+  const listRef = useRef<HTMLDivElement | null>(null)
   const opener = useRef<HTMLElement | null>(null)
   const root = useRef<HTMLDivElement | null>(null)
   useEffect(() => {
@@ -64,6 +72,12 @@ export function HelpVideoLibrary({
   const canAuthor = !!q.data?.can_author
   const shown = q.data?.data.length ?? 0
   const total = q.data?.total ?? 0
+
+  const listedIds = (q.data?.data ?? []).map((v) => v.id).join(',')
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runs when the listed rows change
+  useEffect(() => {
+    settleFocus()
+  }, [listedIds])
 
   // A note about one list does not belong to the next one.
   // biome-ignore lint/correctness/useExhaustiveDependencies: clears when the list changes
@@ -77,6 +91,50 @@ export function HelpVideoLibrary({
         <HelpVideoEditor videoId={editId} onClose={() => onEdit(null)} />
       </div>
     )
+  }
+
+  function settleFocus() {
+    const f = focusAfter.current
+    if (!f || !root.current) return
+    if (root.current.querySelector(`[data-hv-card="${f.gone}"]`)) return
+    focusAfter.current = null
+    const next = f.next
+      ? root.current.querySelector<HTMLElement>(`[data-hv-purge="${f.next}"]`)
+      : null
+    ;(next ?? listRef.current)?.focus()
+  }
+
+  const purge = async (v: HelpVideoDto): Promise<PurgeOutcome> => {
+    const rows = q.data?.data ?? []
+    const i = rows.findIndex((r) => r.id === v.id)
+    const next = rows[i + 1] ?? rows[i - 1]
+    try {
+      await helpVideoApi(client).purge(v.id)
+      toast.success(`"${v.title}" deleted`)
+    } catch (e) {
+      const err = helpVideoError(e)
+      // Another administrator got there first: the video is gone, which is the goal.
+      // Any other 404 (a stale API with no such route) is a real failure.
+      if (!(err?.status === 404 && err.code === 'HELP_VIDEO_NOT_FOUND')) {
+        // The list was stale (it was published again): show what it is now.
+        if (err?.code === 'HELP_VIDEO_NOT_ARCHIVED') {
+          void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+        }
+        return { ok: false, message: `It could not be deleted. ${(e as Error).message}` }
+      }
+    }
+    focusAfter.current = { gone: v.id, next: next?.id ?? null }
+    setPurgeTarget(null)
+    // Once the list has refreshed, a row that is still there (or a refetch that failed)
+    // must not leave a stale hand-off behind for the next Cancel.
+    void qc.invalidateQueries({ queryKey: helpVideoKeys.all }).then(() =>
+      window.setTimeout(() => {
+        if (!focusAfter.current) return
+        focusAfter.current = null
+        if (purgeTrigger.current?.isConnected) purgeTrigger.current.focus()
+      }, 0)
+    )
+    return { ok: true }
   }
 
   const archive = async (v: HelpVideoDto) => {
@@ -189,7 +247,12 @@ export function HelpVideoLibrary({
           {archiveError}
         </p>
       )}
-      <div className='min-h-0 flex-1 overflow-y-auto p-5'>
+      <div
+        ref={listRef}
+        tabIndex={-1}
+        className='min-h-0 flex-1 overflow-y-auto p-5 focus:outline-none'
+        data-hv-list
+      >
         {q.isLoading && <p className='text-[13px] text-muted-foreground'>Loading…</p>}
         {q.isError && (
           <p role='alert' className='mb-3 text-[13px] text-rose-700 dark:text-rose-300'>
@@ -280,7 +343,7 @@ export function HelpVideoLibrary({
                   </div>
                 </button>
                 {canAuthor && (
-                  <div className='flex gap-1 border-t border-border px-1.5 py-1'>
+                  <div className='flex flex-wrap gap-1 border-t border-border px-1.5 py-1'>
                     <Button
                       size='sm'
                       variant='ghost'
@@ -298,6 +361,21 @@ export function HelpVideoLibrary({
                         data-hv-archive={v.id}
                       >
                         <Archive className='h-3.5 w-3.5' /> Archive
+                      </Button>
+                    )}
+                    {isAdmin && v.status === 'archived' && (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='text-rose-700 hover:text-rose-800 dark:text-rose-300 dark:hover:text-rose-200'
+                        onClick={(e) => {
+                          purgeTrigger.current = e.currentTarget
+                          setPurgeTarget(v)
+                        }}
+                        aria-label={`Delete permanently: ${v.title || 'Untitled video'}`}
+                        data-hv-purge={v.id}
+                      >
+                        <Trash2 className='h-3.5 w-3.5' /> Delete permanently
                       </Button>
                     )}
                   </div>
@@ -327,6 +405,18 @@ export function HelpVideoLibrary({
           </div>
         )}
       </div>
+      {purgeTarget && (
+        <PurgeVideoDialog
+          title={purgeTarget.title || 'Untitled video'}
+          container={modalHostOf(root.current?.firstElementChild as HTMLElement | null)}
+          onConfirm={() => purge(purgeTarget)}
+          onClose={() => setPurgeTarget(null)}
+          restoreFocus={() => {
+            if (focusAfter.current) settleFocus()
+            else purgeTrigger.current?.focus()
+          }}
+        />
+      )}
       <HelpVideoSheet
         videoId={watchId}
         open={!!watchId}

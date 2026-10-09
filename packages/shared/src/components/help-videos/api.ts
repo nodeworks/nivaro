@@ -150,6 +150,9 @@ export function helpVideoApi(client: NivaroClient) {
     setRequirements: (id: string, role_ids: string[]) =>
       r(put(`/help-videos/${id}/requirements`, { role_ids })),
     archive: (id: string) => r(del(`/help-videos/${id}`)),
+    /** Deletes the video, its versions, files, views and requirements for good. Administrators
+     *  only (403 ADMIN_ONLY otherwise); 404 when it is already gone. */
+    purge: (id: string) => r(del(`/help-videos/${id}?purge=1`)),
     draft: (id: string) =>
       r(get<{ data: VersionDto }>(`/help-videos/${id}/draft/edits`)).then((x) => x.data),
     /** 409 HELP_VIDEO_EDITS_CONFLICT (with `current_hash`) when `base_hash` is stale;
