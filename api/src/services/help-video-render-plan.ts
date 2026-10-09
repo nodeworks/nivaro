@@ -334,10 +334,15 @@ export function buildRenderArgs(input: RenderInput): string[] {
           `[${k}:v]scale=${out.width}:${out.height},format=yuv420p,setsar=1,${held}setpts=N/(${CARD_FPS}*TB)[${name}v]`
         )
       } else {
+        // The picture can end before the edit does (a narrated recording's
+        // sound runs on past its last frame), so the last frame is cloned on
+        // before it is picked; otherwise the pick finds nothing and the end
+        // card vanishes.
         const pick =
           edge === 'first'
             ? 'trim=end_frame=1'
-            : `trim=start=${sec(Math.max(0, bodyDuration(e) - 50))},trim=end_frame=1`
+            : `fps=${CARD_FPS},tpad=stop_mode=clone:stop_duration=${sec(bodyDuration(e))},` +
+              `trim=start=${sec(Math.max(0, bodyDuration(e) - 50))},trim=end_frame=1`
         parts.push(
           `[${name}src]${pick},setpts=PTS-STARTPTS,loop=loop=${frames - 1}:size=1:start=0,setpts=N/(${CARD_FPS}*TB)[${name}bg]`
         )

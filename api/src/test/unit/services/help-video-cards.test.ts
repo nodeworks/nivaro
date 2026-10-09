@@ -377,6 +377,22 @@ describe('render plan with cards', () => {
     expect(g).toMatch(/trim=start=6\.950[^;]*,trim=end_frame=1/)
     expect(g).toMatch(/\[cobg\]\[cofr\]overlay=0:0/)
   })
+  it('holds the last frame on when the picture ends before the edit does', () => {
+    // A narrated recording's audio can run past its last video frame, so a
+    // pick 50 ms before the end may find nothing: the last frame is cloned on
+    // (at the card rate) before it is picked, and the end card never vanishes.
+    const g = fc(
+      buildRenderArgs({
+        ...base,
+        ...cards,
+        edits: e,
+        outro: { ...seq('d/card-outro/f%05d.png', 60), duration_ms: 2000, over_frame: true }
+      })
+    )
+    expect(g).toMatch(
+      /\[cosrc\]fps=30,tpad=stop_mode=clone:stop_duration=7\.000,trim=start=6\.950,trim=end_frame=1/
+    )
+  })
   it('reads a moving banner as a sequence offset to its edited start', () => {
     const g = fc(
       buildRenderArgs({
