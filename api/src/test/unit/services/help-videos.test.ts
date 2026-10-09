@@ -245,6 +245,29 @@ describe('serializeVideo', () => {
     expect(seen.some((s) => s.includes('"D1"'))).toBe(false)
   })
 
+  it('reports a fresh start when watch again re-armed a finished video', async () => {
+    const viewRow = {
+      video_id: 'AAAA',
+      user: 'U1',
+      buckets: '1'.repeat(20),
+      position_ms: 9_800,
+      completed_at: new Date('2026-10-08T01:00:00Z')
+    }
+    const ctx = { author: false, userId: 'U1', role: 'R1' }
+    const rearmed = { ...video, required_since: new Date('2026-10-08T02:00:00Z') } as VideoRow
+    vi.mocked(db).mockImplementation(
+      fakeDb({ ...tables, nivaro_help_video_views: [viewRow] }, []) as never
+    )
+    const stale = await serializeVideo(rearmed, ctx)
+    expect(stale.my_progress).toEqual({ position_ms: 0, completed: false, percent: 0 })
+    // A completion after the requirement was set stays as it was.
+    const fresh = await serializeVideo(
+      { ...video, required_since: new Date('2026-10-08T00:30:00Z') } as VideoRow,
+      ctx
+    )
+    expect(fresh.my_progress).toEqual({ position_ms: 9_800, completed: true, percent: 100 })
+  })
+
   it('is required only for the viewer whose role has a requirement', async () => {
     vi.mocked(db).mockImplementation(fakeDb(tables, []) as never)
     expect(

@@ -366,6 +366,9 @@ export async function serializeVideo(
   const seen = [...buckets].filter((c) => c === '1').length
   const requiredSince = video.required_since ? new Date(video.required_since as string) : null
   const completedAt = view?.completed_at ? new Date(view.completed_at) : null
+  // "Watch again" re-armed the requirement after this viewer finished: report
+  // a fresh start so nothing says "100% watched" or resumes at the end.
+  const stale = !!completedAt && !!requiredSince && completedAt < requiredSince
   const dto: HelpVideoDto = {
     id,
     title: String(video.title ?? ''),
@@ -398,9 +401,9 @@ export async function serializeVideo(
     updated_at: new Date(video.updated_at as string).toISOString(),
     my_progress: view
       ? {
-          position_ms: Number(view.position_ms ?? 0),
-          completed: !!completedAt && (!requiredSince || completedAt >= requiredSince),
-          percent: Math.round((seen / 20) * 100)
+          position_ms: stale ? 0 : Number(view.position_ms ?? 0),
+          completed: !!completedAt && !stale,
+          percent: stale ? 0 : Math.round((seen / 20) * 100)
         }
       : null
   }
