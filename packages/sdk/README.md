@@ -2489,15 +2489,15 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 #### Response notes
 
 - `stream_url`, `captions_url` and `poster_url` are ticketed (`?st=`): hand them to `<video>`, `<track>` and `<img>` as-is. Authors also get `draft_stream_url` and `draft_captions_url`.
-- `published.playable` is `false` when a viewer's stream would answer 409 (the video is still being prepared); authors always get `true`.
-- `required` is true when the video is required for the caller's own role. Authors also get `required_role_ids`. `my_progress` is the caller's own progress (or `null`).
+- `published.playable` is `false` when a viewer’s stream would answer 409 (the video is still being prepared); authors always get `true`.
+- `required` is true when the video is required for the caller’s own role. Authors also get `required_role_ids`. `my_progress` is the caller’s own progress (or `null`).
 - `recordHelpVideoProgress` takes `buckets` as a 20-character `0`/`1` string (the 5% sections seen) and answers `{ data: { completed } }`, or no body (204) for a masquerade session.
 - `listHelpVideos` and `helpVideosFor` carry `can_author`, so a screen can offer "Add a video" without a second call.
 
 #### Errors callers must handle
 
-| Status | `code` | When |
-|--------|--------|------|
+| Status | code | When |
+| --- | --- | --- |
 | 409 | `HELP_VIDEO_PROCESSING` | A viewer requested `stream_url` before a current render exists and the original cannot be shown. Check `published.playable`, retry later. |
 | 409 | `HELP_VIDEO_EDITS_CONFLICT` | `saveHelpVideoDraft` with a stale `base_hash`. The body carries `current_hash`; reload the draft and merge. |
 | 409 | `UPLOAD_CLOSED` | The upload is already finalized or finishing. |
@@ -2509,7 +2509,7 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | 404 | `HELP_VIDEO_NOT_FOUND` | Unknown id, or a video the caller may not see. |
 
 | Command | Route | Auth |
-|---------|-------|------|
+| --- | --- | --- |
 | listHelpVideos(params?) | GET /help-videos | Authenticated |
 | readHelpVideo(id) | GET /help-videos/:id | Authenticated |
 | helpVideosFor(params) | GET /help-videos/for | Authenticated |
