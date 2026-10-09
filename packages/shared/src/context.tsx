@@ -180,6 +180,9 @@ export type NavigationContextValue = {
    *  the link is hidden. Headless hosts that embed the admin elsewhere can
    *  return an absolute URL. */
   consoleUrl?: (adminPath: string) => string | null
+  /** Where the host mounts the help-video library (`?watch=` / `?edit=` are read there).
+   *  Absent = `/help-videos` (the admin route). */
+  helpVideosPath?: string
 }
 
 export const NavigationContext = createContext<NavigationContextValue>({

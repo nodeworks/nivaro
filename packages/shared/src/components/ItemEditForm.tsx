@@ -92,6 +92,7 @@ import {
   type DocumentApplySelection,
   DocumentAutofillButton
 } from './import/DocumentAutofillButton'
+import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
 import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
 import { ImportColumnChips } from './import/ImportColumnChips'
 import { ImportFromFileButton } from './import/ImportFromFileButton'
@@ -9233,6 +9234,13 @@ export function ItemEditForm({
                                               fields={findableFields}
                                               onJump={jumpToField}
                                             />
+                                            {itemId && (
+                                              <HelpVideoButton
+                                                compact
+                                                collection={collection}
+                                                item={itemId}
+                                              />
+                                            )}
                                             <button
                                               type='button'
                                               title='Copy a plain-text summary of this record (fields + link) for chat or email'
