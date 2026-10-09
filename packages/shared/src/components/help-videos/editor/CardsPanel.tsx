@@ -1,13 +1,19 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { Eye } from 'lucide-react'
-import { memo, useId } from 'react'
+import { memo, useId, useRef, useState } from 'react'
+import { toast } from 'sonner'
+import { useItemEditAuth, useNivaroClient } from '../../../context'
+import { patch } from '../../../lib/commands'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Switch } from '../../ui/switch'
 import { useCardBrand } from '../api'
+import type { CardAnimation, CardTransition } from '../cardDesign'
 import { firstLine } from '../cards'
 import {
   EDIT_LIMITS,
   OUTRO_DEFAULT_TEXT,
+  setBannerAnimation,
   setCardBrand,
   setChapterBanners,
   setIntro,
@@ -16,6 +22,19 @@ import {
 import type { VideoEdits } from '../types'
 
 const SECONDS = [2, 3, 4, 5, 6]
+const ANIMATIONS: Array<{ value: CardAnimation; label: string }> = [
+  { value: 'none', label: 'None' },
+  { value: 'subtle', label: 'Subtle' },
+  { value: 'lively', label: 'Lively' }
+]
+const TRANSITIONS: Array<{ value: CardTransition; label: string }> = [
+  { value: 'cut', label: 'Cut' },
+  { value: 'fade', label: 'Fade' },
+  { value: 'fade_black', label: 'Through black' },
+  { value: 'slide', label: 'Slide' },
+  { value: 'zoom', label: 'Zoom' },
+  { value: 'wipe', label: 'Wipe' }
+]
 
 /**
  * The intro card, the outro card and chapter banners. Each card adds its own
@@ -53,8 +72,30 @@ export const CardsPanel = memo(function CardsPanel({
   const intro = edits.intro
   const outro = edits.outro
   const descLine = firstLine(videoDescription)
-  // The instance name: what a blank "Name on the cards" shows.
-  const instance = useCardBrand(!!(intro || outro), '')
+  // The instance name: what a blank "Name on the cards" shows, and whether
+  // the instance has a logo at all.
+  const instance = useCardBrand(!!(intro || outro || edits.chapter_banners), '')
+  const { isAdmin } = useItemEditAuth()
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [uploading, setUploading] = useState(false)
+  // The same logo Settings → Project sets: the cards and the sign-in page.
+  const uploadLogo = async (file: File | null) => {
+    if (!file) return
+    setUploading(true)
+    try {
+      const f = await client.upload(file)
+      await client.request(patch('/settings', { brand_logo: f.id }))
+      await qc.invalidateQueries({ queryKey: ['help-video-card-brand'] })
+      toast.success('Logo set. The cards and the sign-in page use it now.')
+    } catch {
+      toast.error('Could not set the logo. Try again, or set it in Settings → Project.')
+    } finally {
+      setUploading(false)
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
   return (
     <section className='space-y-3' aria-labelledby={headingId} data-hv-cards>
       <div>
@@ -85,6 +126,20 @@ export const CardsPanel = memo(function CardsPanel({
               value={intro.duration_ms}
               onPick={(ms) => onChange(setIntro(edits, { duration_ms: ms }))}
               data='intro'
+            />
+            <Choice
+              label='Animation'
+              value={intro.animation ?? 'none'}
+              options={ANIMATIONS}
+              onPick={(v) => onChange(setIntro(edits, { animation: v }))}
+              data={(v) => ({ 'data-hv-card-animation': `intro:${v}` })}
+            />
+            <Choice
+              label='Transition into the recording'
+              value={intro.transition ?? 'cut'}
+              options={TRANSITIONS}
+              onPick={(v) => onChange(setIntro(edits, { transition: v }))}
+              data={(v) => ({ 'data-hv-card-transition': `intro:${v}` })}
             />
             <div className='space-y-1'>
               <label htmlFor={ids.introTitle} className='text-[12px] font-medium text-foreground'>
@@ -150,6 +205,20 @@ export const CardsPanel = memo(function CardsPanel({
               onPick={(ms) => onChange(setOutro(edits, { duration_ms: ms }))}
               data='outro'
             />
+            <Choice
+              label='Animation'
+              value={outro.animation ?? 'none'}
+              options={ANIMATIONS}
+              onPick={(v) => onChange(setOutro(edits, { animation: v }))}
+              data={(v) => ({ 'data-hv-card-animation': `outro:${v}` })}
+            />
+            <Choice
+              label='Transition from the recording'
+              value={outro.transition ?? 'cut'}
+              options={TRANSITIONS}
+              onPick={(v) => onChange(setOutro(edits, { transition: v }))}
+              data={(v) => ({ 'data-hv-card-transition': `outro:${v}` })}
+            />
             <div className='space-y-1'>
               <label htmlFor={ids.outroText} className='text-[12px] font-medium text-foreground'>
                 Closing line
@@ -192,6 +261,40 @@ export const CardsPanel = memo(function CardsPanel({
         </div>
       )}
 
+      {(intro || outro) && !instance.logo && (
+        <div
+          className='rounded-md border border-dashed border-border p-2.5 text-[11.5px] leading-snug text-muted-foreground'
+          data-hv-logo-missing
+        >
+          No logo is set for this instance, so the cards show the name instead.
+          {isAdmin ? (
+            <>
+              {' '}
+              <button
+                type='button'
+                className='font-medium text-foreground underline underline-offset-2 hover:no-underline disabled:opacity-60'
+                onClick={() => fileRef.current?.click()}
+                disabled={uploading}
+                data-hv-logo-upload
+              >
+                {uploading ? 'Uploading…' : 'Upload a logo'}
+              </button>
+              <input
+                ref={fileRef}
+                type='file'
+                accept='image/png,image/jpeg,image/webp,image/svg+xml,image/gif'
+                className='sr-only'
+                tabIndex={-1}
+                aria-hidden
+                onChange={(ev) => void uploadLogo(ev.target.files?.[0] ?? null)}
+              />
+            </>
+          ) : (
+            ' An administrator can add one in Settings → Project.'
+          )}
+        </div>
+      )}
+
       <ToggleRow
         id={ids.banners}
         label='Chapter banners'
@@ -204,6 +307,17 @@ export const CardsPanel = memo(function CardsPanel({
         onChange={(on) => onChange(setChapterBanners(edits, on))}
         data='data-hv-banners-toggle'
       />
+      {edits.chapter_banners && (
+        <div className='border-l border-border pl-3'>
+          <Choice
+            label='Banner animation'
+            value={edits.banner_animation ?? 'none'}
+            options={ANIMATIONS}
+            onPick={(v) => onChange(setBannerAnimation(edits, v))}
+            data={(v) => ({ 'data-hv-banner-animation': v })}
+          />
+        </div>
+      )}
     </section>
   )
 })
@@ -293,7 +407,45 @@ function ShowButton({ onClick, data }: { onClick: () => void; data: 'intro' | 'o
       onClick={onClick}
       data-hv-card-show={data}
     >
-      <Eye className='!size-3.5' aria-hidden /> Show it
+      <Eye className='!size-3.5' aria-hidden /> Play it
     </Button>
+  )
+}
+
+/** A row of choices for one setting (wraps when there are many). */
+function Choice<T extends string>({
+  label,
+  value,
+  options,
+  onPick,
+  data
+}: {
+  label: string
+  value: T
+  options: Array<{ value: T; label: string }>
+  onPick: (v: T) => void
+  data: (v: T) => Record<string, string>
+}) {
+  return (
+    <fieldset className='space-y-1'>
+      <legend className='text-[12px] font-medium text-foreground'>{label}</legend>
+      <div className='flex flex-wrap gap-1'>
+        {options.map((o) => {
+          const active = o.value === value
+          return (
+            <button
+              key={o.value}
+              type='button'
+              aria-pressed={active}
+              onClick={() => onPick(o.value)}
+              className={`h-7 rounded-md border border-input px-2 text-[12px] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none ${active ? 'bg-nvr-cyan/15 font-semibold text-foreground' : 'bg-background text-foreground hover:bg-muted'}`}
+              {...data(o.value)}
+            >
+              {o.label}
+            </button>
+          )
+        })}
+      </div>
+    </fieldset>
   )
 }

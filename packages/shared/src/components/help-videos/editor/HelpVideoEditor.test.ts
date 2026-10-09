@@ -56,6 +56,7 @@ vi.mock('../HelpVideoPlayer', async () => {
 
 const request = vi.fn()
 vi.mock('../../../context', () => ({
+  useItemEditAuth: () => ({ isAdmin: false, userId: 'U1' }),
   useNivaroClient: () => ({ request }),
   useNavigation: () => ({ navigate: () => {} }),
   useApiFetchConfig: () => ({ apiBase: '/api', authHeaders: {}, credentials: 'include' })
