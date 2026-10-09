@@ -31,6 +31,7 @@ export function AutofillRunsChip({ onOpen }: { onOpen: (run: AutofillRun) => voi
       data-nvr-dock-aware
       className='fixed bottom-4 right-4 z-[110] flex flex-col items-end gap-2'
       data-autofill-chips={runs.length}
+      data-nvr-recording-hide
     >
       {runs.map((run) => (
         <div

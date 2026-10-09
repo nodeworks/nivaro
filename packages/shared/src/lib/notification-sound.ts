@@ -7,6 +7,8 @@
  * swallowed — a notification sound must never surface an error.
  */
 
+import { isCleanRecording } from '../components/help-videos/recorder/cleanRecording'
+
 export type NotificationSound = 'off' | 'subtle' | 'chime'
 
 let ctx: AudioContext | null = null
@@ -39,6 +41,8 @@ function tone(ac: AudioContext, freq: number, start: number, dur: number, peak: 
 /** Play the configured notification sound. No-op for 'off'/unknown/unavailable audio. */
 export function playNotificationSound(kind: NotificationSound | string | null | undefined): void {
   if (!kind || kind === 'off') return
+  // A clean help-video recording captures this tab's audio: stay silent.
+  if (isCleanRecording()) return
   const ac = audioCtx()
   if (!ac) return
   try {

@@ -19,6 +19,10 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Record a video (or "Record one for this screen" from a Videos button) asks for a screen, window or tab and, optionally, a microphone. A three-second countdown starts it; a small bar shows the time and stops it. Recording follows you from page to page — the bar stays up while you navigate, so you can record a walk-through across screens — and inside a dialog or sheet the bar and setup open inside it. The recording uploads in five-second parts while it runs and keeps unsent parts in the browser, so a dropped connection or a closed tab loses nothing — the next time you open the recorder it offers to finish the upload. A recording that finished uploading but was never saved as a video (the tab closed during the save) is offered there too, ready to save or discard; one left unsaved for a week is deleted. Recordings are limited to 30 minutes.'
     },
+    {
+      type: 'p',
+      text: "Clean screen while recording (on by default, remembered per browser) keeps the author's own things out of the video: from the countdown until you stop, notification counts, the chat button and panel, toasts, banners (announcements, update and reload notices, View as) and floating chips are hidden, notification sounds stay silent, and your name, email and photo in the app's menus read Demo User. Pausing keeps the screen clean; stopping, cancelling or closing the recorder brings everything back at once. Other people's names and photos on the page are not changed — check the screen before you start, or blur in the editor."
+    },
     { type: 'h3', text: 'Editing' },
     {
       type: 'ul',
@@ -117,6 +121,11 @@ export const helpVideosApi: DocSection = {
         ['POST /help-videos/:id/render', 'authors', 'Queue a render again'],
         ['GET /help-videos/:id/analytics', 'authors', 'Viewers, completion, hours, drop-off']
       ]
+    },
+    { type: 'h3', text: 'Clean recording in a host app' },
+    {
+      type: 'p',
+      text: 'While a clean recording runs, the recorder sets data-nvr-recording-clean on the html element. Anything a host app tags with data-nvr-recording-hide is hidden (data-nvr-recording-hide="keep-space" keeps its box so nothing shifts), Sonner toasts are hidden, and the shared components already tag their own counts, banners, chips and the chat panel. useCleanRecording() is true while it runs, DEMO_USER holds the stand-in name, and setRecordingSelf(userId) tells UserAvatar whose photo to replace (it falls back to ItemEditAuthContext.userId). The CSS ships in @nivaro/react\'s styles.css; a host with its own stylesheet should carry the same rules.'
     },
     { type: 'h3', text: 'Rendering' },
     {

@@ -11,6 +11,7 @@ import {
 } from '../../ui/dialog'
 import { Label } from '../../ui/label'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import { Switch } from '../../ui/switch'
 import { formatDuration } from '../viewer/format'
 import type { Leftover } from './leftovers'
 import { ConfirmDiscard, ErrorNote, ghostBtn, primaryBtn } from './RecorderStatus'
@@ -21,12 +22,15 @@ export type SetupOptions = {
   useMic: boolean
   micId: string
   captureClicks: boolean
+  /** Hide notifications, chat and the author's name while recording. */
+  cleanScreen: boolean
 }
 export const DEFAULT_SETUP: SetupOptions = {
   source: 'tab',
   useMic: true,
   micId: 'default',
-  captureClicks: true
+  captureClicks: true,
+  cleanScreen: true
 }
 
 const SOURCES: Array<{ id: Source; label: string; hint: string; icon: ReactNode }> = [
@@ -185,6 +189,25 @@ export function RecorderSetup({
               </p>
             </div>
           </div>
+        </div>
+
+        <div className='flex items-start gap-3 rounded-lg border border-border px-3.5 py-3'>
+          <div className='min-w-0 flex-1'>
+            <Label htmlFor={`${ids}-clean`} className='text-[13px] leading-snug text-foreground'>
+              Clean screen while recording
+            </Label>
+            <p className='mt-1 text-[12.5px] text-muted-foreground'>
+              Hide notifications, chat and my name. Your name and photo show as Demo User; it all
+              comes back when you stop.
+            </p>
+          </div>
+          <Switch
+            id={`${ids}-clean`}
+            checked={options.cleanScreen}
+            onCheckedChange={(v) => set({ cleanScreen: v })}
+            className='mt-0.5 data-[state=checked]:bg-nvr-cyan'
+            data-hv-clean-screen
+          />
         </div>
 
         {error && <ErrorNote data-hv-setup-error>{error}</ErrorNote>}

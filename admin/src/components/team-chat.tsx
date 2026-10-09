@@ -172,6 +172,7 @@ function DockInner() {
           <button
             type='button'
             aria-label='Team chat'
+            data-nvr-recording-hide
             onClick={() => setOpen(true)}
             className='relative flex h-8 w-8 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-white/[0.05] hover:text-white'
           >

@@ -122,6 +122,7 @@ export function BugReporter() {
     <button
       type='button'
       data-bug-reporter
+      data-nvr-recording-hide
       onClick={openReporter}
       title='Report a bug'
       data-nvr-dock-aware

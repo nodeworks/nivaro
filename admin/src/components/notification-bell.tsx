@@ -119,7 +119,10 @@ export function NotificationBell({
             <span className='relative flex'>
               <Bell className='h-[15px] w-[15px] shrink-0' />
               {badge > 0 && (
-                <span className='absolute -right-1.5 -top-1.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white'>
+                <span
+                  data-nvr-recording-hide
+                  className='absolute -right-1.5 -top-1.5 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-red-500 px-1 text-[9px] font-bold leading-none text-white'
+                >
                   {badge > 99 ? '99+' : badge}
                 </span>
               )}

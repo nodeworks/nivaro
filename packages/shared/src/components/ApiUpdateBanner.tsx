@@ -77,6 +77,7 @@ export function ApiUpdateBanner({
       aria-live='polite'
       className='flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 bg-nvr-cyan/15 px-4 py-2 text-[12.5px] font-medium text-slate-900 md:px-6 dark:bg-nvr-cyan/10 dark:text-slate-100'
       data-nvr-api-update={update.version}
+      data-nvr-recording-hide
     >
       <RefreshCw className='h-4 w-4 shrink-0 text-nvr-cyan' strokeWidth={2} aria-hidden />
       <span>
