@@ -20,6 +20,7 @@ type Row = Record<string, unknown>
 type Op = { op: string; table?: string; patch?: Row; ids?: string[] }
 const tables: Record<string, Row[]> = {}
 const ops: Op[] = []
+const hooks = { throwOnReady: false, failUpload: 0, failDelete: new Set<string>() }
 
 const col = (k: string) => k.replace(/^\w+\./, '')
 const time = (v: unknown) => new Date(v as string).getTime()
@@ -77,6 +78,7 @@ function builder(name: string) {
     },
     select: async () => sel().map((x) => ({ ...x })),
     update: async (patch: Row) => {
+      if (hooks.throwOnReady && patch.render_status === 'ready') throw new Error('db down')
       const hit = sel()
       for (const r of hit) Object.assign(r, patch)
       ops.push({ op: 'update', table, patch, ids: hit.map((r) => String(r.id)) })
@@ -103,12 +105,19 @@ vi.mock('../../../services/ffmpeg.js', async (importOriginal) => ({
   }
 }))
 const files = { source: { filename_disk: 'k', type: 'video/webm' } as Row, n: 0 }
+// What deleteFile does, shared by the mocked files service and discardFile.
+const removeFile = async (id: string) => {
+  if (hooks.failDelete.has(id)) throw new Error('storage down')
+  ops.push({ op: 'deleteFile', ids: [id] })
+}
 vi.mock('../../../services/files.js', () => ({
   getFile: async () => files.source,
-  uploadFileFromPath: async () => ({ id: `new-${++files.n}` }),
-  deleteFile: async (id: string) => {
-    ops.push({ op: 'deleteFile', ids: [id] })
-  }
+  uploadFileFromPath: async () => {
+    const n = ++files.n
+    if (n === hooks.failUpload) throw new Error('upload failed')
+    return { id: `new-${n}` }
+  },
+  deleteFile: removeFile
 }))
 vi.mock('../../../services/stored-object-stream.js', () => ({
   openStoredObject: async () => ({ stream: Readable.from([Buffer.from('source bytes')]) })
@@ -128,7 +137,20 @@ const app = { current: null as unknown }
 vi.mock('../../../services/io-holder.js', () => ({ getApp: () => app.current }))
 const work = mkdtempSync(join(tmpdir(), 'nvr-render-'))
 const wd = { dir: work }
-vi.mock('../../../services/help-video-uploads.js', () => ({ videoWorkDir: () => wd.dir }))
+// discardFile parks an undeletable file on an abandoned upload row (the guard
+// covers it and the purge retries it); the mock records the parking.
+vi.mock('../../../services/help-video-uploads.js', () => ({
+  videoWorkDir: () => wd.dir,
+  discardFile: async (_owner: unknown, id: string) => {
+    try {
+      await removeFile(id)
+      return true
+    } catch {
+      ops.push({ op: 'parked', ids: [id] })
+      return false
+    }
+  }
+}))
 
 const r = await import('../../../services/help-video-render.js')
 
@@ -179,6 +201,9 @@ beforeEach(() => {
   ff.during = null
   files.source = { filename_disk: 'k', type: 'video/webm' }
   files.n = 0
+  hooks.throwOnReady = false
+  hooks.failUpload = 0
+  hooks.failDelete.clear()
   app.current = null
 })
 afterEach(async () => {
@@ -345,6 +370,41 @@ describe('sweepRenders', () => {
     // Past the grace period with still no run: the claimer died.
     versions()[0].render_started_at = started(HOUR)
     expect(await r.sweepRenders()).toBe(1)
+  })
+})
+
+describe('no orphaned file rows', () => {
+  it('a claim update that throws deletes the three new files', async () => {
+    process.env.CRON_TICKS = 'off'
+    versions().push(version('a'))
+    hooks.throwOnReady = true
+    await r.queueRender('a')
+    await settle()
+    expect(deleted().sort()).toEqual(['new-1', 'new-2', 'new-3'])
+    expect(row('a')).toMatchObject({ render_status: 'failed', rendered_file: null })
+  })
+
+  it('one of the three uploads failing deletes the other two', async () => {
+    process.env.CRON_TICKS = 'off'
+    versions().push(version('a'))
+    hooks.failUpload = 2
+    await r.queueRender('a')
+    await settle()
+    expect(deleted().sort()).toEqual(['new-1', 'new-3'])
+    expect(row('a').render_status).toBe('failed')
+  })
+
+  it('an old render file that will not delete is parked, not left listable', async () => {
+    process.env.CRON_TICKS = 'off'
+    versions().push(
+      version('a', { rendered_file: 'old-r', captions_file: 'old-c', poster_file: 'old-p' })
+    )
+    hooks.failDelete.add('old-c')
+    await r.queueRender('a')
+    await settle()
+    expect(row('a')).toMatchObject({ render_status: 'ready' })
+    expect(deleted().sort()).toEqual(['old-p', 'old-r'])
+    expect(ops.filter((o) => o.op === 'parked').flatMap((o) => o.ids)).toEqual(['old-c'])
   })
 })
 

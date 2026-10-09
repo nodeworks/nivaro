@@ -13,7 +13,7 @@ import {
   type VideoEdits
 } from './help-video-edits.js'
 import { queueRender } from './help-video-render.js'
-import { takeFinalizedUpload } from './help-video-uploads.js'
+import { releaseFinalizedUpload, takeFinalizedUpload } from './help-video-uploads.js'
 import { viewerCanPlay } from './help-video-views.js'
 import { getApp } from './io-holder.js'
 
@@ -532,25 +532,37 @@ export async function createVideo(
   const upload = await takeFinalizedUpload(user, body.upload_id)
   const id = randomUUID()
   const now = new Date()
-  await db('nivaro_help_videos').insert({
-    id,
-    title: String(body.title ?? '').slice(0, 200),
-    status: 'draft',
-    visibility: JSON.stringify({ mode: 'everyone', role_ids: [] }),
-    created_by: user.id,
-    updated_by: user.id,
-    created_at: now,
-    updated_at: now
-  })
-  const versionId = await insertVersion(id, user, {
-    source_file: upload.file_id,
-    source_duration_ms: upload.duration_ms,
-    width: upload.width,
-    height: upload.height,
-    clicks: upload.clicks,
-    levels: upload.levels,
-    edits: emptyEdits(upload.duration_ms ?? 0)
-  })
+  let versionId: string
+  try {
+    await db('nivaro_help_videos').insert({
+      id,
+      title: String(body.title ?? '').slice(0, 200),
+      status: 'draft',
+      visibility: JSON.stringify({ mode: 'everyone', role_ids: [] }),
+      created_by: user.id,
+      updated_by: user.id,
+      created_at: now,
+      updated_at: now
+    })
+    versionId = await insertVersion(id, user, {
+      source_file: upload.file_id,
+      source_duration_ms: upload.duration_ms,
+      width: upload.width,
+      height: upload.height,
+      clicks: upload.clicks,
+      levels: upload.levels,
+      edits: emptyEdits(upload.duration_ms ?? 0)
+    })
+  } catch (err) {
+    // Nothing references the recording yet: give it back to its author (and
+    // the purge) instead of leaving it marked used, and drop the empty video.
+    await db('nivaro_help_videos')
+      .where({ id })
+      .delete()
+      .catch(() => undefined)
+    await releaseFinalizedUpload(body.upload_id).catch(() => undefined)
+    throw err
+  }
   await db('nivaro_help_videos').where({ id }).update({ draft_version_id: versionId })
   if (contexts.length) await replaceContexts(id, user, contexts)
   await logActivity({
@@ -914,16 +926,22 @@ export async function rerecordVideo(
   uploadId: string
 ): Promise<VersionDto> {
   const upload = await takeFinalizedUpload(user, uploadId)
-  const id = await insertVersion(video.id, user, {
-    source_file: upload.file_id,
-    source_duration_ms: upload.duration_ms,
-    width: upload.width,
-    height: upload.height,
-    clicks: upload.clicks,
-    levels: upload.levels,
-    edits: emptyEdits(upload.duration_ms ?? 0),
-    note: 'Re-recorded'
-  })
+  let id: string
+  try {
+    id = await insertVersion(video.id, user, {
+      source_file: upload.file_id,
+      source_duration_ms: upload.duration_ms,
+      width: upload.width,
+      height: upload.height,
+      clicks: upload.clicks,
+      levels: upload.levels,
+      edits: emptyEdits(upload.duration_ms ?? 0),
+      note: 'Re-recorded'
+    })
+  } catch (err) {
+    await releaseFinalizedUpload(uploadId).catch(() => undefined)
+    throw err
+  }
   await db('nivaro_help_videos')
     .where({ id: video.id })
     .update({ draft_version_id: id, ...touch(user) })

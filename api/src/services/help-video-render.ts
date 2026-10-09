@@ -7,7 +7,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
-import { deleteFile, getFile, uploadFileFromPath } from './files.js'
+import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
 import { rasterizeAnnotations } from './help-video-annotations.js'
 import {
   captionsToVtt,
@@ -17,7 +17,7 @@ import {
   type VideoEdits
 } from './help-video-edits.js'
 import { buildPosterArgs, buildRenderArgs, outputSize } from './help-video-render-plan.js'
-import { videoWorkDir } from './help-video-uploads.js'
+import { discardFile, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
 import { isCancelled } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
@@ -277,34 +277,55 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     )
 
     const owner = { id: String(v.created_by) } as User
-    const [mp4, vtt, poster] = await Promise.all([
+    // Until the claim update names them, the new files are listable and
+    // nothing references them: any failure from here to that update deletes
+    // them again (one of the three uploads failing included).
+    const uploads = await Promise.allSettled([
       uploadFileFromPath(owner, out, `help-video-${key}.mp4`, 'video/mp4'),
       uploadFileFromPath(owner, vttPath, `help-video-${key}.vtt`, 'text/vtt'),
       uploadFileFromPath(owner, posterPath, `help-video-${key}.jpg`, 'image/jpeg')
     ])
+    const created = uploads.flatMap((u) => (u.status === 'fulfilled' ? [String(u.value.id)] : []))
+    const discardCreated = async () => {
+      for (const f of created) await discardFile(owner, f)
+    }
+    const failedUpload = uploads.find((u) => u.status === 'rejected')
+    if (failedUpload) {
+      await discardCreated()
+      throw (failedUpload as PromiseRejectedResult).reason
+    }
+    const [mp4, vtt, poster] = uploads.map((u) => (u as PromiseFulfilledResult<StoredFile>).value)
     const old = [v.rendered_file, v.captions_file, v.poster_file].filter(Boolean).map(String)
-    const updated = await claimed(versionId, token).update({
-      render_status: 'ready',
-      render_progress: 100,
-      render_error: null,
-      rendered_hash: renderedHash,
-      rendered_file: mp4.id,
-      captions_file: vtt.id,
-      poster_file: poster.id,
-      render_run_id: run.id
-    })
+    let updated: unknown
+    try {
+      updated = await claimed(versionId, token).update({
+        render_status: 'ready',
+        render_progress: 100,
+        render_error: null,
+        rendered_hash: renderedHash,
+        rendered_file: mp4.id,
+        captions_file: vtt.id,
+        poster_file: poster.id,
+        render_run_id: run.id
+      })
+    } catch (err) {
+      await discardCreated()
+      throw err
+    }
     if (!Number(updated)) {
       // The row is not this render's any more (purged, or re-queued and
       // claimed again): nothing points at the new files.
       warn(`render of ${key} lost its claim; discarding its files`)
-      for (const f of [mp4.id, vtt.id, poster.id]) await deleteFile(String(f)).catch(() => null)
+      await discardCreated()
       await run.complete('discarded: the version changed hands while rendering')
       return 'skipped'
     }
     await db('nivaro_help_videos')
       .where({ published_version_id: versionId })
       .update({ poster_file: poster.id })
-    for (const f of old) await deleteFile(f).catch(() => null)
+    // An old file that will not delete is no longer referenced, so it would be
+    // listable: discardFile parks it where the guard covers and the purge retries.
+    for (const f of old) await discardFile(owner, f)
     await run.complete(`rendered ${Math.round(total / 1000)} s`)
     return 'ready'
   } catch (err) {

@@ -108,12 +108,14 @@ vi.mock('../../../services/ffmpeg.js', () => ({
 const files = vi.hoisted(() => ({
   fail: false,
   deleteFail: false,
+  afterUpload: null as null | (() => void),
   deleted: [] as string[],
   objects: [] as string[]
 }))
 vi.mock('../../../services/files.js', () => ({
   uploadFileFromPath: async () => {
     if (files.fail) throw new Error('storage down')
+    files.afterUpload?.()
     return { id: 'file-1' }
   },
   getFile: async (id: string) => ({ id, filename_disk: `${id}.webm` }),
@@ -141,6 +143,7 @@ beforeEach(() => {
   ff.probe = { duration_ms: 5000, width: 1, height: 1, has_audio: true }
   files.fail = false
   files.deleteFail = false
+  files.afterUpload = null
   files.deleted = []
   files.objects = []
 })
@@ -240,6 +243,79 @@ describe('finalize', () => {
     })
     expect(rows[0].status).toBe('open')
     expect(existsSync(partFile(s.id))).toBe(true)
+  })
+})
+
+describe('no orphaned file rows (finalize / take)', () => {
+  async function ready() {
+    const s = await up.openUpload(user, 'video/webm')
+    await up.appendPart(user, s.id, 0, webm)
+    return s
+  }
+  it('a finalize that loses its claim after storing the file deletes the file', async () => {
+    const s = await ready()
+    // Another process abandons the row while the bytes are being stored.
+    files.afterUpload = () => {
+      rows[0].status = 'abandoned'
+    }
+    await expect(up.finalizeUpload(user, s.id, {})).rejects.toMatchObject({ statusCode: 409 })
+    expect(files.deleted).toEqual(['file-1'])
+    expect(rows[0].status).toBe('abandoned')
+  })
+  it('a finalize whose row update throws deletes the file and reopens the upload', async () => {
+    const s = await ready()
+    files.afterUpload = () => {
+      let status = 'finalizing'
+      Object.defineProperty(rows[0], 'status', {
+        configurable: true,
+        enumerable: true,
+        get: () => status,
+        set: (v: string) => {
+          if (v === 'finalized') throw new Error('db down')
+          status = v
+        }
+      })
+    }
+    await expect(up.finalizeUpload(user, s.id, {})).rejects.toThrow('db down')
+    expect(files.deleted).toEqual(['file-1'])
+    expect(rows[0].status).toBe('open')
+  })
+  it('a file that will not delete is parked on an abandoned row and the purge retries it', async () => {
+    const s = await ready()
+    files.afterUpload = () => {
+      rows[0].status = 'abandoned'
+    }
+    files.deleteFail = true
+    await expect(up.finalizeUpload(user, s.id, {})).rejects.toMatchObject({ statusCode: 409 })
+    const parked = rows.filter((r) => r.file_id === 'file-1')
+    expect(parked).toHaveLength(1)
+    expect(parked[0].status).toBe('abandoned')
+    files.deleteFail = false
+    files.afterUpload = null
+    await up.purgeStaleUploads()
+    expect(files.deleted).toEqual(['file-1'])
+    expect(rows.some((r) => r.file_id === 'file-1')).toBe(false)
+  })
+  it('discardFile parks any undeletable file for the purge', async () => {
+    files.deleteFail = true
+    expect(await up.discardFile(user, 'old-render')).toBe(false)
+    expect(rows).toEqual([expect.objectContaining({ status: 'abandoned', file_id: 'old-render' })])
+    files.deleteFail = false
+    await up.purgeStaleUploads()
+    expect(files.deleted).toEqual(['old-render'])
+  })
+  it('a taken upload put back is finalized-unused again: listed, and collectable', async () => {
+    const s = await ready()
+    await up.finalizeUpload(user, s.id, {})
+    await up.takeFinalizedUpload(user, s.id)
+    expect(rows[0].status).toBe('used')
+    expect(await up.listOpenUploads(user)).toEqual([])
+    await up.releaseFinalizedUpload(s.id)
+    expect(rows[0].status).toBe('finalized')
+    expect(await up.listOpenUploads(user)).toEqual([expect.objectContaining({ id: s.id })])
+    rows[0].updated_at = new Date(Date.now() - 8 * 86_400_000)
+    await up.purgeStaleUploads()
+    expect(files.deleted).toEqual(['file-1'])
   })
 })
 

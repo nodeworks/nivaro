@@ -255,6 +255,10 @@ export async function finalizeUpload(
   const raw = partPath(String(dbId))
   const ext = row.mime === 'video/mp4' ? '.mp4' : '.webm'
   const fixed = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
+  // The new file row is listable (nothing guards it yet) until the upload row
+  // names it, so every failure between the two must delete it again.
+  let createdFile: string | null = null
+  let recorded = false
   try {
     const size = await stat(raw)
       .then((s) => s.size)
@@ -282,6 +286,7 @@ export async function finalizeUpload(
     }
     const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
     const file = await uploadFileFromPath(user, path, `recording-${stamp}${ext}`, String(row.mime))
+    createdFile = String(file.id)
     const clientMs = Number(meta.duration_ms)
     const durationMs =
       probe.duration_ms ??
@@ -304,6 +309,7 @@ export async function finalizeUpload(
         updated_at: new Date()
       })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
+    recorded = true
     // The recording is stored and recorded: only now is the temp file expendable.
     await rm(raw, { force: true })
     return {
@@ -316,11 +322,60 @@ export async function finalizeUpload(
       levels: meta.levels ?? null
     }
   } catch (err) {
+    if (createdFile && !recorded) {
+      // The upload row never named the file: delete it (bytes and row). If that
+      // fails too, park the id on an abandoned row so the purge retries it, and
+      // leave the upload closed rather than reopening it.
+      if (!(await discardFile(user, createdFile))) {
+        await db('nivaro_help_video_uploads')
+          .where({ id: dbId })
+          .update({ status: 'abandoned', updated_at: new Date() })
+          .catch(() => undefined)
+        throw err
+      }
+    }
     await reopen().catch(() => undefined)
     throw err
   } finally {
     await rm(fixed, { force: true })
   }
+}
+
+/** Deletes a file nothing references (bytes and row). When the delete fails the
+ *  file would stay listable, so its id is parked on an abandoned upload row
+ *  (a column the files guard covers) and purgeStaleUploads retries it. */
+export async function discardFile(owner: { id: string }, fileId: string): Promise<boolean> {
+  try {
+    await deleteFile(fileId)
+    return true
+  } catch (err) {
+    console.warn(
+      `help-video: could not delete file ${fileId}, left for the purge: ${(err as Error).message}`
+    )
+    const now = new Date()
+    await db('nivaro_help_video_uploads')
+      .insert({
+        id: randomUUID(),
+        user: owner.id,
+        mime: 'application/octet-stream',
+        bytes_received: 0,
+        next_part: 0,
+        status: 'abandoned',
+        file_id: fileId,
+        created_at: now,
+        updated_at: now
+      })
+      .catch(() => undefined)
+    return false
+  }
+}
+
+/** Puts a taken upload back to finalized-unused (the video was never created),
+ *  so its author sees the recording again and the purge can collect it. */
+export async function releaseFinalizedUpload(uploadId: string): Promise<void> {
+  await db('nivaro_help_video_uploads')
+    .where({ id: assertId(uploadId), status: 'used' })
+    .update({ status: 'finalized', updated_at: new Date() })
 }
 
 export async function takeFinalizedUpload(user: User, uploadId: string): Promise<FinalizedUpload> {
