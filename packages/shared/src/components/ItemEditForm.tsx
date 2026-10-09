@@ -88,6 +88,7 @@ import {
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { CopyAsButton } from './CopyAsButton'
+import { showFormVideosButton } from './help-videos/viewer/format'
 import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
 import {
   type DocumentApplySelection,
@@ -538,6 +539,8 @@ export interface ItemEditFormProps {
   headerClassName?: string
   renderField?: (props: RenderFieldProps) => ReactNode
   extraTopContent?: ReactNode
+  /** Hide the header's own Videos button, for a host whose top bar already carries it. */
+  hideHelpVideoButton?: boolean
   extraBottomContent?: ReactNode
   onHeaderWidgets?: (widgets: HeaderWidgetInfo[]) => void
   /** Open the new-record form on a stored document proposal (`?autofill=<id>`
@@ -1109,6 +1112,7 @@ export function ItemEditForm({
   headerClassName,
   renderField,
   extraTopContent,
+  hideHelpVideoButton = false,
   extraBottomContent,
   onHeaderWidgets,
   autofillProposalId,
@@ -9234,7 +9238,7 @@ export function ItemEditForm({
                                               fields={findableFields}
                                               onJump={jumpToField}
                                             />
-                                            {itemId && (
+                                            {showFormVideosButton(itemId, hideHelpVideoButton) && (
                                               <HelpVideoButton
                                                 compact
                                                 collection={collection}

@@ -64,6 +64,11 @@ export function showButton(count: number, canAuthor: boolean): boolean {
   return count > 0 || canAuthor
 }
 
+/** The record form's own Videos button: only for a saved record, and not when the host hides it. */
+export function showFormVideosButton(itemId: string | undefined, hide: boolean): boolean {
+  return !!itemId && !hide
+}
+
 /** "Showing 24 of 61", only when there is more than what is on screen. */
 export function showingLabel(shown: number, total: number): string | null {
   return total > shown ? `Showing ${shown} of ${total}` : null

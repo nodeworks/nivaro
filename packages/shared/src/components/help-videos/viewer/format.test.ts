@@ -8,6 +8,7 @@ import {
   listMeta,
   progressLabel,
   showButton,
+  showFormVideosButton,
   showingLabel,
   visibleChapters
 } from './format'
@@ -135,5 +136,17 @@ describe('emptyCopy', () => {
       text: 'No videos yet.',
       offerRecord: false
     })
+  })
+})
+
+describe('showFormVideosButton', () => {
+  it('shows by default for a saved record', () => {
+    expect(showFormVideosButton('12', false)).toBe(true)
+  })
+  it('hides when the host asks', () => {
+    expect(showFormVideosButton('12', true)).toBe(false)
+  })
+  it('never shows for a new record', () => {
+    expect(showFormVideosButton(undefined, false)).toBe(false)
   })
 })
