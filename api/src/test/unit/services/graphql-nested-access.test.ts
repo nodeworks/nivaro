@@ -19,6 +19,11 @@ vi.mock('../../../db/index.js', () => {
 })
 vi.mock('../../../services/permissions.js', () => perms)
 vi.mock('../../../services/user-scopes.js', () => scopes)
+const hv = vi.hoisted(() => ({ whereNotHelpVideoFile: vi.fn() }))
+vi.mock('../../../services/help-video-files.js', () => ({
+  isFilesCollection: (c: string) => /^(nivaro|directus)_files$/i.test(c),
+  whereNotHelpVideoFile: hv.whereNotHelpVideoFile
+}))
 
 const { applyNestedGate, narrowNestedRow, nestedGate } = await import(
   '../../../services/graphql-nested-access.js'
@@ -117,5 +122,21 @@ describe('nested GraphQL read gates', () => {
   it('fails closed when a gate cannot be compiled', async () => {
     perms.can.mockRejectedValue(new Error('db down'))
     expect((await nestedGate({ user }, 'orders')).allowed).toBe(false)
+  })
+
+  it('never returns a help-video file as a nested file row, even through an open gate', async () => {
+    hv.whereNotHelpVideoFile.mockReset()
+    const gate = await nestedGate({ user, isAdmin: true }, 'nivaro_files')
+    expect(gate.open).toBe(true)
+    const q = fakeQuery()
+    expect(applyNestedGate(q as never, 'nivaro_files', gate, user)).toBe(true)
+    expect(hv.whereNotHelpVideoFile).toHaveBeenCalledWith(q, 'nivaro_files.id')
+    applyNestedGate(
+      fakeQuery() as never,
+      'orders',
+      await nestedGate({ user, isAdmin: true }, 'orders'),
+      user
+    )
+    expect(hv.whereNotHelpVideoFile).toHaveBeenCalledTimes(1)
   })
 })

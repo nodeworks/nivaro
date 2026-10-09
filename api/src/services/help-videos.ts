@@ -1,6 +1,5 @@
 import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import type { FastifyRequest } from 'fastify'
-import type { Knex } from 'knex'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
@@ -118,81 +117,13 @@ export function isUuid(v: unknown): v is string {
   return typeof v === 'string' && UUID_RE.test(v)
 }
 
-// ── Help-video files stay out of the generic files API ──────────────────────
-// Recordings (raw, unblurred, uncut), renders, captions and posters are
-// ordinary nivaro_files rows. They are served ONLY through the ticketed media
-// routes, which re-check role, status and visibility; /api/files answers 404
-// for them exactly as for an unknown file, to admins too.
-
-/** Every column that names a help-video file. */
-const HELP_VIDEO_FILE_COLUMNS: ReadonlyArray<readonly [string, readonly string[]]> = [
-  ['nivaro_help_video_versions', ['source_file', 'rendered_file', 'captions_file', 'poster_file']],
-  ['nivaro_help_videos', ['poster_file']],
-  ['nivaro_help_video_uploads', ['file_id']]
-]
-// 4 columns x 400 ids stays under SQL Server's 2,100-parameter limit.
-const FILE_ID_CHUNK = 400
-
-/** Which of these file ids belong to a help video (returned upper-case).
- *  Only exact uuids are looked up: SQL Server truncates a longer string
- *  compared to a uniqueidentifier, so callers pass the file ROW's own id. */
-export async function helpVideoFileIds(ids: unknown[]): Promise<Set<string>> {
-  const exact = [...new Set(ids.filter(isUuid).map(up))]
-  const found = new Set<string>()
-  for (let i = 0; i < exact.length; i += FILE_ID_CHUNK) {
-    const chunk = exact.slice(i, i + FILE_ID_CHUNK)
-    const want = new Set(chunk)
-    const hits = await Promise.all(
-      HELP_VIDEO_FILE_COLUMNS.map(([table, cols]) =>
-        db(table)
-          .where((w) => {
-            for (const c of cols) w.orWhereIn(c, chunk)
-          })
-          .select(...cols)
-      )
-    )
-    hits.forEach((rows, n) => {
-      const cols = HELP_VIDEO_FILE_COLUMNS[n][1]
-      for (const r of rows as Array<Record<string, unknown>>) {
-        for (const c of cols) if (r[c] && want.has(up(r[c]))) found.add(up(r[c]))
-      }
-    })
-  }
-  return found
-}
-
-export async function isHelpVideoFile(id: unknown): Promise<boolean> {
-  return (await helpVideoFileIds([id])).size > 0
-}
-
-/** Adds "and this file is not a help-video file" to a nivaro_files query.
- *  `idColumn` is the file id column as the outer query names it. */
-export function whereNotHelpVideoFile(qb: Knex.QueryBuilder, idColumn: string): Knex.QueryBuilder {
-  for (const [table, cols] of HELP_VIDEO_FILE_COLUMNS) {
-    qb.whereNotExists(function () {
-      this.select(db.raw('1'))
-        .from(table)
-        .where((w) => {
-          for (const c of cols) w.orWhere(`${table}.${c}`, db.ref(idColumn))
-        })
-    })
-  }
-  return qb
-}
-
-/** Is this storage key (a /api/files/raw/* path) a help-video file's object,
- *  or one of its cached image transforms? Driven from the small help-video
- *  tables, so it never scans nivaro_files by filename_disk. */
-export async function isHelpVideoStorageKey(key: string): Promise<boolean> {
-  const transform = /(?:^|\/)transforms\/([0-9a-f-]{36})\//i.exec(key)
-  if (transform) return isHelpVideoFile(transform[1])
-  const [first, ...rest] = HELP_VIDEO_FILE_COLUMNS.flatMap(([table, cols]) =>
-    cols.map((c) => db(table).whereNotNull(c).select(`${c} as id`))
-  )
-  const ids = first.unionAll(rest)
-  const row = await db('nivaro_files').whereIn('id', ids).where('filename_disk', key).first('id')
-  return !!row
-}
+// Help-video files stay out of the generic files API (see help-video-files.ts).
+export {
+  helpVideoFileIds,
+  isFilesCollection,
+  isHelpVideoFile,
+  whereNotHelpVideoFile
+} from './help-video-files.js'
 
 export function parseVisibility(raw: unknown): Visibility {
   const v = json<Record<string, unknown> | null>(raw, null)

@@ -19,11 +19,7 @@ import {
   updateFileMeta,
   uploadFile
 } from '../services/files.js'
-import {
-  helpVideoFileIds,
-  isHelpVideoFile,
-  isHelpVideoStorageKey
-} from '../services/help-videos.js'
+import { helpVideoFileIds, isHelpVideoFile, isUuid } from '../services/help-video-files.js'
 import { getStorage } from '../services/storage/index.js'
 import {
   bustStorageDriverCache,
@@ -43,6 +39,8 @@ function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'i
 const MAX_DIMENSION = 4000
 const TRANSFORM_FORMATS = ['webp', 'jpeg', 'png'] as const
 type TransformFormat = (typeof TRANSFORM_FORMATS)[number]
+/** A cached transform as the transform route writes it: transforms/<id>/<hash16>.<format>. */
+const TRANSFORM_KEY = /^transforms\/([0-9a-fA-F-]{36})\/[0-9a-f]{16}\.(?:webp|jpeg|png)$/
 
 /** The file row, or undefined when there is none OR it belongs to a help
  *  video. Help-video files are served only through the ticketed help-video
@@ -98,9 +96,12 @@ export async function filesRoutes(app: FastifyInstance) {
     const ids = (Array.isArray(body?.ids) ? body.ids : []).map(String).slice(0, 100)
     if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
     const { verifyFiles } = await import('../services/file-integrity.js')
-    // A help-video file gets no verdict, exactly like an unknown id.
-    const hidden = await helpVideoFileIds(ids)
-    const verdicts = (await verifyFiles(ids)).filter((v) => !hidden.has(String(v.id).toUpperCase()))
+    // Exact uuids only (SQL Server would match '<uuid>xyz' to '<uuid>'), and a
+    // help-video file gets no verdict, exactly like an unknown id. The check
+    // runs on the ids of the rows actually found.
+    const found = await verifyFiles(ids.filter(isUuid))
+    const hidden = await helpVideoFileIds(found.map((v) => v.id))
+    const verdicts = found.filter((v) => !hidden.has(String(v.id).toUpperCase()))
     return reply.send({
       data: Object.fromEntries(verdicts.map((v) => [v.id, { missing: v.missing }]))
     })
@@ -258,23 +259,28 @@ export async function filesRoutes(app: FastifyInstance) {
     const { getFileRefColumns } = await import('../services/file-usage.js')
     const refs = await getFileRefColumns()
     const counts = new Map<string, number>(ids.map((id) => [id, 0]))
-    // A help-video file reads as unknown: zero uses, like an id with no row.
-    const hidden = await helpVideoFileIds(ids)
-    for (const ref of refs) {
+    // Only exact uuids are looked up (SQL Server would match '<uuid>xyz' to
+    // '<uuid>'); anything else reads as unknown: zero.
+    const exact = ids.filter(isUuid)
+    const found: Array<[string, number]> = []
+    for (const ref of exact.length ? refs : []) {
       try {
         const rows = (await db(ref.table)
-          .whereIn(ref.column, ids)
+          .whereIn(ref.column, exact)
           .select(ref.column)
           .count({ n: '*' })
           .groupBy(ref.column)) as Array<Record<string, unknown>>
-        for (const r of rows) {
-          const key = String(r[ref.column])
-          if (hidden.has(key.toUpperCase())) continue
-          counts.set(key, (counts.get(key) ?? 0) + Number(r.n ?? 0))
-        }
+        for (const r of rows) found.push([String(r[ref.column]), Number(r.n ?? 0)])
       } catch {
         /* one surface contributes zero */
       }
+    }
+    // A help-video file reads as unknown: zero uses, like an id with no row.
+    // Checked on the stored ids actually counted.
+    const hidden = await helpVideoFileIds(found.map(([key]) => key))
+    for (const [key, n] of found) {
+      if (hidden.has(key.toUpperCase())) continue
+      counts.set(key, (counts.get(key) ?? 0) + n)
     }
     return reply.send({ data: Object.fromEntries(counts) })
   })
@@ -361,19 +367,33 @@ export async function filesRoutes(app: FastifyInstance) {
   })
 
   // Raw object access by storage key (used by the local provider's getUrl()).
+  // An allow-list: a key is served only when it is a cached transform of a
+  // servable file, or names a servable nivaro_files row, and then the bytes
+  // read are that ROW's stored key, never the caller's spelling of it. So no
+  // case, Unicode, encoding or driver key-mapping variant can reach a
+  // help-video object (or any object without a row) through here.
   app.get('/raw/*', async (req, reply) => {
     const key = (req.params as Record<string, string>)['*']
     if (!key || key.includes('..')) return reply.code(400).send({ error: 'Invalid key' })
-    // Only a canonical key is served: './k', 'a//k', 'k/' or a backslash would
-    // reach the same stored object while matching no filename_disk row, and
-    // so slip past the help-video check below. Fail closed.
     if (posix.normalize(key) !== key || /^[/\\]|[\\]|\/$|^\s|\s$/.test(key)) {
       return reply.code(404).send({ error: 'Not found' })
     }
-    if (await isHelpVideoStorageKey(key)) return reply.code(404).send({ error: 'Not found' })
+    let storageKey: string
+    const transform = TRANSFORM_KEY.exec(key)
+    if (transform) {
+      if (!(await servableFile(transform[1]))) return reply.code(404).send({ error: 'Not found' })
+      storageKey = key
+    } else {
+      const row = (await db('nivaro_files').where('filename_disk', key).first('id')) as
+        | { id: unknown }
+        | undefined
+      const file = row ? await servableFile(String(row.id)) : undefined
+      if (!file?.filename_disk) return reply.code(404).send({ error: 'Not found' })
+      storageKey = file.filename_disk
+    }
     try {
-      const buffer = await getStorage().get(key)
-      const contentType = mime.lookup(key) || 'application/octet-stream'
+      const buffer = await getStorage().get(storageKey)
+      const contentType = mime.lookup(storageKey) || 'application/octet-stream'
       return reply.header('Content-Type', contentType).send(buffer)
     } catch {
       return reply.code(404).send({ error: 'Not found' })

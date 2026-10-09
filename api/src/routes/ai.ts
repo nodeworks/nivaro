@@ -1866,6 +1866,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       .slice(0, MAX_DOCUMENTS)) {
       const row = await getFile(id)
       if (!row) continue
+      // Help-video recordings are served only through their ticketed media
+      // routes; nobody, admins included, hands one to the model by id.
+      const { isHelpVideoFile } = await import('../services/help-video-files.js')
+      if (await isHelpVideoFile(String(row.id))) continue
       if (
         !req.isAdmin &&
         String(row.uploaded_by ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()

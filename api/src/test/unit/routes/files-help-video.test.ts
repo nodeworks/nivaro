@@ -60,19 +60,29 @@ vi.mock('../../../services/files.js', () => ({
   updateFileMeta: files.updateFileMeta,
   uploadFile: vi.fn()
 }))
-vi.mock('../../../services/help-videos.js', () => ({
-  isHelpVideoFile: vi.fn(async (id: string) => HIDDEN.has(String(id).toLowerCase())),
-  helpVideoFileIds: vi.fn(
-    async (ids: string[]) =>
-      new Set(ids.filter((i) => HIDDEN.has(i.toLowerCase())).map((i) => i.toUpperCase()))
-  ),
-  isHelpVideoStorageKey: vi.fn(async (key: string) =>
-    [...HIDDEN].some((id) => key === `${id}.png` || key.includes(`transforms/${id}/`))
-  )
-}))
+const guard = vi.hoisted(() => ({ fail: false }))
+vi.mock('../../../services/help-video-files.js', async (orig) => {
+  const real = await orig<typeof import('../../../services/help-video-files.js')>()
+  return {
+    isUuid: real.isUuid,
+    isHelpVideoFile: vi.fn(async (id: string) => {
+      if (guard.fail) throw new Error('db down')
+      return !real.isUuid(id) || HIDDEN.has(String(id).toLowerCase())
+    }),
+    helpVideoFileIds: vi.fn(async (ids: string[]) => {
+      if (guard.fail) throw new Error('db down')
+      return new Set(ids.filter((i) => HIDDEN.has(i.toLowerCase())).map((i) => i.toUpperCase()))
+    })
+  }
+})
+// Every object below exists in storage, rows or not: the route must decide.
+const store = vi.hoisted(() => ({ reads: [] as string[] }))
 vi.mock('../../../services/storage/index.js', () => ({
   getStorage: () => ({
-    get: vi.fn(async () => Buffer.from('bytes')),
+    get: vi.fn(async (k: string) => {
+      store.reads.push(k)
+      return Buffer.from('bytes')
+    }),
     put: vi.fn(async () => undefined),
     getUrl: vi.fn(async (k: string) => `/api/files/raw/${k}`)
   })
@@ -95,13 +105,28 @@ vi.mock('sharp', () => ({
   }
 }))
 vi.mock('../../../db/index.js', () => {
-  const chain: Record<string, unknown> = {}
-  for (const m of ['whereIn', 'select', 'groupBy', 'where', 'update']) chain[m] = () => chain
-  chain.count = () => chain
-  // biome-ignore lint/suspicious/noThenProperty: knex builders are thenable
-  ;(chain as { then: unknown }).then = (res: (v: unknown) => unknown) =>
-    Promise.resolve([SOURCE, PLAIN].map((id) => ({ file: id.toUpperCase(), n: 2 }))).then(res)
-  return { db: Object.assign(() => chain, { raw: () => '' }) }
+  const db = (table: string) => {
+    let disk: string | null = null
+    const chain: Record<string, unknown> = {}
+    for (const m of ['whereIn', 'select', 'groupBy', 'update', 'count']) chain[m] = () => chain
+    chain.where = (col: unknown, val?: unknown) => {
+      if (col === 'filename_disk') disk = String(val)
+      return chain
+    }
+    // nivaro_files by filename_disk, compared like SQL Server (case-insensitive)
+    chain.first = async () => {
+      if (table !== 'nivaro_files' || disk === null) return undefined
+      const id = [SOURCE, RENDER, POSTER, PLAIN].find(
+        (x) => `${x}.png` === (disk as string).toLowerCase()
+      )
+      return id ? { id: id.toUpperCase() } : undefined
+    }
+    // biome-ignore lint/suspicious/noThenProperty: knex builders are thenable
+    chain.then = (res: (v: unknown) => unknown) =>
+      Promise.resolve([SOURCE, PLAIN].map((id) => ({ file: id.toUpperCase(), n: 2 }))).then(res)
+    return chain
+  }
+  return { db: Object.assign(db, { raw: () => '' }) }
 })
 
 import { filesRoutes } from '../../../routes/files.js'
@@ -147,7 +172,11 @@ const ROUTES: Array<[string, (id: string) => string]> = [
 beforeEach(() => {
   vi.clearAllMocks()
   state.admin = false
+  guard.fail = false
+  store.reads = []
 })
+
+const T = (id: string) => `transforms/${id}/0123456789abcdef.webp`
 
 describe('/api/files hides help-video files', () => {
   for (const who of ['viewer', 'admin'] as const) {
@@ -177,7 +206,10 @@ describe('/api/files hides help-video files', () => {
       it(`${who}: GET /raw/<key> answers 404 for a ${label} object and its transforms`, async () => {
         state.admin = who === 'admin'
         expect((await hit('GET', `/api/files/raw/${id}.png`)).statusCode).toBe(404)
-        expect((await hit('GET', `/api/files/raw/transforms/${id}/abc.webp`)).statusCode).toBe(404)
+        expect((await hit('GET', `/api/files/raw/${id.toUpperCase()}.PNG`)).statusCode).toBe(404)
+        expect((await hit('GET', `/api/files/raw/${T(id)}`)).statusCode).toBe(404)
+        expect((await hit('GET', `/api/files/raw/${T(id.toUpperCase())}`)).statusCode).toBe(404)
+        expect(store.reads).toEqual([])
       })
     }
   }
@@ -219,6 +251,7 @@ describe('/api/files hides help-video files', () => {
       expect((await hit('PATCH', `/api/files/${PLAIN}`)).statusCode).toBe(200)
       expect((await hit('REPLACE', `/api/files/${PLAIN}/replace`)).statusCode).toBe(200)
       expect((await hit('GET', `/api/files/raw/${PLAIN}.png`)).statusCode).toBe(200)
+      expect((await hit('GET', `/api/files/raw/${T(PLAIN)}`)).statusCode).toBe(200)
       expect((await hit('DELETE', `/api/files/${PLAIN}`)).statusCode).toBe(204)
     }
     expect(files.deleteFile).toHaveBeenCalledWith(PLAIN.toUpperCase())
@@ -261,9 +294,70 @@ describe('/api/files hides help-video files', () => {
     ]) {
       expect((await hit('GET', `/api/files/raw/${key}`)).statusCode, key).toBe(404)
     }
-    // upper case reaches the help-video row too (case-insensitive collation)
-    expect(
-      (await hit('GET', `/api/files/raw/transforms/${POSTER.toUpperCase()}/a.webp`)).statusCode
-    ).toBe(404)
+    expect(store.reads).toEqual([])
+  })
+
+  it('raw is an allow-list: a key with no servable row is never read from storage', async () => {
+    for (const key of [
+      'orphan.png',
+      'storage-probe/x.txt',
+      `transforms/${PLAIN}/not-a-hash.webp`,
+      `transforms/${PLAIN}/0123456789abcdef.gif`,
+      `tenant/transforms/${PLAIN}/0123456789abcdef.webp`
+    ]) {
+      expect((await hit('GET', `/api/files/raw/${key}`)).statusCode, key).toBe(404)
+    }
+    expect(store.reads).toEqual([])
+  })
+
+  it("raw reads the matched row's stored key, never the caller's spelling", async () => {
+    const res = await hit('GET', `/api/files/raw/${PLAIN.toUpperCase()}.PNG`)
+    expect(res.statusCode).toBe(200)
+    expect(store.reads).toEqual([`${PLAIN}.png`])
+  })
+
+  it('fails closed: when the help-video lookup errors nothing is served', async () => {
+    guard.fail = true
+    const { sendStoredObject } = await import('../../../services/stored-object-stream.js')
+    for (const [method, url] of [
+      ['GET', `/api/files/${PLAIN}`],
+      ['GET', `/api/files/${PLAIN}/meta`],
+      ['GET', `/api/files/${PLAIN}/transform?w=10`],
+      ['GET', `/api/files/raw/${PLAIN}.png`],
+      ['GET', `/api/files/raw/${T(PLAIN)}`],
+      ['PATCH', `/api/files/${PLAIN}`],
+      ['DELETE', `/api/files/${PLAIN}`]
+    ] as const) {
+      expect((await hit(method, url)).statusCode, `${method} ${url}`).toBe(500)
+    }
+    expect((await hit('REPLACE', `/api/files/${PLAIN}/replace`)).statusCode).toBe(500)
+    const a = await app()
+    for (const url of ['/api/files/verify', '/api/files/usage/counts']) {
+      const r = await a.inject({ method: 'POST', url, payload: { ids: [PLAIN] } })
+      expect(r.statusCode, url).toBe(500)
+    }
+    expect(sendStoredObject).not.toHaveBeenCalled()
+    expect(store.reads).toEqual([])
+    expect(files.deleteFile).not.toHaveBeenCalled()
+    expect(files.updateFileMeta).not.toHaveBeenCalled()
+    expect(files.replaceFileContent).not.toHaveBeenCalled()
+  })
+
+  it('verify and usage counts ignore ids that are not exact uuids', async () => {
+    const a = await app()
+    const v = await a.inject({
+      method: 'POST',
+      url: '/api/files/verify',
+      payload: { ids: [`${SOURCE}xyz`, `{${SOURCE}}`] }
+    })
+    expect(v.json().data).toEqual({})
+    const { verifyFiles } = await import('../../../services/file-integrity.js')
+    expect(verifyFiles).toHaveBeenCalledWith([])
+    const c = await a.inject({
+      method: 'POST',
+      url: '/api/files/usage/counts',
+      payload: { ids: [`${SOURCE}xyz`] }
+    })
+    expect(c.json().data).toEqual({ [`${SOURCE}xyz`]: 0 })
   })
 })

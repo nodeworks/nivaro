@@ -246,8 +246,10 @@ describe('Files route regressions', () => {
   })
 
   it('GET /files/:id?download=1 serves an attachment disposition', async () => {
+    // A real file id: the files routes treat a non-uuid row id as a
+    // help-video file (they fail closed) and answer 404.
     vi.mocked(getFile).mockResolvedValue({
-      id: 'f1',
+      id: 'F1F1F1F1-0000-4000-8000-000000000001',
       filename_disk: 'f1.pdf',
       filename_download: 'report.pdf',
       type: 'application/pdf'

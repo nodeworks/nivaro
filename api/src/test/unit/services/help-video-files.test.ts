@@ -43,11 +43,7 @@ vi.mock('../../../db/index.js', async () => {
 })
 vi.mock('../../../services/help-video-render.js', () => ({ queueRender: vi.fn() }))
 
-import {
-  helpVideoFileIds,
-  isHelpVideoFile,
-  isHelpVideoStorageKey
-} from '../../../services/help-videos.js'
+import { helpVideoFileIds, isHelpVideoFile } from '../../../services/help-videos.js'
 
 beforeEach(() => {
   fx.queries = []
@@ -103,27 +99,33 @@ describe('helpVideoFileIds', () => {
   })
 })
 
-describe('isHelpVideoStorageKey', () => {
-  it('matches the stored object by filename_disk, driven from the help-video ids', async () => {
-    fx.answer = (table) => (table === 'nivaro_files' ? { id: SOURCE } : [])
-    expect(await isHelpVideoStorageKey('01abc.webm')).toBe(true)
-    const q = fx.queries.find((x) => x.table === 'nivaro_files')
-    expect(q?.sql).toContain('[filename_disk] = ?')
-    expect(q?.bindings).toContain('01abc.webm')
-    // the id set is the union of all six help-video file columns
-    expect(q?.sql.match(/union all/g)).toHaveLength(5)
-    for (const c of ['source_file', 'rendered_file', 'captions_file', 'poster_file', 'file_id'])
-      expect(q?.sql).toContain(`[${c}] as [id]`)
+describe('fails closed', () => {
+  it('counts anything that is not an exact uuid as a help-video file', async () => {
+    for (const bad of [`${PLAIN}xyz`, `{${PLAIN}}`, `${PLAIN} `, '', null, undefined, 42]) {
+      expect(await isHelpVideoFile(bad), String(bad)).toBe(true)
+    }
+    expect(fx.queries).toHaveLength(0)
   })
-
-  it('is false when no help-video file has that key', async () => {
-    fx.answer = () => undefined // .first() finds no row
-    expect(await isHelpVideoStorageKey('01abc.png')).toBe(false)
+  it('a failed lookup throws rather than answering "not a help-video file"', async () => {
+    fx.answer = () => Promise.reject(new Error('db down'))
+    await expect(isHelpVideoFile(PLAIN)).rejects.toThrow('db down')
   })
+})
 
-  it("checks a cached transform's file id", async () => {
-    expect(await isHelpVideoStorageKey(`transforms/${POSTER}/abc.webp`)).toBe(true)
-    expect(await isHelpVideoStorageKey(`tenant/transforms/${PLAIN}/abc.webp`)).toBe(false)
+describe('whereNotHelpVideoFile on other readers', () => {
+  it('adds the three NOT EXISTS checks against the column it is given', async () => {
+    const { db } = await import('../../../db/index.js')
+    const { whereNotHelpVideoFile, isFilesCollection } = await import(
+      '../../../services/help-video-files.js'
+    )
+    const q = db('directus_files').select('id')
+    whereNotHelpVideoFile(q, 'directus_files.id')
+    const sql = q.toSQL().sql
+    expect(sql.match(/not exists/g)).toHaveLength(3)
+    expect(sql).toContain('[nivaro_help_video_uploads].[file_id] = [directus_files].[id]')
+    expect(isFilesCollection('nivaro_files')).toBe(true)
+    expect(isFilesCollection('directus_files')).toBe(true)
+    expect(isFilesCollection('workflows_files')).toBe(false)
   })
 })
 
