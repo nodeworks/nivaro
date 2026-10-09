@@ -1,10 +1,53 @@
 {
-  "generated_at": "2026-10-09T14:50:11.371Z",
+  "generated_at": "2026-10-09T16:27:24.428Z",
   "releases": [
+    {
+      "version": "0.2.30",
+      "tag": "v0.2.30",
+      "date": "2026-10-09T12:27:10-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "a0acd27f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: a card can be the poster",
+              "hash": "720757c6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: redesigned cards, per-video card name, ripple ticks, editor Back",
+              "hash": "9b7e1149"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: chapter clicks land on the right moment in rendered videos",
+              "hash": "a09f8452"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video editor: a layout host stylesheets cannot break, tidier tools and side panel",
+              "hash": "88cb15bd"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.2.29",
       "tag": "v0.2.29",
-      "date": "2026-10-09T10:49:59-04:00",
+      "date": "2026-10-09T10:50:11-04:00",
       "sections": [
         {
           "label": "Other",
