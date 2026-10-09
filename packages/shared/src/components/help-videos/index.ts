@@ -7,6 +7,7 @@ export {
 } from './api'
 export { HelpVideoEditor } from './editor/HelpVideoEditor'
 export { HelpVideoPlayer, type PlayerHandle } from './HelpVideoPlayer'
+export { AuthorRolesButton } from './library/AuthorRolesButton'
 export { HelpVideoLibrary } from './library/HelpVideoLibrary'
 export { HelpVideoRecorder } from './recorder/HelpVideoRecorder'
 export {

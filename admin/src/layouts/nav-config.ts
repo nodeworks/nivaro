@@ -47,6 +47,7 @@ import {
   MailCheck,
   Megaphone,
   MessagesSquare,
+  MonitorPlay,
   Network,
   Package,
   Plug,
@@ -139,7 +140,13 @@ export const navCategories: NavCategory[] = [
       { icon: Radar, label: 'Command Center', to: '/command', keywords: 'map live' },
       { icon: Sparkles, label: 'Ask AI', to: '/ask', keywords: 'chat question assistant' },
       { icon: MessagesSquare, label: 'Chat', to: '/chat', keywords: 'messages dm channels' },
-      { icon: LifeBuoy, label: 'Support', to: '/support', keywords: 'help tickets request' }
+      { icon: LifeBuoy, label: 'Support', to: '/support', keywords: 'help tickets request' },
+      {
+        icon: MonitorPlay,
+        label: 'Videos',
+        to: '/help-videos',
+        keywords: 'help tutorial training how to demo'
+      }
     ]
   },
   {
