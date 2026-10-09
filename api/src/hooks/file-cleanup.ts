@@ -61,7 +61,7 @@ async function cleanupOrphanedTransforms(): Promise<number> {
   // transforms/<fileId>/<hash>.<ext>
   const byFile = new Map<string, string[]>()
   for (const key of keys) {
-    const fileId = key.split('/')[1]
+    const fileId = key.split('/')[1]?.toLowerCase()
     if (!fileId) continue
     const list = byFile.get(fileId) ?? []
     list.push(key)
@@ -70,7 +70,7 @@ async function cleanupOrphanedTransforms(): Promise<number> {
 
   const ids = Array.from(byFile.keys())
   const existing = await db('nivaro_files').whereIn('id', ids).select('id')
-  const alive = new Set(existing.map((r: { id: unknown }) => String(r.id)))
+  const alive = new Set(existing.map((r: { id: unknown }) => String(r.id).toLowerCase()))
 
   let removed = 0
   for (const [fileId, fileKeys] of byFile) {

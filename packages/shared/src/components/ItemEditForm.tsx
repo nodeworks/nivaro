@@ -85,6 +85,7 @@ import {
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { CopyAsButton } from './CopyAsButton'
+import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
 import {
   type DocumentApplySelection,
   DocumentAutofillButton
@@ -9167,6 +9168,13 @@ export function ItemEditForm({
                                               fields={findableFields}
                                               onJump={jumpToField}
                                             />
+                                            {itemId && (
+                                              <HelpVideoButton
+                                                compact
+                                                collection={collection}
+                                                item={itemId}
+                                              />
+                                            )}
                                             <button
                                               type='button'
                                               title='Copy a plain-text summary of this record (fields + link) for chat or email'

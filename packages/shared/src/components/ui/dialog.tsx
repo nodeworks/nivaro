@@ -25,10 +25,17 @@ function DialogOverlay({
 function DialogContent({
   className,
   children,
+  hideClose = false,
+  container,
   ...props
-}: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>) {
+}: React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & {
+  /** Mount inside this element instead of document.body (a modal host). */
+  container?: HTMLElement | null
+  /** Leaves out the corner close button (for a step that cannot be closed). */
+  hideClose?: boolean
+}) {
   return (
-    <DialogPortal>
+    <DialogPortal container={container ?? undefined}>
       <DialogOverlay />
       <DialogPrimitive.Content
         className={cn(
@@ -38,9 +45,12 @@ function DialogContent({
         {...props}
       >
         {children}
-        <DialogPrimitive.Close className='absolute right-4 top-2 rounded-lg p-1 text-slate-400 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-nvr-cyan'>
-          <X className='h-4 w-4' />
-        </DialogPrimitive.Close>
+        {!hideClose && (
+          <DialogPrimitive.Close className='absolute right-4 top-2 rounded-lg p-1 text-slate-400 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-nvr-cyan'>
+            <X className='h-4 w-4' />
+            <span className='sr-only'>Close</span>
+          </DialogPrimitive.Close>
+        )}
       </DialogPrimitive.Content>
     </DialogPortal>
   )

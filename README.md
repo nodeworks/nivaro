@@ -152,6 +152,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Public Dashboard Links** — token URLs render live read-only dashboards to anyone
 - **Report Studio** — drag-and-drop widget reports (KPI/bar/line/donut/table) over any collection with live preview, sharing, JSON import/export, daily/weekly email subscriptions, and hourly threshold alerts with fire-once/resolve semantics
 - **Session Replay** — opt-in rrweb screen recording of admin sessions, inputs masked, watch like video (7-day retention)
+- **Help Videos** — authors record screen tutorials in the browser, cut, speed up, annotate, zoom, blur and caption them in a visual editor, and publish; viewers watch from a library, from a Videos button on the screen each one explains, and from My Work when a video is required for their role (versions, view tracking, server-rendered MP4)
 - **Journey Trail** — session-by-session page breadcrumbs with time-on-page per user (admin-only, 30-day retention)
 - **Import Templates** — file-to-form import with declarative mapping
 - **Full SDK Coverage** — ~175 typed SDK commands spanning every feature area, explorable in the in-browser SDK playground

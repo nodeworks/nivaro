@@ -90,6 +90,7 @@ export {
   fulfilmentFigures
 } from './components/FulfilmentPill'
 export { HScrollProxy } from './components/HScrollProxy'
+export * from './components/help-videos'
 export type {
   HeaderWidgetInfo,
   ItemEditFormProps,

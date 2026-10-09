@@ -9,6 +9,7 @@ import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
 import { deleteStoredObject, getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
+import { putStoredObjectFromFile } from './stored-object-stream.js'
 
 const ulid = monotonicFactory()
 
@@ -102,6 +103,51 @@ export async function uploadFileBuffer(
   const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
 
   // Report to gateway (fire-and-forget)
+  await reportFileEvent('created', {
+    slug: getTenantSlug() ?? null,
+    fileKey: file.filename_disk,
+    filename: file.filename_download,
+    mimeType: file.type,
+    sizeBytes: file.filesize,
+    folder: file.folder ?? null
+  })
+
+  return file
+}
+
+/** Store a file that already sits on disk (recordings, renders) without
+ *  reading it into memory on local storage. Same row shape as uploadFileBuffer. */
+export async function uploadFileFromPath(
+  user: User,
+  path: string,
+  filename: string,
+  mimeType: string,
+  folderId?: string
+): Promise<StoredFile> {
+  const fileId = randomUUID()
+  const diskId = ulid().toLowerCase()
+  const ext = extname(filename) || (mime.extension(mimeType) ? `.${mime.extension(mimeType)}` : '')
+  const diskName = buildDiskName(diskId, ext)
+  const activeDriver = await getActiveStorageDriver()
+  const provider = activeDriver.name === 'local' ? getStorageProviderName() : activeDriver.name
+  const size = await putStoredObjectFromFile(diskName, path, mimeType)
+  await db('nivaro_files').insert({
+    id: fileId,
+    storage: provider,
+    storage_provider: provider,
+    filename_disk: diskName,
+    filename_download: filename,
+    title: filename.replace(/\.[^.]+$/, ''),
+    type: mimeType,
+    folder: folderId ?? null,
+    uploaded_by: user.id,
+    uploaded_on: new Date(),
+    filesize: size
+  })
+  const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
+
+  // Same gateway event uploadFileBuffer sends, so cloud storage accounting
+  // counts recordings and renders.
   await reportFileEvent('created', {
     slug: getTenantSlug() ?? null,
     fileKey: file.filename_disk,
@@ -218,6 +264,9 @@ export async function listFiles(
   } = {}
 ) {
   const { folder, limit = 50, offset = 0, search, ids, tag } = opts
+  // Help-video recordings, renders, captions and posters never list here:
+  // they are served only through the ticketed help-video media routes.
+  const { whereNotHelpVideoFile } = await import('./help-video-files.js')
   const q = db('nivaro_files as f')
     .select(
       'f.*',
@@ -241,7 +290,9 @@ export async function listFiles(
   if (tag) {
     q.where('f.tags', 'like', `%"${tag.replace(/[%_["]/g, '')}"%`)
   }
+  whereNotHelpVideoFile(q, 'f.id')
   const countQ = db('nivaro_files')
+  whereNotHelpVideoFile(countQ, 'nivaro_files.id')
   if (folder) countQ.where({ folder })
   if (ids && ids.length > 0) countQ.whereIn('id', ids)
   if (search) {
@@ -388,7 +439,10 @@ export async function replaceFileContent(
 export async function deleteTransforms(fileId: string): Promise<void> {
   const storage = getStorage()
   if (!storage.list) return
-  const keys = await storage.list(`transforms/${fileId}/`).catch(() => [] as string[])
+  // Keys are written under the lower-cased row id; normalise the same way here.
+  const keys = await storage
+    .list(`transforms/${String(fileId).toLowerCase()}/`)
+    .catch(() => [] as string[])
   for (const key of keys) {
     await storage.delete(key).catch(() => null)
   }

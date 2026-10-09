@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { isFilesCollection } from '../services/help-video-files.js'
 import { can } from '../services/permissions.js'
 
 function escapeCsv(v: unknown): string {
@@ -23,7 +24,7 @@ export async function contentExportRoutes(app: FastifyInstance) {
   app.post('/:collection', { preHandler: authenticate }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
 
-    if (collection.startsWith('nivaro_')) {
+    if (/^nivaro_/i.test(collection) || isFilesCollection(collection)) {
       return reply.code(403).send({ error: 'Cannot export system tables' })
     }
 

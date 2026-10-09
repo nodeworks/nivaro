@@ -8,6 +8,7 @@ import {
   searchEmbeddings,
   upsertItemEmbedding
 } from '../services/embeddings.js'
+import { isFilesCollection } from '../services/help-video-files.js'
 import { can } from '../services/permissions.js'
 
 // Registered under the /search prefix → /api/search/semantic, /api/search/reindex/:collection
@@ -23,7 +24,7 @@ export async function semanticSearchRoutes(app: FastifyInstance) {
     if (!collection || !query) {
       return reply.code(400).send({ error: 'collection and query are required' })
     }
-    if (collection.startsWith('nivaro_')) {
+    if (/^nivaro_/i.test(collection) || isFilesCollection(collection)) {
       return reply.code(403).send({ error: 'System collections cannot be searched' })
     }
     if (!(await can(req.user!, 'read', collection))) {
@@ -57,7 +58,7 @@ export async function semanticSearchRoutes(app: FastifyInstance) {
   app.post('/reindex/:collection', { preHandler: requireAdmin }, async (req, reply) => {
     const { collection } = req.params as { collection: string }
 
-    if (collection.startsWith('nivaro_')) {
+    if (/^nivaro_/i.test(collection) || isFilesCollection(collection)) {
       return reply.code(403).send({ error: 'System collections cannot be indexed' })
     }
 

@@ -23,6 +23,7 @@ import {
 import { findRecordInstance } from '../services/branch-instances.js'
 import { builtinAllowed, valueUnchanged } from '../services/bulk-actions.js'
 import { chainFields } from '../services/chain-columns.js'
+import { isFilesCollection } from '../services/help-video-files.js'
 import { idempotencyPreHandler } from '../services/idempotency.js'
 import { instanceAccessAllowed } from '../services/instance-guard.js'
 import {
@@ -90,6 +91,15 @@ export async function itemsRoutes(app: FastifyInstance) {
   // Idempotency-Key on any write here: a repeat of the same request returns
   // the first answer instead of writing twice. Runs after authentication.
   app.addHook('preHandler', idempotencyPreHandler('items'))
+  // The files table is never an items collection, under any spelling: no read,
+  // aggregate, export, write or delete of a file row (help-video recordings
+  // included) goes through here. Same answer as an unknown collection.
+  app.addHook('preHandler', async (req, reply) => {
+    const c = (req.params as { collection?: string } | undefined)?.collection
+    if (c !== undefined && isFilesCollection(c)) {
+      return reply.code(404).send({ error: new CollectionNotFoundError(c).message })
+    }
+  })
 
   // #1304: several reads in one round trip. Each runs through readItems /
   // readOne as the caller and answers its own status; the batch itself only
@@ -114,6 +124,7 @@ export async function itemsRoutes(app: FastifyInstance) {
       }
       const r = parsed.read
       try {
+        if (isFilesCollection(r.collection)) throw new CollectionNotFoundError(r.collection)
         if (r.id !== null) {
           const item = await readOne(
             req.user!,

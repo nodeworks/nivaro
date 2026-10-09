@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { posix } from 'node:path'
 import type { FastifyInstance } from 'fastify'
 import mime from 'mime-types'
 import sharp from 'sharp'
@@ -18,6 +19,7 @@ import {
   updateFileMeta,
   uploadFile
 } from '../services/files.js'
+import { helpVideoFileIds, isHelpVideoFile, isUuid } from '../services/help-video-files.js'
 import { getStorage } from '../services/storage/index.js'
 import {
   bustStorageDriverCache,
@@ -25,6 +27,7 @@ import {
   readStorageSettings,
   testStorageDriver
 } from '../services/storage-drivers.js'
+import { sendStoredObject } from '../services/stored-object-stream.js'
 
 function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'inline'): string {
   const ascii = filename.replace(/[^\x20-\x7E]/g, '_')
@@ -36,6 +39,19 @@ function contentDisposition(filename: string, mode: 'inline' | 'attachment' = 'i
 const MAX_DIMENSION = 4000
 const TRANSFORM_FORMATS = ['webp', 'jpeg', 'png'] as const
 type TransformFormat = (typeof TRANSFORM_FORMATS)[number]
+/** A cached transform as the transform route writes it: transforms/<id>/<hash16>.<format>. */
+const TRANSFORM_KEY = /^transforms\/([0-9a-fA-F-]{36})\/[0-9a-f]{16}\.(?:webp|jpeg|png)$/
+
+/** The file row, or undefined when there is none OR it belongs to a help
+ *  video. Help-video files are served only through the ticketed help-video
+ *  media routes (they re-check role and visibility), so here they answer the
+ *  same 404 as an unknown file, to everyone. The check uses the row's own id,
+ *  never the caller's string. */
+async function servableFile(id: string) {
+  const file = await getFile(id)
+  if (!file || (await isHelpVideoFile(String(file.id)))) return undefined
+  return file
+}
 
 export async function filesRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
@@ -80,7 +96,12 @@ export async function filesRoutes(app: FastifyInstance) {
     const ids = (Array.isArray(body?.ids) ? body.ids : []).map(String).slice(0, 100)
     if (ids.length === 0) return reply.code(400).send({ error: 'ids[] is required' })
     const { verifyFiles } = await import('../services/file-integrity.js')
-    const verdicts = await verifyFiles(ids)
+    // Exact uuids only (SQL Server would match '<uuid>xyz' to '<uuid>'), and a
+    // help-video file gets no verdict, exactly like an unknown id. The check
+    // runs on the ids of the rows actually found.
+    const found = await verifyFiles(ids.filter(isUuid))
+    const hidden = await helpVideoFileIds(found.map((v) => v.id))
+    const verdicts = found.filter((v) => !hidden.has(String(v.id).toUpperCase()))
     return reply.send({
       data: Object.fromEntries(verdicts.map((v) => [v.id, { missing: v.missing }]))
     })
@@ -217,7 +238,7 @@ export async function filesRoutes(app: FastifyInstance) {
   // Where is this file referenced? FK-driven scan — see services/file-usage.ts
   app.get('/:id/usage', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const file = await getFile(id)
+    const file = await servableFile(id)
     if (!file) return reply.code(404).send({ error: 'Not found' })
     const usage = await getFileUsage(id)
     return reply.send({ data: usage })
@@ -238,20 +259,28 @@ export async function filesRoutes(app: FastifyInstance) {
     const { getFileRefColumns } = await import('../services/file-usage.js')
     const refs = await getFileRefColumns()
     const counts = new Map<string, number>(ids.map((id) => [id, 0]))
-    for (const ref of refs) {
+    // Only exact uuids are looked up (SQL Server would match '<uuid>xyz' to
+    // '<uuid>'); anything else reads as unknown: zero.
+    const exact = ids.filter(isUuid)
+    const found: Array<[string, number]> = []
+    for (const ref of exact.length ? refs : []) {
       try {
         const rows = (await db(ref.table)
-          .whereIn(ref.column, ids)
+          .whereIn(ref.column, exact)
           .select(ref.column)
           .count({ n: '*' })
           .groupBy(ref.column)) as Array<Record<string, unknown>>
-        for (const r of rows) {
-          const key = String(r[ref.column])
-          counts.set(key, (counts.get(key) ?? 0) + Number(r.n ?? 0))
-        }
+        for (const r of rows) found.push([String(r[ref.column]), Number(r.n ?? 0)])
       } catch {
         /* one surface contributes zero */
       }
+    }
+    // A help-video file reads as unknown: zero uses, like an id with no row.
+    // Checked on the stored ids actually counted.
+    const hidden = await helpVideoFileIds(found.map(([key]) => key))
+    for (const [key, n] of found) {
+      if (hidden.has(key.toUpperCase())) continue
+      counts.set(key, (counts.get(key) ?? 0) + n)
     }
     return reply.send({ data: Object.fromEntries(counts) })
   })
@@ -331,19 +360,40 @@ export async function filesRoutes(app: FastifyInstance) {
 
   app.get('/:id/meta', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const file = await getFile(id)
+    const file = await servableFile(id)
     if (!file) return reply.code(404).send({ error: 'Not found' })
     const url = file.filename_disk ? await getStorage().getUrl(file.filename_disk) : null
     return reply.send({ data: { ...file, url } })
   })
 
   // Raw object access by storage key (used by the local provider's getUrl()).
+  // An allow-list: a key is served only when it is a cached transform of a
+  // servable file, or names a servable nivaro_files row, and then the bytes
+  // read are that ROW's stored key, never the caller's spelling of it. So no
+  // case, Unicode, encoding or driver key-mapping variant can reach a
+  // help-video object (or any object without a row) through here.
   app.get('/raw/*', async (req, reply) => {
     const key = (req.params as Record<string, string>)['*']
     if (!key || key.includes('..')) return reply.code(400).send({ error: 'Invalid key' })
+    if (posix.normalize(key) !== key || /^[/\\]|[\\]|\/$|^\s|\s$/.test(key)) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    let storageKey: string
+    const transform = TRANSFORM_KEY.exec(key)
+    if (transform) {
+      if (!(await servableFile(transform[1]))) return reply.code(404).send({ error: 'Not found' })
+      storageKey = key
+    } else {
+      const row = (await db('nivaro_files').where('filename_disk', key).first('id')) as
+        | { id: unknown }
+        | undefined
+      const file = row ? await servableFile(String(row.id)) : undefined
+      if (!file?.filename_disk) return reply.code(404).send({ error: 'Not found' })
+      storageKey = file.filename_disk
+    }
     try {
-      const buffer = await getStorage().get(key)
-      const contentType = mime.lookup(key) || 'application/octet-stream'
+      const buffer = await getStorage().get(storageKey)
+      const contentType = mime.lookup(storageKey) || 'application/octet-stream'
       return reply.header('Content-Type', contentType).send(buffer)
     } catch {
       return reply.code(404).send({ error: 'Not found' })
@@ -355,7 +405,7 @@ export async function filesRoutes(app: FastifyInstance) {
     const { id } = req.params as { id: string }
     const q = req.query as { w?: string; h?: string; fit?: string; format?: string; q?: string }
 
-    const file = await getFile(id)
+    const file = await servableFile(id)
     if (!file || !file.filename_disk) return reply.code(404).send({ error: 'Not found' })
     if (!file.type?.startsWith('image/')) {
       return reply.code(400).send({ error: 'Transformations are only supported for images' })
@@ -377,7 +427,9 @@ export async function filesRoutes(app: FastifyInstance) {
       .update(`w=${width ?? ''}&h=${height ?? ''}&fit=${fit}&format=${format}&q=${quality}`)
       .digest('hex')
       .slice(0, 16)
-    const cacheKey = `transforms/${id}/${paramsHash}.${format}`
+    // Built from the resolved row only: the caller's string may carry path segments the
+    // database ignores when matching (SQL Server reads "<id>/../<other>" as "<id>").
+    const cacheKey = `transforms/${String(file.id).toLowerCase()}/${paramsHash}.${format}`
     const contentType = `image/${format}`
     const storage = getStorage()
 
@@ -405,23 +457,22 @@ export async function filesRoutes(app: FastifyInstance) {
   app.get('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
     const q = req.query as { download?: string }
-    const file = await getFile(id)
+    const file = await servableFile(id)
     if (!file || !file.filename_disk) return reply.code(404).send({ error: 'Not found' })
     const contentType =
       file.type ?? (mime.lookup(file.filename_download) || 'application/octet-stream')
-    let buffer: Buffer
-    try {
-      buffer = await readFileBuffer(file)
-    } catch {
-      return reply.code(404).send({ error: 'Stored object not found' })
-    }
     // Report bandwidth usage to gateway (fire-and-forget)
     reportFileBandwidth(file).catch(() => {})
     const mode = q.download === '1' || q.download === 'true' ? 'attachment' : 'inline'
-    reply
-      .header('Content-Type', contentType)
-      .header('Content-Disposition', contentDisposition(file.filename_download ?? 'file', mode))
-    return reply.send(buffer)
+    try {
+      return await sendStoredObject(reply, file.filename_disk, {
+        rangeHeader: req.headers.range,
+        contentType,
+        disposition: contentDisposition(file.filename_download ?? 'file', mode)
+      })
+    } catch {
+      return reply.code(404).send({ error: 'Stored object not found' })
+    }
   })
 
   app.patch('/:id', async (req, reply) => {
@@ -435,7 +486,7 @@ export async function filesRoutes(app: FastifyInstance) {
       filename_download?: string
     }
 
-    const existing = await getFile(id)
+    const existing = await servableFile(id)
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
     const patch: Parameters<typeof updateFileMeta>[1] = {}
@@ -462,7 +513,7 @@ export async function filesRoutes(app: FastifyInstance) {
       }
     }
 
-    const file = await updateFileMeta(id, patch, req.user?.id)
+    const file = await updateFileMeta(String(existing.id), patch, req.user?.id)
     await logActivity({
       action: 'update',
       collection: 'nivaro_files',
@@ -477,7 +528,7 @@ export async function filesRoutes(app: FastifyInstance) {
    *  replaceFileContent). Multipart, one part named `file`. */
   app.post('/:id/replace', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const existing = await getFile(id)
+    const existing = await servableFile(id)
     if (!existing) return reply.code(404).send({ error: 'Not found' })
     const multipart = await req.file()
     if (!multipart) return reply.code(400).send({ error: 'No file provided' })
@@ -485,7 +536,7 @@ export async function filesRoutes(app: FastifyInstance) {
     const mimeType =
       multipart.mimetype || mime.lookup(multipart.filename) || 'application/octet-stream'
     const file = await replaceFileContent(
-      id,
+      String(existing.id),
       buffer,
       multipart.filename,
       String(mimeType),
@@ -504,7 +555,11 @@ export async function filesRoutes(app: FastifyInstance) {
 
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    await deleteFile(id)
+    // Unknown and help-video files answer the same 404 (a help-video file is
+    // never deleted here; purging a video removes its files).
+    const file = await servableFile(id)
+    if (!file) return reply.code(404).send({ error: 'Not found' })
+    await deleteFile(String(file.id))
     await logActivity({
       action: 'delete',
       collection: 'nivaro_files',

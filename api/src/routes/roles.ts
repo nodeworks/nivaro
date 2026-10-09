@@ -215,6 +215,10 @@ export async function rolesRoutes(app: FastifyInstance) {
     if (Number(users?.count) > 0) {
       return reply.code(400).send({ error: 'Cannot delete a role that has users assigned to it' })
     }
+    // Help videos name roles (required viewing, author roles, visibility):
+    // let go of this one first, or its requirement rows block the delete.
+    const { forgetHelpVideoRole } = await import('../services/help-videos.js')
+    await forgetHelpVideoRole(id)
     await db('nivaro_policies').where({ role: id }).delete()
     await db('nivaro_roles').where({ id }).delete()
     await logActivity({

@@ -18,6 +18,7 @@ export * from './sections/features.js'
 export * from './sections/field-display.js'
 export * from './sections/field-rules.js'
 export * from './sections/graphql.js'
+export * from './sections/help-videos.js'
 export * from './sections/import-templates.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
@@ -208,6 +209,7 @@ import {
   graphqlSort,
   graphqlSubscriptions
 } from './sections/graphql.js'
+import { helpVideosApi, helpVideosGuide, sdkHelpVideos } from './sections/help-videos.js'
 import { importTemplatesGuide } from './sections/import-templates.js'
 import { integrationObligations } from './sections/integration-obligations.js'
 import {
@@ -565,6 +567,7 @@ export const navSections: NavGroup[] = [
       sdkQueues,
       sdkPresence,
       sdkTreeHierarchy,
+      sdkHelpVideos,
       sdkCoverage
     ]
   },
@@ -776,7 +779,9 @@ export const navSections: NavGroup[] = [
       collabKeyboardShortcuts,
       collabSmsPush,
       webPushDocs,
-      collabMessageActions
+      collabMessageActions,
+      helpVideosGuide,
+      helpVideosApi
     ]
   },
   {

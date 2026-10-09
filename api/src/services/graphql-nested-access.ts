@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { isFilesCollection, whereNotHelpVideoFile } from './help-video-files.js'
 import { applyRowFilter, can, getAllowedFields, getRowFilter, scopeAllows } from './permissions.js'
 import {
   applyScopeEnforcement,
@@ -111,6 +112,8 @@ export function applyNestedGate(
   user: User
 ): boolean {
   if (!gate.allowed || gate.scopes.deny) return false
+  // Help-video recordings, renders and posters never read as nested file rows.
+  if (isFilesCollection(collection)) whereNotHelpVideoFile(q, `${collection}.id`)
   if (gate.open) return true
   if (!gate.rowFilter && gate.scopes.filters.length === 0) return true
   const visible = db(collection).select(`${collection}.id`)

@@ -57,7 +57,10 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   AnnouncementBanner,
   ApiUpdateBanner,
+  defaultItemUrl,
   ErrorSurface,
+  HelpVideoRecordingProvider,
+  NavigationContext,
   NivaroProvider,
   OfflineBanner,
   RealtimeContext
@@ -800,21 +803,23 @@ export function AppLayout() {
 
             {/* ─── Main area ───────────────────────────────────────────── */}
             <main id='main-content' className='flex flex-1 flex-col overflow-hidden bg-secondary'>
-              <PageErrorBoundary key={location.pathname}>
-                <Suspense fallback={null}>
-                  {disabledPaths.size > 0 &&
-                  [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
-                    <Navigate to='/' replace />
-                  ) : (
-                    <div
-                      key={location.pathname}
-                      className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
-                    >
-                      <Outlet />
-                    </div>
-                  )}
-                </Suspense>
-              </PageErrorBoundary>
+              <HelpVideoHost>
+                <PageErrorBoundary key={location.pathname}>
+                  <Suspense fallback={null}>
+                    {disabledPaths.size > 0 &&
+                    [...disabledPaths].some((p) => location.pathname.startsWith(p)) ? (
+                      <Navigate to='/' replace />
+                    ) : (
+                      <div
+                        key={location.pathname}
+                        className='animate-page-enter flex-1 min-h-0 overflow-auto flex flex-col'
+                      >
+                        <Outlet />
+                      </div>
+                    )}
+                  </Suspense>
+                </PageErrorBoundary>
+              </HelpVideoHost>
             </main>
           </div>
         </div>
@@ -974,6 +979,25 @@ function RecorderBadge() {
       <span className='h-2 w-2 animate-pulse rounded-full bg-red-500' />
       Recording · {rec.steps.length} step{rec.steps.length === 1 ? '' : 's'}
     </Link>
+  )
+}
+
+/** One help-video recorder for the whole app, above the page outlet, so a
+ *  recording survives navigating between pages. */
+function HelpVideoHost({ children }: { children: ReactNode }) {
+  const navigate = useNavigate()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider
+        value={{
+          navigate: (path) => navigate(path),
+          itemUrl: defaultItemUrl,
+          helpVideosPath: '/help-videos'
+        }}
+      >
+        <HelpVideoRecordingProvider>{children}</HelpVideoRecordingProvider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
   )
 }
 
