@@ -388,7 +388,7 @@ function PlayerInner({
     }
     v.addEventListener('loadedmetadata', onMeta, { once: true })
     return () => v.removeEventListener('loadedmetadata', onMeta)
-  }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited, seekSource, startAtMs])
+  }, [videoEl, dto.my_progress, useDraft, rendered, edits, seekEdited, startAtMs])
 
   // Autoplay with an intro card: the card's clock starts instead of the video.
   const autoStarted = useRef(false)
