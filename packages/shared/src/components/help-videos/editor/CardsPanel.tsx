@@ -3,7 +3,7 @@ import { Eye } from 'lucide-react'
 import { memo, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../../context'
-import { patch } from '../../../lib/commands'
+import { del, patch } from '../../../lib/commands'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Switch } from '../../ui/switch'
@@ -41,6 +41,10 @@ const TRANSITIONS: Array<{ value: CardTransition; label: string }> = [
  * time before or after the recording (it never covers any of it) and is drawn
  * in the instance's brand; the switches store nothing while they are off.
  */
+/** What the render can draw as a logo (help-video-cards.ts). */
+const MAX_LOGO_BYTES = 2 * 1024 * 1024
+const LOGO_TYPES = /^image\/(png|jpe?g|gif|webp|svg\+xml)$/i
+
 export const CardsPanel = memo(function CardsPanel({
   headless,
   edits,
@@ -83,13 +87,30 @@ export const CardsPanel = memo(function CardsPanel({
   // The same logo Settings → Project sets: the cards and the sign-in page.
   const uploadLogo = async (file: File | null) => {
     if (!file) return
+    // The render draws only these (help-video-cards.ts): anything else would
+    // show in the preview here and be left off the published video.
+    const refusal = !LOGO_TYPES.test(file.type)
+      ? 'Use a PNG, JPEG, GIF, WebP or SVG image for the logo.'
+      : file.size > MAX_LOGO_BYTES
+        ? 'That logo is over 2 MB. Use a smaller image.'
+        : null
+    if (refusal) {
+      toast.error(refusal)
+      if (fileRef.current) fileRef.current.value = ''
+      return
+    }
     setUploading(true)
+    let uploaded: string | null = null
     try {
       const f = await client.upload(file)
+      uploaded = f.id
       await client.request(patch('/settings', { brand_logo: f.id }))
+      uploaded = null
       await qc.invalidateQueries({ queryKey: ['help-video-card-brand'] })
       toast.success('Logo set. The cards and the sign-in page use it now.')
     } catch {
+      // A file nobody points at would just sit in Files.
+      if (uploaded) await client.request(del(`/files/${uploaded}`)).catch(() => null)
       toast.error('Could not set the logo. Try again, or set it in Settings → Project.')
     } finally {
       setUploading(false)

@@ -68,6 +68,8 @@ beforeEach(() => {
   h.logo = null
   h.upload.mockReset()
   h.request.mockReset()
+  h.toastError.mockReset()
+  h.toastSuccess.mockReset()
   host = document.createElement('div')
   document.body.appendChild(host)
   root = createRoot(host)
@@ -113,6 +115,36 @@ describe('CardsPanel logo notice', () => {
       expect.objectContaining({ _method: 'PATCH', _path: '/settings', _body: { brand_logo: 'F1' } })
     )
     expect(h.toastSuccess).toHaveBeenCalled()
+  })
+  const pick = async (file: File) => {
+    const input = host.querySelector('[data-hv-logo-missing] input[type=file]') as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: [file], configurable: true })
+    await act(async () => {
+      input.dispatchEvent(new Event('change', { bubbles: true }))
+    })
+  }
+  it('refuses a logo the render could not draw, before uploading it', async () => {
+    mount(setIntro(base, {}))
+    await pick(new File([new Uint8Array(2 * 1024 * 1024 + 1)], 'big.png', { type: 'image/png' }))
+    await pick(new File(['%PDF'], 'logo.pdf', { type: 'application/pdf' }))
+    expect(h.upload).not.toHaveBeenCalled()
+    expect(h.toastError.mock.calls.map((c) => c[0])).toEqual([
+      expect.stringMatching(/2 MB/),
+      expect.stringMatching(/PNG, JPEG, GIF, WebP or SVG/)
+    ])
+  })
+  it('removes the uploaded file when the logo cannot be set', async () => {
+    h.upload.mockResolvedValue({ id: 'F2' })
+    h.request.mockImplementation(async (c: { _method: string }) => {
+      if (c._method === 'PATCH') throw new Error('nope')
+      return {}
+    })
+    mount(setIntro(base, {}))
+    await pick(new File(['x'], 'logo.svg', { type: 'image/svg+xml' }))
+    expect(h.request).toHaveBeenCalledWith(
+      expect.objectContaining({ _method: 'DELETE', _path: '/files/F2' })
+    )
+    expect(h.toastError).toHaveBeenCalled()
   })
   it('points everyone else to Settings', () => {
     h.isAdmin = false
