@@ -4,7 +4,6 @@ import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { accentOnDark, inkOnAccent } from '../../../services/help-video-card-design.js'
 import {
-  bannerSourceSpans,
   bannerTree,
   type CardNode,
   cardAccent,
@@ -12,6 +11,7 @@ import {
   firstLine,
   introTree,
   outroTree,
+  planCardFrames,
   shownBrand
 } from '../../../services/help-video-cards.js'
 import {
@@ -170,16 +170,6 @@ describe('time mapping with cards', () => {
       { start_ms: 10_000, end_ms: 12_000 }
     ])
     expect(editedSpanToSource(e, 0, 2000)).toEqual([])
-    expect(
-      bannerSourceSpans(
-        e,
-        chapterBannerWindows(e).map((b, i) => ({ ...b, index: i + 1, total: 3 }))
-      )
-    ).toEqual([
-      { index: 0, start_ms: 0, end_ms: 1000 },
-      { index: 1, start_ms: 1000, end_ms: 3500 },
-      { index: 2, start_ms: 16_000, end_ms: 18_000 }
-    ])
   })
   it('has no banners while they are off', () => {
     expect(chapterBannerWindows({ ...e, chapter_banners: undefined })).toEqual([])
@@ -313,16 +303,17 @@ describe('render plan with cards', () => {
     },
     10_000
   )
+  const still = (path: string) => ({ path, sequence: false, frames: 1 })
+  const seq = (path: string, frames: number) => ({ path, sequence: true, frames })
   const cards = {
     overlays: [{ path: 'annot-1.png', start_ms: 0, end_ms: 1000 }],
-    banners: [{ path: 'card-banner-1.png', start_ms: 1000, end_ms: 3500 }],
-    intro: { path: 'card-intro.png', duration_ms: 3000 },
-    outro: { path: 'card-outro.png', duration_ms: 2000 }
+    banners: [{ ...still('card-banner-1.png'), start_ms: 4000, end_ms: 6500 }],
+    intro: { ...still('card-intro.png'), duration_ms: 3000, over_frame: false },
+    outro: { ...still('card-outro.png'), duration_ms: 2000, over_frame: false }
   }
   it('orders the inputs annotations, banners, intro, outro', () => {
     const args = buildRenderArgs({ ...base, ...cards, edits: e })
-    const inputs = args.filter((_, i) => args[i - 1] === '-i')
-    expect(inputs).toEqual([
+    expect(args.filter((_, i) => args[i - 1] === '-i')).toEqual([
       'in.webm',
       'annot-1.png',
       'card-banner-1.png',
@@ -330,25 +321,60 @@ describe('render plan with cards', () => {
       'card-outro.png'
     ])
   })
-  it('lays banners over the picture after the zoom', () => {
-    const g = fc(buildRenderArgs({ ...base, ...cards, edits: e }))
-    expect(g.indexOf('[2:v]overlay=0:0')).toBeGreaterThan(g.indexOf('scale=w='))
-    expect(g).toContain("[2:v]overlay=0:0:enable='between(t,1.000,3.500)'")
-  })
-  it('plays each card as a held still with silence, then concatenates', () => {
+  it('keeps today’s card graph for still cards without a transition', () => {
     const g = fc(buildRenderArgs({ ...base, ...cards, edits: e }))
     expect(g).toContain('[3:v]scale=1280:720,format=yuv420p,setsar=1,loop=loop=89:size=1:start=0')
     expect(g).toContain('[4:v]scale=1280:720,format=yuv420p,setsar=1,loop=loop=59:size=1:start=0')
-    expect(g).toContain('anullsrc=r=48000:cl=stereo,atrim=duration=3.000')
-    expect(g).toContain('concat=n=2:v=1:a=1[vbody][abody]')
-    expect(g).toContain('[civ][cia][vbody][abodyf][cov][coa]concat=n=3:v=1:a=1[vout][aout]')
+    expect(g).not.toContain('trim=end_frame=1')
+  })
+  it('lays banners over the finished picture in edited time', () => {
+    const g = fc(buildRenderArgs({ ...base, ...cards, edits: e }))
+    expect(g.indexOf('[2:v]')).toBeGreaterThan(g.indexOf('concat=n=3'))
+    expect(g).toContain("overlay=0:0:eof_action=pass:enable='between(t,4.000,6.500)'")
+  })
+  it('reads a moving card as an image sequence over the recording’s first frame', () => {
+    const args = buildRenderArgs({
+      ...base,
+      ...cards,
+      edits: e,
+      intro: { ...seq('d/card-intro/f%05d.png', 90), duration_ms: 3000, over_frame: true }
+    })
+    const flat = args.join(' ')
+    expect(flat).toContain('-f image2 -framerate 30 -start_number 1 -i d/card-intro/f%05d.png')
+    const g = fc(args)
+    expect(g).toContain('trim=end_frame=1')
+    expect(g).toContain('loop=loop=89:size=1:start=0')
+    expect(g).toMatch(/\[cibg\]\[cifr\]overlay=0:0/)
+  })
+  it('puts a moving end card over the recording’s last frame', () => {
+    const g = fc(
+      buildRenderArgs({
+        ...base,
+        ...cards,
+        edits: e,
+        outro: { ...seq('d/card-outro/f%05d.png', 60), duration_ms: 2000, over_frame: true }
+      })
+    )
+    expect(g).toMatch(/trim=start=6\.950[^;]*,trim=end_frame=1/)
+    expect(g).toMatch(/\[cobg\]\[cofr\]overlay=0:0/)
+  })
+  it('reads a moving banner as a sequence offset to its edited start', () => {
+    const g = fc(
+      buildRenderArgs({
+        ...base,
+        ...cards,
+        edits: e,
+        banners: [{ ...seq('d/card-banner-1/f%05d.png', 75), start_ms: 4000, end_ms: 6500 }]
+      })
+    )
+    expect(g).toContain('[2:v]format=rgba,setpts=PTS-STARTPTS+4.000/TB')
   })
   it('works without sound and with only an outro', () => {
     const args = buildRenderArgs({
       ...base,
       hasAudio: false,
       overlays: [],
-      outro: cards.outro,
+      outro: { ...still('card-outro.png'), duration_ms: 2000, over_frame: false },
       edits: normalizeEdits({}, 10_000)
     })
     const g = fc(args)
@@ -397,5 +423,26 @@ describe('poster on a card', () => {
       SRC
     )
     expect(posterEditedMs(end)).toBe(SRC + 1200)
+  })
+})
+
+describe('card frame plan', () => {
+  const still = undefined
+  it('captures one image for a still card', () => {
+    expect(planCardFrames(90, still)).toEqual([true, ...Array(89).fill(false)])
+  })
+  it('captures only the moving frames', () => {
+    const m = {
+      t_ms: 0,
+      duration_ms: 3000,
+      animation: 'subtle' as const,
+      transition: 'fade' as const,
+      side: 'intro' as const
+    }
+    const plan = planCardFrames(90, m)
+    // 0–900 ms arriving (frames 0..27), 2400–3000 ms leaving (frames 73..89).
+    expect(plan.slice(0, 28).every(Boolean)).toBe(true)
+    expect(plan.slice(28, 73).some(Boolean)).toBe(false)
+    expect(plan.slice(73).every(Boolean)).toBe(true)
   })
 })

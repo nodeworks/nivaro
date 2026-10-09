@@ -10,10 +10,10 @@ import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { deleteFile, getFile, type StoredFile, uploadFileFromPath } from './files.js'
 import { rasterizeAnnotations } from './help-video-annotations.js'
 import {
-  bannerSourceSpans,
+  type CapturedCards,
+  captureCards,
   cardText,
   loadCardBrand,
-  rasterizeCards,
   shownBrand
 } from './help-video-cards.js'
 import {
@@ -253,13 +253,14 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
         : null) ?? {}) as { title: unknown; description: unknown }
     )
     const hasCards = !!(text.intro || text.outro || text.banners.length)
-    const cardFiles = hasCards
-      ? await rasterizeCards(text, shownBrand(await loadCardBrand(), edits), size, dir)
-      : { intro: null, outro: null, banners: [] as string[] }
-    const banners = bannerSourceSpans(edits, text.banners).map((s) => ({
-      path: cardFiles.banners[s.index],
-      start_ms: s.start_ms,
-      end_ms: s.end_ms
+    const captured: CapturedCards = hasCards
+      ? await captureCards(text, shownBrand(await loadCardBrand(), edits), size, dir, edits)
+      : { intro: null, outro: null, banners: [] }
+    // Banners are timed in edited time, over the finished picture.
+    const banners = text.banners.map((b, i) => ({
+      ...captured.banners[i],
+      start_ms: b.start_ms,
+      end_ms: b.end_ms
     }))
     // Background music (#1547): a library track or the video's own file.
     const music = edits.music ? await musicForRender(String(v.video_id), edits.music, dir) : null
@@ -276,13 +277,22 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
         sourceMime,
         overlays,
         banners,
+        // A card with a transition sits over the recording's edge frame.
         intro:
-          cardFiles.intro && edits.intro
-            ? { path: cardFiles.intro, duration_ms: edits.intro.duration_ms }
+          captured.intro && edits.intro
+            ? {
+                ...captured.intro,
+                duration_ms: edits.intro.duration_ms,
+                over_frame: !!edits.intro.transition
+              }
             : null,
         outro:
-          cardFiles.outro && edits.outro
-            ? { path: cardFiles.outro, duration_ms: edits.outro.duration_ms }
+          captured.outro && edits.outro
+            ? {
+                ...captured.outro,
+                duration_ms: edits.outro.duration_ms,
+                over_frame: !!edits.outro.transition
+              }
             : null,
         music,
         outputPath: out,

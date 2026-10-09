@@ -1,5 +1,6 @@
 import { lockedInputArgs } from './ffmpeg.js'
 import {
+  bodyDuration,
   editedDuration,
   introMs,
   musicShare,
@@ -24,16 +25,27 @@ export interface RenderInput {
   sourceMime: string
   /** `fade_ms`: the overlay fades in and out over that long (#1553). */
   overlays: Array<{ path: string; start_ms: number; end_ms: number; fade_ms?: number }>
-  /** Chapter banners: full-frame PNGs over the finished picture (after the
-   *  zoom, so they never move with it), each enabled over a SOURCE span. */
-  banners?: Array<{ path: string; start_ms: number; end_ms: number }>
-  /** Opaque full-frame cards played before / after the kept recording. */
-  intro?: { path: string; duration_ms: number } | null
-  outro?: { path: string; duration_ms: number } | null
+  /** Chapter banners: full-frame transparent overlays laid over the finished
+   *  picture (after the cards are joined) in EDITED time, so their motion
+   *  plays at its own speed on a sped-up piece. */
+  banners?: Array<CardInput & { start_ms: number; end_ms: number }>
+  /** Full-frame cards played before / after the kept recording. With
+   *  `over_frame` the card sits over the recording's first (intro) or last
+   *  (end card) frame, which shows through its transition. */
+  intro?: (CardInput & { duration_ms: number; over_frame: boolean }) | null
+  outro?: (CardInput & { duration_ms: number; over_frame: boolean }) | null
   /** Background music (#1547): looped under the whole edited timeline. */
   music?: { path: string; mime: string } | null
   outputPath: string
   threads: number
+}
+
+/** One card or banner as captured: one PNG (`sequence` false) or an image2
+ *  pattern of `frames` numbered PNGs. */
+export interface CardInput {
+  path: string
+  sequence: boolean
+  frames: number
 }
 
 const even = (n: number) => Math.max(2, Math.floor(n / 2) * 2)
@@ -239,13 +251,9 @@ export function buildRenderArgs(input: RenderInput): string[] {
 
   const banners = input.banners ?? []
   const bannerBase = input.overlays.length + 1
-  banners.forEach((o, i) => {
-    const to = next()
-    parts.push(
-      `[${label}][${bannerBase + i}:v]overlay=0:0:enable='between(t,${sec(o.start_ms)},${sec(o.end_ms)})'[${to}]`
-    )
-    label = to
-  })
+  // Banners go on after the cards are joined (in edited time); until then the
+  // picture lands on finalV.
+  const finalV = banners.length ? 'vcards' : 'vout'
 
   const segs = e.segments
   const untouched = segs.length === 1 && segs[0].start_ms === 0 && segs[0].speed === 1
@@ -265,7 +273,7 @@ export function buildRenderArgs(input: RenderInput): string[] {
   const withAudio = input.hasAudio || needsMix
   // With a card the kept recording is one piece of a final concat.
   const cards = [input.intro, input.outro].filter(Boolean).length > 0
-  const vb = cards ? 'vbody' : 'vout'
+  const vb = cards ? 'vbody' : finalV
   const ab = cards ? 'abody' : nar
   if (untouched) {
     // A single full piece still bounds the end, so a recording whose header
@@ -296,15 +304,48 @@ export function buildRenderArgs(input: RenderInput): string[] {
   if (withAudio) maps.push('-map', '[aout]')
 
   if (cards) {
-    // Each card is its PNG held for its length at CARD_FPS, with silence when
-    // the recording has sound; then card + recording + card play in order.
+    // Each card is held (one PNG) or played (a frame sequence) for its length
+    // at CARD_FPS, with silence when the recording has sound; then card +
+    // recording + card play in order. A card with a transition sits over the
+    // recording's first (intro) or last (end card) frame, held for its length:
+    // the body is split, one frame picked off it and looped.
+    const needIntroBg = !!input.intro?.over_frame
+    const needOutroBg = !!input.outro?.over_frame
+    const extra = (needIntroBg ? 1 : 0) + (needOutroBg ? 1 : 0)
+    let bodyLabel = 'vbody'
+    if (extra) {
+      parts.push(
+        `[vbody]split=${extra + 1}[vbodym]${needIntroBg ? '[cisrc]' : ''}${needOutroBg ? '[cosrc]' : ''}`
+      )
+      bodyLabel = 'vbodym'
+    }
     let idx = bannerBase + banners.length
     const pieces: string[] = []
-    const card = (c: { duration_ms: number }, name: string) => {
+    const card = (
+      c: NonNullable<RenderInput['intro']>,
+      name: 'ci' | 'co',
+      edge: 'first' | 'last'
+    ) => {
       const frames = Math.max(1, Math.round((c.duration_ms / 1000) * CARD_FPS))
-      parts.push(
-        `[${idx++}:v]scale=${out.width}:${out.height},format=yuv420p,setsar=1,loop=loop=${frames - 1}:size=1:start=0,setpts=N/(${CARD_FPS}*TB)[${name}v]`
-      )
+      const k = idx++
+      const held = c.sequence ? '' : `loop=loop=${frames - 1}:size=1:start=0,`
+      if (!c.over_frame) {
+        parts.push(
+          `[${k}:v]scale=${out.width}:${out.height},format=yuv420p,setsar=1,${held}setpts=N/(${CARD_FPS}*TB)[${name}v]`
+        )
+      } else {
+        const pick =
+          edge === 'first'
+            ? 'trim=end_frame=1'
+            : `trim=start=${sec(Math.max(0, bodyDuration(e) - 50))},trim=end_frame=1`
+        parts.push(
+          `[${name}src]${pick},setpts=PTS-STARTPTS,loop=loop=${frames - 1}:size=1:start=0,setpts=N/(${CARD_FPS}*TB)[${name}bg]`
+        )
+        parts.push(
+          `[${k}:v]scale=${out.width}:${out.height},format=rgba,${held}setpts=N/(${CARD_FPS}*TB)[${name}fr]`
+        )
+        parts.push(`[${name}bg][${name}fr]overlay=0:0:shortest=1,format=yuv420p,setsar=1[${name}v]`)
+      }
       if (input.hasAudio) {
         parts.push(
           `anullsrc=r=48000:cl=stereo,atrim=duration=${sec((frames / CARD_FPS) * 1000)},${AUDIO_FORMAT}[${name}a]`
@@ -312,15 +353,35 @@ export function buildRenderArgs(input: RenderInput): string[] {
         pieces.push(`[${name}v][${name}a]`)
       } else pieces.push(`[${name}v]`)
     }
-    if (input.intro) card(input.intro, 'ci')
+    if (input.intro) card(input.intro, 'ci', 'first')
     if (input.hasAudio) {
       parts.push(`[abody]${AUDIO_FORMAT}[abodyf]`)
-      pieces.push('[vbody][abodyf]')
-    } else pieces.push('[vbody]')
-    if (input.outro) card(input.outro, 'co')
+      pieces.push(`[${bodyLabel}][abodyf]`)
+    } else pieces.push(`[${bodyLabel}]`)
+    if (input.outro) card(input.outro, 'co', 'last')
     parts.push(
-      `${pieces.join('')}concat=n=${pieces.length}:v=1:a=${input.hasAudio ? 1 : 0}[vout]${input.hasAudio ? `[${nar}]` : ''}`
+      `${pieces.join('')}concat=n=${pieces.length}:v=1:a=${input.hasAudio ? 1 : 0}[${finalV}]${input.hasAudio ? `[${nar}]` : ''}`
     )
+  }
+
+  // Chapter banners over the finished picture, each from its edited start: a
+  // held PNG or a frame sequence, offset so its first frame lands there.
+  if (banners.length) {
+    let cur = finalV
+    banners.forEach((b, i) => {
+      const k = bannerBase + i
+      const to = i === banners.length - 1 ? 'vout' : `vbn${i}`
+      const frames = Math.max(1, Math.round(((b.end_ms - b.start_ms) / 1000) * CARD_FPS))
+      parts.push(
+        b.sequence
+          ? `[${k}:v]format=rgba,setpts=PTS-STARTPTS+${sec(b.start_ms)}/TB[bn${i}]`
+          : `[${k}:v]format=rgba,loop=loop=${frames - 1}:size=1:start=0,setpts=N/(${CARD_FPS}*TB)+${sec(b.start_ms)}/TB[bn${i}]`
+      )
+      parts.push(
+        `[${cur}][bn${i}]overlay=0:0:eof_action=pass:enable='between(t,${sec(b.start_ms)},${sec(b.end_ms)})'[${to}]`
+      )
+      cur = to
+    })
   }
 
   if (needsMix) {
@@ -383,14 +444,37 @@ export function buildRenderArgs(input: RenderInput): string[] {
     ...sourceLock,
     '-i',
     input.sourcePath,
-    // Annotation images are our own PNGs; pin them so nothing else is probed.
-    // Order: annotations, banners, intro card, outro card (the graph's indexes).
+    // Annotation and card images are our own PNGs; pin them so nothing else is
+    // probed. Order: annotations, banners, intro card, outro card (the graph's
+    // indexes). A moving card or banner is a numbered sequence (image2).
+    ...input.overlays.flatMap((o) => [
+      '-protocol_whitelist',
+      'file',
+      '-f',
+      'png_pipe',
+      '-i',
+      o.path
+    ]),
     ...[
-      ...input.overlays,
       ...banners,
       ...(input.intro ? [input.intro] : []),
       ...(input.outro ? [input.outro] : [])
-    ].flatMap((o) => ['-protocol_whitelist', 'file', '-f', 'png_pipe', '-i', o.path]),
+    ].flatMap((c) =>
+      c.sequence
+        ? [
+            '-protocol_whitelist',
+            'file',
+            '-f',
+            'image2',
+            '-framerate',
+            String(CARD_FPS),
+            '-start_number',
+            '1',
+            '-i',
+            c.path
+          ]
+        : ['-protocol_whitelist', 'file', '-f', 'png_pipe', '-i', c.path]
+    ),
     // Music last, looped for as long as the graph reads it (atrim bounds it).
     ...(music ? ['-stream_loop', '-1', ...lockedInputArgs(music.mime), '-i', music.path] : []),
     '-filter_complex',

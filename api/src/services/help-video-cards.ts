@@ -1,3 +1,4 @@
+import { copyFile, link, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { db } from '../db/index.js'
 import { getFile } from './files.js'
@@ -6,25 +7,28 @@ import {
   bannerTree,
   CARD_FONT,
   type CardBrandShown,
+  type CardMotion,
   type CardNode,
   type IntroCardContent,
   introTree,
+  isStill,
   type OutroCardContent,
   outroTree
 } from './help-video-card-design.js'
 import {
   chapterBannerWindows,
   editedDuration,
-  editedSpanToSource,
   OUTRO_DEFAULT_TEXT,
   sourceToEdited,
   type VideoEdits
 } from './help-video-edits.js'
+import { CARD_FPS } from './help-video-render-plan.js'
 import { getBrowser } from './pdf-layout.js'
 import { openStoredObject } from './stored-object-stream.js'
 
-// Draws a help video's intro card, outro card and chapter banners as PNGs for
-// the render. The layout itself is help-video-card-design.ts, a copy of the
+// Draws a help video's intro card, outro card and chapter banners as frames
+// for the render: one PNG for a still card, a numbered sequence for a moving
+// one. The layout itself is help-video-card-design.ts, a copy of the
 // shared player's packages/shared/src/components/help-videos/cardDesign.ts
 // (a test fails when they differ); the words come from cardText, which
 // mirrors the player's cards.ts. Like the annotations: every author string goes in through
@@ -148,17 +152,6 @@ export async function loadCardBrand(): Promise<CardBrand> {
   return { name, color, logo }
 }
 
-/** Banner overlays in SOURCE time: each banner's edited window, cut into the
- *  source spans of the kept pieces it crosses (so it honours cuts and speed). */
-export function bannerSourceSpans(
-  e: VideoEdits,
-  banners: CardText['banners']
-): Array<{ index: number; start_ms: number; end_ms: number }> {
-  return banners.flatMap((b, index) =>
-    editedSpanToSource(e, b.start_ms, b.end_ms).map((s) => ({ index, ...s }))
-  )
-}
-
 // The api compiles without the DOM lib; this is the slice the page callback touches.
 interface PageNode {
   style: Record<string, string>
@@ -181,33 +174,124 @@ function isAllowed(url: string): boolean {
   return url === 'about:blank' || url.startsWith('data:')
 }
 
-/** Rasterizes the cards to PNGs in `dir`: intro/outro are opaque full frames,
- *  banners full-frame transparent overlays (one per banner, in order). */
-export async function rasterizeCards(
+/** One card or banner as the render reads it. */
+export interface CardClip {
+  /** One PNG (still card) or an image2 pattern `…/f%05d.png` (moving card). */
+  path: string
+  /** True when `path` is an image2 pattern of `frames` images. */
+  sequence: boolean
+  frames: number
+}
+export interface CapturedCards {
+  intro: CardClip | null
+  outro: CardClip | null
+  banners: CardClip[]
+}
+
+/** The motion of a card at `t_ms` into it: the shared player's cardMotionAt
+ *  (packages/shared/src/components/help-videos/cards.ts). */
+export function cardMotionAt(
+  e: VideoEdits,
+  side: 'intro' | 'outro',
+  t_ms: number
+): CardMotion | undefined {
+  const c = e[side]
+  if (!c) return undefined
+  return {
+    t_ms,
+    duration_ms: c.duration_ms,
+    animation: c.animation ?? 'none',
+    transition: c.transition ?? 'cut',
+    side
+  }
+}
+
+/** A banner's motion: the shared player's bannerMotionAt. */
+export function bannerMotionAt(
+  e: VideoEdits,
+  w: { start_ms: number; end_ms: number },
+  editedMs: number
+): CardMotion {
+  return {
+    t_ms: editedMs - w.start_ms,
+    duration_ms: w.end_ms - w.start_ms,
+    animation: e.banner_animation ?? 'none',
+    transition: 'cut',
+    side: 'banner'
+  }
+}
+
+/** Which frames of a card need their own screenshot: the first always, then
+ *  any frame whose look differs from the frame before it. Frame i is at
+ *  i * 1000 / CARD_FPS ms. */
+export function planCardFrames(frames: number, m: CardMotion | undefined): boolean[] {
+  const moves = !!m && !(m.animation === 'none' && m.transition === 'cut')
+  const at = (i: number) => (i * 1000) / CARD_FPS
+  return Array.from({ length: frames }, (_, i) =>
+    i === 0 ? true : !!m && moves && !isStill(m, at(i - 1), at(i))
+  )
+}
+
+/** Every node's CSS in the order the page creates its elements (the page
+ *  walks the tree breadth first with a queue; this walks it the same way). */
+function cssInOrder(tree: CardNode): string[] {
+  const out: string[] = []
+  const queue: CardNode[] = [tree]
+  while (queue.length) {
+    const node = queue.shift() as CardNode
+    out.push(node.css)
+    for (const child of node.children ?? []) queue.push(child)
+  }
+  return out
+}
+
+/** The cards as frames in `dir`: a still card is one PNG, a moving card a
+ *  numbered sequence where only frames that change are screenshotted and the
+ *  rest are hard links to the frame before. Every frame is transparent where
+ *  the card is (an intro's transition shows the recording through it).
+ *  Banners are full-frame transparent overlays timed in edited time. */
+export async function captureCards(
   text: CardText,
   brand: CardBrandShown,
   size: { width: number; height: number },
-  dir: string
-): Promise<{ intro: string | null; outro: string | null; banners: string[] }> {
-  const out = {
-    intro: null as string | null,
-    outro: null as string | null,
-    banners: [] as string[]
+  dir: string,
+  e: VideoEdits
+): Promise<CapturedCards> {
+  type Job = {
+    name: string
+    frames: number
+    motion: CardMotion | undefined
+    build: (t: number) => CardNode
   }
-  const jobs: Array<{ tree: CardNode; path: string; opaque: boolean }> = []
-  if (text.intro) {
-    out.intro = join(dir, 'card-intro.png')
-    jobs.push({ tree: introTree(text.intro, brand, size.width), path: out.intro, opaque: true })
+  const framesOf = (ms: number) => Math.max(1, Math.round((ms / 1000) * CARD_FPS))
+  const jobs: Job[] = []
+  if (text.intro && e.intro) {
+    const c = text.intro
+    jobs.push({
+      name: 'intro',
+      frames: framesOf(e.intro.duration_ms),
+      motion: cardMotionAt(e, 'intro', 0),
+      build: (t) => introTree(c, brand, size.width, cardMotionAt(e, 'intro', t))
+    })
   }
-  if (text.outro) {
-    out.outro = join(dir, 'card-outro.png')
-    jobs.push({ tree: outroTree(text.outro, brand, size.width), path: out.outro, opaque: true })
+  if (text.outro && e.outro) {
+    const c = text.outro
+    jobs.push({
+      name: 'outro',
+      frames: framesOf(e.outro.duration_ms),
+      motion: cardMotionAt(e, 'outro', 0),
+      build: (t) => outroTree(c, brand, size.width, cardMotionAt(e, 'outro', t))
+    })
   }
   text.banners.forEach((b, i) => {
-    const path = join(dir, `card-banner-${i + 1}.png`)
-    out.banners.push(path)
-    jobs.push({ tree: bannerTree(b, brand, size.width), path, opaque: false })
+    jobs.push({
+      name: `banner-${i + 1}`,
+      frames: framesOf(b.end_ms - b.start_ms),
+      motion: bannerMotionAt(e, b, b.start_ms),
+      build: (t) => bannerTree(b, brand, size.width, bannerMotionAt(e, b, b.start_ms + t))
+    })
   })
+  const out: CapturedCards = { intro: null, outro: null, banners: [] }
   if (!jobs.length) return out
   const browser = await getBrowser()
   const page = await browser.newPage()
@@ -221,16 +305,30 @@ export async function rasterizeCards(
     await page.setViewport({ width: size.width, height: size.height })
     await page.setContent(PAGE, { waitUntil: 'load', timeout: SET_CONTENT_TIMEOUT_MS })
     for (const job of jobs) {
+      const plan = planCardFrames(job.frames, job.motion)
+      const moving = plan.some((p, i) => i > 0 && p)
+      const folder = moving ? join(dir, `card-${job.name}`) : dir
+      if (moving) await mkdir(folder, { recursive: true })
+      const fileAt = (i: number) =>
+        moving
+          ? join(folder, `f${String(i + 1).padStart(5, '0')}.png`)
+          : join(dir, `card-${job.name}.png`)
       // Runs inside Chromium as source text: no named functions (tsx's
       // keepNames would wrap them in a helper the page does not have), so the
-      // tree is walked with an explicit stack.
+      // tree is walked with an explicit queue. The created elements are kept
+      // in creation order so later frames only rewrite their CSS.
       await page.evaluate(
         async (data) => {
-          const document = (globalThis as unknown as { document: PageDocument }).document
+          const g = globalThis as unknown as {
+            document: PageDocument
+            __nvrCardNodes: PageNode[]
+          }
+          const document = g.document
           const root = document.getElementById('root') as PageNode
           root.style.width = `${data.W}px`
           root.style.height = `${data.H}px`
           root.textContent = ''
+          g.__nvrCardNodes = []
           const stack: Array<{ node: CardNode; parent: PageNode }> = [
             { node: data.tree, parent: root }
           ]
@@ -242,17 +340,38 @@ export async function rasterizeCards(
               el.setAttribute('src', node.src)
             } else if (node.text !== undefined) el.textContent = node.text
             parent.appendChild(el)
+            g.__nvrCardNodes.push(el)
             for (const child of node.children ?? []) stack.push({ node: child, parent: el })
           }
           await Promise.all(Array.from(document.images).map((i) => i.decode().catch(() => null)))
         },
-        { tree: job.tree, W: size.width, H: size.height }
+        { tree: job.build(0), W: size.width, H: size.height }
       )
-      await page.screenshot({
-        path: job.path as `${string}.png`,
-        omitBackground: !job.opaque,
-        type: 'png'
-      })
+      let last = ''
+      for (let i = 0; i < (moving ? job.frames : 1); i++) {
+        const path = fileAt(i)
+        if (!plan[i]) {
+          await link(last, path).catch(() => copyFile(last, path))
+          continue
+        }
+        if (i > 0) {
+          await page.evaluate(
+            (list) => {
+              const nodes = (globalThis as unknown as { __nvrCardNodes: PageNode[] }).__nvrCardNodes
+              for (let k = 0; k < list.length; k++) nodes[k].style.cssText = list[k]
+            },
+            cssInOrder(job.build((i * 1000) / CARD_FPS))
+          )
+        }
+        await page.screenshot({ path: path as `${string}.png`, omitBackground: true, type: 'png' })
+        last = path
+      }
+      const clip: CardClip = moving
+        ? { path: join(folder, 'f%05d.png'), sequence: true, frames: job.frames }
+        : { path: fileAt(0), sequence: false, frames: 1 }
+      if (job.name === 'intro') out.intro = clip
+      else if (job.name === 'outro') out.outro = clip
+      else out.banners.push(clip)
     }
   } finally {
     await page.close().catch(() => null)
