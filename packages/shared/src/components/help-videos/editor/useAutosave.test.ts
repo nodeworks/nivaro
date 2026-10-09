@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query'
 import { act, createElement, useReducer } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { helpVideoKeys } from '../api'
 import type { VersionDto, VideoEdits } from '../types'
 import { type History, type HistoryAction, historyReducer, initHistory } from './history'
 import { useAutosave } from './useAutosave'
@@ -254,5 +255,49 @@ describe('useAutosave', () => {
     expect(api.save.status).toBe('saved')
     await wait(5000)
     expect(puts()).toHaveLength(1)
+  })
+})
+
+describe('useAutosave while the video refetches after a save', () => {
+  let release: () => void = () => {}
+  let fetches = 0
+
+  function Observed({ initial }: { initial: VideoEdits }) {
+    // The editor's video query: active, so the save's invalidation refetches it.
+    useQuery({
+      queryKey: helpVideoKeys.one('v1'),
+      queryFn: () => {
+        fetches += 1
+        return fetches === 1 ? Promise.resolve({}) : new Promise((r) => (release = () => r({})))
+      }
+    })
+    const [h, dispatch] = useReducer(historyReducer, initial, initHistory)
+    const save = useAutosave('v1', h.present, 'h0')
+    api = { h, dispatch, save }
+    return null
+  }
+
+  it('reports refreshing from the save landing until the refetched video arrives', async () => {
+    fetches = 0
+    request.mockImplementation(async (c) => version(c._body.edits, 'h1'))
+    root = createRoot(document.createElement('div'))
+    await act(async () =>
+      root.render(
+        createElement(
+          QueryClientProvider,
+          { client: new QueryClient() },
+          createElement(Observed, { initial: e(1000) })
+        )
+      )
+    )
+    expect(api.save.refreshing).toBe(false)
+    await change(e(2000))
+    await wait(1100)
+    // Saved, but `draft_matches_published` has not been refetched yet.
+    expect(api.save.status).toBe('saved')
+    expect(api.save.unsaved).toBe(false)
+    expect(api.save.refreshing).toBe(true)
+    await act(async () => release())
+    expect(api.save.refreshing).toBe(false)
   })
 })

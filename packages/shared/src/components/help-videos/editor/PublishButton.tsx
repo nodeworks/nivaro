@@ -40,7 +40,8 @@ export function PublishButton({
   video: HelpVideoDto
   /** The editor's current edits (the draft's stored ones when not given). */
   edits?: VideoEdits
-  /** Edits not saved yet: the server's "nothing changed" may be out of date. */
+  /** Edits not saved yet, or saved but the refetched video has not arrived: the
+   *  server's "nothing changed" may be out of date. */
   pending?: boolean
   // Lands the editor's pending save. False means it failed: nothing is published.
   beforePublish: () => Promise<boolean>

@@ -44,6 +44,9 @@ export function useAutosave(
   const [status, setStatus] = useState<AutosaveStatus>('idle')
   const [message, setMessage] = useState<string | null>(null)
   const [retryInMs, setRetryInMs] = useState<number | null>(null)
+  // The video is refetching after a save: until it lands, the server's
+  // `draft_matches_published` still describes the edits from before the save.
+  const [refreshing, setRefreshing] = useState(0)
   // Timers and the save chain read refs, so a status change never re-runs the
   // schedule effect (which would PUT the same edits again, forever).
   const statusRef = useRef<AutosaveStatus>('idle')
@@ -105,7 +108,13 @@ export function useAutosave(
       setRetryInMs(null)
       setMessage(null)
       mark('saved')
-      void qc.invalidateQueries({ queryKey: helpVideoKeys.one(videoId) })
+      setRefreshing((n) => n + 1)
+      void qc
+        .invalidateQueries({ queryKey: helpVideoKeys.one(videoId) })
+        .catch(() => undefined)
+        .finally(() => {
+          if (live.current) setRefreshing((n) => Math.max(0, n - 1))
+        })
     } catch (err) {
       const e = helpVideoError(err)
       if (e?.status === 409 && e.code === 'HELP_VIDEO_EDITS_CONFLICT') {
@@ -198,5 +207,14 @@ export function useAutosave(
     status === 'conflict'
   useLeaveWarning(unsaved)
 
-  return { status, message, hash: hash.current, retryInMs, unsaved, flush }
+  return {
+    status,
+    message,
+    hash: hash.current,
+    retryInMs,
+    unsaved,
+    /** True from a save landing until the refetched video arrives. */
+    refreshing: refreshing > 0,
+    flush
+  }
 }
