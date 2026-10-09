@@ -144,9 +144,17 @@ export function parseVisibility(raw: unknown): Visibility {
  *  the author roles, and every video's visibility list. A list that empties
  *  stays limited (authors and admins only); it never opens to everyone. */
 export async function forgetHelpVideoRole(roleId: string): Promise<void> {
-  if (!isUuid(roleId)) return
-  const rid = up(roleId)
-  await db('nivaro_help_video_requirements').where({ role_id: roleId }).delete()
+  // The database accepts spellings of a role id that are not an exact uuid
+  // ('{...}', trailing characters), and the role delete uses that same match.
+  // Resolve the row and work from its own id. A value the database cannot
+  // read as a uuid errors here, exactly as the role delete itself will.
+  const role = await db('nivaro_roles')
+    .where({ id: roleId })
+    .first('id')
+    .catch(() => null)
+  if (!role) return
+  const rid = up(role.id)
+  await db('nivaro_help_video_requirements').where({ role_id: rid }).delete()
   const settings = await db('nivaro_settings')
     .where({ id: 1 })
     .first('help_video_author_roles')

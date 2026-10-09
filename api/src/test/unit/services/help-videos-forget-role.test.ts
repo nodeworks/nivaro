@@ -17,6 +17,10 @@ const t = vi.hoisted(() => ({
 
 vi.mock('../../../db/index.js', () => {
   const same = (a: unknown, b: unknown) => String(a).toLowerCase() === String(b).toLowerCase()
+  // SQL Server compares a string with a uniqueidentifier after parsing it: braces
+  // are accepted, case is ignored and anything past 36 characters is dropped.
+  const sameUuid = (a: unknown, b: unknown) =>
+    String(a).toLowerCase() === String(b).replace(/^\{/, '').slice(0, 36).toLowerCase()
   const db = (table: string) => {
     if (!t.tables[table]) t.tables[table] = []
     const rows = t.tables[table]
@@ -33,7 +37,11 @@ vi.mock('../../../db/index.js', () => {
                 .toLowerCase()
                 .includes(needle)
           )
-        } else for (const [k, val] of Object.entries(c)) tests.push((r) => same(r[k], val))
+        } else
+          for (const [k, val] of Object.entries(c))
+            tests.push((r) =>
+              table === 'nivaro_roles' && k === 'id' ? sameUuid(r[k], val) : same(r[k], val)
+            )
         return q
       },
       first: async () => sel()[0],
@@ -114,13 +122,41 @@ describe('forgetHelpVideoRole', () => {
     expect(t.tables.nivaro_settings[0].help_video_author_roles).toBeNull()
   })
 
-  it('ignores an id that is not exactly a uuid', async () => {
-    await forgetHelpVideoRole(`${ROLE}x`)
+  it('ignores an id that names no role', async () => {
+    await forgetHelpVideoRole('not-a-role')
+    await forgetHelpVideoRole('cccccccc-cccc-4ccc-8ccc-cccccccccccc')
     expect(t.log).toEqual([])
   })
+
+  // The database accepts these for the role delete, so the cleanup must follow
+  // the role row's own id or the delete still fails on the requirement rows.
+  for (const [label, spelled] of [
+    ['braces', `{${ROLE}}`],
+    ['upper case', ROLE.toUpperCase()],
+    ['trailing characters', `${ROLE}xyz`]
+  ] as const) {
+    it(`forgets the role when it is named with ${label}`, async () => {
+      await forgetHelpVideoRole(spelled)
+      expect(t.tables.nivaro_help_video_requirements).toEqual([{ video_id: 'V1', role_id: OTHER }])
+      expect(vis('V1')).toEqual({ mode: 'roles', role_ids: [] })
+      expect(vis('V2')).toEqual({ mode: 'roles', role_ids: [OTHER.toUpperCase()] })
+    })
+  }
 })
 
 describe('DELETE /roles/:id', () => {
+  it('a braced role id still clears the requirement rows before the role goes', async () => {
+    const a = Fastify()
+    await a.register(rolesRoutes, { prefix: '/api/roles' })
+    const res = await a.inject({
+      method: 'DELETE',
+      url: `/api/roles/${encodeURIComponent(`{${ROLE}}`)}`
+    })
+    expect(res.statusCode).toBe(204)
+    expect(t.tables.nivaro_help_video_requirements).toEqual([{ video_id: 'V1', role_id: OTHER }])
+    expect(t.tables.nivaro_roles).toEqual([{ id: OTHER }])
+  })
+
   it('forgets the role in help videos before deleting it', async () => {
     const a = Fastify()
     await a.register(rolesRoutes, { prefix: '/api/roles' })
