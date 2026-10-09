@@ -282,6 +282,16 @@ export function setMusic(e: VideoEdits, music: Partial<MusicBed> | null): VideoE
   }
   return { ...rest, music: next } as VideoEdits
 }
+/** The edits key that carries the narration cleanup (#1519) and its default
+ *  (off) — the server's AUDIO_EDIT_KEY / AUDIO_IMPROVE_DEFAULT. */
+export const AUDIO_EDIT_KEY = 'audio' as const
+export const AUDIO_IMPROVE_DEFAULT = false
+/** Narration cleanup on or off. Off removes the key, as the server stores it,
+ *  so a video that never used it keeps its edits_hash. */
+export function setImproveAudio(e: VideoEdits, on: boolean): VideoEdits {
+  const { audio: _drop, ...rest } = e
+  return (on ? { ...rest, audio: { improve: true } } : rest) as VideoEdits
+}
 /** One piece's music share (1 removes the key, as the server stores it). */
 export function setPieceMusic(e: VideoEdits, index: number, share: number): VideoEdits {
   const v = musicShare(share)

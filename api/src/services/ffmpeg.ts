@@ -14,7 +14,15 @@ function run(
   opts: { onStdout?: (s: string) => void; signal?: AbortSignal; lowPriority?: boolean } = {}
 ): Promise<{ stdout: string; stderr: string }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, { stdio: ['ignore', 'pipe', 'pipe'], signal: opts.signal })
+    // A cancel kills at once (SIGKILL: SIGTERM lets ffmpeg flush its encoder
+    // for seconds) and settles only once the child has exited, so whatever
+    // the caller does next (free the render slot, delete the scratch
+    // directory) happens after ffmpeg is gone.
+    const child = spawn(bin, args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      signal: opts.signal,
+      killSignal: 'SIGKILL'
+    })
     if (opts.lowPriority && child.pid) {
       try {
         setPriority(child.pid, 19) // lowest: renders only use CPU that requests leave idle
@@ -32,9 +40,15 @@ function run(
     child.stderr.on('data', (d: Buffer) => {
       stderr = (stderr + d.toString()).slice(-8000)
     })
-    child.on('error', reject)
+    child.on('error', (err) => {
+      // An abort is reported again by 'close' once the process has exited.
+      if (opts.signal?.aborted && child.pid !== undefined) return
+      reject(err)
+    })
     child.on('close', (code) => {
-      if (code === 0) resolve({ stdout, stderr })
+      if (opts.signal?.aborted)
+        reject(Object.assign(new Error(`${bin} was cancelled`), { stderr, name: 'AbortError' }))
+      else if (code === 0) resolve({ stdout, stderr })
       else
         reject(
           Object.assign(new Error(lastLine(stderr) || `${bin} exited with ${code}`), { stderr })
@@ -74,6 +88,13 @@ export function hasFfmpeg(): Promise<boolean> {
       .catch(() => false)
   }
   return available
+}
+
+/** Run ffmpeg with our own fixed arguments and hand back what it printed
+ *  (encoder lists, a trial encode). Rejects on a non-zero exit or the timeout. */
+export async function ffmpegOutput(args: string[], timeoutMs = 15_000): Promise<string> {
+  const { stdout, stderr } = await run(FFMPEG, args, { signal: AbortSignal.timeout(timeoutMs) })
+  return `${stdout}\n${stderr}`
 }
 
 export async function probeVideo(

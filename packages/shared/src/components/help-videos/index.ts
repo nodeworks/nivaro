@@ -26,6 +26,14 @@ export {
   type StartRecordingOptions,
   useHelpVideoRecording
 } from './recorder/HelpVideoRecordingProvider'
+export {
+  type HelpVideoSettingsDto,
+  helpVideoSettingsApi,
+  helpVideoSettingsKeys,
+  type RenderQueueDto,
+  type RenderQueueItem
+} from './settings/api'
+export { RenderSettingsButton } from './settings/RenderSettingsButton'
 export type {
   HelpVideoContext,
   HelpVideoDto,

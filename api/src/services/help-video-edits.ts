@@ -155,6 +155,25 @@ export interface VideoEdits {
   crop?: Rect
   /** Step badge look. Stored only when it differs from STEP_STYLE_DEFAULTS. */
   step_style?: StepStyle
+  /** Narration cleanup (#1519): the render levels its loudness and reduces
+   *  noise. Stored only while on; live playback plays the recording as is. */
+  audio?: AudioEdits
+}
+
+/** The narration cleanup switch (#1519). Only `{ improve: true }` is ever
+ *  stored; off = the key is absent, so older edits keep their edits_hash. */
+export interface AudioEdits {
+  improve: true
+}
+/** The edits key that carries the narration cleanup, and its default (off).
+ *  A house style (#1551) may turn it on for new videos. */
+export const AUDIO_EDIT_KEY = 'audio' as const
+export const AUDIO_IMPROVE_DEFAULT = false
+
+/** `{ improve: true }` or null (off / unreadable). */
+export function normalizeAudio(v: unknown): AudioEdits | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  return (v as { improve?: unknown }).improve === true ? { improve: true } : null
 }
 
 export const ALLOWED_SPEEDS: Speed[] = [0.5, 1, 1.5, 2, 4]
@@ -392,6 +411,8 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   if (crop) out.crop = crop
   const stepStyle = normalizeStepStyle(o.step_style)
   if (stepStyle) out.step_style = stepStyle
+  const audio = normalizeAudio(o.audio)
+  if (audio) out.audio = audio
   return out
 }
 

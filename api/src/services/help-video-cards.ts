@@ -271,7 +271,9 @@ export async function captureCards(
   brand: CardBrandShown,
   size: { width: number; height: number },
   dir: string,
-  e: VideoEdits
+  e: VideoEdits,
+  /** Cancel (#1532): closes the page; the capture throws at the next frame. */
+  signal?: AbortSignal
 ): Promise<CapturedCards> {
   type Job = {
     name: string
@@ -309,8 +311,12 @@ export async function captureCards(
   })
   const out: CapturedCards = { intro: null, outro: null, banners: [] }
   if (!jobs.length) return out
+  signal?.throwIfAborted()
   const browser = await getBrowser()
   const page = await browser.newPage()
+  // The browser is shared (PDFs use it too): a cancel closes this page only.
+  const onAbort = () => void page.close().catch(() => null)
+  signal?.addEventListener('abort', onAbort, { once: true })
   try {
     await page.setRequestInterception(true)
     page.on('request', (req) => {
@@ -365,6 +371,7 @@ export async function captureCards(
       )
       let last = ''
       for (let i = 0; i < (moving ? job.frames : 1); i++) {
+        signal?.throwIfAborted()
         const path = fileAt(i)
         if (!plan[i]) {
           await link(last, path).catch(() => copyFile(last, path))
@@ -390,6 +397,7 @@ export async function captureCards(
       else out.banners.push(clip)
     }
   } finally {
+    signal?.removeEventListener('abort', onAbort)
     await page.close().catch(() => null)
   }
   return out

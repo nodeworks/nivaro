@@ -5,7 +5,8 @@ import {
   HelpVideoLibrary,
   ItemEditAuthContext,
   NavigationContext,
-  NivaroProvider
+  NivaroProvider,
+  RenderSettingsButton
 } from '@nivaro/shared'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useAuth } from '@/lib/auth'
@@ -46,7 +47,12 @@ export function HelpVideosPage() {
               editId={params.get('edit')}
               onWatch={(id) => set('watch', id)}
               onEdit={(id) => set('edit', id)}
-              headerExtra={<AuthorRolesButton />}
+              headerExtra={
+                <>
+                  <AuthorRolesButton />
+                  <RenderSettingsButton />
+                </>
+              }
             />
           </ItemEditAuthContext.Provider>
         </NavigationContext.Provider>

@@ -31,6 +31,9 @@ export function renderLabel(v: VersionDto | null | undefined): {
         ? { text: 'Ready', tone: 'good' }
         : { text: 'Older render — re-render to include the latest edits', tone: 'neutral' }
     case 'failed':
+      // A cancel (#1532) is not a failure: it plays with live edits until
+      // someone renders it again.
+      if (v.render_error?.startsWith('Cancelled')) return { text: v.render_error, tone: 'neutral' }
       return { text: `Render failed: ${v.render_error ?? 'unknown error'}`, tone: 'bad' }
     case 'unavailable':
       return { text: 'Plays with live edits (no renderer on this server)', tone: 'neutral' }
@@ -68,8 +71,9 @@ export function blindRequiredRoles(visibility: Visibility, required: string[]): 
  * keep the two in step): viewers can't be handed the original recording when
  * the edits hide or cut something, so they wait for the render. Blurs,
  * callouts (opaque panels), boxes (their label can cover a field), steps
- * (opaque badges), a crop, a trim or a cut each mean waiting; so do intro/outro cards, chapter banners and
- * background music (the original has none), and an unknown length.
+ * (opaque badges), a crop, a trim or a cut each mean waiting; so do
+ * intro/outro cards, chapter banners, background music and cleaned-up
+ * narration (the original has none of them), and an unknown length.
  */
 export function viewersWaitForRender(edits: VideoEdits, sourceMs: number | null): boolean {
   const src = Math.round(Number(sourceMs))
@@ -77,6 +81,7 @@ export function viewersWaitForRender(edits: VideoEdits, sourceMs: number | null)
   if (edits.blurs.length) return true
   if (edits.intro || edits.outro || edits.chapter_banners) return true
   if (edits.music) return true
+  if (edits.audio?.improve) return true
   if (edits.annotations.some((a) => a.type === 'callout' || a.type === 'box' || a.type === 'step'))
     return true
   if (edits.crop) return true

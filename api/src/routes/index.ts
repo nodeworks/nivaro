@@ -92,6 +92,7 @@ import { geocodeBackfillRoutes } from './geocode-backfill.js'
 import { geocodeSuggestRoutes } from './geocode-suggest.js'
 import { globalSearchRoutes } from './global-search.js'
 import { healthRoutes } from './health.js'
+import { helpVideoAdminRoutes } from './help-video-admin.js'
 import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
 import { importTemplatesRoutes } from './import-templates.js'
@@ -399,6 +400,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(rolesRoutes, { prefix: '/roles' })
   await app.register(filesRoutes, { prefix: '/files' })
   await app.register(helpVideosRoutes, { prefix: '/help-videos' })
+  // Settings + render queue (admin); static paths beside helpVideosRoutes' /:id.
+  await app.register(helpVideoAdminRoutes, { prefix: '/help-videos' })
   // Stream / captions / poster: no authenticate hook — a signed ?st= ticket
   // authorises them, since <video>/<track>/<img> cannot send a bearer token.
   await app.register(helpVideoMediaRoutes, { prefix: '/help-videos' })

@@ -9,6 +9,7 @@ import { ChaptersPanel } from './ChaptersPanel'
 import { Inspector } from './Inspector'
 import { SideSection, useOpenSections } from './layout'
 import { MusicPanel } from './MusicPanel'
+import { NarrationPanel } from './NarrationPanel'
 import { ClickRipples, PosterPicker } from './PosterAndClicks'
 import type { Selection } from './Timeline'
 import { sentence } from './timeline/useBarDrag'
@@ -141,7 +142,7 @@ export const EditorSidebar = memo(function EditorSidebar({
 
   return (
     <aside
-      aria-label='Selected item, chapters, captions, cards and music'
+      aria-label='Selected item, chapters, captions, cards, music and narration'
       data-hvx-side
       data-hv-sidebar
     >
@@ -258,6 +259,15 @@ export const EditorSidebar = memo(function EditorSidebar({
           onChange={onChange}
           onNote={onNote}
         />
+      </SideSection>
+      <SideSection
+        id='narration'
+        title='Narration'
+        summary={edits.audio?.improve ? 'Improved' : 'As recorded'}
+        open={open.has('narration')}
+        onToggle={toggle}
+      >
+        <NarrationPanel edits={edits} onChange={onChange} />
       </SideSection>
       <SideSection
         id='poster'

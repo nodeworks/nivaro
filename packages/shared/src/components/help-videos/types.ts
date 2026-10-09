@@ -171,6 +171,9 @@ export interface VideoEdits {
   crop?: Rect
   /** Step badge look; stored only when not STEP_STYLE_DEFAULTS. */
   step_style?: StepStyle
+  /** Narration cleanup (#1519): loudness levelling + noise reduction in the
+   *  render. Stored only while on; live playback plays the recording as is. */
+  audio?: { improve: true }
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }

@@ -380,6 +380,7 @@ export {
   RecordSubscribeButton,
   RelatedRecordsPanel,
   RelationCombobox,
+  RenderSettingsButton,
   ReportView,
   ReportWidgetCard,
   RequiredVideosCard,

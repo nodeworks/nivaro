@@ -5,6 +5,7 @@ import { Activity, GitBranch, Pencil, Play, RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { HelpVideoRenderQueue } from '@/components/help-video-render-queue'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { describeCron } from '@/lib/cron-text'
@@ -756,6 +757,9 @@ export default function BackgroundJobs() {
             })}
           </div>
         )}
+
+        {/* help-video renders (#1532): queue order, progress, estimates, cancel */}
+        <HelpVideoRenderQueue />
 
         {/* cron roster */}
         <div className='rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>

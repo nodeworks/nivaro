@@ -25,11 +25,23 @@ import {
   stepStyleOf,
   type VideoEdits
 } from './help-video-edits.js'
+import {
+  markHardwareFailed,
+  planVideoEncode,
+  softwarePlan,
+  type VideoEncodePlan
+} from './help-video-encoder.js'
 import { musicForRender } from './help-video-music.js'
-import { buildPosterArgs, buildRenderArgs, renderSizes } from './help-video-render-plan.js'
+import {
+  buildPosterArgs,
+  buildRenderArgs,
+  type RenderInput,
+  renderSizes
+} from './help-video-render-plan.js'
+import { ENCODER_DEFAULTS, renderEncoderSettings } from './help-video-settings.js'
 import { discardFile, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
-import { isCancelled } from './job-cancel.js'
+import { isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
 import { openStoredObject } from './stored-object-stream.js'
 
@@ -63,6 +75,12 @@ let idle: Promise<void> = Promise.resolve()
 let scratchCleaned = false
 /** Versions this (non-owner) process published and still has to render. */
 const pending = new Set<string>()
+/** Renders running in this process, by version key: Cancel aborts them. */
+const active = new Map<string, { abort: AbortController; runId: number | null }>()
+/** How often a running render checks for a cancel (flag) and for its claim
+ *  (a cancel from another process, or a purge, takes the row away). */
+const CANCEL_POLL_MS = 1000
+const CLAIM_POLL_MS = 5000
 
 type Outcome = 'ready' | 'failed' | 'unavailable' | 'skipped'
 
@@ -219,6 +237,29 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
   const run = await startJobRun('render', `help-video:${key}`, { label: 'Render help video' })
   const dir = join(videoWorkDir(), 'render', `${key}-${randomUUID().slice(0, 8)}`)
   const abort = new AbortController()
+  active.set(key, { abort, runId: run.id })
+  // Cancel (#1532): this process's flag every second; the claim every few
+  // seconds, so a cancel made on another process (it fails the row) or a
+  // purge stops this render too, instead of encoding to the end.
+  let lastClaimCheck = Date.now()
+  const watch = setInterval(() => {
+    if (abort.signal.aborted) return
+    if (run.id !== null && isCancelled(run.id)) abort.abort()
+    else if (Date.now() - lastClaimCheck >= CLAIM_POLL_MS) {
+      lastClaimCheck = Date.now()
+      void claimed(versionId, token)
+        .first('id')
+        .then((row) => {
+          if (!row) abort.abort()
+        })
+        .catch(() => null)
+    }
+  }, CANCEL_POLL_MS)
+  watch.unref?.()
+  const stopIfCancelled = () => {
+    if (abort.signal.aborted) throw new Error('The render was cancelled')
+  }
+  let encoderNote = ''
   try {
     await mkdir(dir, { recursive: true })
     const edits: VideoEdits = normalizeEdits(
@@ -249,6 +290,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
       steps: stepNumbers(edits),
       stepStyle: stepStyleOf(edits)
     })
+    stopIfCancelled()
     // Intro / outro cards and chapter banners, in the instance brand. The
     // card text falls back to the video's title and description as they are
     // now, at render time.
@@ -261,8 +303,16 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     )
     const hasCards = !!(text.intro || text.outro || text.banners.length)
     const captured: CapturedCards = hasCards
-      ? await captureCards(text, shownBrand(await loadCardBrand(), edits), size, dir, edits)
+      ? await captureCards(
+          text,
+          shownBrand(await loadCardBrand(), edits),
+          size,
+          dir,
+          edits,
+          abort.signal
+        )
       : { intro: null, outro: null, banners: [] }
+    stopIfCancelled()
     // Banners are timed in edited time, over the finished picture.
     const banners = text.banners.map((b, i) => ({
       ...captured.banners[i],
@@ -274,53 +324,95 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     const total = Math.max(1, editedDuration(edits))
     let lastWrite = 0
     const out = join(dir, 'video.mp4')
-    await runFfmpeg(
-      buildRenderArgs({
-        edits,
-        width,
-        height,
-        hasAudio: probe.has_audio,
-        sourcePath,
-        sourceMime,
-        overlays,
-        banners,
-        // A card with a transition sits over the recording's edge frame.
-        intro:
-          captured.intro && edits.intro
-            ? {
-                ...captured.intro,
-                duration_ms: edits.intro.duration_ms,
-                over_frame: !!edits.intro.transition
-              }
-            : null,
-        outro:
-          captured.outro && edits.outro
-            ? {
-                ...captured.outro,
-                duration_ms: edits.outro.duration_ms,
-                over_frame: !!edits.outro.transition
-              }
-            : null,
-        music,
-        outputPath: out,
-        threads: renderThreads()
-      }),
-      (ms) => {
-        if (run.id !== null && isCancelled(run.id)) abort.abort()
-        const pct = Math.min(99, Math.round((ms / total) * 100))
-        run.progress({ percent: pct })
-        if (Date.now() - lastWrite > 2000) {
-          lastWrite = Date.now()
-          // Guarded by the claim, so a late write never lands after the
-          // final update or on someone else's render.
-          void claimed(versionId, token)
-            .update({ render_progress: pct })
-            .catch(() => null)
-        }
-      },
-      abort.signal,
-      { lowPriority: true }
-    )
+    stopIfCancelled()
+    const base: RenderInput = {
+      edits,
+      width,
+      height,
+      hasAudio: probe.has_audio,
+      sourcePath,
+      sourceMime,
+      overlays,
+      banners,
+      // A card with a transition sits over the recording's edge frame.
+      intro:
+        captured.intro && edits.intro
+          ? {
+              ...captured.intro,
+              duration_ms: edits.intro.duration_ms,
+              over_frame: !!edits.intro.transition
+            }
+          : null,
+      outro:
+        captured.outro && edits.outro
+          ? {
+              ...captured.outro,
+              duration_ms: edits.outro.duration_ms,
+              over_frame: !!edits.outro.transition
+            }
+          : null,
+      music,
+      outputPath: out,
+      threads: renderThreads()
+    }
+    // The encoder (#1561): the settings' choice, hardware when allowed and
+    // working here. A hardware encode that fails is retried once in software.
+    const settings = await renderEncoderSettings().catch(() => ENCODER_DEFAULTS)
+    let plan = await planVideoEncode(settings, size, total)
+    // Progress over the whole encode: a two-pass encode reports its first
+    // pass as 0-50 % and its second as 50-99 %.
+    const progress = (from: number, share: number) => (ms: number) => {
+      if (run.id !== null && isCancelled(run.id)) abort.abort()
+      const pct = Math.min(99, Math.round((from + share * Math.min(1, ms / total)) * 100))
+      run.progress({ percent: pct, encoder: plan.label })
+      if (Date.now() - lastWrite > 2000) {
+        lastWrite = Date.now()
+        // Guarded by the claim, so a late write never lands after the
+        // final update or on someone else's render. Nothing updated = the
+        // claim is gone (cancelled elsewhere, purged): stop.
+        void claimed(versionId, token)
+          .update({ render_progress: pct })
+          .then((n) => {
+            if (!Number(n)) abort.abort()
+          })
+          .catch(() => null)
+      }
+    }
+    const encode = async (p: VideoEncodePlan) => {
+      if (p.twoPass) {
+        const logfile = join(dir, 'x264-pass')
+        await runFfmpeg(
+          buildRenderArgs({ ...base, video: p, pass: { n: 1, logfile } }),
+          progress(0, 0.5),
+          abort.signal,
+          { lowPriority: true }
+        )
+        stopIfCancelled()
+        await runFfmpeg(
+          buildRenderArgs({ ...base, video: p, pass: { n: 2, logfile } }),
+          progress(0.5, 0.5),
+          abort.signal,
+          { lowPriority: true }
+        )
+      } else {
+        await runFfmpeg(buildRenderArgs({ ...base, video: p }), progress(0, 1), abort.signal, {
+          lowPriority: true
+        })
+      }
+    }
+    try {
+      await encode(plan)
+    } catch (err) {
+      if (abort.signal.aborted || plan.kind === 'libx264') throw err
+      warn(`hardware encoder ${plan.kind} failed rendering ${key}; retrying in software`, err)
+      markHardwareFailed(plan.kind)
+      const failedKind = plan.kind
+      plan = softwarePlan(settings, size, total)
+      encoderNote = ` (${failedKind} failed; encoded in software)`
+      await rm(out, { force: true }).catch(() => null)
+      await encode(plan)
+    }
+    encoderNote = ` · ${plan.label}${encoderNote}`
     const vttPath = join(dir, 'captions.vtt')
     await writeFile(vttPath, captionsToVtt(edits))
     const posterPath = join(dir, 'poster.jpg')
@@ -384,18 +476,81 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     // An old file that will not delete is no longer referenced, so it would be
     // listable: discardFile parks it where the guard covers and the purge retries.
     for (const f of old) await discardFile(owner, f)
-    await run.complete(`rendered ${Math.round(total / 1000)} s`)
+    await run.complete(`rendered ${Math.round(total / 1000)} s${encoderNote}`)
     return 'ready'
   } catch (err) {
-    const reason = abort.signal.aborted ? 'The render was cancelled' : friendlyRenderError(err)
+    if (abort.signal.aborted) {
+      // A cancel from the queue has already failed the row with its reason
+      // (then this update changes nothing); one from Background Jobs has not.
+      await claimed(versionId, token)
+        .update({ render_status: 'failed', render_error: CANCELLED_REASON, render_progress: null })
+        .catch(() => null)
+      await run.complete('cancelled: the version plays with its edits applied live')
+      if (run.id !== null) {
+        await db('nivaro_job_runs')
+          .where('id', run.id)
+          .update({ status: 'cancelled' })
+          .catch(() => null)
+      }
+      return 'failed'
+    }
     await claimed(versionId, token)
-      .update({ render_status: 'failed', render_error: reason, render_progress: null })
+      .update({
+        render_status: 'failed',
+        render_error: friendlyRenderError(err),
+        render_progress: null
+      })
       .catch(() => null)
     await run.fail(err)
     return 'failed'
   } finally {
+    clearInterval(watch)
+    active.delete(key)
     await rm(dir, { recursive: true, force: true }).catch(() => null)
   }
+}
+
+/** What a cancelled version says (the editor's render status). Starts with
+ *  "Cancelled": the editor reads that prefix as a cancel, not a failure. */
+export const CANCELLED_REASON =
+  'Cancelled. It plays with its edits applied live until it is rendered again.'
+
+/** Cancel a queued or running render (#1532). The row goes to 'failed' with a
+ *  cancel reason: viewers keep live playback, and nothing re-queues it (the
+ *  sweep only re-queues rows still 'rendering'). An author queues it again
+ *  with Render again in the editor (POST /help-videos/:id/render). A render
+ *  running in this process is aborted at once (ffmpeg and the card page are
+ *  killed; the heavy slot is released as the render returns); one running on
+ *  another process stops at its next claim check (within about 5 s). */
+export async function cancelRender(
+  versionId: string,
+  byName: string | null
+): Promise<{ cancelled: boolean; was: string | null }> {
+  const key = String(versionId).toLowerCase()
+  const row = (await db(VERSIONS).where({ id: versionId }).first('render_status')) as
+    | { render_status?: string }
+    | undefined
+  const was = row?.render_status ? String(row.render_status) : null
+  const who = byName?.trim().slice(0, 120)
+  const reason = who
+    ? `Cancelled by ${who}. It plays with its edits applied live until it is rendered again.`
+    : CANCELLED_REASON
+  const n = await db(VERSIONS)
+    .where({ id: versionId })
+    .whereIn('render_status', ['queued', 'rendering'])
+    .update({ render_status: 'failed', render_error: reason, render_progress: null })
+  pending.delete(key)
+  const local = active.get(key)
+  if (local) {
+    if (local.runId !== null) requestCancel(local.runId)
+    local.abort.abort()
+  }
+  return { cancelled: Number(n) > 0, was }
+}
+
+/** The version keys rendering in this process right now. */
+export function activeRenderKeys(): string[] {
+  return [...active.keys()]
 }
 
 /** Re-queue renders whose process died mid-render, then kick (owners only).

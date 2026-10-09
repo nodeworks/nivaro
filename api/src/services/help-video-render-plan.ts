@@ -1,3 +1,4 @@
+import { devNull } from 'node:os'
 import { lockedInputArgs } from './ffmpeg.js'
 import {
   bodyDuration,
@@ -9,6 +10,7 @@ import {
   type VideoEdits,
   zoomInView
 } from './help-video-edits.js'
+import { DEFAULT_VIDEO_ARGS, type VideoEncodePlan } from './help-video-encoder.js'
 
 // Builds the single ffmpeg pass that bakes a help video's edits into an MP4.
 // Everything is applied in SOURCE time — blur, annotation overlays, crop, zoom
@@ -42,7 +44,18 @@ export interface RenderInput {
   music?: { path: string; mime: string } | null
   outputPath: string
   threads: number
+  /** How the picture is encoded (#1561). Absent = libx264 veryfast / CRF 23. */
+  video?: Pick<VideoEncodePlan, 'inputArgs' | 'hwFilter' | 'videoArgs'>
+  /** One pass of a two-pass encode: pass 1 writes only the log (no file). */
+  pass?: { n: 1 | 2; logfile: string }
 }
+
+/** The narration cleanup (#1519): spectral noise reduction, then loudness
+ *  levelling to about -16 LUFS (single-pass loudnorm), back at 48 kHz
+ *  (loudnorm works at 192 kHz). Applied to the whole narration, cards'
+ *  silence included, before the music is ducked under it. */
+export const IMPROVE_AUDIO_TARGET_LUFS = -16
+export const IMPROVE_AUDIO_FILTER = `afftdn=nr=12:nf=-50:tn=1,loudnorm=I=${IMPROVE_AUDIO_TARGET_LUFS}:TP=-1.5:LRA=11,aresample=48000`
 
 /** One card or banner as captured: one PNG (`sequence` false) or an image2
  *  pattern of `frames` numbered PNGs. */
@@ -311,7 +324,11 @@ export function buildRenderArgs(input: RenderInput): string[] {
     throw new Error(`Unsupported music format: ${music.mime}`)
   }
   const needsMix = ticks.length > 0 || !!music
-  const nar = needsMix ? 'anar' : 'aout'
+  const narOut = needsMix ? 'anar' : 'aout'
+  // With the narration cleanup on, the edited narration lands on [araw] and
+  // is cleaned onto narOut before anything is mixed over it.
+  const improve = !!e.audio?.improve && input.hasAudio
+  const nar = improve ? 'araw' : narOut
   const withAudio = input.hasAudio || needsMix
   // With a card the kept recording is one piece of a final concat.
   const cards = [input.intro, input.outro].filter(Boolean).length > 0
@@ -411,6 +428,8 @@ export function buildRenderArgs(input: RenderInput): string[] {
     )
   }
 
+  if (improve) parts.push(`[araw]${IMPROVE_AUDIO_FILTER},${AUDIO_FORMAT}[${narOut}]`)
+
   // Chapter banners over the finished picture, each from its edited start: a
   // held PNG or a frame sequence, offset so its first frame lands there.
   if (banners.length) {
@@ -487,6 +506,17 @@ export function buildRenderArgs(input: RenderInput): string[] {
     }
   }
 
+  // A hardware encoder takes the finished picture on its device.
+  const hwFilter = input.video?.hwFilter
+  if (hwFilter) {
+    parts.push(`[vout]${hwFilter}[vhw]`)
+    maps[1] = '[vhw]'
+  }
+  const pass = input.pass
+  const passArgs = pass ? ['-pass', String(pass.n), '-passlogfile', pass.logfile] : []
+  const output =
+    pass?.n === 1 ? ['-f', 'null', devNull] : ['-movflags', '+faststart', input.outputPath]
+
   return [
     '-y',
     '-v',
@@ -495,6 +525,7 @@ export function buildRenderArgs(input: RenderInput): string[] {
     String(input.threads),
     '-filter_complex_threads',
     '1',
+    ...(input.video?.inputArgs ?? []),
     ...sourceLock,
     '-i',
     input.sourcePath,
@@ -539,20 +570,12 @@ export function buildRenderArgs(input: RenderInput): string[] {
     '-filter_complex',
     parts.join(';'),
     ...maps,
-    '-c:v',
-    'libx264',
-    '-preset',
-    'veryfast',
-    '-crf',
-    '23',
-    '-pix_fmt',
-    'yuv420p',
+    ...(input.video?.videoArgs ?? DEFAULT_VIDEO_ARGS),
+    ...passArgs,
     '-threads',
     String(input.threads),
     ...(withAudio ? ['-c:a', 'aac', '-b:a', '128k'] : []),
-    '-movflags',
-    '+faststart',
-    input.outputPath
+    ...output
   ]
 }
 
