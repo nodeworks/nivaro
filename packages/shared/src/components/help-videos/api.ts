@@ -143,8 +143,24 @@ export function helpVideoApi(client: NivaroClient) {
         description?: string | null
         category?: string | null
         visibility?: Visibility
+        /** Viewers may download (authors always may). */
+        allow_downloads?: boolean
       }
     ) => r(patch<{ data: HelpVideoDto }>(`/help-videos/${id}`, body)).then((x) => x.data),
+    /** A fresh ticketed download link (relative to the API origin). 403
+     *  HELP_VIDEO_DOWNLOAD_OFF when downloads are off for this viewer; `draft`
+     *  is for authors. */
+    downloadLink: (
+      id: string,
+      file: 'video' | 'captions.vtt' | 'captions.srt' = 'video',
+      draft = false
+    ) =>
+      r(
+        get<{ data: { url: string } }>(`/help-videos/${id}/download-link`, {
+          file,
+          ...(draft ? { draft: 1 } : {})
+        })
+      ).then((x) => x.data.url),
     setContexts: (id: string, contexts: HelpVideoContext[]) =>
       r(put(`/help-videos/${id}/contexts`, { contexts })),
     setRequirements: (id: string, role_ids: string[]) =>

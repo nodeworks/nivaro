@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import type { InstanceIdentity } from './branch-instances.js'
+import { downloadsAllowed, hasCaptions, withDownloads } from './help-video-download.js'
 import {
   editedDuration,
   emptyEdits,
@@ -87,9 +88,33 @@ export interface HelpVideoDto {
   draft_matches_published?: boolean
   draft_stream_url?: string | null
   draft_captions_url?: string | null
+  /** Author-only: the "Allow downloads" switch (viewers; authors always may). */
+  allow_downloads?: boolean
+  /** Author-only: download links for the draft (render when current, else the original). */
+  draft_download_urls?: DownloadUrls | null
   created_by_name?: string | null
+  /** Ticketed download links for the published version, or null when this
+   *  person may not download it (switched off, or nothing published). A
+   *  viewer's video link answers 409 HELP_VIDEO_PROCESSING while
+   *  `published.playable` is false. */
+  download_urls: DownloadUrls | null
   updated_at: string
   my_progress: { position_ms: number; completed: boolean; percent: number } | null
+}
+
+export interface DownloadUrls {
+  video: string
+  captions_vtt: string | null
+  captions_srt: string | null
+}
+
+function downloadUrls(base: string, ticket: string, captions: boolean): DownloadUrls {
+  const at = (file: string) => `${base}/download?st=${ticket}&file=${file}`
+  return {
+    video: at('video'),
+    captions_vtt: captions ? at('captions.vtt') : null,
+    captions_srt: captions ? at('captions.srt') : null
+  }
 }
 
 function fail(
@@ -178,7 +203,9 @@ export async function forgetHelpVideoRole(roleId: string): Promise<void> {
       .update({
         visibility: JSON.stringify({
           mode: 'roles',
-          role_ids: vis.role_ids.filter((r) => r !== rid)
+          role_ids: vis.role_ids.filter((r) => r !== rid),
+          // The downloads switch is not about roles: keep it as it was.
+          ...(downloadsAllowed(v.visibility) ? {} : { downloads: false })
         })
       })
   }
@@ -450,6 +477,10 @@ export async function serializeVideo(
       reqs.map((r: { role_id: unknown }) => r.role_id),
       ctx.role
     ),
+    download_urls:
+      published && (ctx.author || downloadsAllowed(video.visibility))
+        ? downloadUrls(base, pt, hasCaptions(published))
+        : null,
     published: published
       ? {
           ...serializeVersion(published, { withRecorderData: false }),
@@ -476,7 +507,11 @@ export async function serializeVideo(
       const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sidTag ?? null)
       dto.draft_stream_url = `${base}/stream?st=${dt}&source=1`
       dto.draft_captions_url = `${base}/captions.vtt?st=${dt}`
+      dto.draft_download_urls = downloadUrls(base, dt, hasCaptions(draft))
+    } else {
+      dto.draft_download_urls = null
     }
+    dto.allow_downloads = downloadsAllowed(video.visibility)
     dto.created_by_name = creator
       ? `${creator.first_name ?? ''} ${creator.last_name ?? ''}`.trim() || null
       : null
@@ -594,7 +629,20 @@ export async function updateDetails(
   }
   if ('category' in body)
     patch.category = body.category ? String(body.category).slice(0, 100) : null
-  if ('visibility' in body) patch.visibility = JSON.stringify(parseVisibility(body.visibility))
+  if ('visibility' in body || 'allow_downloads' in body) {
+    // The downloads switch shares the visibility JSON: a visibility change
+    // keeps it, and allow_downloads changes only it.
+    const stored = await db('nivaro_help_videos').where({ id: videoId }).first('visibility')
+    const vis =
+      'visibility' in body
+        ? parseVisibility(body.visibility)
+        : parseVisibility(stored?.visibility ?? null)
+    const allowed =
+      'allow_downloads' in body
+        ? body.allow_downloads !== false
+        : downloadsAllowed(stored?.visibility ?? null)
+    patch.visibility = withDownloads(vis, allowed)
+  }
   if (!Object.keys(patch).length) return
   await db('nivaro_help_videos')
     .where({ id: videoId })
@@ -604,7 +652,12 @@ export async function updateDetails(
     user: user.id,
     collection: 'nivaro_help_videos',
     item: low(videoId),
-    comment: Object.keys(patch).join(', ')
+    comment: [
+      ...Object.keys(patch).filter((k) => k !== 'visibility' || 'visibility' in body),
+      ...('allow_downloads' in body
+        ? [`downloads ${body.allow_downloads !== false ? 'on' : 'off'}`]
+        : [])
+    ].join(', ')
   })
 }
 

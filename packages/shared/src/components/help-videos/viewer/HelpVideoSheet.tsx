@@ -4,6 +4,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { useHelpVideo } from '../api'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto } from '../types'
+import { DownloadMenu } from './DownloadMenu'
 import { formatDuration, isGettingReady, visibleChapters } from './format'
 
 export function useHelpVideosPath(): (query?: string) => string {
@@ -132,16 +133,25 @@ export function HelpVideoSheet({
             </ul>
           </section>
         )}
-        <button
-          type='button'
-          className='self-start rounded text-[12px] text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-          onClick={() => {
-            onOpenChange(false)
-            nav.navigate(path())
-          }}
-        >
-          All videos
-        </button>
+        <div className='flex flex-wrap items-center justify-between gap-3'>
+          <button
+            type='button'
+            className='rounded text-[12px] text-muted-foreground underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+            onClick={() => {
+              onOpenChange(false)
+              nav.navigate(path())
+            }}
+          >
+            All videos
+          </button>
+          {video?.published && video.download_urls && (
+            <DownloadMenu
+              urls={video.download_urls}
+              ready={!!video.visibility || video.published.playable !== false}
+              where='sheet'
+            />
+          )}
+        </div>
       </SheetContent>
     </Sheet>
   )

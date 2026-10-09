@@ -91,6 +91,14 @@ export interface VersionDto {
   levels?: number[] | null
 }
 
+/** Ticketed download links (`attachment`), relative to the API origin. */
+export interface DownloadUrls {
+  video: string
+  /** Null when the video has no captions. */
+  captions_vtt: string | null
+  captions_srt: string | null
+}
+
 export interface HelpVideoProgress {
   position_ms: number
   completed: boolean
@@ -123,7 +131,15 @@ export interface HelpVideoDto {
   /** The draft's original recording (already carries `source=1`). */
   draft_stream_url?: string | null
   draft_captions_url?: string | null
+  /** Author-only: the "Allow downloads" switch (for viewers; authors always may). */
+  allow_downloads?: boolean
+  /** Author-only: the draft's downloads (render when current, else the original). */
+  draft_download_urls?: DownloadUrls | null
   created_by_name?: string | null
+  /** Null when this person may not download the published version. A
+   *  viewer's video link answers 409 HELP_VIDEO_PROCESSING while
+   *  `published.playable` is false. */
+  download_urls: DownloadUrls | null
   updated_at: string
   my_progress: HelpVideoProgress | null
 }
@@ -135,3 +151,4 @@ export type HelpVideoErrorCode =
   | 'HELP_VIDEO_EDITS_INVALID'
   | 'HELP_VIDEO_NOT_FOUND'
   | 'HELP_VIDEO_AUTHOR_ONLY'
+  | 'HELP_VIDEO_DOWNLOAD_OFF'
