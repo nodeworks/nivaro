@@ -1,10 +1,71 @@
 {
-  "generated_at": "2026-10-09T04:40:29.864Z",
+  "generated_at": "2026-10-09T14:50:11.371Z",
   "releases": [
+    {
+      "version": "0.2.29",
+      "tag": "v0.2.29",
+      "date": "2026-10-09T10:49:59-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video packages: export link is single-use and dies with the session",
+              "hash": "182e0793"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: download to the desktop, move videos between instances",
+              "hash": "0f6e4ab4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video player: drop a stale effect dependency left by the merge",
+              "hash": "0b3010c1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help-video uploads: bound conversion time and size, one conversion at a time",
+              "hash": "97691a9c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: record what was clicked, and \"Show me on this page\"",
+              "hash": "6dd67a5c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: upload an existing video file (#1525)",
+              "hash": "90df1a10"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: branded intro and outro cards, chapter banners",
+              "hash": "9375d185"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: clean screen while recording (#1515)",
+              "hash": "27bfcee9"
+            }
+          ]
+        }
+      ],
+      "count": 8
+    },
     {
       "version": "0.2.28",
       "tag": "v0.2.28",
-      "date": "2026-10-09T00:40:18-04:00",
+      "date": "2026-10-09T00:40:29-04:00",
       "sections": [
         {
           "label": "Other",
