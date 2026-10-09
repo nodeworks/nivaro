@@ -1,4 +1,4 @@
-import type { VersionDto, Visibility } from '../types'
+import type { VersionDto, VideoEdits, Visibility } from '../types'
 
 /** Shown beside Publish, Restore and Re-record when the editor's own save fails first. */
 export const UNSAVED_NOTE = "Your latest edits haven't saved yet. Try again once they save."
@@ -61,6 +61,24 @@ export function blindRequiredRoles(visibility: Visibility, required: string[]): 
   if (visibility.mode !== 'roles' || !visibility.role_ids.length) return []
   const seen = new Set(visibility.role_ids.map((r) => r.toUpperCase()))
   return required.filter((r) => !seen.has(r.toUpperCase()))
+}
+
+/**
+ * Client mirror of the server's viewerMayPlaySource (help-video-views.ts —
+ * keep the two in step): viewers can't be handed the original recording when
+ * the edits hide or cut something, so they wait for the render. Blurs, box
+ * annotations, a trim or a cut each mean waiting; so does an unknown length.
+ */
+export function viewersWaitForRender(edits: VideoEdits, sourceMs: number | null): boolean {
+  const src = Math.round(Number(sourceMs))
+  if (!Number.isFinite(src) || src <= 0) return true
+  if (edits.blurs.length) return true
+  if (edits.annotations.some((a) => a.type === 'box')) return true
+  const segs = edits.segments
+  if (!segs.length) return true
+  if (segs[0].start_ms > 0 || segs[segs.length - 1].end_ms < src) return true
+  for (let i = 1; i < segs.length; i++) if (segs[i].start_ms > segs[i - 1].end_ms) return true
+  return false
 }
 
 /** "Supervisors", "Supervisors and Buyers", "A, B and C". */

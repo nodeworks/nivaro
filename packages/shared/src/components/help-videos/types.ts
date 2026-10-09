@@ -117,6 +117,9 @@ export interface HelpVideoDto {
   visibility?: Visibility
   required_role_ids?: string[]
   draft?: VersionDto | null
+  /** Author-only: the draft is exactly the published version (same recording,
+   *  same edits), so publishing it would change nothing. */
+  draft_matches_published?: boolean
   /** The draft's original recording (already carries `source=1`). */
   draft_stream_url?: string | null
   draft_captions_url?: string | null

@@ -82,6 +82,9 @@ export interface HelpVideoDto {
   visibility?: Visibility
   required_role_ids?: string[]
   draft?: VersionDto | null
+  /** Author-only: a draft exists and is exactly the published version (same
+   *  recording, same edits) — publishing it would change nothing. */
+  draft_matches_published?: boolean
   draft_stream_url?: string | null
   draft_captions_url?: string | null
   created_by_name?: string | null
@@ -419,6 +422,7 @@ export async function serializeVideo(
     dto.visibility = parseVisibility(video.visibility)
     dto.required_role_ids = reqs.map((r: { role_id: unknown }) => up(r.role_id))
     dto.draft = draft ? serializeVersion(draft, { withRecorderData: true }) : null
+    dto.draft_matches_published = sameContent(draft, published)
     if (draft) {
       const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sidTag ?? null)
       dto.draft_stream_url = `${base}/stream?st=${dt}&source=1`
@@ -650,13 +654,34 @@ export async function saveDraftEdits(
   )
 }
 
+/** Same recording and same edits: publishing one over the other changes nothing. */
+export function sameContent(
+  a: Pick<VersionRow, 'edits_hash' | 'source_file'> | undefined | null,
+  b: Pick<VersionRow, 'edits_hash' | 'source_file'> | undefined | null
+): boolean {
+  return !!a && !!b && a.edits_hash === b.edits_hash && up(a.source_file) === up(b.source_file)
+}
+
+const NOTHING_TO_PUBLISH = 'No changes since the last publish'
+
 export async function publishVideo(
   video: VideoRow,
   user: User,
   opts: { watch_again?: boolean }
 ): Promise<string> {
   const draft = await loadVersion(video.draft_version_id)
-  if (!draft) throw fail(409, 'HELP_VIDEO_NOTHING_TO_PUBLISH', 'There are no unpublished changes')
+  if (!draft) throw fail(409, 'HELP_VIDEO_NOTHING_TO_PUBLISH', NOTHING_TO_PUBLISH)
+  // Opening the editor makes a draft, so a draft alone is no change. Publishing
+  // an identical one would only make a new version that needs a fresh render —
+  // and a video with blurs or cuts would show "Getting ready" until it lands.
+  const published = await loadVersion(video.published_version_id)
+  if (video.status === 'published' && sameContent(draft, published)) {
+    if (opts.watch_again && (await hasRequirements(video.id))) {
+      await askToWatchAgain(video, user)
+      return String(published?.id)
+    }
+    throw fail(409, 'HELP_VIDEO_NOTHING_TO_PUBLISH', NOTHING_TO_PUBLISH)
+  }
   const contextCount = Number(
     (await db('nivaro_help_video_contexts').where({ video_id: video.id }).count('* as n').first())
       ?.n ?? 0
@@ -703,6 +728,44 @@ export async function publishVideo(
     comment: `version ${draft.version}${opts.watch_again ? ' · asked everyone to watch again' : ''}`
   })
   return String(draft.id)
+}
+
+async function hasRequirements(videoId: string): Promise<boolean> {
+  const row = await db('nivaro_help_video_requirements')
+    .where({ video_id: videoId })
+    .count('* as n')
+    .first()
+  return Number(row?.n ?? 0) > 0
+}
+
+/** "Ask everyone to watch again" with nothing else to publish: the same
+ *  version stays published (no new version, no render); only the requirement
+ *  is re-armed and the people who must watch it are told. */
+async function askToWatchAgain(video: VideoRow, user: User): Promise<void> {
+  await db('nivaro_help_videos')
+    .where({ id: video.id })
+    .update({ required_since: new Date(), ...touch(user) })
+  void (async () => {
+    try {
+      const rows = await db('nivaro_help_video_requirements')
+        .where({ video_id: video.id })
+        .select('role_id')
+      await notifyRequiredViewers(
+        String(video.id),
+        String(video.title ?? ''),
+        rows.map((r: { role_id: unknown }) => String(r.role_id))
+      )
+    } catch (err) {
+      warnNotifyFailed(err, String(video.id))
+    }
+  })()
+  await logActivity({
+    action: 'help-video-watch-again',
+    user: user.id,
+    collection: 'nivaro_help_videos',
+    item: low(video.id),
+    comment: 'asked everyone to watch again (no new version)'
+  })
 }
 
 export function requiredNotice(title: string): { subject: string; message: string; why: string } {

@@ -276,6 +276,8 @@ function EditorBody({
           </div>
           <PublishButton
             video={{ ...video, draft }}
+            edits={edits}
+            pending={save.unsaved}
             beforePublish={save.flush}
             onPublished={onReload}
             conflict={save.status === 'conflict'}

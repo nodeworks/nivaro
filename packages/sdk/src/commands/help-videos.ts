@@ -68,6 +68,9 @@ export interface HelpVideo {
   visibility?: HelpVideoVisibility
   required_role_ids?: string[]
   draft?: HelpVideoVersion | null
+  /** Author-only: the draft is exactly the published version; publishing it
+   *  answers 409 `HELP_VIDEO_NOTHING_TO_PUBLISH`. */
+  draft_matches_published?: boolean
   draft_stream_url?: string | null
   draft_captions_url?: string | null
   created_by_name?: string | null
@@ -163,7 +166,10 @@ export function saveHelpVideoDraft(
 ): Command<{ data: HelpVideoVersion }> {
   return cmd('PUT', `/help-videos/${id}/draft/edits`, undefined, { edits, base_hash })
 }
-/** 422 `HELP_VIDEO_NOT_READY` (body lists `missing`) or 409 `HELP_VIDEO_NOTHING_TO_PUBLISH`. */
+/** 422 `HELP_VIDEO_NOT_READY` (body lists `missing`) or 409 `HELP_VIDEO_NOTHING_TO_PUBLISH`
+ *  (no draft, or the draft equals what is published). With `watch_again` on an
+ *  unchanged video someone must watch, the requirement is re-armed instead: no
+ *  new version, no render. */
 export function publishHelpVideo(
   id: string,
   opts?: { watch_again?: boolean }

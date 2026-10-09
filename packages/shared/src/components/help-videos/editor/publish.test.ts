@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest'
+import type { VideoEdits } from '../types'
 import {
   blindRequiredRoles,
   describeMissing,
   joinNames,
   missingForPublish,
   renderLabel,
+  viewersWaitForRender,
   whenSaved
 } from './publish'
 
@@ -82,5 +84,36 @@ describe('joinNames', () => {
     expect(joinNames(['A'])).toBe('A')
     expect(joinNames(['A', 'B'])).toBe('A and B')
     expect(joinNames(['A', 'B', 'C'])).toBe('A, B and C')
+  })
+})
+
+describe('viewersWaitForRender (mirror of the server rule)', () => {
+  const base: VideoEdits = {
+    v: 1,
+    segments: [{ start_ms: 0, end_ms: 10_000, speed: 1 }],
+    poster_ms: 0,
+    chapters: [],
+    annotations: [],
+    zooms: [],
+    blurs: [],
+    captions: []
+  }
+  const ann = (type: string) => ({ ...base, annotations: [{ type } as never] })
+  it('nothing hidden or cut: viewers play the recording at once', () => {
+    expect(viewersWaitForRender(base, 10_000)).toBe(false)
+    expect(viewersWaitForRender(ann('arrow'), 10_000)).toBe(false)
+    expect(viewersWaitForRender(ann('ripple'), 10_000)).toBe(false)
+    expect(viewersWaitForRender({ ...base, zooms: [{ id: 'z' } as never] }, 10_000)).toBe(false)
+  })
+  it('a blur, a box, a trim, a cut or an unknown length means waiting', () => {
+    expect(viewersWaitForRender({ ...base, blurs: [{ id: 'b' } as never] }, 10_000)).toBe(true)
+    expect(viewersWaitForRender(ann('box'), 10_000)).toBe(true)
+    const seg = (a: number, b: number) => ({ start_ms: a, end_ms: b, speed: 1 as const })
+    expect(viewersWaitForRender({ ...base, segments: [seg(500, 10_000)] }, 10_000)).toBe(true)
+    expect(viewersWaitForRender({ ...base, segments: [seg(0, 9_000)] }, 10_000)).toBe(true)
+    expect(
+      viewersWaitForRender({ ...base, segments: [seg(0, 4_000), seg(5_000, 10_000)] }, 10_000)
+    ).toBe(true)
+    expect(viewersWaitForRender(base, null)).toBe(true)
   })
 })
