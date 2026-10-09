@@ -80,7 +80,7 @@ export const EditorSidebar = memo(function EditorSidebar({
   videoTitle: string
   videoDescription: string | null
   /** Moves the preview to the start of the intro or outro card. */
-  onShowCard: (card: 'intro' | 'outro') => void
+  onShowCard: (card: 'intro' | 'outro', how?: 'play' | 'poster') => void
   /** For the music panel: the video's own files and track links. */
   videoId: string
   /** The recording has microphone levels (the preview can duck the music). */

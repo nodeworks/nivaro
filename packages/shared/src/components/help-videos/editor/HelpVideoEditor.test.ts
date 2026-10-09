@@ -31,7 +31,9 @@ const fake = vi.hoisted(() => ({
     edits?: VideoEdits
     children?: (f: { width: number; height: number }) => ReactNode
   },
-  now: 0
+  now: 0,
+  seekEdited: [] as number[],
+  plays: 0
 }))
 vi.mock('../HelpVideoPlayer', async () => {
   const { createElement: h } = await import('react')
@@ -43,7 +45,13 @@ vi.mock('../HelpVideoPlayer', async () => {
           seekSource: (ms: number) => {
             fake.now = ms
           },
-          sourceMs: () => fake.now
+          sourceMs: () => fake.now,
+          seekEdited: (ms: number) => {
+            fake.seekEdited.push(ms)
+          },
+          play: () => {
+            fake.plays++
+          }
         }
       return h(
         'div',
@@ -183,6 +191,8 @@ async function mount(clicks: Clicks = null, extra: Partial<VersionDto> = {}) {
 
 beforeEach(() => {
   fake.now = 0
+  fake.seekEdited = []
+  fake.plays = 0
   Object.assign(renders, { inspector: 0, captions: 0, clicks: 0 })
   vi.mocked(editsModule.isHiddenByCuts).mockClear()
   vi.mocked(editsModule.sourceToEdited).mockClear()
@@ -431,5 +441,37 @@ describe('HelpVideoEditor shapes on the picture', () => {
     await at(6000) // the 1–4 s callout is gone from the picture
     expect(q('[data-hv-selected]')).toBeNull()
     expect(document.activeElement?.hasAttribute('data-hv-preview-tools')).toBe(true)
+  })
+})
+
+describe('HelpVideoEditor card previews', () => {
+  const withCards: VideoEdits = {
+    ...baseEdits,
+    intro: {
+      enabled: true,
+      duration_ms: 3000,
+      show_chapters: false,
+      title: '',
+      subtitle: '',
+      animation: 'subtle',
+      transition: 'fade'
+    },
+    outro: { enabled: true, duration_ms: 3000, text: '', animation: 'subtle', transition: 'fade' },
+    poster_card: 'intro'
+  }
+  it('plays a card from its start with Play it', async () => {
+    await mount(null, { edits: withCards })
+    await click(q('[data-hv-side-toggle="cards"]'))
+    await click(q('[data-hv-card-show="outro"]'))
+    // Intro 3 s + kept recording 18 s.
+    expect(fake.seekEdited).toEqual([21_000])
+    expect(fake.plays).toBe(1)
+  })
+  it('shows a card poster once the card has arrived, without playing', async () => {
+    await mount(null, { edits: withCards })
+    await click(q('[data-hv-poster-show]'))
+    // Subtle entrance: 900 ms, the server poster's moment.
+    expect(fake.seekEdited).toEqual([900])
+    expect(fake.plays).toBe(0)
   })
 })

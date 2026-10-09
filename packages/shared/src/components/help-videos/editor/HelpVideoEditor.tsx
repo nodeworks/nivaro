@@ -8,6 +8,8 @@ import { Skeleton } from '../../ui/skeleton'
 import { Switch } from '../../ui/switch'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../ui/tabs'
 import { helpVideoApi, helpVideoKeys, useHelpVideo } from '../api'
+import { settledMs } from '../cardDesign'
+import { cardMotionAt } from '../cards'
 import {
   ALLOWED_SPEEDS,
   bodyDuration,
@@ -270,11 +272,21 @@ function EditorBody({
     })
   }, [])
   const forgetSpot = useCallback(() => setReturnTo(null), [])
+  // 'play' replays the card from its start (its motion is the point);
+  // 'poster' jumps to the moment it has finished arriving, the frame the
+  // server takes for a card poster, and stays paused.
   const showCard = useCallback(
-    (card: 'intro' | 'outro') => {
+    (card: 'intro' | 'outro', how: 'play' | 'poster' = 'play') => {
       const e = editsRef.current
       rememberSpot()
-      player.current?.seekEdited(card === 'intro' ? 0 : introMs(e) + bodyDuration(e))
+      const start = card === 'intro' ? 0 : introMs(e) + bodyDuration(e)
+      if (how === 'poster') {
+        const m = cardMotionAt(e, card, 0)
+        player.current?.seekEdited(start + Math.max(100, Math.round(m ? settledMs(m) : 0)))
+        return
+      }
+      player.current?.seekEdited(start)
+      player.current?.play()
     },
     [rememberSpot]
   )

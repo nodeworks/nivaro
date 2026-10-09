@@ -31,7 +31,7 @@ export const PosterPicker = memo(function PosterPicker({
   onUse: () => string | null
   onSeek: (srcMs: number) => void
   /** Moves the preview to the start of a card. */
-  onShowCard: (card: 'intro' | 'outro') => void
+  onShowCard: (card: 'intro' | 'outro', how?: 'play' | 'poster') => void
 }) {
   const headingId = useId()
   const [justSet, setJustSet] = useState<string | null>(null)
@@ -73,7 +73,7 @@ export const PosterPicker = memo(function PosterPicker({
           size='sm'
           variant='ghost'
           className='h-8 text-[12.5px]'
-          onClick={() => (card ? onShowCard(card) : onSeek(edits.poster_ms))}
+          onClick={() => (card ? onShowCard(card, 'poster') : onSeek(edits.poster_ms))}
           data-hv-poster-show
         >
           Show it
