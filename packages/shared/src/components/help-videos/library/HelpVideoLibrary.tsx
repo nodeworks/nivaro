@@ -7,7 +7,8 @@ import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { helpVideoApi, helpVideoKeys, useHelpVideoLibrary } from '../api'
 import { HelpVideoEditor } from '../editor/HelpVideoEditor'
-import { canRecord, HelpVideoRecorder, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
+import { canRecord, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
+import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
 import type { HelpVideoDto } from '../types'
 import { formatDuration, isGettingReady, progressLabel } from '../viewer/format'
 import { HelpVideoSheet } from '../viewer/HelpVideoSheet'
@@ -43,7 +44,8 @@ export function HelpVideoLibrary({
   const [debounced, setDebounced] = useState('')
   const [category, setCategory] = useState<string | undefined>()
   const [status, setStatus] = useState<Status>('published')
-  const [recording, setRecording] = useState(false)
+  const recorder = useHelpVideoRecording()
+  const [busyNote, setBusyNote] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
   const opener = useRef<HTMLElement | null>(null)
   useEffect(() => {
@@ -119,7 +121,9 @@ export function HelpVideoLibrary({
               )}
               <Button
                 size='sm'
-                onClick={() => setRecording(true)}
+                onClick={() =>
+                  setBusyNote(!recorder.start({ onDone: (video) => onEdit(video.id) }))
+                }
                 disabled={!recordable}
                 aria-describedby={recordable ? undefined : reasonId}
                 data-hv-record
@@ -144,6 +148,11 @@ export function HelpVideoLibrary({
             </button>
           ))}
         </div>
+      )}
+      {busyNote && (
+        <p role='status' className='mx-5 mt-3 text-[13px] text-rose-700 dark:text-rose-300'>
+          {RECORDING_BUSY}
+        </p>
       )}
       {archiveError && (
         <p
@@ -265,17 +274,7 @@ export function HelpVideoLibrary({
         onOpenChange={(o) => !o && onWatch(null)}
         returnFocusRef={opener}
       />
-      {canAuthor && (
-        <HelpVideoRecorder
-          open={recording}
-          onClose={() => setRecording(false)}
-          onDone={(video) => {
-            setRecording(false)
-            void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
-            onEdit(video.id)
-          }}
-        />
-      )}
+      {recorder.fallback}
     </div>
   )
 }

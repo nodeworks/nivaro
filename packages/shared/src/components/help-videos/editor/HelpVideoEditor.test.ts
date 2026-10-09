@@ -55,7 +55,10 @@ vi.mock('../HelpVideoPlayer', async () => {
 })
 
 const request = vi.fn()
-vi.mock('../../../context', () => ({ useNivaroClient: () => ({ request }) }))
+vi.mock('../../../context', () => ({
+  useNivaroClient: () => ({ request }),
+  useNavigation: () => ({ navigate: () => {} })
+}))
 
 // The side panels are memoised components. Each is wrapped in a memo with
 // the same props that counts its renders, so the playback test can show
