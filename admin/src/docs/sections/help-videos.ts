@@ -12,12 +12,12 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Who can record' },
     {
       type: 'p',
-      text: 'Administrators always can. Videos → Who can record adds roles whose members may record and edit too. Everyone else can only watch, and only the videos whose visibility includes them ("Everyone" or the chosen roles).'
+      text: 'Administrators always can. Videos → Who can record adds roles whose members may record and edit too. Everyone else can only watch, and only the videos whose visibility includes them ("Everyone" or the chosen roles). A video limited to roles with none chosen (or whose last chosen role was deleted) is visible to authors only.'
     },
     { type: 'h3', text: 'Recording' },
     {
       type: 'p',
-      text: 'Record a video (or "Record one for this screen" from a Videos button) asks for a screen, window or tab and, optionally, a microphone. A three-second countdown starts it; a small bar shows the time and stops it. Recording follows you from page to page — the bar stays up while you navigate, so you can record a walk-through across screens — and inside a dialog or sheet the bar and setup open inside it. The recording uploads in five-second parts while it runs and keeps unsent parts in the browser, so a dropped connection or a closed tab loses nothing — the next time you open the recorder it offers to finish the upload. Recordings are limited to 30 minutes.'
+      text: 'Record a video (or "Record one for this screen" from a Videos button) asks for a screen, window or tab and, optionally, a microphone. A three-second countdown starts it; a small bar shows the time and stops it. Recording follows you from page to page — the bar stays up while you navigate, so you can record a walk-through across screens — and inside a dialog or sheet the bar and setup open inside it. The recording uploads in five-second parts while it runs and keeps unsent parts in the browser, so a dropped connection or a closed tab loses nothing — the next time you open the recorder it offers to finish the upload. A recording that finished uploading but was never saved as a video (the tab closed during the save) is offered there too, ready to save or discard; one left unsaved for a week is deleted. Recordings are limited to 30 minutes.'
     },
     { type: 'h3', text: 'Editing' },
     {
@@ -41,11 +41,11 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Publishing, versions and required viewing' },
     {
       type: 'p',
-      text: 'Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim and no callouts or boxes (a callout is an opaque panel and the label inside a box can cover a field; arrows, ripples and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.'
+      text: 'Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. Opening the editor makes a draft, so Publish stays off, with "No changes since the last publish" beside it, while the draft is exactly what is published. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim and no callouts or boxes (a callout is an opaque panel and the label inside a box can cover a field; arrows, ripples and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.'
     },
     {
       type: 'p',
-      text: 'Required for: people in those roles get an in-app notification and, if their browser is subscribed, a browser push, and see the video in My Work until they have watched most of it (18 of its 20 five-percent sections). "Ask everyone to watch again" on a later publish resets that. Marking a video required tells real people at once, so test it with a throwaway role.'
+      text: 'Required for: people in those roles get an in-app notification and, if their browser is subscribed, a browser push, and see the video in My Work until they have watched most of it (18 of its 20 five-percent sections). "Ask everyone to watch again" on a later publish resets that; when nothing else changed, Publish offers only that and the video itself is not published again. Marking a video required tells real people at once, so test it with a throwaway role.'
     },
     { type: 'h3', text: 'Stats' },
     {
@@ -201,13 +201,27 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
           '`HELP_VIDEO_EDITS_CONFLICT`',
           '`saveHelpVideoDraft` with a stale `base_hash`. The body carries `current_hash`; reload the draft and merge.'
         ],
-        ['409', '`UPLOAD_CLOSED`', 'The upload is already finalized or finishing.'],
+        [
+          '409',
+          '`UPLOAD_CLOSED`',
+          'The upload is already finalized or finishing; or, on discard, already used by a video or discarded.'
+        ],
         ['422', '`UPLOAD_NOT_VIDEO`', 'A part is not a WebM or MP4 recording.'],
         ['422', '`UPLOAD_TOO_LONG`', 'The recording is longer than 30 minutes (on finalize).'],
         [
           '422',
           '`HELP_VIDEO_NOT_READY`',
           '`publishHelpVideo` before the checklist is done; the body lists `missing`.'
+        ],
+        [
+          '409',
+          '`HELP_VIDEO_NOTHING_TO_PUBLISH`',
+          '`publishHelpVideo` with no draft, or a draft that is exactly the published version (`draft_matches_published`). With `watch_again` on a video someone must watch, it re-asks them instead.'
+        ],
+        [
+          '422',
+          '`HELP_VIDEO_EDITS_INVALID`',
+          '`saveHelpVideoDraft` with edits that cannot be kept, such as cuts that leave less than a second. The message says why; the stored draft is unchanged.'
         ],
         [
           '409',

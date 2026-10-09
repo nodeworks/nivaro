@@ -55,10 +55,10 @@ export async function whenSaved<T>(
 /**
  * Roles that must watch a video they cannot see. The server only asks roles
  * that can see it, so these would never be asked. Everyone can see it unless
- * visibility is limited to a non-empty role list.
+ * visibility is limited to roles; limited to no roles, only authors can.
  */
 export function blindRequiredRoles(visibility: Visibility, required: string[]): string[] {
-  if (visibility.mode !== 'roles' || !visibility.role_ids.length) return []
+  if (visibility.mode !== 'roles') return []
   const seen = new Set(visibility.role_ids.map((r) => r.toUpperCase()))
   return required.filter((r) => !seen.has(r.toUpperCase()))
 }

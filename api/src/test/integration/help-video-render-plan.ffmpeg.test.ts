@@ -275,4 +275,97 @@ describe('render plan through real ffmpeg', () => {
     // Eased back out: untouched again.
     expect(near(await pixel(out, 3.6, 8, 8), QUADS.tl)).toBe(true)
   }, 120_000)
+  // M4: a blur on a small field gets its radius capped (ffmpeg's chroma
+  // limit). Extra passes keep it at least as strong as asked. Measured on a
+  // fine 2-px checkerboard (text-like detail): the variance left in the
+  // blurred field, one pass at the capped radius (before) vs the planned
+  // passes (after).
+  async function regionVariance(file: string, w: number, h: number, x: number, y: number) {
+    const { stdout } = await promisify(execFile)(
+      'ffmpeg',
+      [
+        '-v',
+        'error',
+        '-ss',
+        '1',
+        '-i',
+        file,
+        '-frames:v',
+        '1',
+        '-vf',
+        `format=gray,crop=${w}:${h}:${x}:${y}`,
+        '-f',
+        'rawvideo',
+        '-'
+      ],
+      { encoding: 'buffer', maxBuffer: 1 << 20 }
+    )
+    const px = [...stdout]
+    const mean = px.reduce((a, b) => a + b, 0) / px.length
+    return px.reduce((a, b) => a + (b - mean) ** 2, 0) / px.length
+  }
+
+  it('a capped blur still smooths fine detail at least as strongly as asked', async (ctx) => {
+    if (!(await hasFfmpeg())) ctx.skip()
+    const dir = mkdtempSync(join(tmpdir(), 'nvr-render-'))
+    const src = join(dir, 'checker.webm')
+    await runFfmpeg([
+      '-y',
+      '-v',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      "color=c=black:s=640x360:r=15:d=2,format=gray,geq=lum='255*mod(floor(X/2)+floor(Y/2),2)',format=yuv420p",
+      '-c:v',
+      'libvpx',
+      '-b:v',
+      '8M',
+      src
+    ])
+    // A 24x16 field at (96,72): the radius asked for (20) caps at
+    // floor(16/4)-1 = 3, so the plan asks for ceil(20*21 / (3*4)) = 35 passes.
+    const args = buildRenderArgs({
+      edits: normalizeEdits(
+        {
+          blurs: [
+            {
+              start_ms: 0,
+              end_ms: 2000,
+              rect: { x: 96 / 640, y: 72 / 360, w: 24 / 640, h: 16 / 360 },
+              strength: 20
+            }
+          ]
+        },
+        2000
+      ),
+      width: 640,
+      height: 360,
+      hasAudio: false,
+      sourcePath: src,
+      sourceMime: 'video/webm',
+      overlays: [],
+      outputPath: join(dir, 'after.mp4'),
+      threads: 2
+    })
+    const graph = args[args.indexOf('-filter_complex') + 1]
+    expect(graph).toContain('crop=24:16:96:72,boxblur=3:35')
+    await runFfmpeg(args)
+    const before = args.map((a) =>
+      a === graph
+        ? graph.replace('boxblur=3:35', 'boxblur=3:1')
+        : a === join(dir, 'after.mp4')
+          ? join(dir, 'before.mp4')
+          : a
+    )
+    await runFfmpeg(before)
+    // Inset 2 px from the field's edge; the source region for scale.
+    const region = [20, 12, 98, 74] as const
+    const raw = await regionVariance(src, ...region)
+    const one = await regionVariance(join(dir, 'before.mp4'), ...region)
+    const planned = await regionVariance(join(dir, 'after.mp4'), ...region)
+    expect(raw).toBeGreaterThan(1000) // the pattern is really there
+    expect(planned).toBeLessThan(one / 4)
+    expect(planned).toBeLessThan(raw / 100)
+  }, 120_000)
 })

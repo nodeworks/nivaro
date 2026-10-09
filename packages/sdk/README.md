@@ -2500,10 +2500,12 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | --- | --- | --- |
 | 409 | `HELP_VIDEO_PROCESSING` | A viewer requested `stream_url` before a current render exists and the original cannot be shown. Check `published.playable`, retry later. |
 | 409 | `HELP_VIDEO_EDITS_CONFLICT` | `saveHelpVideoDraft` with a stale `base_hash`. The body carries `current_hash`; reload the draft and merge. |
-| 409 | `UPLOAD_CLOSED` | The upload is already finalized or finishing. |
+| 409 | `UPLOAD_CLOSED` | The upload is already finalized or finishing; or, on discard, already used by a video or discarded. |
 | 422 | `UPLOAD_NOT_VIDEO` | A part is not a WebM or MP4 recording. |
 | 422 | `UPLOAD_TOO_LONG` | The recording is longer than 30 minutes (on finalize). |
 | 422 | `HELP_VIDEO_NOT_READY` | `publishHelpVideo` before the checklist is done; the body lists `missing`. |
+| 409 | `HELP_VIDEO_NOTHING_TO_PUBLISH` | `publishHelpVideo` with no draft, or a draft that is exactly the published version (`draft_matches_published`). With `watch_again` on a video someone must watch, it re-asks them instead. |
+| 422 | `HELP_VIDEO_EDITS_INVALID` | `saveHelpVideoDraft` with edits that cannot be kept, such as cuts that leave less than a second. The message says why; the stored draft is unchanged. |
 | 409 | `HELP_VIDEO_NOTHING_TO_RENDER` | `rerenderHelpVideo` for a version that does not exist. |
 | 403 | `HELP_VIDEO_AUTHOR_ONLY` | An authoring command by a non-author. |
 | 404 | `HELP_VIDEO_NOT_FOUND` | Unknown id, or a video the caller may not see. |

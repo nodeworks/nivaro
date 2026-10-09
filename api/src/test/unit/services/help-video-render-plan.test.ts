@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { normalizeEdits } from '../../../services/help-video-edits.js'
 import {
+  blurPower,
   buildPosterArgs,
   buildRenderArgs,
   outputSize,
@@ -237,9 +238,10 @@ describe('blur radius cap', () => {
       },
       10_000
     )
-    // 1280x720 frame: the box is 80x80, so the radius is floor(80/4)-1 = 19 at most.
+    // 1280x720 frame: the box is 80x80, so the radius is floor(80/4)-1 = 19 at most;
+    // 5 passes of 19 spread at least as far as one of 40 (5*19*20 >= 40*41).
     const graph = fc(buildRenderArgs({ ...base, edits }))
-    expect(graph).toContain('crop=80:80:128:72,boxblur=19:1')
+    expect(graph).toContain('crop=80:80:128:72,boxblur=19:5')
   })
   it('never goes below 1 for the smallest box', () => {
     const edits = normalizeEdits(
@@ -250,8 +252,26 @@ describe('blur radius cap', () => {
       },
       10_000
     )
-    // normalizeEdits floors the rect at 0.01 (12x6 px here); radius stays 1
-    expect(fc(buildRenderArgs({ ...base, edits }))).toContain('crop=12:6:128:72,boxblur=1:1')
+    // normalizeEdits floors the rect at 0.01 (12x6 px here); radius stays 1, and
+    // the passes stop at 50 (the 12x6 field is uniform long before that)
+    expect(fc(buildRenderArgs({ ...base, edits }))).toContain('crop=12:6:128:72,boxblur=1:50')
+  })
+  it('an uncapped blur keeps one pass', () => {
+    expect(blurPower(12, 12)).toBe(1)
+    expect(blurPower(12, 40)).toBe(1)
+  })
+  it('a capped blur spreads at least as far as the one asked for', () => {
+    for (const [R, r] of [
+      [40, 19],
+      [20, 3],
+      [12, 5],
+      [8, 2]
+    ]) {
+      const p = blurPower(R, r)
+      expect(p * r * (r + 1), `${R}->${r}`).toBeGreaterThanOrEqual(R * (R + 1))
+      expect((p - 1) * r * (r + 1), `${R}->${r} minimal`).toBeLessThan(R * (R + 1))
+    }
+    expect(blurPower(40, 1)).toBe(50)
   })
 })
 

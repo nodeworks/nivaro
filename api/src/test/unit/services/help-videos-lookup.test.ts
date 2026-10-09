@@ -98,6 +98,17 @@ describe('videosForContext', () => {
     expect(out.state).toBeNull()
   })
 
+  it('looks the pipeline up by the record id when the caller named it by an alias', async () => {
+    vi.mocked(readOne).mockResolvedValue({ id: 42 } as never)
+    vi.mocked(findRecordInstance).mockResolvedValue({ current_state: 'S1' } as never)
+    const out = await videosForContext(req, { collection: 'workflows', item: 'PO-0042' })
+    expect(readOne).toHaveBeenCalledWith(expect.anything(), 'workflows', 'PO-0042', undefined, [
+      'id'
+    ])
+    expect(findRecordInstance).toHaveBeenCalledWith('workflows', '42')
+    expect(out.state).toBe('started')
+  })
+
   it('resolves the pipeline state once the record is readable', async () => {
     vi.mocked(readOne).mockResolvedValue({ id: 5 } as never)
     vi.mocked(findRecordInstance).mockResolvedValue({ current_state: 'S1' } as never)

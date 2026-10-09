@@ -40,11 +40,30 @@ describe('parseVisibility', () => {
       mode: 'roles',
       role_ids: ['AB-C']
     }))
-  it('falls back to everyone when roles mode has no roles', () =>
+  it('keeps roles mode with no roles limited (authors only), never everyone', () => {
     expect(parseVisibility({ mode: 'roles', role_ids: [] })).toEqual({
-      mode: 'everyone',
+      mode: 'roles',
       role_ids: []
-    }))
+    })
+    expect(
+      viewerMaySee(
+        { status: 'published', visibility: '{"mode":"roles","role_ids":[]}' },
+        'R1',
+        false
+      )
+    ).toBe(false)
+    expect(
+      viewerMaySee(
+        { status: 'published', visibility: '{"mode":"roles","role_ids":[]}' },
+        'R1',
+        true
+      )
+    ).toBe(true)
+  })
+  it('reads a missing or unreadable value as everyone', () => {
+    expect(parseVisibility(null)).toEqual({ mode: 'everyone', role_ids: [] })
+    expect(parseVisibility('{nope')).toEqual({ mode: 'everyone', role_ids: [] })
+  })
 })
 
 describe('viewerMaySee', () => {

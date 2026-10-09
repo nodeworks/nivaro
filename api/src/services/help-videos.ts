@@ -128,11 +128,52 @@ export {
   whereNotHelpVideoFile
 } from './help-video-files.js'
 
+/** Stored visibility. Limited to roles stays limited even when the list is
+ *  empty (an author who picked none yet, or a role that was deleted): an
+ *  empty list means authors and admins only, never everyone. Only a missing
+ *  or unreadable value reads as everyone (every video is created with one). */
 export function parseVisibility(raw: unknown): Visibility {
   const v = json<Record<string, unknown> | null>(raw, null)
   const ids = Array.isArray(v?.role_ids) ? (v?.role_ids as unknown[]).map(up).filter(Boolean) : []
-  if (v?.mode === 'roles' && ids.length) return { mode: 'roles', role_ids: [...new Set(ids)] }
+  if (v?.mode === 'roles') return { mode: 'roles', role_ids: [...new Set(ids)] }
   return { mode: 'everyone', role_ids: [] }
+}
+
+/** A role is about to be deleted: take it out of every help-video setting
+ *  that names it — required viewing (whose rows would block the delete),
+ *  the author roles, and every video's visibility list. A list that empties
+ *  stays limited (authors and admins only); it never opens to everyone. */
+export async function forgetHelpVideoRole(roleId: string): Promise<void> {
+  if (!isUuid(roleId)) return
+  const rid = up(roleId)
+  await db('nivaro_help_video_requirements').where({ role_id: roleId }).delete()
+  const settings = await db('nivaro_settings')
+    .where({ id: 1 })
+    .first('help_video_author_roles')
+    .catch(() => null)
+  const authors = json<unknown[]>(settings?.help_video_author_roles, []).map(up).filter(Boolean)
+  if (authors.includes(rid)) {
+    const rest = authors.filter((r) => r !== rid)
+    await db('nivaro_settings')
+      .where({ id: 1 })
+      .update({ help_video_author_roles: rest.length ? JSON.stringify(rest) : null })
+    bustAuthorRoleCache()
+  }
+  const videos = (await db('nivaro_help_videos')
+    .where('visibility', 'like', `%${rid}%`)
+    .select('id', 'visibility')) as Array<{ id: string; visibility: string | null }>
+  for (const v of videos) {
+    const vis = parseVisibility(v.visibility)
+    if (vis.mode !== 'roles' || !vis.role_ids.includes(rid)) continue
+    await db('nivaro_help_videos')
+      .where({ id: v.id })
+      .update({
+        visibility: JSON.stringify({
+          mode: 'roles',
+          role_ids: vis.role_ids.filter((r) => r !== rid)
+        })
+      })
+  }
 }
 
 let authorCache: { at: number; ids: string[] } | null = null
@@ -1039,7 +1080,12 @@ export async function videosForContext(
     if (visible) {
       const { findRecordInstance } = await import('./branch-instances.js')
       type WithState = InstanceIdentity & { current_state: string | null }
-      const inst = await findRecordInstance<WithState>(q.collection, q.item).catch(() => undefined)
+      // The row's own id: the caller may have named the record by an alias
+      // (auto id, slug) that readOne resolves but the instance table never holds.
+      const recordId = String((visible as { id: unknown }).id)
+      const inst = await findRecordInstance<WithState>(q.collection, recordId).catch(
+        () => undefined
+      )
       if (inst?.current_state) {
         const s = await db('nivaro_workflow_states').where({ id: inst.current_state }).first('key')
         state = s?.key ?? null

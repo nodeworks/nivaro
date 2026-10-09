@@ -45,6 +45,22 @@ function atempo(speed: number): string {
   return `atempo=${speed}`
 }
 
+/** Passes beyond which a small blurred field is already uniform. */
+const MAX_BLUR_POWER = 50
+
+/** boxblur passes for a radius capped below the one asked for, so the blur is
+ *  still at least as strong: a radius-r box blur has variance r(r+1)/3 and
+ *  repeated passes add up, so ceil(R(R+1) / r(r+1)) passes of radius r spread
+ *  as far as one of radius R. Bounded: the capped field is at most ~4r+4
+ *  pixels on its short side, so it is near-uniform long before the bound. */
+export function blurPower(requested: number, radius: number): number {
+  if (radius >= requested) return 1
+  return Math.min(
+    MAX_BLUR_POWER,
+    Math.ceil((requested * (requested + 1)) / (radius * (radius + 1)))
+  )
+}
+
 export function buildRenderArgs(input: RenderInput): string[] {
   // An unmapped mime yields no pinned demuxer; refuse rather than let ffmpeg probe.
   const sourceLock = lockedInputArgs(input.sourceMime)
@@ -67,14 +83,15 @@ export function buildRenderArgs(input: RenderInput): string[] {
     const h = Math.min(Math.max(pr.h, 4), out.height)
     const r = { x: Math.min(pr.x, out.width - w), y: Math.min(pr.y, out.height - h), w, h }
     // boxblur's radius applies to the half-size chroma planes too, so it is
-    // bounded by a quarter of the smaller side.
+    // bounded by a quarter of the smaller side; more passes make up for it.
     const strength = Math.max(1, Math.min(b.strength, Math.floor(Math.min(r.w, r.h) / 4) - 1))
+    const power = blurPower(b.strength, strength)
     const a = `${label}a`
     const c = `${label}b`
     const blurred = `bl${n}`
     const to = next()
     parts.push(`[${label}]split[${a}][${c}]`)
-    parts.push(`[${c}]crop=${r.w}:${r.h}:${r.x}:${r.y},boxblur=${strength}:1[${blurred}]`)
+    parts.push(`[${c}]crop=${r.w}:${r.h}:${r.x}:${r.y},boxblur=${strength}:${power}[${blurred}]`)
     parts.push(
       `[${a}][${blurred}]overlay=${r.x}:${r.y}:enable='between(t,${sec(b.start_ms)},${sec(b.end_ms)})'[${to}]`
     )

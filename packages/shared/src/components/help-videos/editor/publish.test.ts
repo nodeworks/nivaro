@@ -75,7 +75,9 @@ describe('blindRequiredRoles', () => {
   })
   it('is quiet when everyone can watch', () => {
     expect(blindRequiredRoles({ mode: 'everyone', role_ids: [] }, ['bb'])).toEqual([])
-    expect(blindRequiredRoles({ mode: 'roles', role_ids: [] }, ['bb'])).toEqual([])
+  })
+  it('limited to no roles, every required role is blind (only authors can watch)', () => {
+    expect(blindRequiredRoles({ mode: 'roles', role_ids: [] }, ['bb'])).toEqual(['bb'])
   })
 })
 

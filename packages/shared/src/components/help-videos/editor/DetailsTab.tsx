@@ -462,7 +462,7 @@ export function DetailsTab({ video }: { video: HelpVideoDto }) {
         {visibility.mode === 'roles' && visibility.role_ids.length === 0 && (
           <p className='flex items-start gap-1.5 text-[12px] text-amber-800 dark:text-amber-200'>
             <AlertTriangle className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
-            Pick at least one role. Until then, everyone can watch it.
+            Pick at least one role. Until then, only video authors can watch it.
           </p>
         )}
       </Section>
