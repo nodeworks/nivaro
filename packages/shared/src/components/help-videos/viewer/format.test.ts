@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
+import { nextLibraryPage } from '../api'
 import type { HelpVideoDto, VideoEdits } from '../types'
 import {
+  emptyCopy,
   formatDuration,
   isGettingReady,
   listMeta,
   progressLabel,
   showButton,
+  showingLabel,
   visibleChapters
 } from './format'
 
@@ -92,5 +95,45 @@ describe('showButton', () => {
     expect(showButton(0, false)).toBe(false)
     expect(showButton(0, true)).toBe(true)
     expect(showButton(2, false)).toBe(true)
+  })
+})
+
+describe('library paging', () => {
+  const page = (n: number, total: number) => ({ data: new Array(n).fill(null) as never[], total })
+  it('asks for the next page until everything is loaded', () => {
+    expect(nextLibraryPage([page(24, 61)])).toBe(2)
+    expect(nextLibraryPage([page(24, 61), page(24, 61)])).toBe(3)
+    expect(nextLibraryPage([page(24, 61), page(24, 61), page(13, 61)])).toBeUndefined()
+    expect(nextLibraryPage([page(24, 24)])).toBeUndefined()
+    // an empty page never loops
+    expect(nextLibraryPage([page(24, 61), page(0, 61)])).toBeUndefined()
+  })
+  it('says how much is showing only when there is more', () => {
+    expect(showingLabel(24, 61)).toBe('Showing 24 of 61')
+    expect(showingLabel(61, 61)).toBeNull()
+  })
+})
+
+describe('emptyCopy', () => {
+  const f = { search: '', status: 'published' as const, canAuthor: true }
+  it('fits the reason the list is empty', () => {
+    expect(emptyCopy({ ...f, search: 'zzz' })).toEqual({
+      text: 'No videos match that search.',
+      offerRecord: false
+    })
+    expect(emptyCopy({ ...f, category: 'Orders' }).offerRecord).toBe(false)
+    expect(emptyCopy({ ...f, category: 'Orders' }).text).toBe('No videos in Orders.')
+    expect(emptyCopy({ ...f, status: 'draft' }).text).toMatch(/^No drafts/)
+    expect(emptyCopy({ ...f, status: 'archived' })).toEqual({
+      text: 'Nothing is archived.',
+      offerRecord: false
+    })
+  })
+  it('offers recording only to authors with nothing at all', () => {
+    expect(emptyCopy(f).offerRecord).toBe(true)
+    expect(emptyCopy({ ...f, canAuthor: false })).toEqual({
+      text: 'No videos yet.',
+      offerRecord: false
+    })
   })
 })

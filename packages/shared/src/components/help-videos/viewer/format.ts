@@ -63,3 +63,35 @@ export function visibleChapters(
 export function showButton(count: number, canAuthor: boolean): boolean {
   return count > 0 || canAuthor
 }
+
+/** "Showing 24 of 61", only when there is more than what is on screen. */
+export function showingLabel(shown: number, total: number): string | null {
+  return total > shown ? `Showing ${shown} of ${total}` : null
+}
+
+/** What an empty library says, by why it is empty. `offerRecord` is true only
+ *  where recording a video is the way out. */
+export function emptyCopy(f: {
+  search: string
+  category?: string
+  status: 'published' | 'draft' | 'archived'
+  canAuthor: boolean
+}): { text: string; offerRecord: boolean } {
+  if (f.search) return { text: 'No videos match that search.', offerRecord: false }
+  if (f.category) {
+    return {
+      text: `No ${f.status === 'published' ? '' : `${f.status} `}videos in ${f.category}.`,
+      offerRecord: false
+    }
+  }
+  if (f.status === 'draft') {
+    return {
+      text: 'No drafts. A video you record stays here until you publish it.',
+      offerRecord: f.canAuthor
+    }
+  }
+  if (f.status === 'archived') return { text: 'Nothing is archived.', offerRecord: false }
+  return f.canAuthor
+    ? { text: 'No videos yet. Record one to show people how a screen works.', offerRecord: true }
+    : { text: 'No videos yet.', offerRecord: false }
+}

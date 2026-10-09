@@ -88,11 +88,11 @@ import {
 import { choiceLabel, cn, formatRelative, titleCase } from '../lib/utils'
 import { applyValidationRule } from '../lib/validation-rules'
 import { CopyAsButton } from './CopyAsButton'
+import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
 import {
   type DocumentApplySelection,
   DocumentAutofillButton
 } from './import/DocumentAutofillButton'
-import { HelpVideoButton } from './help-videos/viewer/HelpVideoButton'
 import { evaluateImportLineRules, RULE_SET_KEY } from './import/evaluateLineRules'
 import { ImportColumnChips } from './import/ImportColumnChips'
 import { ImportFromFileButton } from './import/ImportFromFileButton'

@@ -10,7 +10,13 @@ import { HelpVideoEditor } from '../editor/HelpVideoEditor'
 import { canRecord, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
 import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
 import type { HelpVideoDto } from '../types'
-import { formatDuration, isGettingReady, progressLabel } from '../viewer/format'
+import {
+  emptyCopy,
+  formatDuration,
+  isGettingReady,
+  progressLabel,
+  showingLabel
+} from '../viewer/format'
 import { HelpVideoSheet } from '../viewer/HelpVideoSheet'
 
 type Status = 'published' | 'draft' | 'archived'
@@ -47,6 +53,7 @@ export function HelpVideoLibrary({
   const recorder = useHelpVideoRecording()
   const [busyNote, setBusyNote] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
+  const [archiving, setArchiving] = useState<Set<string>>(() => new Set())
   const opener = useRef<HTMLElement | null>(null)
   useEffect(() => {
     const t = window.setTimeout(() => setDebounced(search.trim()), 300)
@@ -54,6 +61,14 @@ export function HelpVideoLibrary({
   }, [search])
   const q = useHelpVideoLibrary({ search: debounced || undefined, category, status })
   const canAuthor = !!q.data?.can_author
+  const shown = q.data?.data.length ?? 0
+  const total = q.data?.total ?? 0
+
+  // A note about one list does not belong to the next one.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: clears when the list changes
+  useEffect(() => {
+    setArchiveError(null)
+  }, [debounced, category, status])
 
   if (editId) {
     return (
@@ -64,13 +79,21 @@ export function HelpVideoLibrary({
   }
 
   const archive = async (v: HelpVideoDto) => {
+    if (archiving.has(v.id)) return
     setArchiveError(null)
+    setArchiving((cur) => new Set(cur).add(v.id))
     try {
       await helpVideoApi(client).archive(v.id)
       toast.success(`"${v.title}" archived`)
       void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
     } catch (e) {
       setArchiveError(`"${v.title}" could not be archived. ${(e as Error).message}`)
+    } finally {
+      setArchiving((cur) => {
+        const next = new Set(cur)
+        next.delete(v.id)
+        return next
+      })
     }
   }
 
@@ -78,7 +101,7 @@ export function HelpVideoLibrary({
     <div className='flex min-h-0 flex-1 flex-col' data-hv-library>
       <header className='flex shrink-0 flex-wrap items-center gap-3 border-b border-border px-5 py-3'>
         <h1 className='text-[16px] font-semibold'>Videos</h1>
-        <div className='relative flex-1 sm:max-w-[320px]'>
+        <div className='relative min-w-[180px] flex-1 basis-full sm:basis-auto sm:max-w-[320px]'>
           <Search
             aria-hidden='true'
             className='pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground'
@@ -94,21 +117,21 @@ export function HelpVideoLibrary({
           />
         </div>
         {canAuthor && (
-          <div className='flex gap-1' role='tablist' aria-label='Status'>
+          <fieldset className='m-0 flex min-w-0 gap-1 border-0 p-0'>
+            <legend className='sr-only'>Show</legend>
             {(['published', 'draft', 'archived'] as const).map((s) => (
               <button
                 key={s}
                 type='button'
-                role='tab'
-                aria-selected={status === s}
+                aria-pressed={status === s}
                 onClick={() => setStatus(s)}
                 className={`rounded-md px-2.5 py-1 text-[12.5px] transition-colors ${focusRing} ${status === s ? 'bg-nvr-cyan/10 font-medium' : 'hover:bg-muted'}`}
-                data-hv-status-tab={s}
+                data-hv-status={s}
               >
                 {s === 'published' ? 'Published' : s === 'draft' ? 'Drafts' : 'Archived'}
               </button>
             ))}
-          </div>
+          </fieldset>
         )}
         <div className='ml-auto flex items-center gap-2'>
           {headerExtra}
@@ -165,26 +188,36 @@ export function HelpVideoLibrary({
       )}
       <div className='min-h-0 flex-1 overflow-y-auto p-5'>
         {q.isLoading && <p className='text-[13px] text-muted-foreground'>Loading…</p>}
-        {q.error && !q.data && (
-          <p role='alert' className='text-[13px] text-rose-700 dark:text-rose-300'>
+        {q.isError && (
+          <p role='alert' className='mb-3 text-[13px] text-rose-700 dark:text-rose-300'>
             Videos could not be loaded. Try again in a moment.
           </p>
         )}
-        {q.data && !q.data.data.length && (
-          <p className='text-[13px] text-muted-foreground' data-hv-empty>
-            {debounced
-              ? 'No videos match that search.'
-              : canAuthor
-                ? 'No videos yet. Record one to show people how a screen works.'
-                : 'No videos yet.'}
-          </p>
+        {q.data && !q.data.data.length && !q.isError && (
+          <div className='space-y-2' data-hv-empty>
+            <p className='text-[13px] text-muted-foreground'>
+              {emptyCopy({ search: debounced, category, status, canAuthor }).text}
+            </p>
+            {emptyCopy({ search: debounced, category, status, canAuthor }).offerRecord &&
+              recordable && (
+                <Button
+                  size='sm'
+                  variant='outline'
+                  onClick={() =>
+                    setBusyNote(!recorder.start({ onDone: (video) => onEdit(video.id) }))
+                  }
+                >
+                  <Plus className='h-4 w-4' /> Record one
+                </Button>
+              )}
+          </div>
         )}
         <ul className='grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))]'>
           {(q.data?.data ?? []).map((v) => {
             const p = progressLabel(v)
             const waiting = isGettingReady(v)
             const chapters = v.published?.edits.chapters.length ?? 0
-            const overdue = v.required && !p.done && !waiting
+            const overdue = !!v.published && v.required && !p.done && !waiting
             const meta = [
               v.category,
               chapters > 1 ? `${chapters} chapters` : null,
@@ -256,6 +289,7 @@ export function HelpVideoLibrary({
                         size='sm'
                         variant='ghost'
                         onClick={() => void archive(v)}
+                        disabled={archiving.has(v.id)}
                         data-hv-archive={v.id}
                       >
                         <Archive className='h-3.5 w-3.5' /> Archive
@@ -267,6 +301,26 @@ export function HelpVideoLibrary({
             )
           })}
         </ul>
+        {q.data && q.data.data.length > 0 && (
+          <div className='mt-5 flex items-center gap-3' data-hv-more>
+            {q.hasNextPage && (
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={() => void q.fetchNextPage()}
+                disabled={q.isFetchingNextPage}
+                data-hv-show-more
+              >
+                {q.isFetchingNextPage ? 'Loading…' : 'Show more'}
+              </Button>
+            )}
+            {showingLabel(shown, total) && (
+              <p className='text-[12px] text-muted-foreground' aria-live='polite'>
+                {showingLabel(shown, total)}
+              </p>
+            )}
+          </div>
+        )}
       </div>
       <HelpVideoSheet
         videoId={watchId}

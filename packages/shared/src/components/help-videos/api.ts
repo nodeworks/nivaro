@@ -1,5 +1,5 @@
 import type { NivaroClient } from '@nivaro/sdk'
-import { useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
 import type {
@@ -62,23 +62,42 @@ export function useHelpVideosFor(
   })
 }
 
+type LibraryPage = {
+  data: HelpVideoDto[]
+  total: number
+  categories: string[]
+  can_author: boolean
+}
+
+/** The next page to ask for (1-based), or undefined once everything is loaded. */
+export function nextLibraryPage(pages: Array<Pick<LibraryPage, 'data' | 'total'>>) {
+  const last = pages[pages.length - 1]
+  if (!last?.data.length) return undefined
+  const loaded = pages.reduce((n, p) => n + p.data.length, 0)
+  return loaded < last.total ? pages.length + 1 : undefined
+}
+
+/** The library, a page at a time. A new search, category or status is a new
+ *  key, so it starts again from page 1. */
 export function useHelpVideoLibrary(params: {
   search?: string
   category?: string
   status?: string
-  page?: number
 }) {
   const client = useNivaroClient()
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: helpVideoKeys.library(params),
-    queryFn: () =>
-      client.request(
-        get<{ data: HelpVideoDto[]; total: number; categories: string[]; can_author: boolean }>(
-          '/help-videos',
-          params
-        )
-      ),
-    placeholderData: (prev) => prev
+    initialPageParam: 1,
+    queryFn: ({ pageParam }) =>
+      client.request(get<LibraryPage>('/help-videos', { ...params, page: pageParam })),
+    getNextPageParam: (_last, all) => nextLibraryPage(all),
+    placeholderData: (prev) => prev,
+    select: (d): LibraryPage => ({
+      data: d.pages.flatMap((p) => p.data),
+      total: d.pages[d.pages.length - 1]?.total ?? 0,
+      categories: d.pages[0]?.categories ?? [],
+      can_author: d.pages[0]?.can_author ?? false
+    })
   })
 }
 
