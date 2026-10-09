@@ -41,7 +41,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Publishing, versions and required viewing' },
     {
       type: 'p',
-      text: 'Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim and no box annotations (callouts, arrows, ripples and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.'
+      text: 'Publish needs a title and at least one place to show. Every published cut is kept under Versions; restoring copies an older cut into a new draft and overwrites nothing. A publish queues a render on the server. Viewers get the original recording only when the cut leaves it untouched in every way that matters: no blurs, no cuts, no trim and no callouts or boxes (a callout is an opaque panel and the label inside a box can cover a field; arrows, ripples and zooms are drawn live). Any other video plays as the finished render, and until that render is ready viewers see "Getting ready" in the library. Authors always see their latest edits applied live.'
     },
     {
       type: 'p',

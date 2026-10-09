@@ -105,9 +105,10 @@ describe('viewersWaitForRender (mirror of the server rule)', () => {
     expect(viewersWaitForRender(ann('ripple'), 10_000)).toBe(false)
     expect(viewersWaitForRender({ ...base, zooms: [{ id: 'z' } as never] }, 10_000)).toBe(false)
   })
-  it('a blur, a box, a trim, a cut or an unknown length means waiting', () => {
+  it('a blur, a callout, a box, a trim, a cut or an unknown length means waiting', () => {
     expect(viewersWaitForRender({ ...base, blurs: [{ id: 'b' } as never] }, 10_000)).toBe(true)
     expect(viewersWaitForRender(ann('box'), 10_000)).toBe(true)
+    expect(viewersWaitForRender(ann('callout'), 10_000)).toBe(true)
     const seg = (a: number, b: number) => ({ start_ms: a, end_ms: b, speed: 1 as const })
     expect(viewersWaitForRender({ ...base, segments: [seg(500, 10_000)] }, 10_000)).toBe(true)
     expect(viewersWaitForRender({ ...base, segments: [seg(0, 9_000)] }, 10_000)).toBe(true)

@@ -148,7 +148,7 @@ describe('viewerMayPlaySource', () => {
   it('allows no stored edits at all', () => expect(viewerMayPlaySource(null, src)).toBe(true))
   it('refuses a blur', () =>
     expect(viewerMayPlaySource(editsJson({ blurs: [blur] }), src)).toBe(false))
-  it('refuses a box annotation (it can mask content); a callout is fine', () => {
+  it('refuses a callout (an opaque panel) and a box (its label can cover a field)', () => {
     const ann = (type: string) => ({
       id: 'a1',
       type,
@@ -157,8 +157,28 @@ describe('viewerMayPlaySource', () => {
       rect: { x: 0.1, y: 0.1, w: 0.3, h: 0.3 },
       text: 'x'
     })
+    expect(viewerMayPlaySource(editsJson({ annotations: [ann('callout')] }), src)).toBe(false)
     expect(viewerMayPlaySource(editsJson({ annotations: [ann('box')] }), src)).toBe(false)
-    expect(viewerMayPlaySource(editsJson({ annotations: [ann('callout')] }), src)).toBe(true)
+  })
+  it('allows arrows and ripples (they only draw attention)', () => {
+    const arrow = {
+      id: 'a2',
+      type: 'arrow',
+      start_ms: 1000,
+      end_ms: 3000,
+      rect: { x: 0.1, y: 0.1, w: 0.01, h: 0.01 },
+      to: { x: 0.5, y: 0.5 },
+      text: ''
+    }
+    const ripple = {
+      id: 'a3',
+      type: 'ripple',
+      start_ms: 1000,
+      end_ms: 3000,
+      rect: { x: 0.1, y: 0.1, w: 0.1, h: 0.1 },
+      text: ''
+    }
+    expect(viewerMayPlaySource(editsJson({ annotations: [arrow, ripple] }), src)).toBe(true)
   })
   it('refuses a cut', () =>
     expect(

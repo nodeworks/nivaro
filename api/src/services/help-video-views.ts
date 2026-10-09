@@ -43,8 +43,8 @@ export function dropOff(rows: string[]): number[] {
  *  hide nothing: in live mode blurs are only CSS and cuts/trims are only
  *  player skips, so a download of the source would show what was blurred or
  *  cut away. Unreadable edits or an unknown source length count as "hides
- *  something", and so does a box annotation — the viewer then needs a
- *  current render. */
+ *  something", and so do callout and box annotations — the viewer then
+ *  needs a current render. */
 export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boolean {
   const src = Math.round(Number(sourceMs))
   if (!Number.isFinite(src) || src <= 0) return false
@@ -65,9 +65,11 @@ export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boole
     throw err
   }
   if (e.blurs.length) return false
-  // An opaque box can mask content just like a blur; callouts, arrows,
-  // ripples and zooms only draw attention.
-  if (e.annotations.some((a) => a.type === 'box')) return false
+  // A callout is an opaque filled panel: it hides what is under it, like a
+  // blur. A box is an outline, but its label is drawn inside it and can cover
+  // a small field, so it counts too (the conservative choice). Arrows,
+  // ripples (translucent) and zooms only draw attention.
+  if (e.annotations.some((a) => a.type === 'callout' || a.type === 'box')) return false
   const segs = e.segments
   if (!segs.length) return false
   if (segs[0].start_ms > 0 || segs[segs.length - 1].end_ms < src) return false // trimmed
