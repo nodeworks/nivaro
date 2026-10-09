@@ -27,6 +27,7 @@ import {
 } from '../services/help-video-edits.js'
 import {
   deleteVideoMusic,
+  importOpenverseMusic,
   libraryTrackFile,
   listVideoMusic,
   MUSIC_MAX_BYTES,
@@ -34,6 +35,13 @@ import {
   uploadMusic,
   videoMusicRow
 } from '../services/help-video-music.js'
+import {
+  OpenverseError,
+  openverseEnabled,
+  openverseTrack,
+  previewBytes,
+  searchOpenverse
+} from '../services/help-video-openverse.js'
 import {
   appendImportPart,
   applyImport,
@@ -468,6 +476,58 @@ export async function helpVideosRoutes(app: FastifyInstance) {
       .header('Content-Length', String(s.size))
       .header('Cache-Control', 'private, max-age=3600')
       .send(createReadStream(t.path))
+  })
+  // Free music from Openverse: CC0 / public domain only, every call made by
+  // the server (the browser never talks to a third-party host).
+  const openverseReply = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof OpenverseError) {
+      return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+    }
+    throw err
+  }
+  app.get('/music/openverse', { preHandler: requireAuthor }, async (req, reply) => {
+    const q = req.query as { q?: string; page?: string }
+    if (!openverseEnabled()) return reply.send({ data: { enabled: false, results: [] } })
+    try {
+      const r = await searchOpenverse(String(q.q ?? ''), Number(q.page ?? 1))
+      return reply.send({ data: { enabled: true, ...r } })
+    } catch (err) {
+      return openverseReply(reply, err)
+    }
+  })
+  app.get(
+    '/music/openverse/:trackId/preview',
+    { preHandler: requireAuthor },
+    async (req, reply) => {
+      const { trackId } = req.params as { trackId: string }
+      try {
+        const { type, bytes } = await previewBytes(await openverseTrack(trackId))
+        return reply
+          .header('Content-Type', type)
+          .header('Cache-Control', 'private, max-age=600')
+          .send(bytes)
+      } catch (err) {
+        return openverseReply(reply, err)
+      }
+    }
+  )
+  app.post('/:id/music/openverse', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const trackId = String((req.body as { openverse_id?: unknown } | null)?.openverse_id ?? '')
+    try {
+      const music = await importOpenverseMusic(req.user!, String(video.id), trackId)
+      await logActivity({
+        action: 'help-video-music-import',
+        user: req.user!.id,
+        collection: 'nivaro_help_videos',
+        item: String(video.id).toLowerCase(),
+        comment: `${music.name} · Openverse ${trackId} (${music.origin?.license ?? 'cc0'})`
+      })
+      return reply.code(201).send({ data: music })
+    } catch (err) {
+      return openverseReply(reply, err)
+    }
   })
   app.get('/:id/music', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }

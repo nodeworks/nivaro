@@ -1,4 +1,5 @@
 import { EditsError, hashEdits, normalizeEdits, type VideoEdits } from './help-video-edits.js'
+import { type MusicOrigin, normalizeOrigin } from './help-video-openverse.js'
 
 // The manifest of a help-video package (moving videos between instances) and
 // its validation. Pure: no database, no files — the package service feeds it
@@ -72,6 +73,8 @@ export interface Manifest {
       levels: unknown
       note: string | null
       files: Partial<Record<FileRole, ManifestFile>>
+      /** Where uploaded music came from (an Openverse import), when known. */
+      music_origin?: unknown
     }
   }>
 }
@@ -96,6 +99,7 @@ export interface PackageVideo {
   levels: number[] | null
   note: string | null
   files: Partial<Record<FileRole, ManifestFile>>
+  music_origin: MusicOrigin | null
 }
 
 export interface CheckedManifest {
@@ -318,7 +322,8 @@ export function checkManifest(raw: unknown, entries: Map<string, number>): Check
       clicks: sanitizeClicks(ver.clicks, sourceMs),
       levels: sanitizeLevels(ver.levels),
       note: optStr(ver.note, 300),
-      files
+      files,
+      music_origin: files.music ? normalizeOrigin(ver.music_origin) : null
     })
   }
   return out

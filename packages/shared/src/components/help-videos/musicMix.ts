@@ -228,14 +228,16 @@ export function useLiveMusic(opts: {
 /**
  * Plays the first seconds of a track (the editor's "Listen"), fading out at
  * the end. Returns a function that stops it; `onEnd` runs when it stops by
- * itself. Never throws.
+ * itself, `onStart` once the sound actually begins (a slow host can take a
+ * while to send the track). Never throws.
  */
 export function previewMusic(
   url: string,
   init: { headers?: Record<string, string>; credentials?: RequestCredentials },
   volume: number,
   onEnd: () => void,
-  seconds = 10
+  seconds = 10,
+  onStart?: () => void
 ): () => void {
   let stopped = false
   let stopNow: (() => void) | null = null
@@ -260,6 +262,7 @@ export function previewMusic(
       src.connect(gain).connect(ac.destination)
       src.start(t)
       src.stop(t + len)
+      onStart?.()
       src.onended = () => {
         if (!stopped) {
           stopped = true

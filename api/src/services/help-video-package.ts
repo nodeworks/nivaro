@@ -11,7 +11,12 @@ import { hasFfmpeg, probeVideo } from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import { downloadsAllowed, withDownloads } from './help-video-download.js'
 import { editedDuration, hashEdits, type VideoEdits } from './help-video-edits.js'
-import { libraryTrackFile, musicRowMeta, videoMusicRow } from './help-video-music.js'
+import {
+  libraryTrackFile,
+  musicRowMeta,
+  musicRowOrigin,
+  videoMusicRow
+} from './help-video-music.js'
 import {
   type CheckedManifest,
   checkManifest,
@@ -175,7 +180,8 @@ export async function exportPackageStream(
         clicks: parse(ver.clicks),
         levels: parse(ver.levels),
         note: (ver.note as string | null) ?? null,
-        files: {}
+        files: {},
+        ...(musicRowOrigin(musicRow) ? { music_origin: musicRowOrigin(musicRow) } : {})
       }
     })
     for (const role of FILE_ROLES) {
@@ -783,7 +789,7 @@ async function applyOne(
       file_id: ids.music,
       duration_ms: null,
       has_audio: true,
-      meta: musicRowMeta(v.id, edits.music?.name || 'Music'),
+      meta: musicRowMeta(v.id, edits.music?.name || 'Music', v.music_origin),
       created_at: new Date(),
       updated_at: new Date()
     }

@@ -8,6 +8,7 @@ import type {
   HelpVideoDto,
   HelpVideoErrorCode,
   MusicTrack,
+  OpenverseSearch,
   RecordedClick,
   UploadedMusic,
   VersionDto,
@@ -326,6 +327,22 @@ export function helpVideoApi(client: NivaroClient) {
       r(get<{ data: UploadedMusic[] }>(`/help-videos/${id}/music`)).then((x) => x.data),
     /** 409 MUSIC_IN_USE while any version of the video uses it. */
     deleteMusic: (id: string, musicId: string) => r(del(`/help-videos/${id}/music/${musicId}`)),
+    /** CC0 / public-domain audio on Openverse (the server searches). 429
+     *  OPENVERSE_BUSY when Openverse limits searches, 502 when unreachable. */
+    searchOpenverse: (q: string, page = 1) =>
+      r(
+        get<{ data: OpenverseSearch }>(
+          `/help-videos/music/openverse?q=${encodeURIComponent(q)}&page=${page}`
+        )
+      ).then((x) => x.data),
+    /** Imports an Openverse track as this video's music (the same track twice
+     *  is kept once). 422 OPENVERSE_LICENSE when it is no longer CC0. */
+    importOpenverse: (id: string, openverseId: string) =>
+      r(
+        post<{ data: UploadedMusic }>(`/help-videos/${id}/music/openverse`, {
+          openverse_id: openverseId
+        })
+      ).then((x) => x.data),
     registerPage: (key: string, label: string, app?: string) =>
       r(post('/help-videos/pages', { key, label, app })),
     authorRoles: () =>

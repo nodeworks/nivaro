@@ -1,5 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Music, Play, Square, Trash2, Upload } from 'lucide-react'
+import {
+  ExternalLink,
+  Loader2,
+  Music,
+  Play,
+  Plus,
+  Search,
+  Square,
+  Trash2,
+  Upload
+} from 'lucide-react'
 import { memo, useEffect, useId, useRef, useState } from 'react'
 import { useApiFetchConfig, useNivaroClient } from '../../../context'
 import { Button } from '../../ui/button'
@@ -7,12 +17,31 @@ import { Switch } from '../../ui/switch'
 import { helpVideoApi, helpVideoError, uploadMusicFile } from '../api'
 import { EDIT_LIMITS, setMusic } from '../edits'
 import { musicTrackPath, previewMusic } from '../musicMix'
-import type { MusicBed, MusicTrack, UploadedMusic, VideoEdits } from '../types'
+import type {
+  MusicBed,
+  MusicOrigin,
+  MusicTrack,
+  OpenverseTrack,
+  UploadedMusic,
+  VideoEdits
+} from '../types'
 
 const keys = {
   library: ['help-video-music', 'library'] as const,
-  mine: (id: string) => ['help-video-music', 'video', id] as const
+  mine: (id: string) => ['help-video-music', 'video', id] as const,
+  openverse: (q: string, page: number) => ['help-video-music', 'openverse', q, page] as const
 }
+
+/** Openverse's names for the sites it searches, as people know them. */
+const SOURCE_NAMES: Record<string, string> = {
+  freesound: 'Freesound',
+  jamendo: 'Jamendo',
+  wikimedia_audio: 'Wikimedia Commons',
+  ccmixter: 'ccMixter'
+}
+const sourceName = (s: string | null) =>
+  s ? (SOURCE_NAMES[s] ?? s.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())) : null
+const licenseName = (l: MusicOrigin['license']) => (l === 'pdm' ? 'Public domain' : 'CC0')
 
 const clock = (ms: number) =>
   `${Math.floor(ms / 60_000)}:${String(Math.floor((ms % 60_000) / 1000)).padStart(2, '0')}`
@@ -65,24 +94,50 @@ export const MusicPanel = memo(function MusicPanel({
   })
   const [busy, setBusy] = useState<string | null>(null)
   const [playing, setPlaying] = useState<string | null>(null)
+  /** A Listen still waiting for its sound (a slow host takes a while). */
+  const [loading, setLoading] = useState<string | null>(null)
   const stopRef = useRef<(() => void) | null>(null)
   const fileRef = useRef<HTMLInputElement | null>(null)
 
   useEffect(() => () => stopRef.current?.(), [])
 
-  const listen = (key: string, m: Pick<MusicBed, 'source' | 'track'>) => {
+  // Free music (Openverse): a search the author runs, results imported on Use.
+  const [findOpen, setFindOpen] = useState(false)
+  const [draftQ, setDraftQ] = useState('')
+  const [search, setSearch] = useState<{ q: string; page: number } | null>(null)
+  const found = useQuery({
+    queryKey: keys.openverse(search?.q ?? '', search?.page ?? 1),
+    queryFn: () => helpVideoApi(client).searchOpenverse(search?.q ?? '', search?.page ?? 1),
+    enabled: !!search?.q,
+    staleTime: 10 * 60_000,
+    retry: false
+  })
+  const foundError = found.error ? helpVideoError(found.error) : null
+
+  const listen = (key: string, m: Pick<MusicBed, 'source' | 'track'> | { openverse: string }) => {
     stopRef.current?.()
     stopRef.current = null
     if (playing === key) {
       setPlaying(null)
+      setLoading(null)
       return
     }
     setPlaying(key)
+    setLoading(key)
+    const path =
+      'openverse' in m
+        ? `/help-videos/music/openverse/${encodeURIComponent(m.openverse)}/preview`
+        : musicTrackPath(videoId, m)
     stopRef.current = previewMusic(
-      `${cfg.apiBase}${musicTrackPath(videoId, m)}`,
+      `${cfg.apiBase}${path}`,
       { headers: cfg.authHeaders, credentials: cfg.credentials },
       Math.max(0.3, music?.volume ?? EDIT_LIMITS.musicDefaultVolume),
-      () => setPlaying((p) => (p === key ? null : p))
+      () => {
+        setPlaying((p) => (p === key ? null : p))
+        setLoading((p) => (p === key ? null : p))
+      },
+      10,
+      () => setLoading((p) => (p === key ? null : p))
     )
   }
 
@@ -115,6 +170,29 @@ export const MusicPanel = memo(function MusicPanel({
     } finally {
       setBusy(null)
       if (fileRef.current) fileRef.current.value = ''
+    }
+  }
+
+  const addFound = async (t: OpenverseTrack) => {
+    setBusy(`ov:${t.id}`)
+    onNote(null)
+    try {
+      const m = await helpVideoApi(client).importOpenverse(videoId, t.id)
+      await qc.invalidateQueries({ queryKey: keys.mine(videoId) })
+      choose({ source: 'upload', track: m.id, name: m.name })
+    } catch (err) {
+      const e = helpVideoError(err)
+      onNote(
+        e?.code === 'OPENVERSE_LICENSE'
+          ? 'That track is no longer public domain, so it cannot be used'
+          : e?.code === 'MUSIC_TOO_LARGE'
+            ? 'That track is over 40 MB'
+            : e?.code === 'MUSIC_TOO_LONG'
+              ? 'That track is over 20 minutes'
+              : 'That track could not be added. Try another one'
+      )
+    } finally {
+      setBusy(null)
     }
   }
 
@@ -194,12 +272,188 @@ export const MusicPanel = memo(function MusicPanel({
                   </button>
                   <ListenButton
                     playing={playing === `lib:${t.key}`}
+                    loading={loading === `lib:${t.key}`}
                     name={t.title}
                     onClick={() => listen(`lib:${t.key}`, { source: 'library', track: t.key })}
                   />
                 </li>
               ))}
             </ul>
+          </div>
+
+          <div className='space-y-1.5' data-hv-music-find>
+            {!findOpen ? (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8 text-[12.5px]'
+                onClick={() => setFindOpen(true)}
+                data-hv-music-find-open
+              >
+                <Search className='!size-3.5' aria-hidden />
+                Find free music
+              </Button>
+            ) : (
+              <>
+                <p className='text-[12px] font-medium text-foreground'>Free music</p>
+                <form
+                  className='flex gap-1'
+                  onSubmit={(e) => {
+                    e.preventDefault()
+                    const q = draftQ.trim()
+                    if (q) setSearch({ q, page: 1 })
+                  }}
+                >
+                  <input
+                    type='search'
+                    value={draftQ}
+                    onChange={(e) => setDraftQ(e.target.value)}
+                    placeholder='Calm piano, upbeat, ambient…'
+                    aria-label='Search free music'
+                    maxLength={100}
+                    // biome-ignore lint/a11y/noAutofocus: opened on purpose by the author
+                    autoFocus
+                    className='h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-[12.5px] text-foreground placeholder:text-muted-foreground focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/60'
+                    data-hv-music-find-input
+                  />
+                  <Button
+                    type='submit'
+                    size='sm'
+                    variant='outline'
+                    className='h-8 shrink-0 px-2.5 text-[12.5px]'
+                    disabled={!draftQ.trim() || found.isFetching}
+                    data-hv-music-find-go
+                  >
+                    {found.isFetching ? (
+                      <Loader2
+                        className='!size-3.5 animate-spin motion-reduce:animate-none'
+                        aria-hidden
+                      />
+                    ) : (
+                      'Search'
+                    )}
+                  </Button>
+                </form>
+                <p className='text-[11.5px] leading-snug text-muted-foreground'>
+                  Public-domain sounds and music from{' '}
+                  <a
+                    href='https://openverse.org/'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                    className='underline underline-offset-2 hover:text-foreground'
+                  >
+                    Openverse
+                  </a>
+                  . Free to use, no credit needed.
+                </p>
+                {found.data && !found.data.enabled && (
+                  <p className='text-[12px] text-muted-foreground'>
+                    Free music search is switched off on this site.
+                  </p>
+                )}
+                {foundError && (
+                  <p className='text-[12px] text-muted-foreground' role='status'>
+                    {foundError.code === 'OPENVERSE_BUSY'
+                      ? 'Openverse is limiting searches right now. Try again in a minute.'
+                      : 'Openverse could not be reached. Try again in a moment.'}
+                  </p>
+                )}
+                {found.data?.enabled && search && !found.isFetching && (
+                  <p className='sr-only' role='status'>
+                    {found.data.results.length
+                      ? `${found.data.results.length} results`
+                      : 'No results'}
+                  </p>
+                )}
+                {found.data?.enabled && found.data.results.length === 0 && !found.isFetching && (
+                  <p className='text-[12px] text-muted-foreground'>
+                    Nothing found for “{search?.q}”. Try fewer or broader words.
+                  </p>
+                )}
+                <ul className='space-y-1' data-hv-music-find-results>
+                  {(found.data?.results ?? []).map((t) => (
+                    <li
+                      key={t.id}
+                      className='flex items-center gap-1'
+                      data-hv-music-find-result={t.id}
+                    >
+                      <div className={`${row} min-w-0 flex-1 border-border bg-background`}>
+                        <span className='min-w-0 flex-1'>
+                          <span className='block truncate text-[12.5px] font-medium text-foreground'>
+                            {t.title}
+                          </span>
+                          <span className='block truncate text-[11.5px] text-muted-foreground'>
+                            {[
+                              licenseName(t.license),
+                              t.creator && `by ${t.creator}`,
+                              sourceName(t.provider)
+                            ]
+                              .filter(Boolean)
+                              .join(' · ')}
+                          </span>
+                        </span>
+                        {!!t.duration_ms && (
+                          <span className='shrink-0 text-[11.5px] tabular-nums text-muted-foreground'>
+                            {clock(t.duration_ms)}
+                          </span>
+                        )}
+                      </div>
+                      <ListenButton
+                        playing={playing === `ov:${t.id}`}
+                        loading={loading === `ov:${t.id}`}
+                        name={t.title}
+                        onClick={() => listen(`ov:${t.id}`, { openverse: t.id })}
+                      />
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        className='h-8 w-8 shrink-0 px-0 text-muted-foreground'
+                        aria-label={`Use ${t.title}`}
+                        title='Use this track'
+                        disabled={!!busy}
+                        onClick={() => void addFound(t)}
+                        data-hv-music-find-use={t.id}
+                      >
+                        {busy === `ov:${t.id}` ? (
+                          <Loader2
+                            className='!size-3.5 animate-spin motion-reduce:animate-none'
+                            aria-hidden
+                          />
+                        ) : (
+                          <Plus className='!size-3.5' aria-hidden />
+                        )}
+                      </Button>
+                    </li>
+                  ))}
+                </ul>
+                {search && found.data?.enabled && (found.data.page_count ?? 0) > 1 && (
+                  <div className='flex items-center justify-between gap-2'>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-7 px-2 text-[12px]'
+                      disabled={search.page <= 1 || found.isFetching}
+                      onClick={() => setSearch({ ...search, page: search.page - 1 })}
+                    >
+                      Previous
+                    </Button>
+                    <span className='text-[11.5px] tabular-nums text-muted-foreground'>
+                      Page {search.page} of {found.data.page_count}
+                    </span>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-7 px-2 text-[12px]'
+                      disabled={search.page >= (found.data.page_count ?? 1) || found.isFetching}
+                      onClick={() => setSearch({ ...search, page: search.page + 1 })}
+                      data-hv-music-find-next
+                    >
+                      Next
+                    </Button>
+                  </div>
+                )}
+              </>
+            )}
           </div>
 
           <div className='space-y-1.5'>
@@ -214,8 +468,22 @@ export const MusicPanel = memo(function MusicPanel({
                     className={`${row} min-w-0 flex-1 ${selected('upload', m.id) ? rowOn : rowOff}`}
                     data-hv-music-file={m.id}
                   >
-                    <span className='min-w-0 flex-1 truncate text-[12.5px] text-foreground'>
-                      {m.name}
+                    <span className='min-w-0 flex-1'>
+                      <span className='block truncate text-[12.5px] text-foreground'>{m.name}</span>
+                      {m.origin && (
+                        <span
+                          className='block truncate text-[11.5px] text-muted-foreground'
+                          data-hv-music-origin={m.origin.id}
+                        >
+                          {[
+                            licenseName(m.origin.license),
+                            m.origin.creator && `by ${m.origin.creator}`,
+                            sourceName(m.origin.source)
+                          ]
+                            .filter(Boolean)
+                            .join(' · ')}
+                        </span>
+                      )}
                     </span>
                     {m.duration_ms > 0 && (
                       <span className='shrink-0 text-[11.5px] tabular-nums text-muted-foreground'>
@@ -225,9 +493,22 @@ export const MusicPanel = memo(function MusicPanel({
                   </button>
                   <ListenButton
                     playing={playing === `up:${m.id}`}
+                    loading={loading === `up:${m.id}`}
                     name={m.name}
                     onClick={() => listen(`up:${m.id}`, { source: 'upload', track: m.id })}
                   />
+                  {m.origin?.landing_url && (
+                    <a
+                      href={m.origin.landing_url}
+                      target='_blank'
+                      rel='noopener noreferrer'
+                      className='inline-flex size-8 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground'
+                      aria-label={`Where ${m.name} comes from`}
+                      title='Where it comes from'
+                    >
+                      <ExternalLink className='!size-3.5' aria-hidden />
+                    </a>
+                  )}
                   {!selected('upload', m.id) && (
                     <Button
                       size='sm'
@@ -340,10 +621,12 @@ export const MusicPanel = memo(function MusicPanel({
 
 function ListenButton({
   playing,
+  loading,
   name,
   onClick
 }: {
   playing: boolean
+  loading?: boolean
   name: string
   onClick: () => void
 }) {
@@ -354,11 +637,15 @@ function ListenButton({
       className='h-8 w-8 shrink-0 px-0 text-muted-foreground'
       aria-label={playing ? `Stop ${name}` : `Listen to ${name}`}
       aria-pressed={playing}
-      title={playing ? 'Stop' : 'Listen'}
+      title={loading ? 'Loading… (select to cancel)' : playing ? 'Stop' : 'Listen'}
+      aria-busy={loading || undefined}
       onClick={onClick}
       data-hv-music-listen
+      data-loading={loading ? '' : undefined}
     >
-      {playing ? (
+      {loading ? (
+        <Loader2 className='!size-3.5 animate-spin motion-reduce:animate-none' aria-hidden />
+      ) : playing ? (
         <Square className='!size-3.5' aria-hidden />
       ) : (
         <Play className='!size-3.5' aria-hidden />

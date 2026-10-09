@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import type { Readable } from 'node:stream'
@@ -10,6 +10,13 @@ import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import { type MusicBed, normalizeMusic } from './help-video-edits.js'
 import { isUuid } from './help-video-files.js'
+import {
+  downloadTrack,
+  type MusicOrigin,
+  normalizeOrigin,
+  openverseTrack,
+  originOf
+} from './help-video-openverse.js'
 import { discardFile, videoWorkDir } from './help-video-uploads.js'
 import { openStoredObject } from './stored-object-stream.js'
 
@@ -32,7 +39,11 @@ export interface UploadedMusic {
   id: string
   name: string
   duration_ms: number
+  /** Where it came from, when it was imported (Openverse). */
+  origin?: MusicOrigin
 }
+export type { MusicOrigin }
+export { normalizeOrigin }
 
 const RATE = 32_000
 const LOOP_S = 32
@@ -304,8 +315,11 @@ const metaPrefix = (videoId: string) =>
   `{"source":"music","video_id":"${String(videoId).toLowerCase()}"`
 
 /** The meta a music row carries: video first, so a row is found by prefix. */
-export function musicRowMeta(videoId: string, name: string): string {
-  return `${metaPrefix(videoId)},"name":${JSON.stringify(String(name).slice(0, 120))}}`
+export function musicRowMeta(videoId: string, name: string, origin?: MusicOrigin | null): string {
+  const o = normalizeOrigin(origin)
+  return `${metaPrefix(videoId)},"name":${JSON.stringify(String(name).slice(0, 120))}${
+    o ? `,"origin":${JSON.stringify(o)}` : ''
+  }}`
 }
 
 function musicError(statusCode: number, code: string, message: string): Error {
@@ -332,7 +346,8 @@ export function sniffAudio(head: Buffer): string | null {
 export async function uploadMusic(
   user: User,
   videoId: string,
-  file: { filename: string; stream: Readable; truncated?: () => boolean }
+  file: { filename: string; stream: Readable; truncated?: () => boolean },
+  opts: { origin?: MusicOrigin; name?: string } = {}
 ): Promise<UploadedMusic> {
   if (!(await hasFfmpeg())) {
     throw musicError(503, 'MUSIC_NO_FFMPEG', 'Music needs ffmpeg on the server')
@@ -399,8 +414,7 @@ export async function uploadMusic(
       throw musicError(422, 'MUSIC_NOT_AUDIO', 'That file has no sound we can read')
     }
     const name =
-      basename(String(file.filename || 'Music'))
-        .replace(/\.[^.]+$/, '')
+      (opts.name ?? basename(String(file.filename || 'Music')).replace(/\.[^.]+$/, ''))
         .replace(/\s+/g, ' ')
         .trim()
         .slice(0, 120) || 'Music'
@@ -417,7 +431,7 @@ export async function uploadMusic(
         file_id: stored.id,
         duration_ms: done.duration_ms,
         has_audio: true,
-        meta: musicRowMeta(videoId, name),
+        meta: musicRowMeta(videoId, name, opts.origin),
         created_at: new Date(),
         updated_at: new Date()
       })
@@ -425,7 +439,47 @@ export async function uploadMusic(
       await discardFile(user, String(stored.id))
       throw err
     }
-    return { id, name, duration_ms: done.duration_ms }
+    return {
+      id,
+      name,
+      duration_ms: done.duration_ms,
+      ...(opts.origin ? { origin: opts.origin } : {})
+    }
+  } finally {
+    await rm(dir, { recursive: true, force: true })
+  }
+}
+
+/**
+ * Imports a CC0 / public-domain track from Openverse into this video's music.
+ * The track is read again from Openverse by id (its license checked there,
+ * never taken from the browser) and goes through the same conversion as an
+ * author's own file. The same track imported twice is kept once.
+ */
+export async function importOpenverseMusic(
+  user: User,
+  videoId: string,
+  openverseId: string
+): Promise<UploadedMusic> {
+  const t = await openverseTrack(openverseId)
+  const have = (await listVideoMusic(videoId)).find(
+    (m) => m.origin?.provider === 'openverse' && m.origin.id === t.id
+  )
+  if (have) return have
+  if (!(await hasFfmpeg())) {
+    throw musicError(503, 'MUSIC_NO_FFMPEG', 'Music needs ffmpeg on the server')
+  }
+  const dir = join(videoWorkDir(), 'music-dl', randomUUID())
+  await mkdir(dir, { recursive: true })
+  try {
+    const raw = join(dir, 'track.bin')
+    await downloadTrack(t, raw, UPLOAD_MAX_BYTES)
+    return await uploadMusic(
+      user,
+      videoId,
+      { filename: t.title, stream: createReadStream(raw) },
+      { origin: originOf(t), name: t.title }
+    )
   } finally {
     await rm(dir, { recursive: true, force: true })
   }
@@ -433,12 +487,25 @@ export async function uploadMusic(
 
 function rowToMusic(r: Record<string, unknown>): UploadedMusic {
   let name = 'Music'
+  let origin: MusicOrigin | null = null
   try {
-    name = String(JSON.parse(String(r.meta)).name ?? 'Music')
+    const m = JSON.parse(String(r.meta))
+    name = String(m.name ?? 'Music')
+    origin = normalizeOrigin(m.origin)
   } catch {
     /* keep the default */
   }
-  return { id: String(r.id).toLowerCase(), name, duration_ms: Number(r.duration_ms ?? 0) }
+  return {
+    id: String(r.id).toLowerCase(),
+    name,
+    duration_ms: Number(r.duration_ms ?? 0),
+    ...(origin ? { origin } : {})
+  }
+}
+
+/** A music row's origin (packages carry it). */
+export function musicRowOrigin(row: Record<string, unknown> | null): MusicOrigin | null {
+  return row ? (rowToMusic(row).origin ?? null) : null
 }
 
 function musicRows(videoId: string) {
