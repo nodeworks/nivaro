@@ -101,17 +101,22 @@ async function runFrames(max: number): Promise<number> {
 
 let widgetMounts = 0
 
-// The "Project Budget" widget: five money figures, label + value + 36 each
-// (StripCell's dense padding), 952px in all.
+// The "Project Budget" widget on 284212: five money figures, the null ones a
+// dash (no `awaiting` in the render response), EFP Committed $0.00. Text
+// widths (`data-test-sw`) as the investigation's sketch had them; each
+// figure RENDERS ~190px (952 in all, as measured) — more than its text-based
+// estimate, so the estimate of the folded widget (658) is short of the truth
+// and only a remembered measurement keeps the fold stable.
 const FIGURES: Array<[string, string, number, number]> = [
-  ["PUB'd", 'needs PUB', 34, 120],
-  ['Fusion Remaining', 'needs Fusion', 98, 56],
-  ['EFP Committed', '$0.00', 84, 70],
-  ['Total Remaining', '—', 92, 62],
-  ['Total Remaining %', '—', 104, 52]
+  ["PUB'd", '—', 34, 8],
+  ['Fusion Remaining', '—', 98, 8],
+  ['EFP Committed', '$0.00', 84, 34],
+  ['Total Remaining', '—', 92, 8],
+  ['Total Remaining %', '—', 104, 8]
 ]
+const FIGURE_W = [190, 190, 190, 190, 192]
 
-function FakeWidget() {
+function FakeWidget({ committed }: { committed: string }) {
   const [loaded, setLoaded] = useState(false)
   useEffect(() => {
     widgetMounts++
@@ -125,13 +130,13 @@ function FakeWidget() {
   if (!loaded) return <span data-test-w={144} />
   return (
     <>
-      {FIGURES.map(([label, value, lw, vw]) => (
-        <div key={label} data-test-w={lw + vw + 36}>
+      {FIGURES.map(([label, value, lw, vw], i) => (
+        <div key={label} data-test-w={FIGURE_W[i]}>
           <span data-header-label data-test-sw={lw}>
             {label}
           </span>
           <span data-header-value data-test-sw={vw}>
-            {value}
+            {label === 'EFP Committed' ? committed : value}
           </span>
         </div>
       ))}
@@ -145,11 +150,11 @@ const DENSE = [172, 190, 952, 125, 110, 196, 173, 105, 161, 309, 90, 150]
 const EMPTY = new Set([0, 4, 5, 8, 10])
 const MONEY = new Set([0, 1])
 
-function tiles(): ReactElement[] {
+function tiles(committed: string): ReactElement[] {
   return DENSE.map((w, i) =>
     i === 2 ? (
       <div key='project_budget' className={HEADER_TILE} data-header-money=''>
-        <FakeWidget />
+        <FakeWidget committed={committed} />
       </div>
     ) : (
       <div
@@ -171,23 +176,31 @@ function tiles(): ReactElement[] {
   )
 }
 
-function Band({ width }: { width: number }) {
+function Band({
+  width,
+  committed = '$0.00',
+  items
+}: {
+  width: number
+  committed?: string
+  items?: ReactElement[]
+}) {
   const { headerDense, headerFolded, headerTilesRef } = useHeaderBand()
   return (
     <div data-header-dense={headerDense ? '' : undefined}>
       <div ref={headerTilesRef} data-test-client-w={width}>
-        <HeaderTiles tiles={tiles()} folded={headerDense ? headerFolded : []} />
+        <HeaderTiles tiles={items ?? tiles(committed)} folded={headerDense ? headerFolded : []} />
       </div>
     </div>
   )
 }
 
-async function mount(width: number) {
+async function mount(band: ReactElement) {
   widgetMounts = 0
   const host = document.createElement('div')
   document.body.append(host)
   root = createRoot(host)
-  await act(async () => root?.render(<Band width={width} />))
+  await act(async () => root?.render(band))
   return host
 }
 
@@ -198,7 +211,7 @@ const widgetFolded = (host: HTMLElement) =>
 
 describe('HeaderTiles + useHeaderBand — folding a tile never remounts it', () => {
   it('folds and unfolds the five-figure widget with one mount', async () => {
-    const host = await mount(1006)
+    const host = await mount(<Band width={1006} />)
     await runFrames(40)
     expect(widgetMounts).toBe(1)
     expect(widgetFolded(host)).toBe(true)
@@ -214,10 +227,78 @@ describe('HeaderTiles + useHeaderBand — folding a tile never remounts it', () 
   })
 
   it('settles at a fold-triggering width in a bounded number of measure passes', async () => {
-    const host = await mount(1006)
+    const host = await mount(<Band width={1006} />)
     const passes = await runFrames(40)
     expect(frames.size).toBe(0) // nothing left to re-measure
     expect(passes).toBeLessThanOrEqual(4)
     expect(widgetFolded(host)).toBe(true)
+  })
+})
+
+describe('useHeaderBand — a folded cell keeps the width it was folded on', () => {
+  it('a figure changing inside the folded widget does not unfold it', async () => {
+    const host = await mount(<Band width={1006} />)
+    await runFrames(40)
+    expect(widgetFolded(host)).toBe(true)
+
+    // The folded widget's render refetches: EFP Committed changes.
+    await act(async () => root?.render(<Band width={1006} committed='$1,250.00' />))
+    expect(host.textContent).toContain('$1,250.00')
+    const seen: boolean[] = []
+    let n = 0
+    while (frames.size > 0 && n++ < 40) {
+      await runFrames(1)
+      seen.push(widgetFolded(host))
+    }
+    // Clearing every remembered width here left the widget costed at its
+    // text estimate (658 of 952): it unfolded, then refolded.
+    expect(seen.length).toBeGreaterThan(0)
+    expect(seen.every(Boolean)).toBe(true)
+  })
+})
+
+// A header summary chip renders nothing when it has no rows
+// (hide_when_zero) — like HeaderSummaryChip, it passes the band's cell
+// attributes to its tile.
+function FakeSummary({ hidden, label, ...cell }: { hidden?: boolean; label: string }) {
+  if (hidden) return null
+  return (
+    <div className={HEADER_TILE} data-test-w={150} data-header-money='' {...cell}>
+      <span data-header-label data-test-sw={60}>
+        {label}
+      </span>
+      <span data-header-value data-test-sw={40}>
+        $5.00
+      </span>
+    </div>
+  )
+}
+
+describe('HeaderTiles — folds by tile key, not position', () => {
+  it('a summary that renders nothing does not shift which tile folds', async () => {
+    const money = (key: string) => (
+      <div key={key} className={HEADER_TILE} data-test-w={150} data-header-money=''>
+        <span data-header-label data-test-sw={60}>
+          {key}
+        </span>
+        <span data-header-value data-test-sw={40}>
+          $1.00
+        </span>
+      </div>
+    )
+    const items = [
+      money('A'),
+      money('B'),
+      <FakeSummary key='__summary__empty' hidden label='Empty' />,
+      <FakeSummary key='__summary__lines' label='Lines' />
+    ]
+    // 250px: A | B | Lines needs three rows; folding the right-most money
+    // cell (Lines) leaves A | B + chip.
+    const host = await mount(<Band width={250} items={items} />)
+    await runFrames(40)
+    const lines = Array.from(host.querySelectorAll('[data-header-label]')).find(
+      (l) => l.textContent === 'Lines'
+    )
+    expect(lines?.closest('[data-header-folded]')).not.toBeNull()
   })
 })

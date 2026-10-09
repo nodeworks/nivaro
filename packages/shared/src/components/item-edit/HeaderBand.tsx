@@ -41,7 +41,7 @@ export function useHeaderBand() {
       const folded = dense
         ? headerFoldedCells(el, headerDenseRef.current, headerWidthCache.current)
         : []
-      const key = (list: FoldedCell[]) => list.map((c) => `${c.index}${c.empty ? 'e' : ''}`).join()
+      const key = (list: FoldedCell[]) => list.map((c) => `${c.key}${c.empty ? 'e' : ''}`).join()
       if (key(folded) !== key(headerFoldedRef.current)) setHeaderFolded(folded)
     }
     const schedule = () => {
@@ -53,14 +53,17 @@ export function useHeaderBand() {
     const mo = new MutationObserver((records) => {
       for (const child of el.children) ro.observe(child)
       // Something changed inside a shown cell (a value loaded, a rollup
-      // updated): THAT cell's remembered widths are stale. A folded cell's
-      // are kept — it cannot be re-measured, and clearing every width let a
-      // folded five-figure widget be costed as one figure, so the band
-      // unfolded, refolded, and looped until React threw (headerChangedCells).
-      for (const key of headerChangedCells(el, records)) {
+      // updated): THAT cell's remembered widths are stale. A folded cell
+      // keeps its dense width — it cannot be re-measured, and clearing every
+      // width let a folded five-figure widget be costed as one figure, so the
+      // band unfolded, refolded, and looped until React threw. Its stacked
+      // width (maybe a loading skeleton's) goes (headerChangedCells).
+      const changed = headerChangedCells(el, records)
+      for (const key of changed.shown) {
         headerWidthCache.current.delete(key)
         headerStackedCache.current.delete(key)
       }
+      for (const key of changed.folded) headerStackedCache.current.delete(key)
       schedule()
     })
     mo.observe(el, { childList: true, subtree: true, characterData: true })
@@ -79,28 +82,35 @@ export function useHeaderBand() {
 /**
  * The band's tiles in sort order, the folded ones (`folded`, from
  * `useHeaderBand`) behind the "+N more" chip. Each tile is one keyed element
- * that renders one cell and passes `data-header-cell` / `data-header-folded`
- * / `aria-hidden` to it (HEADER_TILE styles the folded state).
+ * that renders one cell (or nothing) and passes `data-header-cell` /
+ * `data-header-folded` / `aria-hidden` to it (HEADER_TILE styles the folded
+ * state). Folding goes by that cell key, so a tile that renders nothing
+ * never shifts which tile folds.
  */
 export function HeaderTiles({ tiles, folded }: { tiles: ReactElement[]; folded: FoldedCell[] }) {
-  const foldSet = new Set(folded.map((c) => c.index))
-  const foldedTiles = tiles.filter((_, k) => foldSet.has(k))
+  const foldSet = new Set(folded.map((c) => String(c.key)))
+  // A repeated key gets `key#position`, as headerCellKeys does: two tiles
+  // never share a cell key.
+  const seen = new Set<string>()
+  const cellKeys = tiles.map((t, k) => {
+    let key = String(t.key ?? k)
+    if (seen.has(key)) key = `${key}#${k}`
+    seen.add(key)
+    return key
+  })
+  const foldedTiles = tiles.filter((_, k) => foldSet.has(cellKeys[k]))
   return (
     <>
       {tiles.map((t, k) =>
         // Folded: marked on the tile itself, which keeps its own key — a
         // wrapper changed the key and remounted the tile on every fold, so a
         // widget refetched and re-rendered each time. Out of flow but in the
-        // DOM, in place, so the measurer's cell index stays the tile index.
+        // DOM, in place.
         cloneElement(
           t as ReactElement<Record<string, unknown>>,
-          foldSet.has(k)
-            ? {
-                'data-header-cell': String(t.key ?? k),
-                'data-header-folded': '',
-                'aria-hidden': 'true'
-              }
-            : { 'data-header-cell': String(t.key ?? k) }
+          foldSet.has(cellKeys[k])
+            ? { 'data-header-cell': cellKeys[k], 'data-header-folded': '', 'aria-hidden': 'true' }
+            : { 'data-header-cell': cellKeys[k] }
         )
       )}
       {foldedTiles.length > 0 && (
