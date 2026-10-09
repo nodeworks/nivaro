@@ -31,6 +31,7 @@ export function Timeline({
   sourceMs,
   playheadSrcMs,
   levels,
+  uploaded,
   silences,
   selection,
   onSelect,
@@ -43,6 +44,8 @@ export function Timeline({
   sourceMs: number
   playheadSrcMs: number
   levels: number[] | null
+  /** The source is an uploaded file: there are no microphone levels to draw. */
+  uploaded?: boolean
   /** Suggested silent stretches, shaded on the sound lane. */
   silences?: Stretch[]
   selection: Selection
@@ -243,8 +246,13 @@ export function Timeline({
                   <path d={wave} stroke='currentColor' strokeWidth={1} fill='none' />
                 </svg>
               ) : (
-                <span className='absolute inset-y-0 left-2 text-[11px] leading-8 text-muted-foreground'>
-                  No microphone in this recording
+                <span
+                  className='absolute inset-y-0 left-2 text-[11px] leading-8 text-muted-foreground'
+                  data-hv-sound-empty={uploaded ? 'upload' : 'no-mic'}
+                >
+                  {uploaded
+                    ? 'No sound levels for an uploaded video'
+                    : 'No microphone in this recording'}
                 </span>
               )}
             </div>

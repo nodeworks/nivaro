@@ -149,8 +149,8 @@ const video = {
 
 let root: Root
 let host: HTMLDivElement
-async function mount(clicks: Clicks = null) {
-  const draft = draftFor(clicks)
+async function mount(clicks: Clicks = null, extra: Partial<VersionDto> = {}) {
+  const draft = { ...draftFor(clicks), ...extra }
   request.mockImplementation(async (c: { _method: string; _path: string; _body?: unknown }) => {
     if (c._method === 'GET' && c._path.endsWith('/draft/edits')) return { data: draft }
     if (c._method === 'GET') return { data: { ...video, draft } }
@@ -350,6 +350,17 @@ describe('HelpVideoEditor click ripples', () => {
       "Clicks weren't captured for this recording."
     )
     expect(q('[data-hv-add-ripples]')).toBeNull()
+  })
+
+  it('an uploaded file says why there are no clicks, sound levels or pause suggestions', async () => {
+    await mount(null, { source_kind: 'upload' })
+    expect(q('[data-hv-clicks-state]').textContent).toBe(
+      'This video was uploaded as a file, so no clicks were captured. Add ripples by hand with the Ripple tool.'
+    )
+    expect(q('[data-hv-add-ripples]')).toBeNull()
+    expect(q('[data-hv-sound-empty]').getAttribute('data-hv-sound-empty')).toBe('upload')
+    expect(q('[data-hv-suggestions-none]').textContent).toBe('No pause suggestions')
+    expect(q('[data-hv-suggestions]')).toBeNull()
   })
 
   it('says plainly when none were made', async () => {

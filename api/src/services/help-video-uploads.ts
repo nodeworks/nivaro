@@ -4,8 +4,21 @@ import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { hasFfmpeg, probeVideo, remuxToFile } from './ffmpeg.js'
+import {
+  hasFfmpeg,
+  lockedInputArgs,
+  probeStreams,
+  probeVideo,
+  remuxToFile,
+  runFfmpeg
+} from './ffmpeg.js'
 import { deleteFile, getFile, uploadFileFromPath } from './files.js'
+import {
+  buildUploadArgs,
+  planUploadedVideo,
+  sniffContainer,
+  type UploadContainer
+} from './help-video-upload-media.js'
 import { deleteStoredObject } from './storage-drivers.js'
 
 // The host name, not the per-boot INSTANCE_ID: a restarted container keeps its
@@ -37,6 +50,50 @@ export interface UploadSession {
   duration_ms: number | null
   created_at: string
   updated_at: string
+  /** 'recording' from the browser recorder, 'upload' for a file someone picked. */
+  source: 'recording' | 'upload'
+  /** Uploaded files only: the picked file's name and size (resume matches them). */
+  name?: string | null
+  size?: number | null
+  /** Uploaded files while finishing: 'checking' | 'converting' | 'saving'. */
+  phase?: string | null
+  /** Uploaded files while converting: 0-100. */
+  progress?: number | null
+  /** Why an uploaded file could not be kept (status `abandoned` = final,
+   *  `open` = finalize can be tried again). */
+  error?: string | null
+  error_code?: string | null
+}
+
+/** What `meta` holds for an uploaded file (recordings hold {clicks, levels}). */
+interface UploadMeta {
+  source?: 'upload'
+  name?: string | null
+  size?: number | null
+  phase?: string | null
+  progress?: number | null
+  error?: string | null
+  error_code?: string | null
+  clicks?: unknown
+  levels?: unknown
+}
+
+/** The meta of an uploaded file. A recording's meta (up to 2 MB of clicks and
+ *  levels) is never parsed here: `source` is always written first, so its head
+ *  says which kind the row is. */
+const UPLOAD_META_HEAD = '{"source":"upload"'
+function uploadMeta(row: Record<string, unknown>): UploadMeta | null {
+  const raw = row.meta == null ? '' : String(row.meta)
+  if (!raw.startsWith(UPLOAD_META_HEAD)) return null
+  try {
+    return JSON.parse(raw) as UploadMeta
+  } catch {
+    return null
+  }
+}
+function metaJson(m: UploadMeta): string {
+  // `source` first: uploadMeta() reads the head only.
+  return JSON.stringify({ source: 'upload', ...m })
 }
 export interface FinalizedUpload {
   file_id: string
@@ -115,12 +172,24 @@ export function decidePart(
   if (n !== session.next_part)
     return { error: `Expected part ${session.next_part}, got ${n}`, status: 409 }
   if (session.bytes_received + size > MAX_UPLOAD_BYTES)
-    return { error: 'Recordings may be at most 1.2 GB', status: 413 }
+    return { error: 'Videos may be at most 1.2 GB', status: 413 }
   return 'append'
 }
 
 function shape(r: Record<string, unknown>): UploadSession {
+  const m = uploadMeta(r)
   return {
+    source: m ? 'upload' : 'recording',
+    ...(m
+      ? {
+          name: m.name ?? null,
+          size: m.size ?? null,
+          phase: m.phase ?? null,
+          progress: m.progress ?? null,
+          error: m.error ?? null,
+          error_code: m.error_code ?? null
+        }
+      : {}),
     id: String(r.id).toLowerCase(),
     mime: String(r.mime),
     bytes_received: Number(r.bytes_received),
@@ -147,10 +216,37 @@ async function own(
   return row
 }
 
-export async function openUpload(user: User, mime: string): Promise<UploadSession> {
-  const base = mime.split(';')[0].trim().toLowerCase()
-  if (!ALLOWED_MIME.includes(base))
+export async function openUpload(
+  user: User,
+  mime: string,
+  opts: { source?: string; name?: unknown; size?: unknown } = {}
+): Promise<UploadSession> {
+  const isFile = opts.source === 'upload'
+  let base = mime.split(';')[0].trim().toLowerCase()
+  let meta: string | null = null
+  if (isFile) {
+    // A picked file: what the browser says it is means nothing. The first part
+    // decides the container (sniffContainer) and finalize probes the streams,
+    // which needs ffmpeg.
+    if (!(await hasFfmpeg())) {
+      throw fail(
+        503,
+        'UPLOAD_NO_FFMPEG',
+        'This server cannot read uploaded videos (ffmpeg is not installed)'
+      )
+    }
+    const size = Number(opts.size)
+    if (Number.isFinite(size) && size > MAX_UPLOAD_BYTES) {
+      throw fail(413, 'UPLOAD_TOO_BIG', 'Videos may be at most 1.2 GB')
+    }
+    base = 'video/mp4' // a placeholder until the first part shows what it is
+    meta = metaJson({
+      name: String(opts.name ?? '').slice(0, 200) || null,
+      size: Number.isFinite(size) && size > 0 ? Math.round(size) : null
+    })
+  } else if (!ALLOWED_MIME.includes(base)) {
     throw fail(400, 'UPLOAD_MIME', 'Only WebM or MP4 recordings can be uploaded')
+  }
   const id = randomUUID()
   const now = new Date()
   await mkdir(join(videoWorkDir(), 'uploads'), { recursive: true })
@@ -163,6 +259,7 @@ export async function openUpload(user: User, mime: string): Promise<UploadSessio
     last_part_bytes: null,
     status: 'open',
     instance: HOST,
+    meta,
     created_at: now,
     updated_at: now
   })
@@ -192,7 +289,14 @@ export async function appendPart(
     )
     if (decision === 'duplicate') return shape(row)
     if (typeof decision === 'object') throw fail(decision.status, 'UPLOAD_PART', decision.error)
-    if (n === 0 && !looksLikeVideo(String(row.mime), body)) {
+    const isFile = !!uploadMeta(row)
+    let sniffed: UploadContainer | null = null
+    if (n === 0 && isFile) {
+      sniffed = sniffContainer(body)
+      if (!sniffed) {
+        throw fail(422, 'UPLOAD_NOT_VIDEO', "That file isn't an MP4, WebM or MOV video")
+      }
+    } else if (n === 0 && !looksLikeVideo(String(row.mime), body)) {
       throw fail(422, 'UPLOAD_NOT_VIDEO', 'That does not look like a WebM or MP4 recording')
     }
     const path = partPath(String(row.id))
@@ -203,6 +307,7 @@ export async function appendPart(
         next_part: n + 1,
         last_part_bytes: body.length,
         bytes_received: Number(row.bytes_received) + body.length,
+        ...(sniffed ? { mime: sniffed } : {}),
         updated_at: new Date()
       })
     if (!updated) {
@@ -222,7 +327,7 @@ export async function finalizeUpload(
   user: User,
   id: string,
   meta: { duration_ms?: number; clicks?: unknown; levels?: unknown }
-): Promise<FinalizedUpload> {
+): Promise<FinalizedUpload | ProcessingUpload> {
   const rid = assertId(id)
   // Claim: only one finalize can flip open -> finalizing; appends are serialized
   // on the same lock so none is mid-write when the claim lands.
@@ -247,6 +352,14 @@ export async function finalizeUpload(
     }
     return r
   })
+  const fileMeta = uploadMeta(row)
+  if (fileMeta) {
+    // A picked file is checked (and maybe converted) in the background: a
+    // conversion can outlast any proxy's request timeout. The caller polls
+    // GET /uploads/:id until it is finalized (or says why it was refused).
+    startFileProcessing(user, row, fileMeta)
+    return { processing: true, id: String(row.id).toLowerCase() }
+  }
   const dbId = row.id
   const reopen = () =>
     db('nivaro_help_video_uploads')
@@ -339,6 +452,202 @@ export async function finalizeUpload(
   } finally {
     await rm(fixed, { force: true })
   }
+}
+
+export interface ProcessingUpload {
+  processing: true
+  id: string
+}
+
+/** Uploaded files being checked or converted on this process, by upload id. */
+const processing = new Map<string, AbortController>()
+
+function uploadThreads(): number {
+  const n = Number(process.env.VIDEO_RENDER_THREADS)
+  return Number.isFinite(n) && n >= 1 ? Math.min(8, Math.floor(n)) : 2
+}
+
+const UNREADABLE =
+  "That video could not be read. It may be damaged, or saved in a format this server can't open."
+
+function startFileProcessing(user: User, row: Record<string, unknown>, m: UploadMeta): void {
+  const id = String(row.id).toLowerCase()
+  const ctl = new AbortController()
+  processing.set(id, ctl)
+  void processFile(user, row, m, ctl.signal)
+    .catch((err) => console.warn(`help-video upload ${id}: ${(err as Error).message}`))
+    .finally(() => processing.delete(id))
+}
+
+/** Writes an uploaded file's meta while it is still finishing (also keeps the
+ *  finalizing claim fresh, so a long conversion is never reclaimed). */
+function setFileMeta(dbId: unknown, m: UploadMeta) {
+  return db('nivaro_help_video_uploads')
+    .where({ id: dbId, status: 'finalizing' })
+    .update({ meta: metaJson(m), updated_at: new Date() })
+}
+
+/**
+ * Turns an uploaded file into a stored source the player can play anywhere
+ * (rules in help-video-upload-media.ts): probe the streams with the sniffed
+ * container pinned, refuse what cannot be kept (422: the upload is abandoned
+ * with the reason in its meta), copy or convert into a temp file, probe that,
+ * store it and mark the upload finalized. A storage or database failure
+ * reopens the upload (with the reason) so finalize can be tried again.
+ * Exported for tests; production calls it through finalizeUpload.
+ */
+export async function processFile(
+  user: User,
+  row: Record<string, unknown>,
+  base: UploadMeta,
+  signal: AbortSignal
+): Promise<void> {
+  const dbId = row.id
+  const mime = String(row.mime) as UploadContainer
+  const raw = partPath(String(dbId))
+  const keep: UploadMeta = { name: base.name ?? null, size: base.size ?? null }
+  let out: string | null = null
+  let createdFile: string | null = null
+  let recorded = false
+  try {
+    const size = await stat(raw)
+      .then((x) => x.size)
+      .catch(() => 0)
+    if (!size) throw fail(422, 'UPLOAD_EMPTY', 'The file was empty')
+    await setFileMeta(dbId, { ...keep, phase: 'checking' })
+    const probed = await probeStreams(raw, mime).catch(() => {
+      throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+    })
+    if (probed.duration_ms != null && probed.duration_ms > MAX_DURATION_MS) {
+      throw fail(422, 'UPLOAD_TOO_LONG', 'Videos can be up to 30 minutes')
+    }
+    const plan = planUploadedVideo(probed)
+    if ('error' in plan) throw fail(422, plan.error.code, plan.error.message)
+    const ext = plan.container === 'video/mp4' ? '.mp4' : '.webm'
+    out = join(videoWorkDir(), 'uploads', `${String(dbId).toLowerCase()}.fixed${ext}`)
+    const converting = plan.kind !== 'copy'
+    await setFileMeta(dbId, {
+      ...keep,
+      phase: converting ? 'converting' : 'checking',
+      progress: converting ? 0 : null
+    })
+    const total = probed.duration_ms
+    let beat = 0
+    try {
+      await runFfmpeg(
+        buildUploadArgs(
+          plan,
+          { path: raw, inputLock: lockedInputArgs(mime) },
+          out,
+          uploadThreads()
+        ),
+        converting && total
+          ? (ms) => {
+              const now = Date.now()
+              if (now - beat < 1500) return
+              beat = now
+              const progress = Math.max(0, Math.min(99, Math.round((ms / total) * 100)))
+              void setFileMeta(dbId, { ...keep, phase: 'converting', progress }).catch(
+                () => undefined
+              )
+            }
+          : undefined,
+        signal,
+        { lowPriority: converting }
+      )
+    } catch (err) {
+      if (signal.aborted) throw fail(409, 'UPLOAD_CANCELLED', 'The upload was cancelled')
+      console.warn(
+        `help-video upload ${String(dbId).toLowerCase()}: ffmpeg (${plan.kind}) failed: ${(err as Error).message}`
+      )
+      throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+    }
+    const probe = await probeVideo(out, plan.container).catch(() => null)
+    if (!probe?.width) throw fail(422, 'UPLOAD_UNREADABLE', UNREADABLE)
+    if (probe.duration_ms != null && probe.duration_ms > MAX_DURATION_MS) {
+      throw fail(422, 'UPLOAD_TOO_LONG', 'Videos can be up to 30 minutes')
+    }
+    await setFileMeta(dbId, { ...keep, phase: 'saving' })
+    const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+    const file = await uploadFileFromPath(user, out, `upload-${stamp}${ext}`, plan.container)
+    createdFile = String(file.id)
+    const done = await db('nivaro_help_video_uploads')
+      .where({ id: dbId, status: 'finalizing' })
+      .update({
+        status: 'finalized',
+        mime: plan.container,
+        file_id: file.id,
+        duration_ms: probe.duration_ms,
+        width: probe.width,
+        height: probe.height,
+        has_audio: probe.has_audio,
+        meta: metaJson({ ...keep, clicks: null, levels: null }),
+        updated_at: new Date()
+      })
+    if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
+    recorded = true
+    await rm(raw, { force: true })
+  } catch (err) {
+    const e = err as Error & { statusCode?: number; code?: string }
+    if (createdFile && !recorded && !(await discardFile(user, createdFile))) {
+      // Parked for the purge (same rule as a recording's finalize).
+      await db('nivaro_help_video_uploads')
+        .where({ id: dbId })
+        .update({ status: 'abandoned', updated_at: new Date() })
+        .catch(() => undefined)
+    } else if (e.statusCode === 422) {
+      // The file itself is the problem: trying again cannot help.
+      await db('nivaro_help_video_uploads')
+        .where({ id: dbId, status: 'finalizing' })
+        .update({
+          status: 'abandoned',
+          meta: metaJson({ ...keep, error: e.message, error_code: e.code ?? null }),
+          updated_at: new Date()
+        })
+        .catch(() => undefined)
+    } else {
+      await db('nivaro_help_video_uploads')
+        .where({ id: dbId, status: 'finalizing' })
+        .update({
+          status: 'open',
+          meta: metaJson({
+            ...keep,
+            error: 'The video could not be saved. Try again in a moment.',
+            error_code: 'UPLOAD_SAVE_FAILED'
+          }),
+          updated_at: new Date()
+        })
+        .catch(() => undefined)
+    }
+    // Abandoned (refused, cancelled, parked): the parts on this disk can go.
+    const now = await db('nivaro_help_video_uploads')
+      .where({ id: dbId })
+      .first()
+      .catch(() => null)
+    if (now?.status === 'abandoned') await rm(raw, { force: true })
+    if (e.code !== 'UPLOAD_CANCELLED' && e.statusCode !== 422) throw err
+  } finally {
+    if (out) await rm(out, { force: true })
+  }
+}
+
+/** One upload as its owner sees it (any host): the upload dialog polls this
+ *  while an uploaded file is checked or converted. */
+export async function uploadStatus(user: User, id: string): Promise<UploadSession> {
+  return shape(await own(user, id, { anyHost: true }))
+}
+
+/** 'upload' when a version's source file came from a picked file, else
+ *  'recording' (the editor words a few things differently). */
+export async function sourceKindOfFile(fileId: unknown): Promise<'recording' | 'upload'> {
+  if (!fileId) return 'recording'
+  const row = await db('nivaro_help_video_uploads')
+    .where({ file_id: fileId })
+    .first(db.raw('LEFT(meta, 20) as meta'))
+    .catch(() => null)
+  return String((row as { meta?: unknown } | null)?.meta ?? '').startsWith(UPLOAD_META_HEAD)
+    ? 'upload'
+    : 'recording'
 }
 
 /** Deletes a file nothing references (bytes and row). When the delete fails the
@@ -473,6 +782,18 @@ async function deleteRecording(uploadId: unknown, fileId: string): Promise<boole
  *  else (finishing, used, already discarded) is refused with 409. */
 export async function abandonUpload(user: User, id: string): Promise<void> {
   const row = await own(user, id, { anyHost: true })
+  if (row.status === 'finalizing' && uploadMeta(row)) {
+    // An uploaded file still being checked or converted: cancel it. The
+    // conversion notices (its claim is gone) and deletes anything it stored.
+    const done = await db('nivaro_help_video_uploads')
+      .where({ id: row.id, status: 'finalizing' })
+      .update({ status: 'abandoned', updated_at: new Date() })
+    if (done) {
+      processing.get(String(row.id).toLowerCase())?.abort()
+      await rm(partPath(String(row.id)), { force: true })
+      return
+    }
+  }
   if (row.status === 'open') {
     if (row.instance && row.instance !== HOST) {
       throw fail(409, 'UPLOAD_ELSEWHERE', 'This upload is held by another server — retry shortly')

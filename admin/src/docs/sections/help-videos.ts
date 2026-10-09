@@ -23,6 +23,11 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: "Clean screen while recording (on by default, remembered per browser) keeps the author's own things out of the video: from the countdown until you stop, notification counts, the chat button and panel, toasts, banners (announcements, update and reload notices, View as) and floating chips are hidden, notification sounds stay silent, and your name, email and photo in the app's menus read Demo User. Pausing keeps the screen clean; stopping, cancelling or closing the recorder brings everything back at once. Other people's names and photos on the page are not changed — check the screen before you start, or blur in the editor."
     },
+    { type: 'h3', text: 'Uploading a video file' },
+    {
+      type: 'p',
+      text: 'Upload a video (beside Record a video, or "Upload a video" from a Videos button, which pre-fills that screen) takes an MP4, WebM or MOV made elsewhere — up to 30 minutes and 1.2 GB, the same limits as a recording. It goes through the same upload as a recording and opens the editor on a new draft. The server judges the file by its contents, never its name: it reads the streams, keeps an H.264 MP4 or a VP8/VP9 WebM as it is (an MP4 is rewritten so playback starts before the whole file loads), converts only the sound when a browser cannot play it (for example the PCM audio of many MOV files), and converts anything else — HEVC from a phone, ProRes, AV1, 10-bit video — to H.264 with AAC sound, at most 2560 pixels on the long side. Converting runs in the background at low priority and takes a few minutes for a long video; the dialog shows its progress and Cancel stops it. A file that is not a video, has no picture or cannot be read is refused with the reason. An uploaded file has no recorded clicks or microphone levels, so the editor offers no automatic click ripples or pause suggestions for it (add ripples by hand with the Ripple tool). If the connection drops, picking the same file again carries on where the upload stopped.'
+    },
     { type: 'h3', text: 'Editing' },
     {
       type: 'ul',
@@ -106,7 +111,12 @@ export const helpVideosApi: DocSection = {
         [
           'POST /help-videos/uploads, PUT …/parts/:n, POST …/finalize',
           'authors',
-          'Chunked recording upload (parts ≤ 8 MB, total ≤ 1.2 GB, webm or mp4)'
+          'Chunked upload (parts ≤ 8 MB, total ≤ 1.2 GB). A recording sends mime webm/mp4; a picked file sends source "upload" with its name and size, the first part decides its container, and finalize answers 202 while the file is checked or converted'
+        ],
+        [
+          'GET /help-videos/uploads/:id',
+          'authors',
+          'One upload: status, and for a picked file its phase (checking, converting, saving), progress and, when it was refused, error and error_code'
         ],
         ['POST /help-videos', 'authors', 'Create a video from a finalized upload'],
         [
@@ -139,7 +149,7 @@ export const helpVideosApi: DocSection = {
     },
     {
       type: 'note',
-      text: 'The release image includes ffmpeg. A self-hosted install built another way needs ffmpeg on the PATH for renders and for fixing up browser recordings at upload.'
+      text: 'The release image includes ffmpeg. A self-hosted install built another way needs ffmpeg on the PATH for renders, for fixing up browser recordings at upload, and for uploaded video files (without it, uploading a file answers 503 UPLOAD_NO_FFMPEG).'
     },
     {
       type: 'warn',

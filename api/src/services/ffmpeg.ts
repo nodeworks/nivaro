@@ -102,6 +102,63 @@ export async function probeVideo(
   }
 }
 
+/** Every stream of a file (codec, profile, pixel format, size) and its length,
+ *  with the container pinned. Used to decide how an uploaded file is kept. */
+export async function probeStreams(
+  path: string,
+  mime: string
+): Promise<{
+  duration_ms: number | null
+  streams: Array<{
+    index: number
+    codec_type: string
+    codec_name: string
+    profile?: string
+    pix_fmt?: string
+    width?: number
+    height?: number
+    attached_pic?: boolean
+  }>
+}> {
+  const { stdout } = await run(FFPROBE, [
+    '-v',
+    'error',
+    ...lockedInputArgs(mime),
+    '-show_entries',
+    'format=duration:stream=index,codec_type,codec_name,profile,pix_fmt,width,height:stream_disposition=attached_pic',
+    '-of',
+    'json',
+    path
+  ])
+  const j = JSON.parse(stdout) as {
+    format?: { duration?: string }
+    streams?: Array<{
+      index?: number
+      codec_type?: string
+      codec_name?: string
+      profile?: string
+      pix_fmt?: string
+      width?: number
+      height?: number
+      disposition?: { attached_pic?: number }
+    }>
+  }
+  const d = Number(j.format?.duration)
+  return {
+    duration_ms: Number.isFinite(d) && d > 0 ? Math.round(d * 1000) : null,
+    streams: (j.streams ?? []).map((s) => ({
+      index: Number(s.index ?? 0),
+      codec_type: String(s.codec_type ?? ''),
+      codec_name: String(s.codec_name ?? ''),
+      profile: s.profile,
+      pix_fmt: s.pix_fmt,
+      width: s.width,
+      height: s.height,
+      attached_pic: s.disposition?.attached_pic === 1
+    }))
+  }
+}
+
 /** Rewrite the container without re-encoding: a MediaRecorder WebM gains its
  *  duration and cue index, which is what makes browser seeking work. */
 export async function remuxToFile(input: string, output: string, mime?: string): Promise<void> {

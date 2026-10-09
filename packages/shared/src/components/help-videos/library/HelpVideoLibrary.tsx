@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Pencil, Plus, Search, Trash2 } from 'lucide-react'
+import { Archive, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../../context'
@@ -11,6 +11,7 @@ import { HelpVideoEditor } from '../editor/HelpVideoEditor'
 import { canRecord, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
 import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
 import type { HelpVideoDto } from '../types'
+import { useHelpVideoUpload } from '../upload/HelpVideoUpload'
 import {
   emptyCopy,
   formatDuration,
@@ -53,6 +54,7 @@ export function HelpVideoLibrary({
   const [category, setCategory] = useState<string | undefined>()
   const [status, setStatus] = useState<Status>('published')
   const recorder = useHelpVideoRecording()
+  const upload = useHelpVideoUpload({ onDone: (video) => onEdit(video.id) })
   const [busyNote, setBusyNote] = useState(false)
   const [archiveError, setArchiveError] = useState<string | null>(null)
   const [archiving, setArchiving] = useState<Set<string>>(() => new Set())
@@ -201,6 +203,15 @@ export function HelpVideoLibrary({
                   {RECORD_UNSUPPORTED}
                 </p>
               )}
+              <Button
+                size='sm'
+                variant='outline'
+                onClick={upload.pick}
+                disabled={upload.busy}
+                data-hv-upload
+              >
+                <Upload className='h-4 w-4' /> Upload a video
+              </Button>
               <Button
                 size='sm'
                 onClick={() =>
@@ -424,6 +435,7 @@ export function HelpVideoLibrary({
         returnFocusRef={opener}
       />
       {recorder.fallback}
+      {upload.ui}
     </div>
   )
 }

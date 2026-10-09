@@ -1,11 +1,12 @@
 import { CheckCircle2, Clock, PlayCircle, Video } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { useNavigation, useNivaroClient } from '../../../context'
-import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { modalHostOf, Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { helpVideoApi, useHelpVideosFor } from '../api'
 import { canRecord, RECORD_UNSUPPORTED } from '../recorder/HelpVideoRecorder'
 import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
 import type { HelpVideoContext } from '../types'
+import { useHelpVideoUpload } from '../upload/HelpVideoUpload'
 import { isGettingReady, listMeta, progressLabel, showButton } from './format'
 import { HelpVideoSheet, useHelpVideosPath } from './HelpVideoSheet'
 
@@ -66,6 +67,13 @@ export function HelpVideoButton({
     : page
       ? [{ kind: 'page', key: page, state_key: null }]
       : []
+
+  // Same hand-over as a recording started here: the editor opens on the draft.
+  const upload = useHelpVideoUpload({
+    contexts,
+    host: modalHostOf(trigger.current) ?? null,
+    onDone: (video) => nav.navigate(path(`?edit=${video.id}`))
+  })
 
   return (
     <>
@@ -179,6 +187,18 @@ export function HelpVideoButton({
                   >
                     Record one for this screen
                   </button>
+                  <button
+                    type='button'
+                    disabled={upload.busy}
+                    className={`mt-0.5 rounded text-[12px] font-medium text-[#2563eb] hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:no-underline dark:text-sky-300 ${focusRing}`}
+                    onClick={() => {
+                      upload.pick()
+                      setOpen(false)
+                    }}
+                    data-hv-upload-here
+                  >
+                    Upload a video
+                  </button>
                   {!recordable && (
                     <p
                       id={reasonId}
@@ -210,6 +230,7 @@ export function HelpVideoButton({
         returnFocusRef={trigger}
       />
       {recorder.fallback}
+      {upload.ui}
     </>
   )
 }

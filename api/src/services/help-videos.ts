@@ -64,6 +64,9 @@ export interface VersionDto {
   created_at: string
   clicks?: Array<{ t_ms: number; x: number; y: number }> | null
   levels?: number[] | null
+  /** Draft load only: 'upload' when the source was a picked file (no clicks
+   *  or microphone levels exist for it), else 'recording'. */
+  source_kind?: 'recording' | 'upload'
 }
 export interface HelpVideoDto {
   id: string

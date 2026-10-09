@@ -74,16 +74,18 @@ export const PosterPicker = memo(function PosterPicker({
 
 /**
  * Click ripples from the recorder's captured clicks: one per click, added
- * in one go. Says plainly when clicks weren't captured (null) or none were
- * made ([]).
+ * in one go. Says plainly when clicks weren't captured (null), none were
+ * made ([]), or the video was uploaded as a file (no clicks exist for it).
  */
 export const ClickRipples = memo(function ClickRipples({
   clicks,
+  uploaded,
   edits,
   sourceMs,
   onAdd
 }: {
   clicks: Array<{ t_ms: number; x: number; y: number }> | null | undefined
+  uploaded?: boolean
   edits: VideoEdits
   sourceMs: number
   onAdd: () => void
@@ -91,13 +93,15 @@ export const ClickRipples = memo(function ClickRipples({
   const headingId = useId()
   const fresh = clicks?.length ? clicksToRipples(clicks, edits.annotations, sourceMs).length : 0
   const text =
-    clicks == null
-      ? "Clicks weren't captured for this recording."
-      : clicks.length === 0
-        ? 'No clicks were recorded.'
-        : fresh === 0
-          ? `Every one of the ${clicks.length} recorded clicks has a ripple.`
-          : `The recording caught ${clicks.length} ${clicks.length === 1 ? 'click' : 'clicks'}. Add a ripple where each one happened.`
+    uploaded && !clicks?.length
+      ? 'This video was uploaded as a file, so no clicks were captured. Add ripples by hand with the Ripple tool.'
+      : clicks == null
+        ? "Clicks weren't captured for this recording."
+        : clicks.length === 0
+          ? 'No clicks were recorded.'
+          : fresh === 0
+            ? `Every one of the ${clicks.length} recorded clicks has a ripple.`
+            : `The recording caught ${clicks.length} ${clicks.length === 1 ? 'click' : 'clicks'}. Add a ripple where each one happened.`
   return (
     <section className='space-y-2' aria-labelledby={headingId} data-hv-clicks>
       <h3 id={headingId} className='text-[13px] font-semibold text-foreground'>

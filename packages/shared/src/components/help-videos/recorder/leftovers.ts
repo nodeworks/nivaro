@@ -10,6 +10,8 @@ export type OpenUpload = {
   duration_ms?: number | null
   created_at: string
   updated_at: string
+  /** 'upload' for a picked video file: an unfinished one is not a recording to keep. */
+  source?: string
 }
 
 /** A recording this person started and never finished.
@@ -55,6 +57,9 @@ export async function findLeftovers(
   for (const u of open) {
     const touched = Date.parse(u.updated_at)
     if (Number.isFinite(touched) && now - touched < LIVE_ELSEWHERE_MS) continue
+    // A picked file still uploading can only be finished from the file itself
+    // (the upload dialog resumes it when the same file is picked again).
+    if (u.source === 'upload' && u.status !== 'finalized') continue
     if (u.status === 'finalized') {
       rows.push({
         id: u.id,

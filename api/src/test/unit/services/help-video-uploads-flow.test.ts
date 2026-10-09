@@ -96,14 +96,34 @@ vi.mock('../../../db/index.js', () => ({
   db: Object.assign((t: string) => builder(t), { raw: (x: string) => x })
 }))
 
-const ff = {
+type Streams = Array<{ index: number; codec_type: string; codec_name: string; pix_fmt?: string }>
+const H264_AAC: Streams = [
+  { index: 0, codec_type: 'video', codec_name: 'h264', pix_fmt: 'yuv420p' },
+  { index: 1, codec_type: 'audio', codec_name: 'aac' }
+]
+const ff = vi.hoisted(() => ({
   has: true,
-  probe: { duration_ms: 5000 as number | null, width: 1, height: 1, has_audio: true }
-}
+  probe: { duration_ms: 5000 as number | null, width: 1, height: 1, has_audio: true },
+  streams: [] as Array<{ index: number; codec_type: string; codec_name: string; pix_fmt?: string }>,
+  ran: [] as string[][],
+  /** Holds runFfmpeg until the abort signal fires (a cancel test). */
+  hang: false
+}))
 vi.mock('../../../services/ffmpeg.js', () => ({
   hasFfmpeg: async () => ff.has,
   probeVideo: async () => ff.probe,
-  remuxToFile: async (i: string, o: string) => writeFileSync(o, readFileSync(i))
+  remuxToFile: async (i: string, o: string) => writeFileSync(o, readFileSync(i)),
+  lockedInputArgs: (mime: string) => ['-f', mime],
+  probeStreams: async () => ({ duration_ms: ff.probe.duration_ms, streams: ff.streams }),
+  runFfmpeg: async (args: string[], _p: unknown, signal?: AbortSignal) => {
+    ff.ran.push(args)
+    if (ff.hang) {
+      await new Promise((_r, reject) =>
+        signal?.addEventListener('abort', () => reject(new Error('aborted')))
+      )
+    }
+    writeFileSync(args[args.length - 1], readFileSync(args[args.indexOf('-i') + 1]))
+  }
 }))
 const files = vi.hoisted(() => ({
   fail: false,
@@ -141,6 +161,9 @@ beforeEach(() => {
   for (const t of Object.values(tables)) t.length = 0
   ff.has = true
   ff.probe = { duration_ms: 5000, width: 1, height: 1, has_audio: true }
+  ff.streams = H264_AAC
+  ff.ran = []
+  ff.hang = false
   files.fail = false
   files.deleteFail = false
   files.afterUpload = null
@@ -446,5 +469,121 @@ describe('finished recordings never saved as a video (I1)', () => {
     expect(existsSync(stale)).toBe(false)
     expect(existsSync(fresh)).toBe(true)
     expect(existsSync(other)).toBe(true)
+  })
+})
+
+describe('uploaded files (picked, not recorded)', () => {
+  const mp4 = Buffer.from('\0\0\0\x18ftypmp42 and the rest of the file', 'latin1')
+  const settle = async () => {
+    for (let i = 0; i < 200 && rows.some((r) => r.status === 'finalizing'); i++)
+      await new Promise((r) => setTimeout(r, 5))
+  }
+  async function sent(head = mp4) {
+    const s = await up.openUpload(user, 'video/quicktime', {
+      source: 'upload',
+      name: 'Walkthrough.mov',
+      size: head.length
+    })
+    await up.appendPart(user, s.id, 0, head)
+    return s
+  }
+
+  it('needs ffmpeg to read it at all', async () => {
+    ff.has = false
+    await expect(up.openUpload(user, 'video/mp4', { source: 'upload' })).rejects.toMatchObject({
+      statusCode: 503,
+      code: 'UPLOAD_NO_FFMPEG'
+    })
+  })
+  it('refuses a file over 1.2 GB before a byte is sent', async () => {
+    await expect(
+      up.openUpload(user, 'video/mp4', { source: 'upload', size: up.MAX_UPLOAD_BYTES + 1 })
+    ).rejects.toMatchObject({ statusCode: 413 })
+  })
+  it('ignores the declared type and takes the container from the first bytes', async () => {
+    const s = await up.openUpload(user, 'text/plain', { source: 'upload', name: 'x.mp4' })
+    expect(s).toMatchObject({ source: 'upload', name: 'x.mp4' })
+    await expect(
+      up.appendPart(user, s.id, 0, Buffer.from('not a video at all'))
+    ).rejects.toMatchObject({
+      statusCode: 422,
+      code: 'UPLOAD_NOT_VIDEO',
+      message: "That file isn't an MP4, WebM or MOV video"
+    })
+    await up.appendPart(user, s.id, 0, webm)
+    expect(rows[0].mime).toBe('video/webm')
+  })
+  it('finishes in the background, then is kept like a recording with no clicks or levels', async () => {
+    const s = await sent()
+    await expect(up.finalizeUpload(user, s.id, {})).resolves.toEqual({
+      processing: true,
+      id: s.id
+    })
+    await settle()
+    const st = await up.uploadStatus(user, s.id)
+    expect(st).toMatchObject({ status: 'finalized', source: 'upload', name: 'Walkthrough.mov' })
+    expect(st.error).toBeNull()
+    expect(ff.ran[0]).toEqual(expect.arrayContaining(['-c:v', 'copy', '-movflags', '+faststart']))
+    expect(existsSync(partFile(s.id))).toBe(false)
+    const taken = await up.takeFinalizedUpload(user, s.id)
+    expect(taken).toMatchObject({ file_id: 'file-1', clicks: null, levels: null })
+    expect(await up.sourceKindOfFile('file-1')).toBe('upload')
+  })
+  it('a file with no video is refused with the reason, and its parts are deleted', async () => {
+    ff.streams = [{ index: 0, codec_type: 'audio', codec_name: 'mp3' }]
+    const s = await sent()
+    await up.finalizeUpload(user, s.id, {})
+    await settle()
+    expect(await up.uploadStatus(user, s.id)).toMatchObject({
+      status: 'abandoned',
+      error: 'That file has no video in it',
+      error_code: 'UPLOAD_NO_VIDEO'
+    })
+    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(ff.ran).toHaveLength(0)
+  })
+  it('a file longer than 30 minutes is refused before any conversion', async () => {
+    ff.probe = { ...ff.probe, duration_ms: 40 * 60_000 }
+    const s = await sent()
+    await up.finalizeUpload(user, s.id, {})
+    await settle()
+    expect(rows[0]).toMatchObject({ status: 'abandoned' })
+    expect((await up.uploadStatus(user, s.id)).error_code).toBe('UPLOAD_TOO_LONG')
+    expect(ff.ran).toHaveLength(0)
+  })
+  it('a storage failure reopens it with the reason, and finalize can be tried again', async () => {
+    const s = await sent()
+    files.fail = true
+    await up.finalizeUpload(user, s.id, {})
+    await settle()
+    expect(await up.uploadStatus(user, s.id)).toMatchObject({
+      status: 'open',
+      error_code: 'UPLOAD_SAVE_FAILED'
+    })
+    expect(existsSync(partFile(s.id))).toBe(true)
+    files.fail = false
+    await up.finalizeUpload(user, s.id, {})
+    await settle()
+    expect(await up.uploadStatus(user, s.id)).toMatchObject({ status: 'finalized', error: null })
+  })
+  it('converting HEVC can be cancelled: nothing is stored and the parts go', async () => {
+    ff.streams = [{ index: 0, codec_type: 'video', codec_name: 'hevc', pix_fmt: 'yuv420p' }]
+    ff.hang = true
+    const s = await sent()
+    await up.finalizeUpload(user, s.id, {})
+    for (let i = 0; i < 100 && !ff.ran.length; i++) await new Promise((r) => setTimeout(r, 5))
+    expect(ff.ran[0]).toContain('libx264')
+    expect((await up.uploadStatus(user, s.id)).phase).toBe('converting')
+    await up.abandonUpload(user, s.id)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(rows[0].status).toBe('abandoned')
+    expect(rows[0].file_id ?? null).toBeNull()
+    expect(existsSync(partFile(s.id))).toBe(false)
+    expect(existsSync(join(work, 'uploads', `${s.id}.fixed.mp4`))).toBe(false)
+  })
+  it('a recording says so, and its meta is never parsed for the list', async () => {
+    const s = await up.openUpload(user, 'video/webm')
+    expect(s.source).toBe('recording')
+    expect(await up.sourceKindOfFile(null)).toBe('recording')
   })
 })
