@@ -23,6 +23,10 @@ export function AuthorRolesButton() {
   const [saveError, setSaveError] = useState<string | null>(null)
   // The last list the server confirmed; a failed save puts this back.
   const confirmed = useRef<string[] | null>(null)
+  const latest = useRef<string[]>([])
+  const chain = useRef<Promise<void>>(Promise.resolve())
+  const queued = useRef(0)
+  const failures = useRef(0)
   const current = useQuery({
     queryKey: AUTHOR_ROLES_KEY,
     enabled: isAdmin && open,
@@ -44,21 +48,47 @@ export function AuthorRolesButton() {
     if (roles.isPending) return 'Loading…'
     return roles.data?.find((r) => r.id.toUpperCase() === id.toUpperCase())?.name ?? 'Unknown role'
   }
-  const save = async (next: string[]) => {
+  // Saves run one at a time, each carrying the list as the person last saw it,
+  // so two quick picks cannot drop the first. A failed save skips the ones
+  // queued behind it and, once the queue drains, shows the confirmed list.
+  const save = (change: (list: string[]) => string[]) => {
     setSaveError(null)
+    const next = change(latest.current)
+    latest.current = next
     qc.setQueryData(AUTHOR_ROLES_KEY, next)
-    try {
-      await helpVideoApi(client).setAuthorRoles(next)
-      confirmed.current = next
-      // can_author changes for people in these roles; refresh every list that reports it.
-      void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
-    } catch (e) {
-      qc.setQueryData(AUTHOR_ROLES_KEY, confirmed.current ?? [])
-      setSaveError(`That change was not saved. ${(e as Error).message}`)
-    }
+    queued.current += 1
+    const epoch = failures.current
+    chain.current = chain.current
+      .then(async () => {
+        if (failures.current !== epoch) return
+        try {
+          await helpVideoApi(client).setAuthorRoles(next)
+          confirmed.current = next
+          // can_author changes for people in these roles; refresh every list that reports it.
+          void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+        } catch (e) {
+          failures.current += 1
+          setSaveError(`That change was not saved. ${(e as Error).message}`)
+        }
+      })
+      .finally(() => {
+        queued.current -= 1
+        if (queued.current === 0 && confirmed.current) {
+          latest.current = confirmed.current
+          qc.setQueryData(AUTHOR_ROLES_KEY, confirmed.current)
+        }
+      })
   }
+  if (queued.current === 0) latest.current = ids
+  const removeLabel = (id: string) => (roles.isPending ? 'Remove role' : `Remove ${name(id)}`)
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(o) => {
+        setOpen(o)
+        if (!o) setSaveError(null)
+      }}
+    >
       <PopoverTrigger asChild>
         <Button size='sm' variant='outline' data-hv-author-roles>
           <Users className='mr-1 h-4 w-4' aria-hidden /> Who can record
@@ -87,8 +117,8 @@ export function AuthorRolesButton() {
               <RemovableChip
                 key={id}
                 data-hv-author-role={id}
-                removeLabel={`Remove ${name(id)}`}
-                onRemove={() => void save(ids.filter((x) => x !== id))}
+                removeLabel={removeLabel(id)}
+                onRemove={() => save((list) => list.filter((x) => x !== id))}
               >
                 {name(id)}
               </RemovableChip>
@@ -106,7 +136,7 @@ export function AuthorRolesButton() {
               options={(roles.data ?? [])
                 .filter((r) => !ids.some((x) => x.toUpperCase() === r.id.toUpperCase()))
                 .map((r) => ({ value: r.id, label: r.name }))}
-              onPick={(v) => void save([...ids, v])}
+              onPick={(v) => save((list) => [...list, v])}
             />
           </div>
         )}
