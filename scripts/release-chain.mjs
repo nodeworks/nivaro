@@ -398,6 +398,15 @@ async function main() {
       // "types"), so shared builds first — `tsc` there emits and typechecks in
       // one pass; a dist older than the shared source fails admin with
       // "no exported member". Then api and admin run at once.
+      // api resolves @nivaro/extension-kit the same way (its dist), so a kit
+      // whose source gained members fails api the same way unless it builds
+      // first.
+      log('typecheck packages/extension-kit (build)')
+      await shAsync('npx', ['tsc'], { cwd: resolve(ROOT, 'packages/extension-kit'), quiet: true }).catch(
+        (err) => {
+          throw new StageError(`typecheck packages/extension-kit: ${err.message}`)
+        }
+      )
       log('typecheck packages/shared (build)')
       await shAsync('npx', ['tsc'], { cwd: resolve(ROOT, 'packages/shared'), quiet: true }).catch((err) => {
         throw new StageError(`typecheck packages/shared: ${err.message}`)
