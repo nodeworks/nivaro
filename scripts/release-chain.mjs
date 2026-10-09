@@ -394,9 +394,15 @@ async function main() {
       emit('preflight', 'start')
       if (git(['rev-parse', '--abbrev-ref', 'HEAD']) !== 'main') throw new StageError('not on main')
       sh('gh', ['auth', 'status'], { quiet: true })
-      // The three typechecks share nothing: run them at once (serial they
-      // took 76s; together they take the slowest one, ~35s).
-      const dirs = ['api', 'admin', 'packages/shared']
+      // admin resolves @nivaro/shared through its BUILT dist (package.json
+      // "types"), so shared builds first — `tsc` there emits and typechecks in
+      // one pass; a dist older than the shared source fails admin with
+      // "no exported member". Then api and admin run at once.
+      log('typecheck packages/shared (build)')
+      await shAsync('npx', ['tsc'], { cwd: resolve(ROOT, 'packages/shared'), quiet: true }).catch((err) => {
+        throw new StageError(`typecheck packages/shared: ${err.message}`)
+      })
+      const dirs = ['api', 'admin']
       for (const dir of dirs) log(`typecheck ${dir}`)
       await Promise.all(
         dirs.map((dir) =>
