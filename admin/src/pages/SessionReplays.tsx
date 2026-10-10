@@ -7,6 +7,12 @@ import { toast } from 'sonner'
 import { ReplayPlayer } from '@/components/replay-player'
 import { ChapterCountChip } from '@/components/replay-player/ChapterList'
 import {
+  closeFloatingReplay,
+  floatReplay,
+  resumeStartAt,
+  useDockedReplay
+} from '@/components/replay-player/floating-store'
+import {
   ActiveTimeChip,
   RecordingSortToggle,
   readRecordingSort,
@@ -383,6 +389,16 @@ export function SessionReplaysPage() {
         toast.error('That recording no longer exists (recordings expire with retention)')
       )
   }, [deepLinkId, deepLinkT, recordings])
+
+  // #1401 — a floated replay comes back here at the moment it reached; a
+  // replay opened here replaces a floating one (one player at a time).
+  useDockedReplay((rec, at) => {
+    setPlaying(rec as Recording)
+    setStartAt(resumeStartAt(at))
+  })
+  useEffect(() => {
+    if (playing) closeFloatingReplay()
+  }, [playing])
 
   const { data: settings } = useQuery({
     queryKey: ['session-recording-retention'],
@@ -799,7 +815,14 @@ export function SessionReplaysPage() {
         </div>
       </div>
 
-      <Sheet open={!!playing} onOpenChange={(o) => !o && setPlaying(null)}>
+      <Sheet
+        open={!!playing}
+        onOpenChange={(o) => {
+          if (o) return
+          setPlaying(null)
+          setStartAt(null)
+        }}
+      >
         <SheetContent className='w-[85%] overflow-y-auto sm:max-w-[85%]'>
           <SheetHeader>
             <SheetTitle className='flex items-center gap-2 text-[15px]'>
@@ -834,7 +857,21 @@ export function SessionReplaysPage() {
             </SheetTitle>
           </SheetHeader>
           {playing && (
-            <ReplayPlayer recordingId={playing.id} startAt={startAt} live={isLive(playing)} />
+            <ReplayPlayer
+              recordingId={playing.id}
+              startAt={startAt}
+              live={isLive(playing)}
+              onFloat={(at) => {
+                floatReplay({
+                  recording: playing,
+                  title: playing.user_name || 'Session replay',
+                  at,
+                  live: isLive(playing)
+                })
+                setPlaying(null)
+                setStartAt(null)
+              }}
+            />
           )}
         </SheetContent>
       </Sheet>

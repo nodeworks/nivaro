@@ -275,6 +275,11 @@ function App() {
     {
       type: 'p',
       text: 'The list shows how many chapters each recording has, counted from the route markers as the recording uploads (recordings made before this show no count).'
+    },
+    { type: 'h2', id: 'session-replay-float', text: 'Floating player' },
+    {
+      type: 'p',
+      text: 'Float (beside the speeds) detaches the replay into a small window in a corner of the admin, so it keeps playing while you open the record it is about, a drill-down or anything else — moving between admin pages does not stop it. Drag the window by its title bar; it settles into the nearest corner, and that corner is remembered in this browser. A pinned chat panel moves it over instead of covering it. Closing the window takes you back to Session Replays with the replay open at the moment it had reached; the square button stops it without going anywhere. Opening another replay on the Session Replays page closes the floating one.'
     }
   ]
 }

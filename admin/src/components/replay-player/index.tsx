@@ -6,11 +6,13 @@
  * server-side event rail (#1356) under it and the Console / Network panel (#1357) beside it.)
  */
 import { TipLayer } from '@nivaro/shared'
+import { PictureInPicture2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { ChapterList, useChapterKeys } from './ChapterList'
 import { buildChapters, chapterIndexAt } from './chapters'
+import type { ReplayControls } from './controls'
 import { EventRail } from './EventRail'
 import { findInactiveGaps, type InactiveGap } from './inactivity'
 import {
@@ -51,7 +53,9 @@ export function ReplayPlayer({
   startAt,
   live,
   minHeight = 400,
-  panel = 'side'
+  panel = 'side',
+  onFloat,
+  controlsRef
 }: {
   recordingId: string
   /** Offset into the recording (ms); playback opens 5 s before it. */
@@ -64,7 +68,11 @@ export function ReplayPlayer({
    * Session replays sheet; stacks on a narrow window) or 'stacked' (under the
    * controls — narrow hosts like the Traffic Map's Recording level).
    */
-  panel?: 'side' | 'stacked'
+  panel?: 'side' | 'stacked' | 'none'
+  /** #1401 — shows a Float button; called with the playhead to hand over. */
+  onFloat?: (time: number) => void
+  /** Filled while the replay is ready: read / drive the playhead from the host. */
+  controlsRef?: { current: ReplayControls | null }
 }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const replayerRef = useRef<{
@@ -330,10 +338,34 @@ export function ReplayPlayer({
   timeRef.current = time
   useChapterKeys(chapters, () => timeRef.current, stableSeek, ready && !following)
 
+  // #1401 / #1399: the host reads and drives the playhead (refs and setters
+  // only, so the first render's closures stay valid).
+  const speedRef = useRef(speed)
+  speedRef.current = speed
+  // biome-ignore lint/correctness/useExhaustiveDependencies: playAt / changeSpeed only touch refs and setters
+  const controls = useMemo<ReplayControls>(
+    () => ({
+      getTime: () => timeRef.current,
+      isPlaying: () => playingRef.current,
+      getSpeed: () => speedRef.current,
+      seek: (ms) => seekRef.current(ms),
+      playAt,
+      setSpeed: changeSpeed
+    }),
+    []
+  )
+  useEffect(() => {
+    if (!controlsRef) return
+    controlsRef.current = ready && !following ? controls : null
+    return () => {
+      controlsRef.current = null
+    }
+  }, [controlsRef, controls, ready, following])
+
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
   const activeNetwork = activeIndex(ctx.network, time)
-  const showPanel = ready && !following && hasPanel
+  const showPanel = ready && !following && hasPanel && panel !== 'none'
   const side = showPanel && sideBySide
   // The frame's width budget moved: scale it again.
   const lastSideRef = useRef(side)
@@ -342,6 +374,16 @@ export function ReplayPlayer({
     lastSideRef.current = side
     rescaleRef.current?.()
   }, [side])
+
+  function playAt(on: boolean, ms: number) {
+    const rep = replayerRef.current
+    if (!rep) return
+    setTime(ms)
+    if (on) rep.play(ms)
+    else rep.pause(ms)
+    playingRef.current = on
+    setPlaying(on)
+  }
 
   function changeSpeed(v: number) {
     setSpeed(v)
@@ -454,6 +496,18 @@ export function ReplayPlayer({
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(total)}
           </span>
+          {onFloat && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1 px-2 text-[12px]'
+              onClick={() => onFloat(time)}
+              data-tip='Float — keep watching in a corner window while you use the admin'
+              data-replay-float=''
+            >
+              <PictureInPicture2 className='h-3 w-3' /> Float
+            </Button>
+          )}
           {gaps.length > 0 && (
             <SkipToggle enabled={skip.enabled} onChange={skip.setEnabled} count={gaps.length} />
           )}
