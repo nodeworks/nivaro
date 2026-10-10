@@ -1,10 +1,11 @@
 /**
  * Range selection under the replay scrubber and what to do with a range:
- * raise an issue on it (#1366). Drag along the track to select; drag either
- * handle (or focus it and use the arrow keys) to adjust.
+ * raise an issue on it (#1366), save it to the clip library (#1415). Drag
+ * along the track to select; drag either handle (or focus it and use the
+ * arrow keys) to adjust.
  */
-import { useMutation } from '@tanstack/react-query'
-import { Bug, X } from 'lucide-react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { Bookmark, Bug, X } from 'lucide-react'
 import { memo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -24,6 +25,9 @@ import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { fmtClock } from './logic'
 import { dragRange, fmtSpan, moveEdge, msAtX, type ReplayRange, usableRange } from './range'
+
+/** Query key of the clip library (Session Replays → Library). */
+export const CLIPS_QUERY_KEY = 'replay-clips'
 
 function apiError(err: unknown, fallback: string): string {
   return (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? fallback
@@ -104,7 +108,7 @@ export const RangeTrack = memo(function RangeTrack({
     >
       {!range && (
         <span className='pointer-events-none absolute inset-0 flex items-center justify-center text-[9px] leading-none text-slate-400 opacity-0 transition-opacity group-hover/range:opacity-100'>
-          Drag to select a range — raise an issue on it
+          Drag to select a range — raise an issue on it or save it as a clip
         </span>
       )}
       {range && (
@@ -155,7 +159,7 @@ export function RangeActions({
   onChange: (r: ReplayRange | null) => void
   onSeek: (ms: number) => void
 }) {
-  const [dialog, setDialog] = useState<'issue' | null>(null)
+  const [dialog, setDialog] = useState<'issue' | 'clip' | null>(null)
   const ok = usableRange(range)
   return (
     <div
@@ -197,6 +201,15 @@ export function RangeActions({
       >
         <Bug className='h-3.5 w-3.5' /> Raise an issue
       </Button>
+      <Button
+        size='sm'
+        variant='outline'
+        className='h-7 gap-1.5 text-[12px]'
+        disabled={!ok}
+        onClick={() => setDialog('clip')}
+      >
+        <Bookmark className='h-3.5 w-3.5' /> Save clip
+      </Button>
       <button
         type='button'
         aria-label='Clear range'
@@ -207,6 +220,12 @@ export function RangeActions({
       </button>
       <ClipIssueDialog
         open={dialog === 'issue'}
+        onClose={() => setDialog(null)}
+        recordingId={recordingId}
+        range={range}
+      />
+      <SaveClipDialog
+        open={dialog === 'clip'}
         onClose={() => setDialog(null)}
         recordingId={recordingId}
         range={range}
@@ -289,6 +308,93 @@ function ClipIssueDialog({
           </Button>
           <Button onClick={() => raise.mutate()} disabled={raise.isPending}>
             {raise.isPending ? 'Raising…' : 'Raise issue'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── Save to the library (#1415) ──────────────────────────────────────────────
+
+function SaveClipDialog({
+  open,
+  onClose,
+  recordingId,
+  range
+}: {
+  open: boolean
+  onClose: () => void
+  recordingId: string
+  range: ReplayRange
+}) {
+  const qc = useQueryClient()
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [tags, setTags] = useState('')
+  const save = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { id: string; name: string } }>(`/session-recordings/${recordingId}/clips`, {
+          from_ms: range[0],
+          to_ms: range[1],
+          name: name.trim(),
+          description: description.trim() || undefined,
+          tags: tags
+            .split(',')
+            .map((t) => t.trim())
+            .filter(Boolean)
+        })
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      toast.success(`Saved "${d.name}" to the library`)
+      qc.invalidateQueries({ queryKey: [CLIPS_QUERY_KEY] })
+      setName('')
+      setDescription('')
+      setTags('')
+      onClose()
+    },
+    onError: (err) => toast.error(apiError(err, 'Could not save the clip'))
+  })
+  return (
+    <Dialog open={open} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>Save clip to the library</DialogTitle>
+          <DialogDescription>
+            {fmtClock(range[0])} – {fmtClock(range[1])} is kept as a replay of its own, with its
+            masking as recorded, after this recording expires. Find it under Library.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className='space-y-3'>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder='Name'
+            aria-label='Clip name'
+            maxLength={200}
+          />
+          <Textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            placeholder='Description (optional)'
+            aria-label='Clip description'
+            rows={3}
+            maxLength={2000}
+          />
+          <Input
+            value={tags}
+            onChange={(e) => setTags(e.target.value)}
+            placeholder='Tags, comma-separated (optional)'
+            aria-label='Clip tags'
+          />
+        </DialogBody>
+        <DialogFooter>
+          <Button variant='outline' onClick={onClose} disabled={save.isPending}>
+            Cancel
+          </Button>
+          <Button onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
+            {save.isPending ? 'Saving…' : 'Save clip'}
           </Button>
         </DialogFooter>
       </DialogContent>

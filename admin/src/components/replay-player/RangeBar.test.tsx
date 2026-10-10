@@ -112,3 +112,34 @@ describe('RangeActions — raise an issue (#1366)', () => {
     expect(onChange).toHaveBeenLastCalledWith([10_000, 15_000])
   })
 })
+
+describe('RangeActions — save clip (#1415)', () => {
+  it('saves a named, tagged clip to the library', async () => {
+    postMock.mockResolvedValue({ data: { data: { id: 'c1', name: 'Queue freeze' } } })
+    wrap(
+      <RangeActions
+        recordingId='rec-1'
+        range={[2_000, 9_000]}
+        time={0}
+        total={60_000}
+        onChange={vi.fn()}
+        onSeek={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Save clip/ }))
+    const save = screen.getAllByRole('button', { name: 'Save clip' }).at(-1) as HTMLButtonElement
+    expect(save.disabled).toBe(true)
+    fireEvent.change(screen.getByLabelText('Clip name'), { target: { value: 'Queue freeze' } })
+    fireEvent.change(screen.getByLabelText('Clip tags'), { target: { value: 'queues, freeze,' } })
+    fireEvent.click(save)
+    await waitFor(() =>
+      expect(postMock).toHaveBeenCalledWith('/session-recordings/rec-1/clips', {
+        from_ms: 2_000,
+        to_ms: 9_000,
+        name: 'Queue freeze',
+        description: undefined,
+        tags: ['queues', 'freeze']
+      })
+    )
+  })
+})

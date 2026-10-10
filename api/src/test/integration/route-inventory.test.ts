@@ -124,6 +124,9 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-recordings/:id/events-rail' },
   // Session replay clips (#1366)
   { method: 'POST', path: '/api/session-recordings/:id/clip-issue' },
+  { method: 'POST', path: '/api/session-recordings/:id/clips' },
+  { method: 'GET', path: '/api/session-replay-clips' },
+  { method: 'DELETE', path: '/api/session-replay-clips/:id' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

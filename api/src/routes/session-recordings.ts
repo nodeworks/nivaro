@@ -118,7 +118,12 @@ function originsClause(raw: string | undefined): { clause: string; binds: string
 export async function purgeExpiredRecordings(): Promise<void> {
   const days = await recordingRetentionDays()
   const cutoff = new Date(Date.now() - days * 86_400_000)
-  await db('nivaro_session_recordings').where('started_at', '<', cutoff).del()
+  // A saved library clip (#1415) is its own cut recording, kept until someone
+  // deletes the clip — retention purges everything else, its source included.
+  await db('nivaro_session_recordings')
+    .where('started_at', '<', cutoff)
+    .whereNotIn('id', db('nivaro_replay_clips').select('recording'))
+    .del()
 }
 
 async function recordingEnabled(): Promise<boolean> {

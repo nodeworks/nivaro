@@ -86,7 +86,7 @@ export function ReplayPlayer({
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
   const [following, setFollowing] = useState(!!live)
-  // #1366 range on the scrubber: raise an issue on it.
+  // #1366 / #1415 range on the scrubber: raise an issue on it, save it as a clip.
   const [range, setRange] = useState<ReplayRange | null>(null)
   // Replay context: route changes, the user's console lines and (#1357) the
   // page's requests ride the recording as rrweb custom events (type 5) —

@@ -74,6 +74,24 @@ export function parseRange(body: unknown): { fromMs: number; toMs: number } | nu
   return { fromMs: lo, toMs: hi }
 }
 
+/** Library tags: trimmed, lower-cased, de-duplicated, at most 10 of 40 chars (array or comma list). */
+export function parseTags(raw: unknown): string[] {
+  const list = Array.isArray(raw) ? raw : typeof raw === 'string' ? raw.split(',') : []
+  const out: string[] = []
+  for (const t of list) {
+    const v = String(t ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/\s+/g, ' ')
+      .slice(0, 40)
+    if (v && !out.includes(v)) out.push(v)
+    if (out.length >= 10) break
+  }
+  // The column holds the JSON array: keep it under 500 characters.
+  while (out.length > 0 && JSON.stringify(out).length > 500) out.pop()
+  return out
+}
+
 /** The source's events cut to the range, without storing anything. */
 export async function cutSource(
   recordingId: string,

@@ -13,6 +13,8 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatFileSize, formatRelative } from '@/lib/utils'
+import { ReplayLibrary } from './session-replays/ReplayLibrary'
+import { ReplayTabs, useReplayTab } from './session-replays/tabs'
 
 /**
  * Session replays — list recorded admin sessions (rrweb), watch them in the
@@ -256,6 +258,7 @@ export function SessionReplaysPage() {
   // environment this admin is running in. null = all environments.
   const [envFilter, setEnvFilter] = useState<string | null | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [tab, setTab] = useReplayTab()
 
   const { data: modes } = useQuery({
     queryKey: ['session-recording-enabled'],
@@ -578,9 +581,11 @@ export function SessionReplaysPage() {
             />
           </label>
         </div>
+        <ReplayTabs tab={tab} onChange={setTab} />
       </header>
 
-      <div className='flex flex-1 min-h-0 overflow-hidden'>
+      {tab === 'library' && <ReplayLibrary />}
+      <div className={cn('flex flex-1 min-h-0 overflow-hidden', tab !== 'list' && 'hidden')}>
         {/* People rail */}
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
           {isLoading ? (

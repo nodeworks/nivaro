@@ -267,6 +267,19 @@ function App() {
         'A clip starts from the last full page snapshot before the range, so it plays exactly what was on screen at its first second. Its events are copied as they were stored: masked inputs stay masked.',
         'A clip raised as an issue is kept for the same number of days as any recording.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-library', text: 'Clip library' },
+    {
+      type: 'p',
+      text: 'Save clip keeps the selected range in the library with a name, an optional description and tags. Session Replays → Library lists saved clips newest first: search by name, description or tag, filter by a tag, play a clip in place and delete it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A saved clip is a replay of its own, cut from the recording the same way as a clip raised as an issue, with the masking it was recorded with.',
+        'Retention skips recordings the library holds: the clip stays until someone deletes it, while the rest of the recording it came from expires as usual. Delete clips you no longer need — the library is the one place recordings are kept indefinitely.',
+        'Saving and deleting clips is recorded in the activity log.'
+      ]
     }
   ]
 }
