@@ -19,6 +19,8 @@ import {
   type ReplayContext,
   railMarkers
 } from './logic'
+import { RangeActions, RangeTrack } from './RangeBar'
+import type { ReplayRange } from './range'
 import { ReplaySidePanel } from './SidePanel'
 
 const SPEEDS = [1, 2, 4, 8]
@@ -84,6 +86,8 @@ export function ReplayPlayer({
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
   const [following, setFollowing] = useState(!!live)
+  // #1366 range on the scrubber: raise an issue on it.
+  const [range, setRange] = useState<ReplayRange | null>(null)
   // Replay context: route changes, the user's console lines and (#1357) the
   // page's requests ride the recording as rrweb custom events (type 5) —
   // ticks on the scrubber, the Console / Network panel beside the player.
@@ -126,6 +130,7 @@ export function ReplayPlayer({
     let raf = 0
     setRail(null)
     setCtx(NO_CONTEXT)
+    setRange(null)
 
     function rescale() {
       const rep = replayerRef.current
@@ -420,6 +425,7 @@ export function ReplayPlayer({
               truncated={rail?.truncated ?? []}
               onSeek={stableSeek}
             />
+            <RangeTrack total={total} range={range} onChange={setRange} />
           </div>
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(total)}
@@ -441,6 +447,16 @@ export function ReplayPlayer({
             ))}
           </span>
         </div>
+      )}
+      {ready && !following && range && (
+        <RangeActions
+          recordingId={recordingId}
+          range={range}
+          time={time}
+          total={total}
+          onChange={setRange}
+          onSeek={stableSeek}
+        />
       )}
       {showPanel && !side && panelEl('stacked')}
     </div>

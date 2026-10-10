@@ -254,6 +254,19 @@ function App() {
         'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
         'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-clips', text: 'Clips: select a range' },
+    {
+      type: 'p',
+      text: 'Drag along the thin track under the scrubber to select a range; drag either handle, or focus it and use the arrow keys (Shift for 5 seconds), to adjust it, and Escape to clear it. The strip under the player shows the range and can move either end to the playhead.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Raise an issue cuts the range into a replay of its own (labelled clip in the list) and opens a new issue linked to it. The issue says which page the clip opens on, lists the console errors in it and the person’s requests in its window (from the event rail), and adds your note.',
+        'A clip starts from the last full page snapshot before the range, so it plays exactly what was on screen at its first second. Its events are copied as they were stored: masked inputs stay masked.',
+        'A clip raised as an issue is kept for the same number of days as any recording.'
+      ]
     }
   ]
 }

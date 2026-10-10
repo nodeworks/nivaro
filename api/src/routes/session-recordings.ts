@@ -83,12 +83,12 @@ const MAX_BYTES = 15_000_000 // 15MB STORED (gzip) per recording ≈ 100MB+ of r
 const MAX_CHUNK = 8_000_000
 const CHUNK_BODY_LIMIT = 9_000_000
 
-function encodeChunk(json: string): string {
+export function encodeChunk(json: string): string {
   return `gz:${gzipSync(Buffer.from(json, 'utf8')).toString('base64')}`
 }
 
 /** Chunks written before gzip storage are plain JSON — both shapes read. */
-function decodeChunk(stored: string): string {
+export function decodeChunk(stored: string): string {
   if (stored.startsWith('gz:')) {
     return gunzipSync(Buffer.from(stored.slice(3), 'base64')).toString('utf8')
   }
