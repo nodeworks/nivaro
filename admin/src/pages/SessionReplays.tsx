@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatFileSize, formatRelative } from '@/lib/utils'
 import { ReplayLibrary } from './session-replays/ReplayLibrary'
+import { SharedReplay } from './session-replays/SharedReplay'
 import { ReplayTabs, useReplayTab } from './session-replays/tabs'
 
 /**
@@ -243,6 +244,14 @@ interface PersonGroup {
 }
 
 export function SessionReplaysPage() {
+  // ?share=<token> (#1362): a window shared with this person, who need not
+  // be an admin — the admin page and its admin-only queries never mount.
+  const [params] = useSearchParams()
+  const share = params.get('share')
+  return share ? <SharedReplay token={share} /> : <SessionReplaysAdmin />
+}
+
+function SessionReplaysAdmin() {
   const queryClient = useQueryClient()
   const [playing, setPlaying] = useState<Recording | null>(null)
   const [startAt, setStartAt] = useState<number | null>(null)

@@ -229,6 +229,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tuning_param_sets',
   'nivaro_session_events',
   'nivaro_replay_clips', // session replay library (migration 422) — per environment, like its recordings
+  'nivaro_replay_shares', // replay share links (migration 422)
   'nivaro_item_locks',
   'nivaro_notifications',
   'nivaro_deferred_emails',

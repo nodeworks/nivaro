@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { dragRange, fmtSpan, MIN_RANGE_MS, moveEdge, msAtX, usableRange } from './range'
+import { dragRange, expiresIn, fmtSpan, MIN_RANGE_MS, moveEdge, msAtX, usableRange } from './range'
 
 describe('replay range helpers (#1366)', () => {
   it('maps a pointer x to ms, clamped to the track', () => {
@@ -32,5 +32,14 @@ describe('replay range helpers (#1366)', () => {
     expect(usableRange([0, MIN_RANGE_MS])).toBe(true)
     expect(fmtSpan(28_000)).toBe('28 s')
     expect(fmtSpan(125_000)).toBe('2 m 05 s')
+  })
+
+  it('says when a share link expires (#1362)', () => {
+    const now = Date.parse('2026-10-10T12:00:00Z')
+    expect(expiresIn('2026-10-10T12:20:00Z', now)).toBe('in 20 minutes')
+    expect(expiresIn('2026-10-10T13:00:00Z', now)).toBe('in 1 hour')
+    expect(expiresIn('2026-10-11T12:00:00Z', now)).toBe('in 24 hours')
+    expect(expiresIn('2026-10-13T12:00:00Z', now)).toBe('in 3 days')
+    expect(expiresIn('2026-10-10T11:00:00Z', now)).toBe('expired')
   })
 })

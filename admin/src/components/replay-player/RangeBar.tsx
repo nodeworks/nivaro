@@ -1,11 +1,11 @@
 /**
  * Range selection under the replay scrubber and what to do with a range:
- * raise an issue on it (#1366), save it to the clip library (#1415). Drag
- * along the track to select; drag either handle (or focus it and use the
- * arrow keys) to adjust.
+ * raise an issue on it (#1366), save it to the clip library (#1415), share
+ * it with one person (#1362). Drag along the track to select; drag either
+ * handle (or focus it and use the arrow keys) to adjust.
  */
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { Bookmark, Bug, X } from 'lucide-react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { Bookmark, Bug, Copy, Share2, X } from 'lucide-react'
 import { memo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
@@ -22,9 +22,18 @@ import {
 import { Input } from '@/components/ui/input'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { Textarea } from '@/components/ui/textarea'
+import { UserCombobox } from '@/components/user-combobox'
 import { api } from '@/lib/api'
 import { fmtClock } from './logic'
-import { dragRange, fmtSpan, moveEdge, msAtX, type ReplayRange, usableRange } from './range'
+import {
+  dragRange,
+  expiresIn,
+  fmtSpan,
+  moveEdge,
+  msAtX,
+  type ReplayRange,
+  usableRange
+} from './range'
 
 /** Query key of the clip library (Session Replays → Library). */
 export const CLIPS_QUERY_KEY = 'replay-clips'
@@ -108,7 +117,7 @@ export const RangeTrack = memo(function RangeTrack({
     >
       {!range && (
         <span className='pointer-events-none absolute inset-0 flex items-center justify-center text-[9px] leading-none text-slate-400 opacity-0 transition-opacity group-hover/range:opacity-100'>
-          Drag to select a range — raise an issue on it or save it as a clip
+          Drag to select a range — raise an issue, save a clip or share it
         </span>
       )}
       {range && (
@@ -159,7 +168,7 @@ export function RangeActions({
   onChange: (r: ReplayRange | null) => void
   onSeek: (ms: number) => void
 }) {
-  const [dialog, setDialog] = useState<'issue' | 'clip' | null>(null)
+  const [dialog, setDialog] = useState<'issue' | 'clip' | 'share' | null>(null)
   const ok = usableRange(range)
   return (
     <div
@@ -210,6 +219,15 @@ export function RangeActions({
       >
         <Bookmark className='h-3.5 w-3.5' /> Save clip
       </Button>
+      <Button
+        size='sm'
+        variant='outline'
+        className='h-7 gap-1.5 text-[12px]'
+        disabled={!ok}
+        onClick={() => setDialog('share')}
+      >
+        <Share2 className='h-3.5 w-3.5' /> Share…
+      </Button>
       <button
         type='button'
         aria-label='Clear range'
@@ -230,6 +248,9 @@ export function RangeActions({
         recordingId={recordingId}
         range={range}
       />
+      {dialog === 'share' && (
+        <ShareDialog onClose={() => setDialog(null)} recordingId={recordingId} range={range} />
+      )}
     </div>
   )
 }
@@ -395,6 +416,192 @@ function SaveClipDialog({
           </Button>
           <Button onClick={() => save.mutate()} disabled={save.isPending || !name.trim()}>
             {save.isPending ? 'Saving…' : 'Save clip'}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ── Share with one person (#1362) ────────────────────────────────────────────
+
+const SHARE_EXPIRY = [
+  { value: '1', label: '1 hour' },
+  { value: '24', label: '24 hours' },
+  { value: '72', label: '3 days' },
+  { value: '168', label: '7 days' },
+  { value: '720', label: '30 days' }
+]
+
+export interface ReplayShare {
+  id: string
+  from_ms: number
+  to_ms: number
+  user_id: string
+  user_name?: string | null
+  user_email?: string | null
+  shared_by_name?: string | null
+  expires_at: string
+  created_at: string
+  open_count: number
+  last_opened_at: string | null
+  expired: boolean
+}
+
+function ShareDialog({
+  onClose,
+  recordingId,
+  range
+}: {
+  onClose: () => void
+  recordingId: string
+  range: ReplayRange
+}) {
+  const qc = useQueryClient()
+  const [person, setPerson] = useState<string | null>(null)
+  const [hours, setHours] = useState('72')
+  const [link, setLink] = useState<string | null>(null)
+  const sharesKey = ['replay-shares', recordingId]
+  const { data: shares = [] } = useQuery({
+    queryKey: sharesKey,
+    queryFn: () =>
+      api
+        .get<{ data: ReplayShare[] }>(`/session-recordings/${recordingId}/shares`)
+        .then((r) => r.data.data)
+  })
+  const mint = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { url: string } }>(`/session-recordings/${recordingId}/share`, {
+          from_ms: range[0],
+          to_ms: range[1],
+          expires_hours: Number(hours),
+          user_id: person
+        })
+        .then((r) => r.data.data),
+    onSuccess: (d) => {
+      setLink(`${window.location.origin}${d.url}`)
+      qc.invalidateQueries({ queryKey: sharesKey })
+    },
+    onError: (err) => toast.error(apiError(err, 'Could not share the replay'))
+  })
+  const revoke = useMutation({
+    mutationFn: (id: string) => api.delete(`/session-replay-shares/${id}`),
+    onSuccess: () => {
+      toast.success('Link revoked')
+      qc.invalidateQueries({ queryKey: sharesKey })
+    },
+    onError: () => toast.error('Could not revoke the link')
+  })
+  async function copy() {
+    if (!link) return
+    try {
+      await navigator.clipboard.writeText(link)
+      toast.success('Link copied')
+    } catch {
+      toast.error('Copy failed — select the link and copy it')
+    }
+  }
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            Share {fmtClock(range[0])} – {fmtClock(range[1])}
+          </DialogTitle>
+          <DialogDescription>
+            Only the person you pick can open the link, signed in as themselves, until it expires.
+            They see just this window. Every open is in the activity log; revoke the link at any
+            time.
+          </DialogDescription>
+        </DialogHeader>
+        <DialogBody className='space-y-3'>
+          <div className='flex items-center gap-2'>
+            <div className='min-w-0 flex-1'>
+              <UserCombobox
+                value={person}
+                onChange={(v) => {
+                  setPerson(v)
+                  setLink(null)
+                }}
+                placeholder='Share with…'
+                noneLabel='Nobody'
+              />
+            </div>
+            <SimpleSelect
+              value={hours}
+              onChange={setHours}
+              ariaLabel='Link expires after'
+              className='h-9 w-28 text-[12.5px]'
+              options={SHARE_EXPIRY}
+            />
+            <Button onClick={() => mint.mutate()} disabled={!person || mint.isPending}>
+              {mint.isPending ? 'Sharing…' : 'Share'}
+            </Button>
+          </div>
+          {link && (
+            <div className='flex items-center gap-2'>
+              <Input
+                readOnly
+                value={link}
+                aria-label='Share link'
+                className='font-mono text-[11.5px]'
+              />
+              <Button variant='outline' size='sm' className='gap-1.5' onClick={() => void copy()}>
+                <Copy className='h-3.5 w-3.5' /> Copy
+              </Button>
+            </div>
+          )}
+          {link && (
+            <p className='text-[11.5px] text-slate-500'>
+              They were notified with the link too. It is shown once — the server keeps only its
+              fingerprint.
+            </p>
+          )}
+          {shares.length > 0 && (
+            <div>
+              <h4 className='mb-1 text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
+                Shared from this recording
+              </h4>
+              <ul className='divide-y divide-slate-100 rounded-md border border-slate-200 text-[12px] dark:divide-border/50 dark:border-border'>
+                {shares.map((sh) => (
+                  <li key={sh.id} className='flex items-center gap-2 px-2.5 py-1.5'>
+                    <span className='min-w-0 flex-1 truncate'>
+                      <span className='text-slate-500'>{sh.shared_by_name || 'Someone'} → </span>
+                      <span className='font-medium text-slate-800 dark:text-foreground'>
+                        {sh.user_name || sh.user_email || sh.user_id}
+                      </span>
+                      <span className='ml-1.5 font-mono text-[11px] text-slate-500'>
+                        {fmtClock(sh.from_ms)}–{fmtClock(sh.to_ms)}
+                      </span>
+                    </span>
+                    <span
+                      className={
+                        sh.expired ? 'text-[11px] text-slate-400' : 'text-[11px] text-slate-500'
+                      }
+                      data-tip={new Date(sh.expires_at).toLocaleString()}
+                    >
+                      {sh.expired ? 'expired' : `expires ${expiresIn(sh.expires_at)}`}
+                      {sh.open_count > 0 ? ` · opened ${sh.open_count}×` : ''}
+                    </span>
+                    <Button
+                      size='sm'
+                      variant='ghost'
+                      className='h-6 px-2 text-[11px] text-red-500'
+                      disabled={revoke.isPending}
+                      onClick={() => revoke.mutate(sh.id)}
+                    >
+                      Revoke
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </DialogBody>
+        <DialogFooter>
+          <Button variant='outline' onClick={onClose}>
+            Done
           </Button>
         </DialogFooter>
       </DialogContent>

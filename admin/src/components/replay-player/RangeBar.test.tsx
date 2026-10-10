@@ -13,6 +13,17 @@ vi.mock('react-router', async (importOriginal) => {
 import { RangeActions, RangeTrack } from './RangeBar'
 
 const postMock = api.post as unknown as ReturnType<typeof vi.fn>
+const getMock = api.get as unknown as ReturnType<typeof vi.fn>
+const deleteMock = api.delete as unknown as ReturnType<typeof vi.fn>
+
+// The person picker fetches /users; the test picks through a plain stand-in.
+vi.mock('@/components/user-combobox', () => ({
+  UserCombobox: ({ onChange }: { onChange: (v: string | null) => void }) => (
+    <button type='button' onClick={() => onChange('user-dana')}>
+      Pick Dana
+    </button>
+  )
+}))
 
 // jsdom has no PointerEvent: a MouseEvent carries clientX / button.
 if (typeof window.PointerEvent === 'undefined') {
@@ -141,5 +152,60 @@ describe('RangeActions — save clip (#1415)', () => {
         tags: ['queues', 'freeze']
       })
     )
+  })
+})
+
+describe('RangeActions — share (#1362)', () => {
+  it('mints a link for one person, shows it, lists shares and revokes', async () => {
+    getMock.mockReset()
+    deleteMock.mockReset()
+    deleteMock.mockResolvedValue({ data: { data: { revoked: true } } })
+    getMock.mockResolvedValue({
+      data: {
+        data: [
+          {
+            id: 'sh-1',
+            from_ms: 0,
+            to_ms: 5_000,
+            user_id: 'user-lee',
+            user_name: 'Lee Park',
+            shared_by_name: 'Admin User',
+            expires_at: new Date(Date.now() - 1_000).toISOString(),
+            created_at: new Date().toISOString(),
+            open_count: 2,
+            last_opened_at: null,
+            expired: true
+          }
+        ]
+      }
+    })
+    postMock.mockResolvedValue({ data: { data: { url: '/session-replays?share=tok' } } })
+    wrap(
+      <RangeActions
+        recordingId='rec-1'
+        range={[10_000, 30_000]}
+        time={0}
+        total={60_000}
+        onChange={vi.fn()}
+        onSeek={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: /Share…/ }))
+    expect(await screen.findByText('Lee Park')).toBeTruthy()
+    expect(screen.getByText(/expired · opened 2×/)).toBeTruthy()
+    const share = screen.getByRole('button', { name: 'Share' }) as HTMLButtonElement
+    expect(share.disabled).toBe(true)
+    fireEvent.click(screen.getByRole('button', { name: 'Pick Dana' }))
+    fireEvent.click(share)
+    const link = (await screen.findByLabelText('Share link')) as HTMLInputElement
+    expect(link.value).toBe(`${window.location.origin}/session-replays?share=tok`)
+    expect(postMock).toHaveBeenCalledWith('/session-recordings/rec-1/share', {
+      from_ms: 10_000,
+      to_ms: 30_000,
+      expires_hours: 72,
+      user_id: 'user-dana'
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Revoke' }))
+    await waitFor(() => expect(deleteMock).toHaveBeenCalledWith('/session-replay-shares/sh-1'))
   })
 })

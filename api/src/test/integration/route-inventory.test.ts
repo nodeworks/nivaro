@@ -127,6 +127,12 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/session-recordings/:id/clips' },
   { method: 'GET', path: '/api/session-replay-clips' },
   { method: 'DELETE', path: '/api/session-replay-clips/:id' },
+  // Shareable replay links (#1362)
+  { method: 'POST', path: '/api/session-recordings/:id/share' },
+  { method: 'GET', path: '/api/session-recordings/:id/shares' },
+  { method: 'DELETE', path: '/api/session-replay-shares/:id' },
+  { method: 'GET', path: '/api/session-replay-shares/view/:token' },
+  { method: 'GET', path: '/api/session-replay-shares/view/:token/events' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

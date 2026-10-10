@@ -280,6 +280,21 @@ function App() {
         'Retention skips recordings the library holds: the clip stays until someone deletes it, while the rest of the recording it came from expires as usual. Delete clips you no longer need — the library is the one place recordings are kept indefinitely.',
         'Saving and deleting clips is recorded in the activity log.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-share', text: 'Sharing a replay with one person' },
+    {
+      type: 'p',
+      text: 'Share… on a selected range creates a link for one person you pick, valid for 1 hour to 30 days (3 days by default). They get a notification with the link; you see it once, to copy.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Never public: the link opens only for the person it names, signed in as themselves — they do not need to be an administrator. Anyone else signed in gets a refusal, and so does a masquerade session.',
+        'They see only the shared window, with the masking it was recorded with — not the rest of the recording, its event rail or any other session. The page says who shared it and when the link expires.',
+        'Every open is recorded in the activity log, and so is every refused attempt. The share dialog lists the links made from a recording: who shared it with whom, the window, the expiry and how often it was opened.',
+        'Revoke deletes the link at once. A link also stops working when it expires or when its recording is purged by retention — save the range as a clip first if it must outlive the recording.',
+        'Only a fingerprint of the link is stored, so the link itself cannot be read back from the database.'
+      ]
     }
   ]
 }

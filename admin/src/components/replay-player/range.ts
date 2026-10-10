@@ -52,3 +52,16 @@ export function fmtSpan(ms: number): string {
   if (s < 60) return `${s} s`
   return `${Math.floor(s / 60)} m ${String(s % 60).padStart(2, '0')} s`
 }
+
+/** "in 3 days", "in 5 hours", "in 20 minutes" — a share link's expiry (#1362). */
+export function expiresIn(iso: string, now = Date.now()): string {
+  const ms = new Date(iso).getTime() - now
+  if (!Number.isFinite(ms)) return '—'
+  if (ms <= 0) return 'expired'
+  const mins = Math.ceil(ms / 60_000)
+  const plural = (n: number, w: string) => `in ${n} ${w}${n === 1 ? '' : 's'}`
+  if (mins < 60) return plural(mins, 'minute')
+  const hrs = Math.round(mins / 60)
+  if (hrs < 48) return plural(hrs, 'hour')
+  return plural(Math.round(hrs / 24), 'day')
+}
