@@ -496,7 +496,26 @@ export async function usersRoutes(app: FastifyInstance) {
         50,
         { memberIds }
       )
-      return reply.send({ data })
+      // #1394 — who on the team is stuck right now (at the keyboard, same
+      // route, nothing saved for ten minutes): their own manager or an admin.
+      const mayKnow = !!req.isAdmin || String(id).toUpperCase() === req.user!.id.toUpperCase()
+      const { stuckForPeople } = await import('../services/presence-stuck.js')
+      const stuck = mayKnow
+        ? await stuckForPeople(
+            data.reports.map((r) => r.id),
+            req.user!.id
+          )
+        : new Map()
+      return reply.send({
+        data: {
+          ...data,
+          reports: data.reports.map((r) => ({
+            ...r,
+            stuck_now: stuck.get(String(r.id).toUpperCase()) ?? null
+          })),
+          stuck_now_count: stuck.size
+        }
+      })
     }
   )
 

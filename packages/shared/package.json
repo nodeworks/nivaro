@@ -61,9 +61,9 @@
   "devDependencies": {
     "@types/react": "^19",
     "@types/react-dom": "^19",
-    "html-to-image": "^1.11.13",
     "react-dom": "^19",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.0"
+    "vitest": "^2.1.0",
+    "html2canvas": "^1.4.1"
   }
 }

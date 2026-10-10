@@ -156,6 +156,12 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   // Session replay cost on DB Health (#1368)
   { method: 'GET', path: '/api/ops-db/storage' },
   { method: 'GET', path: '/api/ops-db/session-replay' },
+  // Support requests carry a replay; Report a problem files issue + request (#1377, #1390)
+  { method: 'POST', path: '/api/support/tickets' },
+  { method: 'POST', path: '/api/support/report-problem' },
+  // Presence: the Online list (state / stuck, #1394) and the team view
+  { method: 'GET', path: '/api/presence/online' },
+  { method: 'GET', path: '/api/users/:id/team-load' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

@@ -46,7 +46,7 @@ export const managersTeamGuide: DocSection = {
       rows: [
         [
           'GET /users/me/team-load',
-          'One row per report: open records, past SLA, oldest, stuck count, the three oldest records, out-of-office and who covers. Admins may pass ?team=<team id> to read a Team instead.'
+          'One row per report: open records, past SLA, oldest, stuck count, the three oldest records, out-of-office and who covers. Admins may pass ?team=<team id> to read a Team instead. stuck_now (per row) and stuck_now_count say who is stuck at the keyboard right now: same page, nothing saved for ten minutes (their manager or an admin only).'
         ],
         [
           'GET /delegation/team?days=14',

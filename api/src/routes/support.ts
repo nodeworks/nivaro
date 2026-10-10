@@ -1,9 +1,10 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { uploadFileBuffer } from '../services/files.js'
 import { readOne } from '../services/items.js'
+import { cleanAppLabel } from '../services/page-at.js'
 import {
   canSeeTicket,
   canWorkDesk,
@@ -48,16 +49,6 @@ interface CategoryRow {
 }
 
 const PRIORITIES = ['low', 'normal', 'urgent']
-
-interface RaiseTicketInput {
-  title?: string
-  description?: string | null
-  category_id?: number | null
-  collection?: string | null
-  item?: string | number | null
-  priority?: string
-  attachments?: string[]
-}
 
 function serializeCategory(c: CategoryRow & Record<string, unknown>) {
   return {
@@ -152,6 +143,15 @@ async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>
       email: r.r_email as string | null
     }),
     attachments: parseAttachments(r.attachments),
+    // #1390 — the issue a Report a problem filed alongside this request.
+    issue_id: r.issue_id == null ? null : Number(r.issue_id),
+    // #1377 — 'Watch what they saw' (only admins can open a replay).
+    replay: r.replay_recording_id
+      ? {
+          recording_id: String(r.replay_recording_id),
+          offset_ms: r.replay_offset_ms == null ? null : Number(r.replay_offset_ms)
+        }
+      : null,
     replies: countOf.get(String(r.id)) ?? 0,
     legacy: r.legacy_id != null,
     created_at: r.created_at,
@@ -160,11 +160,120 @@ async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>
   }))
 }
 
+/**
+ * #1377 — the requester's replay link ('Watch what they saw'). Caller-supplied,
+ * so only a uuid-shaped id of a recording that exists AND belongs to the
+ * requester is kept — a client must not attach someone else's recording.
+ * The offset is ms into that recording (clamped, null when not given).
+ */
+export async function ownReplayLink(
+  userId: string,
+  raw: unknown
+): Promise<{ recording_id: string; offset_ms: number | null } | null> {
+  const r = raw as { recording_id?: unknown; offset_ms?: unknown } | null | undefined
+  if (typeof r?.recording_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(r.recording_id)) return null
+  const rec = await db('nivaro_session_recordings')
+    .where({ id: r.recording_id, user: userId })
+    .first('id')
+    .catch(() => undefined)
+  if (!rec) return null
+  const n = r.offset_ms == null ? Number.NaN : Number(r.offset_ms)
+  return {
+    recording_id: r.recording_id,
+    offset_ms: Number.isFinite(n) ? Math.min(Math.max(0, Math.floor(n)), 2_000_000_000) : null
+  }
+}
+
 async function loadTicket(id: number): Promise<(TicketRow & Record<string, unknown>) | undefined> {
   if (!Number.isInteger(id) || id <= 0) return undefined
   return (await ticketQuery().where('t.id', id).first()) as
     | (TicketRow & Record<string, unknown>)
     | undefined
+}
+
+/** Only files the requester uploaded ride along (the admin will open them). */
+async function ownFilesOf(req: FastifyRequest, raw: unknown): Promise<string[]> {
+  const attachments = Array.isArray(raw)
+    ? raw
+        .map(String)
+        .filter((s) => /^[0-9a-f-]{32,36}$/i.test(s))
+        .slice(0, 20)
+    : []
+  if (!attachments.length || req.isAdmin) return attachments
+  const rows = (await db('nivaro_files')
+    .whereIn('id', attachments)
+    .where('uploaded_by', req.user!.id)
+    .select('id')) as Array<{ id: string }>
+  const ok = new Set(rows.map((r) => String(r.id).toLowerCase()))
+  return attachments.filter((a) => ok.has(a.toLowerCase()))
+}
+
+/**
+ * Insert a support request as the caller, log it and tell the desk. Shared
+ * by POST /tickets and POST /report-problem (#1390). Columns from migration
+ * 425 (replay, issue link) are written only once it has run.
+ */
+async function raiseTicket(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  f: {
+    title: string
+    description: string | null
+    collection: string | null
+    item: string | null
+    category: CategoryRow | null
+    priority: string
+    attachments: string[]
+    replay: { recording_id: string; offset_ms: number | null } | null
+    issueId?: number | null
+  }
+) {
+  const replayCols =
+    f.replay && (await hasColumn('nivaro_tasks', 'replay_recording_id'))
+      ? { replay_recording_id: f.replay.recording_id, replay_offset_ms: f.replay.offset_ms }
+      : {}
+  const issueCols =
+    f.issueId != null && (await hasColumn('nivaro_tasks', 'issue_id'))
+      ? { issue_id: f.issueId }
+      : {}
+  const now = new Date()
+  const [row] = (await db('nivaro_tasks')
+    .insert({
+      ...replayCols,
+      ...issueCols,
+      kind: SUPPORT_KIND,
+      collection: f.collection,
+      item: f.item,
+      title: f.title.slice(0, 500),
+      description: f.description,
+      assignee: f.category?.default_assignee ?? null,
+      category_id: f.category?.id ?? null,
+      team_id: f.category?.team_id ?? null,
+      attachments: f.attachments.length ? JSON.stringify(f.attachments) : null,
+      priority: f.priority,
+      status: f.category?.default_assignee ? 'in_progress' : 'open',
+      created_by: req.user!.id,
+      completed_at: null,
+      created_at: now,
+      updated_at: now
+    })
+    .returning('id')) as Array<{ id: number } | number>
+  const id = Number(typeof row === 'object' ? row.id : row)
+  await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
+  const t = (await loadTicket(id))!
+  const [s] = await serializeTickets([t])
+  const where = s.record_label ? ` on ${s.record_label}` : ' (General Support)'
+  const who = s.requester_name ?? 'Someone'
+  const audience = t.assignee ? [t.assignee] : await supportAudience(t.team_id)
+  await notifyTicket(app, t, audience, {
+    subject: `New support request: ${s.title}`,
+    message: `${who} asked${where}${s.category_name ? ` · ${s.category_name}` : ''}.${
+      s.description ? `\n\n${String(s.description).slice(0, 400)}` : ''
+    }`,
+    actorId: req.user!.id,
+    category: 'system'
+  })
+  return s
 }
 
 export async function supportRoutes(app: FastifyInstance) {
@@ -442,43 +551,39 @@ export async function supportRoutes(app: FastifyInstance) {
   })
 
   // POST /tickets — raise one.
-  app.post<{ Body: RaiseTicketInput }>('/tickets', async (req, reply) => {
-    const out = await raiseTicket(req, req.body ?? {})
-    if ('error' in out) return reply.code(out.status).send({ error: out.error })
-    return reply.code(201).send({ data: out.ticket })
-  })
-
-  /**
-   * Raise a ticket as the caller (POST /tickets and the portal's "Report a
-   * problem"). Answers the serialized ticket, or the refusal to send.
-   */
-  async function raiseTicket(
-    req: FastifyRequest,
-    b: RaiseTicketInput,
-    opts: { trustedAttachments?: string[] } = {}
-  ): Promise<
-    | { ticket: Awaited<ReturnType<typeof serializeTickets>>[number] }
-    | { status: number; error: string }
-  > {
+  app.post<{
+    Body: {
+      title?: string
+      description?: string | null
+      category_id?: number | null
+      collection?: string | null
+      item?: string | number | null
+      priority?: string
+      attachments?: string[]
+      /** #1377 — the requester's own recording + where they asked. */
+      replay?: { recording_id?: string; offset_ms?: number | null } | null
+    }
+  }>('/tickets', async (req, reply) => {
+    const b = req.body ?? {}
     const title = String(b.title ?? '').trim()
-    if (!title) return { status: 400, error: 'A short summary is required' }
+    if (!title) return reply.code(400).send({ error: 'A short summary is required' })
     const collection = b.collection ? String(b.collection) : null
     const item = b.item != null && b.item !== '' ? String(b.item) : null
     if ((collection && !item) || (!collection && item)) {
-      return { status: 400, error: 'collection and item go together' }
+      return reply.code(400).send({ error: 'collection and item go together' })
     }
     if (collection && item) {
       if (/^(nivaro|directus)_/i.test(collection)) {
-        return { status: 400, error: 'Tickets cannot target system collections' }
+        return reply.code(400).send({ error: 'Tickets cannot target system collections' })
       }
       // The requester must be able to open the record they are asking about.
       try {
         // readOne answers NULL (no throw) for a row the caller cannot see.
         if (!(await readOne(req.user!, collection, item, req.workspaceId ?? undefined, ['id']))) {
-          return { status: 404, error: 'Record not found' }
+          return reply.code(404).send({ error: 'Record not found' })
         }
       } catch {
-        return { status: 404, error: 'Record not found' }
+        return reply.code(404).send({ error: 'Record not found' })
       }
     }
     let category: CategoryRow | undefined
@@ -486,219 +591,108 @@ export async function supportRoutes(app: FastifyInstance) {
       category = (await db('nivaro_task_categories')
         .where({ id: Number(b.category_id), is_active: true })
         .first()) as CategoryRow | undefined
-      if (!category) return { status: 400, error: 'Unknown support type' }
+      if (!category) return reply.code(400).send({ error: 'Unknown support type' })
       if (category.collection && category.collection !== collection) {
-        return { status: 400, error: 'That type is only for a different kind of record' }
+        return reply.code(400).send({ error: 'That type is only for a different kind of record' })
       }
     }
     const priority = b.priority && PRIORITIES.includes(b.priority) ? b.priority : 'normal'
-    const attachments = Array.isArray(b.attachments)
-      ? b.attachments
-          .map(String)
-          .filter((s) => /^[0-9a-f-]{32,36}$/i.test(s))
-          .slice(0, 20)
-      : []
-    // Only files the requester uploaded ride along (the admin will open them).
-    let ownFiles = attachments
-    if (attachments.length && !req.isAdmin) {
-      const rows = (await db('nivaro_files')
-        .whereIn('id', attachments)
-        .where('uploaded_by', req.user!.id)
-        .select('id')) as Array<{ id: string }>
-      const ok = new Set(rows.map((r) => String(r.id).toLowerCase()))
-      ownFiles = attachments.filter((a) => ok.has(a.toLowerCase()))
-    }
-    // Files the server itself stored for this caller (a problem report's
-    // screenshot) ride along without the ownership re-check.
-    if (opts.trustedAttachments?.length) ownFiles = [...ownFiles, ...opts.trustedAttachments]
-    const now = new Date()
-    const [row] = (await db('nivaro_tasks')
-      .insert({
-        kind: SUPPORT_KIND,
-        collection,
-        item,
-        title: title.slice(0, 500),
-        description: b.description ?? null,
-        assignee: category?.default_assignee ?? null,
-        category_id: category?.id ?? null,
-        team_id: category?.team_id ?? null,
-        attachments: ownFiles.length ? JSON.stringify(ownFiles) : null,
-        priority,
-        status: category?.default_assignee ? 'in_progress' : 'open',
-        created_by: req.user!.id,
-        completed_at: null,
-        created_at: now,
-        updated_at: now
-      })
-      .returning('id')) as Array<{ id: number } | number>
-    const id = Number(typeof row === 'object' ? row.id : row)
-    await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
-    const t = (await loadTicket(id))!
-    const [s] = await serializeTickets([t])
-    const where = s.record_label ? ` on ${s.record_label}` : ' (General Support)'
-    const who = s.requester_name ?? 'Someone'
-    const audience = t.assignee ? [t.assignee] : await supportAudience(t.team_id)
-    await notifyTicket(app, t, audience, {
-      subject: `New support request: ${s.title}`,
-      message: `${who} asked${where}${s.category_name ? ` · ${s.category_name}` : ''}.${
-        s.description ? `\n\n${String(s.description).slice(0, 400)}` : ''
-      }`,
-      actorId: req.user!.id,
-      category: 'system'
+    const s = await raiseTicket(app, req, {
+      title,
+      description: b.description ?? null,
+      collection,
+      item,
+      category: category ?? null,
+      priority,
+      attachments: await ownFilesOf(req, b.attachments),
+      replay: await ownReplayLink(req.user!.id, b.replay)
     })
-    return { ticket: s }
-  }
+    return reply.code(201).send({ data: s })
+  })
 
-  /**
-   * POST /problem-reports — "Report a problem" from a portal (#1390). One
-   * sentence from the person plus what their browser saw: a screenshot (inputs
-   * masked client-side), the replay clip of the moment when error replay or
-   * full recording is on, the console tail and the route. Files an issue
-   * (source client, raised by the person) AND a General Support request that
-   * links to it, so the person follows it under My requests and the desk sees
-   * the screenshot and replay without asking.
-   */
+  // POST /report-problem (#1390) — the portal's (and any host's) "Report a
+  // problem": one sentence, a masked screenshot, the replay and the page's
+  // console/request tail become an ISSUE (source client, raised by the
+  // person) AND a support request linked to it, which they follow under My
+  // requests. The replay is kept only when it is the person's own recording;
+  // attachments only when they uploaded them.
   app.post<{
     Body: {
-      description?: string
-      screenshot?: string | null
-      console?: string[]
+      sentence?: string
       route?: string
-      url?: string
       app?: string
-      user_agent?: string
-      viewport?: string
-      recording_id?: string | null
-      recording_offset_ms?: number | null
+      screenshot?: string | null
+      context?: string | null
+      attachments?: string[]
+      replay?: { recording_id?: string; offset_ms?: number | null } | null
     }
-  }>('/problem-reports', { bodyLimit: 4_000_000 }, async (req, reply) => {
+  }>('/report-problem', async (req, reply) => {
     const b = req.body ?? {}
-    const description = String(b.description ?? '').trim()
-    if (!description) return reply.code(400).send({ error: 'Say what went wrong' })
-    const screenshot = typeof b.screenshot === 'string' && b.screenshot ? b.screenshot : null
-    if (screenshot && !/^data:image\/(png|jpeg|webp);base64,/.test(screenshot)) {
+    const sentence = String(b.sentence ?? '').trim()
+    if (!sentence) return reply.code(400).send({ error: 'Say what went wrong in a sentence' })
+    const shot = typeof b.screenshot === 'string' && b.screenshot ? b.screenshot : null
+    if (shot && !/^data:image\/(png|jpeg|webp);base64,/.test(shot)) {
       return reply.code(400).send({ error: 'screenshot must be a data:image URI' })
     }
-    if (screenshot && screenshot.length > 2_500_000) {
+    if (shot && shot.length > 2_500_000) {
       return reply.code(400).send({ error: 'screenshot too large (2MB cap)' })
     }
-    const userId = req.user!.id
-    // The replay link is caller-supplied: only a recording that exists and
-    // belongs to the reporter (same rule as POST /issues/client).
-    let recordingId: string | null = null
-    if (typeof b.recording_id === 'string' && /^[0-9a-f-]{36}$/i.test(b.recording_id)) {
-      const rec = await db('nivaro_session_recordings')
-        .where({ id: b.recording_id, user: userId })
-        .first('id')
-      if (rec) recordingId = b.recording_id
-    }
-    const recordingOffsetMs =
-      recordingId && b.recording_offset_ms != null && Number.isFinite(Number(b.recording_offset_ms))
-        ? Math.max(0, Math.floor(Number(b.recording_offset_ms)))
-        : null
-    // Control characters out (a log line must not forge new lines in details).
-    const clean = (v: unknown, max: number) =>
-      typeof v === 'string'
-        ? Array.from(v, (c) => (c.charCodeAt(0) < 32 ? ' ' : c))
-            .join('')
-            .trim()
-            .slice(0, max)
-        : ''
-    const route = clean(b.route, 300) || clean(b.url, 300) || 'unknown'
-    const app = clean(b.app, 60)
-    const consoleTail = Array.isArray(b.console)
-      ? b.console
-          .filter((l): l is string => typeof l === 'string')
-          .slice(-40)
-          .map((l) => l.slice(0, 300))
-      : []
-    const title = (description.split('\n')[0] ?? '').slice(0, 140) || 'Problem report'
-
-    // 1. The screenshot as a file the requester owns, so the desk sees it on
-    // the ticket (the issue keeps its own copy inline, like the bug reporter).
-    let screenshotFileId: string | null = null
-    if (screenshot) {
-      try {
-        const [, mimeType, data] = /^data:(image\/[a-z]+);base64,(.*)$/s.exec(screenshot) ?? []
-        if (mimeType && data) {
-          const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg'
-          const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
-          const file = await uploadFileBuffer(
-            req.user!,
-            Buffer.from(data, 'base64'),
-            `problem-report-${stamp}.${ext}`,
-            mimeType
-          )
-          screenshotFileId = String(file.id)
-        }
-      } catch (err) {
-        req.log.warn({ err }, 'problem report: screenshot file could not be stored')
-      }
-    }
-
-    // 2. The issue.
+    const route =
+      typeof b.route === 'string' && /^\/(?!\/)[^\s]*$/.test(b.route) ? b.route.slice(0, 300) : null
+    const appLabel = cleanAppLabel(b.app)
+    const context = typeof b.context === 'string' ? b.context.slice(0, 6000) : ''
+    const replay = await ownReplayLink(req.user!.id, b.replay)
     const now = new Date()
     const details = [
-      description,
+      sentence,
       '',
-      `Route: ${route}`,
-      app ? `App: ${app}` : null,
-      b.user_agent ? `User agent: ${clean(b.user_agent, 300)}` : null,
-      b.viewport ? `Viewport: ${clean(b.viewport, 40)}` : null,
-      recordingId ? 'Replay: attached' : null,
-      '',
-      consoleTail.length > 0 ? `Console tail:\n${consoleTail.join('\n')}` : 'Console tail: empty'
+      `Page: ${route ?? 'unknown'}${appLabel ? ` (${appLabel})` : ''}`,
+      'Reported by the person through Report a problem.',
+      ...(context ? ['', context] : [])
     ]
-      .filter((l) => l !== null)
       .join('\n')
-    const [issueRow] = (await db('nivaro_issues')
+      .slice(0, 8000)
+    const [irow] = (await db('nivaro_issues')
       .insert({
-        title,
+        title: sentence.slice(0, 500),
         severity: 'medium',
         status: 'open',
         collection: null,
         item: null,
         assigned_to: null,
-        details: details.slice(0, 8000),
-        screenshot,
+        details,
+        screenshot: shot,
         source: 'client',
-        raised_by: userId,
-        recording_id: recordingId,
-        recording_offset_ms: recordingOffsetMs,
+        raised_by: req.user!.id,
+        recording_id: replay?.recording_id ?? null,
+        recording_offset_ms: replay?.offset_ms ?? null,
         created_at: now,
         updated_at: now
       })
       .returning('id')) as Array<{ id: number } | number>
-    const issueId = Number(typeof issueRow === 'object' ? issueRow.id : issueRow)
+    const issueId = Number(typeof irow === 'object' ? irow.id : irow)
     await logActivity({
       action: 'create',
-      user: userId,
+      user: req.user!.id,
       collection: 'nivaro_issues',
       item: String(issueId),
-      comment: 'Problem report',
+      comment: 'Report a problem',
       req
     })
-
-    // 3. The support request, linked to the issue.
-    const out = await raiseTicket(
-      req,
-      {
-        title,
-        description: `${description}\n\nReported from ${route}${app ? ` (${app})` : ''}. Issue #${issueId} holds the screenshot, console${recordingId ? ' and replay' : ''}.`,
-        priority: 'normal'
-      },
-      { trustedAttachments: screenshotFileId ? [screenshotFileId] : [] }
-    )
-    if ('error' in out) return reply.code(out.status).send({ error: out.error })
-    await db('nivaro_issues')
-      .where({ id: issueId })
-      .update({
-        details: `${details}\n\nSupport request #${out.ticket.id}`.slice(0, 8000),
-        updated_at: new Date()
-      })
-    return reply.code(201).send({
-      data: { ticket: out.ticket, issue_id: issueId, replay: recordingId != null }
+    const ticket = await raiseTicket(app, req, {
+      title: sentence,
+      description: `${sentence}\n\nReported from ${route ?? 'an unknown page'}${
+        appLabel ? ` (${appLabel})` : ''
+      }. Issue #${issueId} has the screenshot and the details.`,
+      collection: null,
+      item: null,
+      category: null,
+      priority: 'normal',
+      attachments: await ownFilesOf(req, b.attachments),
+      replay,
+      issueId
     })
+    return reply.code(201).send({ data: { ticket, issue_id: issueId } })
   })
 
   // POST /tickets/:id/comments — reply on the thread.

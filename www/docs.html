@@ -14722,12 +14722,12 @@ GET   /api/support/summary               // badge counts
 GET   /api/support/categories?collection=orders
 GET   /api/tasks/requested               // tasks I asked others to do</code></pre>
           <h3 class="doc-h3" id="support-report-problem">Report a problem</h3>
-          <p class="doc-p">A portal can mount <code class="doc-code">ReportProblemDialog</code> (from <code class="doc-code">@nivaro/react</code>). The person writes one sentence; the browser adds a screenshot with every typed value masked (needs <code class="doc-code">html-to-image</code> installed in the host app), the replay of the last minute when the instance records sessions (pass <code class="doc-code">captureErrorClip</code> as <code class="doc-code">captureClip</code>), the last console warnings and errors, and the page. The server files an issue (source client, raised by the person) and a General Support request linked to it; the screenshot is attached to the request so the desk sees it, and the person follows it under My requests.</p>
-          <pre class="doc-pre"><code>POST /api/support/problem-reports
-{ "description": "Saving spun forever", "screenshot": "data:image/jpeg;base64,…",
-  "console": ["[error] …"], "route": "/records/orders/42", "app": "portal",
-  "recording_id": "&lt;own recording&gt;", "recording_offset_ms": 8600 }
-→ { "data": { "ticket": { … }, "issue_id": 501, "replay": true } }</code></pre>
+          <p class="doc-p">A portal can mount <code class="doc-code">ReportProblemButton</code> (from <code class="doc-code">@nivaro/react</code>): <code class="doc-code">&lt;ReportProblemButton app='portal' /&gt;</code> for a corner button, or <code class="doc-code">floating={false}</code> to place it inline. The person writes one sentence. Before the dialog opens the browser takes a screenshot with every typed value masked (needs <code class="doc-code">html2canvas</code> installed in the host app; without it the report goes without a picture) and keeps the moment for the replay. With Include what I was doing ticked, the report also carries the replay, the last console warnings and errors, the last requests and the page. The server files an issue (source client, raised by the person) and a support request linked to it, which the person follows under My requests; the desk sees Issue #N on the ticket.</p>
+          <pre class="doc-pre"><code>POST /api/support/report-problem
+{ "sentence": "Saving spun forever", "screenshot": "data:image/jpeg;base64,…",
+  "route": "/records/orders/42", "app": "portal", "context": "…",
+  "replay": { "recording_id": "&lt;own recording&gt;", "offset_ms": 8600 } }
+→ { "data": { "ticket": { … }, "issue_id": 501 } }</code></pre>
           <!-- /SYNC:support-requests -->
         </div>
 

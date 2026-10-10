@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto'
 import tls from 'node:tls'
+import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
 import { startJobRun } from './job-runs.js'
 import { notifyUser } from './notification-channels.js'
-import type { FastifyInstance } from 'fastify'
 
 /**
  * Ops monitors evaluator. Three check types share one lifecycle: evaluate on
@@ -454,8 +454,7 @@ export async function evaluateMonitor(
       // #1124 — a Traffic Map entity's live figure against a threshold (this process's rings).
       const { evalTraffic } = await import('./traffic-monitor.js')
       result = await evalTraffic(cfg)
-    }
-    else {
+    } else {
       const r = await evalDeployRegression(cfg, state)
       result = r.result
       nextState = r.state
@@ -479,7 +478,20 @@ export async function evaluateMonitor(
       updated_at: new Date()
     })
     .catch(() => {})
-  if (flippedToFailing) await raiseIssue(monitor, result.detail, app)
+  if (flippedToFailing) {
+    await raiseIssue(monitor, result.detail, app)
+    // #1371 — people on the pages this monitor watches record what they see.
+    const paths = [
+      cfg.path,
+      ...(Array.isArray(cfg.steps)
+        ? (cfg.steps as Array<{ path?: unknown }>).map((s) => s?.path)
+        : []),
+      typeof cfg.collection === 'string' ? `/api/items/${cfg.collection}` : null
+    ].filter((p): p is string => typeof p === 'string')
+    const { fireReplaySignal, pagePrefixesFor } = await import('./replay-auto-signals.js')
+    const prefixes = [...new Set(paths.flatMap(pagePrefixesFor))]
+    if (prefixes.length) void fireReplaySignal('monitor', { pathPrefixes: prefixes })
+  }
 
   const outcome =
     result.metric != null

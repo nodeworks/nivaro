@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
+import { presenceOverrideAway, stuckForViewer } from './presence-stuck.js'
 import { listScopeDimensions, resolveScopeLabelsForUsers } from './user-scopes.js'
 
 /**
@@ -55,7 +56,14 @@ export interface PersonProfile {
   timezone: string | null
   last_access: string | null
   created_at: string | null
-  presence: { online: boolean; idle_minutes: number | null; last_seen: string | null }
+  presence: {
+    online: boolean
+    idle_minutes: number | null
+    last_seen: string | null
+    /** #1394 — at the keyboard, same route, nothing saved for 10+ minutes.
+     *  Admins and the person's manager only; null otherwise. */
+    stuck?: { minutes: number; label: string | null } | null
+  }
   teams: Array<{ id: number; name: string; slug: string | null; member_count: number }>
   seats: Array<{
     template_id: string
@@ -463,7 +471,17 @@ export async function buildUserProfile(
     timezone: isSelf || viewer.isAdmin ? ((prefs.timezone as string | null) ?? null) : null,
     last_access: iso(u.last_access),
     created_at: iso(u.created_at),
-    presence: { online, idle_minutes: idleMinutes, last_seen: lastSeen?.toISOString() ?? null },
+    presence: {
+      online,
+      idle_minutes: idleMinutes,
+      last_seen: lastSeen?.toISOString() ?? null,
+      stuck: await stuckForViewer(
+        { id, manager_id: (u.manager_id as string | null) ?? null },
+        presenceRow,
+        viewer,
+        { online, away: presenceOverrideAway(prefs) }
+      ).catch(() => null)
+    },
     teams: (teamRows as Array<Record<string, unknown>>).map((t) => ({
       id: Number(t.id),
       name: String(t.name ?? ''),

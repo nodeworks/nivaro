@@ -151,8 +151,8 @@ export const journeyTrailDocs: DocSection = {
     },
     {
       type: 'pre',
-      code: `GET /api/journeys/user/:id?date=YYYY-MM-DD   # sessions + steps for one day
-GET /api/journeys/days/:id                   # which of the last 30 days have data`
+      code: `GET /api/journeys/user/:id?date=YYYY-MM-DD&app=   # sessions + steps for one day
+GET /api/journeys/days/:id?app=                     # which of the last 30 days have data, + apps seen`
     },
     {
       type: 'ul',
@@ -160,7 +160,8 @@ GET /api/journeys/days/:id                   # which of the last 30 days have da
         'Admin-only — this is user tracking; the API refuses non-admins.',
         'Durations stamp when the user moves to the next page or disconnects (capped at 8h against dangling sessions).',
         'UI: the Journey Trail card on a user profile (admin view), with a day picker of active days.',
-        'Rows purge automatically after 30 days in the daily retention pass.'
+        'Rows purge automatically after 30 days in the daily retention pass.',
+        "Portals too: a front end built on @nivaro/react calls usePageAt({ app: 'efp', path }) inside its realtime provider and its pages land in the same trail, labelled with the app. ?app= narrows either route to one front end ('admin' includes rows from before the label existed); the card shows an app filter and a per-session app chip once a person has used more than one. Portal pages are listed, not linked."
       ]
     }
   ]
@@ -267,6 +268,37 @@ function App() {
         'Recordings attribute to the authenticated SDK identity (usually your service token user); the app label tells frontends apart in the replay list.',
         'Raw SDK commands exist too: sessionRecordingEnabled, startSessionRecording(app), appendSessionRecordingEvents, endSessionRecording.',
         'The hook keeps the same console and network log as the admin recorder (below), from your app’s own fetch and XMLHttpRequest calls.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Error clips work the same in your own frontend: with Error clips on, the hook keeps the last 30–60 seconds in memory and uploads nothing until something breaks. Call reportClientCrash from your error boundary and the issue it files links to the clip (or, with full recording on, to the moment in the live recording):'
+    },
+    {
+      type: 'pre',
+      code: `import { reportClientCrash } from '@nivaro/react'
+
+componentDidCatch(error, info) {
+  void reportClientCrash(client, error, info) // POST /issues/client + replay link
+}`
+    },
+    {
+      type: 'p',
+      text: "Support clips: with Error clips on, a support request (Get help, Request a change) cuts the same in-memory buffer into an app='support-clip' recording, taken when the dialog opens and uploaded only if the request is sent; the requester can untick it. POST /session-recordings/start takes clip_kind ('error' | 'support') from an allowlist, so a clip's label is never free text."
+    },
+    { type: 'h2', id: 'session-replay-auto', text: 'Auto-record on a signal' },
+    {
+      type: 'p',
+      text: 'With "Auto-record on signals" on (Session Replays header; nivaro_settings.replay_auto_signals, off by default), trouble starts a short recording even while recording is off: the next three minutes of the people affected, labelled auto:<signal>, inputs masked as always.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'rage-click — three clicks on one element within 600ms; dead-click — three clicks on buttons or links that changed nothing (no DOM change, no navigation within a second) inside ten seconds. Both arrive with the RUM beacon, sent at once, and record the person who clicked.',
+        'monitor — an ops monitor flips to failing; breaker — an operator opens a Traffic Map breaker on an entity. Both record the people currently on the pages that show it (/collections/<c>…, /records/<c>…), as seen by the API process that noticed (the page pings of the admin and of portals using usePageAt).',
+        'The server sends replay:record { signal, minutes: 3, token } over the socket; the token is single-use, minted for that person and that signal, and lives two minutes. POST /session-recordings/start honours an auto start only with it, so a page cannot start one itself.',
+        'Capped at 12 auto recordings per hour for the instance (counted in Redis across API processes) and one per person per ten minutes; at most ten people per signal.',
+        'With full recording already on, the signal is only marked on the live recording (a signal tick). With error clips on, the auto recording rides the clip buffer instead of starting a second rrweb stream.'
       ]
     },
     {

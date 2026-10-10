@@ -44,6 +44,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
+import { type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
@@ -3845,6 +3846,9 @@ interface PresenceExtra {
   is_idle?: boolean
   idle_minutes?: number | null
   last_active?: string | null
+  /** #1394 — 'active' | 'idle' | 'stuck' (stuck only for admins / their manager). */
+  state?: 'active' | 'idle' | 'stuck'
+  stuck?: StuckState | null
   custom_status?: { text: string; emoji: string | null } | null
   /** An admin is masquerading as this person right now. */
   masquerade?: { admin_id: string | null; admin_name: string } | null
@@ -4523,6 +4527,15 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                             {isIdle && (
                               <span className='ml-1.5 rounded-full bg-amber-500/10 px-1.5 py-px text-[10px] font-medium text-amber-700 dark:text-amber-400'>
                                 {px?.away ? 'Away' : idleLabel(idleSrc)}
+                              </span>
+                            )}
+                            {!isIdle && px?.stuck && (
+                              <span
+                                className='ml-1.5 rounded-full bg-orange-500/10 px-1.5 py-px text-[10px] font-medium text-orange-700 dark:text-orange-400'
+                                data-chat-stuck={px.stuck.minutes}
+                                title='At the keyboard, on the same page, nothing saved for ten minutes'
+                              >
+                                {stuckText(px.stuck)}
                               </span>
                             )}
                             {(() => {

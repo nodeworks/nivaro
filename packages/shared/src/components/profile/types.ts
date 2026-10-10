@@ -44,7 +44,13 @@ export interface PersonProfile {
   timezone: string | null
   last_access: string | null
   created_at: string | null
-  presence: { online: boolean; idle_minutes: number | null; last_seen: string | null }
+  presence: {
+    online: boolean
+    idle_minutes: number | null
+    last_seen: string | null
+    /** #1394 — admins and the person's manager only. */
+    stuck?: { minutes: number; label: string | null } | null
+  }
   teams: Array<{ id: number; name: string; slug: string | null; member_count: number }>
   seats: Array<{
     template_id: string

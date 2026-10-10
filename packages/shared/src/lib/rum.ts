@@ -13,7 +13,7 @@
 
 interface RumEvent {
   route: string
-  kind: 'load' | 'route' | 'rage'
+  kind: 'load' | 'route' | 'rage' | 'dead'
   ttfb_ms?: number
   fcp_ms?: number
   lcp_ms?: number
@@ -24,7 +24,7 @@ interface RumEvent {
 let started = false
 let appName: string | undefined
 let toPattern: (path: string) => string = (p) => p
-let queue: RumEvent[] = []
+const queue: RumEvent[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let apiBase = '/api'
 
@@ -49,7 +49,10 @@ function watchRageClicks(currentRoute: () => string): void {
   window.addEventListener(
     'click',
     (e) => {
-      const el = e.target instanceof Element ? e.target.closest('button, a, [role="button"], input, [data-testid]') : null
+      const el =
+        e.target instanceof Element
+          ? e.target.closest('button, a, [role="button"], input, [data-testid]')
+          : null
       if (!el) return
       if (el === rageTarget) {
         rageCount++
@@ -59,6 +62,8 @@ function watchRageClicks(currentRoute: () => string): void {
             route: `${currentRoute()} :: ${targetLabel(el)}`.slice(0, 300),
             duration_ms: rageCount
           })
+          // #1371 — the server may ask this tab to record; tell it now.
+          flush()
         }
       } else {
         rageTarget = el
@@ -69,6 +74,70 @@ function watchRageClicks(currentRoute: () => string): void {
         rageTarget = null
         rageCount = 0
       }, 600)
+    },
+    { capture: true, passive: true }
+  )
+}
+
+// ─── Dead-click bursts (#1371) ──────────────────────────────────────────────
+// A click on a button or link after which nothing happens — no DOM change,
+// no navigation — within DEAD_WAIT_MS is dead. DEAD_BURST of them inside
+// DEAD_WINDOW_MS is reported as one 'dead' RUM event (sent at once), which
+// the server can answer with an auto recording when that is on.
+export const DEAD_WAIT_MS = 1000
+export const DEAD_WINDOW_MS = 10_000
+export const DEAD_BURST = 3
+
+/** Counts dead clicks; true when this one completes a burst (then resets). */
+export function createDeadClickCounter(burst = DEAD_BURST, windowMs = DEAD_WINDOW_MS) {
+  let times: number[] = []
+  return (now: number): boolean => {
+    times = times.filter((t) => now - t < windowMs)
+    times.push(now)
+    if (times.length >= burst) {
+      times = []
+      return true
+    }
+    return false
+  }
+}
+
+function watchDeadClicks(currentRoute: () => string): void {
+  if (typeof window === 'undefined' || typeof MutationObserver === 'undefined') return
+  const countDead = createDeadClickCounter()
+  window.addEventListener(
+    'click',
+    (e) => {
+      const el =
+        e.target instanceof Element ? e.target.closest('button, a[href], [role="button"]') : null
+      if (!el || (el as HTMLButtonElement).disabled || el.closest('.nvr-no-record')) return
+      const href = window.location.href
+      let alive = false
+      const mo = new MutationObserver(() => {
+        alive = true
+      })
+      try {
+        mo.observe(document.body, {
+          subtree: true,
+          childList: true,
+          attributes: true,
+          characterData: true
+        })
+      } catch {
+        return
+      }
+      setTimeout(() => {
+        mo.disconnect()
+        if (alive || window.location.href !== href) return
+        if (countDead(Date.now())) {
+          enqueue({
+            kind: 'dead',
+            route: `${currentRoute()} :: ${targetLabel(el)}`.slice(0, 300),
+            duration_ms: DEAD_BURST
+          })
+          flush()
+        }
+      }, DEAD_WAIT_MS)
     },
     { capture: true, passive: true }
   )
@@ -120,15 +189,22 @@ export function rumRouteChange(pathname: string): void {
   })
 }
 
-export function startRum(opts?: { app?: string; routePattern?: (path: string) => string; apiBase?: string }): void {
+export function startRum(opts?: {
+  app?: string
+  routePattern?: (path: string) => string
+  apiBase?: string
+}): void {
   if (started || typeof window === 'undefined' || typeof performance === 'undefined') return
   started = true
   appName = opts?.app
   if (opts?.routePattern) toPattern = opts.routePattern
   if (opts?.apiBase) apiBase = opts.apiBase
   watchRageClicks(() => toPattern(window.location.pathname))
+  watchDeadClicks(() => toPattern(window.location.pathname))
 
-  const nav = performance.getEntriesByType('navigation')[0] as PerformanceNavigationTiming | undefined
+  const nav = performance.getEntriesByType('navigation')[0] as
+    | PerformanceNavigationTiming
+    | undefined
   let lcp: number | null = null
   try {
     const po = new PerformanceObserver((list) => {

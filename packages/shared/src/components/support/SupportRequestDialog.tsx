@@ -1,10 +1,13 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Paperclip, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { type PreparedReplayClip, prepareReplayClip } from '../../lib/replay-capture'
+import { installReplayTail } from '../../lib/replay-tail'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '../ui/dialog'
+import { collectSupportContext } from './support-context'
 import type { SupportCategory, SupportTicket } from './types'
 
 /**
@@ -12,6 +15,12 @@ import type { SupportCategory, SupportTicket } from './types'
  * that record and offers the types meant for its collection; without one it is
  * General Support. The request lands with the administrators (or the type's
  * team), who are told at once.
+ *
+ * #1377 — unless the person unticks it, the request carries what they were
+ * looking at: the replay taken the moment the dialog OPENED (the error-replay
+ * buffer cut as an app='support-clip' recording, or the live recording at
+ * that moment) and a text attachment with the page, the console tail and the
+ * last twenty requests. Nothing uploads unless the request is sent.
  */
 export function SupportRequestDialog({
   open,
@@ -38,6 +47,23 @@ export function SupportRequestDialog({
   const [files, setFiles] = useState<Array<{ id: string; name: string }>>([])
   const [uploading, setUploading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [withContext, setWithContext] = useState(true)
+  // Taken when the dialog opens — by the time the question is typed the
+  // rolling buffer would hold mostly this dialog.
+  const moment = useRef<{ clip: PreparedReplayClip; route: string } | null>(null)
+  useEffect(() => {
+    installReplayTail()
+  }, [])
+  useEffect(() => {
+    if (!open) {
+      moment.current = null
+      return
+    }
+    moment.current = {
+      clip: prepareReplayClip('support'),
+      route: typeof window !== 'undefined' ? window.location.pathname : ''
+    }
+  }, [open])
 
   const { data: categories = [] } = useQuery({
     queryKey: ['support-categories', onRecord ? collection : null],
@@ -56,20 +82,36 @@ export function SupportRequestDialog({
     setDescription('')
     setFiles([])
     setError(null)
+    setWithContext(true)
+  }
+
+  /** The context attachment + replay link; never fails the request. */
+  async function gatherContext() {
+    if (!withContext) return { fileId: null, replay: null }
+    const m = moment.current
+    return collectSupportContext({
+      clip: m?.clip ?? null,
+      route: m?.route ?? (typeof window !== 'undefined' ? window.location.pathname : ''),
+      upload: (file) => client.upload(file, { title: 'What they saw' }),
+      userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : null
+    })
   }
 
   const create = useMutation({
-    mutationFn: () =>
-      client.request<{ data: SupportTicket }>(
+    mutationFn: async () => {
+      const ctx = await gatherContext()
+      return client.request<{ data: SupportTicket }>(
         post('/support/tickets', {
           title: title.trim(),
           description: description.trim() || null,
           category_id: categoryId,
           collection: onRecord ? collection : null,
           item: onRecord ? String(item) : null,
-          attachments: files.map((f) => f.id)
+          attachments: [...files.map((f) => f.id), ...(ctx.fileId ? [ctx.fileId] : [])],
+          ...(ctx.replay ? { replay: ctx.replay } : {})
         })
-      ),
+      )
+    },
     onSuccess: (r) => {
       void qc.invalidateQueries({ queryKey: ['support-tickets'] })
       void qc.invalidateQueries({ queryKey: ['support-summary'] })
@@ -227,6 +269,24 @@ export function SupportRequestDialog({
               </ul>
             )}
           </div>
+          <label
+            className='flex items-start gap-2 text-[12px] text-slate-600 dark:text-slate-300'
+            data-support-context
+          >
+            <input
+              type='checkbox'
+              checked={withContext}
+              onChange={(e) => setWithContext(e.target.checked)}
+              className='mt-0.5 accent-[#00ceff]'
+            />
+            <span>
+              Include what I was doing
+              <span className='block text-[11px] text-slate-400'>
+                The page, recent errors and requests, and (when replay is on) the last minute of
+                this screen with every typed value hidden.
+              </span>
+            </span>
+          </label>
           {error && (
             <p className='text-[12px] text-red-600 dark:text-red-400' role='alert'>
               {error}

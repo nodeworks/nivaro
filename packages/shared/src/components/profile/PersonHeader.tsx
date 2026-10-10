@@ -1,6 +1,7 @@
 import { Building2, Clock, Eye, Mail, MapPin, MessageSquare, Phone, Video } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { stuckText } from '../../lib/presence-state'
 import { cn, formatRelative } from '../../lib/utils'
 import { canViewAs, viewAs } from '../../lib/view-as'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
@@ -26,6 +27,7 @@ export function PersonHeader({
 }) {
   const online = p.presence.online
   const idle = online && (p.presence.idle_minutes ?? 0) >= 5
+  const stuck = online && !idle ? (p.presence.stuck ?? null) : null
   const statusTone =
     p.status === 'active' ? 'green' : p.status === 'suspended' ? 'red' : ('neutral' as const)
   const oooUntil = p.ooo_end
@@ -51,13 +53,25 @@ export function PersonHeader({
             }
           />
           <span
-            data-person-presence={online ? (idle ? 'idle' : 'online') : 'offline'}
+            data-person-presence={online ? (idle ? 'idle' : stuck ? 'stuck' : 'online') : 'offline'}
             className={cn(
               'absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-white dark:border-card',
-              online ? (idle ? 'bg-amber-400' : 'bg-emerald-500') : 'bg-slate-300 dark:bg-slate-600'
+              online
+                ? idle
+                  ? 'bg-amber-400'
+                  : stuck
+                    ? 'bg-orange-500'
+                    : 'bg-emerald-500'
+                : 'bg-slate-300 dark:bg-slate-600'
             )}
             title={
-              online ? (idle ? `Idle · ${p.presence.idle_minutes}m` : 'Online now') : 'Offline'
+              online
+                ? idle
+                  ? `Idle · ${p.presence.idle_minutes}m`
+                  : stuck
+                    ? `Online · ${stuckText(stuck)}`
+                    : 'Online now'
+                : 'Offline'
             }
           />
         </div>
@@ -159,7 +173,9 @@ export function PersonHeader({
               {online
                 ? idle
                   ? `Online · idle ${p.presence.idle_minutes}m`
-                  : 'Online now'
+                  : stuck
+                    ? `Online · ${stuckText(stuck)}`
+                    : 'Online now'
                 : p.last_access
                   ? `Last active ${formatRelative(p.last_access)}`
                   : 'Never signed in'}

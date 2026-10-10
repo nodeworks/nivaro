@@ -741,6 +741,10 @@ export const collabChat: DocSection = {
     },
     {
       type: 'p',
+      text: 'The Online tab tells three states apart. Active: input recently and things moving. Idle: no input for five minutes (or "appear away"). Stuck: input in the last five minutes, but on the same route with no save, transition or any other request that changed something for ten minutes, shown as "stuck on CM26-80332 for 12m". Stuck reads the person\'s own route history (journeys) and request log, so only administrators and the person\'s manager see it, on the Online tab, on the people page header, and as a count and per-person pill on the manager\'s Team load card. GET /api/presence/online answers it as state and stuck { minutes, label }; the page pings that feed it come from the admin and from portals on @nivaro/react (usePageAt).'
+    },
+    {
+      type: 'p',
       text: 'Admins manage the entity-room registry from the "Record rooms" button on `/chat`: register a prefix + collection + match field, or deactivate an existing type. Entity ids mentioned in messages render as links into the collection browser when a matching room type is registered.'
     },
     { type: 'h2', id: 'chat-edit-delete', text: 'Editing and deleting messages' },
@@ -776,14 +780,22 @@ export const collabSupportRequests: DocSection = {
         '**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.',
         '**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.',
         '**Request types** (`nivaro_task_categories`, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.',
-        "**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list."
+        "**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list.",
+        "**Report a problem** (portals): @nivaro/react exports ReportProblemButton for a host shell to mount (`<ReportProblemButton app='efp' />`, a corner button, or inline with floating={false}). The person writes one sentence; a screenshot is taken before the dialog opens with every typed value masked (html2canvas, an optional peer dependency: without it the report goes without a picture), plus the same what-they-saw context as below. It files an issue (source client, raised by the person, screenshot and details attached) AND a support request linked to it (nivaro_tasks.issue_id), which they follow under My requests; the desk sees Issue #N on the ticket.",
+        "**What they saw** (ticked by default, the requester can untick it): Get help and Request a change take the moment the dialog opens. With Error clips on, the last minute of the screen becomes an app='support-clip' recording (inputs masked); with full recording on, the live recording is marked at that moment. A text attachment (what-they-saw-….txt) carries the page, the last 30 console warnings/errors and the last 20 requests (method, route pattern, status, ms; no bodies or query strings, secrets redacted). Nothing uploads unless the request is sent. On the desk, the ticket shows Watch what they saw, opening /session-replays?recording=<id>&t=<ms> at the moment of asking (administrators only)."
       ]
     },
     {
       type: 'pre',
       code: `POST /api/support/tickets
 { "title": "Change the ship-to address", "description": "…", "category_id": 3,
-  "collection": "orders", "item": "42", "attachments": ["<file id>"] }
+  "collection": "orders", "item": "42", "attachments": ["<file id>"],
+  "replay": { "recording_id": "<their own recording>", "offset_ms": 41000 } }
+
+POST  /api/support/report-problem       // Report a problem: issue + linked request
+{ "sentence": "The upload spins forever", "route": "/claims/7/upload", "app": "efp",
+  "screenshot": "data:image/jpeg;base64,…", "context": "…", "attachments": ["<file id>"],
+  "replay": { "recording_id": "…", "offset_ms": 52000 } }
 
 GET   /api/support/tickets?scope=mine|desk&status=open|closed&assignee=me|unassigned&q=
 GET   /api/support/tickets/:id           // thread + history
@@ -797,15 +809,15 @@ GET   /api/tasks/requested               // tasks I asked others to do`
     { type: 'h3', id: 'support-report-problem', text: 'Report a problem' },
     {
       type: 'p',
-      text: 'A portal can mount `ReportProblemDialog` (from `@nivaro/react`). The person writes one sentence; the browser adds a screenshot with every typed value masked (needs `html-to-image` installed in the host app), the replay of the last minute when the instance records sessions (pass `captureErrorClip` as `captureClip`), the last console warnings and errors, and the page. The server files an issue (source client, raised by the person) and a General Support request linked to it; the screenshot is attached to the request so the desk sees it, and the person follows it under My requests.'
+      text: 'A portal can mount `ReportProblemButton` (from `@nivaro/react`): `<ReportProblemButton app=\'portal\' />` for a corner button, or `floating={false}` to place it inline. The person writes one sentence. Before the dialog opens the browser takes a screenshot with every typed value masked (needs `html2canvas` installed in the host app; without it the report goes without a picture) and keeps the moment for the replay. With Include what I was doing ticked, the report also carries the replay, the last console warnings and errors, the last requests and the page. The server files an issue (source client, raised by the person) and a support request linked to it, which the person follows under My requests; the desk sees Issue #N on the ticket.'
     },
     {
       type: 'pre',
-      code: `POST /api/support/problem-reports
-{ "description": "Saving spun forever", "screenshot": "data:image/jpeg;base64,…",
-  "console": ["[error] …"], "route": "/records/orders/42", "app": "portal",
-  "recording_id": "<own recording>", "recording_offset_ms": 8600 }
-→ { "data": { "ticket": { … }, "issue_id": 501, "replay": true } }`
+      code: `POST /api/support/report-problem
+{ "sentence": "Saving spun forever", "screenshot": "data:image/jpeg;base64,…",
+  "route": "/records/orders/42", "app": "portal", "context": "…",
+  "replay": { "recording_id": "<own recording>", "offset_ms": 8600 } }
+→ { "data": { "ticket": { … }, "issue_id": 501 } }`
     }
   ]
 }
