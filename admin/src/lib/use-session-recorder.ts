@@ -23,6 +23,11 @@ import {
   instrumentRequests,
   redactSecrets
 } from '../../../packages/shared/src/lib/replay-context'
+import {
+  buildReplayMaskingOptions,
+  normalizeReplayMasking,
+  type ReplayMaskingRules
+} from '../../../packages/shared/src/lib/replay-masking'
 
 function clientMeta(): Record<string, string | number> {
   try {
@@ -60,7 +65,10 @@ function clientMeta(): Record<string, string | number> {
  * did in the minute before the crash without anyone recording all day.
  *
  * Privacy is identical in both modes: every input masked, .nvr-no-record
- * blocked. In buffer mode the events never leave the browser except on error.
+ * blocked, and record field values, rich text and file names masked by the
+ * instance's masking rules (#1361, lib/replay-masking.ts) — an admin can
+ * allow a safe field. In buffer mode the events never leave the browser
+ * except on error.
  *
  * `captureErrorClip` is a module singleton (registerDmOpener precedent) so
  * the error boundary — a class component far from this hook — can call it.
@@ -249,7 +257,9 @@ export function useSessionRecorder() {
     queryKey: ['session-recording-enabled'],
     queryFn: () =>
       api
-        .get<{ data: { enabled: boolean; error_replay?: boolean } }>('/session-recordings/enabled')
+        .get<{ data: { enabled: boolean; error_replay?: boolean; masking?: unknown } }>(
+          '/session-recordings/enabled'
+        )
         .then((r) => r.data.data),
     // Never record a "View as" tab — it would be filed under the other person.
     enabled: !!user && !readMasquerade(),
@@ -282,6 +292,11 @@ export function useSessionRecorder() {
     inFlight: null,
     flushAfter: false
   })
+
+  // #1361 — read through a ref by rrweb's mask functions, so a rules change
+  // (the query refetches) applies without restarting the recording.
+  const maskingRef = useRef<ReplayMaskingRules>(normalizeReplayMasking(null))
+  maskingRef.current = normalizeReplayMasking(modes?.masking)
 
   const fullMode = modes?.enabled === true
   const clipMode = !fullMode && modes?.error_replay === true
@@ -460,8 +475,7 @@ export function useSessionRecorder() {
               state.buffer.push(event)
               if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()
             },
-            maskAllInputs: true,
-            blockClass: 'nvr-no-record',
+            ...buildReplayMaskingOptions(() => maskingRef.current),
             checkoutEveryNms: 60_000
           }) ?? null
         {
@@ -575,8 +589,7 @@ export function useSessionRecorder() {
                 state.buffer.push(event)
               }
             },
-            maskAllInputs: true,
-            blockClass: 'nvr-no-record',
+            ...buildReplayMaskingOptions(() => maskingRef.current),
             checkoutEveryNms: CLIP_WINDOW_MS
           }) ?? null
         {

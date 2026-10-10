@@ -5,6 +5,10 @@ import { logActivity } from '../services/activity.js'
 import { bustFormulaContextCache } from '../services/formula-context.js'
 import { sendRawMail } from '../services/mail.js'
 import {
+  applyReplaySettingsPatch,
+  REPLAY_SETTINGS_KEYS
+} from '../services/session-replay-settings.js'
+import {
   bustInstanceOverridesCache,
   envOverrideKeys,
   instanceKey
@@ -39,6 +43,8 @@ const allowedSettingsKeys = [
   'session_recording_enabled',
   'error_replay_enabled',
   'session_recording_retention_days',
+  // Session replay policy (#1361 masking, #1368 cost, #1411 tiering)
+  ...REPLAY_SETTINGS_KEYS,
   'erp_submission_payload_retention_days',
   'two_factor_enabled',
   'presence_sweep_interval',
@@ -329,6 +335,12 @@ export async function settingsRoutes(app: FastifyInstance) {
       const r = validateHeadlineSettings(patch.dashboard_headline)
       if (r.error) return reply.code(400).send({ error: r.error })
       patch.dashboard_headline = r.value ? JSON.stringify(r.value) : null
+    }
+
+    // Session replay policy (#1361/#1368/#1411): shapes checked, JSON stored as text.
+    {
+      const err = applyReplaySettingsPatch(patch)
+      if (err) return reply.code(400).send({ error: err })
     }
 
     if ('graphql_deprecation_days' in patch) {

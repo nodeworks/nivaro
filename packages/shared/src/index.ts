@@ -484,6 +484,16 @@ export {
   requestRoute
 } from './lib/replay-context'
 export {
+  buildReplayMaskingOptions,
+  DEFAULT_REPLAY_MASKING,
+  isReplayFieldAllowed,
+  normalizeReplayMasking,
+  type ReplayMaskingOptions,
+  type ReplayMaskingRules,
+  shouldMaskReplayInput,
+  shouldMaskReplayText
+} from './lib/replay-masking'
+export {
   BATCH_READ_LIMIT,
   type BatchableRead,
   batchableRead,

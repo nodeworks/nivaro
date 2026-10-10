@@ -609,9 +609,24 @@ export interface SessionRecording {
   truncated: boolean
 }
 
-/** Is session recording enabled instance-wide? (Recorders no-op when false.) */
+/** Masking rules the recorders apply (#1361); missing switches mean masked. */
+export interface SessionReplayMasking {
+  mask_rich_text: boolean
+  mask_file_names: boolean
+  /** `collection.field` (or `*.field`) shown unmasked. */
+  allow_fields: string[]
+}
+
+/**
+ * Is session recording enabled instance-wide? (Recorders no-op when false.)
+ * Carries the policy the recorders apply: masking rules (#1361).
+ */
 export function sessionRecordingEnabled(): Command<{
-  data: { enabled: boolean; error_replay?: boolean }
+  data: {
+    enabled: boolean
+    error_replay?: boolean
+    masking?: SessionReplayMasking
+  }
 }> {
   return cmd('GET', '/session-recordings/enabled')
 }

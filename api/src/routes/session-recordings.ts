@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { replayClientPolicy } from '../services/session-replay-policy.js'
 import { buildEventRail, type RailRecording } from '../services/session-replay-rail.js'
 import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
 
@@ -142,7 +143,9 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         // Error-clip buffer mode: record into a rolling in-memory buffer,
         // upload only when an error is reported (see migration 210).
         error_replay: !!(row as { error_replay_enabled?: unknown } | undefined)
-          ?.error_replay_enabled
+          ?.error_replay_enabled,
+        // #1361 masking rules (and the cost policy) the recorders apply.
+        ...(await replayClientPolicy())
       }
     })
   })

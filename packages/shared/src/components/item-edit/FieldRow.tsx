@@ -848,6 +848,10 @@ export function FieldRow({
     <div
       ref={wrapperRef}
       data-field={field.field}
+      // Session replay masking (#1361): which collection the field belongs to
+      // and what kind of value it holds — see lib/replay-masking.ts.
+      data-field-collection={collection}
+      data-field-interface={field.interface ?? undefined}
       className='group/fieldrow space-y-1.5'
       onContextMenu={onFieldContextMenu}
       onKeyDown={onFieldMenuKeyDown}
@@ -867,7 +871,7 @@ export function FieldRow({
       {(label !== '' || addendumHints.length > 0) && (
         <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
           {label !== '' && (
-            <Label className='text-sm font-medium'>
+            <Label data-field-label className='text-sm font-medium'>
               {label}
               {field.required && <span className='ml-0.5 text-destructive'>*</span>}
             </Label>

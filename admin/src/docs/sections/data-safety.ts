@@ -178,7 +178,7 @@ export const sessionReplayDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Privacy: every input is masked client-side before events leave the browser; add the nvr-no-record class to block any element entirely.',
+        'Privacy: every input and every record field value is masked client-side before events leave the browser (see Masking rules below); add the nvr-no-record class to block any element entirely.',
         'Events batch every 10 seconds; a full DOM snapshot every 60 seconds keeps replays seekable.',
         'Recordings cap at 15MB (then mark truncated) and purge after 7 days.',
         'Watching, listing and deleting are admin-only; a recording can only be appended to by its own user.',
@@ -189,6 +189,20 @@ export const sessionReplayDocs: DocSection = {
     {
       type: 'p',
       text: 'A chunk that cannot be sent — the browser is offline, the request fails or the server answers 5xx — waits in the browser (IndexedDB, at most about 20MB per tab, oldest dropped first) and is retried with backoff from 2 seconds up to a minute, and as soon as the browser comes back online. Reloading the tab within 10 minutes continues the same recording instead of starting a new one, and whatever the previous page had not sent goes first. When a page is closed or reloaded, the last few seconds are sent with the request that outlives the page (fetch keepalive); anything that does not fit goes on the next load. A recording that is closed or has reached its size cap still stops for good, and the next page load starts a new one. The headless hook in @nivaro/react does the same.'
+    },
+    { type: 'h2', id: 'session-replay-masking', text: 'Masking rules' },
+    {
+      type: 'p',
+      text: 'Besides every input, the recorders mask the value of every field on a record — in the edit form and the read view — so a replay shows the layout and what the person did, not the data. Settings → Session replay → Masking lists fields that are safe to watch (a status, a code) as collection.field, or *.field for any collection; those show in replays and everything else stays masked. Field labels always show.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Mask rich text (on by default): editors such as notes and descriptions show as asterisks wherever they appear, even in an allowed field.',
+        'Mask file names (on by default): file names are masked and file thumbnails blocked, in file fields and the file library, even in an allowed field.',
+        'Passwords are never shown. Text in attributes (a tooltip, an image’s alt text) is not masked; keep sensitive values out of them or mark the element nvr-no-record.',
+        'The rules apply to the admin app and to frontends using useSessionRecorder from @nivaro/react; a changed rule reaches a recorder on its next page load. Recordings already made are not changed.'
+      ]
     },
     { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },
     {

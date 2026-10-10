@@ -5,7 +5,14 @@ import {
   sessionRecordingEnabled,
   startSessionRecording
 } from '@nivaro/sdk'
-import { instrumentConsole, instrumentRequests, redactSecrets } from '@nivaro/shared'
+import {
+  buildReplayMaskingOptions,
+  instrumentConsole,
+  instrumentRequests,
+  normalizeReplayMasking,
+  type ReplayMaskingRules,
+  redactSecrets
+} from '@nivaro/shared'
 import { useEffect, useRef } from 'react'
 import { useOptionalNivaroClient } from '../context'
 import {
@@ -45,7 +52,9 @@ import {
  * NivaroProvider (or pass a client explicitly). Needs `rrweb` installed in
  * the host (optional peer dependency; without it the hook warns once and
  * no-ops). Privacy in both modes: every input masked, `nvr-no-record`
- * class blocked; in clip mode events never leave the browser except on error.
+ * class blocked, and record field values, rich text and file names masked by
+ * the instance's masking rules (#1361); in clip mode events never leave the
+ * browser except on error.
  *
  * `captureErrorClip` is a module singleton so an error boundary — a class
  * component far from this hook — can call it without plumbing.
@@ -441,8 +450,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
             state.buffer.push(event)
             if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()
           },
-          maskAllInputs: true,
-          blockClass: 'nvr-no-record',
+          ...buildReplayMaskingOptions(() => masking),
           checkoutEveryNms: 60_000
         }) ?? null
       state.uninstrument = instrumentReplayContext(
@@ -485,8 +493,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
               state.buffer.push(event)
             }
           },
-          maskAllInputs: true,
-          blockClass: 'nvr-no-record',
+          ...buildReplayMaskingOptions(() => masking),
           checkoutEveryNms: CLIP_WINDOW_MS
         }) ?? null
       state.uninstrument = instrumentReplayContext((tag, payload) =>
@@ -518,10 +525,13 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     }
 
     let fullMode = false
+    /** #1361 — the instance's masking rules, read live by rrweb's mask functions. */
+    let masking: ReplayMaskingRules = normalizeReplayMasking(null)
     async function start() {
       try {
         const modes = await client!.request(sessionRecordingEnabled())
         if (cancelled) return
+        masking = normalizeReplayMasking(modes.data.masking)
         fullMode = modes.data.enabled === true
         const clipMode = !fullMode && modes.data.error_replay === true
         if (fullMode) await startFull()

@@ -166,6 +166,7 @@ function FileCard({
       {/* Info */}
       <div className='p-2.5'>
         <p
+          data-file-name
           className='truncate text-[12px] font-medium text-slate-700'
           title={file.filename_download}
         >
@@ -829,6 +830,7 @@ export function FilesPage() {
                             )}
                           </div>
                           <span
+                            data-file-name
                             className='max-w-xs truncate text-[13px] font-medium text-slate-700'
                             title={file.filename_download}
                           >
