@@ -768,6 +768,23 @@ export async function buildServer() {
             'Folds finished session recordings into per-route click and scroll heatmaps (aggregates only — no person, recording or session is kept with them).'
         }
       )
+      // Frustration score (#1388): score each journey session of the last two
+      // UTC days from rage / dead clicks, client errors, back-and-forth loops,
+      // slow calls and abandoned forms. Weights: settings.frustration_weights.
+      app.cron.schedule(
+        'session-frustration',
+        '25 2 * * *',
+        async () => {
+          const { runFrustrationScoring } = await import('./services/session-frustration.js')
+          app.log.info({ summary: await runFrustrationScoring() }, '[session-frustration] scored')
+        },
+        {
+          idempotent: 'safe',
+          timezone: 'UTC',
+          description:
+            'Scores each working session of the last two days for frustration (rage and dead clicks, client errors, back-and-forth loops, slow calls, abandoned forms) for the Worst sessions tab and the People Day view.'
+        }
+      )
       // Every process clears its own stale render scratch; only a process
       // that owns the render queue (ticks crons or VIDEO_RENDER=on) drains it.
       void import('./services/help-video-render.js')

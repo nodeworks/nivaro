@@ -15,6 +15,13 @@ import type { Knex } from 'knex'
  *  - nivaro_session_recordings.heat_folded_at: the nightly fold's high-water
  *    mark (a recording is folded once).
  *
+ * #1388 Frustration score:
+ *  - nivaro_session_scores: one row per journey session per UTC day, with the
+ *    score (0–100), the components that made it and the recording overlapping
+ *    the session when there is one.
+ *  - nivaro_settings.frustration_weights: JSON text; NULL = the defaults in
+ *    services/session-frustration.ts.
+ *
  * Idempotent: every step checks before it creates.
  */
 export async function up(knex: Knex): Promise<void> {
@@ -64,9 +71,40 @@ export async function up(knex: Knex): Promise<void> {
       t.dateTime('heat_folded_at').nullable()
     })
   }
+
+  if (!(await knex.schema.hasTable('nivaro_session_scores'))) {
+    await knex.schema.createTable('nivaro_session_scores', (t) => {
+      t.increments('id').primary()
+      t.string('session_id', 64).notNullable()
+      t.uuid('user').notNullable().references('id').inTable('nivaro_users').onDelete('CASCADE')
+      /** UTC calendar day of the session's steps, YYYY-MM-DD. */
+      t.string('day', 10).notNullable()
+      t.dateTime('session_start').notNullable()
+      t.dateTime('session_end').notNullable()
+      t.integer('score').notNullable()
+      /** JSON: counts and points per component, for the explanation chips. */
+      t.text('components').nullable()
+      t.string('top_route', 140).nullable()
+      t.string('recording_id', 36).nullable()
+      t.dateTime('computed_at').notNullable()
+      t.unique(['session_id', 'day'])
+      t.index(['day', 'score'])
+      t.index(['user', 'session_start'])
+    })
+  }
+
+  if (!(await knex.schema.hasColumn('nivaro_settings', 'frustration_weights'))) {
+    await knex.schema.alterTable('nivaro_settings', (t) => {
+      t.text('frustration_weights').nullable()
+    })
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {
+  if (await knex.schema.hasColumn('nivaro_settings', 'frustration_weights')) {
+    await knex.schema.alterTable('nivaro_settings', (t) => t.dropColumn('frustration_weights'))
+  }
+  await knex.schema.dropTableIfExists('nivaro_session_scores')
   if (await knex.schema.hasColumn('nivaro_session_recordings', 'heat_folded_at')) {
     await knex.schema.alterTable('nivaro_session_recordings', (t) => t.dropColumn('heat_folded_at'))
   }

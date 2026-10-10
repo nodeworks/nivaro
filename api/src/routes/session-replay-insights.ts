@@ -1,5 +1,13 @@
 import type { FastifyInstance } from 'fastify'
+import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { logActivity } from '../services/activity.js'
+import {
+  DEFAULT_WEIGHTS,
+  loadWeights,
+  readWorstSessions,
+  validateWeights
+} from '../services/session-frustration.js'
 import {
   readFrame,
   readFrameEvents,
@@ -16,6 +24,8 @@ import {
  *  GET /heat/routes  routes with heat in a date range (the picker)
  *  GET /heat         one route's click cells, top elements, scroll depth
  *  GET /heat/frame   the events that render that route's stored frame
+ *  GET /worst        highest frustration scores in a date range (#1388)
+ *  GET /frustration-weights, PUT /frustration-weights   the score's weights
  */
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/
@@ -99,6 +109,52 @@ export async function sessionReplayInsightRoutes(app: FastifyInstance) {
           events
         }
       })
+    }
+  )
+
+  // ── Frustration score (#1388) ──────────────────────────────────────────────
+
+  app.get<{ Querystring: { from?: string; to?: string; limit?: string; min_score?: string } }>(
+    '/worst',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const r = dayRange(req.query.from, req.query.to)
+      if ('error' in r) return reply.code(400).send({ error: r.error })
+      const limit = Math.min(200, Math.max(1, Math.trunc(Number(req.query.limit) || 50)))
+      const minScore = Math.min(100, Math.max(0, Math.trunc(Number(req.query.min_score) || 1)))
+      const data = await readWorstSessions({ ...r, limit, minScore })
+      return reply.send({ data, ...r })
+    }
+  )
+
+  app.get('/frustration-weights', { preHandler: requireAdmin }, async (_req, reply) => {
+    return reply.send({ data: { weights: await loadWeights(), defaults: DEFAULT_WEIGHTS } })
+  })
+
+  /** Body { weights: {...} } replaces the weights; { weights: null } restores the defaults. */
+  app.put<{ Body: { weights?: unknown } }>(
+    '/frustration-weights',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const raw = req.body?.weights
+      let stored: string | null = null
+      if (raw !== null) {
+        const v = validateWeights(raw)
+        if ('error' in v) return reply.code(400).send({ error: v.error })
+        stored = JSON.stringify(v)
+      }
+      await db('nivaro_settings').where({ id: 1 }).update({ frustration_weights: stored })
+      await logActivity({
+        action: 'update',
+        collection: 'nivaro_settings',
+        item: '1',
+        user: req.user?.id,
+        comment: stored
+          ? `Frustration score weights: ${stored}`
+          : 'Frustration score weights reset',
+        req
+      })
+      return reply.send({ data: { weights: await loadWeights(), defaults: DEFAULT_WEIGHTS } })
     }
   )
 }

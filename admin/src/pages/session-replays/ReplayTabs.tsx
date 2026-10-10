@@ -9,7 +9,8 @@ import { cn } from '@/lib/utils'
  */
 export const REPLAY_TABS = [
   { id: 'list', label: 'Recordings' },
-  { id: 'heat', label: 'Heat' }
+  { id: 'heat', label: 'Heat' },
+  { id: 'worst', label: 'Worst sessions' }
 ] as const
 
 export type ReplayTab = (typeof REPLAY_TABS)[number]['id']

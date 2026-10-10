@@ -13,8 +13,10 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatFileSize, formatRelative } from '@/lib/utils'
+import { offsetInto } from './session-replays/frustrationLogic'
 import { HeatTab } from './session-replays/HeatTab'
 import { ReplayTabBar, useReplayTab } from './session-replays/ReplayTabs'
+import { WorstSessionsTab } from './session-replays/WorstSessionsTab'
 
 /**
  * Session replays — list recorded admin sessions (rrweb), watch them in the
@@ -259,6 +261,18 @@ export function SessionReplaysPage() {
   const [envFilter, setEnvFilter] = useState<string | null | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [tab, setTab] = useReplayTab()
+  // Worst sessions (#1388): open the overlapping recording at the session's start.
+  const watchFromSession = (recordingId: string, sessionStart: string | null) => {
+    void api
+      .get<{ data: Recording }>(`/session-recordings/${recordingId}`)
+      .then((r) => {
+        setStartAt(offsetInto(sessionStart, r.data.data.started_at))
+        setPlaying(r.data.data)
+      })
+      .catch(() =>
+        toast.error('That recording no longer exists (recordings expire with retention)')
+      )
+  }
 
   const { data: modes } = useQuery({
     queryKey: ['session-recording-enabled'],
@@ -584,6 +598,7 @@ export function SessionReplaysPage() {
       </header>
       <ReplayTabBar tab={tab} onChange={setTab} />
       {tab === 'heat' && <HeatTab />}
+      {tab === 'worst' && <WorstSessionsTab onWatch={watchFromSession} />}
 
       <div className={cn('flex flex-1 min-h-0 overflow-hidden', tab !== 'list' && 'hidden')}>
         {/* People rail */}

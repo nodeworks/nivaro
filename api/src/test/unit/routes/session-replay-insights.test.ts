@@ -19,7 +19,9 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   ),
   requireAuth: vi.fn(async () => {})
 }))
-vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../db/index.js', () => ({
+  db: Object.assign(vi.fn(), { raw: vi.fn((sql: string) => sql) })
+}))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn() }))
 
 import { db } from '../../../db/index.js'
@@ -77,12 +79,121 @@ describe('admin gating', () => {
   it.each([
     '/heat/routes',
     '/heat?route=/queues',
-    '/heat/frame?route=/queues'
+    '/heat/frame?route=/queues',
+    '/worst',
+    '/frustration-weights'
   ])('GET %s is admin-only', async (url) => {
     mockTables({})
     const res = await buildApp().inject({ method: 'GET', url })
     expect(res.statusCode).toBe(403)
     expect(db).not.toHaveBeenCalled()
+  })
+  it('PUT /frustration-weights is admin-only', async () => {
+    mockTables({})
+    const res = await buildApp().inject({
+      method: 'PUT',
+      url: '/frustration-weights',
+      payload: { weights: { loops: 1 } }
+    })
+    expect(res.statusCode).toBe(403)
+    expect(db).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /worst (#1388)', () => {
+  it('lists the highest scores in the range with the person, and drops expired recording links', async () => {
+    const scores = chain([
+      {
+        session_id: 'sock-1',
+        user: 'U-1',
+        user_name: 'Ada Lovelace',
+        day: '2026-10-01',
+        session_start: new Date('2026-10-01T09:00:00.000Z'),
+        session_end: new Date('2026-10-01T09:30:00.000Z'),
+        score: 81,
+        components: JSON.stringify({ counts: { rage_clicks: 2 }, points: { rage_clicks: 12 } }),
+        top_route: '/queues',
+        recording_id: REC
+      },
+      {
+        session_id: 'sock-2',
+        user: 'U-2',
+        user_name: '',
+        day: '2026-10-01',
+        session_start: new Date('2026-10-01T10:00:00.000Z'),
+        session_end: new Date('2026-10-01T10:05:00.000Z'),
+        score: 40,
+        components: 'not json',
+        top_route: null,
+        recording_id: 'gone-gone'
+      }
+    ])
+    mockTables({
+      'nivaro_session_scores as s': scores,
+      nivaro_session_recordings: chain([{ id: REC.toLowerCase() }])
+    })
+    const res = await buildApp().inject({
+      method: 'GET',
+      url: '/worst?from=2026-10-01&to=2026-10-01&limit=999&min_score=30',
+      headers: ADMIN
+    })
+    expect(res.statusCode).toBe(200)
+    const d = res.json().data
+    expect(d[0]).toMatchObject({
+      session_id: 'sock-1',
+      user_name: 'Ada Lovelace',
+      score: 81,
+      components: { counts: { rage_clicks: 2 } },
+      recording_id: REC
+    })
+    expect(d[1]).toMatchObject({ user_name: null, components: {}, recording_id: null })
+    expect(scores.calls).toContainEqual(['limit', [200]])
+    expect(scores.calls).toContainEqual(['where', ['s.score', '>=', 30]])
+    expect(scores.calls).toContainEqual(['orderBy', ['s.score', 'desc']])
+  })
+})
+
+describe('frustration weights', () => {
+  it('GET answers the stored weights over the defaults', async () => {
+    mockTables({ nivaro_settings: chain([], { frustration_weights: '{"loops": 9}' }) })
+    const res = await buildApp().inject({
+      method: 'GET',
+      url: '/frustration-weights',
+      headers: ADMIN
+    })
+    expect(res.json().data.weights.loops).toBe(9)
+    expect(res.json().data.defaults.loops).toBe(3)
+  })
+  it('PUT validates and stores JSON; null resets', async () => {
+    const settings = chain([], { frustration_weights: null })
+    mockTables({ nivaro_settings: settings })
+    const bad = await buildApp().inject({
+      method: 'PUT',
+      url: '/frustration-weights',
+      headers: ADMIN,
+      payload: { weights: { loops: 500 } }
+    })
+    expect(bad.statusCode).toBe(400)
+    const ok = await buildApp().inject({
+      method: 'PUT',
+      url: '/frustration-weights',
+      headers: ADMIN,
+      payload: { weights: { loops: 7 } }
+    })
+    expect(ok.statusCode).toBe(200)
+    const update = settings.calls.find(([m]) => m === 'update')?.[1][0] as {
+      frustration_weights: string
+    }
+    expect(JSON.parse(update.frustration_weights).loops).toBe(7)
+    await buildApp().inject({
+      method: 'PUT',
+      url: '/frustration-weights',
+      headers: ADMIN,
+      payload: { weights: null }
+    })
+    expect(settings.calls.filter(([m]) => m === 'update').at(-1)?.[1][0]).toEqual({
+      frustration_weights: null
+    })
   })
 })
 
