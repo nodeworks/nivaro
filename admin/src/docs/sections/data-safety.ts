@@ -268,6 +268,11 @@ function App() {
         'Indexing runs after the upload has been answered and never slows it down. Recordings uploaded before the index existed are not searchable.',
         'Index rows are deleted with their recording, by retention or by Delete.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-inspector', text: 'Inspecting an element' },
+    {
+      type: 'p',
+      text: 'Pause a replay and click anything in it: the inspector outlines the element and shows its selector (with a Copy button), its data-* attributes, and the nearest data-field and data-cbv-* hooks on it or above it. Find in other recordings lists the other recordings in which someone clicked or typed into the same element, from the replay index; Open in Search shows them all with a Watch button that opens each one at that moment. An element with no stable hook on it or above it gets a plain selector such as button, which cannot be searched for. The inspector reads attributes only, never text or what was typed.'
     }
   ]
 }

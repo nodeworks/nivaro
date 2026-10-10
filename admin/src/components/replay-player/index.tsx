@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { EventRail } from './EventRail'
+import { type InspectableReplayer, ReplayInspector } from './Inspector'
 import {
   activeIndex,
   fmtClock,
@@ -315,6 +316,10 @@ export function ReplayPlayer({
   const seekRef = useRef(seek)
   seekRef.current = seek
   const stableSeek = useCallback((ms: number) => seekRef.current(ms), [])
+  const getInspectable = useCallback(
+    () => replayerRef.current as unknown as InspectableReplayer | null,
+    []
+  )
 
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
@@ -353,11 +358,17 @@ export function ReplayPlayer({
       {/* Same element tree with or without the side column — the frame must
           never remount under a live Replayer. */}
       <div className={side ? 'flex items-stretch gap-3' : ''}>
-        <div className={side ? 'min-w-0 flex-1' : ''}>
+        <div className={side ? 'relative min-w-0 flex-1' : 'relative'}>
           <div
             ref={frameRef}
             className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
             style={{ minHeight }}
+          />
+          {/* #1372 — click an element of the paused replay to inspect it. */}
+          <ReplayInspector
+            getReplayer={getInspectable}
+            active={ready && !following && !playing}
+            recordingId={recordingId}
           />
         </div>
         {side && panelEl('side')}
