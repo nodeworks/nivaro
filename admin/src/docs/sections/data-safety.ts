@@ -254,6 +254,18 @@ function App() {
         'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
         'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-skip', text: 'Skipping inactivity' },
+    {
+      type: 'p',
+      text: 'Stretches longer than 5 seconds with no input (mouse, keys, scroll, touch) and no change on the page play at 8×; a stretch that would still take more than a few seconds at 8× is jumped over to its last 2 seconds. The scrubber shades each one with how long it was ("skipped 2m 10s") and a badge over the replay says when it is skipping. The Skip idle / Real time button beside the speeds turns it off; the choice is remembered in this browser.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Each recording’s active time — the time between input or page changes, every idle stretch counted as at most 5 seconds — is worked out as its chunks upload and shown on the list ("4m 12s active"). Sort a person’s recordings by Most active to find the sessions where something actually happened.',
+        'Recordings made before active time was measured show no figure and sort last.'
+      ]
     }
   ]
 }

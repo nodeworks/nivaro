@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { EventRail } from './EventRail'
+import { findInactiveGaps, type InactiveGap } from './inactivity'
 import {
   activeIndex,
   fmtClock,
@@ -20,6 +21,7 @@ import {
   railMarkers
 } from './logic'
 import { ReplaySidePanel } from './SidePanel'
+import { SkipBands, SkippingBadge, SkipToggle, useSkipInactivity } from './SkipInactivity'
 
 const SPEEDS = [1, 2, 4, 8]
 
@@ -120,12 +122,18 @@ export function ReplayPlayer({
     () => (rail ? railMarkers(rail.items, rail.first, total) : []),
     [rail, total]
   )
+  // #1358 skip inactivity: idle stretches crossed at 8× (or real time).
+  const [gaps, setGaps] = useState<InactiveGap[]>([])
+  const skip = useSkipInactivity(replayerRef, gaps, speed, ready && !following && playing)
+  const skipTickRef = useRef(skip.onTick)
+  skipTickRef.current = skip.onTick
 
   useEffect(() => {
     let cancelled = false
     let raf = 0
     setRail(null)
     setCtx(NO_CONTEXT)
+    setGaps([])
 
     function rescale() {
       const rep = replayerRef.current
@@ -173,6 +181,7 @@ export function ReplayPlayer({
             setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
           })
           setCtx(parseReplayContext(events, first))
+          setGaps(findInactiveGaps(events, first))
         }
         if (events.length < 2) {
           setError('Not enough events to replay this session.')
@@ -184,7 +193,8 @@ export function ReplayPlayer({
         frameRef.current.replaceChildren()
         const replayer = new rrweb.Replayer(events as never[], {
           root: frameRef.current,
-          skipInactive: !following,
+          // Inactivity is skipped by our own driver (#1358, ./SkipInactivity).
+          skipInactive: false,
           // Live-follow: rrweb's liveMode plays events as they are appended,
           // pinned to the tail of the stream.
           liveMode: following,
@@ -222,9 +232,9 @@ export function ReplayPlayer({
         }
         const tick = () => {
           if (replayerRef.current && playingRef.current) {
-            setTime(
-              Math.min(replayerRef.current.getCurrentTime(), total || Number.MAX_SAFE_INTEGER)
-            )
+            const now = replayerRef.current.getCurrentTime()
+            setTime(Math.min(now, total || Number.MAX_SAFE_INTEGER))
+            skipTickRef.current(now)
           }
           raf = requestAnimationFrame(tick)
         }
@@ -339,7 +349,8 @@ export function ReplayPlayer({
       {/* Same element tree with or without the side column — the frame must
           never remount under a live Replayer. */}
       <div className={side ? 'flex items-stretch gap-3' : ''}>
-        <div className={side ? 'min-w-0 flex-1' : ''}>
+        <div className={side ? 'relative min-w-0 flex-1' : 'relative'}>
+          <SkippingBadge gap={skip.current} />
           <div
             ref={frameRef}
             className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
@@ -405,6 +416,7 @@ export function ReplayPlayer({
                   />
                 ))}
             </div>
+            <SkipBands gaps={gaps} total={total} enabled={skip.enabled} />
             <input
               type='range'
               min={0}
@@ -424,6 +436,9 @@ export function ReplayPlayer({
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(total)}
           </span>
+          {gaps.length > 0 && (
+            <SkipToggle enabled={skip.enabled} onChange={skip.setEnabled} count={gaps.length} />
+          )}
           <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
             {SPEEDS.map((v) => (
               <button
