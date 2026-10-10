@@ -1,9 +1,29 @@
 import { registerReplayCapture } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
-import { api } from '@/lib/api'
+import { api, WORKSPACE_KEY } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { readMasquerade } from '@/lib/masquerade'
+import {
+  backoffDelay,
+  CHUNK_BYTES,
+  clearResume,
+  type DrainOutcome,
+  isResumable,
+  KEEPALIVE_CHUNK_BYTES,
+  ORPHAN_TTL_MS,
+  ReplayUploader,
+  readResume,
+  sessionStore,
+  sharedChunkStore,
+  splitBySize,
+  writeResume
+} from '@/lib/replay-upload-queue'
+import {
+  instrumentConsole,
+  instrumentRequests,
+  redactSecrets
+} from '../../../packages/shared/src/lib/replay-context'
 
 function clientMeta(): Record<string, string | number> {
   try {
@@ -28,7 +48,10 @@ function clientMeta(): Record<string, string | number> {
  * rrweb session recorder — two modes, one hook.
  *
  * FULL mode (`session_recording_enabled`): events stream to the server
- * continuously, exactly as before.
+ * continuously, through a queue that survives failures (#1369): chunks that
+ * can't go now wait in IndexedDB and retry with backoff, a reload within ten
+ * minutes continues the same recording, and pagehide sends the tail with
+ * fetch keepalive. See replay-upload-queue.ts.
  *
  * ERROR-CLIP mode (`error_replay_enabled`, when full recording is off):
  * rrweb records into a rolling IN-MEMORY buffer — two 30s checkout windows,
@@ -57,40 +80,62 @@ const FLUSH_COUNT = 150
  */
 const QUIET_MS = 3_000
 const HARD_FLUSH_COUNT = 600
-/**
- * Raw JSON bytes per upload. The server takes 8MB per chunk; a full snapshot
- * of a heavy page can be several MB on its own, so the buffer is cut by SIZE,
- * not count, and an oversized single event travels alone.
- */
-const CHUNK_BYTES = 2_000_000
+// Chunk sizing (CHUNK_BYTES, splitBySize) lives in replay-upload-queue.ts.
 
-function splitBySize(events: unknown[]): unknown[][] {
-  const out: unknown[][] = []
-  let cur: unknown[] = []
-  let size = 2
-  for (const ev of events) {
-    let len = 0
-    try {
-      len = JSON.stringify(ev).length + 1
-    } catch {
-      continue
-    }
-    if (cur.length > 0 && size + len > CHUNK_BYTES) {
-      out.push(cur)
-      cur = []
-      size = 2
-    }
-    cur.push(ev)
-    size += len
+/** sessionStorage key for this tab's resumable recording (#1369). */
+const RESUME_KEY = 'nvr_replay_resume'
+
+const isOnline = () => typeof navigator === 'undefined' || navigator.onLine !== false
+
+/**
+ * POST one queued chunk. While the page is hidden (it may be unloading) a
+ * small chunk rides fetch keepalive so it outlives the page. The admin API
+ * authenticates by cookie, so a plain same-origin fetch carries the session;
+ * recording never runs in a "View as" tab, so there is no bearer to add.
+ */
+async function sendChunk(
+  recordingId: string,
+  seq: number,
+  events: unknown[],
+  keepalive: boolean
+): Promise<void> {
+  if (!keepalive) {
+    await api.post(`/session-recordings/${recordingId}/events`, { seq, events })
+    return
   }
-  if (cur.length > 0) out.push(cur)
-  return out
+  const res = await fetch(eventsUrl(recordingId), keepaliveInit(JSON.stringify({ seq, events })))
+  if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status })
+}
+
+/** Fire-and-forget keepalive POST for pagehide; the IndexedDB copy is the net. */
+function sendKeepalive(recordingId: string, body: string): void {
+  try {
+    void fetch(eventsUrl(recordingId), keepaliveInit(body)).catch(() => {})
+  } catch {
+    /* over the browser's keepalive allowance — the next load sends it */
+  }
+}
+
+function eventsUrl(recordingId: string): string {
+  return `/api/session-recordings/${recordingId}/events`
+}
+
+function keepaliveInit(body: string): RequestInit {
+  const headers: Record<string, string> = { 'content-type': 'application/json' }
+  try {
+    const ws = localStorage.getItem(WORKSPACE_KEY)
+    if (ws) headers['x-workspace'] = ws
+  } catch {
+    /* storage blocked — the events route is not workspace-scoped anyway */
+  }
+  return { method: 'POST', keepalive: true, credentials: 'include', headers, body }
 }
 
 /**
- * Upload events in size-bounded chunks. A 413 drops THAT chunk and keeps
- * recording (one lost snapshot beats a dead session); a 409 means the
- * recording is closed or capped — stop for good.
+ * Upload events in size-bounded chunks, once — error-clip mode only. A 413
+ * drops THAT chunk and keeps going (one lost snapshot beats a dead clip); a
+ * 409 means the recording is closed or capped — stop for good. Full mode
+ * goes through the resilient queue instead.
  */
 async function postEventChunks(
   recordingId: string,
@@ -153,51 +198,26 @@ export async function captureErrorClip(): Promise<ErrorReplayLink | null> {
 }
 
 // ── Replay context instrumentation ───────────────────────────────────────────
-// Console lines + route changes ride the recording as rrweb CUSTOM events
-// (type 5), so the player can mark them on the scrubber and show the user's
-// console next to the replay. Capped so a render-loop error flood can't bloat
-// the recording; console.log deliberately excluded (noise) — info/warn/error
-// only. Returns an undo function that restores the patched globals.
+// Console lines, the page's requests (#1357) and route changes ride the
+// recording as rrweb CUSTOM events (type 5), so the player can mark them on
+// the scrubber and list console + network beside the replay. The console and
+// request patches live in packages/shared (lib/replay-context.ts — one
+// implementation for this recorder and @nivaro/react's): warn/error only, 200
+// characters, token-shaped text redacted; requests as method, route pattern,
+// status and duration, never bodies. Returns an undo that restores the globals.
 function instrumentReplayContext(
   addCustomEvent: (tag: string, payload: unknown) => void,
   onRoute?: () => void
 ): () => void {
-  let captured = 0
-  const MAX_EVENTS = 500
-  const originals: Partial<Record<'info' | 'warn' | 'error', (...a: unknown[]) => void>> = {}
-  let inHook = false
-  for (const level of ['info', 'warn', 'error'] as const) {
-    originals[level] = console[level].bind(console)
-    console[level] = (...args: unknown[]) => {
-      originals[level]?.(...args)
-      if (inHook || captured >= MAX_EVENTS) return
-      inHook = true
-      try {
-        captured++
-        const msg = args
-          .map((a) => {
-            if (typeof a === 'string') return a
-            if (a instanceof Error) return `${a.name}: ${a.message}`
-            try {
-              return JSON.stringify(a)
-            } catch {
-              return String(a)
-            }
-          })
-          .join(' ')
-          .slice(0, 500)
-        addCustomEvent('console', { level, msg })
-      } catch {
-        /* never break the console */
-      } finally {
-        inHook = false
-      }
-    }
-  }
+  const undoConsole = instrumentConsole(addCustomEvent)
+  const undoRequests = instrumentRequests(addCustomEvent)
   const routeEvent = () => {
     onRoute?.()
     try {
-      addCustomEvent('route', { path: window.location.pathname + window.location.search })
+      // A query string can carry a reset or invite token — redact like the console.
+      addCustomEvent('route', {
+        path: redactSecrets(window.location.pathname + window.location.search)
+      })
     } catch {
       /* best-effort */
     }
@@ -215,9 +235,8 @@ function instrumentReplayContext(
   window.addEventListener('popstate', routeEvent)
   routeEvent() // the starting page is a marker too
   return () => {
-    for (const level of ['info', 'warn', 'error'] as const) {
-      if (originals[level]) console[level] = originals[level] as never
-    }
+    undoConsole()
+    undoRequests()
     history.pushState = origPush
     history.replaceState = origReplace
     window.removeEventListener('popstate', routeEvent)
@@ -240,9 +259,8 @@ export function useSessionRecorder() {
   })
 
   const stateRef = useRef<{
-    recordingId: string | null
+    // Full mode's recording id and seq live in its ReplayUploader.
     buffer: unknown[]
-    seq: number
     stop: (() => void) | null
     uninstrument: (() => void) | null
     dead: boolean
@@ -254,10 +272,8 @@ export function useSessionRecorder() {
     inFlight: Promise<void> | null
     flushAfter: boolean
   }>({
-    recordingId: null,
     buffer: [],
     uninstrument: null,
-    seq: 0,
     stop: null,
     dead: false,
     startedAt: 0,
@@ -271,38 +287,121 @@ export function useSessionRecorder() {
   const fullMode = modes?.enabled === true
   const clipMode = !fullMode && modes?.error_replay === true
 
-  // ── Full recording (unchanged behaviour) ─────────────────────────────────
+  // ── Full recording ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!fullMode || !user) return
     let cancelled = false
     const state = stateRef.current
     state.dead = false
+    const userId = user.id
+    const storage = sessionStore()
+    const store = sharedChunkStore()
+    const uploader = new ReplayUploader({ store, send: sendChunk, online: isOnline })
+    let retryTimer: ReturnType<typeof setTimeout> | null = null
+    /** Uploads wait until then after a transient failure (backoff). */
+    let retryAt = 0
 
     const quiet = () =>
       document.readyState === 'complete' && Date.now() - state.lastNavAt >= QUIET_MS
 
+    /** Remember the recording for a reload in this tab (sessionStorage). */
+    function saveResume() {
+      if (!uploader.recordingId) return
+      writeResume(storage, RESUME_KEY, {
+        recordingId: uploader.recordingId,
+        nextSeq: uploader.nextSeq,
+        startedAt: state.startedAt,
+        lastActivityAt: Date.now(),
+        userId
+      })
+    }
+
+    function clearRetry() {
+      if (retryTimer) clearTimeout(retryTimer)
+      retryTimer = null
+      retryAt = 0
+    }
+
+    function scheduleRetry() {
+      clearRetry()
+      const delay = backoffDelay(uploader.attempt)
+      retryAt = Date.now() + delay
+      retryTimer = setTimeout(() => {
+        retryTimer = null
+        retryAt = 0
+        void flush(true)
+      }, delay)
+    }
+
+    /** 409 (closed / capped) or a recording that will never take a chunk. */
+    function kill() {
+      state.dead = true
+      state.stop?.()
+      clearRetry()
+      uploader.discard()
+      clearResume(storage, RESUME_KEY)
+    }
+
+    /**
+     * Move buffered events into the queue — their seq is fixed from here on.
+     * While the page may be unloading the chunks are cut small enough to
+     * ride fetch keepalive.
+     */
+    function enqueueBuffer(hiding: boolean) {
+      if (state.buffer.length === 0 || !uploader.recordingId) return
+      const events = state.buffer
+      state.buffer = []
+      for (const chunk of splitBySize(events, hiding ? KEEPALIVE_CHUNK_BYTES : CHUNK_BYTES)) {
+        uploader.enqueue(chunk)
+      }
+      saveResume()
+    }
+
+    async function afterDrain(outcome: DrainOutcome): Promise<void> {
+      // After cleanup the shared stateRef may already belong to the next
+      // run of this effect — a late outcome must not stop ITS rrweb.
+      if (cancelled) return
+      if (outcome === 'retry') scheduleRetry()
+      else if (outcome === 'closed' || outcome === 'abandoned') kill()
+      else if (outcome === 'stale') {
+        // The recording this tab was resuming is gone (ended, purged, not
+        // this user's). Start a fresh one and move this page's chunks —
+        // the opening full snapshot among them — onto it.
+        try {
+          const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
+            origin: window.location.origin,
+            meta: clientMeta()
+          })
+          if (cancelled) return
+          uploader.rebase(r.data.data.id)
+          state.startedAt = Date.now()
+          saveResume()
+          state.flushAfter = true
+        } catch {
+          kill()
+        }
+      }
+      // 'offline' waits for the online event; 'ok' has nothing left to do.
+    }
+
     /**
      * Single-flight: one upload at a time, chunks in seq order. A forced
      * flush that lands mid-upload runs again once that upload settles; an
-     * unforced one just waits for the next tick.
+     * unforced one just waits for the next tick. Chunks that fail stay
+     * queued (and in IndexedDB) and go again after the backoff.
      */
-    function flush(force = false): Promise<void> {
+    function flush(force = false, hiding = false): Promise<void> {
       if (state.inFlight) {
         if (force) state.flushAfter = true
         return state.inFlight
       }
-      if (state.dead || !state.recordingId || state.buffer.length === 0) return Promise.resolve()
+      if (state.dead || !uploader.recordingId) return Promise.resolve()
       if (!force && !quiet() && state.buffer.length < HARD_FLUSH_COUNT) return Promise.resolve()
-      const events = state.buffer
-      state.buffer = []
-      const id = state.recordingId
-      state.inFlight = postEventChunks(id, () => state.seq++, events)
-        .then((outcome) => {
-          if (outcome === 'closed') {
-            state.dead = true
-            state.stop?.()
-          }
-        })
+      enqueueBuffer(hiding)
+      if (!uploader.hasPending() || Date.now() < retryAt) return Promise.resolve()
+      state.inFlight = uploader
+        .drain(hiding)
+        .then(afterDrain)
         .catch(() => {})
         .finally(() => {
           state.inFlight = null
@@ -327,13 +426,32 @@ export function useSessionRecorder() {
 
     async function start() {
       try {
-        const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
-          origin: window.location.origin,
-          meta: clientMeta()
-        })
-        if (cancelled) return
-        state.recordingId = r.data.data.id
-        state.startedAt = Date.now()
+        void store.prune(Date.now() - ORPHAN_TTL_MS)
+        // A reload in this tab within the resume window continues the same
+        // recording: no /start, seq carries on, and whatever the previous
+        // page could not upload goes first. If the server no longer takes
+        // that id, the first upload answers 'stale' and a fresh recording
+        // starts then (afterDrain).
+        const saved = readResume(storage, RESUME_KEY)
+        if (saved && isResumable(saved, Date.now(), userId)) {
+          const restored = await store.list(saved.recordingId)
+          if (cancelled) return
+          uploader.begin(saved.recordingId, saved.nextSeq, { trusted: false, restored })
+          state.startedAt = saved.startedAt
+        } else {
+          if (saved) {
+            void store.clear(saved.recordingId)
+            clearResume(storage, RESUME_KEY)
+          }
+          const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
+            origin: window.location.origin,
+            meta: clientMeta()
+          })
+          if (cancelled) return
+          uploader.begin(r.data.data.id)
+          state.startedAt = Date.now()
+        }
+        saveResume()
         state.lastNavAt = Date.now()
         const { record } = await import('rrweb')
         if (cancelled) return
@@ -362,11 +480,14 @@ export function useSessionRecorder() {
 
         // A live full recording answers an error capture with itself + the
         // error's offset, after pushing whatever is still buffered.
+        // (Queued chunks — this page's or a resumed page's — may still be on
+        // their way; the link is valid either way and they land on retry.)
         captureFn = async () => {
-          if (!state.recordingId) return null
+          if (!uploader.recordingId) return null
           const offset = Date.now() - state.startedAt
           await flush(true).catch(() => {})
-          return { recording_id: state.recordingId, offset_ms: offset }
+          if (!uploader.recordingId) return null
+          return { recording_id: uploader.recordingId, offset_ms: offset }
         }
       } catch {
         /* recording is best-effort — never disturb the session */
@@ -377,24 +498,56 @@ export function useSessionRecorder() {
     const timer = setInterval(scheduleFlush, FLUSH_MS)
 
     const onHide = () => {
-      if (document.visibilityState === 'hidden') void flush(true)
+      if (document.visibilityState === 'hidden') void flush(true, true)
     }
     document.addEventListener('visibilitychange', onHide)
+
+    /**
+     * The page is going away (reload, navigation, tab close). Queue the
+     * buffer (≤10s of events) in keepalive-sized chunks — that also writes
+     * them to IndexedDB — then send what fits in the keepalive allowance.
+     * No /end: a reload in this tab continues this recording, and the
+     * server already reads "live" off last_event_at.
+     */
+    const onPageHide = () => {
+      if (state.dead || !uploader.recordingId) return
+      enqueueBuffer(true)
+      saveResume()
+      if (!isOnline()) return
+      for (const { chunk, body } of uploader.keepaliveBatch()) {
+        sendKeepalive(chunk.recordingId, body)
+      }
+    }
+    window.addEventListener('pagehide', onPageHide)
+
+    const onOnline = () => {
+      clearRetry()
+      void flush(true)
+    }
+    window.addEventListener('online', onOnline)
 
     return () => {
       cancelled = true
       captureFn = null
       document.removeEventListener('visibilitychange', onHide)
+      window.removeEventListener('pagehide', onPageHide)
+      window.removeEventListener('online', onOnline)
       clearInterval(timer)
+      clearRetry()
       state.uninstrument?.()
       state.uninstrument = null
       state.stop?.()
       state.stop = null
+      // A real unmount — signed out, recording switched off — ends the
+      // recording: one last upload attempt, then /end, and nothing is left
+      // behind to retry or resume.
       void flush(true).then(() => {
-        if (state.recordingId) {
-          void api.post(`/session-recordings/${state.recordingId}/end`).catch(() => {})
-          state.recordingId = null
-        }
+        const id = uploader.recordingId
+        if (!id) return
+        if (!state.dead) void api.post(`/session-recordings/${id}/end`).catch(() => {})
+        uploader.discard()
+        uploader.recordingId = null
+        clearResume(storage, RESUME_KEY)
       })
     }
   }, [fullMode, user])

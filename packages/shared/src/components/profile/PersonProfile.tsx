@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useItemEditAuth } from '../../context'
 import { cn } from '../../lib/utils'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
+import { DayTimelineCard } from './DayTimeline'
 import { DelegationCard } from './DelegationCard'
 import {
   AccessCard,
@@ -20,6 +21,8 @@ import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from '.
 import { useInvalidatePerson, usePersonProfile } from './types'
 
 export type PersonProfileTab = 'overview' | 'access' | 'activity' | 'tools'
+/** The Activity tab's two views: the cards, or one day on a timeline (#1367). */
+type ActivityView = 'feed' | 'day'
 
 /**
  * Someone else's page. A colleague gets the slim read: who they are, how to
@@ -41,6 +44,7 @@ export function PersonProfile({
   const { data: profile, isLoading, isError } = usePersonProfile(userId)
   const invalidate = useInvalidatePerson(userId)
   const [tab, setTab] = useState<PersonProfileTab>(initialTab)
+  const [activityView, setActivityView] = useState<ActivityView>('feed')
 
   if (isLoading || (!profile && !isError)) return <PersonSkeleton className={className} />
   if (!profile) {
@@ -153,16 +157,50 @@ export function PersonProfile({
             </div>
           </TabsContent>
           <TabsContent value='activity' className='mt-4 focus-visible:outline-none'>
-            <div className='grid gap-4 lg:grid-cols-2'>
-              <div className='space-y-4'>
-                <StatsCard userId={profile.id} />
-                <ActivityFeedCard userId={profile.id} />
+            {/* The tabs only render for administrators; Day reads an
+                admin-only, audited endpoint, so it never shows otherwise. */}
+            <fieldset
+              className='mb-4 inline-flex gap-0.5 rounded-lg border border-slate-200 bg-white p-0.5 dark:border-border dark:bg-card'
+              data-person-activity-views
+            >
+              <legend className='sr-only'>Activity view</legend>
+              {(
+                [
+                  ['feed', 'Feed'],
+                  ['day', 'Day']
+                ] as Array<[ActivityView, string]>
+              ).map(([id, label]) => (
+                <button
+                  key={id}
+                  type='button'
+                  aria-pressed={activityView === id}
+                  data-person-activity-view={id}
+                  onClick={() => setActivityView(id)}
+                  className={cn(
+                    'h-6 rounded-md px-3 text-[11.5px] font-medium',
+                    activityView === id
+                      ? 'bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
+                      : 'text-slate-500 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200'
+                  )}
+                >
+                  {label}
+                </button>
+              ))}
+            </fieldset>
+            {activityView === 'day' && isAdmin ? (
+              <DayTimelineCard userId={profile.id} />
+            ) : (
+              <div className='grid gap-4 lg:grid-cols-2'>
+                <div className='space-y-4'>
+                  <StatsCard userId={profile.id} />
+                  <ActivityFeedCard userId={profile.id} />
+                </div>
+                <div className='space-y-4'>
+                  <SignInsCard profile={profile} />
+                  <JourneyCard userId={profile.id} />
+                </div>
               </div>
-              <div className='space-y-4'>
-                <SignInsCard profile={profile} />
-                <JourneyCard userId={profile.id} />
-              </div>
-            </div>
+            )}
           </TabsContent>
           <TabsContent value='tools' className='mt-4 focus-visible:outline-none'>
             <div className='grid gap-4 lg:grid-cols-2'>

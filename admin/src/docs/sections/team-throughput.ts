@@ -142,6 +142,24 @@ export const peoplePageGuide: DocSection = {
       type: 'p',
       text: 'An admin’s header button on someone’s page. In the admin app it opens a NEW TAB as that person: the tab carries its own masquerade token in sessionStorage (it arrives in the URL fragment, which never reaches a server, and is removed at once), every request that tab makes rides it as a bearer token, and an amber bar says who the tab is. The admin’s other tabs stay signed in as the admin. "Stop viewing as" revokes the token and closes the tab. The tab never records a session replay. A host registers how it opens itself as someone else with `registerViewAsOpener`; without one the button does not show.'
     },
+    { type: 'h2', id: 'people-day', text: 'One day of one person' },
+    {
+      type: 'p',
+      text: 'Activity tab → Day (administrators): one date on one horizontal timeline in your own hours — session recordings, admin pages visited, requests per minute (red where they failed), workflow transitions, and tasks created or completed. It opens zoomed to the hours that had activity; "Whole day" shows all 24. Every mark opens its own thing: a recording plays in Session replays, a page opens that page, a request bar plays the recording that covers that minute at that moment, and a transition or task opens its record. A lane whose source is not on this instance (an older database, recordings off) is left out. Each day opened writes a `person-day-read` activity row (collection `nivaro_users`, item = the person), as reading the chat log does.'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/journeys/day/:userId?date=2026-10-10&tz_offset=-120     (admin)
+  tz_offset = the viewer's getTimezoneOffset() at that local midnight; omitted → the server's zone
+→ 200 { "data": { "date", "tz_offset", "day_start", "day_end",
+                  "recordings": [{ "id", "app", "start", "end", "live" }] | null,
+                  "pages": [{ "path", "session_id", "start", "end", "duration_seconds" }] | null,
+                  "requests": [{ "minute", "count", "errors" }] | null,
+                  "transitions": [{ "id", "at", "collection", "item", "from", "to", "label" }] | null,
+                  "tasks": [{ "id", "at", "kind": "created" | "completed", "title", "collection", "item" }] | null,
+                  "capped": ["pages", ...] } }
+→ 400 date must be YYYY-MM-DD / a real calendar day; tz_offset must be whole minutes (clamped to ±14h)`
+    },
     { type: 'h2', id: 'people-bulk', text: 'Users list bulk actions' },
     {
       type: 'p',
