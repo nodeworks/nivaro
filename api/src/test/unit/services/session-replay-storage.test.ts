@@ -76,6 +76,15 @@ vi.mock('../../../db/index.js', () => {
       preds.push((r) => r[c as string] != null)
       return b
     }
+    // whereNotIn(col, db('nivaro_replay_clips').select('recording')) — the only
+    // subquery the service uses; an array is taken as is.
+    b.whereNotIn = (c, list) => {
+      const out = Array.isArray(list)
+        ? (list as unknown[])
+        : (h.tables.nivaro_replay_clips ?? []).map((x) => x.recording)
+      preds.push((r) => !out.some((x) => val(x) === val(r[c as string])))
+      return b
+    }
     b.orderBy = (c, dir) => {
       order = [c as string, (dir as string) ?? 'asc']
       return b
@@ -346,5 +355,15 @@ describe('purge', () => {
     expect([...objects.keys()]).toEqual(['session-replays/b'])
     await deleteColdObject('KEEP')
     expect(objects.size).toBe(0)
+  })
+
+  it('keeps the object of a recording the clip library holds (#1415)', async () => {
+    h.tables.nivaro_session_recordings.push(
+      recording('CLIP', 30, { cold: true, cold_key: 'session-replays/c' })
+    )
+    h.tables.nivaro_replay_clips = [{ id: 'K1', recording: 'CLIP' }]
+    objects.set('session-replays/c', Buffer.from('c'))
+    expect(await purgeColdObjects(new Date(NOW.getTime() - 7 * DAY))).toBe(0)
+    expect([...objects.keys()]).toEqual(['session-replays/c'])
   })
 })
