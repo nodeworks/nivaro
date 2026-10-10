@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-10T20:24:59.536Z",
+  "generated_at": "2026-10-10T21:04:44.200Z",
   "releases": [
+    {
+      "version": "0.2.37",
+      "tag": "v0.2.37",
+      "date": "2026-10-10T17:04:31-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "e27390f3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Mirror publish: rewrite provider-key-shaped fixtures out of history",
+              "hash": "0e2ef778"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.36",
       "tag": "v0.2.36",
-      "date": "2026-10-10T16:24:47-04:00",
+      "date": "2026-10-10T16:24:59-04:00",
       "sections": [
         {
           "label": "Other",
