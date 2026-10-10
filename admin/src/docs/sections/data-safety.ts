@@ -227,6 +227,10 @@ componentDidCatch(error, info) {
 }`
     },
     {
+      type: 'p',
+      text: "Support clips: with Error clips on, a support request (Get help, Request a change) cuts the same in-memory buffer into an app='support-clip' recording, taken when the dialog opens and uploaded only if the request is sent; the requester can untick it. POST /session-recordings/start takes clip_kind ('error' | 'support') from an allowlist, so a clip's label is never free text."
+    },
+    {
       type: 'note',
       text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'
     },

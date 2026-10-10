@@ -2,6 +2,7 @@ import {
   AutofillRunsChip,
   DEMO_USER,
   ForceReloadBanner,
+  installReplayTail,
   parseThemeAccents,
   registerViewAsOpener,
   resolveAccentColor,
@@ -304,6 +305,8 @@ export function AppLayout() {
   // the cardinality. Fire-and-forget — never affects the page it measures.
   useEffect(() => {
     startRum({ app: 'admin', routePattern: rumPattern })
+    // #1377 — the console + request tail a support request attaches.
+    installReplayTail()
   }, [])
   const firstRouteRef = useRef(true)
   useEffect(() => {

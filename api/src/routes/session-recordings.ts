@@ -121,6 +121,11 @@ export async function purgeExpiredRecordings(): Promise<void> {
   await db('nivaro_session_recordings').where('started_at', '<', cutoff).del()
 }
 
+/** A clip's app label, from an allowlist — never the caller's free text. */
+export function clipAppLabel(kind: unknown): 'error-clip' | 'support-clip' {
+  return kind === 'support' ? 'support-clip' : 'error-clip'
+}
+
 async function recordingEnabled(): Promise<boolean> {
   try {
     const row = await db('nivaro_settings').where({ id: 1 }).first('session_recording_enabled')
@@ -148,7 +153,14 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
   })
 
   app.post<{
-    Body: { app?: string; origin?: string; clip?: boolean; meta?: Record<string, unknown> }
+    Body: {
+      app?: string
+      origin?: string
+      clip?: boolean
+      /** #1377 — why the clip was cut: 'error' (default) or 'support'. */
+      clip_kind?: string
+      meta?: Record<string, unknown>
+    }
   }>('/start', { preHandler: requireAuth }, async (req, reply) => {
     // A clip start is gated by the error-replay bit, not the full-recording
     // bit — clips exist precisely so operators can keep continuous
@@ -164,7 +176,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     }
     const id = randomUUID()
     const appLabel = isClip
-      ? 'error-clip'
+      ? clipAppLabel(req.body?.clip_kind)
       : typeof req.body?.app === 'string'
         ? req.body.app.slice(0, 100)
         : null

@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Loader2, Paperclip } from 'lucide-react'
+import { Loader2, Paperclip, PlayCircle } from 'lucide-react'
 import { useState } from 'react'
-import { useApiFetchConfig, useItemNavigation, useNivaroClient } from '../../context'
+import { useApiFetchConfig, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
+import { replayHref } from '../../lib/replay-capture'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
@@ -57,6 +58,7 @@ export function TicketDetailSheet({
   const qc = useQueryClient()
   const { apiBase } = useApiFetchConfig()
   const { urlFor, open: openItem } = useItemNavigation()
+  const nav = useNavigation()
   const [reply, setReply] = useState('')
   const [err, setErr] = useState<string | null>(null)
 
@@ -232,6 +234,27 @@ export function TicketDetailSheet({
                 <p className='whitespace-pre-wrap text-[13px] leading-relaxed text-slate-800 dark:text-slate-200'>
                   {t.description || <span className='text-slate-400'>No details given.</span>}
                 </p>
+                {t.replay &&
+                  t.can.work &&
+                  (() => {
+                    // #1377 — the replay opens where they asked (admins only:
+                    // the replay page is an admin surface).
+                    const path = replayHref(t.replay)
+                    const href = nav.consoleUrl ? nav.consoleUrl(path) : path
+                    if (!href) return null
+                    return (
+                      <a
+                        href={href}
+                        target='_blank'
+                        rel='noreferrer'
+                        data-ticket-replay={t.replay.recording_id}
+                        className='mt-2 inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/50 bg-nvr-cyan/10 px-2 py-1 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/15 dark:text-nvr-cyan'
+                      >
+                        <PlayCircle className='h-3.5 w-3.5' />
+                        Watch what they saw
+                      </a>
+                    )
+                  })()}
                 {t.files.length > 0 && (
                   <ul className='mt-2 flex flex-wrap gap-1.5'>
                     {t.files.map((f) => (

@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { buildClientCrashBody, reportClientCrash } from './client-crash'
-import { captureReplayClip, registerReplayCapture, replayHref } from './replay-capture'
+import {
+  captureReplayClip,
+  clipEndOffset,
+  registerReplayCapture,
+  replayHref,
+  withClipKind
+} from './replay-capture'
 
 let undo: (() => void) | null = null
 afterEach(() => {
@@ -77,5 +83,20 @@ describe('reportClientCrash', () => {
       throw new Error('offline')
     })
     await expect(reportClientCrash({ request } as never, new Error('x'))).resolves.toBeUndefined()
+  })
+})
+
+describe('support clips', () => {
+  it('seek to their end; error clips have no moment', () => {
+    const events = [{ timestamp: 1000 }, { timestamp: 5000 }, { timestamp: 61_000 }]
+    expect(clipEndOffset(events, 'support')).toBe(60_000)
+    expect(clipEndOffset(events, 'error')).toBeNull()
+    expect(clipEndOffset([], 'support')).toBeNull()
+  })
+
+  it('carry their kind in the start body', () => {
+    const cmd = { _method: 'POST', _path: '/session-recordings/start', _body: { clip: true } }
+    expect(withClipKind(cmd, 'support')._body).toEqual({ clip: true, clip_kind: 'support' })
+    expect(cmd._body).toEqual({ clip: true })
   })
 })

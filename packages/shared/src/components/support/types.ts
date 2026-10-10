@@ -36,6 +36,8 @@ export interface SupportTicket {
   created_by: string
   requester_name: string | null
   attachments: string[]
+  /** #1377 — the requester's replay at the moment they asked (admins open it). */
+  replay?: { recording_id: string; offset_ms: number | null } | null
   replies: number
   legacy: boolean
   created_at: string

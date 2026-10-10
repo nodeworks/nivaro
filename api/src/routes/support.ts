@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readOne } from '../services/items.js'
@@ -141,12 +142,43 @@ async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>
       email: r.r_email as string | null
     }),
     attachments: parseAttachments(r.attachments),
+    // #1377 — 'Watch what they saw' (only admins can open a replay).
+    replay: r.replay_recording_id
+      ? {
+          recording_id: String(r.replay_recording_id),
+          offset_ms: r.replay_offset_ms == null ? null : Number(r.replay_offset_ms)
+        }
+      : null,
     replies: countOf.get(String(r.id)) ?? 0,
     legacy: r.legacy_id != null,
     created_at: r.created_at,
     updated_at: r.updated_at,
     completed_at: r.completed_at
   }))
+}
+
+/**
+ * #1377 — the requester's replay link ('Watch what they saw'). Caller-supplied,
+ * so only a uuid-shaped id of a recording that exists AND belongs to the
+ * requester is kept — a client must not attach someone else's recording.
+ * The offset is ms into that recording (clamped, null when not given).
+ */
+export async function ownReplayLink(
+  userId: string,
+  raw: unknown
+): Promise<{ recording_id: string; offset_ms: number | null } | null> {
+  const r = raw as { recording_id?: unknown; offset_ms?: unknown } | null | undefined
+  if (typeof r?.recording_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(r.recording_id)) return null
+  const rec = await db('nivaro_session_recordings')
+    .where({ id: r.recording_id, user: userId })
+    .first('id')
+    .catch(() => undefined)
+  if (!rec) return null
+  const n = r.offset_ms == null ? Number.NaN : Number(r.offset_ms)
+  return {
+    recording_id: r.recording_id,
+    offset_ms: Number.isFinite(n) ? Math.min(Math.max(0, Math.floor(n)), 2_000_000_000) : null
+  }
 }
 
 async function loadTicket(id: number): Promise<(TicketRow & Record<string, unknown>) | undefined> {
@@ -440,6 +472,8 @@ export async function supportRoutes(app: FastifyInstance) {
       item?: string | number | null
       priority?: string
       attachments?: string[]
+      /** #1377 — the requester's own recording + where they asked. */
+      replay?: { recording_id?: string; offset_ms?: number | null } | null
     }
   }>('/tickets', async (req, reply) => {
     const b = req.body ?? {}
@@ -491,9 +525,15 @@ export async function supportRoutes(app: FastifyInstance) {
       const ok = new Set(rows.map((r) => String(r.id).toLowerCase()))
       ownFiles = attachments.filter((a) => ok.has(a.toLowerCase()))
     }
+    const replay = await ownReplayLink(req.user!.id, b.replay)
+    const replayCols =
+      replay && (await hasColumn('nivaro_tasks', 'replay_recording_id'))
+        ? { replay_recording_id: replay.recording_id, replay_offset_ms: replay.offset_ms }
+        : {}
     const now = new Date()
     const [row] = (await db('nivaro_tasks')
       .insert({
+        ...replayCols,
         kind: SUPPORT_KIND,
         collection,
         item,

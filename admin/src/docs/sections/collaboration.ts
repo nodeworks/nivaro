@@ -780,14 +780,16 @@ export const collabSupportRequests: DocSection = {
         '**Work it** on the Desk tab (administrators, and members of a team a request type routes to): Pick it up assigns it to you and moves it to In progress; status, type and assignee can be changed; replies go to the requester.',
         '**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.',
         '**Request types** (`nivaro_task_categories`, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.',
-        "**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list."
+        "**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list.",
+        "**What they saw** (ticked by default, the requester can untick it): Get help and Request a change take the moment the dialog opens. With Error clips on, the last minute of the screen becomes an app='support-clip' recording (inputs masked); with full recording on, the live recording is marked at that moment. A text attachment (what-they-saw-….txt) carries the page, the last 30 console warnings/errors and the last 20 requests (method, route pattern, status, ms; no bodies or query strings, secrets redacted). Nothing uploads unless the request is sent. On the desk, the ticket shows Watch what they saw, opening /session-replays?recording=<id>&t=<ms> at the moment of asking (administrators only)."
       ]
     },
     {
       type: 'pre',
       code: `POST /api/support/tickets
 { "title": "Change the ship-to address", "description": "…", "category_id": 3,
-  "collection": "orders", "item": "42", "attachments": ["<file id>"] }
+  "collection": "orders", "item": "42", "attachments": ["<file id>"],
+  "replay": { "recording_id": "<their own recording>", "offset_ms": 41000 } }
 
 GET   /api/support/tickets?scope=mine|desk&status=open|closed&assignee=me|unassigned&q=
 GET   /api/support/tickets/:id           // thread + history

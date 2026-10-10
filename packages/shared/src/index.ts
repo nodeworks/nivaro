@@ -483,10 +483,14 @@ export {
 } from './lib/realtime'
 export {
   captureReplayClip,
+  clipEndOffset,
+  type PreparedReplayClip,
+  prepareReplayClip,
   type ReplayClipKind,
   type ReplayLink,
   registerReplayCapture,
-  replayHref
+  replayHref,
+  withClipKind
 } from './lib/replay-capture'
 export {
   consoleLine,
@@ -496,6 +500,14 @@ export {
   redactSecrets,
   requestRoute
 } from './lib/replay-context'
+export {
+  formatReplayTail,
+  getReplayTail,
+  installReplayTail,
+  type ReplayTail,
+  type TailConsoleLine,
+  type TailRequest
+} from './lib/replay-tail'
 export {
   BATCH_READ_LIMIT,
   type BatchableRead,
