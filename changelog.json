@@ -1,10 +1,125 @@
 {
-  "generated_at": "2026-10-09T21:56:55.097Z",
+  "generated_at": "2026-10-10T17:53:38.216Z",
   "releases": [
+    {
+      "version": "0.2.34",
+      "tag": "v0.2.34",
+      "date": "2026-10-10T13:53:22-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: rename draftSuggestions.ts so it cannot shadow DraftSuggestions.tsx",
+              "hash": "ca8d99c1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: migration 414 fails on SQL Server (two cascade paths)",
+              "hash": "b68861eb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: fix the masquerade route test (stray closing line)",
+              "hash": "211959fa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: masquerade sessions stay out of admin-only routes",
+              "hash": "569350ab"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: record while viewing as someone, keep controls out of the video",
+              "hash": "25efab2d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: review fixes on the media side",
+              "hash": "25b03e63"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: review fixes on the client side",
+              "hash": "a0e2f0e5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: review fixes on the server side",
+              "hash": "6f622946"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: server-side thumbnails and waveform, clips and GIFs (#1560, #1562)",
+              "hash": "3b43648e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: hold a frame and multi-select on the timeline (#1537, #1543)",
+              "hash": "2a9df059"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: script mode and a fixed-size recording window (#1491, #1516)",
+              "hash": "f8c95abe"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: learning paths, and videos in broadcasts, release notes and docs (#1508, #1528)",
+              "hash": "f5601b3e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: AI first draft of the edit and automatic captions (#1487, #1520)",
+              "hash": "ce2fd0af"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: mini player, helpful votes and questions, Up next (#1500, #1505, #1530)",
+              "hash": "4007041f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: moving zooms, recorded cursor and shortcuts, zooms that follow the pointer (#1539, #1517, #1540)",
+              "hash": "801b9455"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: out-of-date flags and storage housekeeping (#1495, #1531)",
+              "hash": "b33c79b8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "88162683"
+            }
+          ]
+        }
+      ],
+      "count": 17
+    },
     {
       "version": "0.2.33",
       "tag": "v0.2.33",
-      "date": "2026-10-09T17:56:43-04:00",
+      "date": "2026-10-09T17:56:55-04:00",
       "sections": [
         {
           "label": "Other",
