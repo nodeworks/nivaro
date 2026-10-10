@@ -4,6 +4,7 @@ import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { captionLookOf, EDIT_LIMITS, removeItem, setCaptionLook } from '../edits'
 import type { CaptionStyle, VideoEdits } from '../types'
+import { GenerateCaptions } from './GenerateCaptions'
 import { typeAlongCaptionChecked } from './tools'
 
 const stamp = (ms: number) => {
@@ -99,6 +100,7 @@ function CaptionLook({
  */
 export const CaptionsPanel = memo(function CaptionsPanel({
   headless,
+  videoId,
   edits,
   sourceMs,
   selectedId,
@@ -110,6 +112,8 @@ export const CaptionsPanel = memo(function CaptionsPanel({
 }: {
   /** The side panel shows the title itself (the heading stays for screen readers). */
   headless?: boolean
+  /** With a video id the panel offers automatic captions (#1520). */
+  videoId?: string
   edits: VideoEdits
   sourceMs: number
   selectedId: string | null
@@ -220,6 +224,16 @@ export const CaptionsPanel = memo(function CaptionsPanel({
             )
           })}
         </ul>
+      )}
+      {videoId && (
+        <GenerateCaptions
+          videoId={videoId}
+          edits={edits}
+          sourceMs={sourceMs}
+          onChange={onChange}
+          onNote={onRefused}
+          onSeek={onSeek}
+        />
       )}
       <CaptionLook edits={edits} onChange={onChange} />
     </section>

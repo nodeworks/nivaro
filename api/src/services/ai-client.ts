@@ -148,7 +148,8 @@ export async function describeAiProvider(): Promise<AiProviderInfo> {
       extract: models.extractModel,
       generate: models.generateModel,
       summarize: models.summarizeModel,
-      embed: models.embedModel ?? ''
+      embed: models.embedModel ?? '',
+      transcribe: models.transcribeModel ?? ''
     },
     embedding: embeddingProviderFor(s)
   }
@@ -167,14 +168,22 @@ export function embeddingProviderFor(s: AiSettingsRow): {
 
 // ─── per-feature models (#754) ───────────────────────────────────────────────
 
-export type AiFeatureModelKey = 'default' | 'chat' | 'extract' | 'generate' | 'summarize' | 'embed'
+export type AiFeatureModelKey =
+  | 'default'
+  | 'chat'
+  | 'extract'
+  | 'generate'
+  | 'summarize'
+  | 'embed'
+  | 'transcribe'
 export const AI_FEATURE_MODEL_KEYS: AiFeatureModelKey[] = [
   'default',
   'chat',
   'extract',
   'generate',
   'summarize',
-  'embed'
+  'embed',
+  'transcribe'
 ]
 
 /** The configured map, legacy columns folded in as the fallback for a
@@ -812,6 +821,10 @@ export async function getAiModelSettings() {
     summarizeModel: (gateway && models.summarize) || model,
     /** Gateway embedding model for semantic search (#681); null = not set. */
     embedModel: (gateway && models.embed) || null,
+    /** Gateway speech-to-text model for help-video captions (#1520), reached
+     *  through the gateway's OpenAI-compatible /audio/transcriptions; null =
+     *  not set (a local Whisper command may still transcribe). */
+    transcribeModel: (gateway && models.transcribe) || null,
     answerCacheMinutes:
       row.ai_answer_cache_minutes == null
         ? 15

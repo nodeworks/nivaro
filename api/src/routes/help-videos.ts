@@ -8,6 +8,13 @@ import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getFile } from '../services/files.js'
 import {
+  CaptionsError,
+  captionProvider,
+  clearCaptionJob,
+  readCaptionJob,
+  startCaptionJob
+} from '../services/help-video-captions.js'
+import {
   captionsVtt,
   contentDisposition,
   downloadsAllowed,
@@ -20,6 +27,7 @@ import {
   videoExtension,
   vttToSrt
 } from '../services/help-video-download.js'
+import { DraftError, suggestDraftForVideo } from '../services/help-video-draft.js'
 import {
   captionsToVtt,
   EditsError,
@@ -502,6 +510,93 @@ export async function helpVideosRoutes(app: FastifyInstance) {
         return reply.code(422).send({ error: err.message, code: err.code })
       throw err
     }
+  })
+
+  // ── AI first draft (#1487) ────────────────────────────────────────────────
+  // Suggestions only: chapters, callouts at the clicks, a title, a
+  // description and the screens it explains. Nothing is written here; the
+  // editor accepts each one through the draft save and the detail routes.
+  app.post('/:id/draft/suggest', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const draft = await loadVersion(video.draft_version_id)
+    if (!draft) {
+      return reply.code(409).send({
+        error: 'This video has no draft yet. Open it in the editor first.',
+        code: 'HELP_VIDEO_NO_DRAFT'
+      })
+    }
+    try {
+      return reply.send({ data: await suggestDraftForVideo(video, draft, req.user!) })
+    } catch (err) {
+      if (err instanceof DraftError)
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      throw err
+    }
+  })
+
+  // ── Automatic captions (#1520) ───────────────────────────────────────────
+  // A background transcription of the draft's sound; the result is a pending
+  // set the editor shows until the author uses or discards it (24 h).
+  const captionsReply = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof CaptionsError)
+      return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+    throw err
+  }
+  app.get('/:id/captions/generate', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const job = video.draft_version_id ? await readCaptionJob(video.draft_version_id) : null
+    const p = await captionProvider()
+    return reply.send({
+      data: {
+        job: job && job.video_id === String(video.id).toLowerCase() ? job : null,
+        provider: {
+          kind: p.kind,
+          model: p.kind === 'none' ? null : p.model,
+          reason: p.kind === 'none' ? p.reason : null
+        }
+      }
+    })
+  })
+  app.post('/:id/captions/generate', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const draft = await loadVersion(video.draft_version_id)
+    if (!draft) {
+      return reply.code(409).send({
+        error: 'This video has no draft yet. Open it in the editor first.',
+        code: 'HELP_VIDEO_NO_DRAFT'
+      })
+    }
+    try {
+      const job = await startCaptionJob({ id: String(video.id) }, String(draft.id), req.user!)
+      await logActivity({
+        action: 'help-video-captions',
+        user: req.user!.id,
+        collection: 'nivaro_help_videos',
+        item: String(video.id).toLowerCase(),
+        comment: `generate (${job.provider ?? 'unknown'})`
+      })
+      return reply.code(202).send({ data: job })
+    } catch (err) {
+      return captionsReply(reply, err)
+    }
+  })
+  app.delete('/:id/captions/generate', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    if (video.draft_version_id) {
+      const job = await readCaptionJob(video.draft_version_id)
+      if (job && (job.status === 'queued' || job.status === 'running')) {
+        return reply.code(409).send({
+          error: 'Captions are still being generated',
+          code: 'HELP_VIDEO_CAPTIONS_BUSY'
+        })
+      }
+      await clearCaptionJob(video.draft_version_id)
+    }
+    return reply.code(204).send()
   })
 
   // ── Versions ──────────────────────────────────────────────────────────────

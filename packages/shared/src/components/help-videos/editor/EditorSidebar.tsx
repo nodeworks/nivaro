@@ -224,6 +224,7 @@ export const EditorSidebar = memo(function EditorSidebar({
       >
         <CaptionsPanel
           headless
+          videoId={videoId}
           edits={edits}
           sourceMs={sourceMs}
           selectedId={selection?.lane === 'captions' ? selection.id : null}

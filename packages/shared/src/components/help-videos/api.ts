@@ -5,6 +5,9 @@ import { del, get, patch, post, put } from '../../lib/commands'
 import { type CardBrand, cardAccent } from './cards'
 import type {
   ActivitySpan,
+  CaptionJob,
+  CaptionJobStatus,
+  DraftSuggestions,
   HelpVideoAnalytics,
   HelpVideoContext,
   HelpVideoDto,
@@ -418,6 +421,23 @@ export function helpVideoApi(client: NivaroClient) {
      *  there is nothing to dismiss. Authors only. */
     dismissStale: (id: string) =>
       r(post<{ data: HelpVideoDto }>(`/help-videos/${id}/stale/dismiss`)).then((x) => x.data),
+    /** AI first draft of the edit (#1487): suggestions only, nothing applied.
+     *  409 HELP_VIDEO_NO_DRAFT, 503 HELP_VIDEO_AI_NOT_CONFIGURED, 502
+     *  HELP_VIDEO_DRAFT_UNREADABLE when the model's answer was not JSON. */
+    suggestDraft: (id: string) =>
+      r(post<{ data: DraftSuggestions }>(`/help-videos/${id}/draft/suggest`)).then((x) => x.data),
+    /** The draft's automatic-captions job (#1520) and which transcriber would run. */
+    captionJob: (id: string) =>
+      r(get<{ data: CaptionJobStatus }>(`/help-videos/${id}/captions/generate`)).then(
+        (x) => x.data
+      ),
+    /** Starts transcribing the draft's sound in the background (202). 409
+     *  HELP_VIDEO_NO_DRAFT / HELP_VIDEO_CAPTIONS_BUSY, 503
+     *  HELP_VIDEO_CAPTIONS_NOT_CONFIGURED with what an administrator must set up. */
+    generateCaptions: (id: string) =>
+      r(post<{ data: CaptionJob }>(`/help-videos/${id}/captions/generate`)).then((x) => x.data),
+    /** Forgets a finished or failed caption set (409 while one runs). */
+    discardCaptionJob: (id: string) => r(del(`/help-videos/${id}/captions/generate`)),
     authorRoles: () =>
       r(get<{ data: { help_video_author_roles?: unknown } }>('/settings')).then((x) =>
         parseRoleIdList(x.data?.help_video_author_roles)

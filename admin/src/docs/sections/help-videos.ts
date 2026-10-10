@@ -45,13 +45,23 @@ export const helpVideosGuide: DocSection = {
         'Zoom: draw the area to zoom into; the video eases in and out. A zoom can move: with it selected, put the playhead somewhere inside the zoom and drag or resize its area — that adds a stop there (a diamond on its bar), and the picture pans and resizes in a straight line from one stop to the next, holding the first before it and the last after it. The side panel lists the stops (press one to go there, the bin removes it); down to one stop the zoom stands still again. Follow the pointer makes the stops for you from the recorded pointer path over the zoom’s span — about one every half second, smoothed, fewer where the pointer stayed still, kept inside the frame — and you can then move or remove them like any other; it is greyed out, with the reason, for an uploaded video or a recording without a pointer path.',
         'Crop: the Crop tool shows the whole recorded frame; drag over the part viewers should see (to leave out a sidebar or empty margins) for the whole video. Show the whole frame removes it. Blurs, drawings and zoom areas stay where you put them on the recording; zooms move within the cropped picture (a zoom area larger than the crop shows the whole crop). The intro card, end card and banners are full frames of the cropped size. A cropped video is always watched as its render.',
         'Blur: hide part of the screen (or the whole frame) for a stretch of time.',
-        'Captions: type them along the timeline; viewers turn them on with CC.',
+        'Captions: type them along the timeline; viewers turn them on with CC. Generate captions (in the Captions panel) has the server transcribe the narration in the background — see Automatic captions below.',
+        'Draft the edit (the toolbar button beside Suggested edits) asks the AI provider for a first draft from what the recorder saw: the labelled clicks, where you speak and where you go quiet, the captions typed so far and the current title. It proposes chapters, callouts at the clicks ("Click Approve", placed beside the click), a title, a description and the screens the video explains — only collections, pipeline steps and pages that exist. Each row is accepted or dismissed one at a time (or Accept them all): a chapter or callout goes into the edits and saves like any other change, a title, description or screen saves at once. Nothing changes until you accept it, and rows already in place read as done. Needs an AI provider (Settings → AI Features); the button says so when there is none. The clicks are sent as data (the first 80, with their labels), the microphone levels as speaking and quiet stretches, never the recording itself; each run is one AI call, logged as help-video-draft.',
         'Intro, outro and banners: a title card before the recording (title, first line of the description and, if you like, the chapter list), an end card after it with a closing line you write, and chapter banners — each chapter’s title as a lower-third for a few seconds as it starts. Cards are 2 to 6 seconds each and add their own time; they never cover any of the recording. All three use the instance brand (name and colour from Settings, and the cards’ own logo, else the instance logo) and are off until you switch them on. Name on the cards replaces the instance name for this video only (leave it blank to keep the instance name); the logo and colour stay. The title card shows the brand at the top, the video’s length, the title and subtitle on the left and the chapters in a column on the right; the end card shows a check, what the viewer just finished and your closing line; a banner shows the chapter’s number on a tile in the brand colour with “Chapter 2 of 5” above its title. A brand colour too dark to read on the dark card is lightened automatically. Each card has an Animation (None, Subtle, Lively) for how the logo, title and lines arrive, and a Transition (Cut, Fade, Through black, Slide, Zoom, Wipe) for how the title card hands over to the recording and how the end card takes over from it; a new card starts Subtle with a Fade, and a card made before these settings keeps its still look. Transitions play inside the card’s own seconds, over the recording’s first or last frame. Chapter banners have their own Animation. Play it plays a card from its start in the preview. A card drawn with motion becomes the poster once it has finished arriving, and Show it under the poster jumps to that moment. When the cards have no logo the panel says so, and an administrator can upload one there. That logo is for the help-video cards only and is stored with the settings themselves (a PNG, JPEG, GIF, WebP or SVG of 2 MB or less), so it follows the settings to other environments; the instance logo in Settings → Project (sign-in page, sidebar) is not changed, and the cards fall back to it when they have none of their own.',
         'Background music: switch it on under Background music and pick a track from the library (Calm, Bright and Focus are generated by Nivaro, so there is nothing to license; an administrator can add more) upload a file of your own (MP3, M4A, WAV, OGG or FLAC, up to 40 MB and 20 minutes; it is converted to AAC and belongs to this video), or choose Find free music to search Openverse for public-domain (CC0) sounds and music: Listen plays the opening, + adds the track to this video. Only CC0 and public-domain tracks are offered, so no credit is needed; each imported file keeps its creator, license and a link to where it came from. The music loops for the whole video, cards included, fades in at the start and out at the end, and gets quieter while someone speaks (switch that off with Quieter while someone speaks). Volume sets its level; to change it under one part, select that piece on the timeline and choose Off, Low, Half or Full. The preview mixes the music live and lowers it on the recorded microphone levels (an uploaded video has none, so the preview plays it at one level); the published video lowers it under the actual speech. A video with music is always watched as its render, so viewers wait for the render to finish.',
         'Narration: switch on Improve audio to even out how loud the narration is (to about -16 LUFS) and lower background noise in the published video. The preview in the editor plays the narration as recorded; only the render carries the cleanup, so viewers wait for the render. Off by default.',
         'Cursor and shortcuts: when you record your own tab with "Capture my clicks" on, the recorder also keeps where your pointer went (about twenty times a second, only while it moves, thinned on long recordings) and which keyboard shortcuts you pressed — modifier combos such as ⌘S or Ctrl+K, Enter, Escape, Tab and the arrows; never letters typed into a field, and nothing inside an area marked .nvr-no-record. Show cursor draws a soft, highlighted pointer along that path in place of the small captured one, smoothed and placed through the crop and any zoom; Show shortcuts adds a small badge (⌘S, Ctrl+K, ↵ Enter) bottom left as each shortcut is pressed. Both are off until you switch them on; a recording made before this, or of another window or screen, has no path and cannot switch them on, and an uploaded video does not offer them. The editor preview draws them live; viewers watch the rendered video, which has them burned in.',
         'Undo and redo cover every change (Ctrl/Cmd+Z, Shift for redo). Edits save as you go; nothing reaches viewers until you publish.'
       ]
+    },
+    { type: 'h3', text: 'Automatic captions' },
+    {
+      type: 'p',
+      text: 'Generate captions, in the editor’s Captions panel, starts a background job on the server: the sound of the draft’s recording is extracted with ffmpeg (mono, 16 kHz, never past the 30-minute limit) and transcribed, then the words are grouped into caption lines of at most 42 characters and 5 seconds, split at pauses and sentence ends, in the recording’s own time. The panel shows the job’s progress (waiting, reading the sound, transcribing) and, when it is done, the lines as a pending set to review: jump to a line to hear it, then Use these captions (replaces the video’s captions) or Merge with mine (keeps yours and adds only lines that do not overlap them), or Discard. Using them is an ordinary edit — it saves with the draft and can be undone. A pending set is kept for 24 hours; one job runs at a time on a server (a second request waits), and each run is a Background Jobs run of kind ai.'
+    },
+    {
+      type: 'p',
+      text: 'Which transcriber runs: the AI gateway’s speech-to-text model when Settings → AI Features → Model per feature → Help-video captions names one (sent to the gateway’s OpenAI-compatible /audio/transcriptions with word timestamps; logged in the AI log as feature help-video-captions with the tokens or seconds the gateway reports), else a local Whisper model on the server: HELP_VIDEO_WHISPER_CMD is the command to run (default `whisper-cli -m {model} -f {input} -ojf -of {output} -l en -t 2 -np`, a whisper.cpp invocation that writes {output}.json with token timings; {input} is the WAV, {model} is HELP_VIDEO_WHISPER_MODEL, default /opt/whisper/ggml-base.en.bin). The command runs at the lowest CPU priority inside the heavy job slot, never through a shell, and is logged as provider local-whisper with its duration. The API image can carry whisper.cpp and the base English model: build it with --build-arg WHISPER=on (WHISPER_MODEL picks another ggml model); the default build leaves it out. With neither a gateway model nor a working local command, the button explains what an administrator must set up.'
     },
     { type: 'h3', text: 'Show me on this page' },
     {
@@ -223,6 +233,16 @@ export const helpVideosApi: DocSection = {
           'Publish the draft; watch_again resets required viewing; note (≤ 500 characters) is what changed, shown to people who watched an earlier version and sent with watch_again'
         ],
         ['POST /help-videos/:id/render', 'authors', 'Queue a render again'],
+        [
+          'POST /help-videos/:id/draft/suggest',
+          'authors',
+          'AI first draft of the edit (#1487) for the draft version: `{suggestions, model}`, each suggestion with a stable id and a kind — title, description, chapter ({chapter}), callout ({annotation, click_index}) or context ({context, label}). Suggestions only: the editor applies accepted ones through PUT …/draft/edits, PATCH /help-videos/:id and PUT …/contexts. 409 HELP_VIDEO_NO_DRAFT, 503 HELP_VIDEO_AI_NOT_CONFIGURED, 502 HELP_VIDEO_DRAFT_UNREADABLE. Logged in the AI log as help-video-draft'
+        ],
+        [
+          'GET · POST · DELETE /help-videos/:id/captions/generate',
+          'authors',
+          'Automatic captions (#1520) for the draft version. POST queues the transcription (202; 409 HELP_VIDEO_NO_DRAFT / HELP_VIDEO_CAPTIONS_BUSY, 503 HELP_VIDEO_CAPTIONS_NOT_CONFIGURED with what to set up); GET answers `{job, provider}` — the job’s status (queued, running with its phase, done with `captions` in source time, failed with `error`) and which transcriber would run (gateway, local or none with the reason); DELETE forgets a finished set (409 while one runs). A set lives 24 hours'
+        ],
         [
           'GET /help-videos/music',
           'authors',
@@ -514,7 +534,28 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
           '`HELP_VIDEO_PACKAGE_INVALID`',
           'A package that is not a help-video package, is damaged or holds no usable video.'
         ],
-        ['404', '`HELP_VIDEO_NOT_FOUND`', 'Unknown id, or a video the caller may not see.']
+        ['404', '`HELP_VIDEO_NOT_FOUND`', 'Unknown id, or a video the caller may not see.'],
+        [
+          '409',
+          '`HELP_VIDEO_NO_DRAFT`',
+          'A draft suggestion or caption job for a video that has no draft yet (open it in the editor first).'
+        ],
+        [
+          '503',
+          '`HELP_VIDEO_AI_NOT_CONFIGURED`',
+          'Draft the edit without an AI provider (Settings → AI Features).'
+        ],
+        ['502', '`HELP_VIDEO_DRAFT_UNREADABLE`', 'The model’s answer was not the JSON asked for.'],
+        [
+          '503',
+          '`HELP_VIDEO_CAPTIONS_NOT_CONFIGURED`',
+          'Generate captions with neither a gateway speech-to-text model nor a working local Whisper command; the message says what to set up.'
+        ],
+        [
+          '409',
+          '`HELP_VIDEO_CAPTIONS_BUSY`',
+          'Generate captions (or discarding the set) while a job for the draft is queued or running.'
+        ]
       ]
     },
     {
@@ -544,6 +585,8 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
           'Author'
         ],
         ['rerenderHelpVideo(id, opts?)', 'POST /help-videos/:id/render', 'Author'],
+        ['— (editor only)', 'POST /help-videos/:id/draft/suggest', 'Author'],
+        ['— (editor only)', 'GET · POST · DELETE /help-videos/:id/captions/generate', 'Author'],
         ['recordHelpVideoProgress(id, body)', 'POST /help-videos/:id/progress', 'Authenticated'],
         ['readRequiredHelpVideos()', 'GET /help-videos/required/mine', 'Authenticated'],
         ['readHelpVideoAnalytics(id)', 'GET /help-videos/:id/analytics', 'Author'],
