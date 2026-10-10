@@ -232,6 +232,20 @@ export const sessionReplayDocs: DocSection = {
         'Switching the storage driver does not move recordings already in storage: they are read from the active driver, then from local disk. Moving from one cloud driver to another leaves older recordings unreadable until they are purged.'
       ]
     },
+    { type: 'h2', id: 'session-replay-health', text: 'Health check' },
+    {
+      type: 'p',
+      text: 'While recording or error clips are on, the readiness scorecard runs a Session recording is healthy check. It warns, with the figure and the likely cause, when:'
+    },
+    {
+      type: 'ul',
+      items: [
+        'more than 5% of chunk uploads failed since yesterday (at least 20 uploads) — refusals the server saw (too large, recording closed or at its size cap) plus failed attempts the recorders report on their next successful upload. A browser that never gets through again cannot report, so the real figure can be higher;',
+        'no recording started in the last 24 hours while people were signed in (the recorder is blocked, starts are failing, or sampling records nobody);',
+        'the daily recording cap was reached, naming the page that stored the most that day;',
+        'the oldest recording is more than a day past the retention period (the daily purge is not running).'
+      ]
+    },
     { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },
     {
       type: 'p',

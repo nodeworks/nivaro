@@ -1856,6 +1856,12 @@ export async function buildServer() {
         const { registerTuningReadiness } = await import('./services/db-tuning/readiness.js')
         registerTuningReadiness()
       }
+      // #1412 — session recording health (upload failures, nothing landing,
+      // the daily cap, retention behind).
+      {
+        const { registerReplayReadiness } = await import('./services/session-replay-health.js')
+        registerReplayReadiness()
+      }
 
       // Integration obligation notifications: tell the record's owners and
       // the API's owner when a row the sweep below writes (or a writer
