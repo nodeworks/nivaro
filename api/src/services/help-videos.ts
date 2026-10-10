@@ -1491,6 +1491,10 @@ export async function purgeVideo(video: VideoRow, user: User): Promise<void> {
   for (const f of await takeVideoMusicFiles(String(video.id))) fileIds.add(f)
   // Clips made of this video (#1562), the same way.
   for (const f of await takeVideoClipFiles(String(video.id))) fileIds.add(f)
+  // "Watched next" rows that point AT this video: that key is NO ACTION
+  // (SQL Server allows one cascade path per table), so they go by hand. The
+  // rows FROM this video cascade with it.
+  await db('nivaro_help_video_next').where({ next_video_id: video.id }).delete()
   await db('nivaro_help_videos').where({ id: video.id }).delete()
   // The upload rows that produced these recordings still reference the files
   // (nivaro_help_video_uploads.file_id, status 'used'); drop them first or the

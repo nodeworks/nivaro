@@ -48,11 +48,14 @@ export async function up(knex: Knex): Promise<void> {
         .references('id')
         .inTable('nivaro_help_videos')
         .onDelete('CASCADE')
+      // NO ACTION: a second cascading key to nivaro_help_videos is refused
+      // by SQL Server (error 1785, multiple cascade paths). purgeVideo
+      // removes the rows that point at a deleted video first.
       t.uuid('next_video_id')
         .notNullable()
         .references('id')
         .inTable('nivaro_help_videos')
-        .onDelete('CASCADE')
+        .onDelete('NO ACTION')
       // Null = people in any role.
       t.uuid('role_id').nullable()
       t.float('score').notNullable().defaultTo(0)
