@@ -5,6 +5,7 @@ import {
   sessionRecordingEnabled,
   startSessionRecording
 } from '@nivaro/sdk'
+import { instrumentConsole, instrumentRequests, redactSecrets } from '@nivaro/shared'
 import { useEffect, useRef } from 'react'
 import { useOptionalNivaroClient } from '../context'
 
@@ -161,50 +162,26 @@ async function loadRrweb(): Promise<typeof import('rrweb')['record'] | null> {
 }
 
 // ── Replay context instrumentation (mirrors the admin recorder) ─────────────
-// Console lines + route changes ride the recording as rrweb CUSTOM events
-// (type 5) so the replay player can mark them on the scrubber and show the
-// user's console beside the replay. Capped so an error flood can't bloat the
-// recording; console.log deliberately excluded. Returns an undo function.
+// Console lines, the page's requests (#1357) and route changes ride the
+// recording as rrweb CUSTOM events (type 5) so the replay player can mark
+// them on the scrubber and list console + network beside the replay. The
+// console and request patches come from @nivaro/shared (one implementation
+// with the admin recorder): warn/error only, 200 characters, token-shaped
+// text redacted; requests as method, route pattern, status and duration,
+// never bodies. Returns an undo function.
 function instrumentReplayContext(
   addCustomEvent: (tag: string, payload: unknown) => void,
   onRoute?: () => void
 ): () => void {
-  let captured = 0
-  const MAX_EVENTS = 500
-  const originals: Partial<Record<'info' | 'warn' | 'error', (...a: unknown[]) => void>> = {}
-  let inHook = false
-  for (const level of ['info', 'warn', 'error'] as const) {
-    originals[level] = console[level].bind(console)
-    console[level] = (...args: unknown[]) => {
-      originals[level]?.(...args)
-      if (inHook || captured >= MAX_EVENTS) return
-      inHook = true
-      try {
-        captured++
-        const msg = args
-          .map((a) => {
-            if (typeof a === 'string') return a
-            if (a instanceof Error) return `${a.name}: ${a.message}`
-            try {
-              return JSON.stringify(a)
-            } catch {
-              return String(a)
-            }
-          })
-          .join(' ')
-          .slice(0, 500)
-        addCustomEvent('console', { level, msg })
-      } catch {
-        /* never break the console */
-      } finally {
-        inHook = false
-      }
-    }
-  }
+  const undoConsole = instrumentConsole(addCustomEvent)
+  const undoRequests = instrumentRequests(addCustomEvent)
   const routeEvent = () => {
     onRoute?.()
     try {
-      addCustomEvent('route', { path: window.location.pathname + window.location.search })
+      // A query string can carry a reset or invite token — redact like the console.
+      addCustomEvent('route', {
+        path: redactSecrets(window.location.pathname + window.location.search)
+      })
     } catch {
       /* best-effort */
     }
@@ -222,9 +199,8 @@ function instrumentReplayContext(
   window.addEventListener('popstate', routeEvent)
   routeEvent() // the starting page is a marker too
   return () => {
-    for (const level of ['info', 'warn', 'error'] as const) {
-      if (originals[level]) console[level] = originals[level] as never
-    }
+    undoConsole()
+    undoRequests()
     history.pushState = origPush
     history.replaceState = origReplace
     window.removeEventListener('popstate', routeEvent)

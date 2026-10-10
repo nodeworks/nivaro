@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import {
+  activeIndex,
   fmtClock,
   groupTip,
   markerTone,
+  parseReplayContext,
   RAIL_COLORS,
   type RailItem,
   railMarkers,
+  statusClass,
   thinMarkers
 } from './logic'
 
@@ -109,5 +112,63 @@ describe('groupTip', () => {
     )
     const [one] = thinMarkers(m.slice(0, 1), total, 100)
     expect(groupTip(one)).toBe('0:01 · GET /a → 200')
+  })
+})
+
+describe('parseReplayContext (#1357)', () => {
+  it('reads route, console (old info lines too) and request custom events, sorted', () => {
+    const ev = (ts: number, tag: string, payload: Record<string, unknown>) => ({
+      type: 5,
+      timestamp: FIRST + ts,
+      data: { tag, payload }
+    })
+    const ctx = parseReplayContext(
+      [
+        { type: 4, timestamp: FIRST, data: {} },
+        ev(3_000, 'request', {
+          method: 'GET',
+          route: '/api/items/x/:id',
+          status: 404,
+          duration_ms: 31
+        }),
+        ev(1_000, 'console', { level: 'info', msg: 'old recording' }),
+        ev(2_000, 'console', { level: 'error', msg: 'boom' }),
+        ev(500, 'route', { path: '/environments' }),
+        ev(4_000, 'request', { method: 'POST', route: '/api/flows', status: 0 }),
+        ev(5_000, 'something-else', {}),
+        null
+      ],
+      FIRST
+    )
+    expect(ctx.routes).toEqual([{ offset: 500, text: '/environments' }])
+    expect(ctx.console.map((c) => [c.offset, c.level, c.text])).toEqual([
+      [1_000, 'info', 'old recording'],
+      [2_000, 'error', 'boom']
+    ])
+    expect(ctx.network).toEqual([
+      { offset: 3_000, method: 'GET', route: '/api/items/x/:id', status: 404, duration_ms: 31 },
+      { offset: 4_000, method: 'POST', route: '/api/flows', status: 0, duration_ms: null }
+    ])
+  })
+})
+
+describe('activeIndex', () => {
+  const rows = [{ offset: 100 }, { offset: 200 }, { offset: 200 }, { offset: 900 }]
+  it('is the last entry at or before the playhead', () => {
+    expect(activeIndex(rows, 0)).toBe(-1)
+    expect(activeIndex(rows, 100)).toBe(0)
+    expect(activeIndex(rows, 250)).toBe(2)
+    expect(activeIndex(rows, 10_000)).toBe(3)
+    expect(activeIndex([], 50)).toBe(-1)
+  })
+})
+
+describe('statusClass', () => {
+  it('colours by status band; no answer reads as a failure', () => {
+    expect(statusClass(200)).toContain('emerald')
+    expect(statusClass(304)).toContain('slate')
+    expect(statusClass(422)).toContain('amber')
+    expect(statusClass(500)).toContain('red')
+    expect(statusClass(0)).toContain('red')
   })
 })

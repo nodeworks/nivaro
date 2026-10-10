@@ -204,23 +204,33 @@ function App() {
       items: [
         'The hook no-ops unless the instance toggle is on AND rrweb is installed — safe to ship always-on.',
         'Recordings attribute to the authenticated SDK identity (usually your service token user); the app label tells frontends apart in the replay list.',
-        'Raw SDK commands exist too: sessionRecordingEnabled, startSessionRecording(app), appendSessionRecordingEvents, endSessionRecording.'
+        'Raw SDK commands exist too: sessionRecordingEnabled, startSessionRecording(app), appendSessionRecordingEvents, endSessionRecording.',
+        'The hook keeps the same console and network log as the admin recorder (below), from your app’s own fetch and XMLHttpRequest calls.'
       ]
     },
     {
       type: 'note',
       text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'
     },
-    { type: 'h2', id: 'session-replay-markers', text: 'Timeline markers and the console panel' },
+    { type: 'h2', id: 'session-replay-markers', text: 'Timeline markers, console and network' },
     {
       type: 'p',
-      text: 'Recordings now capture context alongside the pixels: every route change and every console info/warning/error the page emitted (plain console.log is deliberately skipped as noise; lines are truncated to 500 characters, capped at 500 markers per recording).'
+      text: 'Recordings capture context alongside the pixels: every route change, every console warning and error the page emitted, and a light log of the page’s requests. console.log and console.info are skipped as noise (recordings made before this also kept info lines, and still show them).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Console lines are cut to 200 characters, at most 500 per page load. Anything that looks like a credential is replaced with [redacted] before it is kept: JWTs, Bearer and Basic credentials, long hex or base64 strings, and the value of anything named token, secret, password, API key, authorization or cookie.',
+        'Requests keep the method, the route with ids replaced by :id, the status and how long it took, at most 1,000 per page load. No query strings, bodies or headers; a call to another site keeps its host. A request that never got an answer shows as failed. The recorder’s own uploads are left out.',
+        'The page’s address in a route marker gets the same redaction, so a reset or invite link’s token is not kept.'
+      ]
     },
     {
       type: 'ul',
       items: [
         'The player’s scrubber shows the markers as colored ticks — blue for route changes, red for console errors, amber for warnings. Clicking a tick seeks the replay to just before that moment. Info-level console lines are kept out of the scrubber to avoid clutter.',
-        'When a recording has console output, a Console panel appears under the player: a scrollable list of every captured line with All / Info / Warn / Error filter buttons and per-level counts. Clicking a line seeks the replay to it.',
+        'Beside the player, a Console / Network panel lists the console lines and requests. The line at the playhead is highlighted, later lines are dimmed, and the list scrolls itself to follow the replay unless your pointer is over it or you have just scrolled it. Clicking a line seeks the replay to it. Console has a filter per level with counts.',
+        'On a narrow window, and in the Traffic Map’s Recording level, the panel sits under the player instead.',
         'This makes "what was the user doing when that error fired" a one-click question — find the red tick, click it, watch.'
       ]
     },

@@ -2,23 +2,52 @@
  * Session replay player on rrweb's own Replayer engine — the /session-replays page and the
  * Traffic Map's recording panel both use it. (rrweb-player 2.x ships a broken build — its bundle
  * never constructs a Replayer — so the controls live here: play/pause, scrubber, speed,
- * auto-scaled viewport, live follow, route + console markers above the scrubber and the
- * server-side event rail (#1356) under it.)
+ * auto-scaled viewport, live follow, route + console markers above the scrubber, the
+ * server-side event rail (#1356) under it and the Console / Network panel (#1357) beside it.)
  */
 import { TipLayer } from '@nivaro/shared'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { EventRail } from './EventRail'
-import { fmtClock, type RailItem, type RailKind, railMarkers } from './logic'
+import {
+  activeIndex,
+  fmtClock,
+  parseReplayContext,
+  type RailItem,
+  type RailKind,
+  type ReplayContext,
+  railMarkers
+} from './logic'
+import { ReplaySidePanel } from './SidePanel'
 
 const SPEEDS = [1, 2, 4, 8]
+
+/** The Console / Network column right of the frame (w-80 + the gap). */
+const SIDE_PANEL_PX = 320 + 12
+/** Below this viewport width a 'side' panel stacks under the controls instead. */
+const SIDE_MIN_VIEWPORT = 1100
+
+const NO_CONTEXT: ReplayContext = { routes: [], console: [], network: [] }
+
+function useWideViewport(): boolean {
+  const [wide, setWide] = useState(() =>
+    typeof window === 'undefined' ? true : window.innerWidth >= SIDE_MIN_VIEWPORT
+  )
+  useEffect(() => {
+    const on = () => setWide(window.innerWidth >= SIDE_MIN_VIEWPORT)
+    window.addEventListener('resize', on)
+    return () => window.removeEventListener('resize', on)
+  }, [])
+  return wide
+}
 
 export function ReplayPlayer({
   recordingId,
   startAt,
   live,
-  minHeight = 400
+  minHeight = 400,
+  panel = 'side'
 }: {
   recordingId: string
   /** Offset into the recording (ms); playback opens 5 s before it. */
@@ -26,6 +55,12 @@ export function ReplayPlayer({
   live?: boolean
   /** Frame height before the first snapshot scales it (a narrow panel wants less). */
   minHeight?: number
+  /**
+   * Where the Console / Network panel goes: 'side' (right of the frame — the
+   * Session replays sheet; stacks on a narrow window) or 'stacked' (under the
+   * controls — narrow hosts like the Traffic Map's Recording level).
+   */
+  panel?: 'side' | 'stacked'
 }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const replayerRef = useRef<{
@@ -49,13 +84,31 @@ export function ReplayPlayer({
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
   const [following, setFollowing] = useState(!!live)
-  // Replay context: route changes + the user's console
-  // lines ride the recording as rrweb custom events (type 5) — markers on
-  // the scrubber, console panel underneath, both seekable.
-  const [markers, setMarkers] = useState<
-    Array<{ offset: number; tag: 'route' | 'console'; level?: string; text: string }>
-  >([])
-  const [consoleFilter, setConsoleFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all')
+  // Replay context: route changes, the user's console lines and (#1357) the
+  // page's requests ride the recording as rrweb custom events (type 5) —
+  // ticks on the scrubber, the Console / Network panel beside the player.
+  const [ctx, setCtx] = useState<ReplayContext>(NO_CONTEXT)
+  const ticks = useMemo(
+    () =>
+      [
+        ...ctx.routes.map((r) => ({ offset: r.offset, color: '#38bdf8', tip: r.text })),
+        ...ctx.console
+          .filter((c) => c.level !== 'info')
+          .map((c) => ({
+            offset: c.offset,
+            color: c.level === 'error' ? '#ef4444' : '#f59e0b',
+            tip: `${c.level}: ${c.text.slice(0, 120)}`
+          }))
+      ].sort((a, b) => a.offset - b.offset),
+    [ctx]
+  )
+  const wide = useWideViewport()
+  const hasPanel = ctx.console.length > 0 || ctx.network.length > 0
+  const sideBySide = panel === 'side' && wide
+  // Read by rescale() inside the load effect: the frame's width budget.
+  const sideReserveRef = useRef(0)
+  sideReserveRef.current = sideBySide && hasPanel && !following ? SIDE_PANEL_PX : 0
+  const rescaleRef = useRef<(() => void) | null>(null)
   // #1356 event rail: the person's requests / errors / page changes /
   // transitions from the server, placed against the first event's clock.
   const [rail, setRail] = useState<{
@@ -72,6 +125,7 @@ export function ReplayPlayer({
     let cancelled = false
     let raf = 0
     setRail(null)
+    setCtx(NO_CONTEXT)
 
     function rescale() {
       const rep = replayerRef.current
@@ -81,7 +135,8 @@ export function ReplayPlayer({
       const h = rep.iframe.offsetHeight || 720
       // Width budget from the sheet itself — the host div can be mid-animation
       // (or grown by the giant iframe), so never trust host.clientWidth alone.
-      const sheetW = window.innerWidth * 0.85 - 56
+      // The Console / Network column, when it sits beside the frame, comes off.
+      const sheetW = window.innerWidth * 0.85 - 56 - sideReserveRef.current
       const budget = Math.min(host.parentElement?.clientWidth || sheetW, sheetW)
       // Fill the sheet: scale up as well as down, bounded by width and viewport height
       const scale = Math.min(budget / w, (window.innerHeight - 170) / h)
@@ -90,6 +145,7 @@ export function ReplayPlayer({
       host.style.width = `${Math.ceil(w * scale)}px`
       host.style.height = `${Math.ceil(h * scale)}px`
     }
+    rescaleRef.current = rescale
 
     async function load() {
       try {
@@ -107,40 +163,16 @@ export function ReplayPlayer({
         const events = r.data.data.events
         lastSeqRef.current = r.data.data.last_seq ?? -1
         {
-          const evs = events as Array<{
-            type?: number
-            timestamp?: number
-            data?: { tag?: string; payload?: Record<string, unknown> }
-          }>
-          const first = evs.find((e) => typeof e.timestamp === 'number')?.timestamp ?? 0
+          const first = Number(
+            (events as Array<{ timestamp?: unknown } | null>).find(
+              (e) => typeof e?.timestamp === 'number'
+            )?.timestamp ?? 0
+          )
           void railReq.then((d) => {
             if (cancelled || !d || !first) return
             setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
           })
-          const found: Array<{
-            offset: number
-            tag: 'route' | 'console'
-            level?: string
-            text: string
-          }> = []
-          for (const e of evs) {
-            if (e.type !== 5 || !e.data?.tag || typeof e.timestamp !== 'number') continue
-            if (e.data.tag === 'route') {
-              found.push({
-                offset: e.timestamp - first,
-                tag: 'route',
-                text: String(e.data.payload?.path ?? '')
-              })
-            } else if (e.data.tag === 'console') {
-              found.push({
-                offset: e.timestamp - first,
-                tag: 'console',
-                level: String(e.data.payload?.level ?? 'info'),
-                text: String(e.data.payload?.msg ?? '')
-              })
-            }
-          }
-          setMarkers(found)
+          setCtx(parseReplayContext(events, first))
         }
         if (events.length < 2) {
           setError('Not enough events to replay this session.')
@@ -208,6 +240,7 @@ export function ReplayPlayer({
       cancelled = true
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', rescale)
+      rescaleRef.current = null
       replayerRef.current?.pause()
       replayerRef.current?.destroy?.()
       replayerRef.current = null
@@ -264,10 +297,23 @@ export function ReplayPlayer({
     else rep.pause(ms)
   }
 
-  // Stable for the memoised rail — it must not re-render every animation frame.
+  // Stable for the memoised rail and panel — they must not re-render every animation frame.
   const seekRef = useRef(seek)
   seekRef.current = seek
-  const railSeek = useCallback((ms: number) => seekRef.current(ms), [])
+  const stableSeek = useCallback((ms: number) => seekRef.current(ms), [])
+
+  // The panel re-renders when the highlighted row changes, not every frame.
+  const activeConsole = activeIndex(ctx.console, time)
+  const activeNetwork = activeIndex(ctx.network, time)
+  const showPanel = ready && !following && hasPanel
+  const side = showPanel && sideBySide
+  // The frame's width budget moved: scale it again.
+  const lastSideRef = useRef(side)
+  useEffect(() => {
+    if (lastSideRef.current === side) return
+    lastSideRef.current = side
+    rescaleRef.current?.()
+  }, [side])
 
   function changeSpeed(v: number) {
     setSpeed(v)
@@ -276,14 +322,32 @@ export function ReplayPlayer({
 
   if (error) return <p className='py-10 text-center text-[13px] text-slate-400'>{error}</p>
 
+  const panelEl = (layout: 'side' | 'stacked') => (
+    <ReplaySidePanel
+      consoleEntries={ctx.console}
+      networkEntries={ctx.network}
+      activeConsole={activeConsole}
+      activeNetwork={activeNetwork}
+      onSeek={stableSeek}
+      layout={layout}
+    />
+  )
+
   return (
     <div className='nvr-no-record mt-3'>
       <TipLayer />
-      <div
-        ref={frameRef}
-        className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
-        style={{ minHeight }}
-      />
+      {/* Same element tree with or without the side column — the frame must
+          never remount under a live Replayer. */}
+      <div className={side ? 'flex items-stretch gap-3' : ''}>
+        <div className={side ? 'min-w-0 flex-1' : ''}>
+          <div
+            ref={frameRef}
+            className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
+            style={{ minHeight }}
+          />
+        </div>
+        {side && panelEl('side')}
+      </div>
       {ready && following && (
         <div className='mt-2 flex items-center gap-3'>
           <span className='flex items-center gap-1.5 rounded-full bg-red-500/10 px-2.5 py-1 text-[11.5px] font-medium text-red-600 dark:text-red-400'>
@@ -327,22 +391,19 @@ export function ReplayPlayer({
                 clickable, positioned by offset. */}
             <div className='pointer-events-none absolute inset-x-0 -top-1.5 h-1.5'>
               {total > 0 &&
-                markers.map((m, i) => {
-                  if (m.tag === 'console' && m.level === 'info') return null
-                  const left = `${Math.min(100, Math.max(0, (m.offset / total) * 100))}%`
-                  const color =
-                    m.tag === 'route' ? '#38bdf8' : m.level === 'error' ? '#ef4444' : '#f59e0b'
-                  return (
-                    <button
-                      key={i}
-                      type='button'
-                      onClick={() => seek(Math.max(0, m.offset - 500))}
-                      className='pointer-events-auto absolute h-1.5 w-[3px] -translate-x-1/2 rounded-sm'
-                      style={{ left, background: color }}
-                      data-tip={`${fmtClock(m.offset)} · ${m.tag === 'route' ? m.text : `${m.level}: ${m.text.slice(0, 120)}`}`}
-                    />
-                  )
-                })}
+                ticks.map((m, i) => (
+                  <button
+                    key={`${i}:${m.offset}`}
+                    type='button'
+                    onClick={() => seek(Math.max(0, m.offset - 500))}
+                    className='pointer-events-auto absolute h-1.5 w-[3px] -translate-x-1/2 rounded-sm'
+                    style={{
+                      left: `${Math.min(100, Math.max(0, (m.offset / total) * 100))}%`,
+                      background: m.color
+                    }}
+                    data-tip={`${fmtClock(m.offset)} · ${m.tip}`}
+                  />
+                ))}
             </div>
             <input
               type='range'
@@ -357,7 +418,7 @@ export function ReplayPlayer({
               markers={railMarks}
               total={total}
               truncated={rail?.truncated ?? []}
-              onSeek={railSeek}
+              onSeek={stableSeek}
             />
           </div>
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
@@ -381,56 +442,7 @@ export function ReplayPlayer({
           </span>
         </div>
       )}
-      {ready && !following && markers.some((m) => m.tag === 'console') && (
-        <div className='mt-3 rounded-lg border border-slate-200 dark:border-border'>
-          <div className='flex items-center gap-2 border-b border-slate-100 px-3 py-1.5 dark:border-border/60'>
-            <span className='text-[11px] font-semibold uppercase tracking-wide text-slate-400'>
-              Console
-            </span>
-            {(['all', 'info', 'warn', 'error'] as const).map((f) => {
-              const n =
-                f === 'all'
-                  ? markers.filter((m) => m.tag === 'console').length
-                  : markers.filter((m) => m.tag === 'console' && m.level === f).length
-              return (
-                <button
-                  key={f}
-                  type='button'
-                  onClick={() => setConsoleFilter(f)}
-                  className={`rounded px-1.5 py-0.5 text-[11px] ${consoleFilter === f ? 'bg-accent font-medium text-accent-foreground' : 'text-slate-400 hover:bg-muted'}`}
-                >
-                  {f} {n > 0 && <span className='tabular-nums'>({n})</span>}
-                </button>
-              )
-            })}
-            <span className='ml-auto text-[10.5px] text-slate-400'>click a line to seek</span>
-          </div>
-          <div className='max-h-56 overflow-y-auto p-2 font-mono text-[11px] leading-relaxed'>
-            {markers
-              .filter(
-                (m) => m.tag === 'console' && (consoleFilter === 'all' || m.level === consoleFilter)
-              )
-              .map((m, i) => (
-                <button
-                  key={i}
-                  type='button'
-                  onClick={() => seek(Math.max(0, m.offset - 500))}
-                  className='flex w-full items-start gap-2 rounded px-1.5 py-0.5 text-left hover:bg-muted'
-                >
-                  <span className='shrink-0 tabular-nums text-slate-400'>{fmtClock(m.offset)}</span>
-                  <span
-                    className={`shrink-0 ${m.level === 'error' ? 'text-red-500' : m.level === 'warn' ? 'text-amber-500' : 'text-sky-500'}`}
-                  >
-                    {m.level}
-                  </span>
-                  <span className='min-w-0 break-all text-slate-600 dark:text-slate-300'>
-                    {m.text}
-                  </span>
-                </button>
-              ))}
-          </div>
-        </div>
-      )}
+      {showPanel && !side && panelEl('stacked')}
     </div>
   )
 }

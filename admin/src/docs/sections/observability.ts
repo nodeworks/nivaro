@@ -586,7 +586,7 @@ export const obsTrafficMapInvestigate: DocSection = {
         ],
         [
           'Recording',
-          'The person’s session replay inside the level, started 5 s before the moment, with the same event rail under the scrubber as on the Session replays page. With no recording covering it, the nearest error clip within two minutes, or Follow this person and Keep their next 50 traces. Recordings and clips are kept for 7 days.'
+          'The person’s session replay inside the level, started 5 s before the moment, with the same event rail under the scrubber and Console / Network list (here under the player) as on the Session replays page. With no recording covering it, the nearest error clip within two minutes, or Follow this person and Keep their next 50 traces. Recordings and clips are kept for 7 days.'
         ],
         [
           'Record',

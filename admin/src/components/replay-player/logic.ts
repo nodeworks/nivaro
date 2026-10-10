@@ -132,3 +132,93 @@ export function groupTip(g: MarkerGroup, max = 6): string {
   const more = g.markers.length > max ? [`… ${g.markers.length - max} more`] : []
   return [`${fmtClock(g.offset)} · ${summary}`, ...lines, ...more].join('\n')
 }
+
+// ── Replay context: route / console / network custom events (#1357) ─────────
+
+export interface RouteEntry {
+  offset: number
+  text: string
+}
+
+export interface ConsoleEntry {
+  offset: number
+  /** warn | error — and info on recordings made before #1357. */
+  level: string
+  text: string
+}
+
+export interface NetworkEntry {
+  offset: number
+  method: string
+  route: string
+  /** 0 = the request never got an answer (network error, aborted). */
+  status: number
+  duration_ms: number | null
+}
+
+export interface ReplayContext {
+  routes: RouteEntry[]
+  console: ConsoleEntry[]
+  network: NetworkEntry[]
+}
+
+type CustomEventLike = {
+  type?: number
+  timestamp?: number
+  data?: { tag?: string; payload?: Record<string, unknown> }
+} | null
+
+/**
+ * The recorder's custom events (rrweb type 5) → what the player lists:
+ * `route`, `console` and `request` tags, each as an offset from `first`.
+ */
+export function parseReplayContext(events: unknown[], first: number): ReplayContext {
+  const ctx: ReplayContext = { routes: [], console: [], network: [] }
+  for (const e of events as CustomEventLike[]) {
+    if (e?.type !== 5 || !e.data?.tag || typeof e.timestamp !== 'number') continue
+    const offset = Math.max(0, e.timestamp - first)
+    const p = e.data.payload ?? {}
+    if (e.data.tag === 'route') {
+      ctx.routes.push({ offset, text: String(p.path ?? '') })
+    } else if (e.data.tag === 'console') {
+      ctx.console.push({ offset, level: String(p.level ?? 'info'), text: String(p.msg ?? '') })
+    } else if (e.data.tag === 'request') {
+      const d = Number(p.duration_ms)
+      ctx.network.push({
+        offset,
+        method: String(p.method ?? 'GET'),
+        route: String(p.route ?? ''),
+        status: Number(p.status) || 0,
+        duration_ms: p.duration_ms != null && Number.isFinite(d) ? d : null
+      })
+    }
+  }
+  const byOffset = (a: { offset: number }, b: { offset: number }) => a.offset - b.offset
+  ctx.routes.sort(byOffset)
+  ctx.console.sort(byOffset)
+  ctx.network.sort(byOffset)
+  return ctx
+}
+
+/** Index of the last entry at or before `time` (entries sorted by offset); −1 before the first. */
+export function activeIndex(entries: Array<{ offset: number }>, time: number): number {
+  let lo = 0
+  let hi = entries.length - 1
+  let found = -1
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1
+    if (entries[mid].offset <= time) {
+      found = mid
+      lo = mid + 1
+    } else hi = mid - 1
+  }
+  return found
+}
+
+/** Tailwind text colour for an HTTP status in the network list. */
+export function statusClass(status: number): string {
+  if (status === 0 || status >= 500) return 'text-red-500'
+  if (status >= 400) return 'text-amber-500'
+  if (status >= 300) return 'text-slate-400'
+  return 'text-emerald-600 dark:text-emerald-400'
+}
