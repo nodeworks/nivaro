@@ -5,7 +5,7 @@ import {
   describeSuggestion,
   isSuggestionApplied,
   withContext
-} from './draftSuggestions'
+} from './applyDraftSuggestion'
 
 const edits: VideoEdits = {
   v: 1,

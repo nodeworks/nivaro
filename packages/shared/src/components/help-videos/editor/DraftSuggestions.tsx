@@ -11,7 +11,7 @@ import {
   describeSuggestion,
   isSuggestionApplied,
   suggestionClock
-} from './draftSuggestions'
+} from './applyDraftSuggestion'
 
 /** The sentence a failed request carries (`error` in our own answers, else the message). */
 function reasonOf(err: unknown): string {
