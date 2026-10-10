@@ -1,10 +1,71 @@
 {
-  "generated_at": "2026-10-10T18:51:00.895Z",
+  "generated_at": "2026-10-10T20:24:59.536Z",
   "releases": [
+    {
+      "version": "0.2.36",
+      "tag": "v0.2.36",
+      "date": "2026-10-10T16:24:47-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: Console / Network panel while following live",
+              "hash": "26e4d744"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "tsc type-checks only, never writes .js beside the sources",
+              "hash": "ecd95deb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Day timeline test waits for the day query instead of a fixed tick count",
+              "hash": "b7001879"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: console and network beside the player (#1357)",
+              "hash": "d6785f7a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: resilient uploads (#1369)",
+              "hash": "8c4a0f12"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "one day of one person (#1367)",
+              "hash": "fa08d646"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: event rail on the scrubber (#1356)",
+              "hash": "70a56d74"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "2ccbf3a2"
+            }
+          ]
+        }
+      ],
+      "count": 8
+    },
     {
       "version": "0.2.35",
       "tag": "v0.2.35",
-      "date": "2026-10-10T14:50:48-04:00",
+      "date": "2026-10-10T14:51:00-04:00",
       "sections": [
         {
           "label": "Other",
