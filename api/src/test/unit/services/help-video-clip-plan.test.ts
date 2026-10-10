@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildClipArgs,
+  buildClipPlan,
   CLIP_LIMITS,
   type ClipPlanInput,
   clipDurationMs,
@@ -9,7 +10,12 @@ import {
   clipSpans,
   isClipKind
 } from '../../../services/help-video-clip-plan.js'
-import { emptyEdits, type VideoEdits } from '../../../services/help-video-edits.js'
+import {
+  EDIT_LIMITS,
+  emptyEdits,
+  normalizeEdits,
+  type VideoEdits
+} from '../../../services/help-video-edits.js'
 
 // #1562: the edit mapping and ffmpeg arguments of a clip, with no ffmpeg.
 
@@ -98,6 +104,48 @@ const base: ClipPlanInput = {
 }
 const graph = (args: string[]) => args[args.indexOf('-filter_complex') + 1]
 const argAfter = (args: string[], flag: string) => args[args.indexOf(flag) + 1]
+
+describe('buildClipPlan (the graph by file)', () => {
+  it('names the file with -filter_complex_script and hands the graph back', () => {
+    const inline = buildClipArgs(base)
+    const plan = buildClipPlan({ ...base, graphFile: '/w/filters.txt' })
+    const i = plan.args.indexOf('-filter_complex_script')
+    expect(i).toBeGreaterThan(0)
+    expect(plan.args[i + 1]).toBe('/w/filters.txt')
+    expect(plan.args).not.toContain('-filter_complex')
+    expect(plan.args.join('\n')).not.toContain('[vcut]')
+    expect(plan.graph).toBe(graph(inline))
+    // The GIF passes too.
+    const gif = { ...base, kind: 'gif' as const, graphFile: '/w/filters.txt' }
+    for (const pass of ['palette', 'encode'] as const) {
+      const g = buildClipPlan(gif, pass)
+      expect(g.args).toContain('-filter_complex_script')
+      expect(g.graph).toBe(graph(buildClipArgs({ ...base, kind: 'gif' }, pass)))
+    }
+  })
+  it('builds a window over as many kept pieces as it can hold, with the graph off argv', () => {
+    // EDIT_LIMITS.segments pieces of 100 ms with 100 ms gaps: a 30 s window
+    // crosses 300 of them, every one a branch of the graph.
+    const segments = []
+    for (let i = 0; i < EDIT_LIMITS.segments; i++)
+      segments.push({ start_ms: i * 200, end_ms: i * 200 + 100, speed: 1 })
+    const e = normalizeEdits({ segments }, 200 * EDIT_LIMITS.segments)
+    expect(e.segments).toHaveLength(EDIT_LIMITS.segments)
+    const spans = clipSpans(e, 0, 30_000)
+    expect(spans).toHaveLength(300)
+    const plan = buildClipPlan({
+      ...base,
+      inputPath: '/w/in.webm',
+      inputMime: 'video/webm',
+      cut: { from: 'source', spans, edits: e },
+      graphFile: '/w/filters.txt'
+    })
+    expect(plan.graph).toContain('concat=n=300:v=1:a=1[vcut][acut]')
+    expect(Buffer.byteLength(plan.graph)).toBeGreaterThan(32 * 1024)
+    for (const a of plan.args) expect(Buffer.byteLength(a)).toBeLessThan(4096)
+    expect(plan.args).not.toContain('-filter_complex')
+  })
+})
 
 describe('buildClipArgs', () => {
   it('cuts a rendered MP4 by seeking before decoding, with sound', () => {

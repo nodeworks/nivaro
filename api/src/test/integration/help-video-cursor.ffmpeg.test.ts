@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest'
 import { hasFfmpeg, probeVideo, runFfmpeg } from '../../services/ffmpeg.js'
 import { buildCursorAss } from '../../services/help-video-cursor.js'
 import { normalizeEdits } from '../../services/help-video-edits.js'
-import { buildRenderArgs, renderSizes } from '../../services/help-video-render-plan.js'
+import { renderSizes } from '../../services/help-video-render-plan.js'
+import { runRenderPlan } from './help-video-graph-file.js'
 
 // A moving zoom (#1539) and the burned-in cursor (#1517) through real ffmpeg:
 // the st/ld crop expressions and the libass filter must both be accepted.
@@ -66,20 +67,18 @@ describe('moving zoom and cursor through real ffmpeg', () => {
       })
     )
     const out = join(dir, 'out.mp4')
-    await runFfmpeg(
-      buildRenderArgs({
-        edits,
-        width: 640,
-        height: 360,
-        hasAudio: false,
-        sourcePath: src,
-        sourceMime: 'video/webm',
-        overlays: [],
-        cursor: { assPath },
-        outputPath: out,
-        threads: 2
-      })
-    )
+    await runRenderPlan({
+      edits,
+      width: 640,
+      height: 360,
+      hasAudio: false,
+      sourcePath: src,
+      sourceMime: 'video/webm',
+      overlays: [],
+      cursor: { assPath },
+      outputPath: out,
+      threads: 2
+    })
     const p = await probeVideo(out, 'video/mp4')
     expect(p.width).toBe(640)
     expect(p.height).toBe(360)

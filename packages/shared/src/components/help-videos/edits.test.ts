@@ -121,6 +121,7 @@ describe('mirrors the server EDIT_LIMITS', () => {
       minKeptMs: 1000,
       minItemMs: 200,
       minSegmentMs: 100,
+      segments: 500,
       zoomMinSide: 0.25,
       zoomKeyframes: 40,
       zoomKeyframesTotal: 300,

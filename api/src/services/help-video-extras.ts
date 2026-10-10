@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { mkdir, readFile, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -111,7 +112,13 @@ export async function buildMediaExtras(
   if (!geometry && !wantPeaks) return null
   const file = await getFile(input.fileId).catch(() => undefined)
   if (!file?.filename_disk) return null
-  const dir = join(videoWorkDir(), 'extras', input.uploadId.toLowerCase())
+  // A random suffix like the other scratch areas: never a path someone can
+  // predict from the upload id; the render sweep removes one a crash leaves.
+  const dir = join(
+    videoWorkDir(),
+    'extras',
+    `${input.uploadId.toLowerCase()}-${randomUUID().slice(0, 8)}`
+  )
   const ext = input.mime.includes('mp4') ? '.mp4' : '.webm'
   const src = join(dir, `source${ext}`)
   const signal = AbortSignal.timeout(EXTRAS_TIMEOUT_MS)

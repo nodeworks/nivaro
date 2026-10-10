@@ -39,20 +39,33 @@ RUN pnpm --filter @nivaro/api build:ci
 # depends on the network. Build with --build-arg WHISPER=on to carry the
 # whisper-cli binary and the ggml base English model (about 150 MB) in the
 # image; WHISPER_MODEL picks another ggml model (tiny.en, small.en, …) and
-# WHISPER_REF pins the whisper.cpp release. The server finds them through
+# WHISPER_REF pins the whisper.cpp source. The server finds them through
 # HELP_VIDEO_WHISPER_CMD / HELP_VIDEO_WHISPER_MODEL (see the Help Videos docs).
+#
+# WHISPER_REF is the commit the v1.7.5 tag pointed at (a tag can be moved; a
+# commit cannot). WHISPER_MODEL_SHA256 is checked against the downloaded
+# model: whisper.cpp's download script verifies nothing. The default is the
+# sha256 of ggml-base.en.bin as Hugging Face (ggerganov/whisper.cpp, the
+# script's source) lists it; building with another WHISPER_MODEL needs its
+# hash too (an empty value skips the check, which is then a TODO to close).
 FROM base AS whisper
 ARG WHISPER=off
 ARG WHISPER_MODEL=base.en
-ARG WHISPER_REF=v1.7.5
+ARG WHISPER_REF=51c6961c7b64b406833f4b6a4a20e67142f69225
+ARG WHISPER_MODEL_SHA256=a03779c86df3323075f5e796cb2ce5029f00ec8869eee3fdfb897afe36c6d002
 RUN mkdir -p /opt/whisper && if [ "$WHISPER" = "on" ]; then \
       apk add --no-cache git cmake make g++ curl bash \
-      && git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp /tmp/whisper.cpp \
+      && git init -q /tmp/whisper.cpp \
+      && git -C /tmp/whisper.cpp fetch -q --depth 1 https://github.com/ggml-org/whisper.cpp "$WHISPER_REF" \
+      && git -C /tmp/whisper.cpp checkout -q FETCH_HEAD \
       && cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build -DCMAKE_BUILD_TYPE=Release \
            -DBUILD_SHARED_LIBS=OFF -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
       && cmake --build /tmp/whisper.cpp/build --config Release -j"$(nproc)" --target whisper-cli \
       && cp /tmp/whisper.cpp/build/bin/whisper-cli /opt/whisper/whisper-cli \
       && bash /tmp/whisper.cpp/models/download-ggml-model.sh "$WHISPER_MODEL" /opt/whisper \
+      && if [ -n "$WHISPER_MODEL_SHA256" ]; then \
+           echo "$WHISPER_MODEL_SHA256  /opt/whisper/ggml-$WHISPER_MODEL.bin" | sha256sum -c -; \
+         else echo "WARNING: WHISPER_MODEL_SHA256 is empty; the model was not verified"; fi \
       && rm -rf /tmp/whisper.cpp; \
     fi
 

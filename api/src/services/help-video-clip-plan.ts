@@ -1,6 +1,6 @@
 import { lockedInputArgs } from './ffmpeg.js'
 import { introMs, type VideoEdits } from './help-video-edits.js'
-import { blurPower, pixelRect, renderSizes } from './help-video-render-plan.js'
+import { blurPower, graphArgs, pixelRect, renderSizes } from './help-video-render-plan.js'
 
 // Short clips and GIFs (#1562): the ffmpeg plan for one clip. A clip is a
 // window of EDITED time. When the version's render is current it is cut
@@ -16,6 +16,8 @@ export const CLIP_LIMITS = {
   minMs: 500,
   /** Clips per video, failed ones not counted. */
   maxPerVideo: 20,
+  /** Clips queued or being made across the whole instance. */
+  maxQueued: 50,
   gifWidth: 640,
   gifFps: 12,
   mp4Width: 1280,
@@ -78,6 +80,12 @@ export interface ClipPlanInput {
   cut: ClipCut
   /** GIF only: where the palette is written (pass 'palette') and read (pass 'encode'). */
   palettePath?: string
+  /** Where the caller writes the filter graph (buildClipPlan hands it back):
+   *  the arguments then name it with -filter_complex_script. Without it the
+   *  graph is one -filter_complex argument (tests). A clip cut from the
+   *  source carries one branch per kept piece, which as one argument can
+   *  pass the kernel's per-argument limit. */
+  graphFile?: string
 }
 
 const sec = (ms: number) => (ms / 1000).toFixed(3)
@@ -124,6 +132,15 @@ export function clipInputWindow(cut: ClipCut): { offset_ms: number; length_ms: n
  * with it (palettegen / paletteuse), so colours and dithering stay clean.
  */
 export function buildClipArgs(input: ClipPlanInput, pass?: 'palette' | 'encode'): string[] {
+  return buildClipPlan(input, pass).args
+}
+
+/** The arguments and the filter graph of one clip run. With `graphFile` the
+ *  caller writes `graph` there before spawning ffmpeg. */
+export function buildClipPlan(
+  input: ClipPlanInput,
+  pass?: 'palette' | 'encode'
+): { args: string[]; graph: string } {
   const lock = lockedInputArgs(input.inputMime)
   if (!lock.includes('-f')) throw new Error(`Unsupported recording format: ${input.inputMime}`)
   const gif = input.kind === 'gif'
@@ -242,7 +259,8 @@ export function buildClipArgs(input: ClipPlanInput, pass?: 'palette' | 'encode')
     ]
   }
 
-  return [
+  const graph = graphArgs(parts, input.graphFile)
+  const args = [
     '-y',
     '-v',
     'error',
@@ -262,11 +280,11 @@ export function buildClipArgs(input: ClipPlanInput, pass?: 'palette' | 'encode')
     ...(gif && pass === 'encode'
       ? ['-protocol_whitelist', 'file', '-f', 'png_pipe', '-i', input.palettePath as string]
       : []),
-    '-filter_complex',
-    parts.join(';'),
+    ...graph.args,
     ...maps,
     '-threads',
     String(input.threads),
     ...tail
   ]
+  return { args, graph: graph.graph }
 }

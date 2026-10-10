@@ -10,6 +10,8 @@ const CLIP = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
 const USER = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 const ROLE = 'dddddddd-dddd-4ddd-8ddd-dddddddddddd'
 const PUB = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
+const DRAFT = '99999999-9999-4999-8999-999999999999'
+const DRAFT_CLIP = '12121212-1212-4121-8121-121212121212'
 
 const state = vi.hoisted(() => ({
   author: false,
@@ -42,7 +44,7 @@ vi.mock('../../../db/index.js', () => {
                 status: state.status,
                 visibility: JSON.stringify({ mode: 'everyone', role_ids: [] }),
                 published_version_id: PUB,
-                draft_version_id: null
+                draft_version_id: DRAFT
               }
             : undefined
         }
@@ -84,10 +86,19 @@ vi.mock('../../../services/stored-object-stream.js', () => ({
     }
   )
 }))
-vi.mock('../../../services/help-videos.js', async (orig) => ({
-  ...(await orig<object>()),
-  isAuthor: vi.fn(async () => state.author)
-}))
+vi.mock('../../../services/help-videos.js', async (orig) => {
+  const real = await orig<typeof import('../../../services/help-videos.js')>()
+  return {
+    ...real,
+    isAuthor: vi.fn(async () => state.author),
+    // loadVideoForUser asks isAuthor inside its own module: its answer is
+    // the state's, with the video (and the 404) as the real one gives them.
+    loadVideoForUser: vi.fn(async (req: never, id: string) => ({
+      ...(await real.loadVideoForUser(req, id)),
+      author: state.author
+    }))
+  }
+})
 const created = vi.hoisted(() => ({ calls: [] as unknown[] }))
 vi.mock('../../../services/help-video-clips.js', async (orig) => ({
   ...(await orig<object>()),
@@ -108,6 +119,7 @@ vi.mock('../../../services/help-video-clips.js', async (orig) => ({
 }))
 
 import { helpVideoMediaRoutes, helpVideosRoutes } from '../../../routes/help-videos.js'
+import { logActivity } from '../../../services/activity.js'
 import { createClip, deleteClip } from '../../../services/help-video-clips.js'
 import { mediaTicket } from '../../../services/help-videos.js'
 
@@ -132,6 +144,19 @@ function readyClip(): Record<string, unknown> {
   }
 }
 
+/** A clip cut from the draft (#1562 `draft: true`): authors only. */
+function draftClip(): Record<string, unknown> {
+  return {
+    ...readyClip(),
+    id: DRAFT_CLIP,
+    version_id: DRAFT,
+    kind: 'mp4',
+    label: 'Draft take',
+    file_id: 'F2',
+    error: null
+  }
+}
+
 async function app() {
   const a = Fastify()
   a.setErrorHandler((err: Error & { statusCode?: number; code?: string }, _req, reply) =>
@@ -151,6 +176,7 @@ beforeEach(() => {
   created.calls = []
   vi.mocked(createClip).mockClear()
   vi.mocked(deleteClip).mockClear()
+  vi.mocked(logActivity).mockClear()
 })
 
 describe('GET /:id/clips', () => {
@@ -174,6 +200,53 @@ describe('GET /:id/clips', () => {
       headers: auth
     })
     expect(res.statusCode).toBe(404)
+  })
+  it('lists a clip of the draft, and why a clip failed, to authors only', async () => {
+    const failed = {
+      ...readyClip(),
+      id: '34343434-3434-4343-8343-343434343434',
+      status: 'failed',
+      file_id: null,
+      error: 'The clip could not be made'
+    }
+    state.clips = [readyClip(), draftClip(), failed]
+    const a = await app()
+    const viewer = await a.inject({
+      method: 'GET',
+      url: `/api/help-videos/${VID}/clips`,
+      headers: auth
+    })
+    expect(viewer.statusCode).toBe(200)
+    expect(viewer.json().data.map((c: { id: string }) => c.id)).toEqual([CLIP, failed.id])
+    expect(viewer.json().data[1]).toMatchObject({ status: 'failed', error: null })
+    state.author = true
+    const author = await a.inject({
+      method: 'GET',
+      url: `/api/help-videos/${VID}/clips`,
+      headers: auth
+    })
+    expect(author.json().data.map((c: { id: string }) => c.id)).toEqual([
+      CLIP,
+      DRAFT_CLIP,
+      failed.id
+    ])
+    expect(author.json().data[2]).toMatchObject({
+      status: 'failed',
+      error: 'The clip could not be made'
+    })
+  })
+  it('hides every clip from viewers while nothing is published', async () => {
+    // The mock's video keeps PUB; a clip of some other version is not of it.
+    state.clips = [
+      { ...readyClip(), version_id: '77777777-7777-4777-8777-777777777777' },
+      { ...readyClip(), version_id: null }
+    ]
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: `/api/help-videos/${VID}/clips`,
+      headers: auth
+    })
+    expect(res.json().data).toEqual([])
   })
 })
 
@@ -270,6 +343,43 @@ describe('GET /:id/clips/:clipId (ticketed)', () => {
       url: `/api/help-videos/${VID}/clips/${CLIP}?st=${ticket()}`
     })
     expect(res.statusCode).toBe(404)
+  })
+  it('serves a clip of the draft to authors only', async () => {
+    state.clips = [readyClip(), draftClip()]
+    const a = await app()
+    const url = `/api/help-videos/${VID}/clips/${DRAFT_CLIP}?st=${ticket()}`
+    expect((await a.inject({ method: 'GET', url })).statusCode).toBe(404)
+    expect(logActivity).not.toHaveBeenCalled()
+    state.author = true
+    const res = await a.inject({ method: 'GET', url })
+    expect(res.statusCode).toBe(200)
+    expect(res.body).toBe('bytes:F2.bin:video/mp4')
+  })
+  it('logs each fetch and download as data egress, not a resumed range', async () => {
+    const a = await app()
+    await a.inject({ method: 'GET', url: `/api/help-videos/${VID}/clips/${CLIP}?st=${ticket()}` })
+    expect(logActivity).toHaveBeenCalledTimes(1)
+    expect(logActivity).toHaveBeenLastCalledWith({
+      action: 'help-video-download',
+      user: USER,
+      collection: 'nivaro_help_videos',
+      item: VID,
+      comment: `clip ${CLIP} (gif)`
+    })
+    await a.inject({
+      method: 'GET',
+      url: `/api/help-videos/${VID}/clips/${CLIP}?st=${ticket()}&download=1`
+    })
+    expect(logActivity).toHaveBeenCalledTimes(2)
+    expect(logActivity).toHaveBeenLastCalledWith(
+      expect.objectContaining({ comment: `clip ${CLIP} (gif) · download` })
+    )
+    await a.inject({
+      method: 'GET',
+      url: `/api/help-videos/${VID}/clips/${CLIP}?st=${ticket()}`,
+      headers: { range: 'bytes=500-' }
+    })
+    expect(logActivity).toHaveBeenCalledTimes(2)
   })
 })
 

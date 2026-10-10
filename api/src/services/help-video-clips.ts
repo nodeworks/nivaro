@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
-import { mkdir, rm, stat } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pipeline } from 'node:stream/promises'
 import { db } from '../db/index.js'
@@ -9,7 +9,7 @@ import type { User } from '../types.js'
 import { hasFfmpeg, lockedInputArgs, probeVideo, runFfmpeg } from './ffmpeg.js'
 import { getFile, uploadFileFromPath } from './files.js'
 import {
-  buildClipArgs,
+  buildClipPlan,
   CLIP_LIMITS,
   type ClipCut,
   type ClipKind,
@@ -89,8 +89,13 @@ export function clipUrl(videoId: string, clipId: string, ticket: string): string
 }
 
 /** The clip as the API answers it; `ticket` is the asking person's media
- *  ticket for the video (null = no URL, e.g. a create answer). */
-export function serializeClip(row: Record<string, unknown>, ticket: string | null): ClipDto {
+ *  ticket for the video (null = no URL, e.g. a create answer). A failed
+ *  clip's reason is for authors (they make clips); viewers get none. */
+export function serializeClip(
+  row: Record<string, unknown>,
+  ticket: string | null,
+  opts: { author?: boolean } = {}
+): ClipDto {
   const status = String(row.status ?? 'queued') as ClipStatus
   const id = low(row.id)
   const videoId = low(row.video_id)
@@ -101,7 +106,7 @@ export function serializeClip(row: Record<string, unknown>, ticket: string | nul
     kind: (isClipKind(row.kind) ? row.kind : 'mp4') as ClipKind,
     status: (CLIP_STATUSES as readonly string[]).includes(status) ? status : 'failed',
     progress: row.progress == null ? null : Number(row.progress),
-    error: row.error == null ? null : String(row.error),
+    error: opts.author && row.error != null ? String(row.error) : null,
     start_ms: Number(row.start_ms ?? 0),
     end_ms: Number(row.end_ms ?? 0),
     label: row.label == null || row.label === '' ? null : String(row.label),
@@ -211,6 +216,22 @@ export async function createClip(
   if (!version) throw fail(409, 'HELP_VIDEO_NO_VERSION', 'This video has no recording yet')
   const edits = readEdits(version)
   const range = checkClipRange(body.start_ms, body.end_ms, editedDuration(edits))
+  // A bound on the whole instance's backlog, so no number of authors can
+  // queue hours of ffmpeg work; a per-process queue drains one at a time.
+  const queued = Number(
+    (
+      (await db(CLIPS).whereIn('status', ['queued', 'rendering']).count({ n: '*' }).first()) as
+        | { n?: unknown }
+        | undefined
+    )?.n ?? 0
+  )
+  if (queued >= CLIP_LIMITS.maxQueued) {
+    throw fail(
+      409,
+      'HELP_VIDEO_CLIP_LIMIT',
+      'Too many clips are being made right now. Try again in a few minutes.'
+    )
+  }
   const count = Number(
     (
       (await db(CLIPS)
@@ -317,13 +338,15 @@ function warn(msg: string): void {
   console.warn(`[help-videos] ${msg}`)
 }
 
+/** What the clip row says when it fails: a plain reason. The detail (ffmpeg's
+ *  last line names scratch paths) stays in the job run and the server log. */
 export function friendlyClipError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err)
   if (/No such file|ENOENT|Stored object not found/i.test(msg)) {
     return 'The recording is missing from storage'
   }
   if (/cancelled|aborted|AbortError/i.test(msg)) return 'The clip was cancelled'
-  return `The clip could not be made: ${msg.split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 300) ?? 'unknown error'}`
+  return 'The clip could not be made'
 }
 
 /** Cuts one queued clip. Exported for tests. */
@@ -409,20 +432,26 @@ export async function renderClip(id: string): Promise<'ready' | 'failed' | 'skip
       threads: renderThreads(),
       outputPath,
       cut,
-      palettePath: join(dir, 'palette.png')
+      palettePath: join(dir, 'palette.png'),
+      // The filter graph goes by file (one trim branch per kept piece can
+      // pass the kernel's per-argument limit as one argument).
+      graphFile: join(dir, 'filters.txt')
+    }
+    // One ffmpeg run: the graph is written to its file, then ffmpeg runs.
+    const ffmpeg = async (
+      pass: 'palette' | 'encode' | undefined,
+      onProgress?: (ms: number) => void
+    ) => {
+      const built = buildClipPlan(plan, pass)
+      await writeFile(plan.graphFile, built.graph)
+      await runFfmpeg(built.args, onProgress, abort.signal, { lowPriority: true })
     }
     if (kind === 'gif') {
-      await runFfmpeg(buildClipArgs(plan, 'palette'), undefined, abort.signal, {
-        lowPriority: true
-      })
+      await ffmpeg('palette')
       progress(0, 0.5, 1)(1)
-      await runFfmpeg(buildClipArgs(plan, 'encode'), progress(0.5, 0.5, total), abort.signal, {
-        lowPriority: true
-      })
+      await ffmpeg('encode', progress(0.5, 0.5, total))
     } else {
-      await runFfmpeg(buildClipArgs(plan), progress(0, 1, total), abort.signal, {
-        lowPriority: true
-      })
+      await ffmpeg(undefined, progress(0, 1, total))
     }
     const bytes = (await stat(outputPath)).size
     if (!bytes) throw new Error('ffmpeg wrote nothing')
@@ -461,6 +490,7 @@ export async function renderClip(id: string): Promise<'ready' | 'failed' | 'skip
     return 'ready'
   } catch (err) {
     const message = friendlyClipError(err)
+    warn(`clip ${key} failed: ${err instanceof Error ? err.message : String(err)}`)
     await db(CLIPS)
       .where({ id, status: 'rendering' })
       .update({ status: 'failed', progress: null, error: message, updated_at: new Date() })

@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Readable } from 'node:stream'
@@ -138,7 +138,13 @@ describe('buildMediaExtras', () => {
     expect(JSON.parse(String(row.peaks))).toEqual([0, 0, 0, 0.5, 1])
     expect(tables.nivaro_help_video_versions[0].sprite_file).toBe('SPRITE-FILE')
     expect(tables.nivaro_help_video_versions[1].sprite_file).toBeNull()
-    expect(existsSync(join(work, 'extras', UPLOAD))).toBe(false) // scratch gone
+    // The scratch directory (`<upload id>-<8 hex>`, never the bare id) is gone.
+    const scratch = st.ran[0][st.ran[0].indexOf('-i') + 1]
+    expect(scratch).toMatch(
+      new RegExp(`^${join(work, 'extras', UPLOAD)}-[0-9a-f]{8}/source\\.webm$`)
+    )
+    expect(existsSync(join(work, 'extras', UPLOAD))).toBe(false)
+    expect(readdirSync(join(work, 'extras'))).toEqual([])
   })
   it('keeps the peaks when the sheet fails, and skips the sheet for a huge frame', async () => {
     st.spriteFail = true

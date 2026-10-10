@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { normalizeEdits } from '../../../services/help-video-edits.js'
+import { EDIT_LIMITS, normalizeEdits } from '../../../services/help-video-edits.js'
 import {
   blurPower,
   buildPosterArgs,
   buildRenderArgs,
+  buildRenderPlan,
+  graphArgs,
+  MAX_GRAPH_BYTES,
   musicShareWindows,
   outputSize,
   pixelRect,
@@ -160,6 +163,111 @@ describe('buildRenderArgs', () => {
     expect(graph).toContain(`x='max(0,min(${cx}*(1280*${z})-1280/2,1280*${z}-1280))'`)
     expect(graph).toContain(`y='max(0,min(${cy}*(720*${z})-720/2,720*${z}-720))'`)
     expect(graph).not.toMatch(/\*iw|\*ih|iw-|ih-/)
+  })
+})
+
+// The graph by file: as one argument it can pass Linux's 128 KiB
+// per-argument limit and ffmpeg never starts (E2BIG).
+describe('graph file', () => {
+  const SRC = 600_000
+  /** Every zoom and every keyframe EDIT_LIMITS allows, all moving. */
+  function fullZooms() {
+    const per = EDIT_LIMITS.zoomKeyframesTotal / EDIT_LIMITS.zooms
+    const zooms = []
+    for (let i = 0; i < EDIT_LIMITS.zooms; i++) {
+      const start = 1000 + i * 10_000
+      const end = start + 8000
+      const keyframes = []
+      for (let k = 0; k < per; k++) {
+        keyframes.push({
+          at_ms: start + Math.round((k * (end - start)) / (per - 1)),
+          rect: { x: (k % 3) * 0.2 + 0.01 * i, y: (k % 2) * 0.3, w: 0.3 + 0.05 * k, h: 0.3 }
+        })
+      }
+      zooms.push({ start_ms: start, end_ms: end, rect: keyframes[0].rect, ease_ms: 300, keyframes })
+    }
+    return zooms
+  }
+  /** The zooms plus every blur and hold EDIT_LIMITS allows. */
+  function fullEdits() {
+    const blurs = Array.from({ length: EDIT_LIMITS.blurs }, (_, i) => ({
+      start_ms: i * 10_000,
+      end_ms: i * 10_000 + 9000,
+      rect: { x: 0.1, y: 0.1, w: 0.2, h: 0.2 },
+      strength: 12
+    }))
+    const holds = Array.from({ length: EDIT_LIMITS.holds }, (_, i) => ({
+      at_ms: 500 + i * 10_000,
+      hold_ms: 1000
+    }))
+    return normalizeEdits({ zooms: fullZooms(), blurs, holds }, SRC)
+  }
+  /** Every callout EDIT_LIMITS allows, rasterised (one fading overlay each). */
+  const fullOverlays = () =>
+    Array.from({ length: EDIT_LIMITS.annotations }, (_, i) => ({
+      path: `/scratch/a${i}.png`,
+      start_ms: i * 2000,
+      end_ms: i * 2000 + 1500,
+      fade_ms: 200
+    }))
+
+  it('names the file with -filter_complex_script and hands the graph back', () => {
+    const edits = normalizeEdits({}, 10_000)
+    const inline = buildRenderArgs({ ...base, edits })
+    const plan = buildRenderPlan({ ...base, edits, graphFile: '/scratch/filters.txt' })
+    const i = plan.args.indexOf('-filter_complex_script')
+    expect(i).toBeGreaterThan(0)
+    expect(plan.args[i + 1]).toBe('/scratch/filters.txt')
+    expect(plan.args).not.toContain('-filter_complex')
+    expect(plan.args).not.toContain(plan.graph)
+    expect(plan.args.some((a) => a.includes('[0:v]'))).toBe(false)
+    expect(plan.graph).toBe(fc(inline))
+    // Only the graph's place differs.
+    expect(
+      plan.args.filter((a) => a !== '-filter_complex_script' && a !== '/scratch/filters.txt')
+    ).toEqual(inline.filter((a) => a !== '-filter_complex' && a !== plan.graph))
+  })
+  it('builds 50 moving zooms of 6 stops each, without the graph in argv', () => {
+    const edits = normalizeEdits({ zooms: fullZooms() }, SRC)
+    expect(edits.zooms).toHaveLength(EDIT_LIMITS.zooms)
+    expect(edits.zooms.every((z) => z.keyframes?.length === 6)).toBe(true)
+    const plan = buildRenderPlan({ ...base, edits, graphFile: '/scratch/filters.txt' })
+    // About 110 KB of zoom expressions alone.
+    expect(Buffer.byteLength(plan.graph)).toBeGreaterThan(96 * 1024)
+    for (const a of plan.args) expect(Buffer.byteLength(a)).toBeLessThan(4096)
+    expect(plan.args).not.toContain('-filter_complex')
+    // A moving zoom's Z is stored once per crop offset (st/ld).
+    expect(plan.graph).toContain("x='st(0,")
+    expect(plan.graph).toContain("y='st(0,")
+  })
+  it('builds edits inside every cap, past the 128 KiB per-argument limit, and in argv it would not', () => {
+    const edits = fullEdits()
+    expect(edits.blurs).toHaveLength(EDIT_LIMITS.blurs)
+    expect(edits.holds).toHaveLength(EDIT_LIMITS.holds)
+    const input = { ...base, edits, overlays: fullOverlays() }
+    const plan = buildRenderPlan({ ...input, graphFile: '/scratch/filters.txt' })
+    expect(Buffer.byteLength(plan.graph)).toBeGreaterThan(128 * 1024)
+    expect(Buffer.byteLength(plan.graph)).toBeLessThanOrEqual(MAX_GRAPH_BYTES)
+    for (const a of plan.args) expect(Buffer.byteLength(a)).toBeLessThan(4096)
+    // The inline form (tests only) is the same graph as one argument.
+    const inline = buildRenderArgs(input)
+    expect(fc(inline)).toBe(plan.graph)
+    expect(Buffer.byteLength(fc(inline))).toBeGreaterThan(128 * 1024)
+  })
+  it('refuses a graph over the sanity limit', () => {
+    expect(() => graphArgs(['x'.repeat(MAX_GRAPH_BYTES)], undefined)).not.toThrow()
+    expect(() => graphArgs(['x'.repeat(MAX_GRAPH_BYTES + 1)], '/scratch/filters.txt')).toThrow(
+      /filter graph is too large/
+    )
+    const edits = normalizeEdits({}, 10_000)
+    expect(() =>
+      buildRenderPlan({
+        ...base,
+        edits,
+        cursor: { assPath: `/${'c'.repeat(MAX_GRAPH_BYTES)}.ass` },
+        graphFile: '/scratch/filters.txt'
+      })
+    ).toThrow(/filter graph is too large/)
   })
 })
 

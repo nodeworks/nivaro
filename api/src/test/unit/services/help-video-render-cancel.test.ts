@@ -1,4 +1,4 @@
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -76,6 +76,11 @@ vi.mock('../../../services/ffmpeg.js', async (importOriginal) => ({
     ff.during = null
     await hook?.()
     if (signal?.aborted) throw new Error('aborted')
+    // The graph goes by file, written before ffmpeg is started.
+    if (args.includes('-filter_complex')) throw new Error('the graph was passed as an argument')
+    const script = args.indexOf('-filter_complex_script')
+    if (script >= 0 && !readFileSync(args[script + 1], 'utf8').includes('[vout]'))
+      throw new Error('the graph file was not written')
     const codec = args.includes('-c:v') ? args[args.indexOf('-c:v') + 1] : null
     if (codec && codec === ff.failCodec) throw new Error(`${codec}: encoder failed`)
     await writeFile(args[args.length - 1], 'x')
@@ -254,7 +259,7 @@ describe('hardware fallback', () => {
     await r.queueRender('a')
     await settle()
     expect(row('a').render_status).toBe('ready')
-    const encodes = ff.calls.filter((c) => c.includes('-filter_complex'))
+    const encodes = ff.calls.filter((c) => c.includes('-filter_complex_script'))
     expect(encodes.map((c) => c[c.indexOf('-c:v') + 1])).toEqual(['h264_videotoolbox', 'libx264'])
     expect(runs.completed[0]).toMatch(
       /libx264 veryfast crf 23 \(videotoolbox failed; encoded in software\)/
@@ -267,7 +272,7 @@ describe('hardware fallback', () => {
     await r.queueRender('a')
     await settle()
     expect(row('a').render_status).toBe('failed')
-    expect(ff.calls.filter((c) => c.includes('-filter_complex'))).toHaveLength(1)
+    expect(ff.calls.filter((c) => c.includes('-filter_complex_script'))).toHaveLength(1)
     expect(runs.failed).toBe(1)
   })
 })

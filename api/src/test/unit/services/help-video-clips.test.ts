@@ -65,7 +65,13 @@ function builder(table: string) {
   return b
 }
 vi.mock('../../../db/index.js', () => ({ db: (t: string) => builder(t) }))
-const st = vi.hoisted(() => ({ migrated: true, ffmpeg: true, ran: [] as string[][], uploads: 0 }))
+const st = vi.hoisted(() => ({
+  migrated: true,
+  ffmpeg: true,
+  ran: [] as string[][],
+  graphs: [] as string[],
+  uploads: 0
+}))
 vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: async () => st.migrated }))
 vi.mock('../../../services/ffmpeg.js', () => ({
   hasFfmpeg: async () => st.ffmpeg,
@@ -74,11 +80,15 @@ vi.mock('../../../services/ffmpeg.js', () => ({
   probeVideo: async () => ({ duration_ms: 60_000, width: 1920, height: 1080, has_audio: true }),
   runFfmpeg: async (args: string[], onProgress?: (ms: number) => void) => {
     st.ran.push(args)
+    if (files.failWith) throw Object.assign(new Error(files.failWith), { stderr: files.failWith })
+    // The graph comes by file, written before ffmpeg is started.
+    if (args.includes('-filter_complex')) throw new Error('the graph was passed as an argument')
+    st.graphs.push(readFileSync(args[args.indexOf('-filter_complex_script') + 1], 'utf8'))
     onProgress?.(1500)
     writeFileSync(args[args.length - 1], readFileSync(args[args.indexOf('-i') + 1]))
   }
 }))
-const files = vi.hoisted(() => ({ discarded: [] as string[] }))
+const files = vi.hoisted(() => ({ discarded: [] as string[], failWith: null as string | null }))
 vi.mock('../../../services/files.js', () => ({
   getFile: async (id: string) =>
     id === 'missing' ? undefined : { id, filename_disk: `${id}.bin`, type: 'video/webm' },
@@ -95,7 +105,7 @@ vi.mock('../../../services/stored-object-stream.js', () => ({
   openStoredObject: async () => ({ stream: Readable.from([Buffer.from('video-bytes')]) })
 }))
 vi.mock('../../../services/io-holder.js', () => ({ getApp: () => null }))
-const runs = vi.hoisted(() => ({ outcomes: [] as string[], failures: 0 }))
+const runs = vi.hoisted(() => ({ outcomes: [] as string[], failures: 0, failed: [] as string[] }))
 vi.mock('../../../services/job-runs.js', () => ({
   startJobRun: async () => ({
     id: 1,
@@ -103,8 +113,9 @@ vi.mock('../../../services/job-runs.js', () => ({
     complete: async (o: string) => {
       runs.outcomes.push(o)
     },
-    fail: async () => {
+    fail: async (err: unknown) => {
       runs.failures++
+      runs.failed.push(err instanceof Error ? err.message : String(err))
     }
   })
 }))
@@ -139,10 +150,13 @@ beforeEach(() => {
   st.migrated = true
   st.ffmpeg = true
   st.ran = []
+  st.graphs = []
   st.uploads = 0
   files.discarded = []
+  files.failWith = null
   runs.outcomes = []
   runs.failures = 0
+  runs.failed = []
 })
 
 describe('checkClipRange / cleanClipLabel', () => {
@@ -204,6 +218,15 @@ describe('serializeClip', () => {
     expect(clips.serializeClip({ ...row, status: 'queued', file_id: null }, 'T').url).toBeNull()
     expect(clips.serializeClip(row, null).url).toBeNull()
   })
+  it('tells authors why a clip failed, viewers only that it did', () => {
+    const failed = { ...row, status: 'failed', error: 'The clip could not be made', file_id: null }
+    expect(clips.serializeClip(failed, 'T', { author: true })).toMatchObject({
+      status: 'failed',
+      error: 'The clip could not be made'
+    })
+    expect(clips.serializeClip(failed, 'T', { author: false }).error).toBeNull()
+    expect(clips.serializeClip(failed, 'T').error).toBeNull()
+  })
 })
 
 describe('createClip', () => {
@@ -227,6 +250,11 @@ describe('createClip', () => {
     expect(Number(done.bytes)).toBeGreaterThan(0)
     expect(st.ran).toHaveLength(1)
     expect(st.ran[0]).toContain('libx264')
+    // The graph went by file in the clip's scratch directory, not in argv.
+    expect(st.ran[0][st.ran[0].indexOf('-filter_complex_script') + 1]).toMatch(
+      new RegExp(`^${join(work, 'clips')}/[0-9a-f-]{36}-[0-9a-f]{8}/filters\\.txt$`)
+    )
+    expect(st.graphs[0]).toContain('[vout]')
     expect(runs.outcomes[0]).toMatch(/^mp4 · 3 s/)
     expect(existsSync(join(work, 'clips'))).toBe(true)
   })
@@ -234,8 +262,8 @@ describe('createClip', () => {
     await clips.createClip(video, user, { kind: 'gif', start_ms: 0, end_ms: 2000 })
     await clips.whenClipsIdle()
     expect(st.ran).toHaveLength(2)
-    expect(st.ran[0].join(' ')).toContain('palettegen')
-    expect(st.ran[1].join(' ')).toContain('paletteuse')
+    expect(st.graphs[0]).toContain('palettegen')
+    expect(st.graphs[1]).toContain('paletteuse')
     expect(tables.nivaro_help_video_clips[0]).toMatchObject({ status: 'ready', width: 640 })
   })
   it('cuts from the render when it is current', async () => {
@@ -297,6 +325,28 @@ describe('createClip', () => {
     })
     await clips.whenClipsIdle()
   })
+  it('stops at 50 clips queued or being made across the instance', async () => {
+    for (let i = 0; i < 50; i++) {
+      tables.nivaro_help_video_clips.push({
+        id: `q${i}`,
+        video_id: `other-video-${i}`,
+        status: i % 2 ? 'queued' : 'rendering'
+      })
+    }
+    await expect(
+      clips.createClip(video, user, { kind: 'mp4', start_ms: 0, end_ms: 1000 })
+    ).rejects.toMatchObject({
+      statusCode: 409,
+      code: 'HELP_VIDEO_CLIP_LIMIT',
+      message: expect.stringMatching(/Too many clips are being made/)
+    })
+    expect(tables.nivaro_help_video_clips).toHaveLength(50)
+    // Finished ones do not count.
+    tables.nivaro_help_video_clips[0].status = 'ready'
+    await clips.createClip(video, user, { kind: 'mp4', start_ms: 0, end_ms: 1000 })
+    await clips.whenClipsIdle()
+    expect(tables.nivaro_help_video_clips).toHaveLength(51)
+  })
   it('fails the row with a plain reason when the recording is missing', async () => {
     tables.nivaro_help_video_versions[0].source_file = 'missing'
     await clips.createClip(video, user, { kind: 'mp4', start_ms: 0, end_ms: 1000 })
@@ -304,6 +354,20 @@ describe('createClip', () => {
     expect(tables.nivaro_help_video_clips[0]).toMatchObject({ status: 'failed' })
     expect(String(tables.nivaro_help_video_clips[0].error)).toMatch(/could not be made|missing/)
     expect(runs.failures).toBe(1)
+  })
+  it('keeps ffmpeg detail (scratch paths) out of the row: job run and log only', async () => {
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    tables.nivaro_help_video_versions[0].source_file = 'unreadable'
+    files.failWith = `Error opening ${join(work, 'clips', 'x', 'input.webm')}: Invalid data`
+    await clips.createClip(video, user, { kind: 'mp4', start_ms: 0, end_ms: 1000 })
+    await clips.whenClipsIdle()
+    const row = tables.nivaro_help_video_clips[0]
+    expect(row).toMatchObject({ status: 'failed', error: 'The clip could not be made' })
+    expect(String(row.error)).not.toContain(work)
+    expect(runs.failures).toBe(1)
+    expect(runs.failed[0]).toContain(work)
+    expect(warned.mock.calls.map((c) => c.join(' ')).join('\n')).toContain(work)
+    warned.mockRestore()
   })
 })
 
@@ -348,12 +412,18 @@ describe('deleteClip / takeVideoClipFiles / failStaleClips', () => {
 })
 
 describe('friendlyClipError', () => {
-  it('names a missing recording and keeps other reasons short', () => {
+  it('names a missing recording or a cancel, and says nothing more of other failures', () => {
     expect(clips.friendlyClipError(new Error('Stored object not found'))).toBe(
       'The recording is missing from storage'
     )
+    expect(clips.friendlyClipError(new Error('ffmpeg was cancelled'))).toBe(
+      'The clip was cancelled'
+    )
     expect(clips.friendlyClipError(new Error('ffmpeg exited with 1'))).toBe(
-      'The clip could not be made: ffmpeg exited with 1'
+      'The clip could not be made'
+    )
+    expect(clips.friendlyClipError(new Error('/srv/work/clips/abc/input.webm: Invalid data'))).toBe(
+      'The clip could not be made'
     )
   })
 })

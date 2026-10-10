@@ -24,7 +24,10 @@ import { DEFAULT_VIDEO_ARGS, type VideoEncodePlan } from './help-video-encoder.j
 // recorded frame (their rects are fractions of it); the crop (#1544) then cuts
 // the picture down to what viewers see, and zooms move inside the cropped
 // picture. Cards and banners are full frames of the cropped output size. Expressions are single-quoted inside the graph so
-// commas and colons stay literal; ffmpeg receives the graph as one argument.
+// commas and colons stay literal. The graph is written to a file in the
+// render's scratch directory and named with -filter_complex_script: as one
+// argument it can pass Linux's 128 KiB per-argument limit (fifty moving zooms
+// with their stops alone come to about 110 KB) and ffmpeg never starts.
 
 export interface RenderInput {
   edits: VideoEdits
@@ -56,6 +59,34 @@ export interface RenderInput {
   video?: Pick<VideoEncodePlan, 'inputArgs' | 'hwFilter' | 'videoArgs'>
   /** One pass of a two-pass encode: pass 1 writes only the log (no file). */
   pass?: { n: 1 | 2; logfile: string }
+  /** Where the caller writes the filter graph (buildRenderPlan hands it
+   *  back): the arguments then name it with -filter_complex_script. Without
+   *  it the graph is one -filter_complex argument (tests). */
+  graphFile?: string
+}
+
+/** A filter graph is refused above this: a file has no argument limit, so
+ *  this is only a sanity bound (every cap in EDIT_LIMITS together stays well
+ *  under 1 MB). */
+export const MAX_GRAPH_BYTES = 4 * 1024 * 1024
+
+/** The finished graph and the arguments that hand it to ffmpeg: by file
+ *  (`-filter_complex_script`) when the plan names one, else inline. */
+export function graphArgs(
+  parts: string[],
+  graphFile: string | undefined
+): { graph: string; args: string[] } {
+  const graph = parts.join(';')
+  const bytes = Buffer.byteLength(graph)
+  if (bytes > MAX_GRAPH_BYTES) {
+    throw new Error(
+      `The filter graph is too large to render (${Math.round(bytes / 1024)} KB; the limit is ${MAX_GRAPH_BYTES / 1024} KB)`
+    )
+  }
+  return {
+    graph,
+    args: graphFile ? ['-filter_complex_script', graphFile] : ['-filter_complex', graph]
+  }
 }
 
 /** The narration cleanup (#1519): spectral noise reduction, then loudness
@@ -284,6 +315,12 @@ export function blurPower(requested: number, radius: number): number {
 }
 
 export function buildRenderArgs(input: RenderInput): string[] {
+  return buildRenderPlan(input).args
+}
+
+/** The arguments and the filter graph of one render pass. With `graphFile`
+ *  the caller writes `graph` there before spawning ffmpeg. */
+export function buildRenderPlan(input: RenderInput): { args: string[]; graph: string } {
   // An unmapped mime yields no pinned demuxer; refuse rather than let ffmpeg probe.
   const sourceLock = lockedInputArgs(input.sourceMime)
   if (!sourceLock.includes('-f')) {
@@ -629,8 +666,9 @@ export function buildRenderArgs(input: RenderInput): string[] {
   const passArgs = pass ? ['-pass', String(pass.n), '-passlogfile', pass.logfile] : []
   const output =
     pass?.n === 1 ? ['-f', 'null', devNull] : ['-movflags', '+faststart', input.outputPath]
+  const graph = graphArgs(parts, input.graphFile)
 
-  return [
+  const args = [
     '-y',
     '-v',
     'error',
@@ -680,8 +718,7 @@ export function buildRenderArgs(input: RenderInput): string[] {
     ),
     // Music last, looped for as long as the graph reads it (atrim bounds it).
     ...(music ? ['-stream_loop', '-1', ...lockedInputArgs(music.mime), '-i', music.path] : []),
-    '-filter_complex',
-    parts.join(';'),
+    ...graph.args,
     ...maps,
     ...(input.video?.videoArgs ?? DEFAULT_VIDEO_ARGS),
     ...passArgs,
@@ -690,6 +727,7 @@ export function buildRenderArgs(input: RenderInput): string[] {
     ...(withAudio ? ['-c:a', 'aac', '-b:a', '128k'] : []),
     ...output
   ]
+  return { args, graph: graph.graph }
 }
 
 export function buildPosterArgs(renderedPath: string, editedMs: number, outPath: string): string[] {

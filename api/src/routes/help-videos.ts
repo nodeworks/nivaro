@@ -178,6 +178,21 @@ async function requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<v
   }
 }
 
+/** Was this clip cut from the version viewers see (the published one)? */
+function clipOfPublished(
+  row: Record<string, unknown>,
+  video: { published_version_id: string | null }
+): boolean {
+  return (
+    !!row.version_id &&
+    !!video.published_version_id &&
+    String(row.version_id).toLowerCase() === String(video.published_version_id).toLowerCase()
+  )
+}
+
+/** The finalize body (the recording's metadata) may be this large. */
+export const FINALIZE_BODY_BYTES = 8 * 1024 * 1024
+
 function viewerCtx(req: FastifyRequest, author: boolean) {
   return { author, userId: req.user!.id, role: req.user!.role ?? null, sidTag: sessionTag(req) }
 }
@@ -210,22 +225,28 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     }
     return reply.send({ data: await appendPart(req.user!, id, Number(n), body) })
   })
-  app.post('/uploads/:id/finalize', { preHandler: requireAuthor }, async (req, reply) => {
-    const { id } = req.params as { id: string }
-    const meta = (req.body ?? {}) as {
-      duration_ms?: number
-      clicks?: unknown
-      levels?: unknown
-      activity?: unknown
-      script?: unknown
-      marks?: unknown
+  // The metadata (clicks, levels, activity, script, marks) is bounded by its
+  // normalisers at under 3 MB, so the body need not parse under the global limit.
+  app.post(
+    '/uploads/:id/finalize',
+    { preHandler: requireAuthor, bodyLimit: FINALIZE_BODY_BYTES },
+    async (req, reply) => {
+      const { id } = req.params as { id: string }
+      const meta = (req.body ?? {}) as {
+        duration_ms?: number
+        clicks?: unknown
+        levels?: unknown
+        activity?: unknown
+        script?: unknown
+        marks?: unknown
+      }
+      const result = await finalizeUpload(req.user!, id, meta)
+      // An uploaded file is checked (and maybe converted) in the background:
+      // poll GET /uploads/:id until it is finalized.
+      if ('processing' in result) return reply.code(202).send({ data: result })
+      return reply.send({ data: result })
     }
-    const result = await finalizeUpload(req.user!, id, meta)
-    // An uploaded file is checked (and maybe converted) in the background:
-    // poll GET /uploads/:id until it is finalized.
-    if ('processing' in result) return reply.code(202).send({ data: result })
-    return reply.send({ data: result })
-  })
+  )
   app.get('/uploads/mine', { preHandler: requireAuthor }, async (req, reply) => {
     return reply.send({ data: await listOpenUploads(req.user!) })
   })
@@ -763,15 +784,19 @@ export async function helpVideosRoutes(app: FastifyInstance) {
 
   // ── Clips and GIFs (#1562) ────────────────────────────────────────────────
   // Anyone who can watch the video sees its clips (the list carries ticketed
-  // links); only authors make and delete them.
+  // links); only authors make and delete them. A viewer sees only clips of
+  // the published version: one cut from the draft shows what is not
+  // published yet (the media route refuses it the same way).
   const clipTicket = (req: FastifyRequest, videoId: string) =>
     mediaTicket(String(videoId).toLowerCase(), req.user!.id, 'p', Date.now(), sessionTag(req))
   app.get('/:id/clips', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const { video } = await loadVideoForUser(req, id)
+    const { video, author } = await loadVideoForUser(req, id)
     const t = clipTicket(req, String(video.id))
-    const rows = await listClips(String(video.id))
-    return reply.send({ data: rows.map((r) => serializeClip(r, t)) })
+    const rows = (await listClips(String(video.id))).filter(
+      (r) => author || clipOfPublished(r, video)
+    )
+    return reply.send({ data: rows.map((r) => serializeClip(r, t, { author })) })
   })
   app.post('/:id/clips', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -792,7 +817,9 @@ export async function helpVideosRoutes(app: FastifyInstance) {
       item: String(video.id).toLowerCase(),
       comment: `${String(row.kind)} ${Number(row.start_ms)}–${Number(row.end_ms)} ms`
     })
-    return reply.code(201).send({ data: serializeClip(row, clipTicket(req, String(video.id))) })
+    return reply
+      .code(201)
+      .send({ data: serializeClip(row, clipTicket(req, String(video.id)), { author: true }) })
   })
   app.delete('/:id/clips/:clipId', { preHandler: requireAuthor }, async (req, reply) => {
     const { id, clipId } = req.params as { id: string; clipId: string }
@@ -1181,14 +1208,20 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
   })
 
   // A clip (#1562): the same people as the video (no version needed — the
-  // clip row says which one it was cut from). `download=1` saves it.
+  // clip row says which one it was cut from). A viewer gets only a clip of
+  // the published version; one cut from the draft is 404 like the draft
+  // itself. `download=1` saves it. Each fetch (not each resumed range) is an
+  // activity row — data egress, like /:id/download.
   app.get('/:id/clips/:clipId', async (req, reply) => {
-    const { video } = await resolve(req, { needVersion: false })
+    const { video, author, userId } = await resolve(req, { needVersion: false })
     const { clipId } = req.params as { clipId: string }
     const q = req.query as { download?: string }
     const row = await clipRow(String(video.id), clipId)
+    const visible = !!row && (author || clipOfPublished(row, video))
     const file =
-      row?.status === 'ready' && row.file_id ? await getFile(String(row.file_id)) : undefined
+      visible && row.status === 'ready' && row.file_id
+        ? await getFile(String(row.file_id))
+        : undefined
     if (!row || !file?.filename_disk) {
       return reply.code(404).send({ error: 'Clip not found', code: 'HELP_VIDEO_CLIP_NOT_FOUND' })
     }
@@ -1198,6 +1231,15 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       `${video.title || 'Help video'}${row.label ? ` - ${String(row.label)}` : ''}`,
       gif ? 'gif' : 'mp4'
     )
+    if (startsDownload(req.headers.range)) {
+      void logActivity({
+        action: 'help-video-download',
+        user: userId,
+        collection: 'nivaro_help_videos',
+        item: String(video.id).toLowerCase(),
+        comment: `clip ${String(row.id).toLowerCase()} (${gif ? 'gif' : 'mp4'})${q.download === '1' ? ' · download' : ''}`
+      })
+    }
     return sendStoredObject(reply, file.filename_disk, {
       rangeHeader: req.headers.range,
       contentType: gif ? 'image/gif' : 'video/mp4',

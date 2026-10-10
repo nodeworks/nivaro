@@ -292,6 +292,8 @@ export const EDIT_LIMITS = {
   minKeptMs: 1000,
   minItemMs: 200,
   minSegmentMs: 100,
+  /** Kept pieces: each is one branch of the render's and a clip's graph. */
+  segments: 500,
   /** Smallest zoom rect side (fraction of the frame): at most 4x magnification. */
   zoomMinSide: 0.25,
   /** Stops of a moving zoom (#1539), per zoom and over the whole video: each
@@ -418,6 +420,7 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
       .sort((a, b) => a.start_ms - b.start_ms)
     segments = []
     for (const s of raw) {
+      if (segments.length >= EDIT_LIMITS.segments) break
       const prevEnd = segments.length ? segments[segments.length - 1].end_ms : 0
       const start = Math.max(s.start_ms, prevEnd)
       if (s.end_ms - start >= EDIT_LIMITS.minSegmentMs) segments.push({ ...s, start_ms: start })

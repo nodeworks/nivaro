@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { hasFfmpeg, probeVideo, runFfmpeg } from '../../services/ffmpeg.js'
 import { normalizeEdits } from '../../services/help-video-edits.js'
-import { buildRenderArgs } from '../../services/help-video-render-plan.js'
+import { runRenderPlan } from './help-video-graph-file.js'
 
 // Slow motion (#1538) and the video crop (#1544) through real ffmpeg.
 describe('crop and slow motion through real ffmpeg', () => {
@@ -44,19 +44,17 @@ describe('crop and slow motion through real ffmpeg', () => {
       3000
     )
     const out = join(dir, 'out.mp4')
-    await runFfmpeg(
-      buildRenderArgs({
-        edits,
-        width: 640,
-        height: 360,
-        hasAudio: true,
-        sourcePath: src,
-        sourceMime: 'video/webm',
-        overlays: [],
-        outputPath: out,
-        threads: 2
-      })
-    )
+    await runRenderPlan({
+      edits,
+      width: 640,
+      height: 360,
+      hasAudio: true,
+      sourcePath: src,
+      sourceMime: 'video/webm',
+      overlays: [],
+      outputPath: out,
+      threads: 2
+    })
     const p = await probeVideo(out, 'video/mp4')
     expect(p.width).toBe(320)
     expect(p.height).toBe(360)

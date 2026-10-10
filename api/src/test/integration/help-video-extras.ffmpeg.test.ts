@@ -3,11 +3,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { hasFfmpeg, probeVideo, runFfmpeg } from '../../services/ffmpeg.js'
-import {
-  buildClipArgs,
-  type ClipPlanInput,
-  clipSpans
-} from '../../services/help-video-clip-plan.js'
+import { type ClipPlanInput, clipSpans } from '../../services/help-video-clip-plan.js'
 import { emptyEdits, type VideoEdits } from '../../services/help-video-edits.js'
 import {
   buildPeaksArgs,
@@ -15,6 +11,7 @@ import {
   peaksFromPcm,
   spriteGeometry
 } from '../../services/help-video-extras-plan.js'
+import { runClipPlan } from './help-video-graph-file.js'
 
 // #1560 / #1562 against the real ffmpeg: a 6-second test pattern with a tone
 // gets a sprite sheet and peaks; a clip of it comes out as an MP4 and a GIF.
@@ -102,7 +99,7 @@ describe('clips', () => {
       cut,
       palettePath: join(dir, 'palette.png')
     }
-    await runFfmpeg(buildClipArgs(base))
+    await runClipPlan(base)
     const mp4 = await probeVideo(base.outputPath, 'video/mp4')
     expect(mp4.width).toBe(640)
     expect(mp4.has_audio).toBe(true)
@@ -110,9 +107,9 @@ describe('clips', () => {
     expect(mp4.duration_ms).toBeLessThan(2400)
 
     const gif = { ...base, kind: 'gif' as const, outputPath: join(dir, 'clip.gif') }
-    await runFfmpeg(buildClipArgs(gif, 'palette'))
+    await runClipPlan(gif, 'palette')
     expect(statSync(gif.palettePath as string).size).toBeGreaterThan(0)
-    await runFfmpeg(buildClipArgs(gif, 'encode'))
+    await runClipPlan(gif, 'encode')
     const bytes = readFileSync(gif.outputPath)
     expect(bytes.subarray(0, 6).toString('latin1')).toBe('GIF89a')
     expect(bytes.length).toBeGreaterThan(1000)
@@ -122,19 +119,17 @@ describe('clips', () => {
     if (!(await hasFfmpeg())) ctx.skip()
     const src = await source()
     const out = join(dir, 'rendered-clip.mp4')
-    await runFfmpeg(
-      buildClipArgs({
-        kind: 'mp4',
-        inputPath: src,
-        inputMime: 'video/mp4',
-        width: 640,
-        height: 360,
-        hasAudio: true,
-        threads: 1,
-        outputPath: out,
-        cut: { from: 'rendered', start_ms: 4000, end_ms: 5500 }
-      })
-    )
+    await runClipPlan({
+      kind: 'mp4',
+      inputPath: src,
+      inputMime: 'video/mp4',
+      width: 640,
+      height: 360,
+      hasAudio: true,
+      threads: 1,
+      outputPath: out,
+      cut: { from: 'rendered', start_ms: 4000, end_ms: 5500 }
+    })
     const probe = await probeVideo(out, 'video/mp4')
     expect(probe.duration_ms).toBeGreaterThan(1300)
     expect(probe.duration_ms).toBeLessThan(1800)

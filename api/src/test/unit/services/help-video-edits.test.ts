@@ -57,6 +57,18 @@ describe('normalizeEdits', () => {
       { start_ms: 30_000, end_ms: SRC, speed: 1 }
     ])
   })
+  it('keeps the first EDIT_LIMITS.segments pieces in time order, and all of them up to it', () => {
+    const piece = (i: number) => ({ start_ms: i * 200, end_ms: i * 200 + 100, speed: 1 as const })
+    const src = 200 * (EDIT_LIMITS.segments + 100)
+    const atLimit = Array.from({ length: EDIT_LIMITS.segments }, (_, i) => piece(i))
+    const e = normalizeEdits({ segments: atLimit }, src)
+    expect(e.segments).toEqual(atLimit)
+    expect(hashEdits(normalizeEdits(e, src))).toBe(hashEdits(e))
+    // Over it: the earliest pieces stay, however they were ordered.
+    const over = Array.from({ length: EDIT_LIMITS.segments + 100 }, (_, i) => piece(i)).reverse()
+    const capped = normalizeEdits({ segments: over }, src)
+    expect(capped.segments).toEqual(atLimit)
+  })
   it('refuses edits that keep less than one second', () => {
     expect(() =>
       normalizeEdits({ segments: [{ start_ms: 0, end_ms: 500, speed: 1 }] }, SRC)
