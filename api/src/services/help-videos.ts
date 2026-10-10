@@ -322,6 +322,45 @@ export async function isAuthor(user: User, isAdmin: boolean): Promise<boolean> {
   return (await authorRoleIds()).includes(up(user.role))
 }
 
+type MasqueradeAuthor = { user: User; role: Record<string, unknown> | null; isAdmin: boolean }
+const masqueradeAuthors = new WeakMap<FastifyRequest, Promise<MasqueradeAuthor | null>>()
+
+/**
+ * The administrator behind a masquerade request, when that administrator may
+ * author videos (null otherwise, and for every other kind of request — a
+ * run-as-key session also carries masqueradeAdminId and never counts). An
+ * admin viewing the app as someone else still records and edits videos as
+ * themselves: the recording shows the other person's screen, the video and
+ * its upload belong to the admin. Read once per request.
+ */
+export function masqueradeAuthor(req: FastifyRequest): Promise<MasqueradeAuthor | null> {
+  if (req.authMethod !== 'masquerade' || !req.masqueradeAdminId) return Promise.resolve(null)
+  let found = masqueradeAuthors.get(req)
+  if (!found) {
+    found = (async () => {
+      const admin = (await db('nivaro_users')
+        .where({ id: req.masqueradeAdminId, status: 'active' })
+        .first()) as (User & { is_redacted?: unknown }) | undefined
+      if (!admin || admin.is_redacted === true || admin.is_redacted === 1) return null
+      const role = admin.role ? await db('nivaro_roles').where({ id: admin.role }).first() : null
+      const isAdmin = !!role?.admin_access
+      return (await isAuthor(admin, isAdmin)) ? { user: admin, role: role ?? null, isAdmin } : null
+    })().catch(() => null)
+    masqueradeAuthors.set(req, found)
+  }
+  return found
+}
+
+/** Runs the rest of a help-video request as the masquerading administrator
+ *  when they may author videos (see masqueradeAuthor). Nothing otherwise. */
+export async function actAsMasqueradeAuthor(req: FastifyRequest): Promise<void> {
+  const m = await masqueradeAuthor(req)
+  if (!m) return
+  req.user = m.user
+  req.userRole = m.role as typeof req.userRole
+  req.isAdmin = m.isAdmin
+}
+
 export function viewerMaySee(
   video: { status: string; visibility: unknown },
   role: string | null,
@@ -1506,6 +1545,9 @@ export async function videosForContext(
   q: { collection?: string; item?: string; state?: string; page?: string }
 ): Promise<{ data: HelpVideoDto[]; can_author: boolean; state: string | null }> {
   const author = await isAuthor(req.user!, !!req.isAdmin)
+  // A screen's videos are the person's own view (an admin masquerading sees
+  // what they see), but the Record offer follows the admin behind them.
+  const canAuthor = author || !!(await masqueradeAuthor(req))
   let state = q.state ?? null
   if (!state && q.collection && q.item) {
     // A record's pipeline state is record data: read the record AS THE CALLER
@@ -1531,14 +1573,14 @@ export async function videosForContext(
       }
     }
   }
-  if (!q.collection && !q.page) return { data: [], can_author: author, state }
+  if (!q.collection && !q.page) return { data: [], can_author: canAuthor, state }
   const qb = db('nivaro_help_video_contexts').select('video_id', 'kind', 'key', 'state_key')
   qb.where((w) => {
     if (q.collection) w.orWhere((x) => x.where({ kind: 'collection', key: q.collection }))
     if (q.page) w.orWhere((x) => x.where({ kind: 'page', key: q.page }))
   })
   const ids = rankForContext(await qb, { collection: q.collection, state, page: q.page })
-  if (!ids.length) return { data: [], can_author: author, state }
+  if (!ids.length) return { data: [], can_author: canAuthor, state }
   const videos = (await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[]
   const byId = new Map(videos.map((v) => [up(v.id), v]))
   const shown = ids
@@ -1559,7 +1601,7 @@ export async function videosForContext(
       })
     )
   )
-  return { data, can_author: author, state }
+  return { data, can_author: canAuthor, state }
 }
 
 export async function listVideos(

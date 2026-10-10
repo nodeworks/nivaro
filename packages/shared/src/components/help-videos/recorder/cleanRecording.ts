@@ -21,6 +21,10 @@ import { ItemEditAuthContext } from '../../../context'
 
 export const CLEAN_RECORDING_ATTR = 'data-nvr-recording-clean'
 export const RECORDING_HIDE_ATTR = 'data-nvr-recording-hide'
+/** On <html> from the countdown to the stop of EVERY recording, clean screen
+ *  or not. `data-nvr-recording-hide="always"` hides an element while it is
+ *  set (a masquerade bar: never part of a video, whatever the setting). */
+export const RECORDING_ATTR = 'data-nvr-recording'
 
 /** What the author reads as while a clean recording runs. */
 export const DEMO_USER = {
@@ -90,6 +94,32 @@ export function useCleanScreen(active: boolean): void {
   }, [active])
 }
 
+let recordingHolders = 0
+
+/** Marks the page as being recorded until the returned release runs
+ *  (idempotent; nested holders count, like beginCleanRecording). */
+export function beginRecordingScreen(): () => void {
+  recordingHolders += 1
+  if (recordingHolders === 1 && typeof document !== 'undefined')
+    document.documentElement.setAttribute(RECORDING_ATTR, '1')
+  let released = false
+  return () => {
+    if (released) return
+    released = true
+    recordingHolders = Math.max(0, recordingHolders - 1)
+    if (recordingHolders === 0 && typeof document !== 'undefined')
+      document.documentElement.removeAttribute(RECORDING_ATTR)
+  }
+}
+
+/** Holds the recording mark while `active` is true. */
+export function useRecordingScreen(active: boolean): void {
+  useEffect(() => {
+    if (!active) return
+    return beginRecordingScreen()
+  }, [active])
+}
+
 /** Tells shared components who the signed-in person is, so their own photo
  *  reads as Demo User during a clean recording. Hosts call it once they know. */
 export function setRecordingSelf(userId: string | number | null | undefined): void {
@@ -135,7 +165,9 @@ export function writeCleanPref(on: boolean): void {
 /** Test-only: forget every holder and the registered person. */
 export function resetCleanRecordingForTests(): void {
   holders = 0
+  recordingHolders = 0
   selfId = null
+  if (typeof document !== 'undefined') document.documentElement.removeAttribute(RECORDING_ATTR)
   apply(false)
   emit()
 }

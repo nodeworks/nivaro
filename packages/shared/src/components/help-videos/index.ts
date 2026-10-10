@@ -28,9 +28,11 @@ export { AuthorRolesButton } from './library/AuthorRolesButton'
 export { HelpVideoLibrary } from './library/HelpVideoLibrary'
 export {
   beginCleanRecording,
+  beginRecordingScreen,
   CLEAN_RECORDING_ATTR,
   DEMO_USER,
   isCleanRecording,
+  RECORDING_ATTR,
   RECORDING_HIDE_ATTR,
   setRecordingSelf,
   useCleanRecording,

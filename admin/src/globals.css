@@ -588,6 +588,13 @@ tr.nvr-row-flash > td {
   .traffic-map .tm-ev-fresh { animation: none; }
 }
 
+/* Every help-video recording (clean screen or not) puts data-nvr-recording on
+   <html> from the countdown to the stop: data-nvr-recording-hide="always"
+   (a masquerade bar) never shows in a video. */
+html[data-nvr-recording] [data-nvr-recording-hide='always'] {
+  display: none !important;
+}
+
 /* Clean help-video recording: the recorder puts data-nvr-recording-clean on
    <html> from the countdown to the stop. Tagged chrome (notification counts,
    chat, banners, floating chips) and Sonner toasts leave the frame;

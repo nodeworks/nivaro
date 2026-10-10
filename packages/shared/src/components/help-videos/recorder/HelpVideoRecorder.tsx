@@ -1,10 +1,11 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useApiFetchConfig, useNivaroClient } from '../../../context'
 import { Dialog, DialogContent } from '../../ui/dialog'
 import { modalHostOf } from '../../ui/popover'
 import { fetchHelpVideo, helpVideoApi } from '../api'
 import type { HelpVideoContext, HelpVideoDto } from '../types'
-import { readCleanPref, useCleanScreen, writeCleanPref } from './cleanRecording'
+import { outsideCaptureHost, releaseOutsideHost } from './captureRestriction'
+import { readCleanPref, useCleanScreen, useRecordingScreen, writeCleanPref } from './cleanRecording'
 import { type Failure, plainFailure, stopsRecording } from './failure'
 import { findLeftovers, type Leftover, planResume } from './leftovers'
 import { idbPartStore, PartUploader, type UploadState } from './partQueue'
@@ -213,6 +214,20 @@ export function HelpVideoRecorder({
   // A clean screen from the countdown to the stop (paused included). Leaving
   // these stages, closing or unmounting the recorder brings everything back.
   useCleanScreen(open && options.cleanScreen && (stage === 'countdown' || stage === 'recording'))
+  useRecordingScreen(open && (stage === 'countdown' || stage === 'recording'))
+
+  // A capture that leaves the controls out (captureRestriction) only does so
+  // when the bar is outside <body>: it renders in a host beside it then.
+  const [outsideHost, setOutsideHost] = useState<HTMLElement | null>(null)
+  useLayoutEffect(() => {
+    if (!cap.restricted) return
+    setOutsideHost(outsideCaptureHost())
+    return () => {
+      setOutsideHost(null)
+      releaseOutsideHost()
+    }
+  }, [cap.restricted])
+  const recordingBarHost = (cap.restricted && outsideHost) || barHost
 
   // A fresh start every time the recorder opens (unless a recording is live).
   // The script stays for the same video (a cancelled setup keeps what was
@@ -716,9 +731,9 @@ export function HelpVideoRecorder({
       <>
         {/* Marks where the recorder sits in the tree, for modalHostOf. */}
         <span ref={setMarker} hidden />
-        {barHost && (
+        {recordingBarHost && (
           <RecorderBar
-            host={barHost}
+            host={recordingBarHost}
             stage={stage}
             count={cap.count}
             elapsed={cap.elapsed}

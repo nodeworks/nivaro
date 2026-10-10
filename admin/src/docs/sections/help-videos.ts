@@ -33,6 +33,14 @@ export const helpVideosGuide: DocSection = {
     },
     {
       type: 'p',
+      text: "The recording controls (time, pause, mute, stop, the script) are kept out of the video when you record this tab in Chrome 132 or later: the capture is limited to the page itself, so dialogs, menus and toasts are recorded and the controls are not. In other browsers, or when you record a window or the whole screen, the controls show in the video as before; trim or blur them in the editor. The View as bar is never recorded, whether clean screen is on or off."
+    },
+    {
+      type: 'p',
+      text: 'Recording as someone else: an administrator who can author videos may View as another person and record from there. The video shows that person\'s screen (their navigation, their data, their permissions), while the video, its upload and every edit belong to the administrator. The help-video library and editor work as the administrator; the per-screen Videos button and required videos still show what the other person sees.'
+    },
+    {
+      type: 'p',
       text: 'Script (optional): write the steps before you record, one per line (up to 60 steps of 200 characters). While you record they show above the recording bar as a teleprompter — the current step large, the next one dimmed, "Step 2 of 5" — and Next (the button, or Alt+Shift+N / ⌥⇧N, which works even while you are typing in a field and is never typed into it) moves on and marks the moment. The new draft opens with a chapter per step you reached, titled with the step\'s text, the first at 0:00; a step you never marked makes no chapter, and you can move or rename them in the editor as usual. The script is kept with the version, so Re-record offers it again, pre-filled; an uploaded file has no script.'
     },
     {

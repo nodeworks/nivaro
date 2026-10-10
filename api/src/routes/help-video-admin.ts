@@ -30,7 +30,7 @@ import {
   storageReport,
   sweepPlan
 } from '../services/help-video-storage.js'
-import { isAuthor } from '../services/help-videos.js'
+import { actAsMasqueradeAuthor, isAuthor } from '../services/help-videos.js'
 import { withJobRun } from '../services/job-runs.js'
 
 // Administrator routes for help videos that are not about one video:
@@ -112,14 +112,18 @@ export async function helpVideoAdminRoutes(app: FastifyInstance): Promise<void> 
 
   // Authors read it (the editor gives new callouts its tone and offers
   // "Apply house style"); administrators change it.
-  app.get('/house-style', { preHandler: authenticate }, async (req, reply) => {
-    if (!(await isAuthor(req.user!, !!req.isAdmin))) {
-      return reply
-        .code(403)
-        .send({ error: 'Only video authors can do this', code: 'HELP_VIDEO_AUTHOR_ONLY' })
+  app.get(
+    '/house-style',
+    { preHandler: [authenticate, actAsMasqueradeAuthor] },
+    async (req, reply) => {
+      if (!(await isAuthor(req.user!, !!req.isAdmin))) {
+        return reply
+          .code(403)
+          .send({ error: 'Only video authors can do this', code: 'HELP_VIDEO_AUTHOR_ONLY' })
+      }
+      return reply.send({ data: await houseStyleBody() })
     }
-    return reply.send({ data: await houseStyleBody() })
-  })
+  )
 
   app.patch('/house-style', { preHandler: requireAdmin }, async (req, reply) => {
     const body = (req.body ?? {}) as { house_style?: unknown }

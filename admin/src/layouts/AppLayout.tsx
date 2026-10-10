@@ -1030,7 +1030,7 @@ function ViewAsBar() {
   return (
     <div
       data-view-as-bar
-      data-nvr-recording-hide
+      data-nvr-recording-hide='always'
       role='status'
       className='flex shrink-0 items-center gap-3 border-b border-amber-300 bg-amber-100 px-4 py-1.5 text-[12.5px] text-amber-950 dark:border-amber-500/40 dark:bg-amber-500/15 dark:text-amber-100'
     >

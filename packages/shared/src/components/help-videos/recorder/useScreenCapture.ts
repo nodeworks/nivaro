@@ -17,6 +17,7 @@ import {
   isMaskedTarget,
   isTypingTarget
 } from './activity'
+import { restrictCaptureToPage } from './captureRestriction'
 import { isNextStepKey, type RecordedMark } from './script'
 
 export const WARN_MS = 25 * 60_000
@@ -57,6 +58,8 @@ type Refs = {
   analyser?: AnalyserNode
   stream?: MediaStream
   recorder?: MediaRecorder
+  /** Undoes the page change made to keep the controls out of the frames. */
+  unrestrict?: () => void
   live: boolean
   /** Click capture is on for this recording (this tab only). */
   clickCapture: boolean
@@ -120,6 +123,9 @@ export function useScreenCapture(events: {
   const [hasMic, setHasMic] = useState(false)
   const [micMissing, setMicMissing] = useState(false)
   const [announce, setAnnounce] = useState('')
+  // The capture shows the page without the recorder's controls (see
+  // captureRestriction): the bar then renders outside <body>.
+  const [restricted, setRestricted] = useState(false)
   const r = useRef<Refs>(fresh())
 
   const elapsedMs = () => {
@@ -191,6 +197,9 @@ export function useScreenCapture(events: {
     for (const st of [s.display, s.mic]) for (const t of st?.getTracks() ?? []) t.stop()
     void s.ctx?.close().catch(() => null)
     s.ctx = undefined
+    s.unrestrict?.()
+    s.unrestrict = undefined
+    setRestricted(false)
     s.analyser = undefined
     window.removeEventListener('pointerdown', onPointer, true)
     for (const ev of ACTIVITY_EVENTS) window.removeEventListener(ev, onActivity, true)
@@ -235,6 +244,12 @@ export function useScreenCapture(events: {
       } as object)
     } as DisplayMediaStreamOptions)
     s.display = display
+    // Before the first frame is recorded: the controls never reach the video.
+    const undo = await restrictCaptureToPage(display.getVideoTracks()[0])
+    if (undo) {
+      s.unrestrict = undo
+      setRestricted(true)
+    }
     const dest = ctx.createMediaStreamDestination()
     let hasAudio = false
     if (display.getAudioTracks().length) {
@@ -417,6 +432,8 @@ export function useScreenCapture(events: {
     hasMic,
     micMissing,
     announce,
+    /** The recording leaves the page's controls out (render the bar outside <body>). */
+    restricted,
     /** True between `begin` and `halt`. */
     isLive: () => r.current.live,
     reset,

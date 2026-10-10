@@ -120,6 +120,7 @@ import {
   videoAnalytics
 } from '../services/help-video-views.js'
 import {
+  actAsMasqueradeAuthor,
   archiveVideo,
   createVideo,
   draftMedia,
@@ -197,8 +198,23 @@ function viewerCtx(req: FastifyRequest, author: boolean) {
   return { author, userId: req.user!.id, role: req.user!.role ?? null, sidTag: sessionTag(req) }
 }
 
+/** Routes about the signed-in person's own watching: a masquerading admin
+ *  keeps seeing the other person's here. Everything else in this plugin runs
+ *  as an admin who may author videos (see actAsMasqueradeAuthor). */
+const OWN_VIEW_ROUTES = [
+  '/help-videos/for',
+  '/help-videos/paths/mine',
+  '/help-videos/required/mine',
+  '/help-videos/:id/next'
+]
+
 export async function helpVideosRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
+  app.addHook('preHandler', async (req) => {
+    const url = req.routeOptions.url ?? ''
+    if (OWN_VIEW_ROUTES.some((r) => url.endsWith(r))) return
+    await actAsMasqueradeAuthor(req)
+  })
   app.addContentTypeParser(
     'application/octet-stream',
     { parseAs: 'buffer', bodyLimit: MAX_PART_BYTES + 1024 },

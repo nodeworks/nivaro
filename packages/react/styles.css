@@ -301,6 +301,13 @@ tr.nvr-row-flash > td {
   .nvr-saved-glow, .nvr-pop, .nvr-state-pulse, .nvr-fill-sweep, .nvr-rise-in, .nvr-section-enter, .nvr-tab-enter, .nvr-expand-in, .nvr-shake, .nvr-fade-in, .nvr-autofill-glow, .nvr-pop-in, .nvr-value-pulse, .nvr-value-pulse-bg, .nvr-idle-breathe, .nvr-row-enter, .nvr-slide-up, .nvr-slide-up-centered { animation: none; }
 }
 
+/* Every help-video recording (clean screen or not) puts data-nvr-recording on
+   <html> from the countdown to the stop: data-nvr-recording-hide="always"
+   (a masquerade bar) never shows in a video. */
+html[data-nvr-recording] [data-nvr-recording-hide='always'] {
+  display: none !important;
+}
+
 /* Clean help-video recording: the recorder puts data-nvr-recording-clean on
    <html> from the countdown to the stop. Tagged chrome (notification counts,
    chat, banners, floating chips) and Sonner toasts leave the frame;
