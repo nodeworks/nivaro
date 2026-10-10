@@ -13,6 +13,7 @@ import {
 import { useApiFetchConfig, useNivaroClient } from '../../context'
 import { fetchHelpVideo, helpVideoApi, helpVideoKeys, useCardBrand } from './api'
 import { CardLayer } from './CardLayer'
+import { CursorLayer } from './CursorLayer'
 import {
   bodyDuration,
   captionLookOf,
@@ -608,6 +609,10 @@ function PlayerInner({
   // Crop then zoom (the render's order). The whole recorded frame is laid
   // out at `whole` size and placed so the cropped, zoomed part fills `frame`.
   const view = liveEdits && edits ? viewAt(edits, overlaySrcMs) : NO_VIEW
+  // The recorded cursor (#1517), drawn live over the picture through the same
+  // view; a rendered file carries it already. Only a draft load carries the
+  // pointer path, so this is the author's preview.
+  const pointerPath = liveEdits && edits?.cursor?.show ? (version?.pointer ?? null) : null
   const whole = frame
     ? {
         width: frame.width / (liveCrop?.w ?? 1),
@@ -743,6 +748,15 @@ function PlayerInner({
                 />
               )}
             </div>
+            {frame && edits && pointerPath && phase === 'body' && (
+              <CursorLayer
+                pointer={pointerPath}
+                edits={edits}
+                frame={frame}
+                srcMs={overlaySrcMs}
+                view={view}
+              />
+            )}
             {/* Cards and chapter banners: drawn here only when the edits play
                 live; a rendered file already has them in the picture. */}
             {frame && edits && liveEdits && hasCards && (

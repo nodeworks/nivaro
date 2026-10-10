@@ -4,7 +4,8 @@ import {
   outroMs,
   segmentIndexAt,
   sourceToEdited,
-  zoomInView
+  zoomInView,
+  zoomRectAt
 } from './edits'
 import type { Rect, VideoEdits } from './types'
 
@@ -75,7 +76,8 @@ export function liveBlurPx(
 /** Zoom inside the (cropped) picture as CSS: transform-origin 0 0,
  *  translate(tx·100%, ty·100%) scale(z). Same maths as the render's crop:
  *  offset = clamp(0.5 − centre·z, 1 − z, 0). Zoom rects are mapped into the
- *  crop first (zoomInView), as the render does. */
+ *  crop first (zoomInView), as the render does; a moving zoom's area at this
+ *  moment comes from its stops (zoomRectAt, #1539). */
 export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; ty: number } {
   for (const zm of e.zooms) {
     if (srcMs < zm.start_ms || srcMs > zm.end_ms) continue
@@ -87,7 +89,7 @@ export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; t
             1
           )
         : 1
-    const v = zoomInView(e, zm.rect)
+    const v = zoomInView(e, zoomRectAt(zm, srcMs))
     const z = 1 + (v.mag - 1) * p
     const cx = 0.5 + (v.cx - 0.5) * p
     const cy = 0.5 + (v.cy - 0.5) * p

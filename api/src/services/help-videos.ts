@@ -12,6 +12,7 @@ import {
   readEdits,
   viewerNote
 } from './help-video-changes.js'
+import type { PointerPath } from './help-video-cursor.js'
 import { downloadsAllowed, hasCaptions, withDownloads } from './help-video-download.js'
 import {
   EditsError,
@@ -88,6 +89,9 @@ export interface VersionDto {
   /** Draft load only: typing and idle spans the recorder logged (#1518), read
    *  from the source's upload row; null when there are none. */
   activity?: ActivitySpan[] | null
+  /** Draft load only: the pointer path and shortcuts the recorder logged
+   *  (#1517), read from the source's upload row; null when there are none. */
+  pointer?: PointerPath | null
 }
 export interface HelpVideoDto {
   id: string

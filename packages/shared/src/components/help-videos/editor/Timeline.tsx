@@ -270,6 +270,7 @@ export function Timeline({
               hintId={hintId}
               layout={layout}
               clicks={clicks}
+              onSeek={onSeek}
             />
             <Playhead srcMs={playheadSrcMs} pps={pps} scroller={scroller} dragging={dragging} />
           </div>

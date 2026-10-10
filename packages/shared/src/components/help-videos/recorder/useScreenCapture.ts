@@ -1,8 +1,22 @@
 import { useEffect, useRef, useState } from 'react'
 import type { RecordedClick } from '../api'
+import {
+  POINTER_LIMITS,
+  POINTER_SAMPLE_MS,
+  pointerMoved,
+  pointerSample,
+  shortcutFromKey,
+  thinPointerPath
+} from '../pointer'
+import type { Point, PointerPath, PointerSample, RecordedShortcut } from '../types'
 import { currentHelpVideoPage } from '../walk/store'
 import { describeClickTarget } from '../walk/target'
-import { type ActivitySpan, createActivityTracker, isTypingTarget } from './activity'
+import {
+  type ActivitySpan,
+  createActivityTracker,
+  isMaskedTarget,
+  isTypingTarget
+} from './activity'
 
 export const WARN_MS = 25 * 60_000
 /** From here the bar counts down the time that is left. */
@@ -26,6 +40,9 @@ export type CaptureMeta = {
   levels: number[] | null
   /** Typing / idle spans on this tab (#1518); null when click capture was off. */
   activity?: ActivitySpan[] | null
+  /** The pointer path and shortcuts on this tab (#1517); null when click
+   *  capture was off. */
+  pointer?: PointerPath | null
 }
 
 type Refs = {
@@ -47,6 +64,12 @@ type Refs = {
   levels: number[]
   /** Typing and idle stretches (#1518), on this tab only, like clicks. */
   activity: ReturnType<typeof createActivityTracker>
+  /** The pointer path (#1517): where it is now, the last sample taken, the
+   *  samples so far, and the shortcuts pressed. This tab only, like clicks. */
+  pointerNow: Point | null
+  pointerSampled: Point | null
+  pointer: PointerSample[]
+  shortcuts: RecordedShortcut[]
   timers: number[]
 }
 
@@ -61,6 +84,10 @@ const fresh = (): Refs => ({
   pausedTotal: 0,
   clicks: [],
   levels: [],
+  pointerNow: null,
+  pointerSampled: null,
+  pointer: [],
+  shortcuts: [],
   timers: []
 })
 
@@ -118,13 +145,30 @@ export function useScreenCapture(events: {
   }).current
 
   // Typing and idle stretches (#1518): any pointer, wheel or key input marks
-  // the moment; a key into a text field is typing. Never the key itself.
+  // the moment; a key into a text field is typing. Never the key itself —
+  // except a shortcut (#1517: a modifier combo, Enter, Escape, Tab, an
+  // arrow), kept with its moment unless pressed inside a masked area. The
+  // pointer's place is noted here and sampled by the timer below.
   const onActivity = useRef((e: Event) => {
     const s = r.current
     if (!s.live || s.pausedAt || !s.startedAt) return
     const at = Math.round(Math.max(0, performance.now() - s.startedAt - s.pausedTotal))
-    if (e.type === 'keydown') s.activity.key(at, isTypingTarget(e.target))
-    else s.activity.input(at)
+    if (e.type === 'keydown') {
+      const k = e as KeyboardEvent
+      s.activity.key(at, isTypingTarget(k.target))
+      const keys = isMaskedTarget(k.target) ? null : shortcutFromKey(k)
+      if (keys && s.shortcuts.length < POINTER_LIMITS.shortcuts)
+        s.shortcuts.push({ t_ms: at, keys })
+    } else {
+      s.activity.input(at)
+      if (e.type === 'pointermove' || e.type === 'pointerdown') {
+        const p = e as PointerEvent
+        s.pointerNow = {
+          x: Math.min(1, Math.max(0, p.clientX / window.innerWidth)),
+          y: Math.min(1, Math.max(0, p.clientY / window.innerHeight))
+        }
+      }
+    }
   }).current
   const ACTIVITY_EVENTS = ['pointerdown', 'pointermove', 'wheel', 'keydown'] as const
 
@@ -267,7 +311,18 @@ export function useScreenCapture(events: {
         const at = Math.floor(elapsedMs() / LEVEL_SAMPLE_MS)
         while (s.levels.length < at) s.levels.push(s.levels[s.levels.length - 1] ?? 0)
         s.levels[at] = level
-      }, LEVEL_SAMPLE_MS)
+      }, LEVEL_SAMPLE_MS),
+      // The pointer path (#1517): ~20 samples a second, only while it moves;
+      // past twice the cap the path is thinned in place, so memory is bounded.
+      window.setInterval(() => {
+        if (!s.clickCapture || !s.live || s.pausedAt) return
+        const now = s.pointerNow
+        if (!now || !pointerMoved(s.pointerSampled, now)) return
+        s.pointerSampled = now
+        s.pointer.push(pointerSample(elapsedMs(), now.x, now.y))
+        if (s.pointer.length >= POINTER_LIMITS.samples * 2)
+          s.pointer = thinPointerPath(s.pointer, POINTER_LIMITS.samples)
+      }, POINTER_SAMPLE_MS)
     )
     setAnnounce('Recording.')
   }
@@ -280,7 +335,10 @@ export function useScreenCapture(events: {
       duration_ms: Math.min(MAX_MS, Math.round(elapsedMs())),
       clicks: s.clickCapture ? s.clicks : null,
       levels: s.levels.length ? s.levels : null,
-      activity: s.clickCapture ? s.activity.spans(Math.round(elapsedMs())) : null
+      activity: s.clickCapture ? s.activity.spans(Math.round(elapsedMs())) : null,
+      pointer: s.clickCapture
+        ? { samples: thinPointerPath(s.pointer), shortcuts: s.shortcuts.slice() }
+        : null
     }
   }
 

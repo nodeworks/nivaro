@@ -2,10 +2,11 @@ import { CornerUpLeft, X } from 'lucide-react'
 import { memo, useCallback, useRef } from 'react'
 import { Button } from '../../ui/button'
 import { setPoster, sourceToEdited, upsertItemChecked } from '../edits'
-import type { RecordedClick, VideoEdits } from '../types'
+import type { PointerPath, RecordedClick, VideoEdits } from '../types'
 import { CaptionsPanel } from './CaptionsPanel'
 import { CardsPanel } from './CardsPanel'
 import { ChaptersPanel } from './ChaptersPanel'
+import { CursorPanel } from './CursorPanel'
 import { HouseStyleSection } from './HouseStylePanel'
 import { Inspector } from './Inspector'
 import { SideSection, useOpenSections } from './layout'
@@ -53,13 +54,16 @@ export const EditorSidebar = memo(function EditorSidebar({
   videoDescription,
   onShowCard,
   videoId,
-  hasLevels
+  hasLevels,
+  pointer
 }: {
   edits: VideoEdits
   selection: Selection
   sourceMs: number
   /** The recorder's captured clicks: null when click capture was off. */
   clicks: RecordedClick[] | null | undefined
+  /** The recorder's pointer path and shortcuts (#1517): null when there are none. */
+  pointer?: PointerPath | null
   /** The source is an uploaded file (it never has captured clicks). */
   uploaded?: boolean
   /** The playhead now (read when an action needs it, not every frame). */
@@ -191,6 +195,8 @@ export const EditorSidebar = memo(function EditorSidebar({
           onSeek={onSeek}
           onError={onNote}
           clicks={clicks}
+          pointer={pointer}
+          uploaded={uploaded}
         />
       </div>
       <SideSection
@@ -270,6 +276,18 @@ export const EditorSidebar = memo(function EditorSidebar({
       >
         <NarrationPanel edits={edits} onChange={onChange} />
       </SideSection>
+      {/* An uploaded file has no pointer path: nothing to switch on. */}
+      {!uploaded && (
+        <SideSection
+          id='cursor'
+          title='Cursor and shortcuts'
+          summary={edits.cursor ? (edits.cursor.shortcuts ? 'Cursor, shortcuts' : 'Cursor') : 'Off'}
+          open={open.has('cursor')}
+          onToggle={toggle}
+        >
+          <CursorPanel edits={edits} pointer={pointer} onChange={onChange} />
+        </SideSection>
+      )}
       <SideSection
         id='poster'
         title='Poster'

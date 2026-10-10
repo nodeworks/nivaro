@@ -5,6 +5,7 @@ import type {
   Caption,
   CaptionStyle,
   Chapter,
+  CursorEdits,
   IntroCard,
   MusicBed,
   OutroCard,
@@ -13,7 +14,8 @@ import type {
   Speed,
   StepStyle,
   VideoEdits,
-  Zoom
+  Zoom,
+  ZoomKeyframe
 } from './types'
 
 // Client twin of api/src/services/help-video-edits.ts (time mapping and
@@ -41,6 +43,9 @@ export const EDIT_LIMITS = {
   minSegmentMs: 100,
   /** Smallest zoom rect side (fraction of the frame): at most 4x magnification. */
   zoomMinSide: 0.25,
+  /** Stops of a moving zoom (#1539), per zoom and over the whole video. */
+  zoomKeyframes: 40,
+  zoomKeyframesTotal: 300,
   cardMinMs: 2000,
   cardMaxMs: 6000,
   cardDefaultMs: 3000,
@@ -435,15 +440,18 @@ function normalizeItem<K extends ListKey>(key: K, item: Item<K>): Item<K> {
   if (key === 'zooms') {
     const z = item as Zoom
     const s = span(z)
-    const r = clampRect(z.rect)
-    const side = clamp(Math.max(r.w, r.h), EDIT_LIMITS.zoomMinSide, 1)
     const half = Math.floor((s.end_ms - s.start_ms) / 2)
-    return {
-      ...z,
+    const { keyframes: _k, ...rest } = z
+    const keyframes = normalizeZoomKeyframes(z.keyframes, s)
+    // A moving zoom's area is its first stop (the server's rule).
+    const out: Zoom = {
+      ...rest,
       ...s,
-      rect: { x: clamp(r.x, 0, 1 - side), y: clamp(r.y, 0, 1 - side), w: side, h: side },
+      rect: keyframes ? keyframes[0].rect : zoomSquare(clampRect(z.rect)),
       ease_ms: Math.round(clamp(z.ease_ms, 0, Math.max(0, half)))
-    } as Item<K>
+    }
+    if (keyframes) out.keyframes = keyframes
+    return out as Item<K>
   }
   if (key === 'blurs') {
     const b = item as Blur
@@ -522,6 +530,106 @@ export function removeItem(e: VideoEdits, key: ListKey, id: string): VideoEdits 
 }
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000
+
+/** A zoom's square (the server's zoomSquare): the longer side, at least
+ *  EDIT_LIMITS.zoomMinSide, moved back inside the frame. */
+function zoomSquare(r: Rect): Rect {
+  const side = clamp(Math.max(r.w, r.h), EDIT_LIMITS.zoomMinSide, 1)
+  return { x: clamp(r.x, 0, 1 - side), y: clamp(r.y, 0, 1 - side), w: side, h: side }
+}
+/** The stops the server stores for a moving zoom (#1539, its
+ *  normalizeZoomKeyframes): inside the span, sorted, one per moment (the
+ *  first wins), squares, at most EDIT_LIMITS.zoomKeyframes. Null with fewer
+ *  than two: that is a still zoom. */
+export function normalizeZoomKeyframes(
+  raw: ZoomKeyframe[] | null | undefined,
+  s: { start_ms: number; end_ms: number }
+): ZoomKeyframe[] | null {
+  if (!raw?.length) return null
+  const stops = raw
+    .map((k) => ({
+      at_ms: Math.round(clamp(k.at_ms, s.start_ms, s.end_ms)),
+      rect: zoomSquare(clampRect(k.rect))
+    }))
+    .sort((a, b) => a.at_ms - b.at_ms)
+  const out: ZoomKeyframe[] = []
+  for (const k of stops) {
+    if (out.length >= EDIT_LIMITS.zoomKeyframes) break
+    if (out.length && out[out.length - 1].at_ms === k.at_ms) continue
+    out.push(k)
+  }
+  return out.length >= 2 ? out : null
+}
+/** The area a zoom shows at a SOURCE moment (the server's zoomRectAt): its
+ *  one area, or for a moving zoom the straight-line blend of the two stops
+ *  around that moment (the first held before it, the last after it). */
+export function zoomRectAt(z: Zoom, srcMs: number): Rect {
+  const k = z.keyframes
+  if (!k || k.length < 2) return z.rect
+  if (srcMs <= k[0].at_ms) return k[0].rect
+  const last = k[k.length - 1]
+  if (srcMs >= last.at_ms) return last.rect
+  for (let i = 1; i < k.length; i++) {
+    const b = k[i]
+    if (srcMs > b.at_ms) continue
+    const a = k[i - 1]
+    const u = b.at_ms === a.at_ms ? 1 : (srcMs - a.at_ms) / (b.at_ms - a.at_ms)
+    const mix = (p: number, q: number) => p + (q - p) * u
+    return {
+      x: mix(a.rect.x, b.rect.x),
+      y: mix(a.rect.y, b.rect.y),
+      w: mix(a.rect.w, b.rect.w),
+      h: mix(a.rect.h, b.rect.h)
+    }
+  }
+  return last.rect
+}
+/** The zoom with its area at `atMs` set to `rect` (#1539): a still zoom
+ *  moved at its start stays still; moved anywhere else inside its span it
+ *  gets two stops (its old area at the start, the new one here). A moving
+ *  zoom replaces the stop at that moment or gains one. The result is not yet
+ *  normalized: write it through upsertItemChecked. */
+export function setZoomKeyframe(z: Zoom, atMs: number, rect: Rect): Zoom {
+  const at = Math.round(clamp(atMs, z.start_ms, z.end_ms))
+  const sq = zoomSquare(clampRect(rect))
+  if (!z.keyframes?.length) {
+    if (at === z.start_ms) return { ...z, rect: sq }
+    return {
+      ...z,
+      keyframes: [
+        { at_ms: z.start_ms, rect: z.rect },
+        { at_ms: at, rect: sq }
+      ]
+    }
+  }
+  const keyframes = z.keyframes.filter((k) => k.at_ms !== at)
+  keyframes.push({ at_ms: at, rect: sq })
+  keyframes.sort((a, b) => a.at_ms - b.at_ms)
+  return { ...z, rect: keyframes[0].rect, keyframes }
+}
+/** The zoom without its stop at `atMs`; down to one stop it is a still zoom
+ *  showing that area. Unchanged when there is no such stop. */
+export function removeZoomKeyframe(z: Zoom, atMs: number): Zoom {
+  if (!z.keyframes?.some((k) => k.at_ms === atMs)) return z
+  const keyframes = z.keyframes.filter((k) => k.at_ms !== atMs)
+  const { keyframes: _drop, ...rest } = z
+  if (keyframes.length < 2) return { ...rest, rect: keyframes[0]?.rect ?? z.rect }
+  return { ...rest, rect: keyframes[0].rect, keyframes }
+}
+/** The cursor switches (#1517) as the server stores them: nothing while
+ *  "Show cursor" is off; `{ show: true }`, with `shortcuts: true` when the
+ *  shortcut badges are on too. */
+export function setCursor(
+  e: VideoEdits,
+  patch: { show?: boolean; shortcuts?: boolean }
+): VideoEdits {
+  const { cursor: _drop, ...rest } = e
+  const show = patch.show ?? !!e.cursor?.show
+  if (!show) return rest as VideoEdits
+  const cursor: CursorEdits = { show: true }
+  if (patch.shortcuts ?? !!e.cursor?.shortcuts) cursor.shortcuts = true
+  return { ...rest, cursor } as VideoEdits
+}
 
 /** The crop the server stores (normalizeCrop): sides at least
  *  EDIT_LIMITS.cropMinSide, inside the frame, 4 places; null = the whole frame. */

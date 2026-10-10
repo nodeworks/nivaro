@@ -31,7 +31,7 @@ export function canRecord(): boolean {
   )
 }
 
-const emptyMeta = (): CaptureMeta => ({ duration_ms: 0, clicks: null, levels: null })
+const emptyMeta = (): CaptureMeta => ({ duration_ms: 0, clicks: null, levels: null, pointer: null })
 
 /**
  * Records this tab, a window or the whole screen with optional microphone

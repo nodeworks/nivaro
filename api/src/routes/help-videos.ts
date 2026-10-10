@@ -64,6 +64,7 @@ import {
   listOpenUploads,
   MAX_PART_BYTES,
   openUpload,
+  pointerOfFile,
   sourceKindOfFile,
   uploadStatus
 } from '../services/help-video-uploads.js'
@@ -404,7 +405,8 @@ export async function helpVideosRoutes(app: FastifyInstance) {
       data: {
         ...serializeVersion(draft, { withRecorderData: true }),
         source_kind: await sourceKindOfFile(draft.source_file),
-        activity: await activityOfFile(draft.source_file)
+        activity: await activityOfFile(draft.source_file),
+        pointer: await pointerOfFile(draft.source_file)
       }
     })
   })

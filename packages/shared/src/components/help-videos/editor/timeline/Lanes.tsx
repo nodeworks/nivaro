@@ -3,10 +3,12 @@ import {
   isHiddenByCuts,
   type ListKey,
   removeItem,
+  removeZoomKeyframe,
   trimSegment,
+  upsertItem,
   upsertItemChecked
 } from '../../edits'
-import type { Annotation, RecordedClick, VideoEdits } from '../../types'
+import type { Annotation, RecordedClick, VideoEdits, Zoom } from '../../types'
 import { clickForRipple, clickTargetText } from '../tools'
 import { LANE_H, type laneLayout, type Packed, SUB_H } from './packRows'
 import type { useBarDrag } from './useBarDrag'
@@ -153,7 +155,8 @@ export const Lanes = memo(function Lanes({
   nudge,
   hintId,
   layout,
-  clicks
+  clicks,
+  onSeek
 }: {
   edits: VideoEdits
   sourceMs: number
@@ -168,6 +171,8 @@ export const Lanes = memo(function Lanes({
   layout: Layout
   /** The recorder's clicks: a ripple's tip says what its click hit. */
   clicks?: RecordedClick[] | null
+  /** A zoom's stop (#1539) moves the playhead to it when pressed. */
+  onSeek?: (srcMs: number) => void
 }) {
   const toPx = (ms: number) => (ms / 1000) * pps
   const selectedIn = (k: ListKey) =>
@@ -368,6 +373,40 @@ export const Lanes = memo(function Lanes({
                 </button>
               )
             })}
+            {/* A moving zoom's stops (#1539): diamonds on its bar. Pressing
+                one selects the zoom and moves the playhead there; Delete on
+                a focused one removes the stop. */}
+            {k === 'zooms' &&
+              (items as unknown as Zoom[]).flatMap((z) =>
+                (z.keyframes ?? []).map((kf) => {
+                  const box = rowBox(packed, z.id)
+                  return (
+                    <button
+                      key={`${z.id}:${kf.at_ms}`}
+                      type='button'
+                      tabIndex={-1}
+                      aria-label={`Zoom stop at ${clock(kf.at_ms)}`}
+                      title={`Stop at ${clock(kf.at_ms)}: press to go there, Delete to remove it`}
+                      data-hv-keyframe={`${z.id}:${kf.at_ms}`}
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        if (e.button !== 0) return
+                        e.preventDefault()
+                        e.currentTarget.focus({ preventScroll: true })
+                        onSelect({ lane: 'zooms', id: z.id })
+                        onSeek?.(kf.at_ms)
+                      }}
+                      onKeyDown={(e) =>
+                        nudge(e, null, `kf:${z.id}:${kf.at_ms}`, () =>
+                          upsertItem(edits, 'zooms', removeZoomKeyframe(z, kf.at_ms))
+                        )
+                      }
+                      className='absolute z-[6] h-2.5 w-2.5 -translate-x-1/2 rotate-45 cursor-pointer rounded-[1px] border border-emerald-700 bg-white outline-none hover:bg-emerald-200 focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-emerald-200 dark:bg-emerald-950 dark:hover:bg-emerald-800'
+                      style={{ left: toPx(kf.at_ms), top: box.top + box.height / 2 - 5 }}
+                    />
+                  )
+                })
+              )}
           </div>
         )
       })}

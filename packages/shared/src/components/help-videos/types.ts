@@ -38,12 +38,23 @@ export interface Annotation {
   text: string
   tone: Tone
 }
+/** One stop of a moving zoom (#1539): the area shown at `at_ms` (source
+ *  time), a square in frame fractions like `Zoom.rect`. */
+export interface ZoomKeyframe {
+  at_ms: number
+  rect: Rect
+}
 export interface Zoom {
   id: string
   start_ms: number
   end_ms: number
+  /** The area shown; with keyframes, always the first keyframe's area. */
   rect: Rect
   ease_ms: number
+  /** A zoom that moves (#1539): the area pans and resizes straight-line
+   *  between these stops (the first held before it, the last after it).
+   *  Stored only with two or more stops, sorted, inside the zoom's span. */
+  keyframes?: ZoomKeyframe[]
 }
 export interface Blur {
   id: string
@@ -180,6 +191,17 @@ export interface VideoEdits {
   /** How captions look to viewers who have not chosen their own (#1551);
    *  only the keys that differ from the default look are stored. */
   caption_style?: Partial<CaptionStyle>
+  /** The recorded cursor (#1517): a highlighted pointer drawn over the
+   *  picture along the recorded pointer path, and with `shortcuts` a badge
+   *  for each keyboard shortcut pressed. Stored only while on. */
+  cursor?: CursorEdits
+}
+
+/** The cursor switches (#1517): only `{ show: true }` (plus `shortcuts: true`)
+ *  is ever stored; off = the key is absent. */
+export interface CursorEdits {
+  show: true
+  shortcuts?: true
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }
@@ -220,7 +242,21 @@ export interface VersionDto {
    *  idle (no input for 3 s+) on the recorded tab, in source time. Null for
    *  uploaded files and recordings made without it. */
   activity?: ActivitySpan[] | null
+  /** Draft load only (#1517): where the pointer went on the recorded tab and
+   *  which shortcuts were pressed. Null for uploaded files and recordings
+   *  made without it (the cursor switches then have nothing to show). */
+  pointer?: PointerPath | null
 }
+
+/** One sample of the pointer path (#1517): source time and frame fractions
+ *  (0–1) of the captured frame, like a click. */
+export type PointerSample = { t_ms: number; x: number; y: number }
+/** A keyboard shortcut pressed while recording (#1517): source time and the
+ *  keys as `Meta+S`, `Ctrl+K`, `Shift+Tab`, `Enter`, `ArrowDown` (modifiers
+ *  first, letters upper-case). Never text typed into a field. */
+export type RecordedShortcut = { t_ms: number; keys: string }
+/** The pointer path and shortcuts of a recording of the author's own tab. */
+export type PointerPath = { samples: PointerSample[]; shortcuts: RecordedShortcut[] }
 
 /** A stretch of the recording where the author was typing in a text field,
  *  or touched nothing at all (#1518). Never what was typed. */

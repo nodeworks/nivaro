@@ -16,6 +16,7 @@ import {
   loadCardBrand,
   shownBrand
 } from './help-video-cards.js'
+import { buildCursorAss } from './help-video-cursor.js'
 import {
   CALLOUT_TEXT_SCALE,
   calloutTextOf,
@@ -41,7 +42,7 @@ import {
   renderSizes
 } from './help-video-render-plan.js'
 import { ENCODER_DEFAULTS, renderEncoderSettings } from './help-video-settings.js'
-import { discardFile, videoWorkDir } from './help-video-uploads.js'
+import { discardFile, pointerOfFile, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
 import { isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
@@ -324,6 +325,26 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     }))
     // Background music (#1547): a library track or the video's own file.
     const music = edits.music ? await musicForRender(String(v.video_id), edits.music, dir) : null
+    // The recorded cursor and shortcut badges (#1517): an ASS file burned in
+    // over the picture. A recording without a pointer path draws nothing.
+    let cursor: RenderInput['cursor'] = null
+    if (edits.cursor?.show) {
+      const pointer = await pointerOfFile(v.source_file)
+      if (pointer) {
+        const assPath = join(dir, 'cursor.ass')
+        await writeFile(
+          assPath,
+          buildCursorAss({
+            pointer,
+            edits,
+            out: size,
+            durationMs: Number(v.source_duration_ms ?? probe.duration_ms ?? 0),
+            shortcuts: !!edits.cursor.shortcuts
+          })
+        )
+        cursor = { assPath }
+      }
+    }
     const total = Math.max(1, editedDuration(edits))
     let lastWrite = 0
     const out = join(dir, 'video.mp4')
@@ -355,6 +376,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
             }
           : null,
       music,
+      cursor,
       outputPath: out,
       threads: renderThreads()
     }

@@ -13,6 +13,7 @@ import {
   runFfmpeg
 } from './ffmpeg.js'
 import { deleteFile, getFile, uploadFileFromPath } from './files.js'
+import { normalizePointer, type PointerPath } from './help-video-cursor.js'
 import {
   buildUploadArgs,
   planUploadedVideo,
@@ -332,12 +333,19 @@ export async function appendPart(
 export async function finalizeUpload(
   user: User,
   id: string,
-  meta: { duration_ms?: number; clicks?: unknown; levels?: unknown; activity?: unknown }
+  meta: {
+    duration_ms?: number
+    clicks?: unknown
+    levels?: unknown
+    activity?: unknown
+    pointer?: unknown
+  }
 ): Promise<FinalizedUpload | ProcessingUpload> {
   const rid = assertId(id)
   const clicks = normalizeClicks(meta.clicks)
   const levels = normalizeLevels(meta.levels)
   const activity = normalizeActivity(meta.activity)
+  const pointer = normalizePointer(meta.pointer)
   // Claim: only one finalize can flip open -> finalizing; appends are serialized
   // on the same lock so none is mid-write when the claim lands.
   const row = await withLock(rid, async () => {
@@ -424,10 +432,11 @@ export async function finalizeUpload(
         width: probe.width,
         height: probe.height,
         has_audio: probe.has_audio,
-        // Bounded by the normalizers (≈1.5 MB at most), so never cut mid-JSON.
-        // Activity (#1518) is read back by activityOfFile: the version table
-        // has no column for it, the upload row stays for as long as the video.
-        meta: JSON.stringify({ clicks, levels, activity }),
+        // Bounded by the normalizers (≈2 MB at most), so never cut mid-JSON.
+        // Activity (#1518) and the pointer path (#1517) are read back by
+        // activityOfFile / pointerOfFile: the version table has no column for
+        // them, the upload row stays for as long as the video.
+        meta: JSON.stringify({ clicks, levels, activity, pointer }),
         updated_at: new Date()
       })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
@@ -731,6 +740,26 @@ export async function activityOfFile(fileId: unknown): Promise<ActivitySpan[] | 
   if (!raw || raw.startsWith(UPLOAD_META_HEAD) || !raw.includes('"activity"')) return null
   try {
     return normalizeActivity((JSON.parse(raw) as { activity?: unknown }).activity)
+  } catch {
+    return null
+  }
+}
+
+/** The pointer path and shortcuts the recorder logged for a version's source
+ *  file (#1517), read from the upload row that produced it, like
+ *  activityOfFile. Null for an uploaded file, a recording made before #1517
+ *  or of another window, and a recording that arrived in a package. */
+export async function pointerOfFile(fileId: unknown): Promise<PointerPath | null> {
+  if (!fileId) return null
+  const row = (await db('nivaro_help_video_uploads')
+    .where({ file_id: fileId })
+    .whereIn('status', ['used', 'finalized'])
+    .first('meta')
+    .catch(() => null)) as { meta?: unknown } | null | undefined
+  const raw = row?.meta == null ? '' : String(row.meta)
+  if (!raw || raw.startsWith(UPLOAD_META_HEAD) || !raw.includes('"pointer"')) return null
+  try {
+    return normalizePointer((JSON.parse(raw) as { pointer?: unknown }).pointer)
   } catch {
     return null
   }

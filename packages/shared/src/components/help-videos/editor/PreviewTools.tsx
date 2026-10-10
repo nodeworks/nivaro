@@ -18,7 +18,8 @@ import {
   newItemFor,
   type ReshapeMode,
   rectFromPoints,
-  reshapeItem,
+  reshapeItemAt,
+  shapeRectAt,
   squareRect,
   type Tool
 } from './tools'
@@ -223,7 +224,7 @@ export function PreviewTools({
         if (!moving && Math.hypot(ev.clientX - x0, ev.clientY - y0) < CLICK_PX) return
         moving = true
         const p = frac(ev)
-        write(base, l, reshapeItem(s, l, mode, p.x - p0.x, p.y - p0.y), `rect:${s.id}`)
+        write(base, l, reshapeItemAt(s, l, mode, p.x - p0.x, p.y - p0.y, srcMs), `rect:${s.id}`)
       }
       const up = () => {
         el.removeEventListener('pointermove', move)
@@ -250,7 +251,7 @@ export function PreviewTools({
       write(
         edits,
         lane,
-        reshapeItem(selected, lane, mode, dir[0] * step, dir[1] * step),
+        reshapeItemAt(selected, lane, mode, dir[0] * step, dir[1] * step, srcMs),
         `rect:${selected.id}`
       )
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -280,9 +281,10 @@ export function PreviewTools({
         }))
       ]
 
-  /** An arrow's hit area: the box around both ends, padded for the pointer. */
-  const reach = (s: Shape) => {
-    if (s.type !== 'arrow' || !s.to) return box(s.rect)
+  /** An arrow's hit area: the box around both ends, padded for the pointer;
+   *  a moving zoom's box is its area at the playhead. */
+  const reach = (s: Shape, l: ShapeLane = 'annotations') => {
+    if (s.type !== 'arrow' || !s.to) return box(shapeRectAt(s, l, srcMs))
     const a = px(s.rect)
     const b = px(s.to)
     const pad = 8
@@ -396,7 +398,7 @@ export function PreviewTools({
             ref={selectedEl}
             type='button'
             className='pointer-events-auto absolute cursor-move touch-none rounded-[2px] outline-none ring-2 ring-nvr-cyan shadow-[0_0_0_3px_rgb(0_0_0/0.5)] focus-visible:ring-[3px]'
-            style={reach(selected)}
+            style={reach(selected, lane)}
             onPointerDown={edit('move', selected, lane)}
             onKeyDown={onShapeKey}
             onFocus={() => {

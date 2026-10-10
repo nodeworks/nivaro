@@ -2,12 +2,14 @@ import { devNull } from 'node:os'
 import { lockedInputArgs } from './ffmpeg.js'
 import {
   bodyDuration,
+  cropOf,
   editedDuration,
   introMs,
   musicShare,
   type Rect,
   sourceToEdited,
   type VideoEdits,
+  type Zoom,
   zoomInView
 } from './help-video-edits.js'
 import { DEFAULT_VIDEO_ARGS, type VideoEncodePlan } from './help-video-encoder.js'
@@ -42,6 +44,9 @@ export interface RenderInput {
   outro?: (CardInput & { duration_ms: number; over_frame: boolean }) | null
   /** Background music (#1547): looped under the whole edited timeline. */
   music?: { path: string; mime: string } | null
+  /** The recorded cursor and shortcut badges (#1517): an ASS file written by
+   *  help-video-cursor.ts, burned in over the finished picture in SOURCE time. */
+  cursor?: { assPath: string } | null
   outputPath: string
   threads: number
   /** How the picture is encoded (#1561). Absent = libx264 veryfast / CRF 23. */
@@ -186,6 +191,54 @@ export function musicVolumeExpr(e: VideoEdits): string {
   return terms.length ? `1+${terms.join('+')}` : '1'
 }
 
+const f4 = (n: number) => n.toFixed(4)
+
+/** A value that changes straight-line between stops, as an expression in t:
+ *  `if(lt(t,…))` pieces, the first value before the first stop and the last
+ *  after the last; one constant when every stop has the same value. */
+export function lerpChain(stops: Array<{ t_ms: number; v: number }>): string {
+  if (stops.every((s) => s.v === stops[0].v)) return f4(stops[0].v)
+  let expr = f4(stops[stops.length - 1].v)
+  for (let i = stops.length - 2; i >= 0; i--) {
+    const a = stops[i]
+    const b = stops[i + 1]
+    expr = `if(lt(t,${sec(b.t_ms)}),${f4(a.v)}+(${f4(b.v - a.v)})*(t-${sec(a.t_ms)})/${sec(b.t_ms - a.t_ms)},${expr})`
+  }
+  return `if(lt(t,${sec(stops[0].t_ms)}),${f4(stops[0].v)},${expr})`
+}
+
+/** A zoom's magnification and centre over its span, as expressions in t
+ *  less their resting values (mag − 1, cx − 0.5, cy − 0.5), ready to be
+ *  scaled by the ease ramp. A still zoom gives three constants (the graph a
+ *  video without moving zooms always had). A moving zoom (#1539) blends its
+ *  area straight-line between its stops (zoomRectAt): the centre is then a
+ *  chain of straight pieces and the magnification follows the blended side. */
+export function zoomMotionExprs(e: VideoEdits, z: Zoom): { mag: string; cx: string; cy: string } {
+  const k = z.keyframes
+  if (!k || k.length < 2) {
+    const v = zoomInView(e, z.rect)
+    return { mag: f4(v.mag - 1), cx: f4(v.cx - 0.5), cy: f4(v.cy - 0.5) }
+  }
+  const views = k.map((s) => ({ t_ms: s.at_ms, v: zoomInView(e, s.rect), side: s.rect.w }))
+  const c = cropOf(e)
+  const sides = lerpChain(views.map((s) => ({ t_ms: s.t_ms, v: s.side })))
+  const mag = views.every((s) => s.side === views[0].side)
+    ? f4(views[0].v.mag - 1)
+    : `max(1,${f4(Math.min(c.w, c.h))}/(${sides}))-1`
+  const centre = (pick: (v: { cx: number; cy: number }) => number) => {
+    const chain = lerpChain(views.map((s) => ({ t_ms: s.t_ms, v: pick(s.v) })))
+    return chain.startsWith('if(') ? `${chain}-0.5` : f4(Number(chain) - 0.5)
+  }
+  return { mag, cx: centre((v) => v.cx), cy: centre((v) => v.cy) }
+}
+
+/** A file path as a filter option inside the graph: escaped once for the
+ *  option parser (`\`, `'` and `:`) and once more for the graph parser
+ *  (`\`, `'`, `[`, `]`, `,` and `;`), the way ffmpeg's own docs show. */
+export function graphPath(path: string): string {
+  return path.replace(/([\\':])/g, '\\$1').replace(/([\\'[\],;])/g, '\\$1')
+}
+
 /** Passes beyond which a small blurred field is already uniform. */
 const MAX_BLUR_POWER = 50
 
@@ -278,29 +331,38 @@ export function buildRenderArgs(input: RenderInput): string[] {
         ? `clip(min((t-${sec(a)})/${sec(ease)},(${sec(b)}-t)/${sec(ease)}),0,1)`
         : `between(t,${sec(a)},${sec(b)})`
     // Zoom rects are fractions of the whole recorded frame; inside a crop
-    // they are re-expressed in the cropped picture (zoomInView).
-    const views = e.zooms.map((z) => ({ z, v: zoomInView(e, z.rect) }))
-    const zTerms = views.map(
-      ({ z, v }) => `(${(v.mag - 1).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
-    )
-    const cxTerms = views.map(
-      ({ z, v }) => `(${(v.cx - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
-    )
-    const cyTerms = views.map(
-      ({ z, v }) => `(${(v.cy - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
-    )
+    // they are re-expressed in the cropped picture (zoomInView). A moving
+    // zoom's magnification and centre follow its stops (zoomMotionExprs).
+    const views = e.zooms.map((z) => ({ z, m: zoomMotionExprs(e, z) }))
+    const zTerms = views.map(({ z, m }) => `(${m.mag})*${p(z.start_ms, z.end_ms, z.ease_ms)}`)
+    const cxTerms = views.map(({ z, m }) => `(${m.cx})*${p(z.start_ms, z.end_ms, z.ease_ms)}`)
+    const cyTerms = views.map(({ z, m }) => `(${m.cy})*${p(z.start_ms, z.end_ms, z.ease_ms)}`)
     const Z = `(1+${zTerms.join('+')})`
     const CX = `(0.5+${cxTerms.join('+')})`
     const CY = `(0.5+${cyTerms.join('+')})`
+    // A moving zoom's Z is a chain of pieces: the crop offsets store it once
+    // (st/ld; `;` sequences the two, and the quotes keep it one option).
+    const moving = e.zooms.some((z) => z.keyframes)
+    const Zx = moving ? 'ld(0)' : Z
+    const pre = moving ? `st(0,${Z});` : ''
     const to = next()
     parts.push(
       `[${label}]scale=w='trunc(${out.width}*${Z}/2)*2':h='trunc(${out.height}*${Z}/2)*2':eval=frame,` +
         // crop's iw/ih are the size the graph was configured with (the unzoomed
         // frame), not the per-frame scaled size, so use the zoomed size explicitly.
         `crop=${out.width}:${out.height}:` +
-        `x='max(0,min(${CX}*(${out.width}*${Z})-${out.width}/2,${out.width}*${Z}-${out.width}))':` +
-        `y='max(0,min(${CY}*(${out.height}*${Z})-${out.height}/2,${out.height}*${Z}-${out.height}))'[${to}]`
+        `x='${pre}max(0,min(${CX}*(${out.width}*${Zx})-${out.width}/2,${out.width}*${Zx}-${out.width}))':` +
+        `y='${pre}max(0,min(${CY}*(${out.height}*${Zx})-${out.height}/2,${out.height}*${Zx}-${out.height}))'[${to}]`
     )
+    label = to
+  }
+
+  // The recorded cursor and shortcut badges (#1517), burned in from an ASS
+  // file in SOURCE time over the finished picture (crop and zoom applied), so
+  // cuts and speed changes carry the cursor with the frames it was on.
+  if (input.cursor) {
+    const to = next()
+    parts.push(`[${label}]ass=filename=${graphPath(input.cursor.assPath)}[${to}]`)
     label = to
   }
 

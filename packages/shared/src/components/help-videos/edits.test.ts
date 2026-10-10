@@ -115,6 +115,8 @@ describe('mirrors the server EDIT_LIMITS', () => {
       minItemMs: 200,
       minSegmentMs: 100,
       zoomMinSide: 0.25,
+      zoomKeyframes: 40,
+      zoomKeyframesTotal: 300,
       cardMinMs: 2000,
       cardMaxMs: 6000,
       cardDefaultMs: 3000,

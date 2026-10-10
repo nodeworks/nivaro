@@ -10,6 +10,7 @@ import type {
   HelpVideoErrorCode,
   MusicTrack,
   OpenverseSearch,
+  PointerPath,
   RecordedClick,
   UploadedMusic,
   VersionDto,
@@ -306,6 +307,10 @@ export function helpVideoApi(client: NivaroClient) {
      *   `i * 100` ms. Null without a microphone.
      * - `activity` (optional): `{ kind: 'typing' | 'idle', start_ms, end_ms }`
      *   spans on the recorded tab — never what was typed. Null when not captured.
+     * - `pointer` (optional, #1517): `{ samples: [{ t_ms, x, y }], shortcuts:
+     *   [{ t_ms, keys }] }` — where the pointer went (sampled ~20 times a
+     *   second while it moved) and the keyboard shortcuts pressed (`Meta+S`,
+     *   `Ctrl+K`, `Enter`…), never text typed into a field. Null when not captured.
      * Matches `HelpVideoVersion.clicks` / `.levels` in @nivaro/sdk.
      * 422 UPLOAD_TOO_LONG past 31 minutes, 409 UPLOAD_CLOSED when finished.
      */
@@ -316,6 +321,7 @@ export function helpVideoApi(client: NivaroClient) {
         clicks: RecordedClick[] | null
         levels: number[] | null
         activity?: ActivitySpan[] | null
+        pointer?: PointerPath | null
       }
     ) =>
       r(

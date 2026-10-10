@@ -609,6 +609,7 @@ function EditorBody({
               onShowCard={showCard}
               videoId={video.id}
               hasLevels={!!draft.levels?.length}
+              pointer={draft.pointer}
             />
           )}
           <div data-hvx-timeline>

@@ -38,12 +38,25 @@ export interface Annotation {
   text: string
   tone: Tone
 }
+/** One stop of a moving zoom (#1539): the area shown at `at_ms` (source
+ *  time), a square in frame fractions like `Zoom.rect`. */
+export interface ZoomKeyframe {
+  at_ms: number
+  rect: Rect
+}
 export interface Zoom {
   id: string
   start_ms: number
   end_ms: number
+  /** The area shown; with keyframes, always the first keyframe's area, so a
+   *  reader that knows nothing of keyframes still shows a sensible zoom. */
   rect: Rect
   ease_ms: number
+  /** A zoom that moves (#1539): the area pans and resizes between these
+   *  stops, straight-line between each pair, holding the first before it and
+   *  the last after it. Stored only with two or more stops, sorted, inside
+   *  the zoom's span; absent = one still area (`rect`). */
+  keyframes?: ZoomKeyframe[]
 }
 export interface Blur {
   id: string
@@ -164,6 +177,26 @@ export interface VideoEdits {
   /** How captions look to viewers who have not chosen their own (#1551).
    *  Only the keys that differ from CAPTION_LOOK_DEFAULTS are stored. */
   caption_style?: Partial<CaptionLook>
+  /** The recorded cursor (#1517): a highlighted pointer drawn along the
+   *  recorded pointer path, and with `shortcuts` a badge for each keyboard
+   *  shortcut pressed. Stored only while on; a recording without a pointer
+   *  path (an upload, an older recording) draws nothing.  */
+  cursor?: CursorEdits
+}
+
+/** The cursor switches (#1517). Only `{ show: true }`, with `shortcuts: true`
+ *  when the badges are on too, is ever stored; off = the key is absent. */
+export interface CursorEdits {
+  show: true
+  shortcuts?: true
+}
+
+/** `{ show: true, shortcuts?: true }` or null (off / unreadable). */
+export function normalizeCursor(v: unknown): CursorEdits | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const r = v as { show?: unknown; shortcuts?: unknown }
+  if (r.show !== true) return null
+  return r.shortcuts === true ? { show: true, shortcuts: true } : { show: true }
 }
 
 /** The narration cleanup switch (#1519). Only `{ improve: true }` is ever
@@ -249,6 +282,10 @@ export const EDIT_LIMITS = {
   minSegmentMs: 100,
   /** Smallest zoom rect side (fraction of the frame): at most 4x magnification. */
   zoomMinSide: 0.25,
+  /** Stops of a moving zoom (#1539), per zoom and over the whole video: each
+   *  stop is one more piece of the render's per-frame zoom expression. */
+  zoomKeyframes: 40,
+  zoomKeyframesTotal: 300,
   cardMinMs: 2000,
   cardMaxMs: 6000,
   cardDefaultMs: 3000,
@@ -400,21 +437,27 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   }
 
   const zooms: Zoom[] = []
+  let keyframeBudget = EDIT_LIMITS.zoomKeyframesTotal
   for (const z of arr(o.zooms).sort((a, b) => num(a.start_ms) - num(b.start_ms))) {
     if (zooms.length >= EDIT_LIMITS.zooms) break
     const s = span(z, src)
     if (!s) continue
     if (zooms.length && s.start_ms < zooms[zooms.length - 1].end_ms) continue
-    const r = rect(z.rect)
-    const side = clamp(Math.max(r.w, r.h), EDIT_LIMITS.zoomMinSide, 1)
-    const sq = { x: clamp(r.x, 0, 1 - side), y: clamp(r.y, 0, 1 - side), w: side, h: side }
+    // A moving zoom's area is its first stop; a still zoom keeps its own.
+    const keyframes = normalizeZoomKeyframes(z.keyframes, s, keyframeBudget)
+    const sq = keyframes ? keyframes[0].rect : zoomSquare(rect(z.rect))
     const half = Math.floor((s.end_ms - s.start_ms) / 2)
-    zooms.push({
+    const zoom: Zoom = {
       id: id(z.id),
       ...s,
       rect: sq,
       ease_ms: Math.round(clamp(num(z.ease_ms, 400), 0, half))
-    })
+    }
+    if (keyframes) {
+      zoom.keyframes = keyframes
+      keyframeBudget -= keyframes.length
+    }
+    zooms.push(zoom)
   }
 
   const blurs: Blur[] = []
@@ -476,6 +519,8 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   if (calloutText) out.callout_text = calloutText
   const captionStyle = normalizeCaptionLook(o.caption_style)
   if (captionStyle) out.caption_style = captionStyle
+  const cursor = normalizeCursor(o.cursor)
+  if (cursor) out.cursor = cursor
   return out
 }
 
@@ -527,6 +572,107 @@ export function stepNumbers(e: VideoEdits): Map<string, number> {
 /** The crop in effect: the stored one, else the whole frame. */
 export function cropOf(e: VideoEdits): Rect {
   return e.crop ?? { x: 0, y: 0, w: 1, h: 1 }
+}
+
+/** A zoom's square: the longer side, at least EDIT_LIMITS.zoomMinSide,
+ *  moved back inside the frame (the same rule the editor's squareRect uses). */
+export function zoomSquare(r: Rect): Rect {
+  const side = clamp(Math.max(r.w, r.h), EDIT_LIMITS.zoomMinSide, 1)
+  return { x: clamp(r.x, 0, 1 - side), y: clamp(r.y, 0, 1 - side), w: side, h: side }
+}
+
+/** The stops a moving zoom (#1539) stores: inside the zoom's span, sorted,
+ *  one per moment (the first wins), squares like the zoom's own area, at
+ *  most EDIT_LIMITS.zoomKeyframes and whatever is left of the video's
+ *  budget. Null (nothing stored) with fewer than two: one stop is a still
+ *  zoom, and its area is the zoom's `rect`. */
+export function normalizeZoomKeyframes(
+  raw: unknown,
+  s: { start_ms: number; end_ms: number },
+  budget = EDIT_LIMITS.zoomKeyframesTotal
+): ZoomKeyframe[] | null {
+  const max = Math.min(EDIT_LIMITS.zoomKeyframes, Math.max(0, budget))
+  if (max < 2) return null
+  const stops = arr(raw)
+    .map((k) => ({
+      at_ms: Math.round(clamp(num(k.at_ms), s.start_ms, s.end_ms)),
+      rect: zoomSquare(rect(k.rect))
+    }))
+    .sort((a, b) => a.at_ms - b.at_ms)
+  const out: ZoomKeyframe[] = []
+  for (const k of stops) {
+    if (out.length >= max) break
+    if (out.length && out[out.length - 1].at_ms === k.at_ms) continue
+    out.push(k)
+  }
+  return out.length >= 2 ? out : null
+}
+
+/** The area a zoom shows at a SOURCE moment: its one area, or, for a moving
+ *  zoom, the straight-line blend of the two stops around that moment (the
+ *  first stop before it, the last after it). The live player and the render
+ *  both follow this. */
+export function zoomRectAt(z: Zoom, srcMs: number): Rect {
+  const k = z.keyframes
+  if (!k || k.length < 2) return z.rect
+  if (srcMs <= k[0].at_ms) return k[0].rect
+  const last = k[k.length - 1]
+  if (srcMs >= last.at_ms) return last.rect
+  for (let i = 1; i < k.length; i++) {
+    const b = k[i]
+    if (srcMs > b.at_ms) continue
+    const a = k[i - 1]
+    const u = b.at_ms === a.at_ms ? 1 : (srcMs - a.at_ms) / (b.at_ms - a.at_ms)
+    const mix = (p: number, q: number) => p + (q - p) * u
+    return {
+      x: mix(a.rect.x, b.rect.x),
+      y: mix(a.rect.y, b.rect.y),
+      w: mix(a.rect.w, b.rect.w),
+      h: mix(a.rect.h, b.rect.h)
+    }
+  }
+  return last.rect
+}
+
+/** The zoom in effect at a SOURCE moment as the picture is drawn: the
+ *  uniform scale `z` of the cropped picture and where its top-left corner
+ *  lands, as fractions of the picture (transform-origin 0 0:
+ *  translate(tx, ty) scale(z)). The twin of the player's playerMath.zoomAt
+ *  and of the render's per-frame scale + crop. */
+export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; ty: number } {
+  for (const zm of e.zooms) {
+    if (srcMs < zm.start_ms || srcMs > zm.end_ms) continue
+    const p =
+      zm.ease_ms > 0
+        ? clamp(
+            Math.min((srcMs - zm.start_ms) / zm.ease_ms, (zm.end_ms - srcMs) / zm.ease_ms),
+            0,
+            1
+          )
+        : 1
+    const v = zoomInView(e, zoomRectAt(zm, srcMs))
+    const z = 1 + (v.mag - 1) * p
+    const cx = 0.5 + (v.cx - 0.5) * p
+    const cy = 0.5 + (v.cy - 0.5) * p
+    return { z, tx: clamp(0.5 - cx * z, 1 - z, 0), ty: clamp(0.5 - cy * z, 1 - z, 0) }
+  }
+  return { z: 1, tx: 0, ty: 0 }
+}
+
+/** What viewers see at a SOURCE moment: crop, then zoom. A point at fraction
+ *  p of the whole recorded frame shows at (p.x·sx + ox, p.y·sy + oy) of the
+ *  finished picture. The twin of the player's playerMath.viewAt. */
+export interface View {
+  z: number
+  sx: number
+  sy: number
+  ox: number
+  oy: number
+}
+export function viewAt(e: VideoEdits, srcMs: number): View {
+  const c = cropOf(e)
+  const { z, tx, ty } = zoomAt(e, srcMs)
+  return { z, sx: z / c.w, sy: z / c.h, ox: tx - (c.x * z) / c.w, oy: ty - (c.y * z) / c.h }
 }
 
 /** A zoom as seen inside the crop: how much it magnifies the cropped picture

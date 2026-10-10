@@ -1,4 +1,4 @@
-import { Crosshair, Trash2 } from 'lucide-react'
+import { Crosshair, MousePointer2, Trash2 } from 'lucide-react'
 import { memo, type ReactNode, useId, useRef } from 'react'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
@@ -13,6 +13,7 @@ import {
   musicShare,
   removeItem,
   removeSegment,
+  removeZoomKeyframe,
   setCalloutText,
   setPieceMusic,
   setSpeed,
@@ -23,11 +24,13 @@ import {
   upsertItemChecked,
   zoomInView
 } from '../edits'
+import { followPointerKeyframes } from '../followPointer'
 import type {
   Annotation,
   Blur,
   Caption,
   Chapter,
+  PointerPath,
   RecordedClick,
   StepStyle,
   Tone,
@@ -36,6 +39,7 @@ import type {
 } from '../types'
 import { seconds, TimeField } from './TimeField'
 import type { Selection } from './Timeline'
+import { clock } from './timeline/Lanes'
 import { clickForRipple, clickTargetText, shortForText, withTypedText } from './tools'
 
 const TONES: Array<{ value: Tone; label: string }> = [
@@ -99,13 +103,19 @@ export const Inspector = memo(function Inspector({
   onSelect,
   onSeek,
   onError,
-  clicks
+  clicks,
+  pointer,
+  uploaded
 }: {
   edits: VideoEdits
   selection: Selection
   sourceMs: number
   /** The recorder's clicks: a ripple says what its click hit. */
   clicks?: RecordedClick[] | null
+  /** The recorder's pointer path (#1517): a zoom can follow it (#1540). */
+  pointer?: PointerPath | null
+  /** The source is an uploaded file (it never has a pointer path). */
+  uploaded?: boolean
   onChange: (e: VideoEdits, key?: string) => void
   onSelect: (s: Selection) => void
   onSeek: (srcMs: number) => void
@@ -604,6 +614,25 @@ export const Inspector = memo(function Inspector({
 
   if (lane === 'zooms') {
     const z = item as Zoom
+    const stops = z.keyframes ?? []
+    /** A changed zoom (its stops included); a refusal goes to the note. */
+    const writeZoom = (next: Zoom, key?: string) => {
+      const r = upsertItemChecked(edits, 'zooms', next)
+      if (r.refused) onError(r.refused)
+      else if (r.edits !== edits) onChange(r.edits, key)
+    }
+    const hasPath = !!pointer?.samples.length
+    const noPath = uploaded
+      ? 'An uploaded video has no pointer path to follow'
+      : 'This recording has no pointer path: it was made before the recorder kept one, or of another window or screen'
+    const follow = () => {
+      const keyframes = followPointerKeyframes(z, pointer?.samples)
+      if (!keyframes) {
+        onError('The pointer was not seen on this tab during this zoom')
+        return
+      }
+      writeZoom({ ...z, rect: keyframes[0].rect, keyframes }, `follow:${z.id}`)
+    }
     return frame(
       'Zoom',
       'zooms',
@@ -612,6 +641,60 @@ export const Inspector = memo(function Inspector({
           Shows the outlined area {zoomInView(edits, z.rect).mag.toFixed(1)} times larger. While it
           is selected the preview shows the whole picture, so you can place it.
         </p>
+        <div className='space-y-1.5' data-hv-zoom-motion>
+          <p className={label}>Movement</p>
+          {stops.length ? (
+            <ul className='space-y-1' data-hv-keyframes>
+              {stops.map((k) => (
+                <li key={k.at_ms} className='flex items-center gap-1 text-[12.5px]'>
+                  <button
+                    type='button'
+                    className='inline-flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left tabular-nums hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                    onClick={() => onSeek(k.at_ms)}
+                    data-hv-keyframe-go={k.at_ms}
+                  >
+                    <span
+                      className='h-2 w-2 shrink-0 rotate-45 border border-emerald-700 bg-white dark:border-emerald-200 dark:bg-emerald-950'
+                      aria-hidden
+                    />
+                    Stop at {clock(k.at_ms)}
+                  </button>
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='h-7 w-7 shrink-0 px-0 text-muted-foreground hover:text-rose-700 dark:hover:text-rose-300'
+                    onClick={() => writeZoom(removeZoomKeyframe(z, k.at_ms), `kf:${z.id}`)}
+                    aria-label={`Remove the stop at ${clock(k.at_ms)}`}
+                    data-hv-keyframe-remove={k.at_ms}
+                  >
+                    <Trash2 className='!size-3.5' aria-hidden />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <p className={hint}>
+            {stops.length
+              ? 'The zoom pans between its stops. Move the playhead inside the zoom and drag the area to add or change a stop; down to one stop it stands still.'
+              : 'Still. To make it move, put the playhead inside the zoom and drag the area: that adds a stop there, and the zoom pans from its start to it.'}
+          </p>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8 text-[12.5px]'
+            onClick={follow}
+            disabled={!hasPath}
+            title={hasPath ? undefined : noPath}
+            data-hv-follow-pointer
+          >
+            <MousePointer2 className='!size-3.5' aria-hidden /> Follow the pointer
+          </Button>
+          {!hasPath && (
+            <p className={hint} data-hv-follow-pointer-reason>
+              {noPath}.
+            </p>
+          )}
+        </div>
         <div className='flex flex-col gap-1'>
           <label htmlFor={`${headingId}-ease`} className={label}>
             Ease in and out{' '}
