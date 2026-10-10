@@ -27,6 +27,14 @@ import {
   normalizeEdits
 } from '../services/help-video-edits.js'
 import {
+  answerQuestion,
+  askQuestion,
+  listQuestions,
+  myRating,
+  ratingSummary,
+  setRating
+} from '../services/help-video-feedback.js'
+import {
   deleteVideoMusic,
   importOpenverseMusic,
   libraryTrackFile,
@@ -36,6 +44,7 @@ import {
   uploadMusic,
   videoMusicRow
 } from '../services/help-video-music.js'
+import { nextForViewer } from '../services/help-video-next.js'
 import {
   OpenverseError,
   openverseEnabled,
@@ -392,7 +401,57 @@ export async function helpVideosRoutes(app: FastifyInstance) {
   app.get('/:id/analytics', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { video } = await loadVideoForUser(req, id)
-    return reply.send({ data: await videoAnalytics(video) })
+    const [analytics, ratings, questions] = await Promise.all([
+      videoAnalytics(video),
+      ratingSummary(video),
+      listQuestions(video, { userId: req.user!.id, author: true })
+    ])
+    return reply.send({ data: { ...analytics, ratings, questions } })
+  })
+
+  // ── "Was this helpful?" and questions at a moment (#1505) ─────────────────
+  // Like progress, nothing is written for a masquerade session: an admin
+  // looking as someone else must not vote or ask in that person's name.
+  const notWhileMasquerading = (reply: FastifyReply) =>
+    reply.code(403).send({
+      error: 'Not while viewing as someone else',
+      code: 'HELP_VIDEO_MASQUERADE'
+    })
+  app.put('/:id/rating', async (req, reply) => {
+    if (req.masqueradeAdminId) return notWhileMasquerading(reply)
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const body = (req.body ?? {}) as { helpful?: unknown }
+    return reply.send({ data: await setRating(req.user!, video, body.helpful) })
+  })
+  app.get('/:id/questions', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video, author } = await loadVideoForUser(req, id)
+    const [data, rating] = await Promise.all([
+      listQuestions(video, { userId: req.user!.id, author }),
+      myRating(video, req.user!.id)
+    ])
+    return reply.send({ data, my_rating: rating })
+  })
+  app.post('/:id/questions', async (req, reply) => {
+    if (req.masqueradeAdminId) return notWhileMasquerading(reply)
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const body = (req.body ?? {}) as { at_ms?: unknown; text?: unknown }
+    return reply.code(201).send({ data: await askQuestion(req.user!, video, body) })
+  })
+  app.post('/:id/questions/:qid/answer', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id, qid } = req.params as { id: string; qid: string }
+    const { video } = await loadVideoForUser(req, id)
+    const body = (req.body ?? {}) as { answer?: unknown }
+    return reply.send({ data: await answerQuestion(req.user!, video, qid, body) })
+  })
+
+  // ── "Up next" (#1530): what people in this role watched after this one ──
+  app.get('/:id/next', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    return reply.send({ data: await nextForViewer(req, video) })
   })
 
   // ── Draft edits ───────────────────────────────────────────────────────────

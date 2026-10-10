@@ -44,9 +44,16 @@ export type PlayerHandle = {
   seekSource(ms: number): void
   play(): void
   pause(): void
+  /** Playing now (the recording or a card's clock). */
+  isPlaying(): boolean
   sourceMs(): number
   editedMs(): number
+  /** The finished video's length (edited time); 0 while unknown. */
+  totalMs(): number
   frame(): { width: number; height: number } | null
+  /** Measures the picture again — after the player's DOM moved to another
+   *  window or box (the mini player, #1500). */
+  remeasure(): void
 }
 
 const SPEEDS = [0.75, 1, 1.25, 1.5, 2]
@@ -86,6 +93,8 @@ export type HelpVideoPlayerProps = {
   /** Play the draft (authors in the editor). */
   useDraft?: boolean
   onTime?: (sourceMs: number, editedMs: number) => void
+  /** The finished video ended (after the end card when there is one). */
+  onEnded?: () => void
   trackProgress?: boolean
   autoPlay?: boolean
   handleRef?: MutableRefObject<PlayerHandle | null>
@@ -108,6 +117,7 @@ function PlayerInner({
   edits: editsProp,
   useDraft = false,
   onTime,
+  onEnded,
   trackProgress = true,
   autoPlay = false,
   handleRef,
@@ -174,6 +184,9 @@ function PlayerInner({
   const [fileDurMs, setFileDurMs] = useState(0)
   const [checking, setChecking] = useState(false)
   const resumeAt = useRef<number | null>(null)
+  const measureRef = useRef<(() => void) | null>(null)
+  const onEndedRef = useRef(onEnded)
+  onEndedRef.current = onEnded
   // Edits played live (no render): the intro and outro cards are drawn here
   // and run on their own clock. A rendered file already contains them.
   const liveEdits = !rendered && !!edits
@@ -274,6 +287,7 @@ function PlayerInner({
       const h = videoEl?.videoHeight || version?.height || 9
       setFrame(fitFrame(box.clientWidth, box.clientHeight, w * cw, h * ch))
     }
+    measureRef.current = measure
     const ro = new ResizeObserver(measure)
     ro.observe(box)
     videoEl?.addEventListener('loadedmetadata', measure)
@@ -281,6 +295,7 @@ function PlayerInner({
     return () => {
       ro.disconnect()
       videoEl?.removeEventListener('loadedmetadata', measure)
+      measureRef.current = null
     }
   }, [videoEl, version?.width, version?.height, cropKey])
 
@@ -316,7 +331,7 @@ function PlayerInner({
           // The recording is over: the outro card plays, then the video ends.
           if (outroMs(edits) > 0 && !cardRef.current) {
             setCard({ kind: 'outro', at: 0, playing: true })
-          }
+          } else if (outroMs(edits) <= 0) onEndedRef.current?.()
         } else {
           if (v.playbackRate !== step.rate * userRate) v.playbackRate = step.rate * userRate
           if (step.action === 'seek') v.currentTime = step.toMs / 1000
@@ -417,9 +432,12 @@ function PlayerInner({
           if (c.playing) togglePlay()
         } else videoRef.current?.pause()
       },
+      isPlaying: () => isPlaying,
       sourceMs: () => (videoRef.current?.currentTime ?? 0) * 1000,
       editedMs: () => editedMs,
-      frame: () => (frame ? { width: frame.width, height: frame.height } : null)
+      totalMs: () => totalMs,
+      frame: () => (frame ? { width: frame.width, height: frame.height } : null),
+      remeasure: () => measureRef.current?.()
     }
   }
 
@@ -516,7 +534,10 @@ function PlayerInner({
   const sendRef = useRef(send)
   sendRef.current = send
   // The outro card finished: the video has ended.
-  const cardEndedRef = useRef(() => sendRef.current())
+  const cardEndedRef = useRef(() => {
+    sendRef.current()
+    onEndedRef.current?.()
+  })
   useEffect(() => {
     if (!isPlaying) return
     const t = setInterval(() => sendRef.current(), 10_000)
@@ -708,7 +729,10 @@ function PlayerInner({
                   // The file ran out before the live step saw the end: the outro still plays.
                   if (liveEdits && tail > 0 && !cardRef.current) {
                     setCard({ kind: 'outro', at: 0, playing: true })
-                  } else send()
+                  } else {
+                    send()
+                    onEndedRef.current?.()
+                  }
                 }}
                 onLoadedMetadata={(e) => {
                   if (resumeAt.current !== null) {

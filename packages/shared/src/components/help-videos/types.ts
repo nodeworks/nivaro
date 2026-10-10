@@ -344,6 +344,46 @@ export interface CaptionStyle {
   position: 'bottom' | 'top'
 }
 
+/** A question asked at a moment of the video (#1505; GET /help-videos/:id/questions).
+ *  `text` and `answer` are what people wrote — data, shown as is. */
+export interface HelpVideoQuestion {
+  id: string
+  video_id: string
+  version_id: string | null
+  /** Where it was asked, in the finished video (edited time). */
+  at_ms: number
+  text: string
+  /** Asked by this person. */
+  mine: boolean
+  /** Authors only: who asked. */
+  asked_by_name?: string | null
+  answer: string | null
+  answered_at: string | null
+  answered_by_name: string | null
+  created_at: string
+}
+
+/** Thumbs up / down counts (#1505). */
+export interface HelpVideoRatingSummary {
+  up: number
+  down: number
+  /** up / (up + down), 3 places; 0 with no votes. */
+  helpful_rate: number
+}
+
+/** GET /help-videos/:id/analytics (authors). */
+export interface HelpVideoAnalytics {
+  views: number
+  unique_viewers: number
+  completion_rate: number
+  /** Share of viewers who reached each 5% section (20 values). */
+  drop_off: number[]
+  watched_hours: number
+  /** Absent on older servers. */
+  ratings?: HelpVideoRatingSummary
+  questions?: HelpVideoQuestion[]
+}
+
 /** Error codes the help-video routes answer with (`{ error, code }`). */
 export type HelpVideoErrorCode =
   | 'HELP_VIDEO_PROCESSING'
@@ -352,3 +392,7 @@ export type HelpVideoErrorCode =
   | 'HELP_VIDEO_NOT_FOUND'
   | 'HELP_VIDEO_AUTHOR_ONLY'
   | 'HELP_VIDEO_DOWNLOAD_OFF'
+  | 'HELP_VIDEO_MASQUERADE'
+  | 'HELP_VIDEO_RATING_INVALID'
+  | 'HELP_VIDEO_QUESTION_INVALID'
+  | 'HELP_VIDEO_QUESTION_NOT_FOUND'

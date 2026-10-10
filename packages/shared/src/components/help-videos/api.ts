@@ -5,9 +5,11 @@ import { del, get, patch, post, put } from '../../lib/commands'
 import { type CardBrand, cardAccent } from './cards'
 import type {
   ActivitySpan,
+  HelpVideoAnalytics,
   HelpVideoContext,
   HelpVideoDto,
   HelpVideoErrorCode,
+  HelpVideoQuestion,
   MusicTrack,
   OpenverseSearch,
   RecordedClick,
@@ -26,6 +28,10 @@ export const helpVideoKeys = {
   required: ['help-videos', 'required'] as const,
   pages: ['help-videos', 'pages'] as const,
   walk: (id: string) => ['help-videos', 'walk', id] as const,
+  /** This person's questions on a video and their vote (#1505). */
+  questions: (id: string) => ['help-videos', 'questions', id] as const,
+  /** "Up next" suggestions for a video (#1530). */
+  next: (id: string) => ['help-videos', 'next', id] as const,
   /** The editor's draft load. Outside the `all` prefix on purpose: GET
    *  /draft/edits creates a missing draft, so a broad invalidation must
    *  never refetch it. `n` bumps on Reload. */
@@ -132,6 +138,28 @@ export function useHelpVideoWalk(id: string | null) {
           get<{ data: { version_id: string | null; steps: WalkStep[] } }>(`/help-videos/${id}/walk`)
         )
       ).data
+  })
+}
+
+/** This person's questions (authors: everyone's) and their own vote. */
+export function useHelpVideoQuestions(id: string | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.questions(id ?? ''),
+    enabled: !!id,
+    staleTime: 30_000,
+    queryFn: () => helpVideoApi(client).questions(id as string)
+  })
+}
+
+/** Up to five videos to watch after this one (#1530). */
+export function useHelpVideoNext(id: string | null, enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.next(id ?? ''),
+    enabled: enabled && !!id,
+    staleTime: 300_000,
+    queryFn: () => helpVideoApi(client).next(id as string)
   })
 }
 
@@ -259,17 +287,39 @@ export function helpVideoApi(client: NivaroClient) {
       body: { position_ms: number; watched_ms_delta: number; buckets: string; version_id?: string }
     ) => r(post<{ data: { completed: boolean } } | undefined>(`/help-videos/${id}/progress`, body)),
     analytics: (id: string) =>
+      r(get<{ data: HelpVideoAnalytics }>(`/help-videos/${id}/analytics`)).then((x) => x.data),
+    /** "Was this helpful?" — one vote per person per video, changeable. 403
+     *  HELP_VIDEO_MASQUERADE while viewing as someone else. */
+    rate: (id: string, helpful: boolean) =>
+      r(put<{ data: { helpful: boolean } }>(`/help-videos/${id}/rating`, { helpful })).then(
+        (x) => x.data
+      ),
+    /** This person's questions on the video (authors: everyone's, with who
+     *  asked) and their own vote (null = none yet). */
+    questions: (id: string) =>
       r(
-        get<{
-          data: {
-            views: number
-            unique_viewers: number
-            completion_rate: number
-            drop_off: number[]
-            watched_hours: number
-          }
-        }>(`/help-videos/${id}/analytics`)
+        get<{ data: HelpVideoQuestion[]; my_rating: boolean | null }>(
+          `/help-videos/${id}/questions`
+        )
+      ).then((x) => ({ questions: x.data, my_rating: x.my_rating ?? null })),
+    /** Asks a question at a moment (edited time); text ≤ 1000 characters
+     *  (400 HELP_VIDEO_QUESTION_INVALID). The authors are notified. */
+    ask: (id: string, body: { at_ms: number; text: string }) =>
+      r(post<{ data: HelpVideoQuestion }>(`/help-videos/${id}/questions`, body)).then(
+        (x) => x.data
+      ),
+    /** Authors: answers a question (≤ 2000 characters); the asker is notified. */
+    answer: (id: string, questionId: string, answer: string) =>
+      r(
+        post<{ data: HelpVideoQuestion }>(`/help-videos/${id}/questions/${questionId}/answer`, {
+          answer
+        })
       ).then((x) => x.data),
+    /** Up to five published videos to watch after this one: what people in
+     *  this person's role watched next, then anyone, then the same screen;
+     *  never one this person has finished. */
+    next: (id: string) =>
+      r(get<{ data: HelpVideoDto[] }>(`/help-videos/${id}/next`)).then((x) => x.data),
     openUpload: (mime: string) =>
       r(post<{ data: { id: string; next_part: number } }>('/help-videos/uploads', { mime })).then(
         (x) => x.data
