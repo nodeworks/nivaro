@@ -1,7 +1,8 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { uploadFileBuffer } from '../services/files.js'
 import { readOne } from '../services/items.js'
 import {
   canSeeTicket,
@@ -47,6 +48,16 @@ interface CategoryRow {
 }
 
 const PRIORITIES = ['low', 'normal', 'urgent']
+
+interface RaiseTicketInput {
+  title?: string
+  description?: string | null
+  category_id?: number | null
+  collection?: string | null
+  item?: string | number | null
+  priority?: string
+  attachments?: string[]
+}
 
 function serializeCategory(c: CategoryRow & Record<string, unknown>) {
   return {
@@ -431,37 +442,43 @@ export async function supportRoutes(app: FastifyInstance) {
   })
 
   // POST /tickets — raise one.
-  app.post<{
-    Body: {
-      title?: string
-      description?: string | null
-      category_id?: number | null
-      collection?: string | null
-      item?: string | number | null
-      priority?: string
-      attachments?: string[]
-    }
-  }>('/tickets', async (req, reply) => {
-    const b = req.body ?? {}
+  app.post<{ Body: RaiseTicketInput }>('/tickets', async (req, reply) => {
+    const out = await raiseTicket(req, req.body ?? {})
+    if ('error' in out) return reply.code(out.status).send({ error: out.error })
+    return reply.code(201).send({ data: out.ticket })
+  })
+
+  /**
+   * Raise a ticket as the caller (POST /tickets and the portal's "Report a
+   * problem"). Answers the serialized ticket, or the refusal to send.
+   */
+  async function raiseTicket(
+    req: FastifyRequest,
+    b: RaiseTicketInput,
+    opts: { trustedAttachments?: string[] } = {}
+  ): Promise<
+    | { ticket: Awaited<ReturnType<typeof serializeTickets>>[number] }
+    | { status: number; error: string }
+  > {
     const title = String(b.title ?? '').trim()
-    if (!title) return reply.code(400).send({ error: 'A short summary is required' })
+    if (!title) return { status: 400, error: 'A short summary is required' }
     const collection = b.collection ? String(b.collection) : null
     const item = b.item != null && b.item !== '' ? String(b.item) : null
     if ((collection && !item) || (!collection && item)) {
-      return reply.code(400).send({ error: 'collection and item go together' })
+      return { status: 400, error: 'collection and item go together' }
     }
     if (collection && item) {
       if (/^(nivaro|directus)_/i.test(collection)) {
-        return reply.code(400).send({ error: 'Tickets cannot target system collections' })
+        return { status: 400, error: 'Tickets cannot target system collections' }
       }
       // The requester must be able to open the record they are asking about.
       try {
         // readOne answers NULL (no throw) for a row the caller cannot see.
         if (!(await readOne(req.user!, collection, item, req.workspaceId ?? undefined, ['id']))) {
-          return reply.code(404).send({ error: 'Record not found' })
+          return { status: 404, error: 'Record not found' }
         }
       } catch {
-        return reply.code(404).send({ error: 'Record not found' })
+        return { status: 404, error: 'Record not found' }
       }
     }
     let category: CategoryRow | undefined
@@ -469,9 +486,9 @@ export async function supportRoutes(app: FastifyInstance) {
       category = (await db('nivaro_task_categories')
         .where({ id: Number(b.category_id), is_active: true })
         .first()) as CategoryRow | undefined
-      if (!category) return reply.code(400).send({ error: 'Unknown support type' })
+      if (!category) return { status: 400, error: 'Unknown support type' }
       if (category.collection && category.collection !== collection) {
-        return reply.code(400).send({ error: 'That type is only for a different kind of record' })
+        return { status: 400, error: 'That type is only for a different kind of record' }
       }
     }
     const priority = b.priority && PRIORITIES.includes(b.priority) ? b.priority : 'normal'
@@ -491,6 +508,9 @@ export async function supportRoutes(app: FastifyInstance) {
       const ok = new Set(rows.map((r) => String(r.id).toLowerCase()))
       ownFiles = attachments.filter((a) => ok.has(a.toLowerCase()))
     }
+    // Files the server itself stored for this caller (a problem report's
+    // screenshot) ride along without the ownership re-check.
+    if (opts.trustedAttachments?.length) ownFiles = [...ownFiles, ...opts.trustedAttachments]
     const now = new Date()
     const [row] = (await db('nivaro_tasks')
       .insert({
@@ -526,7 +546,159 @@ export async function supportRoutes(app: FastifyInstance) {
       actorId: req.user!.id,
       category: 'system'
     })
-    return reply.code(201).send({ data: s })
+    return { ticket: s }
+  }
+
+  /**
+   * POST /problem-reports — "Report a problem" from a portal (#1390). One
+   * sentence from the person plus what their browser saw: a screenshot (inputs
+   * masked client-side), the replay clip of the moment when error replay or
+   * full recording is on, the console tail and the route. Files an issue
+   * (source client, raised by the person) AND a General Support request that
+   * links to it, so the person follows it under My requests and the desk sees
+   * the screenshot and replay without asking.
+   */
+  app.post<{
+    Body: {
+      description?: string
+      screenshot?: string | null
+      console?: string[]
+      route?: string
+      url?: string
+      app?: string
+      user_agent?: string
+      viewport?: string
+      recording_id?: string | null
+      recording_offset_ms?: number | null
+    }
+  }>('/problem-reports', { bodyLimit: 4_000_000 }, async (req, reply) => {
+    const b = req.body ?? {}
+    const description = String(b.description ?? '').trim()
+    if (!description) return reply.code(400).send({ error: 'Say what went wrong' })
+    const screenshot = typeof b.screenshot === 'string' && b.screenshot ? b.screenshot : null
+    if (screenshot && !/^data:image\/(png|jpeg|webp);base64,/.test(screenshot)) {
+      return reply.code(400).send({ error: 'screenshot must be a data:image URI' })
+    }
+    if (screenshot && screenshot.length > 2_500_000) {
+      return reply.code(400).send({ error: 'screenshot too large (2MB cap)' })
+    }
+    const userId = req.user!.id
+    // The replay link is caller-supplied: only a recording that exists and
+    // belongs to the reporter (same rule as POST /issues/client).
+    let recordingId: string | null = null
+    if (typeof b.recording_id === 'string' && /^[0-9a-f-]{36}$/i.test(b.recording_id)) {
+      const rec = await db('nivaro_session_recordings')
+        .where({ id: b.recording_id, user: userId })
+        .first('id')
+      if (rec) recordingId = b.recording_id
+    }
+    const recordingOffsetMs =
+      recordingId && b.recording_offset_ms != null && Number.isFinite(Number(b.recording_offset_ms))
+        ? Math.max(0, Math.floor(Number(b.recording_offset_ms)))
+        : null
+    // Control characters out (a log line must not forge new lines in details).
+    const clean = (v: unknown, max: number) =>
+      typeof v === 'string'
+        ? Array.from(v, (c) => (c.charCodeAt(0) < 32 ? ' ' : c))
+            .join('')
+            .trim()
+            .slice(0, max)
+        : ''
+    const route = clean(b.route, 300) || clean(b.url, 300) || 'unknown'
+    const app = clean(b.app, 60)
+    const consoleTail = Array.isArray(b.console)
+      ? b.console
+          .filter((l): l is string => typeof l === 'string')
+          .slice(-40)
+          .map((l) => l.slice(0, 300))
+      : []
+    const title = (description.split('\n')[0] ?? '').slice(0, 140) || 'Problem report'
+
+    // 1. The screenshot as a file the requester owns, so the desk sees it on
+    // the ticket (the issue keeps its own copy inline, like the bug reporter).
+    let screenshotFileId: string | null = null
+    if (screenshot) {
+      try {
+        const [, mimeType, data] = /^data:(image\/[a-z]+);base64,(.*)$/s.exec(screenshot) ?? []
+        if (mimeType && data) {
+          const ext = mimeType === 'image/png' ? 'png' : mimeType === 'image/webp' ? 'webp' : 'jpg'
+          const stamp = new Date().toISOString().slice(0, 16).replace(/[:T]/g, '-')
+          const file = await uploadFileBuffer(
+            req.user!,
+            Buffer.from(data, 'base64'),
+            `problem-report-${stamp}.${ext}`,
+            mimeType
+          )
+          screenshotFileId = String(file.id)
+        }
+      } catch (err) {
+        req.log.warn({ err }, 'problem report: screenshot file could not be stored')
+      }
+    }
+
+    // 2. The issue.
+    const now = new Date()
+    const details = [
+      description,
+      '',
+      `Route: ${route}`,
+      app ? `App: ${app}` : null,
+      b.user_agent ? `User agent: ${clean(b.user_agent, 300)}` : null,
+      b.viewport ? `Viewport: ${clean(b.viewport, 40)}` : null,
+      recordingId ? 'Replay: attached' : null,
+      '',
+      consoleTail.length > 0 ? `Console tail:\n${consoleTail.join('\n')}` : 'Console tail: empty'
+    ]
+      .filter((l) => l !== null)
+      .join('\n')
+    const [issueRow] = (await db('nivaro_issues')
+      .insert({
+        title,
+        severity: 'medium',
+        status: 'open',
+        collection: null,
+        item: null,
+        assigned_to: null,
+        details: details.slice(0, 8000),
+        screenshot,
+        source: 'client',
+        raised_by: userId,
+        recording_id: recordingId,
+        recording_offset_ms: recordingOffsetMs,
+        created_at: now,
+        updated_at: now
+      })
+      .returning('id')) as Array<{ id: number } | number>
+    const issueId = Number(typeof issueRow === 'object' ? issueRow.id : issueRow)
+    await logActivity({
+      action: 'create',
+      user: userId,
+      collection: 'nivaro_issues',
+      item: String(issueId),
+      comment: 'Problem report',
+      req
+    })
+
+    // 3. The support request, linked to the issue.
+    const out = await raiseTicket(
+      req,
+      {
+        title,
+        description: `${description}\n\nReported from ${route}${app ? ` (${app})` : ''}. Issue #${issueId} holds the screenshot, console${recordingId ? ' and replay' : ''}.`,
+        priority: 'normal'
+      },
+      { trustedAttachments: screenshotFileId ? [screenshotFileId] : [] }
+    )
+    if ('error' in out) return reply.code(out.status).send({ error: out.error })
+    await db('nivaro_issues')
+      .where({ id: issueId })
+      .update({
+        details: `${details}\n\nSupport request #${out.ticket.id}`.slice(0, 8000),
+        updated_at: new Date()
+      })
+    return reply.code(201).send({
+      data: { ticket: out.ticket, issue_id: issueId, replay: recordingId != null }
+    })
   })
 
   // POST /tickets/:id/comments — reply on the thread.

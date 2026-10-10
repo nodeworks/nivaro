@@ -349,6 +349,11 @@ export { type ReadViewLayout, RecordReadView } from './components/RecordReadView
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
+export {
+  type ProblemReplayLink,
+  type ProblemReportResult,
+  ReportProblemDialog
+} from './components/support/ReportProblemDialog'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
 export {
@@ -467,6 +472,11 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export {
+  captureProblemScreenshot,
+  problemConsoleTail,
+  startProblemConsoleTail
+} from './lib/problem-report'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
 export {

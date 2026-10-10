@@ -14697,7 +14697,7 @@ DELETE /api/tasks/:id</code></pre>
           </ul>
           <!-- /SYNC:tasks -->
         </div>
-        <div class="doc-section" id="s-support-requests" data-toc='[{"id":"support-requests","label":"Support Requests"}]'>
+        <div class="doc-section" id="s-support-requests" data-toc='[{"id":"support-requests","label":"Support Requests"},{"id":"support-report-problem","label":"Report a problem"}]'>
           <!-- SYNC:support-requests -->
           <h1 class="doc-h1" id="support-requests">Support Requests</h1>
           <p class="doc-p">People ask the administrators for help or for a change to a record, and follow the request until it is done. A support request is a task (<code class="doc-code">nivaro_tasks.kind = support</code>) that points at a record, or at nothing for General Support, and waits unassigned until someone picks it up.</p>
@@ -14721,6 +14721,13 @@ PATCH /api/support/tickets/:id           { "status": "done" }
 GET   /api/support/summary               // badge counts
 GET   /api/support/categories?collection=orders
 GET   /api/tasks/requested               // tasks I asked others to do</code></pre>
+          <h3 class="doc-h3" id="support-report-problem">Report a problem</h3>
+          <p class="doc-p">A portal can mount <code class="doc-code">ReportProblemDialog</code> (from <code class="doc-code">@nivaro/react</code>). The person writes one sentence; the browser adds a screenshot with every typed value masked (needs <code class="doc-code">html-to-image</code> installed in the host app), the replay of the last minute when the instance records sessions (pass <code class="doc-code">captureErrorClip</code> as <code class="doc-code">captureClip</code>), the last console warnings and errors, and the page. The server files an issue (source client, raised by the person) and a General Support request linked to it; the screenshot is attached to the request so the desk sees it, and the person follows it under My requests.</p>
+          <pre class="doc-pre"><code>POST /api/support/problem-reports
+{ "description": "Saving spun forever", "screenshot": "data:image/jpeg;base64,…",
+  "console": ["[error] …"], "route": "/records/orders/42", "app": "portal",
+  "recording_id": "&lt;own recording&gt;", "recording_offset_ms": 8600 }
+→ { "data": { "ticket": { … }, "issue_id": 501, "replay": true } }</code></pre>
           <!-- /SYNC:support-requests -->
         </div>
 

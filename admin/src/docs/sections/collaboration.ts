@@ -793,6 +793,19 @@ PATCH /api/support/tickets/:id           { "status": "done" }
 GET   /api/support/summary               // badge counts
 GET   /api/support/categories?collection=orders
 GET   /api/tasks/requested               // tasks I asked others to do`
+    },
+    { type: 'h3', id: 'support-report-problem', text: 'Report a problem' },
+    {
+      type: 'p',
+      text: 'A portal can mount `ReportProblemDialog` (from `@nivaro/react`). The person writes one sentence; the browser adds a screenshot with every typed value masked (needs `html-to-image` installed in the host app), the replay of the last minute when the instance records sessions (pass `captureErrorClip` as `captureClip`), the last console warnings and errors, and the page. The server files an issue (source client, raised by the person) and a General Support request linked to it; the screenshot is attached to the request so the desk sees it, and the person follows it under My requests.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/support/problem-reports
+{ "description": "Saving spun forever", "screenshot": "data:image/jpeg;base64,…",
+  "console": ["[error] …"], "route": "/records/orders/42", "app": "portal",
+  "recording_id": "<own recording>", "recording_offset_ms": 8600 }
+→ { "data": { "ticket": { … }, "issue_id": 501, "replay": true } }`
     }
   ]
 }
