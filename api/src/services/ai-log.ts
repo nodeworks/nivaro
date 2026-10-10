@@ -59,6 +59,12 @@ export function featureFromRoute(route: string | null): string {
   if (r.startsWith('/config-conformance')) return 'integrity'
   if (r.startsWith('/pipelines')) return 'pipeline-review'
   if (r.startsWith('/metric-alerts') || r.startsWith('/alerts')) return 'alerts'
+  if (r.startsWith('/help-videos/')) {
+    // The editor's AI helpers (#1487, #1520): one feature name each, so the
+    // AI analytics page can tell a first draft from a caption run.
+    if (/\/draft\/suggest(\?|$)/.test(r)) return 'help-video-draft'
+    if (/\/captions\/generate(\?|$)/.test(r)) return 'help-video-captions'
+  }
   return r.split('/')[1]?.split('?')[0] || 'other'
 }
 
@@ -221,6 +227,52 @@ export function loggedStream(
           : call.fail(err)
     })
   }
+}
+
+/**
+ * A row for a call that did not go through `messages.create` — a speech-to-
+ * text run on the gateway's audio endpoint, or a local Whisper model (#1520).
+ * The feature is named by the caller (a background job has no request
+ * trace); tokens and cost are whatever the provider reported, else null.
+ * Best-effort like every log write.
+ */
+export function recordAiCall(row: {
+  feature: string
+  provider: AiProviderKind | 'local-whisper'
+  model: string
+  status: 'ok' | 'error'
+  latency_ms: number
+  user?: string | null
+  route?: string | null
+  input_tokens?: number | null
+  output_tokens?: number | null
+  cost_usd?: number | null
+  /** Capped JSON of what was sent (never the audio itself). */
+  request?: unknown
+  /** Capped JSON of what came back (a transcript summary, not the words). */
+  response?: unknown
+  error?: string | null
+}): void {
+  const meta = currentTraceMeta()
+  void db('nivaro_ai_calls')
+    .insert({
+      created_at: new Date(),
+      request_id: meta?.id ?? null,
+      user: row.user ?? meta?.userId ?? null,
+      feature: row.feature.slice(0, 60),
+      route: (row.route ?? meta?.urlHint ?? null)?.slice(0, 300) ?? null,
+      provider: row.provider,
+      model: row.model.slice(0, 100),
+      status: row.status,
+      latency_ms: Math.max(0, Math.round(row.latency_ms)),
+      input_tokens: row.input_tokens ?? null,
+      output_tokens: row.output_tokens ?? null,
+      cost_usd: row.cost_usd ?? null,
+      request: capJson(row.request, REQUEST_CAP),
+      response: capJson(row.response, RESPONSE_CAP),
+      error: row.error ? String(row.error).slice(0, 1000) : null
+    })
+    .catch(() => undefined)
 }
 
 export const AI_LOG_RETENTION_DAYS = 30

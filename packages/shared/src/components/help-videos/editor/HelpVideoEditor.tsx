@@ -24,6 +24,7 @@ import {
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
 import { addChapterAt } from './ChaptersPanel'
+import { DraftSuggestions } from './DraftSuggestions'
 import { EditorSidebar } from './EditorSidebar'
 import { historyReducer, initHistory } from './history'
 import { EditorLayoutStyle, ToolSep } from './layout'
@@ -528,6 +529,14 @@ function EditorBody({
               onChange={set}
               onSeek={sideSeek}
               onRefused={showNote}
+            />
+            <DraftSuggestions
+              video={video}
+              edits={edits}
+              onChange={set}
+              onSeek={sideSeek}
+              onNote={showNote}
+              disabled={blocked}
             />
             <div className='ml-auto flex items-center gap-0.5'>
               <ShortcutsCard open={shortcutsOpen} onOpenChange={setShortcutsOpen} />

@@ -344,6 +344,50 @@ export interface CaptionStyle {
   position: 'bottom' | 'top'
 }
 
+/**
+ * One suggestion of the AI first draft (#1487, POST /help-videos/:id/draft/
+ * suggest). Ids are stable for the same content; nothing is applied until
+ * the author accepts it in the editor. Mirrors api/src/services/help-video-draft.ts.
+ */
+export type DraftSuggestion =
+  | { id: string; kind: 'title'; text: string }
+  | { id: string; kind: 'description'; text: string }
+  | { id: string; kind: 'chapter'; chapter: Chapter }
+  | { id: string; kind: 'callout'; annotation: Annotation; click_index: number }
+  | { id: string; kind: 'context'; context: HelpVideoContext; label: string }
+
+export interface DraftSuggestions {
+  suggestions: DraftSuggestion[]
+  model: string | null
+}
+
+/** The automatic-captions job of the draft version (#1520), as GET
+ *  /help-videos/:id/captions/generate answers it. Mirrors
+ *  api/src/services/help-video-captions.ts. */
+export interface CaptionJob {
+  version_id: string
+  video_id: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  requested_by: string | null
+  requested_at: string
+  started_at?: string
+  finished_at?: string
+  phase?: 'extracting' | 'transcribing' | 'grouping'
+  provider?: 'gateway' | 'local'
+  model?: string
+  /** The pending suggestion set (done only), in source time. */
+  captions?: Caption[]
+  words?: number
+  audio_ms?: number
+  error?: string
+}
+
+export interface CaptionJobStatus {
+  job: CaptionJob | null
+  /** Which transcriber this server would use, or why none. */
+  provider: { kind: 'gateway' | 'local' | 'none'; model: string | null; reason: string | null }
+}
+
 /** Error codes the help-video routes answer with (`{ error, code }`). */
 export type HelpVideoErrorCode =
   | 'HELP_VIDEO_PROCESSING'
@@ -352,3 +396,8 @@ export type HelpVideoErrorCode =
   | 'HELP_VIDEO_NOT_FOUND'
   | 'HELP_VIDEO_AUTHOR_ONLY'
   | 'HELP_VIDEO_DOWNLOAD_OFF'
+  | 'HELP_VIDEO_NO_DRAFT'
+  | 'HELP_VIDEO_AI_NOT_CONFIGURED'
+  | 'HELP_VIDEO_DRAFT_UNREADABLE'
+  | 'HELP_VIDEO_CAPTIONS_NOT_CONFIGURED'
+  | 'HELP_VIDEO_CAPTIONS_BUSY'

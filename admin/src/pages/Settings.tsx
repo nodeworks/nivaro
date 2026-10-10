@@ -2975,7 +2975,7 @@ export function SettingsPage() {
                       </Field>
                       <Field
                         label='Model per feature'
-                        hint='Each AI feature can run on its own gateway model id. Blank = the default model above (Ask AI and document autofill fall back to the chat model first). The embed model turns semantic search onto the gateway embeddings endpoint — changing it needs a reindex.'
+                        hint='Each AI feature can run on its own gateway model id. Blank = the default model above (Ask AI and document autofill fall back to the chat model first). The embed model turns semantic search onto the gateway embeddings endpoint — changing it needs a reindex. The captions model is a speech-to-text model on the gateway’s /audio/transcriptions endpoint; blank = a local Whisper command on the server, if one is installed.'
                       >
                         <div className='space-y-1.5' data-ai-models>
                           {(
@@ -2984,7 +2984,8 @@ export function SettingsPage() {
                               ['extract', 'Document autofill', 'claude-4-6-sonnet'],
                               ['generate', 'Field generation', ''],
                               ['summarize', 'Summaries + briefs', ''],
-                              ['embed', 'Semantic search embeddings', 'text-embedding-3-large']
+                              ['embed', 'Semantic search embeddings', 'text-embedding-3-large'],
+                              ['transcribe', 'Help-video captions (speech to text)', 'whisper-1']
                             ] as const
                           ).map(([key, label, ph]) => (
                             <div key={key} className='flex items-center gap-2'>
