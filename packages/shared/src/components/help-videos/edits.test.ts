@@ -1,8 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import {
+  addHoldAt,
+  bodyDuration,
   EDIT_LIMITS,
   editedDuration,
   editedToSource,
+  heldAtMoment,
+  holdAtEdited,
+  holdAtSource,
+  holdsIn,
+  pieceEditedMs,
   removeItem,
   removeSegment,
   segmentIndexAt,
@@ -127,7 +134,11 @@ describe('mirrors the server EDIT_LIMITS', () => {
       musicMinVolume: 0.05,
       musicDefaultVolume: 0.25,
       fadeMs: 200,
-      cropMinSide: 0.2
+      cropMinSide: 0.2,
+      holds: 50,
+      holdMinMs: 200,
+      holdMaxMs: 10_000,
+      holdDefaultMs: 3000
     })
   })
   it('squares a zoom rect and clamps its side to at least 0.25', () => {
@@ -316,5 +327,92 @@ describe('card motion setters', () => {
     expect(setBannerAnimation(on, 'lively').banner_animation).toBe('lively')
     expect('banner_animation' in setBannerAnimation(on, 'none')).toBe(false)
     expect('banner_animation' in setChapterBanners(on, false)).toBe(false)
+  })
+})
+
+describe('held frames (#1537)', () => {
+  const e: VideoEdits = {
+    ...base,
+    segments: [
+      { start_ms: 0, end_ms: 10_000, speed: 1 },
+      { start_ms: 20_000, end_ms: 40_000, speed: 2 }
+    ],
+    holds: [
+      { id: 'h2', at_ms: 30_000, hold_ms: 1000 },
+      { id: 'h1', at_ms: 5000, hold_ms: 2000 },
+      { id: 'hx', at_ms: 15_000, hold_ms: 9000 } // inside the cut: counts for nothing
+    ]
+  }
+  it('adds edited time with no source advance, like slow motion', () => {
+    expect(bodyDuration(e)).toBe(23_000)
+    expect(editedDuration(e)).toBe(23_000)
+    expect(pieceEditedMs(e, e.segments[0])).toBe(12_000)
+    expect(holdsIn(e, e.segments[1]).map((h) => h.id)).toEqual(['h2'])
+  })
+  it('maps source to edited time past each hold', () => {
+    expect(sourceToEdited(e, 4000)).toBe(4000)
+    expect(sourceToEdited(e, 5000)).toBe(5000) // the hold's own start
+    expect(sourceToEdited(e, 6000)).toBe(8000)
+    expect(sourceToEdited(e, 30_000)).toBe(17_000)
+    expect(sourceToEdited(e, 32_000)).toBe(19_000)
+    expect(sourceToEdited(e, 15_000)).toBeNull()
+  })
+  it('maps edited time back: the held frame itself through the hold', () => {
+    expect(editedToSource(e, 4000)).toBe(4000)
+    expect(editedToSource(e, 5000)).toBe(5000)
+    expect(editedToSource(e, 6999)).toBe(5000)
+    expect(editedToSource(e, 7000)).toBe(5000)
+    expect(editedToSource(e, 8000)).toBe(6000)
+    expect(editedToSource(e, 17_500)).toBe(30_000)
+    expect(editedToSource(e, 19_000)).toBe(32_000)
+  })
+  it('knows which hold an edited moment is frozen in', () => {
+    expect(holdAtEdited(e, 6500)).toEqual({
+      hold: { id: 'h1', at_ms: 5000, hold_ms: 2000 },
+      start_ms: 5000,
+      at: 1500
+    })
+    expect(holdAtEdited(e, 7000)).toBeNull()
+    expect(holdAtEdited(e, 4000)).toBeNull()
+    expect(holdAtEdited(e, 17_200)?.hold.id).toBe('h2')
+    expect(holdAtSource(e, 5000)?.id).toBe('h1')
+    expect(holdAtSource(e, 15_000)).toBeNull()
+    expect(heldAtMoment(e, 5000)).toBe(2000)
+    expect(heldAtMoment(e, 5001)).toBe(0)
+  })
+  it('adds a hold at the playhead, on a kept piece only, once per spot', () => {
+    const r = addHoldAt(base, 3000)
+    expect(r.refused).toBeUndefined()
+    expect(r.edits.holds).toEqual([{ id: r.id, at_ms: 3000, hold_ms: 3000 }])
+    const again = addHoldAt(r.edits, 3200)
+    expect(again.refused).toBe('A hold already sits here')
+    expect(again.id).toBe(r.id)
+    expect(again.edits).toBe(r.edits)
+    expect(addHoldAt(e, 15_000).refused).toMatch(/part viewers see/)
+    // The very end of a piece holds its last frame.
+    expect(addHoldAt(base, 10_000).edits.holds?.[0].at_ms).toBe(9999)
+  })
+  it('stores holds normalised and sorted, and refuses one off the kept pieces', () => {
+    const r = upsertItemChecked(base, 'holds', { id: 'a', at_ms: 8000.4, hold_ms: 99_000 })
+    expect(r.edits.holds).toEqual([{ id: 'a', at_ms: 8000, hold_ms: EDIT_LIMITS.holdMaxMs }])
+    const r2 = upsertItemChecked(r.edits, 'holds', { id: 'b', at_ms: 1000, hold_ms: 10 })
+    expect(r2.edits.holds?.map((h) => [h.id, h.hold_ms])).toEqual([
+      ['b', EDIT_LIMITS.holdMinMs],
+      ['a', EDIT_LIMITS.holdMaxMs]
+    ])
+    const off = upsertItemChecked(r2.edits, 'holds', { id: 'c', at_ms: 10_000, hold_ms: 500 })
+    expect(off.refused).toBe('A hold has to sit on a part viewers see')
+    expect(off.edits).toBe(r2.edits)
+  })
+  it('removing the last hold removes the key, so the edits are as they were', () => {
+    const r = upsertItem(base, 'holds', { id: 'a', at_ms: 8000, hold_ms: 1000 })
+    expect(removeItem(r, 'holds', 'a')).toEqual(base)
+    expect('holds' in removeItem(r, 'holds', 'a')).toBe(false)
+  })
+  it('mirrors the server hold limits', () => {
+    expect(EDIT_LIMITS.holds).toBe(50)
+    expect(EDIT_LIMITS.holdMinMs).toBe(200)
+    expect(EDIT_LIMITS.holdMaxMs).toBe(10_000)
+    expect(EDIT_LIMITS.holdDefaultMs).toBe(3000)
   })
 })

@@ -39,7 +39,7 @@ export function packRows(bars: Bar[], maxRows = MAX_ROWS): Packed {
 }
 
 export type TimedLane = 'annotations' | 'zooms' | 'blurs' | 'captions'
-export type LaneKey = 'cuts' | 'chapters' | TimedLane
+export type LaneKey = 'cuts' | 'chapters' | 'holds' | TimedLane
 
 /** A lane's height: the usual one for a single row, else a sub-row each. */
 export const heightFor = (rows: number) => (rows > 1 ? rows * SUB_H : LANE_H)
@@ -62,6 +62,7 @@ export function laneLayout(e: VideoEdits): {
     height: {
       cuts: LANE_H,
       chapters: LANE_H,
+      holds: LANE_H,
       annotations: heightFor(lanes.annotations.rows),
       zooms: heightFor(lanes.zooms.rows),
       blurs: heightFor(lanes.blurs.rows),

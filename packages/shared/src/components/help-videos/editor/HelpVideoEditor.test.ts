@@ -537,3 +537,62 @@ describe('HelpVideoEditor lock (#1523)', () => {
     expect(lockCalls).toHaveLength(1)
   })
 })
+
+describe('HelpVideoEditor held frames (#1537)', () => {
+  it('holds the frame at the playhead with H, on a kept piece, once per spot', async () => {
+    await mount()
+    fake.now = 7000
+    await press('h')
+    expect(edits().holds).toEqual([{ id: expect.any(String), at_ms: 7000, hold_ms: 3000 }])
+    expect(q('[data-hv-inspector="holds"]')).not.toBeNull()
+    expect(q('[data-hv-item^="holds:"]').textContent).toBe('Hold 3 s')
+    await press('h')
+    expect(edits().holds).toHaveLength(1)
+    expect(note()).toBe('A hold already sits here.')
+    fake.now = 11_000 // inside the 10–12 s cut
+    await press('h')
+    expect(edits().holds).toHaveLength(1)
+    expect(note()).toBe('Move the playhead to a part viewers see, then try again.')
+    // The toolbar button does the same, and is off inside a cut.
+    await act(async () => fake.props?.onTime?.(11_000, 11_000))
+    expect(q<HTMLButtonElement>('[data-hv-add-hold]').disabled).toBe(true)
+    await act(async () => fake.props?.onTime?.(2000, 2000))
+    fake.now = 2000
+    await click(q('[data-hv-add-hold]'))
+    expect(edits().holds?.map((h) => h.at_ms)).toEqual([2000, 7000])
+  })
+})
+
+describe('HelpVideoEditor group actions (#1543)', () => {
+  const down = (el: Element, init: MouseEventInit = {}) =>
+    act(async () => {
+      el.dispatchEvent(
+        new MouseEvent('pointerdown', { bubbles: true, cancelable: true, button: 0, ...init })
+      )
+    })
+  it('deletes a Shift-clicked group with Delete as one undo step, and nudges it with the arrows', async () => {
+    await mount()
+    await down(q('[data-hv-item="annotations:a1"]'), { shiftKey: true })
+    await down(q('[data-hv-item="captions:k1"]'), { shiftKey: true })
+    expect(q('[data-hv-inspector="multi"]')).not.toBeNull()
+    await press('ArrowRight')
+    expect(edits().annotations[0]).toMatchObject({ start_ms: 2033, end_ms: 5033 })
+    expect(edits().captions[0]).toMatchObject({ start_ms: 533, end_ms: 3033 })
+    await press('ArrowLeft', { shiftKey: true })
+    // A second back stops where the caption reaches the start.
+    expect(edits().captions[0].start_ms).toBe(0)
+    expect(edits().annotations[0].start_ms).toBe(1500)
+    await press('Delete')
+    expect(edits().annotations).toEqual([])
+    expect(edits().captions).toEqual([])
+    expect(q('[data-hv-inspector="none"]')).not.toBeNull()
+    await click(q('[data-hv-undo]'))
+    expect(edits().annotations).toHaveLength(1)
+    expect(edits().captions).toHaveLength(1)
+    // ] aligns the end of a single selected item to the playhead too.
+    await down(q('[data-hv-item="annotations:a1"]'))
+    fake.now = 9000
+    await press(']')
+    expect(edits().annotations[0]).toMatchObject({ start_ms: 6000, end_ms: 9000 })
+  })
+})

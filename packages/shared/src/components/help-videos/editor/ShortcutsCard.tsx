@@ -10,6 +10,7 @@ const GROUPS: Array<{ title: string; keys: Array<[string[], string]> }> = [
       [['S'], 'Split at the playhead'],
       [['Delete'], 'Cut the selected piece'],
       [['M'], 'Add a chapter at the playhead'],
+      [['H'], 'Hold the frame at the playhead'],
       [['Esc'], 'Stop drawing'],
       [['Ctrl', 'Z'], 'Undo (⌘Z on a Mac)'],
       [['Shift', 'Ctrl', 'Z'], 'Redo (⇧⌘Z on a Mac)'],
@@ -36,7 +37,18 @@ const GROUPS: Array<{ title: string; keys: Array<[string[], string]> }> = [
     keys: [
       [['←', '→'], 'Go to the previous or next item'],
       [['Alt', '←', '→'], 'Nudge it 0.1 seconds (Shift: 1 second)'],
-      [['Delete'], 'Remove it']
+      [['Delete'], 'Remove it'],
+      [['Shift', 'Click'], 'Add to the selection (or drag on empty space)']
+    ]
+  },
+  {
+    title: 'With several items selected',
+    keys: [
+      [['←', '→'], 'Nudge them a frame (Shift: 1 second)'],
+      [['['], 'Align their starts to the playhead'],
+      [[']'], 'Align their ends to the playhead'],
+      [['Ctrl', 'D'], 'Duplicate them (⌘D on a Mac)'],
+      [['Delete'], 'Remove them all']
     ]
   }
 ]

@@ -191,6 +191,7 @@ export const EditorSidebar = memo(function EditorSidebar({
           onSeek={onSeek}
           onError={onNote}
           clicks={clicks}
+          playhead={playhead}
         />
       </div>
       <SideSection

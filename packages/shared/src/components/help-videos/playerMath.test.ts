@@ -4,6 +4,7 @@ import {
   bucketIndex,
   fileMsForSource,
   fitFrame,
+  holdReached,
   liveBlurPx,
   liveStep,
   renderSize,
@@ -125,5 +126,28 @@ describe('fileMsForSource', () => {
     expect(fileMsForSource(e, true, 3000)).toBe(2000)
     // Past the last kept frame: the end of the recording part.
     expect(fileMsForSource(e, true, 9000)).toBe(4000)
+  })
+})
+
+describe('holdReached (#1537)', () => {
+  const held: VideoEdits = {
+    ...e,
+    holds: [
+      { id: 'h1', at_ms: 1000, hold_ms: 2000 },
+      { id: 'hx', at_ms: 3000, hold_ms: 2000 }, // inside the cut: never reached
+      { id: 'h2', at_ms: 6000, hold_ms: 500 }
+    ]
+  }
+  it('fires when playback passes a hold on a kept piece', () => {
+    expect(holdReached(held, 980, 1010, null)).toEqual({ id: 'h1', at_ms: 1000, hold_ms: 2000 })
+    expect(holdReached(held, 1000, 1010, null)).toBeNull() // already past it
+    expect(holdReached(held, 2990, 3010, null)).toBeNull() // in the cut
+    expect(holdReached(held, 5990, 6000, null)).toEqual({ id: 'h2', at_ms: 6000, hold_ms: 500 })
+  })
+  it('ignores a seek or a jump, and the hold playback just left', () => {
+    expect(holdReached(held, 0, 6500, null)).toBeNull()
+    expect(holdReached(held, 1500, 900, null)).toBeNull()
+    expect(holdReached(held, 980, 1010, 'h1')).toBeNull()
+    expect(holdReached(e, 980, 1010, null)).toBeNull()
   })
 })

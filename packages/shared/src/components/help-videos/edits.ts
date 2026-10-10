@@ -5,11 +5,13 @@ import type {
   Caption,
   CaptionStyle,
   Chapter,
+  Hold,
   IntroCard,
   MusicBed,
   OutroCard,
   Point,
   Rect,
+  Segment,
   Speed,
   StepStyle,
   VideoEdits,
@@ -56,7 +58,12 @@ export const EDIT_LIMITS = {
   /** Callouts, boxes and arrows fade in and out over this long (source time). */
   fadeMs: 200,
   /** Smallest crop side (fraction of the frame). */
-  cropMinSide: 0.2
+  cropMinSide: 0.2,
+  /** Held frames (#1537): how many, and how long each holds (edited time). */
+  holds: 50,
+  holdMinMs: 200,
+  holdMaxMs: 10_000,
+  holdDefaultMs: 3000
 } as const
 /** The annotation types that carry text (the server's TEXT_TYPES). */
 export const TEXT_TYPES: Annotation['type'][] = ['callout', 'box', 'step']
@@ -75,14 +82,28 @@ export const SPOTLIGHT_DIM = 0.6
 export const OUTRO_DEFAULT_TEXT = 'Questions? Ask your administrator.'
 export const MIN_KEPT_MS = EDIT_LIMITS.minKeptMs
 const MIN_SEGMENT_MS = EDIT_LIMITS.minSegmentMs
-export type ListKey = 'chapters' | 'annotations' | 'zooms' | 'blurs' | 'captions'
+export type ListKey = 'chapters' | 'annotations' | 'zooms' | 'blurs' | 'captions' | 'holds'
+/** The lanes a timeline item can be on, with their items (`holds` is stored
+ *  only when there are any). */
+export const LIST_KEYS: ListKey[] = [
+  'chapters',
+  'annotations',
+  'zooms',
+  'blurs',
+  'captions',
+  'holds'
+]
+export function itemsOf<K extends ListKey>(e: VideoEdits, key: K): NonNullable<VideoEdits[K]> {
+  return (e[key] ?? []) as NonNullable<VideoEdits[K]>
+}
 
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
 
 export function newId(): string {
   return globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 12)
 }
-// Edited time = intro card + the kept pieces (at their speeds) + outro card.
+// Edited time = intro card + the kept pieces (at their speeds, plus the held
+// frames inside them) + outro card.
 
 /** The intro card's length in edited time (0 when it is off). */
 export function introMs(e: VideoEdits): number {
@@ -92,9 +113,32 @@ export function introMs(e: VideoEdits): number {
 export function outroMs(e: VideoEdits): number {
   return e.outro?.enabled ? e.outro.duration_ms : 0
 }
-/** The kept recording alone, at its speeds. */
+/** The held frames inside a kept piece, in time order. A hold outside every
+ *  kept piece counts for nothing (the server drops it on save). */
+export function holdsIn(e: VideoEdits, s: Segment): Hold[] {
+  const holds = e.holds
+  if (!holds?.length) return []
+  return holds
+    .filter((h) => h.at_ms >= s.start_ms && h.at_ms < s.end_ms)
+    .sort((a, b) => a.at_ms - b.at_ms)
+}
+/** How long the edited timeline holds on exactly this source moment (0 when
+ *  no held frame sits there). */
+export function heldAtMoment(e: VideoEdits, ms: number): number {
+  if (!e.holds?.length) return 0
+  const s = e.segments.find((x) => ms >= x.start_ms && ms < x.end_ms)
+  if (!s) return 0
+  return holdsIn(e, s)
+    .filter((h) => h.at_ms === ms)
+    .reduce((t, h) => t + h.hold_ms, 0)
+}
+/** A kept piece's length in edited time: at its speed, plus its holds. */
+export function pieceEditedMs(e: VideoEdits, s: Segment): number {
+  return (s.end_ms - s.start_ms) / s.speed + holdsIn(e, s).reduce((t, h) => t + h.hold_ms, 0)
+}
+/** The kept recording alone, at its speeds, with its held frames. */
 export function bodyDuration(e: VideoEdits): number {
-  return Math.round(e.segments.reduce((t, s) => t + (s.end_ms - s.start_ms) / s.speed, 0))
+  return Math.round(e.segments.reduce((t, s) => t + pieceEditedMs(e, s), 0))
 }
 export function editedDuration(e: VideoEdits): number {
   return introMs(e) + bodyDuration(e) + outroMs(e)
@@ -102,15 +146,33 @@ export function editedDuration(e: VideoEdits): number {
 export function keptMs(e: VideoEdits): number {
   return e.segments.reduce((t, s) => t + (s.end_ms - s.start_ms), 0)
 }
+/** The edited moment a source moment first shows at: a moment inside a hold
+ *  maps to the hold's start (the frame is shown from then on). */
 export function sourceToEdited(e: VideoEdits, ms: number): number | null {
   const lead = introMs(e)
   let acc = 0
   for (const s of e.segments) {
-    if (ms >= s.start_ms && ms < s.end_ms)
-      return Math.round(lead + acc + (ms - s.start_ms) / s.speed)
-    acc += (s.end_ms - s.start_ms) / s.speed
+    if (ms >= s.start_ms && ms < s.end_ms) {
+      const held = holdsIn(e, s)
+        .filter((h) => h.at_ms < ms)
+        .reduce((t, h) => t + h.hold_ms, 0)
+      return Math.round(lead + acc + (ms - s.start_ms) / s.speed + held)
+    }
+    acc += pieceEditedMs(e, s)
   }
   return null
+}
+/** The source moment shown `m` ms into a kept piece (edited time): before,
+ *  during (the held frame itself) and after each of its holds. */
+function sourceWithin(e: VideoEdits, s: Segment, m: number): number {
+  let held = 0
+  for (const h of holdsIn(e, s)) {
+    const at = (h.at_ms - s.start_ms) / s.speed + held
+    if (m < at) break
+    if (m < at + h.hold_ms) return h.at_ms
+    held += h.hold_ms
+  }
+  return Math.round(s.start_ms + (m - held) * s.speed)
 }
 /** The source moment shown at an edited time. Inside the intro card: the first
  *  kept frame; inside the outro card: the last. */
@@ -119,11 +181,61 @@ export function editedToSource(e: VideoEdits, ms: number): number {
   if (m < 0) return e.segments.length ? e.segments[0].start_ms : 0
   let acc = 0
   for (const s of e.segments) {
-    const len = (s.end_ms - s.start_ms) / s.speed
-    if (m < acc + len) return Math.round(s.start_ms + (m - acc) * s.speed)
+    const len = pieceEditedMs(e, s)
+    if (m < acc + len) return sourceWithin(e, s, m - acc)
     acc += len
   }
   return e.segments.length ? e.segments[e.segments.length - 1].end_ms : 0
+}
+/** The hold the edited timeline is frozen in at an edited moment, with where
+ *  it starts (edited time) and how far into it that moment is; null when the
+ *  frame is moving. */
+export function holdAtEdited(
+  e: VideoEdits,
+  ms: number
+): { hold: Hold; start_ms: number; at: number } | null {
+  if (!e.holds?.length) return null
+  const m = ms - introMs(e)
+  let acc = 0
+  for (const s of e.segments) {
+    let held = 0
+    for (const h of holdsIn(e, s)) {
+      const start = acc + (h.at_ms - s.start_ms) / s.speed + held
+      if (m >= start && m < start + h.hold_ms)
+        return { hold: h, start_ms: Math.round(introMs(e) + start), at: m - start }
+      held += h.hold_ms
+    }
+    acc += pieceEditedMs(e, s)
+  }
+  return null
+}
+/** A kept hold at a source moment (one that sits inside a kept piece), else null. */
+export function holdAtSource(e: VideoEdits, srcMs: number): Hold | null {
+  const s = e.segments.find((x) => srcMs >= x.start_ms && srcMs < x.end_ms)
+  if (!s) return null
+  return holdsIn(e, s).find((h) => h.at_ms === srcMs) ?? null
+}
+/** Two holds this close together are one hold. */
+const SAME_HOLD_MS = 300
+/** A held frame at the playhead, HOLD_DEFAULT long. Refused (edits unchanged,
+ *  with the reason) when the playhead is not on a part viewers see, one
+ *  already sits within 0.3 s, or there are already as many as allowed;
+ *  `id` is the new hold, or the one already there. */
+export function addHoldAt(
+  e: VideoEdits,
+  srcMs: number,
+  holdMs: number = EDIT_LIMITS.holdDefaultMs
+): { edits: VideoEdits; id?: string; refused?: string } {
+  let at = Math.round(Math.max(0, srcMs))
+  // At the very end of a piece, hold its last frame.
+  if (segmentIndexAt(e, at) < 0 && e.segments.some((s) => s.end_ms === at)) at -= 1
+  if (segmentIndexAt(e, at) < 0)
+    return { edits: e, refused: 'Move the playhead to a part viewers see, then try again' }
+  const near = (e.holds ?? []).find((h) => Math.abs(h.at_ms - at) < SAME_HOLD_MS)
+  if (near) return { edits: e, id: near.id, refused: 'A hold already sits here' }
+  const id = newId()
+  const r = upsertItemChecked(e, 'holds', { id, at_ms: at, hold_ms: holdMs })
+  return r.refused ? r : { edits: r.edits, id }
 }
 /** Which part of the edited timeline a moment falls in, and how far into it. */
 export function cardPhaseAt(
@@ -405,7 +517,7 @@ export function trimSegment(
   }
 }
 
-type Item<K extends ListKey> = VideoEdits[K][number]
+type Item<K extends ListKey> = NonNullable<VideoEdits[K]>[number]
 
 /** The server's rect(): sides at least 0.01 and at most 1, inside the frame. */
 function clampRect(r: Rect): Rect {
@@ -430,6 +542,14 @@ function normalizeItem<K extends ListKey>(key: K, item: Item<K>): Item<K> {
       ...c,
       at_ms: Math.round(Math.max(0, c.at_ms)),
       title: c.title.slice(0, EDIT_LIMITS.chapterTitle)
+    } as Item<K>
+  }
+  if (key === 'holds') {
+    const h = item as Hold
+    return {
+      ...h,
+      at_ms: Math.round(Math.max(0, h.at_ms)),
+      hold_ms: Math.round(clamp(h.hold_ms, EDIT_LIMITS.holdMinMs, EDIT_LIMITS.holdMaxMs))
     } as Item<K>
   }
   if (key === 'zooms') {
@@ -473,24 +593,38 @@ function normalizeItem<K extends ListKey>(key: K, item: Item<K>): Item<K> {
 const startOf = (x: { start_ms?: number; at_ms?: number }) => x.start_ms ?? x.at_ms ?? 0
 /** The lists the server stores sorted by start (annotations and blurs keep
  *  their order). */
-const SORTED: ListKey[] = ['chapters', 'zooms', 'captions']
+const SORTED: ListKey[] = ['chapters', 'zooms', 'captions', 'holds']
+/** A lane's list in the order the server stores it (chapters, zooms,
+ *  captions and holds by start; annotations and blurs as they are). */
+export function sortedList<T extends { start_ms?: number; at_ms?: number }>(
+  key: ListKey,
+  list: T[]
+): T[] {
+  return SORTED.includes(key) ? [...list].sort((a, b) => startOf(a) - startOf(b)) : list
+}
+/** The note for a hold the server would drop (one outside every kept piece). */
+export const HOLD_OUTSIDE_NOTE = 'A hold has to sit on a part viewers see'
 
 /** Add or replace an item by id, normalized the way the server's
  *  normalizeEdits would store it. Refused (edits unchanged, with the reason)
  *  when the server would drop the item: shorter than 0.2 seconds, a zoom
- *  overlapping another zoom, or a new item past the list cap. */
+ *  overlapping another zoom, a hold outside every kept piece, or a new item
+ *  past the list cap. */
 export function upsertItemChecked<K extends ListKey>(
   e: VideoEdits,
   key: K,
   item: Item<K>
 ): { edits: VideoEdits; refused?: string } {
-  const list = e[key] as Array<{ id: string }>
+  const list = itemsOf(e, key) as Array<{ id: string }>
   const next = normalizeItem(key, item)
-  if (key !== 'chapters') {
+  if (key !== 'chapters' && key !== 'holds') {
     const s = next as { start_ms: number; end_ms: number }
     if (s.end_ms - s.start_ms < EDIT_LIMITS.minItemMs) {
       return { edits: e, refused: 'Make it at least 0.2 seconds long' }
     }
+  }
+  if (key === 'holds' && segmentIndexAt(e, (next as Hold).at_ms) < 0) {
+    return { edits: e, refused: HOLD_OUTSIDE_NOTE }
   }
   if (key === 'zooms') {
     const z = next as Zoom
@@ -515,10 +649,20 @@ export function upsertItem<K extends ListKey>(e: VideoEdits, key: K, item: Item<
   return upsertItemChecked(e, key, item).edits
 }
 export function removeItem(e: VideoEdits, key: ListKey, id: string): VideoEdits {
-  return {
-    ...e,
-    [key]: (e[key] as Array<{ id: string }>).filter((x) => x.id !== id)
-  } as VideoEdits
+  return withList(
+    e,
+    key,
+    (itemsOf(e, key) as Array<{ id: string }>).filter((x) => x.id !== id)
+  )
+}
+/** The edits with one list replaced; an empty `holds` list is stored as no
+ *  key at all (the server's rule), so a video without holds keeps its hash. */
+export function withList(e: VideoEdits, key: ListKey, list: unknown[]): VideoEdits {
+  if (key === 'holds' && !list.length) {
+    const { holds: _drop, ...rest } = e
+    return rest as VideoEdits
+  }
+  return { ...e, [key]: list } as VideoEdits
 }
 
 const r4 = (n: number) => Math.round(n * 10000) / 10000

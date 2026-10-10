@@ -58,6 +58,16 @@ export interface Caption {
   end_ms: number
   text: string
 }
+/** A held frame (#1537): the edited timeline freezes on the source frame at
+ *  `at_ms` for `hold_ms` (edited time), so viewers can read a callout. Extra
+ *  edited time with no source advance, exactly as 0.5x slow motion adds time;
+ *  everything on screen at that source moment stays up for the hold. A hold
+ *  has to sit inside a kept piece. */
+export interface Hold {
+  id: string
+  at_ms: number
+  hold_ms: number
+}
 /** A title card played BEFORE the recording: real extra time on the edited
  *  timeline. Blank `title` / `subtitle` mean the video's own title and the
  *  first line of its description. */
@@ -164,6 +174,8 @@ export interface VideoEdits {
   /** How captions look to viewers who have not chosen their own (#1551).
    *  Only the keys that differ from CAPTION_LOOK_DEFAULTS are stored. */
   caption_style?: Partial<CaptionLook>
+  /** Held frames (#1537), sorted by `at_ms`. Stored only when there are any. */
+  holds?: Hold[]
 }
 
 /** The narration cleanup switch (#1519). Only `{ improve: true }` is ever
@@ -264,7 +276,12 @@ export const EDIT_LIMITS = {
   /** Callouts, boxes and arrows fade in and out over this long (source time). */
   fadeMs: 200,
   /** Smallest crop side (fraction of the frame). */
-  cropMinSide: 0.2
+  cropMinSide: 0.2,
+  /** Held frames (#1537): how many, and how long each holds (edited time). */
+  holds: 50,
+  holdMinMs: 200,
+  holdMaxMs: 10_000,
+  holdDefaultMs: 3000
 } as const
 
 /** A library track key, or an uploaded music row's id. */
@@ -476,6 +493,36 @@ export function normalizeEdits(input: unknown, sourceMs: number): VideoEdits {
   if (calloutText) out.callout_text = calloutText
   const captionStyle = normalizeCaptionLook(o.caption_style)
   if (captionStyle) out.caption_style = captionStyle
+  const holds = normalizeHolds(o.holds, out.segments, src)
+  if (holds.length) out.holds = holds
+  return out
+}
+
+/** The held frames the server stores: inside a kept piece, 0.2–10 s each,
+ *  sorted by moment, one per moment, at most EDIT_LIMITS.holds. A video
+ *  without any has no `holds` key, so its edits_hash never moves. */
+export function normalizeHolds(v: unknown, segments: Segment[], sourceMs: number): Hold[] {
+  const src = Math.max(0, Math.round(sourceMs))
+  const out: Hold[] = []
+  const raw = arr(v)
+    .map((h) => ({
+      id: id(h.id),
+      at_ms: Math.round(clamp(num(h.at_ms), 0, src)),
+      hold_ms: Math.round(
+        clamp(
+          num(h.hold_ms, EDIT_LIMITS.holdDefaultMs),
+          EDIT_LIMITS.holdMinMs,
+          EDIT_LIMITS.holdMaxMs
+        )
+      )
+    }))
+    .sort((a, b) => a.at_ms - b.at_ms)
+  for (const h of raw) {
+    if (out.length >= EDIT_LIMITS.holds) break
+    if (!segments.some((s) => h.at_ms >= s.start_ms && h.at_ms < s.end_ms)) continue
+    if (out.length && out[out.length - 1].at_ms === h.at_ms) continue
+    out.push(h)
+  }
   return out
 }
 
@@ -647,7 +694,8 @@ export function hashEdits(e: VideoEdits): string {
     .digest('hex')
 }
 
-// Edited time = intro card + the kept pieces (at their speeds) + outro card.
+// Edited time = intro card + the kept pieces (at their speeds, plus the held
+// frames inside them) + outro card.
 
 /** The intro card's length in edited time (0 when it is off). */
 export function introMs(e: VideoEdits): number {
@@ -657,23 +705,65 @@ export function introMs(e: VideoEdits): number {
 export function outroMs(e: VideoEdits): number {
   return e.outro?.enabled ? e.outro.duration_ms : 0
 }
-/** The kept recording alone, at its speeds. */
+/** The held frames inside a kept piece, in time order. A hold outside every
+ *  kept piece counts for nothing (the server drops it on save). */
+export function holdsIn(e: VideoEdits, s: Segment): Hold[] {
+  const holds = e.holds
+  if (!holds?.length) return []
+  return holds
+    .filter((h) => h.at_ms >= s.start_ms && h.at_ms < s.end_ms)
+    .sort((a, b) => a.at_ms - b.at_ms)
+}
+/** How long the edited timeline holds on exactly this source moment (0 when
+ *  no held frame sits there). */
+export function heldAtMoment(e: VideoEdits, ms: number): number {
+  if (!e.holds?.length) return 0
+  const s = e.segments.find((x) => ms >= x.start_ms && ms < x.end_ms)
+  if (!s) return 0
+  return holdsIn(e, s)
+    .filter((h) => h.at_ms === ms)
+    .reduce((t, h) => t + h.hold_ms, 0)
+}
+/** A kept piece's length in edited time: at its speed, plus its holds. */
+export function pieceEditedMs(e: VideoEdits, s: Segment): number {
+  return (s.end_ms - s.start_ms) / s.speed + holdsIn(e, s).reduce((t, h) => t + h.hold_ms, 0)
+}
+/** The kept recording alone, at its speeds, with its held frames. */
 export function bodyDuration(e: VideoEdits): number {
-  return Math.round(e.segments.reduce((t, s) => t + (s.end_ms - s.start_ms) / s.speed, 0))
+  return Math.round(e.segments.reduce((t, s) => t + pieceEditedMs(e, s), 0))
 }
 export function editedDuration(e: VideoEdits): number {
   return introMs(e) + bodyDuration(e) + outroMs(e)
 }
 
+/** The edited moment a source moment first shows at: a moment inside a hold
+ *  maps to the hold's start (the frame is shown from then on). */
 export function sourceToEdited(e: VideoEdits, ms: number): number | null {
   const lead = introMs(e)
   let acc = 0
   for (const s of e.segments) {
-    if (ms >= s.start_ms && ms < s.end_ms)
-      return Math.round(lead + acc + (ms - s.start_ms) / s.speed)
-    acc += (s.end_ms - s.start_ms) / s.speed
+    if (ms >= s.start_ms && ms < s.end_ms) {
+      const held = holdsIn(e, s)
+        .filter((h) => h.at_ms < ms)
+        .reduce((t, h) => t + h.hold_ms, 0)
+      return Math.round(lead + acc + (ms - s.start_ms) / s.speed + held)
+    }
+    acc += pieceEditedMs(e, s)
   }
   return null
+}
+
+/** The source moment shown `m` ms into a kept piece (edited time): before,
+ *  during (the held frame itself) and after each of its holds. */
+function sourceWithin(e: VideoEdits, s: Segment, m: number): number {
+  let held = 0
+  for (const h of holdsIn(e, s)) {
+    const at = (h.at_ms - s.start_ms) / s.speed + held
+    if (m < at) break
+    if (m < at + h.hold_ms) return h.at_ms
+    held += h.hold_ms
+  }
+  return Math.round(s.start_ms + (m - held) * s.speed)
 }
 
 /** How long a card takes to finish arriving (0 for a still card). */
@@ -708,11 +798,33 @@ export function editedToSource(e: VideoEdits, ms: number): number {
   if (m < 0) return e.segments.length ? e.segments[0].start_ms : 0
   let acc = 0
   for (const s of e.segments) {
-    const len = (s.end_ms - s.start_ms) / s.speed
-    if (m < acc + len) return Math.round(s.start_ms + (m - acc) * s.speed)
+    const len = pieceEditedMs(e, s)
+    if (m < acc + len) return sourceWithin(e, s, m - acc)
     acc += len
   }
   return e.segments.length ? e.segments[e.segments.length - 1].end_ms : 0
+}
+
+/** The hold the edited timeline is frozen in at an edited moment, with how
+ *  far into it that moment is; null when the frame is moving. */
+export function holdAtEdited(
+  e: VideoEdits,
+  ms: number
+): { hold: Hold; start_ms: number; at: number } | null {
+  if (!e.holds?.length) return null
+  const m = ms - introMs(e)
+  let acc = 0
+  for (const s of e.segments) {
+    let held = 0
+    for (const h of holdsIn(e, s)) {
+      const start = acc + (h.at_ms - s.start_ms) / s.speed + held
+      if (m >= start && m < start + h.hold_ms)
+        return { hold: h, start_ms: Math.round(introMs(e) + start), at: m - start }
+      held += h.hold_ms
+    }
+    acc += pieceEditedMs(e, s)
+  }
+  return null
 }
 
 /** Which part of the edited timeline a moment falls in, and how far into it. */
@@ -759,14 +871,11 @@ export function editedSpanToSource(
   const out: Array<{ start_ms: number; end_ms: number }> = []
   let acc = introMs(e)
   for (const s of e.segments) {
-    const len = (s.end_ms - s.start_ms) / s.speed
+    const len = pieceEditedMs(e, s)
     const a = Math.max(start, acc)
     const b = Math.min(end, acc + len)
     if (b > a) {
-      out.push({
-        start_ms: Math.round(s.start_ms + (a - acc) * s.speed),
-        end_ms: Math.round(s.start_ms + (b - acc) * s.speed)
-      })
+      out.push({ start_ms: sourceWithin(e, s, a - acc), end_ms: sourceWithin(e, s, b - acc) })
     }
     acc += len
   }
@@ -785,9 +894,8 @@ function snapToEdited(e: VideoEdits, ms: number, dir: 1 | -1): number | null {
   let acc = introMs(e)
   let prevEnd: number | null = null
   for (const s of e.segments) {
-    const len = (s.end_ms - s.start_ms) / s.speed
     if (ms < s.start_ms) return dir === 1 ? Math.round(acc) : prevEnd
-    acc += len
+    acc += pieceEditedMs(e, s)
     prevEnd = Math.round(acc)
   }
   return dir === 1 ? null : prevEnd
@@ -806,7 +914,10 @@ export function captionsToVtt(e: VideoEdits): string {
   const cues: string[] = []
   for (const c of e.captions) {
     const a = snapToEdited(e, c.start_ms, 1)
-    const b = snapToEdited(e, c.end_ms, -1)
+    let b = snapToEdited(e, c.end_ms, -1)
+    // A caption still up at a held frame's moment stays up through the hold,
+    // as it does in the player.
+    if (b !== null) b += heldAtMoment(e, c.end_ms)
     if (a === null || b === null || b <= a) continue
     cues.push(
       `${cues.length + 1}\n${vttTime(a)} --> ${vttTime(b)}\n${c.text.replace(/\n{2,}/g, '\n')}`
