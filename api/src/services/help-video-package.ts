@@ -103,11 +103,23 @@ export async function exportableVideos(ids: string[]) {
     Record<string, unknown>
   >
   const byId = new Map(videos.map((v) => [low(v.id), v]))
+  // A published version whose files retention removed (#1531) has nothing
+  // to pack; the rules keep the published version, so this is a guard.
+  const removed = new Set<string>()
+  const pubIds = videos.map((v) => v.published_version_id).filter(Boolean) as string[]
+  if (pubIds.length) {
+    const rows = (await db('nivaro_help_video_versions')
+      .whereIn('id', pubIds)
+      .select('id', 'source_file', 'files_removed_at')) as Array<Record<string, unknown>>
+    for (const r of rows) if (r.files_removed_at || !r.source_file) removed.add(up(r.id))
+  }
   const problems: string[] = []
   for (const id of ids) {
     const v = byId.get(id)
     if (!v) problems.push(`${id}: not found`)
     else if (!v.published_version_id) problems.push(`${String(v.title) || id}: never published`)
+    else if (removed.has(up(v.published_version_id)))
+      problems.push(`${String(v.title) || id}: its files were removed by retention`)
   }
   if (problems.length) {
     throw Object.assign(

@@ -2,10 +2,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   accessibleName,
+  collectPageLabels,
   describeClickTarget,
   findStepElement,
   hookSelector,
   normalizePath,
+  PAGE_LABELS_LIMIT,
   roleOf,
   stableHook,
   stepMatchesHere,
@@ -193,5 +195,26 @@ describe('findStepElement', () => {
     expect(hookSelector('data-a=b c')).toBe('[data-a="b c"]')
     expect(hookSelector('data-a')).toBe('[data-a]')
     expect(hookSelector('onclick=x')).toBeNull()
+  })
+})
+
+describe('collectPageLabels', () => {
+  it('lists the visible click targets by name, once each, never a field value or masked part', () => {
+    html(`
+      <nav><button>Save</button><a href='/x'>Open the record</a><button>  save </button></nav>
+      <label for='v'>Vendor name</label><input id='v' value='ACME secret'>
+      <button aria-label='Approve request'><svg></svg></button>
+      <div class='nvr-no-record'><button>Private action</button></div>
+      <div data-hv-walk><button>Next</button></div>
+      <button hidden>Hidden one</button>
+      <span role='presentation'><button><span>Deep</span></button></span>`)
+    const labels = collectPageLabels(document, { visible: (el) => !el.hasAttribute('hidden') })
+    expect(labels).toEqual(['Save', 'Open the record', 'Vendor name', 'Approve request', 'Deep'])
+    expect(labels.join(' ')).not.toContain('ACME')
+  })
+
+  it('caps the list', () => {
+    html(Array.from({ length: 320 }, (_, i) => `<button>Item ${i}</button>`).join(''))
+    expect(collectPageLabels(document, { visible: () => true })).toHaveLength(PAGE_LABELS_LIMIT)
   })
 })

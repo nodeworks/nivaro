@@ -38,13 +38,17 @@ export {
   helpVideoSettingsApi,
   helpVideoSettingsKeys,
   type RenderQueueDto,
-  type RenderQueueItem
+  type RenderQueueItem,
+  type StoragePlanDto,
+  type StorageReportDto
 } from './settings/api'
 export { HouseStyleButton } from './settings/HouseStyleButton'
 export { RenderSettingsButton } from './settings/RenderSettingsButton'
+export { StorageButton } from './settings/StorageButton'
 export type {
   HelpVideoContext,
   HelpVideoDto,
+  HelpVideoStale,
   RecordedClick,
   VideoEdits,
   WalkStep
@@ -61,6 +65,7 @@ export {
 } from './walk/store'
 export {
   accessibleName,
+  collectPageLabels,
   describeClickTarget,
   findStepElement,
   normalizePath,

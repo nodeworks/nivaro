@@ -1,4 +1,4 @@
-import { MousePointerClick, Sparkles } from 'lucide-react'
+import { History, MousePointerClick, Sparkles } from 'lucide-react'
 import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useNavigation } from '../../../context'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../../ui/sheet'
@@ -127,6 +127,18 @@ export function HelpVideoSheet({
                 startAtMs={startMs}
                 autoPlay
               />
+              {video.stale && (
+                <p
+                  className='flex items-start gap-1.5 text-[12px] text-muted-foreground'
+                  data-hv-stale={video.stale.kind}
+                >
+                  <History className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
+                  <span>
+                    Recorded before a change to this screen
+                    {video.visibility ? ` — ${video.stale.detail}` : ''}.
+                  </span>
+                </p>
+              )}
               {showMe && firstHere >= 0 && video && (
                 <div className='flex flex-wrap items-center gap-x-3 gap-y-1' data-hv-show-me-row>
                   <button

@@ -220,6 +220,10 @@ export interface VersionDto {
    *  idle (no input for 3 s+) on the recorded tab, in source time. Null for
    *  uploaded files and recordings made without it. */
   activity?: ActivitySpan[] | null
+  /** Retention removed this version's files (#1531): the Versions tab says
+   *  so and restore answers 409 HELP_VIDEO_VERSION_FILES_REMOVED. Optional:
+   *  older servers. */
+  files_removed_at?: string | null
 }
 
 /** A stretch of the recording where the author was typing in a text field,
@@ -320,6 +324,20 @@ export interface HelpVideoDto {
   transcript_url?: string | null
   /** What changed since this person last watched (#1497), else null. */
   whats_new?: HelpVideoWhatsNew | null
+  /** The screen changed since this was published (#1495): a layout version,
+   *  a renamed or removed pipeline step, or a recorded click label gone from
+   *  the page. Null when nothing was found or an author dismissed it;
+   *  publishing clears it. Optional: older servers. */
+  stale?: HelpVideoStale | null
+}
+
+/** Why a video may be out of date (#1495). */
+export interface HelpVideoStale {
+  kind: 'layout' | 'state' | 'label'
+  /** One sentence naming the change. */
+  detail: string
+  /** When the change happened (ISO). */
+  since: string
 }
 
 /** `updated`: a newer version than the one watched is published; `again`: the
@@ -352,3 +370,5 @@ export type HelpVideoErrorCode =
   | 'HELP_VIDEO_NOT_FOUND'
   | 'HELP_VIDEO_AUTHOR_ONLY'
   | 'HELP_VIDEO_DOWNLOAD_OFF'
+  | 'HELP_VIDEO_NOT_STALE'
+  | 'HELP_VIDEO_VERSION_FILES_REMOVED'

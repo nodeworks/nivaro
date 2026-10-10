@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
+import { Archive, History, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../../context'
@@ -68,6 +68,7 @@ export function HelpVideoLibrary({
   const [archiving, setArchiving] = useState<Set<string>>(() => new Set())
   const { isAdmin } = useItemEditAuth()
   const [purgeTarget, setPurgeTarget] = useState<HelpVideoDto | null>(null)
+  const [dismissing, setDismissing] = useState<Set<string>>(() => new Set())
   const purgeTrigger = useRef<HTMLElement | null>(null)
   // After a delete the row is gone: focus moves to the next row's action (or the list).
   const focusAfter = useRef<{ gone: string; next: string | null } | null>(null)
@@ -145,6 +146,32 @@ export function HelpVideoLibrary({
       }, 0)
     )
     return { ok: true }
+  }
+
+  // "May be out of date" (#1495): the note goes for everyone; the same change
+  // is not raised again.
+  const dismissStale = async (v: HelpVideoDto) => {
+    if (dismissing.has(v.id)) return
+    setArchiveError(null)
+    setDismissing((cur) => new Set(cur).add(v.id))
+    try {
+      await helpVideoApi(client).dismissStale(v.id)
+      toast.success(`The note on "${v.title}" was dismissed`)
+      void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+    } catch (e) {
+      // Already gone (published again, or dismissed elsewhere): just refresh.
+      if (helpVideoError(e)?.code === 'HELP_VIDEO_NOT_STALE') {
+        void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+      } else {
+        setArchiveError(`The note on "${v.title}" could not be dismissed. ${(e as Error).message}`)
+      }
+    } finally {
+      setDismissing((cur) => {
+        const next = new Set(cur)
+        next.delete(v.id)
+        return next
+      })
+    }
   }
 
   const archive = async (v: HelpVideoDto) => {
@@ -359,10 +386,34 @@ export function HelpVideoLibrary({
                     >
                       {meta}
                     </p>
+                    {v.stale && (
+                      <p
+                        className='flex items-start gap-1 text-[12px] text-amber-800 dark:text-amber-200'
+                        title={v.stale.detail}
+                        data-hv-stale={v.stale.kind}
+                      >
+                        <History className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
+                        <span className='line-clamp-2'>
+                          May be out of date{canAuthor ? `: ${v.stale.detail}` : ''}
+                        </span>
+                      </p>
+                    )}
                   </div>
                 </button>
                 {canAuthor && (
                   <div className='flex flex-wrap gap-1 border-t border-border px-1.5 py-1'>
+                    {v.stale && (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        onClick={() => void dismissStale(v)}
+                        disabled={dismissing.has(v.id)}
+                        aria-label={`Dismiss the out-of-date note on ${v.title || 'Untitled video'}`}
+                        data-hv-stale-dismiss={v.id}
+                      >
+                        <History className='h-3.5 w-3.5' /> Dismiss
+                      </Button>
+                    )}
                     <Button
                       size='sm'
                       variant='ghost'

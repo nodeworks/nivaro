@@ -84,6 +84,11 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'How the first change is found, comparing the version they watched with the published one: a different recording changes the whole video; otherwise the earliest of — the intro card or background music changing (the start), the first kept piece that differs in start, end, speed or music level, any caption, chapter, callout, arrow, box, ripple, zoom or blur added, removed or changed (at its start; one inside a cut counts from the next kept moment), chapter banners switched on or off (the first chapter), and the end card (where it starts). Moving only the poster is not a change viewers see. The note disappears once the person watches the new version.'
     },
+    { type: 'h3', text: 'Videos that may be out of date' },
+    {
+      type: 'p',
+      text: 'Every night Nivaro checks each published video against the screens it shows on and marks it "May be out of date" when, since its published version was made: a layout of a collection it shows on was changed (a new layout version); a pipeline step it is limited to was renamed or removed; or something it shows being clicked is no longer on that page — the Videos button notes the names of the buttons, links, tabs and fields on a page while an author is on it (never what is typed in a field), and a recorded click label that has gone from a page reported in the last 14 days counts. The author gets one notification naming the change; viewers see a quiet "Recorded before a change to this screen" note under the player; the library shows the reason to authors with Dismiss. Publishing the video again clears the note; dismissing it keeps that change from being raised again (a later change still is). Each flag is written to the activity log.'
+    },
     { type: 'h3', text: 'Links to a moment' },
     {
       type: 'p',
@@ -113,6 +118,11 @@ export const helpVideosGuide: DocSection = {
     {
       type: 'p',
       text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video. Administrators can also delete an archived video for good with Delete permanently on the Archived tab (only archived videos can be deleted permanently), which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
+    },
+    { type: 'h3', text: 'Storage' },
+    {
+      type: 'p',
+      text: 'Videos → Storage (administrators) lists what help videos take up: every version of every video with the size of its recording, render, captions and poster, sortable by any column, with totals at the top. Retention removes the files of earlier cuts after a number of days (blank = keep everything, the default). The published version and its recording, the current draft, a version whose render is queued or running, and any version whose recording a kept version still uses (opening the editor or restoring copies the published recording) are always kept. Next sweep lists exactly what the coming sweep would remove and why, with sizes, before anything happens; the sweep runs every night and Run now runs it at once as a Background Jobs run. Every removed file is a row in the activity log, plus one summary line per sweep. A version whose files were removed stays in the Versions tab as "Files removed by retention" and cannot be restored; a package export refuses a video whose published version lost its files.'
     }
   ]
 }
@@ -143,7 +153,17 @@ export const helpVideosApi: DocSection = {
         [
           'GET /help-videos/:id',
           'viewers',
-          'One video; authors also get the draft, visibility and required roles. whats_new (kind updated | again, note, jump_ms, chapter, whole) says what changed since this person last watched; transcript_url is the ticketed transcript'
+          'One video; authors also get the draft, visibility and required roles. whats_new (kind updated | again, note, jump_ms, chapter, whole) says what changed since this person last watched; transcript_url is the ticketed transcript; stale ({kind: layout | state | label, detail, since}, or null) says the screen changed since it was published'
+        ],
+        [
+          'POST /help-videos/:id/stale/dismiss',
+          'authors',
+          'Dismiss "may be out of date" (publishing clears it by itself); 409 HELP_VIDEO_NOT_STALE when there is nothing to dismiss'
+        ],
+        [
+          'POST /help-videos/pages',
+          'authors',
+          'Register a page key with its label and app; `labels` (optional, ≤ 300) is the list of click targets seen on that page, kept with the time for the nightly out-of-date check'
         ],
         [
           'GET /help-videos/:id/stream | /captions.vtt | /poster',
@@ -263,6 +283,26 @@ export const helpVideosApi: DocSection = {
           'POST /help-videos/render-queue/:versionId/cancel',
           'administrators',
           'Cancel a waiting or running render; the version stays on live playback. 409 HELP_VIDEO_RENDER_NOT_ACTIVE when it is not queued or rendering'
+        ],
+        [
+          'GET /help-videos/storage',
+          'administrators',
+          'Sizes per video and version (recording, render, captions, poster, from the files table), totals, and the retention rule'
+        ],
+        [
+          'PATCH /help-videos/storage/retention',
+          'administrators',
+          'Body `{retention_days}`: 1–3650, or null to keep everything (help_video_settings.retention_days); 409 HELP_VIDEO_SETTINGS_MIGRATION_PENDING before migration 410'
+        ],
+        [
+          'GET /help-videos/storage/plan',
+          'administrators',
+          'What the next sweep would remove (video, version, age, files with sizes, why) and what stays and why'
+        ],
+        [
+          'POST /help-videos/storage/sweep',
+          'administrators',
+          'Run the retention sweep now (a Background Jobs run of help-video-storage-sweep); answers the counts and a summary line'
         ],
         [
           'POST /help-videos/packages',

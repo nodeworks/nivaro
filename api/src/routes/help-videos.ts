@@ -56,6 +56,7 @@ import {
   previewImport
 } from '../services/help-video-package.js'
 import { queueRender } from '../services/help-video-render.js'
+import { dismissStale, StaleError } from '../services/help-video-stale.js'
 import {
   abandonUpload,
   activityOfFile,
@@ -249,9 +250,11 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.send(await videosForContext(req, q))
   })
   app.get('/pages', async (_req, reply) => reply.send({ data: await listPages() }))
+  // `labels` (optional): the click targets the client saw on the page, for
+  // the nightly "may be out of date" check (#1495). Checked and capped.
   app.post('/pages', { preHandler: requireAuthor }, async (req, reply) => {
-    const b = (req.body ?? {}) as { key?: string; label?: string; app?: string }
-    await registerPage(String(b.key ?? ''), String(b.label ?? ''), b.app ?? null)
+    const b = (req.body ?? {}) as { key?: string; label?: string; app?: string; labels?: unknown }
+    await registerPage(String(b.key ?? ''), String(b.label ?? ''), b.app ?? null, b.labels)
     return reply.code(204).send()
   })
 
@@ -387,6 +390,23 @@ export async function helpVideosRoutes(app: FastifyInstance) {
         (req.body ?? {}) as Parameters<typeof recordProgress>[2]
       )
     })
+  })
+
+  // "May be out of date" (#1495): an author dismisses the note; publishing
+  // clears it by itself. 409 HELP_VIDEO_NOT_STALE when there is none.
+  app.post('/:id/stale/dismiss', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    try {
+      await dismissStale(video, req.user!)
+    } catch (err) {
+      if (err instanceof StaleError) {
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      }
+      throw err
+    }
+    const fresh = await loadVideoForUser(req, id)
+    return reply.send({ data: await serializeVideo(fresh.video, viewerCtx(req, true)) })
   })
 
   app.get('/:id/analytics', { preHandler: requireAuthor }, async (req, reply) => {

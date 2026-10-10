@@ -354,8 +354,14 @@ export function helpVideoApi(client: NivaroClient) {
           openverse_id: openverseId
         })
       ).then((x) => x.data),
-    registerPage: (key: string, label: string, app?: string) =>
-      r(post('/help-videos/pages', { key, label, app })),
+    /** `labels` (optional): the click targets seen on the page, for the
+     *  nightly "may be out of date" check (#1495); at most 300. */
+    registerPage: (key: string, label: string, app?: string, labels?: string[]) =>
+      r(post('/help-videos/pages', { key, label, app, ...(labels ? { labels } : {}) })),
+    /** Dismisses "may be out of date" (#1495). 409 HELP_VIDEO_NOT_STALE when
+     *  there is nothing to dismiss. Authors only. */
+    dismissStale: (id: string) =>
+      r(post<{ data: HelpVideoDto }>(`/help-videos/${id}/stale/dismiss`)).then((x) => x.data),
     authorRoles: () =>
       r(get<{ data: { help_video_author_roles?: unknown } }>('/settings')).then((x) =>
         parseRoleIdList(x.data?.help_video_author_roles)
