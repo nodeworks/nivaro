@@ -187,6 +187,7 @@ import { securityRoutes, securitySelfRoutes } from './security.js'
 import { semanticSearchRoutes } from './semantic-search.js'
 import { sequenceRoutes } from './sequences.js'
 import { sessionRecordingRoutes } from './session-recordings.js'
+import { sessionReplayExportRoutes } from './session-replay-export.js'
 import { sessionReplayNotesRoutes } from './session-replay-notes.js'
 import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
@@ -472,6 +473,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(sessionRecordingRoutes, { prefix: '/session-recordings' })
   // #1363 timestamped notes on a recording (admin-only, own file beside the recordings routes)
   await app.register(sessionReplayNotesRoutes, { prefix: '/session-recordings' })
+  // #1375 export a recording as a self-contained HTML replay or a WebM (background job)
+  await app.register(sessionReplayExportRoutes, { prefix: '/session-recordings' })
   await app.register(reportStudioRoutes, { prefix: '/report-studio' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)

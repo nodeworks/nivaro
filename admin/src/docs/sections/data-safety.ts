@@ -267,6 +267,20 @@ function App() {
         'Copy a note onto an issue linked to the recording (it lands as a comment on the issue, shown in the issue’s detail) or onto an open investigation notebook from the Traffic Map (appended to its notes). Either way the copy carries a link that opens the recording at that second.',
         'Adding, deleting and copying a note are recorded in the activity log.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-export', text: 'Exporting a recording' },
+    {
+      type: 'p',
+      text: 'Export (top right of the player) saves a recording outside the admin. Leave From and To empty for the whole recording, or give a window in m:ss.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'HTML replay: one file with the player and the events inside. It opens offline in any browser and plays like the admin’s player. The events are exactly as stored, so inputs that were masked when recorded stay masked.',
+        'WebM video: the server plays the recording in a headless browser and captures it in real time, so a video takes as long to make as the window lasts (at most 30 minutes). When it is ready you get a notification with a link to the file; if it cannot be made, the notification says why. The server needs ffmpeg for this.',
+        'A window starts at the last full snapshot before From, because a replay needs the page as it was; playback still begins at From.',
+        'Every export is recorded in the activity log. The video is stored as a file owned by you; treat both files like the recording itself, since they show someone’s session.'
+      ]
     }
   ]
 }

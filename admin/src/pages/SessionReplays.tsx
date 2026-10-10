@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ReplayPlayer } from '@/components/replay-player'
+import { RecordingExport } from '@/components/replay-player/RecordingExport'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -810,6 +811,7 @@ export function SessionReplaysPage() {
               <span className='text-[12px] font-normal text-slate-400'>
                 {playing && formatRelative(playing.started_at)}
               </span>
+              {playing && <RecordingExport recordingId={playing.id} className='ml-auto mr-8' />}
             </SheetTitle>
           </SheetHeader>
           {playing && (

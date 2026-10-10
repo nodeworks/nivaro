@@ -128,6 +128,8 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'PATCH', path: '/api/session-recordings/:id/notes/:noteId' },
   { method: 'DELETE', path: '/api/session-recordings/:id/notes/:noteId' },
   { method: 'POST', path: '/api/session-recordings/:id/notes/:noteId/copy' },
+  // Export a recording (#1375) — the replay sheet's Export menu
+  { method: 'POST', path: '/api/session-recordings/:id/export' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },
