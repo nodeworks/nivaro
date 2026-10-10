@@ -5,6 +5,7 @@ import {
   sessionRecordingEnabled,
   startSessionRecording
 } from '@nivaro/sdk'
+import { registerReplayCapture } from '@nivaro/shared'
 import { useEffect, useRef } from 'react'
 import { useOptionalNivaroClient } from '../context'
 
@@ -447,3 +448,8 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     }
   }, [client, disabled, appLabel])
 }
+
+// #1370 — shared surfaces (reportClientCrash, the support dialog, Report a
+// problem) reach this recorder through the shared registry, never by
+// importing the host.
+registerReplayCapture(() => captureErrorClip())

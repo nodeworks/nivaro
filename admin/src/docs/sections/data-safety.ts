@@ -208,6 +208,18 @@ function App() {
       ]
     },
     {
+      type: 'p',
+      text: 'Error clips work the same in your own frontend: with Error clips on, the hook keeps the last 30–60 seconds in memory and uploads nothing until something breaks. Call reportClientCrash from your error boundary and the issue it files links to the clip (or, with full recording on, to the moment in the live recording):'
+    },
+    {
+      type: 'pre',
+      code: `import { reportClientCrash } from '@nivaro/react'
+
+componentDidCatch(error, info) {
+  void reportClientCrash(client, error, info) // POST /issues/client + replay link
+}`
+    },
+    {
       type: 'note',
       text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'
     },

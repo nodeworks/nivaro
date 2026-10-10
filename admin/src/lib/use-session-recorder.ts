@@ -1,3 +1,4 @@
+import { registerReplayCapture } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { api } from '@/lib/api'
@@ -475,3 +476,8 @@ export function useSessionRecorder() {
     }
   }, [clipMode, user])
 }
+
+// #1370 — shared surfaces (reportClientCrash, the support dialog, Report a
+// problem) reach this recorder through the shared registry, never by
+// importing the host.
+registerReplayCapture(() => captureErrorClip())

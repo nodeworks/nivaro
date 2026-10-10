@@ -398,6 +398,11 @@ export {
 } from './lib/autofill-runs'
 export * from './lib/catalog-item-open'
 export {
+  buildClientCrashBody,
+  type ClientCrashBody,
+  reportClientCrash
+} from './lib/client-crash'
+export {
   CLIENT_HEADER,
   type ClientVersion,
   clientVersion,
@@ -475,6 +480,13 @@ export {
   RealtimeContext,
   useOptionalRealtime
 } from './lib/realtime'
+export {
+  captureReplayClip,
+  type ReplayClipKind,
+  type ReplayLink,
+  registerReplayCapture,
+  replayHref
+} from './lib/replay-capture'
 export {
   BATCH_READ_LIMIT,
   type BatchableRead,
