@@ -223,6 +223,22 @@ function App() {
         'When a recording has console output, a Console panel appears under the player: a scrollable list of every captured line with All / Info / Warn / Error filter buttons and per-level counts. Clicking a line seeks the replay to it.',
         'This makes "what was the user doing when that error fired" a one-click question — find the red tick, click it, watch.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-rail', text: 'The event rail' },
+    {
+      type: 'p',
+      text: 'Under the scrubber, a second row of markers shows what the same person did on the server while the recording ran, from the API log, the issue log, the page trail and workflow history: their requests, client errors they reported, admin pages they entered and workflow transitions they made.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Colours: requests grey when they succeeded, amber for a 4xx and red for a 5xx; client errors red; page changes blue; transitions violet.',
+        'Hover a marker for what it was (method, path, status and time for a request). Markers a few pixels apart merge into one that lists what it holds, so a busy recording stays clickable.',
+        'Click a marker to seek to just before it. Ctrl-click (⌘-click on a Mac) an error or a transition to open the issue or the record.',
+        'Requests show method, path, status and duration only, never bodies or query strings. The recorder’s own uploads are left out.',
+        'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
+        'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
+      ]
     }
   ]
 }

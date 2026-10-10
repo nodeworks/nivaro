@@ -2,16 +2,15 @@
  * Session replay player on rrweb's own Replayer engine — the /session-replays page and the
  * Traffic Map's recording panel both use it. (rrweb-player 2.x ships a broken build — its bundle
  * never constructs a Replayer — so the controls live here: play/pause, scrubber, speed,
- * auto-scaled viewport, live follow, route + console markers.)
+ * auto-scaled viewport, live follow, route + console markers above the scrubber and the
+ * server-side event rail (#1356) under it.)
  */
-import { useEffect, useRef, useState } from 'react'
+import { TipLayer } from '@nivaro/shared'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
-
-function fmtClock(ms: number): string {
-  const s = Math.max(0, Math.floor(ms / 1000))
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
-}
+import { EventRail } from './EventRail'
+import { fmtClock, type RailItem, type RailKind, railMarkers } from './logic'
 
 const SPEEDS = [1, 2, 4, 8]
 
@@ -57,10 +56,22 @@ export function ReplayPlayer({
     Array<{ offset: number; tag: 'route' | 'console'; level?: string; text: string }>
   >([])
   const [consoleFilter, setConsoleFilter] = useState<'all' | 'info' | 'warn' | 'error'>('all')
+  // #1356 event rail: the person's requests / errors / page changes /
+  // transitions from the server, placed against the first event's clock.
+  const [rail, setRail] = useState<{
+    items: RailItem[]
+    first: number
+    truncated: RailKind[]
+  } | null>(null)
+  const railMarks = useMemo(
+    () => (rail ? railMarkers(rail.items, rail.first, total) : []),
+    [rail, total]
+  )
 
   useEffect(() => {
     let cancelled = false
     let raf = 0
+    setRail(null)
 
     function rescale() {
       const rep = replayerRef.current
@@ -82,6 +93,13 @@ export function ReplayPlayer({
 
     async function load() {
       try {
+        // The rail rides alongside the events and never holds the replay up.
+        const railReq = api
+          .get<{
+            data: { items: RailItem[]; truncated_kinds?: RailKind[] }
+          }>(`/session-recordings/${recordingId}/events-rail`)
+          .then((x) => x.data.data)
+          .catch(() => null)
         const r = await api.get<{ data: { events: unknown[]; last_seq?: number } }>(
           `/session-recordings/${recordingId}/events`
         )
@@ -95,6 +113,10 @@ export function ReplayPlayer({
             data?: { tag?: string; payload?: Record<string, unknown> }
           }>
           const first = evs.find((e) => typeof e.timestamp === 'number')?.timestamp ?? 0
+          void railReq.then((d) => {
+            if (cancelled || !d || !first) return
+            setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
+          })
           const found: Array<{
             offset: number
             tag: 'route' | 'console'
@@ -242,6 +264,11 @@ export function ReplayPlayer({
     else rep.pause(ms)
   }
 
+  // Stable for the memoised rail — it must not re-render every animation frame.
+  const seekRef = useRef(seek)
+  seekRef.current = seek
+  const railSeek = useCallback((ms: number) => seekRef.current(ms), [])
+
   function changeSpeed(v: number) {
     setSpeed(v)
     replayerRef.current?.setConfig({ speed: v })
@@ -251,6 +278,7 @@ export function ReplayPlayer({
 
   return (
     <div className='nvr-no-record mt-3'>
+      <TipLayer />
       <div
         ref={frameRef}
         className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
@@ -324,6 +352,12 @@ export function ReplayPlayer({
               onChange={(e) => seek(Number(e.target.value))}
               className='w-full accent-[#00ceff]'
               aria-label='Replay position'
+            />
+            <EventRail
+              markers={railMarks}
+              total={total}
+              truncated={rail?.truncated ?? []}
+              onSeek={railSeek}
             />
           </div>
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
