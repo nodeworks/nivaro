@@ -243,6 +243,11 @@ export async function forgetHelpVideoRole(roleId: string): Promise<void> {
   if (!role) return
   const rid = up(role.id)
   await db('nivaro_help_video_requirements').where({ role_id: rid }).delete()
+  // Learning paths (#1508) name roles too; the table exists from migration 416.
+  await db('nivaro_help_video_path_roles')
+    .where({ role_id: rid })
+    .delete()
+    .catch(() => {})
   const settings = await db('nivaro_settings')
     .where({ id: 1 })
     .first('help_video_author_roles')
@@ -1052,9 +1057,17 @@ async function askToWatchAgain(video: VideoRow, user: User, note: string | null)
 
 export function requiredNotice(
   title: string,
-  opts: { again?: boolean; note?: string | null } = {}
+  opts: { again?: boolean; note?: string | null; path?: boolean } = {}
 ): { subject: string; message: string; why: string } {
   const where = 'It is on your dashboard under Required videos.'
+  if (opts.path) {
+    // A learning path (#1508): several videos in order, finished when all are watched.
+    return {
+      subject: `Please complete: ${title}`.slice(0, 250),
+      message: `A learning path of short videos your role is asked to complete. ${where}`,
+      why: 'This learning path is required for your role.'
+    }
+  }
   if (opts.again) {
     return {
       subject: `Please watch again: ${title}`.slice(0, 250),
@@ -1087,14 +1100,33 @@ export async function notifyRequiredViewers(
 ): Promise<number> {
   let roles = [...new Set(roleIds.filter(isUuid).map(up))]
   if (!roles.length) return 0
-  const app = getApp()
-  if (!app) return 0
   const row = await db('nivaro_help_videos').where({ id: videoId }).first('visibility')
   const vis = parseVisibility(row?.visibility)
   if (vis.mode === 'roles') roles = roles.filter((r) => vis.role_ids.includes(r))
   if (!roles.length) return 0
+  return fanOutToRoles(roles, requiredNotice(title || 'Untitled video', notice), {
+    kind: 'help-video',
+    label: (title || 'Untitled video').slice(0, 250),
+    id: low(videoId)
+  })
+}
+
+/**
+ * One notification to each active person in the given roles (exact uuids
+ * only; at most NOTIFY_CAP people), landing on the dashboard's required list.
+ * Shared by required videos and required learning paths (#1508); the caller
+ * has already applied any visibility rule.
+ */
+export async function fanOutToRoles(
+  roleIds: string[],
+  text: { subject: string; message: string; why: string },
+  source: { kind: string; label: string; id: string }
+): Promise<number> {
+  const roles = [...new Set(roleIds.filter(isUuid).map(up))]
+  if (!roles.length) return 0
+  const app = getApp()
+  if (!app) return 0
   const { notifyUser } = await import('./notification-channels.js')
-  const sourceLabel = (title || 'Untitled video').slice(0, 250)
   // Ask for one more than the cap so a truncation is detectable.
   const found = await db('nivaro_users')
     .whereIn('role', roles)
@@ -1106,11 +1138,10 @@ export async function notifyRequiredViewers(
     .select('id')
   if (found.length > NOTIFY_CAP) {
     app.log?.warn?.(
-      `help video ${low(videoId)}: more than ${NOTIFY_CAP} people need this video; notified the first ${NOTIFY_CAP}`
+      `${source.kind} ${source.id}: more than ${NOTIFY_CAP} people need this; notified the first ${NOTIFY_CAP}`
     )
   }
   const users = found.slice(0, NOTIFY_CAP)
-  const text = requiredNotice(title || 'Untitled video', notice)
   let delivered = 0
   let failed = 0
   let firstError: unknown = null
@@ -1124,7 +1155,7 @@ export async function notifyRequiredViewers(
             category: 'system',
             why: text.why,
             target: { kind: 'home', focus: 'help-required' },
-            source: { kind: 'help-video', label: sourceLabel, id: low(videoId) }
+            source
           })
           delivered++
         } catch (err) {
@@ -1136,8 +1167,8 @@ export async function notifyRequiredViewers(
   }
   if (failed) {
     app.log?.warn?.(
-      { err: firstError, videoId: low(videoId), failed, total: users.length },
-      `help video required notify: ${failed} of ${users.length} notifications failed`
+      { err: firstError, source, failed, total: users.length },
+      `${source.kind} required notify: ${failed} of ${users.length} notifications failed`
     )
   }
   return delivered

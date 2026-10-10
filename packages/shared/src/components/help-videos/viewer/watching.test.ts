@@ -18,6 +18,7 @@ vi.mock('../api', () => ({
   helpVideoApi: () => ({ registerPage }),
   helpVideoKeys: { all: ['help-videos'] },
   useRequiredVideos: () => ({ data: required }),
+  useRequiredList: () => ({ data: { data: required, paths: [] } }),
   useHelpVideosFor: () => ({ data: forData })
 }))
 vi.mock('../recorder/HelpVideoRecordingProvider', () => ({

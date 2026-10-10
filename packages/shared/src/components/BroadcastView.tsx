@@ -4,6 +4,8 @@ import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { cn } from '../lib/utils'
+import { useHelpVideoLibrary } from './help-videos/api'
+import { formatDuration } from './help-videos/viewer/format'
 import { PickList } from './imports/ServiceConfigBuilder'
 
 /**
@@ -76,6 +78,19 @@ export function BroadcastView({ className }: { className?: string }) {
   const [groups, setGroups] = useState<AudienceGroup[]>([])
   const [roleIds, setRoleIds] = useState<string[]>([])
   const [result, setResult] = useState<string | null>(null)
+  // A video moment (#1528a): a published video and where it starts. Each
+  // recipient gets the card only when they may watch that video.
+  const [helpVideoId, setHelpVideoId] = useState('')
+  const [helpVideoAt, setHelpVideoAt] = useState('')
+  const helpVideos = useHelpVideoLibrary({ status: 'published' })
+  const videoRef = () => {
+    if (!helpVideoId) return {}
+    const secs = Number(helpVideoAt)
+    return {
+      help_video_id: helpVideoId,
+      help_video_t_ms: Number.isFinite(secs) && secs > 0 ? Math.round(secs * 1000) : null
+    }
+  }
 
   const { data: config } = useQuery<{ sms_enabled: boolean }>({
     queryKey: ['broadcast-config'],
@@ -153,7 +168,8 @@ export function BroadcastView({ className }: { className?: string }) {
           scheduled_send_at: sendAt || undefined,
           ends_at: endsAt || undefined,
           require_ack: inApp && inAppKind === 'banner' ? requireAck : false,
-          audience: fullAudience
+          audience: fullAudience,
+          ...videoRef()
         })
       ),
     onSuccess: (r) => {
@@ -168,6 +184,8 @@ export function BroadcastView({ className }: { className?: string }) {
       setMessage('')
       setSubject('')
       setSendAt('')
+      setHelpVideoId('')
+      setHelpVideoAt('')
       void qc.invalidateQueries({ queryKey: ['broadcasts'] })
       void qc.invalidateQueries({ queryKey: ['announcements-active'] })
     },
@@ -222,7 +240,8 @@ export function BroadcastView({ className }: { className?: string }) {
         post('/announcements/test-send', {
           subject: subject.trim() || undefined,
           message: message.trim(),
-          channels: channels.filter((c) => c !== 'banner')
+          channels: channels.filter((c) => c !== 'banner'),
+          ...videoRef()
         })
       ),
     onSuccess: (r) =>
@@ -354,6 +373,63 @@ export function BroadcastView({ className }: { className?: string }) {
           <span className='text-slate-400 dark:text-slate-500'>
             — replaced per recipient at send; unknown tokens render blank.
           </span>
+        </div>
+        {/* A video moment (#1528a): the in-app message and the email carry a card
+            with a link to this moment, for the recipients who may watch the video. */}
+        <div
+          className='mt-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'
+          data-broadcast-video
+        >
+          <label className='flex items-center gap-1.5'>
+            Video
+            <select
+              value={helpVideoId}
+              onChange={(e) => setHelpVideoId(e.target.value)}
+              className='h-7 max-w-[320px] rounded-md border border-slate-200 bg-background px-1.5 text-[12px] text-slate-800 dark:border-border dark:text-foreground'
+              aria-label='Attach a video'
+              data-broadcast-video-id
+            >
+              <option value=''>None</option>
+              {(helpVideos.data?.data ?? []).map((v) => (
+                <option key={v.id} value={v.id}>
+                  {v.title || 'Untitled video'}
+                  {v.duration_ms != null ? ` (${formatDuration(v.duration_ms)})` : ''}
+                </option>
+              ))}
+            </select>
+          </label>
+          {helpVideoId && (
+            <label className='flex items-center gap-1.5'>
+              Start at
+              <input
+                type='number'
+                min={0}
+                step={1}
+                value={helpVideoAt}
+                onChange={(e) => setHelpVideoAt(e.target.value)}
+                placeholder='0'
+                className='h-7 w-20 rounded-md border border-slate-200 bg-background px-1.5 text-[12px] dark:border-border'
+                aria-label='Start at (seconds)'
+                data-broadcast-video-at
+              />
+              seconds
+            </label>
+          )}
+          {helpVideos.hasNextPage && (
+            <button
+              type='button'
+              onClick={() => void helpVideos.fetchNextPage()}
+              disabled={helpVideos.isFetchingNextPage}
+              className='rounded border border-slate-200 px-1.5 py-0.5 text-[11px] hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
+            >
+              {helpVideos.isFetchingNextPage ? 'Loading…' : 'More videos'}
+            </button>
+          )}
+          {helpVideoId && (
+            <span className='text-slate-400 dark:text-slate-500'>
+              Shown as a card with a link to that moment — only to people who can watch the video.
+            </span>
+          )}
         </div>
         <div className='mt-3 flex flex-wrap items-center gap-x-5 gap-y-2'>
           <label className='flex cursor-pointer items-center gap-1.5 text-[12px] text-slate-600 dark:text-muted-foreground'>

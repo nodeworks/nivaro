@@ -1,11 +1,18 @@
 export {
   helpVideoApi,
   helpVideoKeys,
+  learningPathApi,
+  type RequiredList,
+  releaseVideoApi,
   useHelpVideo,
   useHelpVideoNext,
   useHelpVideoQuestions,
   useHelpVideosFor,
   useHelpVideoWalk,
+  useLearningPaths,
+  useMyLearningPaths,
+  useReleaseVideos,
+  useRequiredList,
   useRequiredVideos
 } from './api'
 export { HelpVideoEditor } from './editor/HelpVideoEditor'
@@ -51,15 +58,20 @@ export type {
   HelpVideoAnalytics,
   HelpVideoContext,
   HelpVideoDto,
+  HelpVideoMomentCard,
+  HelpVideoPathDto,
   HelpVideoQuestion,
   HelpVideoRatingSummary,
   HelpVideoStale,
+  MyLearningPathDto,
   RecordedClick,
+  ReleaseVideoDto,
   VideoEdits,
   WalkStep
 } from './types'
 export { HelpVideoButton } from './viewer/HelpVideoButton'
 export { HelpVideoSheet } from './viewer/HelpVideoSheet'
+export { LearningPathCard } from './viewer/LearningPathCard'
 export { RequiredVideosCard } from './viewer/RequiredVideosCard'
 export { HelpVideoWalkHost } from './walk/HelpVideoWalk'
 export {

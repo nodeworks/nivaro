@@ -12,11 +12,15 @@ import type {
   HelpVideoContext,
   HelpVideoDto,
   HelpVideoErrorCode,
+  HelpVideoPathDto,
+  HelpVideoPathRole,
   HelpVideoQuestion,
   MusicTrack,
+  MyLearningPathDto,
   OpenverseSearch,
   PointerPath,
   RecordedClick,
+  ReleaseVideoDto,
   UploadedMusic,
   VersionDto,
   VideoEdits,
@@ -36,6 +40,11 @@ export const helpVideoKeys = {
   questions: (id: string) => ['help-videos', 'questions', id] as const,
   /** "Up next" suggestions for a video (#1530). */
   next: (id: string) => ['help-videos', 'next', id] as const,
+  /** Learning paths (#1508): the author list and this person's own. */
+  paths: ['help-videos', 'paths'] as const,
+  myPaths: ['help-videos', 'paths', 'mine'] as const,
+  /** The changelog's videos (#1528b). */
+  releases: ['help-videos', 'releases'] as const,
   /** The editor's draft load. Outside the `all` prefix on purpose: GET
    *  /draft/edits creates a missing draft, so a broad invalidation must
    *  never refetch it. `n` bumps on Reload. */
@@ -119,14 +128,118 @@ export function useHelpVideoLibrary(params: {
   })
 }
 
+/** GET /help-videos/required/mine: single required videos plus the required
+ *  learning paths that are not finished (#1508). A video inside such a path
+ *  is listed under the path only. Older servers answer without `paths`. */
+export type RequiredList = { data: HelpVideoDto[]; paths: MyLearningPathDto[] }
+
+async function fetchRequired(client: NivaroClient): Promise<RequiredList> {
+  const r = await client.request(
+    get<{ data: HelpVideoDto[]; paths?: MyLearningPathDto[] }>('/help-videos/required/mine')
+  )
+  return { data: r.data ?? [], paths: r.paths ?? [] }
+}
+
+export function useRequiredList() {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.required,
+    staleTime: 60_000,
+    queryFn: () => fetchRequired(client)
+  })
+}
+
+/** The single required videos (the same fetch as useRequiredList). */
 export function useRequiredVideos() {
   const client = useNivaroClient()
   return useQuery({
     queryKey: helpVideoKeys.required,
     staleTime: 60_000,
-    queryFn: async () =>
-      (await client.request(get<{ data: HelpVideoDto[] }>('/help-videos/required/mine'))).data
+    queryFn: () => fetchRequired(client),
+    select: (r) => r.data
   })
+}
+
+/** This person's learning paths (#1508): their role's and, while their
+ *  account is new, the New User paths — each with progress and the next
+ *  unfinished video. */
+export function useMyLearningPaths(enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.myPaths,
+    enabled,
+    staleTime: 60_000,
+    queryFn: async () =>
+      (await client.request(get<{ data: MyLearningPathDto[] }>('/help-videos/paths/mine'))).data
+  })
+}
+
+/** Every path, for authors. */
+export function useLearningPaths(enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.paths,
+    enabled,
+    queryFn: async () =>
+      (await client.request(get<{ data: HelpVideoPathDto[] }>('/help-videos/paths'))).data
+  })
+}
+
+/** Learning-path mutations (authors). Every call answers the path as stored. */
+export function learningPathApi(client: NivaroClient) {
+  const r = client.request.bind(client)
+  type Details = {
+    title?: string
+    description?: string | null
+    status?: 'draft' | 'published'
+    new_user?: boolean
+  }
+  return {
+    create: (body: Details & { title: string }) =>
+      r(post<{ data: HelpVideoPathDto }>('/help-videos/paths', body)).then((x) => x.data),
+    update: (id: string, body: Details) =>
+      r(patch<{ data: HelpVideoPathDto }>(`/help-videos/paths/${id}`, body)).then((x) => x.data),
+    /** The ordered video list; unknown ids are dropped. */
+    setItems: (id: string, video_ids: string[]) =>
+      r(put<{ data: HelpVideoPathDto }>(`/help-videos/paths/${id}/items`, { video_ids })).then(
+        (x) => x.data
+      ),
+    /** The roles; a published path tells the roles that became required. */
+    setRoles: (id: string, roles: HelpVideoPathRole[]) =>
+      r(
+        put<{ data: HelpVideoPathDto; added: string[] }>(`/help-videos/paths/${id}/roles`, {
+          roles
+        })
+      ).then((x) => x.data),
+    remove: (id: string) => r(del(`/help-videos/paths/${id}`))
+  }
+}
+
+/** The changelog's videos this reader may watch (#1528b). */
+export function useReleaseVideos(enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.releases,
+    enabled,
+    staleTime: 60_000,
+    queryFn: async () =>
+      (await client.request(get<{ data: ReleaseVideoDto[] }>('/help-videos/releases'))).data
+  })
+}
+
+/** Release-video mutations (administrators). */
+export function releaseVideoApi(client: NivaroClient) {
+  const r = client.request.bind(client)
+  return {
+    set: (version: string, video_id: string, t_ms?: number | null) =>
+      r(
+        put<{ data: { version: string; video_id: string; t_ms: number | null } }>(
+          `/help-videos/releases/${encodeURIComponent(version)}`,
+          { video_id, t_ms: t_ms ?? null }
+        )
+      ).then((x) => x.data),
+    clear: (version: string) => r(del(`/help-videos/releases/${encodeURIComponent(version)}`))
+  }
 }
 
 /** "Show me on this page": the published version's labelled clicks. */

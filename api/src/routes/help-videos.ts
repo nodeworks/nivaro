@@ -72,6 +72,25 @@ import {
   openImport,
   previewImport
 } from '../services/help-video-package.js'
+import {
+  createPath,
+  deletePath,
+  listPaths,
+  loadPath,
+  notifyRequiredPathViewersSafely,
+  pathsForUser,
+  replacePathItems,
+  replacePathRoles,
+  requiredRolesOf,
+  serializePath,
+  splitRequired,
+  updatePath
+} from '../services/help-video-paths.js'
+import {
+  deleteReleaseVideo,
+  releaseVideosFor,
+  setReleaseVideo
+} from '../services/help-video-releases.js'
 import { queueRender } from '../services/help-video-render.js'
 import { dismissStale, StaleError } from '../services/help-video-stale.js'
 import {
@@ -276,17 +295,96 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.code(204).send()
   })
 
+  // ── Learning paths (#1508) ────────────────────────────────────────────────
+  // Authors make ordered lists of videos for roles; everyone gets the paths
+  // for their role (and the New User paths while their account is new) with
+  // their own progress. Every :pid is an exact uuid or 404.
+  app.post('/paths', { preHandler: requireAuthor }, async (req, reply) => {
+    const id = await createPath(req.user!, req.body)
+    return reply.code(201).send({ data: await serializePath(await loadPath(id)) })
+  })
+  app.get('/paths', { preHandler: requireAuthor }, async (_req, reply) => {
+    return reply.send({ data: await listPaths() })
+  })
+  app.get('/paths/mine', async (req, reply) => {
+    return reply.send({ data: await pathsForUser(req) })
+  })
+  app.get('/paths/:pid', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    return reply.send({ data: await serializePath(await loadPath(pid)) })
+  })
+  app.patch('/paths/:pid', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    const row = await loadPath(pid)
+    const { published_now } = await updatePath(row, req.user!, req.body)
+    const fresh = await loadPath(pid)
+    if (published_now) {
+      // Publishing tells the roles it is required for, like a required video.
+      const roles = await requiredRolesOf(row.id)
+      if (roles.length) {
+        void notifyRequiredPathViewersSafely(String(row.id), String(fresh.title ?? ''), roles)
+      }
+    }
+    return reply.send({ data: await serializePath(fresh) })
+  })
+  app.put('/paths/:pid/items', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    const row = await loadPath(pid)
+    await replacePathItems(row, req.user!, (req.body as { video_ids?: unknown })?.video_ids)
+    return reply.send({ data: await serializePath(await loadPath(pid)) })
+  })
+  app.put('/paths/:pid/roles', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    const row = await loadPath(pid)
+    const { added_required } = await replacePathRoles(
+      row,
+      req.user!,
+      (req.body as { roles?: unknown })?.roles
+    )
+    if (row.status === 'published' && added_required.length) {
+      void notifyRequiredPathViewersSafely(String(row.id), String(row.title ?? ''), added_required)
+    }
+    return reply.send({ data: await serializePath(await loadPath(pid)), added: added_required })
+  })
+  app.delete('/paths/:pid', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    await deletePath(await loadPath(pid), req.user!)
+    return reply.code(204).send()
+  })
+
+  // ── Release videos (#1528b) ───────────────────────────────────────────────
+  // One video per changelog release. Readers get only what they may watch.
+  app.get('/releases', async (req, reply) => {
+    return reply.send({ data: await releaseVideosFor(req) })
+  })
+  app.put('/releases/:version', { preHandler: requireAdmin }, async (req, reply) => {
+    const { version } = req.params as { version: string }
+    return reply.send({ data: await setReleaseVideo(req.user!, version, req.body) })
+  })
+  app.delete('/releases/:version', { preHandler: requireAdmin }, async (req, reply) => {
+    const { version } = req.params as { version: string }
+    await deleteReleaseVideo(req.user!, version)
+    return reply.code(204).send()
+  })
+
   // ── Watching ──────────────────────────────────────────────────────────────
+  // The required list: single required videos, plus required learning paths
+  // (#1508) that are not finished — one entry per path, carrying its videos
+  // and the next one to watch. A video inside such a path is not listed on
+  // its own as well.
   app.get('/required/mine', async (req, reply) => {
     const ids = await requiredForUser(req.user!)
-    if (!ids.length) return reply.send({ data: [] })
-    const rows = (await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[]
-    const data = await Promise.all(
+    const rows = ids.length
+      ? ((await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[])
+      : []
+    const singles = await Promise.all(
       rows
         .filter((v) => viewerMaySee(v, req.user!.role, false))
         .map((v) => serializeVideo(v, viewerCtx(req, false)))
     )
-    return reply.send({ data })
+    const mine = await pathsForUser(req).catch(() => [])
+    const { data, paths } = splitRequired(singles, mine)
+    return reply.send({ data, paths })
   })
 
   app.get('/:id', async (req, reply) => {

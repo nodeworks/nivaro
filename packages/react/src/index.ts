@@ -281,6 +281,7 @@ export {
   isChatPanelPinned,
   isCleanRecording,
   JsonMapEditor,
+  LearningPathCard,
   listFieldInterfaces,
   MatrixEditor,
   MyWorkView,
