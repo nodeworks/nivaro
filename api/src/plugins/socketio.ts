@@ -13,6 +13,7 @@ import {
 } from '../services/client-version.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { can } from '../services/permissions.js'
+import { registerReplayWatch } from '../services/replay-watch.js'
 import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
 
 let pagePresenceReader:
@@ -650,6 +651,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const room = payload?.room
       if (typeof room === 'string' && room) socket.leave(`chat:${room}`)
     })
+
+    // #1399 — watch a session replay together (admin-only replay:<key> rooms).
+    registerReplayWatch(io, socket, () => authenticatedUser)
 
     socket.on('collection:join', async (payload: { collection?: string }) => {
       const collection = payload?.collection

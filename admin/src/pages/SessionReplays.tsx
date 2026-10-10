@@ -12,6 +12,7 @@ import {
   resumeStartAt,
   useDockedReplay
 } from '@/components/replay-player/floating-store'
+import { setWatchSession, WATCH_KEY_RE } from '@/components/replay-player/watch-together'
 import {
   ActiveTimeChip,
   RecordingSortToggle,
@@ -267,6 +268,8 @@ export function SessionReplaysPage() {
   const [searchParams] = useSearchParams()
   const deepLinkId = searchParams.get('recording')
   const deepLinkT = searchParams.get('t')
+  // #1399 — a watch link: join that replay's watch party as a follower.
+  const deepLinkWatch = searchParams.get('watch')
   const deepLinkApplied = useRef(false)
   const [appFilter, setAppFilter] = useState<string | null>(null)
   // Environment filter — buckets by recording origin host, defaulting to the
@@ -373,6 +376,9 @@ export function SessionReplaysPage() {
     deepLinkApplied.current = true
     const match = recordings.find((r) => String(r.id) === deepLinkId)
     const openIt = (rec: Recording) => {
+      if (deepLinkWatch && WATCH_KEY_RE.test(deepLinkWatch)) {
+        setWatchSession({ recordingId: String(rec.id), key: deepLinkWatch, role: 'follower' })
+      }
       setPlaying(rec)
       if (deepLinkT && Number.isFinite(Number(deepLinkT))) setStartAt(Number(deepLinkT))
     }
@@ -388,7 +394,7 @@ export function SessionReplaysPage() {
       .catch(() =>
         toast.error('That recording no longer exists (recordings expire with retention)')
       )
-  }, [deepLinkId, deepLinkT, recordings])
+  }, [deepLinkId, deepLinkT, deepLinkWatch, recordings])
 
   // #1401 — a floated replay comes back here at the moment it reached; a
   // replay opened here replaces a floating one (one player at a time).

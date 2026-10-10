@@ -280,6 +280,19 @@ function App() {
     {
       type: 'p',
       text: 'Float (beside the speeds) detaches the replay into a small window in a corner of the admin, so it keeps playing while you open the record it is about, a drill-down or anything else — moving between admin pages does not stop it. Drag the window by its title bar; it settles into the nearest corner, and that corner is remembered in this browser. A pinned chat panel moves it over instead of covering it. Closing the window takes you back to Session Replays with the replay open at the moment it had reached; the square button stops it without going anywhere. Opening another replay on the Session Replays page closes the floating one.'
+    },
+    { type: 'h2', id: 'session-replay-together', text: 'Watching together' },
+    {
+      type: 'p',
+      text: 'Watch together (under the player) starts a shared viewing and copies its link. Every admin who opens the link follows your playhead: when you play, pause, seek, jump a chapter or change speed, their replay does the same, and a small roster shows who is watching (you lead, with a crown). Copy watch link copies it again; Stop ends it, and closing the replay leaves. A follower can still scrub on their own, but your next move brings them back. If you close the replay while others watch, they can carry on, and one of them can take the lead.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Only admins can join, and only on a recording that exists for them; a watch link opens that recording and no other.',
+        'Discuss posts a link to the current moment — and the shared viewing, when there is one — into one of your chat rooms with an optional note, then opens the room. Copy link in the same menu copies it instead. The link opens Session Replays at that moment (a few seconds before it).',
+        'It runs over the admin’s live connection: nothing about the viewing is stored.'
+      ]
     }
   ]
 }

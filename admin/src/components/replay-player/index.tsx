@@ -26,6 +26,7 @@ import {
 } from './logic'
 import { ReplaySidePanel } from './SidePanel'
 import { SkipBands, SkippingBadge, SkipToggle, useSkipInactivity } from './SkipInactivity'
+import { WatchTogetherBar } from './WatchTogether'
 
 const SPEEDS = [1, 2, 4, 8]
 
@@ -354,11 +355,14 @@ export function ReplayPlayer({
     }),
     []
   )
+  const ownControlsRef = useRef<ReplayControls | null>(null)
   useEffect(() => {
-    if (!controlsRef) return
-    controlsRef.current = ready && !following ? controls : null
+    const live = ready && !following ? controls : null
+    ownControlsRef.current = live
+    if (controlsRef) controlsRef.current = live
     return () => {
-      controlsRef.current = null
+      ownControlsRef.current = null
+      if (controlsRef) controlsRef.current = null
     }
   }, [controlsRef, controls, ready, following])
 
@@ -536,6 +540,11 @@ export function ReplayPlayer({
           onSeek={stableSeek}
         />
       )}
+      <WatchTogetherBar
+        recordingId={recordingId}
+        controlsRef={ownControlsRef}
+        ready={ready && !following}
+      />
       {showPanel && !side && panelEl('stacked')}
     </div>
   )
