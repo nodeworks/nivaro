@@ -6,10 +6,11 @@
  * "Replays of this record" and the inspector can link straight here.
  */
 import { useQuery } from '@tanstack/react-query'
-import { Clapperboard, Play, Search } from 'lucide-react'
+import { Clapperboard, ListVideo, Play, Search } from 'lucide-react'
 import { type FormEvent, useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { ReplayPlayer } from '@/components/replay-player'
+import { PlayAll } from '@/components/replay-player/PlayAll'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
@@ -49,6 +50,7 @@ export function ReplaySearchTab() {
   // A link (record page, inspector) can change the query under an open tab.
   useEffect(() => setDraft(applied), [applied])
   const [watching, setWatching] = useState<ReplayHit | null>(null)
+  const [playingAll, setPlayingAll] = useState(false)
 
   const qs = searchQueryString(applied)
   const {
@@ -182,6 +184,16 @@ export function ReplaySearchTab() {
               <h3 className='text-[11px] font-semibold uppercase tracking-wider text-slate-400'>
                 {hits.length} recording{hits.length === 1 ? '' : 's'}
               </h3>
+              {/* #1398 — one record followed across every recording that opened it. */}
+              {applied.collection && applied.item && !applied.field && !applied.selector && (
+                <Button
+                  size='sm'
+                  className='h-7 gap-1.5 text-[12px]'
+                  onClick={() => setPlayingAll(true)}
+                >
+                  <ListVideo className='h-3.5 w-3.5' /> Play all
+                </Button>
+              )}
             </div>
             <div className='overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'>
               {hits.map((hit, i) => (
@@ -250,6 +262,21 @@ export function ReplaySearchTab() {
               recordingId={watching.id}
               span={{ from: watching.first_ms - LEAD_MS }}
             />
+          )}
+        </SheetContent>
+      </Sheet>
+
+      <Sheet open={playingAll} onOpenChange={setPlayingAll}>
+        <SheetContent className='w-[85%] overflow-y-auto sm:max-w-[85%]'>
+          <SheetHeader>
+            <SheetTitle className='flex items-center gap-2 text-[15px]'>
+              <ListVideo className='h-4 w-4 text-nvr-cyan' />
+              {applied.collection}/{applied.item} across {hits.length} recording
+              {hits.length === 1 ? '' : 's'}
+            </SheetTitle>
+          </SheetHeader>
+          {playingAll && (
+            <PlayAll collection={applied.collection} item={applied.item} visits={hits} />
           )}
         </SheetContent>
       </Sheet>

@@ -20,6 +20,7 @@ import {
   type ReplayContext,
   railMarkers
 } from './logic'
+import { crossedEnd } from './play-all-logic'
 import { ReplaySidePanel } from './SidePanel'
 
 const SPEEDS = [1, 2, 4, 8]
@@ -56,9 +57,11 @@ export function ReplayPlayer({
   startAt?: number | null
   /**
    * Wall-clock window (epoch ms) — a replay search hit (#1374) opens where the
-   * record or field was touched. `from` wins over `startAt`.
+   * record or field was touched. `from` wins over `startAt`. With `to`,
+   * playback pauses the first time it crosses it and calls `onEnd` (also when
+   * the recording finishes first) — Play all (#1398) moves to the next segment.
    */
-  span?: { from: number } | null
+  span?: { from: number; to?: number; onEnd?: () => void } | null
   live?: boolean
   /** Frame height before the first snapshot scales it (a narrow panel wants less). */
   minHeight?: number
@@ -94,6 +97,8 @@ export function ReplayPlayer({
   spanRef.current = span
   /** Timestamp of the first event — offsets are measured from it. */
   const firstTsRef = useRef(0)
+  const spanDoneRef = useRef(false)
+  const prevTimeRef = useRef(0)
   const [following, setFollowing] = useState(!!live)
   // Replay context: route changes, the user's console lines and (#1357) the
   // page's requests ride the recording as rrweb custom events (type 5) —
@@ -137,6 +142,8 @@ export function ReplayPlayer({
     let raf = 0
     setRail(null)
     setCtx(NO_CONTEXT)
+    spanDoneRef.current = false
+    prevTimeRef.current = 0
 
     function rescale() {
       const rep = replayerRef.current
@@ -209,9 +216,17 @@ export function ReplayPlayer({
         replayer.on('resize', rescale)
         // Sheet slide-in animation settles ~300ms after mount — re-measure after
         for (const delay of [100, 400, 800]) setTimeout(rescale, delay)
+        // Play all (#1398): a segment ends once — after that the player is free.
+        const endSpan = () => {
+          const sp = spanRef.current
+          if (!sp?.onEnd || spanDoneRef.current) return
+          spanDoneRef.current = true
+          sp.onEnd()
+        }
         replayer.on('finish', () => {
           playingRef.current = false
           setPlaying(false)
+          endSpan()
         })
         setReady(true)
         if (following) {
@@ -237,9 +252,21 @@ export function ReplayPlayer({
         }
         const tick = () => {
           if (replayerRef.current && playingRef.current) {
-            setTime(
-              Math.min(replayerRef.current.getCurrentTime(), total || Number.MAX_SAFE_INTEGER)
-            )
+            const cur = replayerRef.current.getCurrentTime()
+            setTime(Math.min(cur, total || Number.MAX_SAFE_INTEGER))
+            const end = spanRef.current?.to
+            if (
+              end != null &&
+              !spanDoneRef.current &&
+              firstTsRef.current &&
+              crossedEnd(prevTimeRef.current, cur, end - firstTsRef.current)
+            ) {
+              replayerRef.current.pause()
+              playingRef.current = false
+              setPlaying(false)
+              endSpan()
+            }
+            prevTimeRef.current = cur
           }
           raf = requestAnimationFrame(tick)
         }
@@ -308,6 +335,7 @@ export function ReplayPlayer({
     const rep = replayerRef.current
     if (!rep) return
     setTime(ms)
+    prevTimeRef.current = ms // a seek is not playback crossing a segment end
     if (playing) rep.play(ms)
     else rep.pause(ms)
   }

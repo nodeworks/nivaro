@@ -269,6 +269,10 @@ function App() {
         'Index rows are deleted with their recording, by retention or by Delete.'
       ]
     },
+    {
+      type: 'p',
+      text: 'Following one record: search by collection and record id, then Play all. Every recording that opened the record plays as one timeline, oldest first, each cut to the time the person was on the record plus a minute either side. The strip above the player names the person and time of each part; under it, Record as they found it links to the revision in effect when they arrived, and Saved here to any revision saved during that part. When a part ends the next one starts, unless you turn that off; click a part in the strip to jump to it.'
+    },
     { type: 'h2', id: 'session-replay-inspector', text: 'Inspecting an element' },
     {
       type: 'p',
