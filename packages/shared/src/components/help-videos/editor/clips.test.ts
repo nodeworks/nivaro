@@ -106,6 +106,43 @@ describe('clipRangeForSelection', () => {
     expect(clipRangeForSelection(edits, null)).toBeNull()
     expect(clipRangeForSelection(edits, { lane: 'cuts', index: 9 })).toBeNull()
   })
+  it('counts held frames in a piece and in a timed item (#1537)', () => {
+    // A 3 s hold at 5 s of the first piece: edited 0–13 s, and everything
+    // after it in that piece sits 3 s later.
+    const held: VideoEdits = {
+      ...edits,
+      holds: [{ id: 'h1', at_ms: 5000, hold_ms: 3000 }],
+      annotations: [
+        { ...edits.annotations[0], id: 'a2', start_ms: 2000, end_ms: 8000 },
+        { ...edits.annotations[0], id: 'a3', start_ms: 6000, end_ms: 9000 }
+      ]
+    }
+    expect(clipRangeForSelection(held, { lane: 'cuts', index: 0 })).toEqual({
+      start_ms: 0,
+      end_ms: 13_000
+    })
+    expect(clipRangeForSelection(held, { lane: 'annotations', id: 'a2' })).toEqual({
+      start_ms: 2000,
+      end_ms: 11_000
+    })
+    expect(clipRangeForSelection(held, { lane: 'annotations', id: 'a3' })).toEqual({
+      start_ms: 9000,
+      end_ms: 12_000
+    })
+    expect(clipRangeForSelection(held, { lane: 'holds', id: 'h1' })).toEqual({
+      start_ms: 5000,
+      end_ms: 8000
+    })
+    expect(
+      clipRangeForSelection(held, {
+        lane: 'multi',
+        items: [
+          { lane: 'annotations', id: 'a2' },
+          { lane: 'holds', id: 'h1' }
+        ]
+      })
+    ).toEqual({ start_ms: 2000, end_ms: 11_000 })
+  })
   it('takes a chapter through the chapter lane', () => {
     expect(clipRangeForSelection(edits, { lane: 'chapters', id: 'c3' })).toEqual({
       start_ms: 11_000,

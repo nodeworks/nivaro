@@ -20,6 +20,7 @@ import {
   cardPhaseAt,
   editedDuration,
   editedToSource,
+  heldAtMoment,
   holdAtEdited,
   introMs,
   outroMs,
@@ -240,7 +241,10 @@ function PlayerInner({
     : edits
       ? hold
         ? (sourceToEdited(edits, hold.at_ms) ?? lead) + hold.elapsed
-        : (sourceToEdited(edits, srcMs) ?? lead)
+        : (sourceToEdited(edits, srcMs) ?? lead) +
+          // Just released from a hold: the clock is past it, not back at
+          // its start, until the picture moves on from the held moment.
+          (passedHold.current?.at_ms === Math.round(srcMs) ? heldAtMoment(edits, srcMs) : 0)
       : srcMs
   const editedMs =
     card && edits

@@ -147,6 +147,10 @@ export function HelpVideoSheet({
   )
   const [holder] = useState(() => (typeof document === 'undefined' ? null : makeHolder()))
   const [mini, dispatch] = useReducer(miniReducer, MINI_INITIAL)
+  const miniRef = useRef(mini)
+  miniRef.current = mini
+  const openRef = useRef(open)
+  openRef.current = open
   const pip = useRef<{ win: PipWindow; onHide: () => void; onResize: () => void } | null>(null)
   const [pipBody, setPipBody] = useState<HTMLElement | null>(null)
   useEffect(() => {
@@ -199,6 +203,12 @@ export function HelpVideoSheet({
         const api = (window as unknown as { documentPictureInPicture: DocPip })
           .documentPictureInPicture
         const win = await api.requestWindow({ width: MINI_PANEL.width, height: MINI_PANEL.height })
+        // The sheet closed (or moved on) while the browser asked permission:
+        // nothing to show in the new window, so it goes away again.
+        if (!openRef.current || miniRef.current.place !== 'sheet') {
+          win.close()
+          return
+        }
         preparePipDocument(win, document)
         // The window was closed from the OS side: the sheet comes back at
         // the same moment (the stage is rescued before the document goes).

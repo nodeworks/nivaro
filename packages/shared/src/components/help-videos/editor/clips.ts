@@ -1,4 +1,4 @@
-import { editedDuration, itemsOf, sourceToEdited } from '../edits'
+import { editedDuration, holdsIn, itemsOf, pieceEditedMs, sourceToEdited } from '../edits'
 import { CLIP_LIMITS, type ClipDto, type VideoEdits } from '../types'
 import { type SelectedItem, type Selection, selectedItems } from './selection'
 
@@ -48,10 +48,8 @@ export function clipRangeForSelection(edits: VideoEdits, selection: Selection): 
     if (!s) return null
     const start = sourceToEdited(edits, s.start_ms)
     if (start === null) return null
-    return clampClipRange(
-      { start_ms: start, end_ms: start + (s.end_ms - s.start_ms) / s.speed },
-      total
-    )
+    // The piece at its speed, with its held frames (#1537).
+    return clampClipRange({ start_ms: start, end_ms: start + pieceEditedMs(edits, s) }, total)
   }
   // Several items (#1543): from the first one's start to the last one's end.
   const ranges = selectedItems(selection)
@@ -103,7 +101,12 @@ function lastKept(e: VideoEdits, a: number, b: number): number | null {
     // The end of a piece is not inside it (sourceToEdited would say "cut"):
     // measure from the piece's start, at its speed.
     const from = sourceToEdited(e, s.start_ms)
-    return from === null ? null : Math.round(from + (end - s.start_ms) / s.speed)
+    if (from === null) return null
+    // Frames held before the end sit inside the span too (#1537).
+    const held = holdsIn(e, s)
+      .filter((h) => h.at_ms < end)
+      .reduce((t, h) => t + h.hold_ms, 0)
+    return Math.round(from + (end - s.start_ms) / s.speed + held)
   }
   return null
 }

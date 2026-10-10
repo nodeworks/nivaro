@@ -17,7 +17,7 @@ import {
   isMaskedTarget,
   isTypingTarget
 } from './activity'
-import type { RecordedMark } from './script'
+import { isNextStepKey, type RecordedMark } from './script'
 
 export const WARN_MS = 25 * 60_000
 /** From here the bar counts down the time that is left. */
@@ -163,6 +163,9 @@ export function useScreenCapture(events: {
     const at = Math.round(Math.max(0, performance.now() - s.startedAt - s.pausedTotal))
     if (e.type === 'keydown') {
       const k = e as KeyboardEvent
+      // The teleprompter's Next key (#1491) marks a step: it is neither
+      // typing nor a shortcut viewers should see.
+      if (isNextStepKey(k)) return
       s.activity.key(at, isTypingTarget(k.target))
       const keys = isMaskedTarget(k.target) ? null : shortcutFromKey(k)
       if (keys && s.shortcuts.length < POINTER_LIMITS.shortcuts)

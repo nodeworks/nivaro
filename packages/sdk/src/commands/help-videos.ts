@@ -334,6 +334,9 @@ export function finalizeHelpVideoUpload(
     /** Script mode: the steps (≤ 60 of ≤ 200 chars) and `[{ t_ms, step }]` marks. */
     script?: string[] | null
     marks?: Array<{ t_ms: number; step: number }> | null
+    /** The pointer path and shortcuts of a tab recording (#1517):
+     *  `{ samples: [{ t_ms, x, y }], shortcuts: [{ t_ms, keys }] }`. */
+    pointer?: unknown
   }
 ): Command<{ data: HelpVideoFinalizedUpload }> {
   return cmd('POST', `/help-videos/uploads/${id}/finalize`, undefined, meta ?? {})

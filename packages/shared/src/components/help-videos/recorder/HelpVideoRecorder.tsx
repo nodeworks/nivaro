@@ -484,7 +484,7 @@ export function HelpVideoRecorder({
         if (m.type === 'status') {
           const { token: _t, type: _k, ...status } = m
           setRemote((cur) => (cur ? { ...cur, status } : cur))
-        } else if (m.type === 'done') finish(m.videoId)
+        } else if (m.type === 'done' && typeof m.videoId === 'string') finish(m.videoId)
         else if (m.type === 'closed')
           backToSetup('The recording window was closed before a recording was saved.')
       }
