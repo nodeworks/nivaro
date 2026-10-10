@@ -1,7 +1,9 @@
-import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, Package, Sparkles } from 'lucide-react'
-import { useSearchParams } from 'react-router'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { CheckCircle2, Package, PlayCircle, Sparkles } from 'lucide-react'
+import { useState } from 'react'
+import { Link, useSearchParams } from 'react-router'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn, formatDate } from '@/lib/utils'
 
 /**
@@ -25,6 +27,170 @@ interface Release {
   date: string
   count: number
   sections: Array<{ label: string; entries: Entry[] }>
+}
+
+interface ReleaseVideo {
+  version: string
+  video: {
+    id: string
+    title: string
+    duration_ms: number | null
+    start_ms: number
+    path: string
+    poster_url: string | null
+  }
+}
+
+function clock(ms: number | null | undefined): string | null {
+  if (ms == null || !Number.isFinite(ms)) return null
+  const total = Math.max(0, Math.round(ms / 1000))
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+}
+
+/** The release's video card, and for administrators the control to attach one. */
+function ReleaseVideoRow({
+  version,
+  video,
+  isAdmin
+}: {
+  version: string
+  video: ReleaseVideo['video'] | undefined
+  isAdmin: boolean
+}) {
+  const qc = useQueryClient()
+  const [editing, setEditing] = useState(false)
+  const [videoId, setVideoId] = useState(video?.id ?? '')
+  const [at, setAt] = useState(video ? String(Math.floor(video.start_ms / 1000) || '') : '')
+  const { data: videos = [] } = useQuery({
+    queryKey: ['help-videos', 'published-pick'],
+    enabled: isAdmin && editing,
+    queryFn: () =>
+      api
+        .get<{ data: Array<{ id: string; title: string; duration_ms: number | null }> }>(
+          '/help-videos',
+          { params: { status: 'published', page: 1 } }
+        )
+        .then((r) => r.data.data ?? [])
+  })
+  const refresh = () => qc.invalidateQueries({ queryKey: ['help-videos', 'releases'] })
+  const save = useMutation({
+    mutationFn: () =>
+      videoId
+        ? api.put(`/help-videos/releases/${encodeURIComponent(version)}`, {
+            video_id: videoId,
+            t_ms: Number(at) > 0 ? Math.round(Number(at) * 1000) : null
+          })
+        : api.delete(`/help-videos/releases/${encodeURIComponent(version)}`),
+    onSuccess: () => {
+      setEditing(false)
+      void refresh()
+    }
+  })
+  return (
+    <div className='border-b border-slate-100 px-4 py-2.5' data-changelog-video={version}>
+      {video && !editing && (
+        <Link
+          to={video.path}
+          className='flex max-w-[460px] items-stretch gap-3 overflow-hidden rounded-lg border border-slate-200 bg-white text-left hover:bg-slate-50'
+          aria-label={`Watch: ${video.title}`}
+          data-changelog-video-card={video.id}
+        >
+          <span className='relative block w-[132px] shrink-0 bg-slate-100'>
+            {video.poster_url && (
+              <img src={video.poster_url} alt='' className='h-full w-full object-cover' />
+            )}
+            <span className='absolute inset-0 grid place-content-center'>
+              <PlayCircle className='h-7 w-7 text-white drop-shadow' aria-hidden />
+            </span>
+          </span>
+          <span className='flex min-w-0 flex-1 flex-col justify-center py-1.5 pr-3'>
+            <span className='truncate text-[12.5px] font-medium text-slate-800'>{video.title}</span>
+            <span className='text-[11px] text-slate-500'>
+              {[
+                'Video',
+                clock(video.duration_ms),
+                video.start_ms > 0 ? `starts at ${clock(video.start_ms)}` : null
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+            </span>
+          </span>
+        </Link>
+      )}
+      {isAdmin && !editing && (
+        <button
+          type='button'
+          onClick={() => setEditing(true)}
+          className='mt-1.5 text-[11.5px] text-slate-500 underline decoration-dotted underline-offset-2 hover:text-slate-700'
+          data-changelog-video-edit={version}
+        >
+          {video ? 'Change the video' : 'Attach a video'}
+        </button>
+      )}
+      {isAdmin && editing && (
+        <div className='flex flex-wrap items-center gap-2 text-[12px]'>
+          <select
+            value={videoId}
+            onChange={(e) => setVideoId(e.target.value)}
+            className='h-7 max-w-[320px] rounded-md border border-slate-200 bg-white px-1.5 text-[12px]'
+            aria-label={`Video for ${version}`}
+            data-changelog-video-pick={version}
+          >
+            <option value=''>No video</option>
+            {(
+              [
+                ...(video && !videos.some((v) => v.id === video.id)
+                  ? [{ id: video.id, title: video.title, duration_ms: video.duration_ms }]
+                  : []),
+                ...videos
+              ] as Array<{ id: string; title: string; duration_ms: number | null }>
+            ).map((v) => (
+              <option key={v.id} value={v.id}>
+                {v.title || 'Untitled video'}
+                {v.duration_ms != null ? ` (${clock(v.duration_ms)})` : ''}
+              </option>
+            ))}
+          </select>
+          {videoId && (
+            <label className='flex items-center gap-1 text-slate-500'>
+              Start at
+              <input
+                type='number'
+                min={0}
+                value={at}
+                onChange={(e) => setAt(e.target.value)}
+                className='h-7 w-16 rounded-md border border-slate-200 bg-white px-1.5'
+                aria-label='Start at (seconds)'
+              />
+              s
+            </label>
+          )}
+          <button
+            type='button'
+            onClick={() => save.mutate()}
+            disabled={save.isPending}
+            className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-medium text-white disabled:opacity-50'
+            data-changelog-video-save={version}
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
+          </button>
+          <button
+            type='button'
+            onClick={() => setEditing(false)}
+            className='h-7 rounded-md border border-slate-200 px-2.5 text-[12px]'
+          >
+            Cancel
+          </button>
+          {save.isError && (
+            <span role='alert' className='text-rose-700'>
+              {(save.error as { response?: { data?: { error?: string } } })?.response?.data
+                ?.error ?? 'It could not be saved.'}
+            </span>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 const SECTION_TONE: Record<string, string> = {
@@ -73,6 +239,20 @@ export default function Changelog() {
 
   const releases = data?.releases ?? []
   const running = data?.running
+  // A video per release (#1528b): everyone sees the ones they may watch;
+  // administrators attach or clear them here.
+  const { user } = useAuth()
+  const isAdmin = !!user?.is_admin
+  const { data: releaseVideos = [] } = useQuery({
+    queryKey: ['help-videos', 'releases'],
+    queryFn: () =>
+      api
+        .get<{ data: ReleaseVideo[] }>('/help-videos/releases')
+        .then((r) => r.data.data ?? [])
+        .catch(() => [] as ReleaseVideo[]),
+    staleTime: 60_000
+  })
+  const videoByVersion = new Map(releaseVideos.map((r) => [r.version, r.video]))
   const inWindow = (v: string) =>
     !!since && cmpVersion(v, since) > 0 && (!to || cmpVersion(v, to) <= 0)
   const fresh = since ? releases.filter((r) => inWindow(r.version)) : []
@@ -152,6 +332,13 @@ export default function Changelog() {
                     {r.count === 1 ? '' : 's'}
                   </span>
                 </div>
+                {(videoByVersion.has(r.version) || isAdmin) && (
+                  <ReleaseVideoRow
+                    version={r.version}
+                    video={videoByVersion.get(r.version)}
+                    isAdmin={isAdmin}
+                  />
+                )}
 
                 <div className='space-y-3 px-4 py-3'>
                   {r.sections.length === 0 && (

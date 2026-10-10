@@ -344,6 +344,71 @@ export interface CaptionStyle {
   position: 'bottom' | 'top'
 }
 
+// ── Learning paths (#1508) — mirror of api/src/services/help-video-paths.ts ──
+
+export interface HelpVideoPathItem {
+  video_id: string
+  position: number
+  title: string
+  status: string
+  duration_ms: number | null
+}
+export interface HelpVideoPathRole {
+  role_id: string
+  required: boolean
+}
+/** A path as authors see it (GET /help-videos/paths). */
+export interface HelpVideoPathDto {
+  id: string
+  title: string
+  description: string | null
+  status: 'draft' | 'published'
+  /** Shown to accounts that are new to the instance (their first week, or
+   *  the provisional new-user role), whatever their role. */
+  new_user: boolean
+  /** In order. */
+  items: HelpVideoPathItem[]
+  roles: HelpVideoPathRole[]
+  created_at: string
+  updated_at: string
+}
+export interface HelpVideoPathProgress {
+  total: number
+  completed: number
+  percent: number
+  finished: boolean
+}
+/** A path as the person it is for sees it (GET /help-videos/paths/mine). */
+export interface MyLearningPathDto {
+  id: string
+  title: string
+  description: string | null
+  /** Required for THIS person's role. */
+  required: boolean
+  /** Shown because the person is new, not because of their role. */
+  new_user: boolean
+  /** In order; only the published videos this person may watch. */
+  videos: HelpVideoDto[]
+  progress: HelpVideoPathProgress
+  /** The first unfinished video, or null once the path is finished. */
+  next_video_id: string | null
+}
+
+/** A moment in a video carried by a broadcast or a release (#1528). */
+export interface HelpVideoMomentCard {
+  id: string
+  title: string
+  duration_ms: number | null
+  start_ms: number
+  /** In-app path: `/help-videos?watch=<id>&t=<seconds>`. */
+  path: string
+}
+/** GET /help-videos/releases: one video per changelog release this reader may watch. */
+export interface ReleaseVideoDto {
+  version: string
+  video: HelpVideoMomentCard & { poster_url: string | null }
+}
+
 /** Error codes the help-video routes answer with (`{ error, code }`). */
 export type HelpVideoErrorCode =
   | 'HELP_VIDEO_PROCESSING'
@@ -352,3 +417,6 @@ export type HelpVideoErrorCode =
   | 'HELP_VIDEO_NOT_FOUND'
   | 'HELP_VIDEO_AUTHOR_ONLY'
   | 'HELP_VIDEO_DOWNLOAD_OFF'
+  | 'HELP_VIDEO_PATH_NOT_FOUND'
+  | 'HELP_VIDEO_PATH_INVALID'
+  | 'HELP_VIDEO_RELEASE_INVALID'

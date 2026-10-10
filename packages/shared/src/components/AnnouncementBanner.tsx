@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useOptionalNivaroClient } from './../context'
+import { useNavigation, useOptionalNivaroClient } from './../context'
 import { get, post } from '../lib/commands'
 
 /**
@@ -8,9 +8,17 @@ import { get, post } from '../lib/commands'
  * (stays gone for that user, admins see ack counts). Mount once per app
  * shell; renders nothing when there is nothing to say.
  */
+/** The banner's video card, when the server attached one for this viewer. */
+function videoOf(a: unknown): { path: string; title: string } | null {
+  const v = (a as { help_video?: { path?: unknown; title?: unknown } }).help_video
+  return v && typeof v.path === 'string' ? { path: v.path, title: String(v.title ?? '') } : null
+}
+
 export function AnnouncementBanner() {
   const client = useOptionalNivaroClient()
   const qc = useQueryClient()
+  // The host's videos page, for a banner's "Watch the video" link.
+  const helpVideosPath = useNavigation().helpVideosPath ?? '/help-videos'
   const { data: items = [] } = useQuery<Array<{ id: number; message: string; severity: string }>>({
     queryKey: ['announcements-active'],
     queryFn: () =>
@@ -80,6 +88,16 @@ export function AnnouncementBanner() {
           >
             {a.message}
           </span>
+          {/* A video moment (#1528a), present only when this viewer may watch it. */}
+          {videoOf(a) && (
+            <a
+              href={`${helpVideosPath}${videoOf(a)!.path.replace(/^\/help-videos/, '')}`}
+              className='shrink-0 text-[11.5px] font-medium text-slate-700 underline decoration-dotted underline-offset-2 hover:text-slate-900 dark:text-foreground'
+              data-announcement-video={videoOf(a)!.path}
+            >
+              Watch the video
+            </a>
+          )}
           {(a as { dismissable?: boolean }).dismissable !== false && (
             <button
               type='button'

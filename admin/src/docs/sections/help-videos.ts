@@ -9,6 +9,14 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Short screen recordings that show people how a screen works. Authors record in the browser, cut and annotate in a visual editor, and publish; everyone else watches them in the Videos library, from the Videos button on the screen a video explains, and — when a video is required for their role — from My Work until they have watched it.'
     },
+    // The video tagged to the Videos page itself (Details → Where it shows →
+    // page "help-videos"); nothing shows until an author tags one.
+    {
+      type: 'video',
+      key: 'help-videos',
+      label: 'Docs: Help Videos',
+      caption: 'A tour of the Videos library, when an author has tagged one to it.'
+    },
     { type: 'h3', text: 'Who can record' },
     {
       type: 'p',
@@ -75,6 +83,15 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Required for: people in those roles get an in-app notification and, if their browser is subscribed, a browser push, and see the video in My Work until they have watched most of it (18 of its 20 five-percent sections). "Ask everyone to watch again" on a later publish resets that; when nothing else changed, Publish offers only that and the video itself is not published again. Marking a video required tells real people at once, so test it with a throwaway role.'
     },
+    { type: 'h3', text: 'Learning paths' },
+    {
+      type: 'p',
+      text: 'Videos → Paths (authors). A learning path is an ordered list of published videos for a role — "Getting started as a Workflow Creator" — with a title, a description, the videos in the order to watch them (drag, or the up/down arrows), the roles it is for, and a Published switch. Each role can be marked required: the path then joins those people\'s required list like a single required video (one entry per path, opening at the next video to watch; a video inside such a path is not listed on its own as well), and they are told when the path is published or when their role is added to a published path. The New User switch shows the path to every account that is new to the instance — created in the last seven days, or still in the provisional new-user role (Settings → new user role) — whatever its role.'
+    },
+    {
+      type: 'p',
+      text: 'People see their paths in a "Your learning path" card on My Work beside Required videos, with how many videos are watched, the next one, and Continue, which opens the player with the rest of the path as Up next. Progress is each video\'s own watched state (the same 18 of 20 sections rule), so nothing is tracked twice; a path is finished when every published video in it that the person may see is watched, and a video limited to roles that the person is not in simply does not count for them. Draft and archived videos stay listed for authors but do not count for anyone.'
+    },
     { type: 'h3', text: 'Telling viewers what changed' },
     {
       type: 'p',
@@ -88,6 +105,11 @@ export const helpVideosGuide: DocSection = {
     {
       type: 'p',
       text: 'Copy link under the player copies a link to the video at the current time, at the chapter playing now, or from the start. A link is the videos page with ?watch=<video id>&t=<whole seconds>, and a chapter link adds &c=<chapter id>; when both are present the chapter wins if it still exists, otherwise the time is used. Paste one into chat and it shows a card with the poster, title, length and where it starts — but only for people who can watch that video (the card is built for each reader with the same check as the library); everyone else sees the plain link. A card opens the video in the reader’s own app, whichever app the link was copied from.'
+    },
+    { type: 'h3', text: 'Videos in broadcasts, release notes and these docs' },
+    {
+      type: 'p',
+      text: 'A broadcast (Announcements) can carry a video and a start time: pick one under the message. The in-app message and the email get a card — title, length, where it starts and a link to that moment (the same ?watch=&t= link as Copy link) — and a banner gets a "Watch the video" link. The card is built per recipient with the same visibility check as the library: someone who may not watch the video gets the message without it. Only published videos can be attached. On the Changelog, an administrator can attach a video to a release (Attach a video under the version); everyone who may watch it sees a poster card linking to the moment. In these docs, a section can embed a video by id or by the page key it is tagged to — the card opens the player here, and shows nothing to a reader who cannot watch it.'
     },
     { type: 'h3', text: 'Captions and transcripts' },
     {
@@ -491,7 +513,14 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
           'POST /help-videos/packages/imports/:id/apply',
           'Admin'
         ],
-        ['discardHelpVideoPackageImport(id)', 'DELETE /help-videos/packages/imports/:id', 'Admin']
+        ['discardHelpVideoPackageImport(id)', 'DELETE /help-videos/packages/imports/:id', 'Admin'],
+        ['— (REST)', 'POST / GET /help-videos/paths', 'Author'],
+        ['— (REST)', 'GET /help-videos/paths/mine', 'Authenticated'],
+        ['— (REST)', 'GET / PATCH / DELETE /help-videos/paths/:pid', 'Author'],
+        ['— (REST)', 'PUT /help-videos/paths/:pid/items · /roles', 'Author'],
+        ['— (REST)', 'GET /help-videos/required/mine → { data, paths }', 'Authenticated'],
+        ['— (REST)', 'GET /help-videos/releases', 'Authenticated'],
+        ['— (REST)', 'PUT / DELETE /help-videos/releases/:version', 'Admin']
       ]
     }
   ]

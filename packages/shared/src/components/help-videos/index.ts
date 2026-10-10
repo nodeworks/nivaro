@@ -1,9 +1,16 @@
 export {
   helpVideoApi,
   helpVideoKeys,
+  learningPathApi,
+  type RequiredList,
+  releaseVideoApi,
   useHelpVideo,
   useHelpVideosFor,
   useHelpVideoWalk,
+  useLearningPaths,
+  useMyLearningPaths,
+  useReleaseVideos,
+  useRequiredList,
   useRequiredVideos
 } from './api'
 export { HelpVideoEditor } from './editor/HelpVideoEditor'
@@ -45,12 +52,17 @@ export { RenderSettingsButton } from './settings/RenderSettingsButton'
 export type {
   HelpVideoContext,
   HelpVideoDto,
+  HelpVideoMomentCard,
+  HelpVideoPathDto,
+  MyLearningPathDto,
   RecordedClick,
+  ReleaseVideoDto,
   VideoEdits,
   WalkStep
 } from './types'
 export { HelpVideoButton } from './viewer/HelpVideoButton'
 export { HelpVideoSheet } from './viewer/HelpVideoSheet'
+export { LearningPathCard } from './viewer/LearningPathCard'
 export { RequiredVideosCard } from './viewer/RequiredVideosCard'
 export { HelpVideoWalkHost } from './walk/HelpVideoWalk'
 export {

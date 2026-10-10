@@ -1,7 +1,16 @@
 import type { FastifyInstance } from 'fastify'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import {
+  type MomentCard,
+  momentCard,
+  momentEmailHtml,
+  momentLine,
+  parseMomentMs
+} from '../services/help-video-moments.js'
+import { isUuid, type VideoRow, viewerMaySee } from '../services/help-videos.js'
 import { sendRawMail } from '../services/mail.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { sendSms } from '../services/sms.js'
@@ -61,6 +70,73 @@ function parseJsonSafe<T>(raw: unknown): T | null {
 
 /** Resolve the concrete users an audience means, for send-time channels.
  *  Empty audience = every active user. */
+// ── A video moment in a broadcast (#1528a) ───────────────────────────────────
+// The composer picks a published video and a start time; every surface shows
+// the card only to people who may watch that video (the same check as the
+// library), and omits it for the rest — the message itself still arrives.
+
+const publicOrigin = () => (process.env.PUBLIC_URL || config.PUBLIC_URL || '').replace(/\/$/, '')
+
+/** The video fields of a compose body: a published video (any visibility —
+ *  the administrator may see every video) and a moment. Null when none; a
+ *  string when the id is not a published video. */
+async function parseBroadcastVideo(b: {
+  help_video_id?: unknown
+  help_video_t_ms?: unknown
+}): Promise<{ help_video_id: string | null; help_video_t_ms: number | null } | string> {
+  if (b.help_video_id == null || b.help_video_id === '') {
+    return { help_video_id: null, help_video_t_ms: null }
+  }
+  if (!isUuid(b.help_video_id)) return 'That video does not exist'
+  const video = (await db('nivaro_help_videos')
+    .where({ id: b.help_video_id })
+    .first('id', 'status')
+    .catch(() => undefined)) as { id: string; status: string } | undefined
+  if (video?.status !== 'published') return 'Only a published video can be attached'
+  return {
+    help_video_id: String(video.id).toLowerCase(),
+    help_video_t_ms: parseMomentMs(b.help_video_t_ms)
+  }
+}
+
+/** The broadcast's video row when it is still published, else null. */
+async function broadcastVideo(row: Record<string, unknown>): Promise<VideoRow | null> {
+  if (!isUuid(row.help_video_id)) return null
+  const video = (await db('nivaro_help_videos')
+    .where({ id: row.help_video_id })
+    .first()
+    .catch(() => undefined)) as VideoRow | undefined
+  return video && video.status === 'published' ? video : null
+}
+
+/** The in-app message (500 characters at most) with the video line under it. */
+export function withMomentLine(message: string, card: MomentCard, origin: string): string {
+  const line = momentLine(card, origin)
+  const room = Math.max(0, 500 - line.length - 2)
+  const head = message.slice(0, room).trimEnd()
+  return `${head}${head ? '\n\n' : ''}${line}`.slice(0, 500)
+}
+
+/** Whether the broadcast columns of migration 416 exist (an older database
+ *  still sends broadcasts, just without a video). */
+async function canCarryVideo(): Promise<boolean> {
+  try {
+    return await db.schema.hasColumn('nivaro_announcements', 'help_video_id')
+  } catch {
+    return false
+  }
+}
+
+/** The card for one reader, or null when they may not watch the video. */
+function broadcastCardFor(
+  video: VideoRow | null,
+  tMs: unknown,
+  role: string | null | undefined
+): MomentCard | null {
+  if (!video || !viewerMaySee(video, role ?? null, false)) return null
+  return momentCard(video, parseMomentMs(tMs))
+}
+
 async function resolveAudienceUsers(aud: Audience): Promise<
   Array<{
     id: string
@@ -68,6 +144,7 @@ async function resolveAudienceUsers(aud: Audience): Promise<
     phone: string | null
     first_name: string | null
     last_name: string | null
+    role: string | null
   }>
 > {
   const explicit = new Set<string>((aud.user_ids ?? []).map(String))
@@ -119,12 +196,13 @@ async function resolveAudienceUsers(aud: Audience): Promise<
 
   const all = (await db('nivaro_users')
     .where({ status: 'active', is_redacted: false })
-    .select('id', 'email', 'phone', 'first_name', 'last_name')) as Array<{
+    .select('id', 'email', 'phone', 'first_name', 'last_name', 'role')) as Array<{
     id: string
     email: string | null
     phone: string | null
     first_name: string | null
     last_name: string | null
+    role: string | null
   }>
   // One pass over the unique user list: a user matching several groups still
   // appears exactly once, so multi-group audiences never double-send.
@@ -277,6 +355,9 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
   const subject = String(row.subject ?? '').slice(0, 500) || String(row.message ?? '').slice(0, 120)
   const message = String(row.message ?? '')
   const senderId = (row.created_by as string | null) ?? null
+  // The attached video moment (#1528a), resolved per recipient below.
+  const video = await broadcastVideo(row)
+  const origin = publicOrigin()
 
   let delivered = 0
   const needsSend = channels.some((c) => c !== 'banner')
@@ -327,16 +408,21 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
       let reached = false
       const pSubject = personalize(subject, u)
       const pMessage = personalize(message, u)
+      // The video card only for people who may watch it; the message is the
+      // same for everyone else.
+      const card = broadcastCardFor(video, row.help_video_t_ms, u.role)
       const pHtml = `<p style="margin:0 0 12px;white-space:pre-wrap;">${wrapLinks(
         pMessage.replace(/&/g, '&amp;').replace(/</g, '&lt;')
-      )}</p>`
+      )}</p>${card ? momentEmailHtml(card, origin) : ''}`
+      const inApp = card ? withMomentLine(pMessage, card, origin) : pMessage.slice(0, 500)
       if (channels.includes('message')) {
         await notifyUser(app, u.id, {
           subject: pSubject,
-          message: pMessage.slice(0, 500),
+          message: inApp.slice(0, 500),
           sender: senderId,
           category: 'system',
-          always_inbox: true
+          always_inbox: true,
+          ...(card ? { target: { kind: 'external', url: `${origin}${card.path}` } } : {})
         })
           .then((r) => {
             reached = true
@@ -552,15 +638,35 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       }
       return true
     })
-    const data = visible.map((r) => ({
-      id: r.id as number,
-      message: r.message,
-      subject: r.subject,
-      severity: r.severity,
-      ends_at: r.ends_at,
-      dismissable: true,
-      require_ack: !!r.require_ack
-    }))
+    // A banner's video card (#1528a), for the viewers who may watch it.
+    const videoRows = visible.filter((r) => isUuid(r.help_video_id))
+    const videoById = new Map<string, VideoRow>()
+    if (videoRows.length) {
+      const vids = (await db('nivaro_help_videos')
+        .whereIn('id', [...new Set(videoRows.map((r) => String(r.help_video_id).toUpperCase()))])
+        .catch(() => [])) as VideoRow[]
+      for (const v of vids)
+        if (v.status === 'published') videoById.set(String(v.id).toUpperCase(), v)
+    }
+    const data = visible.map((r) => {
+      const card = isUuid(r.help_video_id)
+        ? broadcastCardFor(
+            videoById.get(String(r.help_video_id).toUpperCase()) ?? null,
+            r.help_video_t_ms,
+            req.user?.role
+          )
+        : null
+      return {
+        id: r.id as number,
+        message: r.message,
+        subject: r.subject,
+        severity: r.severity,
+        ends_at: r.ends_at,
+        dismissable: true,
+        require_ack: !!r.require_ack,
+        ...(card ? { help_video: card } : {})
+      }
+    })
     // Maintenance mode rides the same banner surface — synthetic row, not
     // dismissable (acking it would make the freeze invisible while it holds).
     const {
@@ -689,9 +795,20 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       ends_at?: string
       require_ack?: boolean
       scheduled_send_at?: string
+      help_video_id?: string | null
+      help_video_t_ms?: number | null
     }
     const message = String(b.message ?? '').trim()
     if (!message) return reply.code(400).send({ error: 'message is required' })
+    // A video moment (#1528a): checked now, shown per reader at delivery.
+    const videoRef = await parseBroadcastVideo(b)
+    if (typeof videoRef === 'string') return reply.code(400).send({ error: videoRef })
+    if (videoRef.help_video_id && !(await canCarryVideo())) {
+      return reply.code(409).send({
+        error: 'Attaching a video needs the latest database migration (416).',
+        code: 'HELP_VIDEO_SETTINGS_MIGRATION_PENDING'
+      })
+    }
     const channels = (Array.isArray(b.channels) ? b.channels : ['banner']).filter(
       (c): c is Channel => (CHANNELS as readonly string[]).includes(String(c))
     )
@@ -741,7 +858,10 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         sent_at: null,
         created_by: req.user?.id ?? null,
         created_at: new Date(),
-        updated_at: new Date()
+        updated_at: new Date(),
+        // Only written when a video was picked, so an older database (no
+        // migration 416) keeps taking plain broadcasts.
+        ...(videoRef.help_video_id ? videoRef : {})
       })
       .returning('id')
     const id = typeof inserted === 'object' ? (inserted as { id: number }).id : inserted
@@ -798,7 +918,13 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
   // Test-send (#429): the compose payload delivered to the CALLER only, over
   // the chosen channels — nothing persisted, no announcement row.
   app.post('/test-send', { preHandler: requireAdmin }, async (req, reply) => {
-    const b = req.body as { subject?: string; message?: string; channels?: Channel[] }
+    const b = req.body as {
+      subject?: string
+      message?: string
+      channels?: Channel[]
+      help_video_id?: string | null
+      help_video_t_ms?: number | null
+    }
     const subject = String(b?.subject ?? '').slice(0, 500)
     const message = String(b?.message ?? '')
     if (!subject && !message) return reply.code(400).send({ error: 'subject or message required' })
@@ -807,12 +933,13 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     )
     const me = (await db('nivaro_users')
       .where({ id: req.user!.id })
-      .first('id', 'email', 'phone', 'first_name', 'last_name')) as {
+      .first('id', 'email', 'phone', 'first_name', 'last_name', 'role')) as {
       id: string
       email: string | null
       phone: string | null
       first_name: string | null
       last_name: string | null
+      role: string | null
     }
     const personalize = (text: string) =>
       text
@@ -821,8 +948,23 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     const results: Record<string, string> = {}
     const ps = personalize(subject || message.slice(0, 120))
     const pm = personalize(message)
+    // The video card as the administrator themselves would get it (#1528a).
+    const videoRef = await parseBroadcastVideo(b ?? {})
+    const origin = publicOrigin()
+    const card =
+      typeof videoRef !== 'string' && videoRef.help_video_id
+        ? broadcastCardFor(
+            await broadcastVideo({ help_video_id: videoRef.help_video_id }),
+            videoRef.help_video_t_ms,
+            me.role
+          )
+        : null
     if (channels.includes('message')) {
-      await notifyUser(app, me.id, { subject: `[TEST] ${ps}`, message: pm.slice(0, 500) })
+      await notifyUser(app, me.id, {
+        subject: `[TEST] ${ps}`,
+        message: card ? withMomentLine(pm, card, origin) : pm.slice(0, 500),
+        ...(card ? { target: { kind: 'external', url: `${origin}${card.path}` } } : {})
+      })
         .then(() => {
           results.message = 'sent'
         })
@@ -836,7 +978,9 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         await sendRawMail({
           to: me.email,
           subject: `[TEST] ${ps}`,
-          html: `<p style="margin:0 0 12px;white-space:pre-wrap;">${pm.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>`
+          html:
+            `<p style="margin:0 0 12px;white-space:pre-wrap;">${pm.replace(/&/g, '&amp;').replace(/</g, '&lt;')}</p>` +
+            (card ? momentEmailHtml(card, origin) : '')
         })
           .then(() => {
             results.email = 'sent'
@@ -1189,6 +1333,21 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       }
       if (b.ends_at !== undefined) patch.ends_at = b.ends_at ? new Date(String(b.ends_at)) : null
       if (b.is_active !== undefined) patch.is_active = !!b.is_active
+      // The attached video (#1528a): null clears it; a new id is checked.
+      if (b.help_video_id !== undefined || b.help_video_t_ms !== undefined) {
+        const videoRef = await parseBroadcastVideo({
+          help_video_id: b.help_video_id === undefined ? row.help_video_id : b.help_video_id,
+          help_video_t_ms: b.help_video_t_ms === undefined ? row.help_video_t_ms : b.help_video_t_ms
+        })
+        if (typeof videoRef === 'string') return reply.code(400).send({ error: videoRef })
+        if (!(await canCarryVideo())) {
+          return reply.code(409).send({
+            error: 'Attaching a video needs the latest database migration (416).',
+            code: 'HELP_VIDEO_SETTINGS_MIGRATION_PENDING'
+          })
+        }
+        Object.assign(patch, videoRef)
+      }
       await db('nivaro_announcements').where('id', row.id).update(patch)
       await logActivity({
         action: 'announcement-update',

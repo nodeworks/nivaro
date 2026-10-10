@@ -10,6 +10,7 @@ import { useOptionalRealtime } from '../lib/realtime'
 import { slaChip, withinDay } from '../lib/sla-chip'
 import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
 import { useMyRecordRooms } from './chat/chat-hooks'
+import { LearningPathCard } from './help-videos/viewer/LearningPathCard'
 import { RequiredVideosCard } from './help-videos/viewer/RequiredVideosCard'
 import { TickerNumber } from './TickerNumber'
 import { UserAvatar } from './UserAvatar'
@@ -445,6 +446,8 @@ export function MyWorkView({
       )}
 
       <RequiredVideosCard className='mb-4' />
+      {/* Learning paths (#1508) sit beside the required list; empty = nothing shown. */}
+      <LearningPathCard className='mb-4' />
 
       {/* My Work customization (#368): the three sections render in the
           user's saved order; hidden ones are skipped; consecutive card
