@@ -318,6 +318,39 @@ function App() {
     {
       type: 'p',
       text: 'Pause a replay and click anything in it: the inspector outlines the element and shows its selector (with a Copy button), its data-* attributes, and the nearest data-field and data-cbv-* hooks on it or above it. Find in other recordings lists the other recordings in which someone clicked or typed into the same element, from the replay index; Open in Search shows them all with a Watch button that opens each one at that moment. An element with no stable hook on it or above it gets a plain selector such as button, which cannot be searched for. The inspector reads attributes only, never text or what was typed.'
+    },
+    { type: 'h2', id: 'session-replay-heat', text: 'Heatmaps' },
+    {
+      type: 'p',
+      text: 'The Heat tab shows where people click on a route and how far down they scroll, summed over every recording of that route in a date range. Pick a route on the left; the route is drawn as it was last recorded, with the clicks over it, the most-clicked elements and the share of visits that reached each screen beside it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Heat is aggregate-only. A nightly job (session-replay-heat, 02:05 UTC) folds finished recordings into counts per app, route pattern, day and screen size: click positions as 2% squares of the viewport, the element clicked, and the deepest point of each visit. No person, recording or session is stored with the counts, and nothing in them can be traced back to who clicked.',
+        'Routes are patterns (/collections/workflows/:id), never record ids. Element names prefer test hooks, labels and short button text, and leave out text with digits or addresses, so a record’s data does not become an element name.',
+        'Each run takes at most 300 recordings (about 250MB stored), oldest first, and marks them folded; a backlog drains over the following nights. Error clips are left out. Run it now from Background Jobs.',
+        'The drawing of the route comes from the newest recording that showed it. When that recording has expired with retention, the heat is drawn on a blank viewport instead; the counts themselves are kept for 180 days.',
+        'Positions are relative to the viewport, so a phone and a wide monitor put the same button in different places. Pick one screen size to sharpen the map.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-frustration', text: 'Frustration score and Worst sessions' },
+    {
+      type: 'p',
+      text: 'Every working session gets a frustration score from 0 to 100. A session is one browser tab’s run of admin pages on one day (the page trail’s session). The Worst sessions tab lists the highest scores in a date range with the person, the route they spent most time on, what made the score and a Watch button when a recording overlaps the session. The People page’s Day view shows the day’s worst score beside its summary; it links to that session’s replay when there is one. Unlike heat, a score is about one person, so every read is admin-only.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Rage clicks: three or more clicks on one element within 600 ms (real-user monitoring).',
+        'Dead clicks: clicks that changed nothing, when the page reports them to real-user monitoring.',
+        'Client errors: errors the page reported to the issue log during the session.',
+        'Back-and-forth: page A, then B, then A, then B again within two minutes (the same exact pages; browsing a list and different records is not counted).',
+        'Slow calls: requests slower than that route’s 95th percentile for the same window (at least 20 calls to judge by) and slower than one second.',
+        'Abandoned forms: a new record held at least 10 seconds, or an existing record held at least a minute, and left with no save to that collection or record while it was open. A page whose length is unknown never counts.',
+        'Each signal adds its weight, at most ten of a kind, and the score is 100 × (1 − e^(−sum ÷ scale)), so it levels off toward 100. Defaults: rage 6, dead 3, client error 8, back-and-forth 3, slow call 2, abandoned form 5, scale 25 (one client error scores 27). Change them under Weights on the Worst sessions tab; a weight of 0 turns a signal off. They are stored in settings as frustration_weights.',
+        'A nightly job (session-frustration, 02:25 UTC) rescores the last two days, so a session that ran past midnight or a late report is picked up. Scores are kept 90 days and are deleted with the person. Run it now from Background Jobs.'
+      ]
     }
   ]
 }

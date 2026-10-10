@@ -135,6 +135,14 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-replay-shares/view/:token/events' },
   { method: 'GET', path: '/api/session-recordings/search' },
   { method: 'GET', path: '/api/session-recordings/search/keys' },
+  // Session replay heatmaps (#1364)
+  { method: 'GET', path: '/api/session-replay-insights/heat/routes' },
+  { method: 'GET', path: '/api/session-replay-insights/heat' },
+  { method: 'GET', path: '/api/session-replay-insights/heat/frame' },
+  // Frustration score (#1388)
+  { method: 'GET', path: '/api/session-replay-insights/worst' },
+  { method: 'GET', path: '/api/session-replay-insights/frustration-weights' },
+  { method: 'PUT', path: '/api/session-replay-insights/frustration-weights' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

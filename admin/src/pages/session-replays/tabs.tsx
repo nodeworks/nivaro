@@ -10,7 +10,9 @@ import { wantsSearchTab } from './search-logic'
 export const REPLAY_TABS = [
   { key: 'list', label: 'Sessions' },
   { key: 'search', label: 'Search' },
-  { key: 'library', label: 'Library' }
+  { key: 'library', label: 'Library' },
+  { key: 'heat', label: 'Heat' },
+  { key: 'worst', label: 'Worst sessions' }
 ] as const
 
 export type ReplayTab = (typeof REPLAY_TABS)[number]['key']

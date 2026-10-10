@@ -72,6 +72,17 @@ interface PersonDay {
   requests: MinuteCount[] | null
   transitions: DayTransition[] | null
   tasks: DayTask[] | null
+  /** #1388 — the day's worst frustration score (0–100); null/absent when none was scored. */
+  frustration?: {
+    score: number
+    sessions: number
+    worst: {
+      top_route: string | null
+      recording_id: string | null
+      session_start: string | null
+      components: { counts?: Record<string, number> }
+    }
+  } | null
   capped: string[]
 }
 
@@ -89,6 +100,55 @@ function fmtZone(tzOffset: number): string {
   const east = -tzOffset
   const a = Math.abs(east)
   return `UTC${east < 0 ? '−' : '+'}${String(Math.floor(a / 60)).padStart(2, '0')}:${String(a % 60).padStart(2, '0')}`
+}
+
+const FRUSTRATION_LABELS: Record<string, string> = {
+  rage_clicks: 'rage click',
+  dead_clicks: 'dead click',
+  client_errors: 'client error',
+  loops: 'back-and-forth',
+  slow_actions: 'slow call',
+  abandoned_forms: 'abandoned form'
+}
+
+/** #1388 — the day's frustration score; links to the worst session's replay when one exists. */
+function FrustrationChip({
+  f,
+  href,
+  onGo
+}: {
+  f: NonNullable<PersonDay['frustration']>
+  href: string | null
+  onGo: (href: string) => void
+}) {
+  const why = Object.entries(f.worst.components.counts ?? {})
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => plural(n, FRUSTRATION_LABELS[k] ?? k))
+    .join(', ')
+  const title = `Frustration ${f.score}/100 — worst of ${plural(f.sessions, 'session')}${
+    f.worst.top_route ? ` (mostly ${f.worst.top_route})` : ''
+  }${why ? `: ${why}` : ''}${href ? '. Click to watch it.' : ''}`
+  const cls = cn(
+    'inline-flex h-6 items-center gap-1 rounded-full border px-2 text-[11px] tabular-nums',
+    f.score >= 50
+      ? 'border-rose-300 text-rose-700 dark:border-rose-500/50 dark:text-rose-300'
+      : 'border-slate-200 text-slate-600 dark:border-border dark:text-slate-300'
+  )
+  return href ? (
+    <a
+      href={href}
+      title={title}
+      data-day-frustration={f.score}
+      className={cls}
+      onClick={routed(() => onGo(href))}
+    >
+      Frustration {f.score}
+    </a>
+  ) : (
+    <span title={title} data-day-frustration={f.score} className={cls}>
+      Frustration {f.score}
+    </span>
+  )
 }
 
 /** Keeps a plain click inside the host router; ⌘/Ctrl-click opens a new tab. */
@@ -213,6 +273,17 @@ export function DayTimelineCard({ userId, initialDate }: { userId: string; initi
             <p className='text-[11.5px] text-slate-500 dark:text-slate-400' data-day-summary>
               {layout.summary.join(' · ')}
             </p>
+            {data.frustration && (
+              <FrustrationChip
+                f={data.frustration}
+                href={
+                  data.frustration.worst.recording_id
+                    ? replayHref(data.frustration.worst.recording_id)
+                    : null
+                }
+                onGo={(href) => nav.navigate(href)}
+              />
+            )}
             <button
               type='button'
               aria-pressed={wholeDay}

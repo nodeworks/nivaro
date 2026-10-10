@@ -750,6 +750,41 @@ export async function buildServer() {
         const { computeNextTable } = await import('./services/help-video-next.js')
         await computeNextTable()
       })
+      // Session replay heatmaps (#1364): fold settled recordings into
+      // per-route click / scroll aggregates (no person in them). Bounded per
+      // run with a high-water mark, so a backlog drains over several nights.
+      app.cron.schedule(
+        'session-replay-heat',
+        '5 2 * * *',
+        async () => {
+          const { runHeatFold } = await import('./services/session-replay-heat.js')
+          app.log.info({ summary: await runHeatFold() }, '[session-replay-heat] fold')
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          timezone: 'UTC',
+          description:
+            'Folds finished session recordings into per-route click and scroll heatmaps (aggregates only — no person, recording or session is kept with them).'
+        }
+      )
+      // Frustration score (#1388): score each journey session of the last two
+      // UTC days from rage / dead clicks, client errors, back-and-forth loops,
+      // slow calls and abandoned forms. Weights: settings.frustration_weights.
+      app.cron.schedule(
+        'session-frustration',
+        '25 2 * * *',
+        async () => {
+          const { runFrustrationScoring } = await import('./services/session-frustration.js')
+          app.log.info({ summary: await runFrustrationScoring() }, '[session-frustration] scored')
+        },
+        {
+          idempotent: 'safe',
+          timezone: 'UTC',
+          description:
+            'Scores each working session of the last two days for frustration (rage and dead clicks, client errors, back-and-forth loops, slow calls, abandoned forms) for the Worst sessions tab and the People Day view.'
+        }
+      )
       // Every process clears its own stale render scratch; only a process
       // that owns the render queue (ticks crons or VIDEO_RENDER=on) drains it.
       void import('./services/help-video-render.js')
