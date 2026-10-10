@@ -181,6 +181,7 @@ export async function exportPackageStream(
         levels: parse(ver.levels),
         note: (ver.note as string | null) ?? null,
         files: {},
+        ...(ver.script ? { script: parse(ver.script) } : {}),
         ...(musicRowOrigin(musicRow) ? { music_origin: musicRowOrigin(musicRow) } : {})
       }
     })
@@ -861,6 +862,7 @@ async function applyOne(
         height: v.height,
         clicks: v.clicks == null ? null : JSON.stringify(v.clicks),
         levels: v.levels == null ? null : JSON.stringify(v.levels),
+        script: v.script == null ? null : JSON.stringify(v.script),
         edits: JSON.stringify(edits),
         edits_hash: editsHash,
         render_status: reusable ? 'ready' : 'none',

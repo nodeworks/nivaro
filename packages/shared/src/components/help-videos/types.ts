@@ -220,7 +220,15 @@ export interface VersionDto {
    *  idle (no input for 3 s+) on the recorded tab, in source time. Null for
    *  uploaded files and recordings made without it. */
   activity?: ActivitySpan[] | null
+  /** Draft, re-record and restore results only (#1491): the steps the author
+   *  wrote before recording, so a re-record can reuse them. Null for a
+   *  recording made without a script and for every uploaded file. */
+  script?: string[] | null
 }
+
+/** One "Next" press while recording with a script (#1491): step `step`
+ *  (0-based) starts at `t_ms` of the recording. */
+export type RecordedMark = { t_ms: number; step: number }
 
 /** A stretch of the recording where the author was typing in a text field,
  *  or touched nothing at all (#1518). Never what was typed. */

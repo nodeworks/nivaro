@@ -3,6 +3,7 @@ import type { RecordedClick } from '../api'
 import { currentHelpVideoPage } from '../walk/store'
 import { describeClickTarget } from '../walk/target'
 import { type ActivitySpan, createActivityTracker, isTypingTarget } from './activity'
+import type { RecordedMark } from './script'
 
 export const WARN_MS = 25 * 60_000
 /** From here the bar counts down the time that is left. */
@@ -26,6 +27,10 @@ export type CaptureMeta = {
   levels: number[] | null
   /** Typing / idle spans on this tab (#1518); null when click capture was off. */
   activity?: ActivitySpan[] | null
+  /** Script mode (#1491): the steps and where each one was marked. The
+   *  recorder fills `script`; `marks` is [] until Next is pressed. */
+  script?: string[] | null
+  marks?: RecordedMark[] | null
 }
 
 type Refs = {
@@ -47,6 +52,8 @@ type Refs = {
   levels: number[]
   /** Typing and idle stretches (#1518), on this tab only, like clicks. */
   activity: ReturnType<typeof createActivityTracker>
+  /** Script steps marked with Next (#1491), in recording time like clicks. */
+  marks: RecordedMark[]
   timers: number[]
 }
 
@@ -61,6 +68,7 @@ const fresh = (): Refs => ({
   pausedTotal: 0,
   clicks: [],
   levels: [],
+  marks: [],
   timers: []
 })
 
@@ -272,6 +280,15 @@ export function useScreenCapture(events: {
     setAnnounce('Recording.')
   }
 
+  /** Marks the start of script step `step` (0-based) at the recording's
+   *  current time (#1491). Nothing while paused or not recording. */
+  function mark(step: number): boolean {
+    const s = r.current
+    if (!s.live || s.pausedAt || !s.startedAt) return false
+    s.marks.push({ t_ms: Math.min(MAX_MS, Math.round(elapsedMs())), step })
+    return true
+  }
+
   /** The recording's data so far (call before `halt`). `clicks` is null when
    *  click capture was off, [] when it was on and caught nothing. */
   function meta(): CaptureMeta {
@@ -280,7 +297,8 @@ export function useScreenCapture(events: {
       duration_ms: Math.min(MAX_MS, Math.round(elapsedMs())),
       clicks: s.clickCapture ? s.clicks : null,
       levels: s.levels.length ? s.levels : null,
-      activity: s.clickCapture ? s.activity.spans(Math.round(elapsedMs())) : null
+      activity: s.clickCapture ? s.activity.spans(Math.round(elapsedMs())) : null,
+      marks: s.marks
     }
   }
 
@@ -345,6 +363,7 @@ export function useScreenCapture(events: {
     arm,
     countdown,
     begin,
+    mark,
     meta,
     halt,
     cancel,

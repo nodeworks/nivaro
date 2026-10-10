@@ -1,4 +1,13 @@
-import { AppWindow, ArchiveX, FileVideo, History, Monitor, PanelTop } from 'lucide-react'
+import {
+  AppWindow,
+  ArchiveX,
+  ExternalLink,
+  FileVideo,
+  History,
+  ListOrdered,
+  Monitor,
+  PanelTop
+} from 'lucide-react'
 import { type KeyboardEvent, type ReactNode, useEffect, useId, useRef, useState } from 'react'
 import { Button } from '../../ui/button'
 import { Checkbox } from '../../ui/checkbox'
@@ -12,9 +21,19 @@ import {
 import { Label } from '../../ui/label'
 import { SimpleSelect } from '../../ui/SimpleSelect'
 import { Switch } from '../../ui/switch'
+import { Textarea } from '../../ui/textarea'
 import { formatDuration } from '../viewer/format'
 import type { Leftover } from './leftovers'
-import { ConfirmDiscard, ErrorNote, ghostBtn, primaryBtn } from './RecorderStatus'
+import { ConfirmDiscard, ErrorNote, ghostBtn, primaryBtn, secondaryBtn } from './RecorderStatus'
+import {
+  DEFAULT_WINDOW_PRESET,
+  frameNote,
+  presetById,
+  type Size,
+  WINDOW_PRESETS,
+  sizeLabel as windowSizeLabel
+} from './recordingWindow'
+import { NEXT_STEP_KEY_LABEL, parseScript, SCRIPT_LIMITS } from './script'
 import type { Source } from './useScreenCapture'
 
 export type SetupOptions = {
@@ -24,14 +43,23 @@ export type SetupOptions = {
   captureClicks: boolean
   /** Hide notifications, chat and the author's name while recording. */
   cleanScreen: boolean
+  /** Script mode (#1491): the steps, one per line; '' = no script. */
+  script: string
+  /** The recording window's size (#1516), a WINDOW_PRESETS id. */
+  windowPreset: string
 }
 export const DEFAULT_SETUP: SetupOptions = {
   source: 'tab',
   useMic: true,
   micId: 'default',
   captureClicks: true,
-  cleanScreen: true
+  cleanScreen: true,
+  script: '',
+  windowPreset: DEFAULT_WINDOW_PRESET
 }
+
+/** Inside a recording window (#1516): what was asked for and what it is. */
+export type PopupFrame = { wanted: Size; actual: Size }
 
 const SOURCES: Array<{ id: Source; label: string; hint: string; icon: ReactNode }> = [
   { id: 'tab', label: 'This tab', hint: 'Recommended', icon: <PanelTop className='h-4 w-4' /> },
@@ -43,6 +71,8 @@ const SOURCE_NOTES: Record<Source, string> = {
   window: 'Your browser will ask which window to share.',
   screen: 'Your browser will ask which screen to share. Close anything private first.'
 }
+
+const SCRIPT_PLACEHOLDER = ['Open the record', 'Press Approve', 'Check the result'].join('\n')
 
 function sizeLabel(bytes: number): string {
   const mb = bytes / 1_048_576
@@ -73,7 +103,9 @@ export function RecorderSetup({
   onDiscard,
   error,
   onCancel,
-  onStart
+  onStart,
+  popup,
+  onOpenWindow
 }: {
   title: string
   rerecord: boolean
@@ -90,11 +122,18 @@ export function RecorderSetup({
   error: string | null
   onCancel: () => void
   onStart: () => void
+  /** Set inside a recording window (#1516): the source is this window, and
+   *  no second window can be opened from it. */
+  popup?: PopupFrame | null
+  /** Opens a recording window at `options.windowPreset` (absent = not offered). */
+  onOpenWindow?: () => void
 }) {
   const ids = useId()
   const [mics, setMics] = useState<MediaDeviceInfo[]>([])
   const set = (patch: Partial<SetupOptions>) => onOptions({ ...options, ...patch })
   const { source } = options
+  const script = parseScript(options.script)
+  const popupNote = popup ? frameNote(popup.wanted, popup.actual) : null
 
   useEffect(() => {
     let stop = false
@@ -129,17 +168,32 @@ export function RecorderSetup({
           onDiscard={onDiscard}
         />
 
-        <fieldset>
-          <legend id={`${ids}-src`} className='mb-2 font-medium text-foreground'>
-            What to record
-          </legend>
-          <SourcePicker
-            value={source}
-            onChange={(s) => set({ source: s })}
-            labelledBy={`${ids}-src`}
-          />
-          <p className='mt-2 text-[12.5px] text-muted-foreground'>{SOURCE_NOTES[source]}</p>
-        </fieldset>
+        {popup ? (
+          <div
+            className='rounded-lg border border-nvr-cyan/40 bg-nvr-cyan/10 px-3.5 py-3'
+            data-hv-popup-note
+          >
+            <p className='font-medium text-foreground'>
+              Recording this window ({windowSizeLabel(popup.actual)})
+            </p>
+            <p className='mt-1 text-[12.5px] text-muted-foreground'>
+              {popupNote ??
+                'Every video recorded this way has the same frame. When your browser asks what to share, choose this window.'}
+            </p>
+          </div>
+        ) : (
+          <fieldset>
+            <legend id={`${ids}-src`} className='mb-2 font-medium text-foreground'>
+              What to record
+            </legend>
+            <SourcePicker
+              value={source}
+              onChange={(s) => set({ source: s })}
+              labelledBy={`${ids}-src`}
+            />
+            <p className='mt-2 text-[12.5px] text-muted-foreground'>{SOURCE_NOTES[source]}</p>
+          </fieldset>
+        )}
 
         <div className='space-y-3.5'>
           <div className='flex items-start gap-2.5'>
@@ -210,14 +264,88 @@ export function RecorderSetup({
           />
         </div>
 
+        <div className='space-y-2'>
+          <Label
+            htmlFor={`${ids}-script`}
+            className='flex items-center gap-2 text-[13px] leading-snug text-foreground'
+          >
+            <ListOrdered className='h-4 w-4 text-muted-foreground' aria-hidden />
+            Script
+            <span className='font-normal text-muted-foreground'>(optional)</span>
+          </Label>
+          <Textarea
+            id={`${ids}-script`}
+            value={options.script}
+            onChange={(e) => set({ script: e.target.value })}
+            rows={4}
+            placeholder={SCRIPT_PLACEHOLDER}
+            aria-describedby={`${ids}-script-note`}
+            aria-invalid={!!script.problem}
+            className='min-h-[88px] text-[13px]'
+            data-hv-script
+          />
+          <p id={`${ids}-script-note`} className='text-[12.5px] text-muted-foreground'>
+            {script.problem ? (
+              <span className='text-rose-700 dark:text-rose-300' data-hv-script-problem>
+                {script.problem}
+              </span>
+            ) : script.steps.length ? (
+              <span data-hv-script-count>
+                {script.steps.length === 1 ? '1 step' : `${script.steps.length} steps`}. While you
+                record, the current step shows on the bar; Next ({NEXT_STEP_KEY_LABEL}) moves on and
+                each step becomes a chapter.
+              </span>
+            ) : (
+              `One step per line, up to ${SCRIPT_LIMITS.steps}. The steps show on the recording bar as you go, and each one becomes a chapter.`
+            )}
+          </p>
+        </div>
+
+        {!popup && onOpenWindow && (
+          <div
+            className='space-y-2.5 rounded-lg border border-border px-3.5 py-3'
+            data-hv-window-section
+          >
+            <div className='flex flex-wrap items-center justify-between gap-2'>
+              <span id={`${ids}-win`} className='text-[13px] leading-snug text-foreground'>
+                Recording window
+              </span>
+              <SimpleSelect
+                value={presetById(options.windowPreset).id}
+                onChange={(v) => set({ windowPreset: v })}
+                ariaLabel='Recording window size'
+                className='h-8 w-auto min-w-[150px] text-[12.5px]'
+                options={WINDOW_PRESETS.map((p) => ({
+                  value: p.id,
+                  label: `${p.label} · ${p.hint}`
+                }))}
+              />
+            </div>
+            <p className='text-[12.5px] text-muted-foreground'>
+              Opens this page in a window of exactly that size and records it, so every video has
+              the same frame and readable text. This tab shows how it is going.
+            </p>
+            <Button
+              variant='outline'
+              className={`${secondaryBtn} h-8`}
+              onClick={onOpenWindow}
+              disabled={!!script.problem}
+              data-hv-open-window
+            >
+              <ExternalLink className='mr-1.5 h-3.5 w-3.5' aria-hidden />
+              Open a recording window
+            </Button>
+          </div>
+        )}
+
         {error && <ErrorNote data-hv-setup-error>{error}</ErrorNote>}
       </DialogBody>
       <DialogFooter className='border-border'>
         <Button variant='ghost' className={ghostBtn} onClick={onCancel}>
           Cancel
         </Button>
-        <Button className={primaryBtn} onClick={onStart} data-hv-start>
-          Start recording
+        <Button className={primaryBtn} onClick={onStart} disabled={!!script.problem} data-hv-start>
+          {popup ? 'Start recording this window' : 'Start recording'}
         </Button>
       </DialogFooter>
     </>

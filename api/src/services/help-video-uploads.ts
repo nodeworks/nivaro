@@ -13,6 +13,7 @@ import {
   runFfmpeg
 } from './ffmpeg.js'
 import { deleteFile, getFile, uploadFileFromPath } from './files.js'
+import { normalizeMarks, normalizeScript, type RecordedMark } from './help-video-script.js'
 import {
   buildUploadArgs,
   planUploadedVideo,
@@ -109,6 +110,11 @@ export interface FinalizedUpload {
   has_audio: boolean
   clicks: unknown
   levels: unknown
+  /** Script mode (#1491): the steps written before recording and where each
+   *  one was marked, in source time. Null for recordings made without a
+   *  script and for every uploaded file. */
+  script: string[] | null
+  marks: RecordedMark[] | null
 }
 
 function fail(statusCode: number, code: string, message: string): Error {
@@ -332,12 +338,22 @@ export async function appendPart(
 export async function finalizeUpload(
   user: User,
   id: string,
-  meta: { duration_ms?: number; clicks?: unknown; levels?: unknown; activity?: unknown }
+  meta: {
+    duration_ms?: number
+    clicks?: unknown
+    levels?: unknown
+    activity?: unknown
+    script?: unknown
+    marks?: unknown
+  }
 ): Promise<FinalizedUpload | ProcessingUpload> {
   const rid = assertId(id)
   const clicks = normalizeClicks(meta.clicks)
   const levels = normalizeLevels(meta.levels)
   const activity = normalizeActivity(meta.activity)
+  // Script mode (#1491): marks mean nothing without the script they index.
+  const script = normalizeScript(meta.script)
+  const marks = script ? (normalizeMarks(meta.marks) ?? []) : null
   // Claim: only one finalize can flip open -> finalizing; appends are serialized
   // on the same lock so none is mid-write when the claim lands.
   const row = await withLock(rid, async () => {
@@ -427,7 +443,8 @@ export async function finalizeUpload(
         // Bounded by the normalizers (≈1.5 MB at most), so never cut mid-JSON.
         // Activity (#1518) is read back by activityOfFile: the version table
         // has no column for it, the upload row stays for as long as the video.
-        meta: JSON.stringify({ clicks, levels, activity }),
+        // The script and its marks (#1491) ride along until the video is made.
+        meta: JSON.stringify({ clicks, levels, activity, ...(script ? { script, marks } : {}) }),
         updated_at: new Date()
       })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
@@ -441,7 +458,9 @@ export async function finalizeUpload(
       height: probe.height,
       has_audio: probe.has_audio,
       clicks,
-      levels
+      levels,
+      script,
+      marks
     }
   } catch (err) {
     if (createdFile && !recorded) {
@@ -788,12 +807,13 @@ export async function takeFinalizedUpload(user: User, uploadId: string): Promise
     .where({ id: uploadId, status: 'finalized' })
     .update({ status: 'used', updated_at: new Date() })
   if (!taken) throw fail(409, 'UPLOAD_USED', 'That recording was already used')
-  let meta: { clicks?: unknown; levels?: unknown } = {}
+  let meta: { clicks?: unknown; levels?: unknown; script?: unknown; marks?: unknown } = {}
   try {
     meta = JSON.parse(String(row.meta ?? '{}'))
   } catch {
     meta = {}
   }
+  const script = normalizeScript(meta.script)
   return {
     file_id: String(row.file_id),
     duration_ms: row.duration_ms == null ? null : Number(row.duration_ms),
@@ -801,7 +821,9 @@ export async function takeFinalizedUpload(user: User, uploadId: string): Promise
     height: row.height == null ? null : Number(row.height),
     has_audio: row.has_audio !== false && row.has_audio !== 0,
     clicks: meta.clicks ?? null,
-    levels: meta.levels ?? null
+    levels: meta.levels ?? null,
+    script,
+    marks: script ? (normalizeMarks(meta.marks) ?? []) : null
   }
 }
 

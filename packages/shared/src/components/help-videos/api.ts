@@ -11,6 +11,7 @@ import type {
   MusicTrack,
   OpenverseSearch,
   RecordedClick,
+  RecordedMark,
   UploadedMusic,
   VersionDto,
   VideoEdits,
@@ -306,6 +307,10 @@ export function helpVideoApi(client: NivaroClient) {
      *   `i * 100` ms. Null without a microphone.
      * - `activity` (optional): `{ kind: 'typing' | 'idle', start_ms, end_ms }`
      *   spans on the recorded tab — never what was typed. Null when not captured.
+     * - `script` and `marks` (optional, #1491): the steps the author wrote
+     *   before recording (≤ 60 of ≤ 200 chars) and `{ t_ms, step }` per Next
+     *   press, in recording time; the first draft gets a chapter per marked
+     *   step (the first at 0) and keeps the script for a re-record.
      * Matches `HelpVideoVersion.clicks` / `.levels` in @nivaro/sdk.
      * 422 UPLOAD_TOO_LONG past 31 minutes, 409 UPLOAD_CLOSED when finished.
      */
@@ -316,6 +321,8 @@ export function helpVideoApi(client: NivaroClient) {
         clicks: RecordedClick[] | null
         levels: number[] | null
         activity?: ActivitySpan[] | null
+        script?: string[] | null
+        marks?: RecordedMark[] | null
       }
     ) =>
       r(
