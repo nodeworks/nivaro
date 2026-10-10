@@ -325,3 +325,57 @@ describe('idbChunkStore', () => {
     expect((await store.list('R2')).length).toBe(1)
   })
 })
+
+describe('route, build and retries (#1368)', () => {
+  it('sends each chunk with the route and build it was queued with', async () => {
+    const extras: unknown[] = []
+    const uploader = new ReplayUploader({
+      store: memoryChunkStore(),
+      send: async (_id, _seq, _events, _keepalive, extra) => {
+        extras.push(extra)
+      }
+    })
+    uploader.begin('R1')
+    uploader.enqueue([ev(1)], { route: '/content/orders/:id', build: '0.2.35' })
+    uploader.enqueue([ev(2)])
+    expect(await uploader.drain()).toBe('ok')
+    expect(extras).toEqual([{ route: '/content/orders/:id', build: '0.2.35' }, {}])
+  })
+
+  it('reports the failed attempts on the next successful upload, then stops', async () => {
+    const extras: Array<{ retries?: number }> = []
+    let fail = 2
+    const uploader = new ReplayUploader({
+      store: memoryChunkStore(),
+      send: async (_id, _seq, _events, _keepalive, extra) => {
+        extras.push(extra)
+        if (fail-- > 0) throw networkError()
+      }
+    })
+    uploader.begin('R1')
+    uploader.enqueue([ev(1)], { route: '/home' })
+    uploader.enqueue([ev(2)], { route: '/home' })
+    expect(await uploader.drain()).toBe('retry')
+    expect(await uploader.drain()).toBe('retry')
+    expect(await uploader.drain()).toBe('ok')
+    expect(extras.map((e) => e.retries)).toEqual([undefined, 1, 2, undefined])
+  })
+
+  it('puts route and build in the keepalive body', () => {
+    const chunk: QueuedChunk = {
+      recordingId: 'R1',
+      seq: 4,
+      events: [ev(1)],
+      bytes: 10,
+      at: 0,
+      route: '/home',
+      build: 'dev'
+    }
+    expect(JSON.parse(packKeepalive([chunk], 10_000)[0].body)).toEqual({
+      seq: 4,
+      events: [ev(1)],
+      route: '/home',
+      build: 'dev'
+    })
+  })
+})

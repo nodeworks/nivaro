@@ -28,6 +28,10 @@
  * - On pagehide whatever fits in the browser's keepalive allowance (64KB of
  *   request bodies in flight) goes out with fetch keepalive; the IndexedDB
  *   copy covers the rest and anything a dying page could not confirm.
+ * - Each chunk carries the route pattern it was recorded on and the frontend
+ *   build (#1368, the server's cost attribution), and the first upload after
+ *   transient failures reports how many attempts failed (`retries`) — the
+ *   server cannot see a request that never reached it.
  *
  * The same module lives in packages/react/src/hooks/replayUploadQueue.ts for
  * the headless recorder — the two packages share no code, like splitBySize
@@ -138,6 +142,32 @@ export interface QueuedChunk {
   bytes: number
   /** When it was queued — the orphan sweep reads this. */
   at: number
+  /** Route pattern it was recorded on (#1368). */
+  route?: string
+  /** Frontend build that recorded it (#1368). */
+  build?: string
+}
+
+/** What a chunk's request carries besides seq + events (#1368). */
+export interface ChunkExtra {
+  route?: string
+  build?: string
+  /** Upload attempts that failed since the last success. */
+  retries?: number
+}
+
+/** The request body for one chunk: `{seq, events}` plus its route, build and retries. */
+export function chunkBody(chunk: QueuedChunk, retries = 0): string {
+  const extra = chunkExtra(chunk, retries)
+  return JSON.stringify({ seq: chunk.seq, events: chunk.events, ...extra })
+}
+
+export function chunkExtra(chunk: QueuedChunk, retries = 0): ChunkExtra {
+  const extra: ChunkExtra = {}
+  if (chunk.route) extra.route = chunk.route
+  if (chunk.build) extra.build = chunk.build
+  if (retries > 0) extra.retries = retries
+  return extra
 }
 
 /** Persistence behind the queue. Every method is best-effort and never throws. */
@@ -366,7 +396,7 @@ export function isResumable(
 
 export interface KeepaliveRequest {
   chunk: QueuedChunk
-  /** The exact request body, `{seq, events}`. */
+  /** The exact request body, `{seq, events}` (+ route, build). */
   body: string
 }
 
@@ -379,7 +409,7 @@ export function packKeepalive(chunks: QueuedChunk[], budget: number): KeepaliveR
   const out: KeepaliveRequest[] = []
   let left = budget
   for (const chunk of chunks) {
-    const body = JSON.stringify({ seq: chunk.seq, events: chunk.events })
+    const body = chunkBody(chunk)
     const size = utf8Bytes(body)
     if (size > left) break
     out.push({ chunk, body })
@@ -403,8 +433,17 @@ export type DrainOutcome = 'ok' | 'offline' | 'retry' | 'closed' | 'abandoned' |
 
 export interface UploaderOptions {
   store: ChunkStore
-  /** POST one chunk. Rejects with an error carrying the HTTP status, if any. */
-  send: (recordingId: string, seq: number, events: unknown[], keepalive: boolean) => Promise<void>
+  /**
+   * POST one chunk. Rejects with an error carrying the HTTP status, if any.
+   * `extra` (route, build, retries) rides in the same body (#1368).
+   */
+  send: (
+    recordingId: string,
+    seq: number,
+    events: unknown[],
+    keepalive: boolean,
+    extra: ChunkExtra
+  ) => Promise<void>
   online?: () => boolean
   now?: () => number
   maxBytes?: number
@@ -482,8 +521,11 @@ export class ReplayUploader {
     return this.pending.map((c) => c.seq)
   }
 
-  /** Queue one chunk: its seq is fixed here, for every retry to come. */
-  enqueue(events: unknown[]): QueuedChunk | null {
+  /**
+   * Queue one chunk: its seq is fixed here, for every retry to come. `meta`
+   * names the route it was recorded on and the build (#1368).
+   */
+  enqueue(events: unknown[], meta: { route?: string; build?: string } = {}): QueuedChunk | null {
     if (!this.recordingId || events.length === 0) return null
     let bytes = 2
     try {
@@ -496,7 +538,9 @@ export class ReplayUploader {
       seq: this.nextSeq++,
       events,
       bytes,
-      at: this.now()
+      at: this.now(),
+      ...(meta.route ? { route: meta.route } : {}),
+      ...(meta.build ? { build: meta.build } : {})
     }
     this.pending.push(chunk)
     this.bytesQueued += bytes
@@ -545,7 +589,13 @@ export class ReplayUploader {
       this.sending = chunk
       this.sendingKeepaliveBytes = viaKeepalive ? chunk.bytes : 0
       try {
-        await this.send(chunk.recordingId, chunk.seq, chunk.events, viaKeepalive)
+        await this.send(
+          chunk.recordingId,
+          chunk.seq,
+          chunk.events,
+          viaKeepalive,
+          chunkExtra(chunk, this.attempt)
+        )
         this.trusted = true
         this.attempt = 0
         this.forget(chunk)

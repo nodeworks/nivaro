@@ -204,6 +204,20 @@ export const sessionReplayDocs: DocSection = {
         'The rules apply to the admin app and to frontends using useSessionRecorder from @nivaro/react; a changed rule reaches a recorder on its next page load. Recordings already made are not changed.'
       ]
     },
+    { type: 'h2', id: 'session-replay-cost', text: 'Recording cost' },
+    {
+      type: 'p',
+      text: 'Every uploaded chunk names the page (route pattern) it was recorded on and the frontend build that recorded it. DB Health → Session replay shows what recording stored per page and per build over the last 7 days, day by day, and the recordings’ share of the storage runway.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Daily cap (Settings → Session replay → Recording cost): megabytes the whole instance may store per UTC day. Once reached, recorders stop and no new recording starts until the next day. Replicas see each other’s uploads within about 30 seconds, so the cap can be passed by that much.',
+        'Sampling: the share of sessions recorded, as a default and per page — an exact pattern such as /content/orders/:id, or a prefix such as /reports/* (the most specific rule wins; 0% never records the page). Each tab decides once per visit, so a page is either recorded or not for that person throughout; while a tab is on a page that is not recorded nothing is kept, and the replay picks up again on the next recorded page.',
+        'Clips attached to errors are not sampled, but they count toward the cap and stop when it is reached.',
+        'With @nivaro/react, pass useSessionRecorder({ build }) to name your app’s build; it defaults to the @nivaro/react version.'
+      ]
+    },
     { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },
     {
       type: 'p',

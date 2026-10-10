@@ -6,18 +6,25 @@ import {
   startSessionRecording
 } from '@nivaro/sdk'
 import {
+  attributeChunkRoutes,
   buildReplayMaskingOptions,
+  currentReplayRoute,
   instrumentConsole,
   instrumentRequests,
+  isReplayRouteSampled,
   normalizeReplayMasking,
+  normalizeReplaySampling,
   type ReplayMaskingRules,
-  redactSecrets
+  type ReplaySampling,
+  redactSecrets,
+  replaySampleDraw
 } from '@nivaro/shared'
 import { useEffect, useRef } from 'react'
 import { useOptionalNivaroClient } from '../context'
 import {
   backoffDelay,
   CHUNK_BYTES,
+  type ChunkExtra,
   clearResume,
   type DrainOutcome,
   isResumable,
@@ -67,7 +74,17 @@ export interface SessionRecorderOptions {
   client?: NivaroClient
   /** Force-disable locally regardless of the instance setting. */
   disabled?: boolean
+  /**
+   * Your app's build or version, stamped on every uploaded chunk so DB Health
+   * can show recording cost per build (#1368). Defaults to the
+   * @nivaro/react version.
+   */
+  build?: string
 }
+
+declare const __NIVARO_REACT_VERSION__: string | undefined
+const PACKAGE_BUILD =
+  typeof __NIVARO_REACT_VERSION__ === 'string' ? `nivaro-react@${__NIVARO_REACT_VERSION__}` : ''
 
 export interface ErrorReplayLink {
   recording_id: string
@@ -130,12 +147,20 @@ async function postEventChunks(
   client: NivaroClient,
   recordingId: string,
   nextSeq: () => number,
-  events: unknown[]
+  events: unknown[],
+  extra: { startRoute: string; build: string }
 ): Promise<'ok' | 'closed'> {
-  for (const chunk of splitBySize(events)) {
+  const chunks = splitBySize(events)
+  const { routes } = attributeChunkRoutes(chunks, extra.startRoute)
+  for (const [i, chunk] of chunks.entries()) {
     const seq = nextSeq()
     try {
-      await client.request(appendSessionRecordingEvents(recordingId, seq, chunk))
+      await client.request(
+        appendSessionRecordingEvents(recordingId, seq, chunk, {
+          route: routes[i],
+          ...(extra.build ? { build: extra.build } : {})
+        })
+      )
     } catch (err) {
       const status =
         (err as { status?: number; response?: { status?: number } }).status ??
@@ -241,6 +266,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
   const client = options.client ?? contextClient
   const appLabel = options.app
   const disabled = options.disabled ?? false
+  const build = options.build ?? PACKAGE_BUILD
 
   const stateRef = useRef<{
     // Full mode's recording id and seq live in its ReplayUploader.
@@ -254,6 +280,11 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     lastNavAt: number
     inFlight: Promise<void> | null
     flushAfter: boolean
+    // #1368 — route attribution and per-route sampling.
+    route: string
+    bufferRoute: string
+    prevWindowRoute: string
+    sampled: boolean
   }>({
     buffer: [],
     stop: null,
@@ -264,7 +295,11 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     lastClip: null,
     lastNavAt: 0,
     inFlight: null,
-    flushAfter: false
+    flushAfter: false,
+    route: '/',
+    bufferRoute: '/',
+    prevWindowRoute: '/',
+    sampled: true
   })
 
   useEffect(() => {
@@ -281,12 +316,18 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
      * POST one queued chunk. While the page is hidden (it may be unloading)
      * a small chunk rides fetch keepalive so it outlives the page.
      */
-    const sendChunk = async (id: string, seq: number, events: unknown[], keepalive: boolean) => {
+    const sendChunk = async (
+      id: string,
+      seq: number,
+      events: unknown[],
+      keepalive: boolean,
+      extra: ChunkExtra = {}
+    ) => {
       if (!keepalive || !viaKeepalive) {
-        await api.request(appendSessionRecordingEvents(id, seq, events))
+        await api.request(appendSessionRecordingEvents(id, seq, events, extra))
         return
       }
-      const res = await viaKeepalive(id, JSON.stringify({ seq, events }))
+      const res = await viaKeepalive(id, JSON.stringify({ seq, events, ...extra }))
       if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status })
     }
     const uploader = new ReplayUploader({ store, send: sendChunk, online: isOnline })
@@ -347,8 +388,11 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       if (state.buffer.length === 0 || !uploader.recordingId) return
       const events = state.buffer
       state.buffer = []
-      for (const chunk of splitBySize(events, hiding ? KEEPALIVE_CHUNK_BYTES : CHUNK_BYTES)) {
-        uploader.enqueue(chunk)
+      const chunks = splitBySize(events, hiding ? KEEPALIVE_CHUNK_BYTES : CHUNK_BYTES)
+      // #1368 — each chunk is attributed to the route at its first event.
+      const { routes } = attributeChunkRoutes(chunks, state.bufferRoute)
+      for (const [i, chunk] of chunks.entries()) {
+        uploader.enqueue(chunk, { route: routes[i], ...(build ? { build } : {}) })
       }
       saveResume()
     }
@@ -444,9 +488,32 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       }
       saveResume()
       state.lastNavAt = Date.now()
+      // #1368 — per-route sampling: one draw per tab session; events on a
+      // sampled-out route are dropped, and coming back to a sampled route
+      // takes a full snapshot so the replay resumes from a whole page.
+      const draw = replaySampleDraw(storage)
+      state.route = currentReplayRoute()
+      state.bufferRoute = state.route
+      state.sampled = isReplayRouteSampled(sampling, state.route, draw)
+      const onRouteSample = () => {
+        state.route = currentReplayRoute()
+        const was = state.sampled
+        state.sampled = isReplayRouteSampled(sampling, state.route, draw)
+        if (state.sampled && !was) {
+          try {
+            ;(record as unknown as { takeFullSnapshot?: (c?: boolean) => void }).takeFullSnapshot?.(
+              true
+            )
+          } catch {
+            /* the next checkout snapshot covers it */
+          }
+        }
+      }
       state.stop =
         record({
           emit(event: unknown) {
+            if (!state.sampled) return
+            if (state.buffer.length === 0) state.bufferRoute = state.route
             state.buffer.push(event)
             if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()
           },
@@ -461,6 +528,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
           ),
         () => {
           state.lastNavAt = Date.now()
+          onRouteSample()
         }
       )
       // A live full recording answers an error capture with itself + the
@@ -481,6 +549,9 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       if (cancelled || !record) return
       state.buffer = []
       state.prevWindow = []
+      state.route = currentReplayRoute()
+      state.bufferRoute = state.route
+      state.prevWindowRoute = state.route
       state.stop =
         record({
           emit(event: unknown, isCheckout?: boolean) {
@@ -488,7 +559,9 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
               // A checkout event is a full DOM snapshot — it starts a
               // self-sufficient window, so the one before last can drop.
               state.prevWindow = state.buffer
+              state.prevWindowRoute = state.bufferRoute
               state.buffer = [event]
+              state.bufferRoute = state.route
             } else {
               state.buffer.push(event)
             }
@@ -496,11 +569,15 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
           ...buildReplayMaskingOptions(() => masking),
           checkoutEveryNms: CLIP_WINDOW_MS
         }) ?? null
-      state.uninstrument = instrumentReplayContext((tag, payload) =>
-        (record as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(
-          tag,
-          payload
-        )
+      state.uninstrument = instrumentReplayContext(
+        (tag, payload) =>
+          (record as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(
+            tag,
+            payload
+          ),
+        () => {
+          state.route = currentReplayRoute()
+        }
       )
 
       captureFn = async () => {
@@ -510,13 +587,14 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
         }
         state.lastClip = { at: Date.now(), link: null }
         const events = [...state.prevWindow, ...state.buffer]
+        const startRoute = state.prevWindow.length > 0 ? state.prevWindowRoute : state.bufferRoute
         if (events.length === 0 || !client) return null
         const started = await client.request(
           startSessionRecording(appLabel ?? 'error-clip', undefined, true)
         )
         const id = started.data.id
         let clipSeq = 0
-        await postEventChunks(client, id, () => clipSeq++, events)
+        await postEventChunks(client, id, () => clipSeq++, events, { startRoute, build })
         await client.request(endSessionRecording(id)).catch(() => {})
         const link: ErrorReplayLink = { recording_id: id, offset_ms: null }
         state.lastClip = { at: Date.now(), link }
@@ -527,13 +605,20 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     let fullMode = false
     /** #1361 — the instance's masking rules, read live by rrweb's mask functions. */
     let masking: ReplayMaskingRules = normalizeReplayMasking(null)
+    /** #1368 — per-route sampling rules. */
+    let sampling: ReplaySampling = normalizeReplaySampling(null)
     async function start() {
       try {
         const modes = await client!.request(sessionRecordingEnabled())
         if (cancelled) return
         masking = normalizeReplayMasking(modes.data.masking)
-        fullMode = modes.data.enabled === true
-        const clipMode = !fullMode && modes.data.error_replay === true
+        sampling = normalizeReplaySampling(modes.data.sampling)
+        // Today's byte cap reached (#1368): nothing records — the server
+        // would refuse the start, clips included.
+        const capReached = modes.data.cap_reached === true
+        fullMode = modes.data.enabled === true && !capReached
+        const clipMode =
+          modes.data.enabled !== true && modes.data.error_replay === true && !capReached
         if (fullMode) await startFull()
         else if (clipMode) await startClip()
       } catch {
@@ -603,5 +688,5 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
         clearResume(storage, RESUME_KEY)
       })
     }
-  }, [client, disabled, appLabel])
+  }, [client, disabled, appLabel, build])
 }

@@ -619,13 +619,18 @@ export interface SessionReplayMasking {
 
 /**
  * Is session recording enabled instance-wide? (Recorders no-op when false.)
- * Carries the policy the recorders apply: masking rules (#1361).
+ * Carries the policy the recorders apply: masking rules (#1361), per-route
+ * sampling and whether today's byte cap is reached (#1368).
  */
 export function sessionRecordingEnabled(): Command<{
   data: {
     enabled: boolean
     error_replay?: boolean
     masking?: SessionReplayMasking
+    /** #1368 — share of sessions recorded (0–1): default and per route pattern. */
+    sampling?: { default: number; routes: Record<string, number> }
+    /** #1368 — today's byte cap is reached; recorders should not start. */
+    cap_reached?: boolean
   }
 }> {
   return cmd('GET', '/session-recordings/enabled')
@@ -672,13 +677,20 @@ export function startSessionRecording(
   return cmd('POST', '/session-recordings/start', undefined, body)
 }
 
-/** Append an ordered chunk of rrweb events to an open recording. */
+/**
+ * Append an ordered chunk of rrweb events to an open recording. `meta` names
+ * the route pattern the chunk was recorded on and the app build (recording
+ * cost per route, #1368), and how many upload attempts failed since the last
+ * success. A 409 with `reason: 'daily_cap'` means the instance's daily
+ * recording cap is reached — stop recording.
+ */
 export function appendSessionRecordingEvents(
   id: UUID,
   seq: number,
-  events: unknown[]
-): Command<{ data: { ok: boolean } }> {
-  return cmd('POST', `/session-recordings/${id}/events`, undefined, { seq, events })
+  events: unknown[],
+  meta?: { route?: string; build?: string; retries?: number }
+): Command<{ data: { ok: boolean; duplicate?: boolean } }> {
+  return cmd('POST', `/session-recordings/${id}/events`, undefined, { seq, events, ...meta })
 }
 
 /** Close a recording. */

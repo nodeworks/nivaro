@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { chunkMeta, dailyCapStatus, noteChunk } from '../services/session-replay-cost.js'
 import { replayClientPolicy } from '../services/session-replay-policy.js'
 import { buildEventRail, type RailRecording } from '../services/session-replay-rail.js'
 import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
@@ -165,6 +166,10 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     } else if (!(await recordingEnabled())) {
       return reply.code(409).send({ error: 'Session recording is disabled' })
     }
+    // #1368 — today's byte cap reached: nothing new starts until tomorrow (UTC).
+    if ((await dailyCapStatus()).reached) {
+      return reply.code(409).send({ error: 'Daily recording cap reached', reason: 'daily_cap' })
+    }
     const id = randomUUID()
     const appLabel = isClip
       ? 'error-clip'
@@ -223,11 +228,16 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     return reply.send({ data: { id } })
   })
 
-  app.post<{ Params: { id: string }; Body: { seq?: number; events?: unknown[] } }>(
+  app.post<{
+    Params: { id: string }
+    // route / build / retries: #1368 cost attribution and failure counts.
+    Body: { seq?: number; events?: unknown[]; route?: string; build?: string; retries?: number }
+  }>(
     '/:id/events',
     { preHandler: requireAuth, bodyLimit: CHUNK_BODY_LIMIT },
     async (req, reply) => {
       const { seq, events } = req.body ?? {}
+      const meta = chunkMeta(req.body)
       if (!Array.isArray(events) || events.length === 0 || typeof seq !== 'number') {
         return reply.code(400).send({ error: 'seq and events[] are required' })
       }
@@ -238,6 +248,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       // Only the recording's own user appends to it
       if (rec.user !== req.user!.id) return reply.code(403).send({ error: 'Forbidden' })
       if (rec.truncated || rec.ended_at) {
+        noteChunk('closed', meta)
         return reply.code(409).send({ error: 'Recording is closed' })
       }
 
@@ -248,10 +259,19 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const existing = await db('nivaro_session_events')
         .where({ recording: rec.id, seq })
         .first('id')
-      if (existing) return reply.send({ data: { ok: true, duplicate: true } })
+      if (existing) {
+        noteChunk('duplicate', meta)
+        return reply.send({ data: { ok: true, duplicate: true } })
+      }
+      // #1368 — the instance's daily byte cap: the recorder stops on this 409.
+      if ((await dailyCapStatus()).reached) {
+        noteChunk('daily_cap', meta)
+        return reply.code(409).send({ error: 'Daily recording cap reached', reason: 'daily_cap' })
+      }
 
       const payload = JSON.stringify(events)
       if (payload.length > MAX_CHUNK) {
+        noteChunk('too_large', meta)
         return reply.code(413).send({ error: 'Chunk too large' })
       }
       const stored = encodeChunk(payload)
@@ -259,6 +279,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         await db('nivaro_session_recordings')
           .where({ id: rec.id })
           .update({ truncated: true, ended_at: new Date() })
+        noteChunk('size_cap', meta)
         return reply.code(409).send({ error: 'Recording size cap reached' })
       }
 
@@ -275,6 +296,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           event_count: db.raw('event_count + ?', [events.length]),
           byte_size: db.raw('byte_size + ?', [stored.length])
         })
+      noteChunk('accepted', meta, stored.length)
       return reply.send({ data: { ok: true } })
     }
   )

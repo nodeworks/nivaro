@@ -122,6 +122,9 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-recordings/' },
   { method: 'GET', path: '/api/session-recordings/:id/events' },
   { method: 'GET', path: '/api/session-recordings/:id/events-rail' },
+  // Session replay cost on DB Health (#1368)
+  { method: 'GET', path: '/api/ops-db/storage' },
+  { method: 'GET', path: '/api/ops-db/session-replay' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

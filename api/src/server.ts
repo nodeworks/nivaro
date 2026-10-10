@@ -999,12 +999,18 @@ export async function buildServer() {
         } catch {
           /* uploads dir absent */
         }
+        // #1368 — session recordings' stored size, for the runway.
+        const replayMb = await import('./services/session-replay-cost.js')
+          .then((m) => m.replayStorageFigures())
+          .then((f) => Math.round(f.hot_bytes / 1_048_576))
+          .catch(() => null)
         await db('nivaro_storage_snapshots')
           .insert({
             snapshot_date: today,
             db_mb: dbMb,
             uploads_mb: uploadsMb,
             top_tables: JSON.stringify(topTables),
+            ...(replayMb != null ? { replay_mb: replayMb } : {}),
             created_at: new Date()
           })
           .catch(() => {})
