@@ -43,6 +43,19 @@ export interface HelpVideoVersion {
   clicks?: HelpVideoClick[] | null
   /** Microphone loudness 0–1, one value per 100 ms of source time. */
   levels?: number[] | null
+  /** Draft load only (#1560): the server's audio peaks, 0–1 per 100 ms of
+   *  source time, built from the recording itself; null until built. */
+  peaks?: number[] | null
+  /** Draft load only (#1560): the thumbnail sprite sheet (a ticketed JPEG of
+   *  `count` tiles, `cols` to a row, one every `interval_ms`); null until built. */
+  sprite?: {
+    url: string
+    tile_w: number
+    tile_h: number
+    cols: number
+    count: number
+    interval_ms: number
+  } | null
 }
 /**
  * One recorded click. Recorded on the author's own tab, a click also says

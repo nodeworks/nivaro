@@ -2,6 +2,7 @@ export {
   helpVideoApi,
   helpVideoKeys,
   useHelpVideo,
+  useHelpVideoClips,
   useHelpVideosFor,
   useHelpVideoWalk,
   useRequiredVideos
@@ -43,9 +44,11 @@ export {
 export { HouseStyleButton } from './settings/HouseStyleButton'
 export { RenderSettingsButton } from './settings/RenderSettingsButton'
 export type {
+  ClipDto,
   HelpVideoContext,
   HelpVideoDto,
   RecordedClick,
+  SpriteSheet,
   VideoEdits,
   WalkStep
 } from './types'

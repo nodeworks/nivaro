@@ -14,6 +14,13 @@ import {
 } from './ffmpeg.js'
 import { deleteFile, getFile, uploadFileFromPath } from './files.js'
 import {
+  extrasMigrated,
+  parsePeaks,
+  parseSprite,
+  type SpriteSheet,
+  startMediaExtras
+} from './help-video-extras.js'
+import {
   buildUploadArgs,
   planUploadedVideo,
   sniffContainer,
@@ -109,6 +116,12 @@ export interface FinalizedUpload {
   has_audio: boolean
   clicks: unknown
   levels: unknown
+  /** Server-built thumbnails and waveform (#1560), when the background job
+   *  has finished by the time the recording is taken; else null (they reach
+   *  the version later). */
+  sprite_file?: string | null
+  sprite?: SpriteSheet | null
+  peaks?: number[] | null
 }
 
 function fail(statusCode: number, code: string, message: string): Error {
@@ -434,6 +447,16 @@ export async function finalizeUpload(
     recorded = true
     // The recording is stored and recorded: only now is the temp file expendable.
     await rm(raw, { force: true })
+    // Thumbnails and waveform (#1560) are built after the answer goes out.
+    startMediaExtras(user, {
+      uploadId: String(dbId).toLowerCase(),
+      fileId: String(file.id),
+      mime: String(row.mime),
+      durationMs,
+      width: probe.width,
+      height: probe.height,
+      hasAudio: probe.has_audio
+    })
     return {
       file_id: String(file.id),
       duration_ms: durationMs,
@@ -480,7 +503,7 @@ function uploadThreads(): number {
  *  encode, and an author starting several must not starve renders and
  *  requests. Copies (no re-encode) do not wait for the slot. */
 let conversionTail: Promise<void> = Promise.resolve()
-async function withConversionSlot<T>(
+export async function withConversionSlot<T>(
   onWait: () => Promise<unknown>,
   work: () => Promise<T>
 ): Promise<T> {
@@ -653,6 +676,17 @@ export async function processFile(
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
     recorded = true
     await rm(raw, { force: true })
+    // Thumbnails and waveform (#1560): an uploaded file has no microphone
+    // levels, so its peaks are what gives it a waveform.
+    startMediaExtras(user, {
+      uploadId: String(dbId).toLowerCase(),
+      fileId: String(file.id),
+      mime: plan.container,
+      durationMs: probe.duration_ms,
+      width: probe.width,
+      height: probe.height,
+      hasAudio: probe.has_audio
+    })
   } catch (err) {
     const e = err as Error & { statusCode?: number; code?: string }
     if (createdFile && !recorded && !(await discardFile(user, createdFile))) {
@@ -794,6 +828,7 @@ export async function takeFinalizedUpload(user: User, uploadId: string): Promise
   } catch {
     meta = {}
   }
+  const sprite = parseSprite(row.sprite)
   return {
     file_id: String(row.file_id),
     duration_ms: row.duration_ms == null ? null : Number(row.duration_ms),
@@ -801,7 +836,10 @@ export async function takeFinalizedUpload(user: User, uploadId: string): Promise
     height: row.height == null ? null : Number(row.height),
     has_audio: row.has_audio !== false && row.has_audio !== 0,
     clicks: meta.clicks ?? null,
-    levels: meta.levels ?? null
+    levels: meta.levels ?? null,
+    sprite_file: sprite && row.sprite_file ? String(row.sprite_file) : null,
+    sprite,
+    peaks: parsePeaks(row.peaks)
   }
 }
 
@@ -850,6 +888,7 @@ async function deleteRecording(uploadId: unknown, fileId: string): Promise<boole
       .where({ id: uploadId })
       .update({ file_id: null, updated_at: new Date() })
     await deleteFile(fileId)
+    await deleteSprite(uploadId)
     return true
   } catch (err) {
     await db('nivaro_help_video_uploads')
@@ -862,6 +901,25 @@ async function deleteRecording(uploadId: unknown, fileId: string): Promise<boole
     )
     return false
   }
+}
+
+/** The thumbnail sheet of a discarded recording (#1560): unlinked from the
+ *  row first (its foreign key), then deleted. Nothing before migration 412. */
+async function deleteSprite(uploadId: unknown): Promise<void> {
+  if (!(await extrasMigrated())) return
+  const row = (await db('nivaro_help_video_uploads')
+    .where({ id: uploadId })
+    .first('sprite_file')) as { sprite_file?: unknown } | undefined
+  if (!row?.sprite_file) return
+  const spriteId = String(row.sprite_file)
+  await db('nivaro_help_video_uploads')
+    .where({ id: uploadId })
+    .update({ sprite_file: null, sprite: null, peaks: null })
+  await deleteFile(spriteId).catch((err) =>
+    console.warn(
+      `help-video upload ${String(uploadId).toLowerCase()}: could not delete sprite ${spriteId}: ${(err as Error).message}`
+    )
+  )
 }
 
 /** Discards an open upload, or a finished recording no video uses. Anything

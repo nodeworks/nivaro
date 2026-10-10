@@ -231,6 +231,9 @@ function EditorBody({
   const uploaded = draft.source_kind === 'upload'
   const segIndex = segmentIndexAt(edits, src)
   const silent = useMemo(() => suggestCuts(draft.levels ?? null, edits), [draft.levels, edits])
+  // The sound lane (#1560): the microphone levels, else the server's peaks
+  // (an uploaded video has only those).
+  const soundLevels = draft.levels?.length ? draft.levels : (draft.peaks ?? null)
   // Pauses plus, on a recording of the author's own tab, idle stretches and
   // typing (#1518) — the toolbar's suggestion list.
   const suggestions = useMemo(
@@ -616,7 +619,8 @@ function EditorBody({
               edits={edits}
               sourceMs={sourceMs}
               playheadSrcMs={src}
-              levels={draft.levels ?? null}
+              levels={soundLevels}
+              sprite={draft.sprite ?? null}
               uploaded={uploaded}
               silences={silent}
               selection={selection}

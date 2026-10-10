@@ -8,8 +8,10 @@ import {
   useRef,
   useState
 } from 'react'
-import type { RecordedClick, VideoEdits } from '../types'
+import { useApiFetchConfig } from '../../../context'
+import type { RecordedClick, SpriteSheet, VideoEdits } from '../types'
 import type { Stretch } from './suggestCuts'
+import { filmstripTiles } from './timeline/filmstrip'
 import { clock, LANES, Lanes, type Selection } from './timeline/Lanes'
 import { Playhead } from './timeline/Playhead'
 import { laneLayout } from './timeline/packRows'
@@ -20,6 +22,8 @@ export type { Selection }
 
 const RULER_H = 24
 const SOUND_H = 32
+/** The frames row (#1560), shown only when the server built a sprite sheet. */
+const FRAMES_H = 44
 const MAX_PX_PER_SEC = 200
 /** Ruler label steps, in seconds; the first that leaves ≥ 64 px between labels wins. */
 const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
@@ -31,6 +35,7 @@ export function Timeline({
   sourceMs,
   playheadSrcMs,
   levels,
+  sprite,
   uploaded,
   silences,
   selection,
@@ -44,7 +49,12 @@ export function Timeline({
   edits: VideoEdits
   sourceMs: number
   playheadSrcMs: number
+  /** Sound levels (0–1 per 100 ms): the recorder's microphone levels, or the
+   *  server's audio peaks (#1560) when there are none. */
   levels: number[] | null
+  /** The server's thumbnail sheet (#1560): a frames row under the ruler.
+   *  Absent (older versions, large recordings) = no row. */
+  sprite?: SpriteSheet | null
   /** The source is an uploaded file: there are no microphone levels to draw. */
   uploaded?: boolean
   /** Suggested silent stretches, shaded on the sound lane. */
@@ -132,6 +142,13 @@ export function Timeline({
     () => (levels?.length ? waveformPath(levels, pps, SOUND_H) : ''),
     [levels, pps]
   )
+  const { apiBase } = useApiFetchConfig()
+  const spriteUrl = sprite ? `${apiBase.replace(/\/api$/, '')}${sprite.url}` : null
+  const tiles = useMemo(
+    () => (sprite && sourceMs > 0 ? filmstripTiles(sprite, pps, sourceMs, FRAMES_H) : []),
+    [sprite, pps, sourceMs]
+  )
+  const framesH = tiles.length ? FRAMES_H : 0
 
   return (
     <section
@@ -192,6 +209,14 @@ export function Timeline({
       <div className='flex border-t border-border'>
         <div className='w-[76px] shrink-0 border-r border-border sm:w-[88px]' aria-hidden>
           <div style={{ height: RULER_H }} className='border-b border-border' />
+          {framesH > 0 && (
+            <div
+              className='border-b border-border px-2 text-[11px] text-muted-foreground'
+              style={{ height: framesH, lineHeight: `${framesH}px` }}
+            >
+              Frames
+            </div>
+          )}
           <div
             className='border-b border-border px-2 text-[11px] text-muted-foreground'
             style={{ height: SOUND_H, lineHeight: `${SOUND_H}px` }}
@@ -228,7 +253,33 @@ export function Timeline({
                 </span>
               ))}
             </div>
-            {/* sound, from the recorder's microphone levels */}
+            {/* frames, from the server's thumbnail sheet (#1560) */}
+            {framesH > 0 && spriteUrl && (
+              <div
+                className='relative overflow-hidden border-b border-border bg-muted/40'
+                style={{ height: framesH }}
+                onPointerDown={scrub}
+                data-hv-filmstrip={tiles.length}
+                aria-hidden
+              >
+                {tiles.map((t) => (
+                  <span
+                    key={t.left}
+                    className='absolute top-0 h-full'
+                    style={{
+                      left: t.left,
+                      width: t.width,
+                      backgroundImage: `url("${spriteUrl}")`,
+                      backgroundPosition: `${t.bgX}px ${t.bgY}px`,
+                      backgroundSize: `${t.bgW}px ${t.bgH}px`,
+                      backgroundRepeat: 'no-repeat'
+                    }}
+                    data-hv-filmstrip-tile={t.ms}
+                  />
+                ))}
+              </div>
+            )}
+            {/* sound, from the recorder's microphone levels or the server's peaks */}
             <div className='relative border-b border-border' style={{ height: SOUND_H }}>
               {silences?.map((r) => (
                 <span
