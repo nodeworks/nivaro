@@ -16,9 +16,15 @@ import { type ReactNode, useCallback, useId, useState } from 'react'
  * Areas: tools across the top; the picture with the side panel beside it; the
  * timeline full width at the bottom (time needs every pixel of width). Narrow:
  * one column that scrolls — tools, picture, timeline, side panel.
+ *
+ * Every scrolling area is `position: relative`. Without it, an absolutely
+ * positioned child (the side panel's screen-reader-only headings) takes the
+ * page as its containing block, sits at its scrolled-away spot far below the
+ * window and stretches the whole document, so the page scrolls past the end.
  */
 const CSS = `
 [data-hvx-root]{container-type:inline-size;container-name:hvx}
+[data-hvx-edit],[data-hvx-side],[data-hvx-timeline]{position:relative}
 [data-hvx-head]{display:flex;flex-wrap:wrap;align-items:center;gap:8px 16px;padding:10px 16px;border-bottom:1px solid hsl(var(--border))}
 [data-hvx-head-title]{display:flex;flex:1 1 260px;flex-wrap:wrap;align-items:baseline;gap:2px 12px;min-width:0}
 [data-hvx-head-actions]{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:8px 14px;margin-left:auto}

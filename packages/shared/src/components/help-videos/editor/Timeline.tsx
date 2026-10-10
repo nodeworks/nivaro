@@ -205,7 +205,7 @@ export function Timeline({
 
   return (
     <section
-      className='flex shrink-0 flex-col border-t border-border bg-card'
+      className='flex shrink-0 flex-col border-t border-border bg-card pb-3'
       aria-label='Timeline'
       data-hv-timeline
     >
