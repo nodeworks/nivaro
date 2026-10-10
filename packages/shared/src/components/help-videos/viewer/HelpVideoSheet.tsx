@@ -1,8 +1,17 @@
-import { MousePointerClick, Sparkles } from 'lucide-react'
-import { type RefObject, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { MousePointerClick, PictureInPicture2, Sparkles } from 'lucide-react'
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useReducer,
+  useRef,
+  useState
+} from 'react'
+import { createPortal } from 'react-dom'
 import { useNavigation } from '../../../context'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../../ui/sheet'
-import { useHelpVideo, useHelpVideoWalk } from '../api'
+import { useHelpVideo, useHelpVideoNext, useHelpVideoWalk } from '../api'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto } from '../types'
 import { HelpVideoWalkHost } from '../walk/HelpVideoWalk'
@@ -10,8 +19,13 @@ import { startHelpVideoWalk, useCurrentHelpVideoPage } from '../walk/store'
 import { stepMatchesHere } from '../walk/target'
 import { CopyMomentLink } from './CopyMomentLink'
 import { DownloadMenu } from './DownloadMenu'
-import { formatDuration, isGettingReady, visibleChapters } from './format'
+import { FeedbackPanel } from './FeedbackPanel'
+import { feedbackDue } from './feedback'
+import { formatDuration, visibleChapters } from './format'
+import { MiniPanel, PipContents, preparePipDocument, StageSlot } from './MiniPlayerHost'
+import { handOver, hasDocumentPip, MINI_INITIAL, MINI_PANEL, miniReducer } from './miniPlayer'
 import { resolveMomentStart } from './moments'
+import { UpNextList } from './UpNext'
 
 export function useHelpVideosPath(): (query?: string) => string {
   const nav = useNavigation()
@@ -20,6 +34,20 @@ export function useHelpVideosPath(): (query?: string) => string {
 
 const rowButton =
   'flex w-full items-center gap-3 px-3 py-2 text-left transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan motion-reduce:transition-none'
+const smallButton =
+  'inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12.5px] font-medium transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none'
+
+type PipWindow = Window & { close(): void }
+type DocPip = { requestWindow(o?: { width?: number; height?: number }): Promise<PipWindow> }
+
+/** A detached element that is never shown: the stage is parked here between
+ *  two homes so the <video> never leaves the document (which would pause it). */
+function makeHolder(): HTMLDivElement {
+  const d = document.createElement('div')
+  d.setAttribute('data-hv-stage-holder', '')
+  d.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;overflow:hidden'
+  return d
+}
 
 export function HelpVideoSheet({
   videoId,
@@ -35,7 +63,8 @@ export function HelpVideoSheet({
   videoId: string | null
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** Other videos for the same screen, offered under the player. */
+  /** Other videos for the same screen, offered under the player when the
+   *  server has nothing better (#1530). */
   upNext?: HelpVideoDto[]
   onPick?: (id: string) => void
   /** Where focus goes on close when the opener unmounts while the sheet is
@@ -49,7 +78,6 @@ export function HelpVideoSheet({
   showMe?: boolean
 }) {
   const { data: video, error } = useHelpVideo(open ? videoId : null)
-  const next = upNext.filter((v) => v.id !== videoId && v.published)
   const player = useRef<PlayerHandle | null>(null)
   const nav = useNavigation()
   const path = useHelpVideosPath()
@@ -71,17 +99,189 @@ export function HelpVideoSheet({
   const firstHere = steps.findIndex((s) => stepMatchesHere(s, here))
   const stepsHere = steps.filter((s) => stepMatchesHere(s, here)).length
 
+  // ── The one player, and where it lives (#1500) ───────────────────────────
+  // The player renders through a portal into `stage`; the stage is moved
+  // between the sheet, a Document Picture-in-Picture window and the floating
+  // panel, so the React tree and the <video> survive every move.
+  const [stage] = useState(() =>
+    typeof document === 'undefined' ? null : document.createElement('div')
+  )
+  const [holder] = useState(() => (typeof document === 'undefined' ? null : makeHolder()))
+  const [mini, dispatch] = useReducer(miniReducer, MINI_INITIAL)
+  const pip = useRef<{ win: PipWindow; onHide: () => void; onResize: () => void } | null>(null)
+  const [pipBody, setPipBody] = useState<HTMLElement | null>(null)
+  useEffect(() => {
+    if (!holder) return
+    document.body.appendChild(holder)
+    return () => holder.remove()
+  }, [holder])
+  useEffect(() => {
+    if (open) dispatch({ type: 'open' })
+    else dispatch({ type: 'close' })
+  }, [open])
+  const snapshot = () => ({
+    at: player.current?.editedMs() ?? 0,
+    playing: player.current?.isPlaying() ?? false
+  })
+  /** The clock after a move: normally untouched; restored when the browser reset it. */
+  const afterMove = (before: { at: number; playing: boolean }) => {
+    player.current?.remeasure()
+    window.setTimeout(() => {
+      const h = player.current
+      if (!h) return
+      h.remeasure()
+      const r = handOver(before, { at: h.editedMs(), playing: h.isPlaying() })
+      if (r.seekTo !== null) h.seekEdited(r.seekTo)
+      if (r.resume) h.play()
+    }, 80)
+  }
+  const park = () => {
+    if (stage && holder && stage.parentElement !== holder) holder.appendChild(stage)
+  }
+  const closePip = () => {
+    const p = pip.current
+    if (!p) return
+    pip.current = null
+    p.win.removeEventListener('pagehide', p.onHide)
+    p.win.removeEventListener('resize', p.onResize)
+    park()
+    setPipBody(null)
+    try {
+      p.win.close()
+    } catch {
+      /* already gone */
+    }
+  }
+  const popOut = async () => {
+    if (!stage || mini.place !== 'sheet') return
+    const before = snapshot()
+    if (hasDocumentPip(window)) {
+      try {
+        const api = (window as unknown as { documentPictureInPicture: DocPip })
+          .documentPictureInPicture
+        const win = await api.requestWindow({ width: MINI_PANEL.width, height: MINI_PANEL.height })
+        preparePipDocument(win, document)
+        // The window was closed from the OS side: the sheet comes back at
+        // the same moment (the stage is rescued before the document goes).
+        const onHide = () => {
+          if (pip.current?.win !== win) return
+          const at = snapshot()
+          pip.current = null
+          park()
+          setPipBody(null)
+          dispatch({ type: 'mini-closed', ...at })
+          afterMove(at)
+        }
+        const onResize = () => player.current?.remeasure()
+        win.addEventListener('pagehide', onHide)
+        win.addEventListener('resize', onResize)
+        pip.current = { win, onHide, onResize }
+        // Move the stage now, in this task, so the video never pauses.
+        win.document.body.appendChild(stage)
+        setPipBody(win.document.body)
+        dispatch({ type: 'pop-out', kind: 'pip', ...before })
+        afterMove(before)
+        return
+      } catch {
+        // Refused (no user gesture, policy): the floating panel instead.
+      }
+    }
+    park()
+    dispatch({ type: 'pop-out', kind: 'panel', ...before })
+    afterMove(before)
+  }
+  const popIn = () => {
+    if (mini.place !== 'mini') return
+    const at = snapshot()
+    closePip()
+    park()
+    dispatch({ type: 'pop-in', ...at })
+    afterMove(at)
+  }
+  const closeAll = () => {
+    closePip()
+    onOpenChange(false)
+  }
+  // The host closed while the video was popped out (and on unmount).
+  const closePipRef = useRef(closePip)
+  closePipRef.current = closePip
+  useEffect(() => {
+    if (!open) closePipRef.current()
+  }, [open])
+  useEffect(() => () => closePipRef.current(), [])
+  const sheetOpen = open && mini.place !== 'mini'
+
+  // ── The end of the video: feedback (#1505) and Up next (#1530) ──────────
+  const [ended, setEnded] = useState(false)
+  const [due, setDue] = useState(false)
+  const dueRef = useRef(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new video starts over
+  useEffect(() => {
+    setEnded(false)
+    setDue(false)
+    dueRef.current = false
+  }, [videoId, open])
+  const completed = !!video?.my_progress?.completed
+  const onTime = useCallback((_src: number, editedMs: number) => {
+    if (dueRef.current) return
+    const total = player.current?.totalMs() ?? 0
+    if (feedbackDue({ editedMs, totalMs: total, ended: false, completed: false })) {
+      dueRef.current = true
+      setDue(true)
+    }
+  }, [])
+  const onEnded = useCallback(() => {
+    setEnded(true)
+    dueRef.current = true
+    setDue(true)
+  }, [])
+  const nextQ = useHelpVideoNext(videoId, open && !!video?.published)
+  const fallbackNext = upNext.filter(
+    (v) => v.id !== videoId && v.published && !v.my_progress?.completed
+  )
+  const next = (nextQ.data?.length ? nextQ.data : fallbackNext).filter((v) => v.id !== videoId)
+
   // Runs before the dialog's focus scope moves focus into the sheet.
   const opener = useRef<HTMLElement | null>(null)
   useLayoutEffect(() => {
-    if (open && document.activeElement instanceof HTMLElement)
+    if (sheetOpen && document.activeElement instanceof HTMLElement)
       opener.current = document.activeElement
-  }, [open])
+  }, [sheetOpen])
+
+  const title = video?.title || 'Video'
+  const showPlayer = open && !!video?.published && !!stage
 
   return (
     <>
       <HelpVideoWalkHost />
-      <Sheet open={open} onOpenChange={onOpenChange}>
+      {showPlayer &&
+        stage &&
+        createPortal(
+          <HelpVideoPlayer
+            key={video.published?.id}
+            video={video}
+            mode='viewer'
+            handleRef={player}
+            startAtMs={startMs}
+            onTime={onTime}
+            onEnded={onEnded}
+            autoPlay
+          />,
+          stage
+        )}
+      {open && stage && mini.place === 'mini' && mini.kind === 'panel' && (
+        <MiniPanel stage={stage} title={title} onPopIn={popIn} onClose={closeAll} />
+      )}
+      {open && stage && mini.place === 'mini' && mini.kind === 'pip' && pipBody && (
+        <PipContents
+          body={pipBody}
+          stage={stage}
+          title={title}
+          onPopIn={popIn}
+          onClose={closeAll}
+        />
+      )}
+      <Sheet open={sheetOpen} onOpenChange={onOpenChange}>
         <SheetContent
           className='flex w-[min(960px,96vw)] flex-col gap-3 overflow-y-auto sm:max-w-none'
           data-hv-sheet={videoId ?? ''}
@@ -108,7 +308,7 @@ export function HelpVideoSheet({
               This video has not been published yet.
             </p>
           )}
-          {video?.published && (
+          {video?.published && stage && (
             <>
               {news && (
                 <WhatsNewNote
@@ -119,39 +319,53 @@ export function HelpVideoSheet({
                   }}
                 />
               )}
-              <HelpVideoPlayer
-                key={video.published.id}
-                video={video}
-                mode='viewer'
-                handleRef={player}
-                startAtMs={startMs}
-                autoPlay
-              />
-              {showMe && firstHere >= 0 && video && (
-                <div className='flex flex-wrap items-center gap-x-3 gap-y-1' data-hv-show-me-row>
-                  <button
-                    type='button'
-                    className='inline-flex h-8 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 text-[12.5px] font-medium transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none'
-                    onClick={() => {
-                      player.current?.pause()
-                      onOpenChange(false)
-                      startHelpVideoWalk({
-                        videoId: video.id,
-                        title: video.title || 'Video',
-                        steps,
-                        index: firstHere
-                      })
-                    }}
-                    data-hv-show-me
-                  >
-                    <MousePointerClick className='h-3.5 w-3.5' aria-hidden /> Show me on this page
-                  </button>
-                  <span className='text-[12px] text-muted-foreground'>
-                    Highlights what to click, {stepsHere === 1 ? 'one step' : `${stepsHere} steps`}{' '}
-                    on this screen.
-                  </span>
-                </div>
+              <StageSlot stage={stage} />
+              {ended && next.length > 0 && onPick && (
+                <UpNextList videos={next} onPick={onPick} prominent />
               )}
+              <div className='flex flex-wrap items-center gap-x-3 gap-y-1' data-hv-player-row>
+                <button
+                  type='button'
+                  className={smallButton}
+                  onClick={() => void popOut()}
+                  title='Keep playing in a small window while you work'
+                  data-hv-pop-out
+                >
+                  <PictureInPicture2 className='h-3.5 w-3.5' aria-hidden /> Keep playing while I
+                  work
+                </button>
+                {showMe && firstHere >= 0 && (
+                  <>
+                    <button
+                      type='button'
+                      className={smallButton}
+                      onClick={() => {
+                        player.current?.pause()
+                        onOpenChange(false)
+                        startHelpVideoWalk({
+                          videoId: video.id,
+                          title: video.title || 'Video',
+                          steps,
+                          index: firstHere
+                        })
+                      }}
+                      data-hv-show-me
+                    >
+                      <MousePointerClick className='h-3.5 w-3.5' aria-hidden /> Show me on this page
+                    </button>
+                    <span className='text-[12px] text-muted-foreground'>
+                      Highlights what to click,{' '}
+                      {stepsHere === 1 ? 'one step' : `${stepsHere} steps`} on this screen.
+                    </span>
+                  </>
+                )}
+              </div>
+              <FeedbackPanel
+                video={video}
+                due={due || completed}
+                currentMs={() => player.current?.editedMs() ?? 0}
+                totalMs={player.current?.totalMs() ?? video.duration_ms ?? 0}
+              />
               {chapters.length > 1 && (
                 <nav aria-label='Chapters' data-hv-chapters>
                   <h3 className='mb-1 text-[12px] font-medium text-muted-foreground'>Chapters</h3>
@@ -179,28 +393,7 @@ export function HelpVideoSheet({
               )}
             </>
           )}
-          {next.length > 0 && onPick && (
-            <section aria-label='Up next' data-hv-up-next>
-              <h3 className='mb-1 text-[12px] font-medium text-muted-foreground'>Up next</h3>
-              <ul className='divide-y divide-border overflow-hidden rounded-md border border-border text-[13px]'>
-                {next.map((v) => (
-                  <li key={v.id}>
-                    <button
-                      type='button'
-                      className={rowButton}
-                      onClick={() => onPick(v.id)}
-                      data-hv-up-next-item={v.id}
-                    >
-                      <span className='min-w-0 flex-1 truncate'>{v.title}</span>
-                      <span className='shrink-0 text-[12px] tabular-nums text-muted-foreground'>
-                        {isGettingReady(v) ? 'Getting ready' : formatDuration(v.duration_ms)}
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
+          {!ended && next.length > 0 && onPick && <UpNextList videos={next} onPick={onPick} />}
           <div className='flex flex-wrap items-center justify-between gap-3'>
             <button
               type='button'

@@ -23,6 +23,7 @@ import {
 } from '../edits'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
+import { addAnswerAsCaption, addAnswerAsChapter } from './answerEdits'
 import { addChapterAt } from './ChaptersPanel'
 import { EditorSidebar } from './EditorSidebar'
 import { historyReducer, initHistory } from './history'
@@ -274,6 +275,28 @@ function EditorBody({
     else set(r.edits)
     if (r.id) setSelection({ lane: 'chapters', id: r.id })
   }, [playhead, showNote, set])
+  // Stats → an answer to a viewer's question also lands in the draft as a
+  // chapter or caption at the moment it was asked (#1505); the usual save and
+  // publish follow.
+  const answerEdit = useCallback(
+    (kind: 'chapter' | 'caption', editedMs: number, text: string): string | null => {
+      const r =
+        kind === 'chapter'
+          ? addAnswerAsChapter(editsRef.current, editedMs, text)
+          : addAnswerAsCaption(editsRef.current, editedMs, text, sourceMs)
+      if (r.refused) return r.refused
+      set(r.edits)
+      return null
+    },
+    [set, sourceMs]
+  )
+  const jumpToMoment = useCallback(
+    (editedMs: number) => {
+      onTab('edit')
+      player.current?.seekEdited(editedMs)
+    },
+    [onTab]
+  )
   const stopDrawing = useCallback(() => setTool(null), [])
   // A jump made from the side panel (a chapter, a caption, Jump to it, Show
   // it) remembers where the playhead and selection were, so one click takes
@@ -635,6 +658,8 @@ function EditorBody({
           flush={save.flush}
           conflict={save.status === 'conflict'}
           onReload={onReload}
+          onJump={jumpToMoment}
+          onAnswerEdit={answerEdit}
         />
       </Tabs>
     </div>

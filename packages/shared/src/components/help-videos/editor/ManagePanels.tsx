@@ -5,7 +5,7 @@ import { helpVideoKeys } from '../api'
 import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoRecordingProvider'
 import type { HelpVideoDto } from '../types'
 import { DetailsTab } from './DetailsTab'
-import { StatsTab } from './StatsTab'
+import { type AnswerEdit, StatsTab } from './StatsTab'
 import { VersionsTab } from './VersionsTab'
 
 /**
@@ -17,7 +17,9 @@ export function ManagePanels({
   video,
   flush,
   conflict,
-  onReload
+  onReload,
+  onJump,
+  onAnswerEdit
 }: {
   video: HelpVideoDto
   /** Lands the editor's pending save; false when it failed. */
@@ -26,6 +28,10 @@ export function ManagePanels({
   conflict: boolean
   /** Loads the draft afresh (after a restore or a re-record). */
   onReload: () => void
+  /** Stats → Jump to moment: shows the Edit tab there (edited time). */
+  onJump?: (editedMs: number) => void
+  /** Stats → an answer also becomes a chapter or caption in the draft (#1505). */
+  onAnswerEdit?: AnswerEdit
 }) {
   const qc = useQueryClient()
   const recorder = useHelpVideoRecording()
@@ -56,7 +62,7 @@ export function ManagePanels({
         />
       </TabsContent>
       <TabsContent value='stats' className={scroll}>
-        <StatsTab video={video} />
+        <StatsTab video={video} onJump={onJump} onAnswerEdit={onAnswerEdit} />
       </TabsContent>
       {busy && recorder.active && (
         <p role='status' className='px-4 py-2 text-[12px] text-rose-700 dark:text-rose-300'>

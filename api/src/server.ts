@@ -739,6 +739,13 @@ export async function buildServer() {
         const { sweepRenders } = await import('./services/help-video-render.js')
         await sweepRenders()
       })
+      // Help videos: "watched next" (#1530) — which video people in a role
+      // started after each one, recomputed nightly from the view rows. The
+      // scheduler records every tick as a job run (Background Jobs).
+      app.cron.schedule('help-video-next', '20 3 * * *', async () => {
+        const { computeNextTable } = await import('./services/help-video-next.js')
+        await computeNextTable()
+      })
       // Every process clears its own stale render scratch; only a process
       // that owns the render queue (ticks crons or VIDEO_RENDER=on) drains it.
       void import('./services/help-video-render.js')

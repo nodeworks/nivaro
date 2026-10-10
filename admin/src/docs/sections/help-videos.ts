@@ -110,10 +110,25 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: 'Ask AI searches the videos the person asking may watch — published videos only, by the same who-can-watch rules as the library — when a question is about how to do something in the app. It looks in titles, chapter names, the captions and descriptions, best matches first (title, then chapter, then caption, then description), and cites a video as a link such as "Watch 0:42 of How to submit to warehouse" that opens the player at that moment. A draft or a video the person may not watch is never offered. Extensions can ship starter videos of their own (see Extension Development → Help videos).'
     },
+    { type: 'h3', text: 'Keep playing while you work' },
+    {
+      type: 'p',
+      text: 'Keep playing while I work (under the player) pops the video out into a small window that stays on top while you use the screen it explains. In browsers with Document Picture-in-Picture (Chrome, Edge) that is a window of its own; elsewhere the player docks to the bottom-right corner of the page and the page keeps room for it, as it does for the pinned chat panel. It is the same player moved, not a second one: the video keeps playing from the same moment, captions, chapter marks and the progress that counts toward required viewing carry on, and Back to the video (or closing the small window) brings the sheet back at the same moment. Close in the small window stops watching.'
+    },
+    { type: 'h3', text: 'Was this helpful? and questions at a moment' },
+    {
+      type: 'p',
+      text: 'When a video ends (or the viewer has watched most of it), Was this helpful? offers a thumbs up or down — one vote per person per video, changeable. Ask a question here, available at any time, captures the moment the viewer is at and sends the question (up to 1000 characters) to the video’s creator — or, when that person is gone, to the other authors — as an in-app notification that opens the editor. The viewer sees their own questions, and the answers, in a quiet list under the player and is notified when an answer arrives. Authors answer from the editor’s Stats tab, where each question shows who asked, when, Jump to moment and its answer state; the answer form can also add the answer as a chapter or as a caption at that moment — it lands in the draft like any other edit (saved as you go, published with Publish). Question and answer text is shown exactly as typed. Nothing is recorded while viewing as someone else.'
+    },
+    { type: 'h3', text: 'Up next' },
+    {
+      type: 'p',
+      text: 'Up next (after the video ends, and under the player) suggests up to five published videos the viewer may watch and has not finished: first what people in the viewer’s role started within two hours after this video, then what anyone did, then other videos for the same screen. The pairs are recomputed nightly (the help-video-next job, 03:20, listed under Background Jobs) from the view rows; clicking a suggestion plays it in the same sheet.'
+    },
     { type: 'h3', text: 'Stats' },
     {
       type: 'p',
-      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, and where people stop — the share of viewers who reached each 5% of the video. Administrators can also delete an archived video for good with Delete permanently on the Archived tab (only archived videos can be deleted permanently), which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
+      text: 'Stats shows how many people watched, how many watched most of it, the total hours watched, how many found it helpful (thumbs up and down), where people stop — the share of viewers who reached each 5% of the video — and the questions viewers asked, with their answers. Administrators can also delete an archived video for good with Delete permanently on the Archived tab (only archived videos can be deleted permanently), which removes every version, the recording and video files, the viewing record and any required viewing and cannot be undone.'
     }
   ]
 }
@@ -224,7 +239,31 @@ export const helpVideosApi: DocSection = {
           'viewers',
           '"Show me on this page": the published version’s labelled clicks inside kept pieces, in order — label, role, hook, page_key, path, origin, edited_ms and the nearby callout/box text. Never the draft'
         ],
-        ['GET /help-videos/:id/analytics', 'authors', 'Viewers, completion, hours, drop-off'],
+        [
+          'GET /help-videos/:id/analytics',
+          'authors',
+          'Viewers, completion, hours, drop-off, ratings {up, down, helpful_rate} and the questions with their answers'
+        ],
+        [
+          'PUT /help-videos/:id/rating',
+          'viewers',
+          'Was this helpful? — body {helpful: true|false}, one vote per person (changed in place); 403 HELP_VIDEO_MASQUERADE while viewing as someone else'
+        ],
+        [
+          'GET · POST /help-videos/:id/questions',
+          'viewers',
+          'This person’s questions (authors: everyone’s, with who asked) plus my_rating; POST {at_ms, text ≤ 1000} asks one at a moment (edited time) and notifies the creator or the other authors'
+        ],
+        [
+          'POST /help-videos/:id/questions/:qid/answer',
+          'authors',
+          'Answers a question ({answer ≤ 2000}); the asker is notified. Adding it as a chapter or caption goes through PUT …/draft/edits'
+        ],
+        [
+          'GET /help-videos/:id/next',
+          'viewers',
+          'Up next: up to 5 published, visible, unfinished videos — this role’s watched-next pairs, then anyone’s, then the same screen (nivaro_help_video_next, recomputed nightly)'
+        ],
         [
           'GET /help-videos/:id/download?st=&file=video|captions.vtt|captions.srt',
           'signed link',
