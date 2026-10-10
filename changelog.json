@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-10T17:53:38.216Z",
+  "generated_at": "2026-10-10T18:51:00.895Z",
   "releases": [
+    {
+      "version": "0.2.35",
+      "tag": "v0.2.35",
+      "date": "2026-10-10T14:50:48-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Help videos: editor page no longer scrolls past its end",
+              "hash": "d3e13c2d"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.34",
       "tag": "v0.2.34",
-      "date": "2026-10-10T13:53:22-04:00",
+      "date": "2026-10-10T13:53:38-04:00",
       "sections": [
         {
           "label": "Other",
