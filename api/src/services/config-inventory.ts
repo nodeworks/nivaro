@@ -228,6 +228,9 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tuning_proposals',
   'nivaro_tuning_param_sets',
   'nivaro_session_events',
+  // session replay heatmaps (migration 426) — folded from this environment's recordings
+  'nivaro_replay_heat',
+  'nivaro_replay_heat_frames',
   'nivaro_item_locks',
   'nivaro_notifications',
   'nivaro_deferred_emails',

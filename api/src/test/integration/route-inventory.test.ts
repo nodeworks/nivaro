@@ -122,6 +122,10 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-recordings/' },
   { method: 'GET', path: '/api/session-recordings/:id/events' },
   { method: 'GET', path: '/api/session-recordings/:id/events-rail' },
+  // Session replay heatmaps (#1364)
+  { method: 'GET', path: '/api/session-replay-insights/heat/routes' },
+  { method: 'GET', path: '/api/session-replay-insights/heat' },
+  { method: 'GET', path: '/api/session-replay-insights/heat/frame' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

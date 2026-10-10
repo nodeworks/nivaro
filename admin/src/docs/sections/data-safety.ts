@@ -254,6 +254,21 @@ function App() {
         'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
         'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-heat', text: 'Heatmaps' },
+    {
+      type: 'p',
+      text: 'The Heat tab shows where people click on a route and how far down they scroll, summed over every recording of that route in a date range. Pick a route on the left; the route is drawn as it was last recorded, with the clicks over it, the most-clicked elements and the share of visits that reached each screen beside it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Heat is aggregate-only. A nightly job (session-replay-heat, 02:05 UTC) folds finished recordings into counts per app, route pattern, day and screen size: click positions as 2% squares of the viewport, the element clicked, and the deepest point of each visit. No person, recording or session is stored with the counts, and nothing in them can be traced back to who clicked.',
+        'Routes are patterns (/collections/workflows/:id), never record ids. Element names prefer test hooks, labels and short button text, and leave out text with digits or addresses, so a record’s data does not become an element name.',
+        'Each run takes at most 300 recordings (about 250MB stored), oldest first, and marks them folded; a backlog drains over the following nights. Error clips are left out. Run it now from Background Jobs.',
+        'The drawing of the route comes from the newest recording that showed it. When that recording has expired with retention, the heat is drawn on a blank viewport instead; the counts themselves are kept for 180 days.',
+        'Positions are relative to the viewport, so a phone and a wide monitor put the same button in different places. Pick one screen size to sharpen the map.'
+      ]
     }
   ]
 }
