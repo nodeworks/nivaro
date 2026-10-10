@@ -2,6 +2,7 @@ import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
 import { chunkArray } from './db-batch.js'
 import { ReplayNodeMap, type RrwebEventLike } from './session-replay-heat-nodes.js'
+import { ensureRecordingHot } from './session-replay-storage.js'
 import { normalizeScreenPath } from './traffic-client-facts.js'
 
 /**
@@ -710,6 +711,8 @@ export async function readFrameEvents(
   recordingId: string,
   atMs: number
 ): Promise<RrwebEventLike[] | null> {
+  // #1411 — a cold recording is read back from object storage first.
+  await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
   const chunks = (await db('nivaro_session_events')
     .where({ recording: recordingId })
     .orderBy('seq', 'asc')

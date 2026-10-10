@@ -6,6 +6,7 @@ import { readMasquerade } from '@/lib/masquerade'
 import {
   backoffDelay,
   CHUNK_BYTES,
+  type ChunkExtra,
   clearResume,
   type DrainOutcome,
   isResumable,
@@ -23,6 +24,19 @@ import {
   instrumentRequests,
   redactSecrets
 } from '../../../packages/shared/src/lib/replay-context'
+import {
+  buildReplayMaskingOptions,
+  normalizeReplayMasking,
+  type ReplayMaskingRules
+} from '../../../packages/shared/src/lib/replay-masking'
+import {
+  attributeChunkRoutes,
+  currentReplayRoute,
+  isReplayRouteSampled,
+  normalizeReplaySampling,
+  type ReplaySampling,
+  replaySampleDraw
+} from '../../../packages/shared/src/lib/replay-sampling'
 
 function clientMeta(): Record<string, string | number> {
   try {
@@ -60,7 +74,10 @@ function clientMeta(): Record<string, string | number> {
  * did in the minute before the crash without anyone recording all day.
  *
  * Privacy is identical in both modes: every input masked, .nvr-no-record
- * blocked. In buffer mode the events never leave the browser except on error.
+ * blocked, and record field values, rich text and file names masked by the
+ * instance's masking rules (#1361, lib/replay-masking.ts) — an admin can
+ * allow a safe field. In buffer mode the events never leave the browser
+ * except on error.
  *
  * `captureErrorClip` is a module singleton (registerDmOpener precedent) so
  * the error boundary — a class component far from this hook — can call it.
@@ -96,15 +113,22 @@ async function sendChunk(
   recordingId: string,
   seq: number,
   events: unknown[],
-  keepalive: boolean
+  keepalive: boolean,
+  extra: ChunkExtra = {}
 ): Promise<void> {
   if (!keepalive) {
-    await api.post(`/session-recordings/${recordingId}/events`, { seq, events })
+    await api.post(`/session-recordings/${recordingId}/events`, { seq, events, ...extra })
     return
   }
-  const res = await fetch(eventsUrl(recordingId), keepaliveInit(JSON.stringify({ seq, events })))
+  const res = await fetch(
+    eventsUrl(recordingId),
+    keepaliveInit(JSON.stringify({ seq, events, ...extra }))
+  )
   if (!res.ok) throw Object.assign(new Error(`HTTP ${res.status}`), { status: res.status })
 }
+
+/** The build this bundle was made from — stamped on every chunk (#1368). */
+const BUILD = typeof __NIVARO_ADMIN_BUILD__ === 'string' ? __NIVARO_ADMIN_BUILD__ : 'dev'
 
 /** Fire-and-forget keepalive POST for pagehide; the IndexedDB copy is the net. */
 function sendKeepalive(recordingId: string, body: string): void {
@@ -139,12 +163,20 @@ function keepaliveInit(body: string): RequestInit {
 async function postEventChunks(
   recordingId: string,
   nextSeq: () => number,
-  events: unknown[]
+  events: unknown[],
+  startRoute: string
 ): Promise<'ok' | 'closed'> {
-  for (const chunk of splitBySize(events)) {
+  const chunks = splitBySize(events)
+  const { routes } = attributeChunkRoutes(chunks, startRoute)
+  for (const [i, chunk] of chunks.entries()) {
     const seq = nextSeq()
     try {
-      await api.post(`/session-recordings/${recordingId}/events`, { seq, events: chunk })
+      await api.post(`/session-recordings/${recordingId}/events`, {
+        seq,
+        events: chunk,
+        route: routes[i],
+        build: BUILD
+      })
     } catch (err) {
       const status = (err as { response?: { status?: number } }).response?.status
       if (status === 409) return 'closed'
@@ -249,7 +281,15 @@ export function useSessionRecorder() {
     queryKey: ['session-recording-enabled'],
     queryFn: () =>
       api
-        .get<{ data: { enabled: boolean; error_replay?: boolean } }>('/session-recordings/enabled')
+        .get<{
+          data: {
+            enabled: boolean
+            error_replay?: boolean
+            masking?: unknown
+            sampling?: unknown
+            cap_reached?: boolean
+          }
+        }>('/session-recordings/enabled')
         .then((r) => r.data.data),
     // Never record a "View as" tab — it would be filed under the other person.
     enabled: !!user && !readMasquerade(),
@@ -270,6 +310,15 @@ export function useSessionRecorder() {
     lastNavAt: number
     inFlight: Promise<void> | null
     flushAfter: boolean
+    // #1368 — route attribution and per-route sampling.
+    /** Route pattern the tab is on now. */
+    route: string
+    /** Route in force at the buffer's first event. */
+    bufferRoute: string
+    /** Clip mode: route in force at the previous window's first event. */
+    prevWindowRoute: string
+    /** Is the current route sampled in? Events on a sampled-out route are dropped. */
+    sampled: boolean
   }>({
     buffer: [],
     uninstrument: null,
@@ -280,11 +329,27 @@ export function useSessionRecorder() {
     lastClip: null,
     lastNavAt: 0,
     inFlight: null,
-    flushAfter: false
+    flushAfter: false,
+    route: '/',
+    bufferRoute: '/',
+    prevWindowRoute: '/',
+    sampled: true
   })
 
-  const fullMode = modes?.enabled === true
-  const clipMode = !fullMode && modes?.error_replay === true
+  // #1361 — read through a ref by rrweb's mask functions, so a rules change
+  // (the query refetches) applies without restarting the recording.
+  const maskingRef = useRef<ReplayMaskingRules>(normalizeReplayMasking(null))
+  maskingRef.current = normalizeReplayMasking(modes?.masking)
+
+  // #1368 — per-route sampling, read live like the masking rules.
+  const samplingRef = useRef<ReplaySampling>(normalizeReplaySampling(null))
+  samplingRef.current = normalizeReplaySampling(modes?.sampling)
+
+  // Today's byte cap reached (#1368): nothing records until the server says
+  // otherwise — not even clips, which it would refuse too.
+  const capReached = modes?.cap_reached === true
+  const fullMode = modes?.enabled === true && !capReached
+  const clipMode = modes?.enabled !== true && modes?.error_replay === true && !capReached
 
   // ── Full recording ───────────────────────────────────────────────────────
   useEffect(() => {
@@ -299,6 +364,8 @@ export function useSessionRecorder() {
     let retryTimer: ReturnType<typeof setTimeout> | null = null
     /** Uploads wait until then after a transient failure (backoff). */
     let retryAt = 0
+    /** Re-decides sampling on a route change (#1368); set once rrweb runs. */
+    let onRouteSample = () => {}
 
     const quiet = () =>
       document.readyState === 'complete' && Date.now() - state.lastNavAt >= QUIET_MS
@@ -350,8 +417,11 @@ export function useSessionRecorder() {
       if (state.buffer.length === 0 || !uploader.recordingId) return
       const events = state.buffer
       state.buffer = []
-      for (const chunk of splitBySize(events, hiding ? KEEPALIVE_CHUNK_BYTES : CHUNK_BYTES)) {
-        uploader.enqueue(chunk)
+      const chunks = splitBySize(events, hiding ? KEEPALIVE_CHUNK_BYTES : CHUNK_BYTES)
+      // #1368 — each chunk is attributed to the route at its first event.
+      const { routes } = attributeChunkRoutes(chunks, state.bufferRoute)
+      for (const [i, chunk] of chunks.entries()) {
+        uploader.enqueue(chunk, { route: routes[i], build: BUILD })
       }
       saveResume()
     }
@@ -454,14 +524,34 @@ export function useSessionRecorder() {
         state.lastNavAt = Date.now()
         const { record } = await import('rrweb')
         if (cancelled) return
+        // #1368 — per-route sampling: one draw per tab session; events on a
+        // sampled-out route are dropped, and coming back to a sampled route
+        // takes a full snapshot so the replay resumes from a whole page.
+        const draw = replaySampleDraw(storage)
+        state.route = currentReplayRoute()
+        state.bufferRoute = state.route
+        state.sampled = isReplayRouteSampled(samplingRef.current, state.route, draw)
+        onRouteSample = () => {
+          state.route = currentReplayRoute()
+          const was = state.sampled
+          state.sampled = isReplayRouteSampled(samplingRef.current, state.route, draw)
+          if (state.sampled && !was) {
+            try {
+              record.takeFullSnapshot(true)
+            } catch {
+              /* the next checkout snapshot covers it */
+            }
+          }
+        }
         state.stop =
           record({
             emit(event) {
+              if (!state.sampled) return
+              if (state.buffer.length === 0) state.bufferRoute = state.route
               state.buffer.push(event)
               if (state.buffer.length >= FLUSH_COUNT) scheduleFlush()
             },
-            maskAllInputs: true,
-            blockClass: 'nvr-no-record',
+            ...buildReplayMaskingOptions(() => maskingRef.current),
             checkoutEveryNms: 60_000
           }) ?? null
         {
@@ -473,6 +563,7 @@ export function useSessionRecorder() {
               ).addCustomEvent(tag, payload),
             () => {
               state.lastNavAt = Date.now()
+              onRouteSample()
             }
           )
         }
@@ -563,6 +654,9 @@ export function useSessionRecorder() {
         if (cancelled) return
         state.buffer = []
         state.prevWindow = []
+        state.route = currentReplayRoute()
+        state.bufferRoute = state.route
+        state.prevWindowRoute = state.route
         state.stop =
           record({
             emit(event, isCheckout) {
@@ -570,22 +664,26 @@ export function useSessionRecorder() {
                 // A checkout event is a full DOM snapshot — it starts a
                 // self-sufficient window, so the one before last can drop.
                 state.prevWindow = state.buffer
+                state.prevWindowRoute = state.bufferRoute
                 state.buffer = [event]
+                state.bufferRoute = state.route
               } else {
                 state.buffer.push(event)
               }
             },
-            maskAllInputs: true,
-            blockClass: 'nvr-no-record',
+            ...buildReplayMaskingOptions(() => maskingRef.current),
             checkoutEveryNms: CLIP_WINDOW_MS
           }) ?? null
         {
           const { record: rec } = await import('rrweb')
-          state.uninstrument = instrumentReplayContext((tag, payload) =>
-            (rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }).addCustomEvent(
-              tag,
-              payload
-            )
+          state.uninstrument = instrumentReplayContext(
+            (tag, payload) =>
+              (
+                rec as unknown as { addCustomEvent: (t: string, p: unknown) => void }
+              ).addCustomEvent(tag, payload),
+            () => {
+              state.route = currentReplayRoute()
+            }
           )
         }
 
@@ -596,6 +694,7 @@ export function useSessionRecorder() {
           }
           state.lastClip = { at: Date.now(), link: null }
           const events = [...state.prevWindow, ...state.buffer]
+          const startRoute = state.prevWindow.length > 0 ? state.prevWindowRoute : state.bufferRoute
           if (events.length === 0) return null
           const r = await api.post<{ data: { id: string } }>('/session-recordings/start', {
             clip: true,
@@ -604,7 +703,7 @@ export function useSessionRecorder() {
           })
           const id = r.data.data.id
           let clipSeq = 0
-          await postEventChunks(id, () => clipSeq++, events)
+          await postEventChunks(id, () => clipSeq++, events, startRoute)
           await api.post(`/session-recordings/${id}/end`).catch(() => {})
           const link: ErrorReplayLink = { recording_id: id, offset_ms: null }
           state.lastClip = { at: Date.now(), link }

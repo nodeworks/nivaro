@@ -9,6 +9,7 @@ import {
   parseTags,
   storeCut
 } from '../services/session-replay-clips.js'
+import { deleteColdObject } from '../services/session-replay-storage.js'
 
 /**
  * Clips of session replays.
@@ -257,6 +258,8 @@ export async function sessionReplayClipRoutes(app: FastifyInstance) {
         | undefined
       if (!clip) return reply.code(404).send({ error: 'Clip not found' })
       // The cut goes with it (its events and the library row cascade).
+      // #1411 — a clip that went cold takes its stored object with it.
+      await deleteColdObject(clip.recording)
       await db('nivaro_session_recordings').where({ id: clip.recording }).del()
       await logActivity({
         action: 'session-replay-clip-delete',

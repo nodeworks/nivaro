@@ -9,6 +9,7 @@ import {
   summarizeCut
 } from './session-replay-cut.js'
 import { buildEventRail } from './session-replay-rail.js'
+import { ensureRecordingHot } from './session-replay-storage.js'
 
 /**
  * Cut a range of a stored recording into a recording of its own (#1366).
@@ -45,6 +46,8 @@ export const MIN_CLIP_MS = 1_000
 
 /** Every event of a recording, in chunk order; corrupt chunks are skipped. */
 export async function loadRecordingEvents(recordingId: string): Promise<unknown[]> {
+  // #1411 — a cold recording is read back from object storage first.
+  await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
   const chunks = (await db('nivaro_session_events')
     .where({ recording: recordingId })
     .orderBy('seq', 'asc')

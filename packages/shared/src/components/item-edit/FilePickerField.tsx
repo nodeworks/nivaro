@@ -94,6 +94,7 @@ function FileThumb({
       <img
         src={url}
         alt={filename}
+        data-file-thumb
         className={cn(dim, 'object-cover rounded shrink-0')}
         loading='lazy'
         onError={(e) => {
@@ -211,7 +212,10 @@ function FileBrowserPanel({
                       </div>
                     )}
                   </div>
-                  <span className='text-[10px] text-slate-500 truncate w-full text-center leading-tight'>
+                  <span
+                    data-file-name
+                    className='text-[10px] text-slate-500 truncate w-full text-center leading-tight'
+                  >
                     {f.title || f.filename_download}
                   </span>
                 </button>
@@ -384,7 +388,7 @@ export function FilePickerField({
           <div className='flex-1 min-w-0'>
             <div className='flex items-center gap-1'>
               {hasPending && <Clock className='h-3 w-3 text-amber-400 shrink-0' />}
-              <p className='text-[12px] font-medium text-slate-700 truncate'>
+              <p data-file-name className='text-[12px] font-medium text-slate-700 truncate'>
                 {hasPending ? pendingFile!.name : file?.title || file?.filename_download || fileId}
               </p>
               {/* Dead link: the row exists but the bytes are gone — stamped by
@@ -810,6 +814,7 @@ export function FileM2MField({
                         size: f?.filesize ?? null
                       })
                     }
+                    data-file-name
                     className='block w-full truncate text-left text-[12px] font-medium text-slate-700 hover:underline'
                   >
                     {f?.title || f?.filename_download || id}
@@ -877,7 +882,9 @@ export function FileM2MField({
               <div className='flex-1 min-w-0'>
                 <div className='flex items-center gap-1'>
                   <Clock className='h-3 w-3 text-amber-400 shrink-0' />
-                  <p className='text-[12px] font-medium text-slate-700 truncate'>{pf.file.name}</p>
+                  <p data-file-name className='text-[12px] font-medium text-slate-700 truncate'>
+                    {pf.file.name}
+                  </p>
                 </div>
                 <div className='flex flex-wrap items-center gap-x-2 mt-0.5'>
                   {pf.file.type && (

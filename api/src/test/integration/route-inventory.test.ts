@@ -153,6 +153,9 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/session-recordings/:id/export' },
   // Spec from a recording (#1393) — Export menu → opens in the E2E recorder
   { method: 'POST', path: '/api/session-recordings/:id/spec' },
+  // Session replay cost on DB Health (#1368)
+  { method: 'GET', path: '/api/ops-db/storage' },
+  { method: 'GET', path: '/api/ops-db/session-replay' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

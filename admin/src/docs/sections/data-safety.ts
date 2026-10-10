@@ -178,9 +178,9 @@ export const sessionReplayDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Privacy: every input is masked client-side before events leave the browser; add the nvr-no-record class to block any element entirely.',
+        'Privacy: every input and every record field value is masked client-side before events leave the browser (see Masking rules below); add the nvr-no-record class to block any element entirely.',
         'Events batch every 10 seconds; a full DOM snapshot every 60 seconds keeps replays seekable.',
-        'Recordings cap at 15MB (then mark truncated) and purge after 7 days.',
+        'Recordings cap at 15MB (then mark truncated) and purge after the retention period (7 days unless changed on the Session Replays page); after 3 days they move from the database to file storage.',
         'Watching, listing and deleting are admin-only; a recording can only be appended to by its own user.',
         'Tell your team before enabling — this records their screens.'
       ]
@@ -189,6 +189,62 @@ export const sessionReplayDocs: DocSection = {
     {
       type: 'p',
       text: 'A chunk that cannot be sent — the browser is offline, the request fails or the server answers 5xx — waits in the browser (IndexedDB, at most about 20MB per tab, oldest dropped first) and is retried with backoff from 2 seconds up to a minute, and as soon as the browser comes back online. Reloading the tab within 10 minutes continues the same recording instead of starting a new one, and whatever the previous page had not sent goes first. When a page is closed or reloaded, the last few seconds are sent with the request that outlives the page (fetch keepalive); anything that does not fit goes on the next load. A recording that is closed or has reached its size cap still stops for good, and the next page load starts a new one. The headless hook in @nivaro/react does the same.'
+    },
+    { type: 'h2', id: 'session-replay-masking', text: 'Masking rules' },
+    {
+      type: 'p',
+      text: 'Besides every input, the recorders mask the value of every field on a record — in the edit form and the read view — so a replay shows the layout and what the person did, not the data. Settings → Session replay → Masking lists fields that are safe to watch (a status, a code) as collection.field, or *.field for any collection; those show in replays and everything else stays masked. Field labels always show.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Mask rich text (on by default): editors such as notes and descriptions show as asterisks wherever they appear, even in an allowed field.',
+        'Mask file names (on by default): file names are masked and file thumbnails blocked, in file fields and the file library, even in an allowed field.',
+        'Passwords are never shown. Text in attributes (a tooltip, an image’s alt text) is not masked; keep sensitive values out of them or mark the element nvr-no-record.',
+        'The rules apply to the admin app and to frontends using useSessionRecorder from @nivaro/react; a changed rule reaches a recorder on its next page load. Recordings already made are not changed.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-cost', text: 'Recording cost' },
+    {
+      type: 'p',
+      text: 'Every uploaded chunk names the page (route pattern) it was recorded on and the frontend build that recorded it. DB Health → Session replay shows what recording stored per page and per build over the last 7 days, day by day, and the recordings’ share of the storage runway.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Daily cap (Settings → Session replay → Recording cost): megabytes the whole instance may store per UTC day. Once reached, recorders stop and no new recording starts until the next day. Replicas see each other’s uploads within about 30 seconds, so the cap can be passed by that much.',
+        'Sampling: the share of sessions recorded, as a default and per page — an exact pattern such as /content/orders/:id, or a prefix such as /reports/* (the most specific rule wins; 0% never records the page). Each tab decides once per visit, so a page is either recorded or not for that person throughout; while a tab is on a page that is not recorded nothing is kept, and the replay picks up again on the next recorded page.',
+        'Clips attached to errors are not sampled, but they count toward the cap and stop when it is reached.',
+        'With @nivaro/react, pass useSessionRecorder({ build }) to name your app’s build; it defaults to the @nivaro/react version.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-storage', text: 'Older recordings move to storage' },
+    {
+      type: 'p',
+      text: 'Recordings older than 3 days (Settings → Session replay → Storage) leave the database: each one is compressed into a single file in the file storage driver — local disk, S3 or Azure Blob, as set under Settings → File storage — and its rows in the database are removed. An hourly job does the moving; a recording still receiving events is left until it has been quiet for an hour.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Opening an older recording loads it back first; the player says “Loading from storage…” for the few seconds that takes. It then stays loaded for 24 hours before the copy in the database is dropped again (the file stays).',
+        'When the retention period ends, or a recording is deleted, its file in storage is deleted too.',
+        'DB Health → Session replay shows how much sits in the database (hot) and in storage (cold), and the storage runway counts both.',
+        'Switching the storage driver does not move recordings already in storage: they are read from the active driver, then from local disk. Moving from one cloud driver to another leaves older recordings unreadable until they are purged.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-health', text: 'Health check' },
+    {
+      type: 'p',
+      text: 'While recording or error clips are on, the readiness scorecard runs a Session recording is healthy check. It warns, with the figure and the likely cause, when:'
+    },
+    {
+      type: 'ul',
+      items: [
+        'more than 5% of chunk uploads failed since yesterday (at least 20 uploads) — refusals the server saw (too large, recording closed or at its size cap) plus failed attempts the recorders report on their next successful upload. A browser that never gets through again cannot report, so the real figure can be higher;',
+        'no recording started in the last 24 hours while people were signed in (the recorder is blocked, starts are failing, or sampling records nobody);',
+        'the daily recording cap was reached, naming the page that stored the most that day;',
+        'the oldest recording is more than a day past the retention period (the daily purge is not running).'
+      ]
     },
     { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },
     {

@@ -5,6 +5,7 @@
  */
 import { gunzipSync } from 'node:zlib'
 import { db } from '../db/index.js'
+import { ensureRecordingHot } from './session-replay-storage.js'
 
 export type RrwebEvent = { type: number; timestamp: number; data?: Record<string, unknown> }
 
@@ -22,6 +23,8 @@ export function decodeChunk(stored: string): string {
 
 /** Every event of a recording in order; a corrupt chunk is skipped (a partial replay beats none). */
 export async function loadRecordingEvents(recordingId: string): Promise<RrwebEvent[]> {
+  // #1411 — a cold recording is read back from object storage first.
+  await ensureRecordingHot(recordingId, { wait: true }).catch(() => null)
   const chunks = (await db('nivaro_session_events')
     .where({ recording: recordingId })
     .orderBy('seq', 'asc')

@@ -987,6 +987,25 @@ export async function buildServer() {
         )
       }, 60_000)
 
+      // Session replay storage tiering (#1411): recordings older than
+      // replay_cold_after_days move to the storage driver as one object each;
+      // rehydrated recordings' 24-hour hot cache is dropped again.
+      app.cron.schedule(
+        'session-replay-tiering',
+        '25 * * * *',
+        async () => {
+          const { runReplayTiering } = await import('./services/session-replay-storage.js')
+          const r = await runReplayTiering()
+          if (r.moved || r.evicted || r.failed) app.log.info(`session-replay-tiering: ${r.summary}`)
+        },
+        {
+          idempotent: 'safe',
+          heavy: true,
+          description:
+            'Hourly at :25 — moves session recordings older than replay_cold_after_days (default 3) to the file storage driver as one gzipped object each, marks them cold and deletes their event rows; drops the event rows of cold recordings rehydrated more than 24 hours ago (the object stays). A recording whose upload fails stays hot and is retried next hour.'
+        }
+      )
+
       // Storage snapshots (#291/#155): one row per day of DB + uploads size,
       // feeding the runway projection on /db-health.
       app.cron.schedule('storage-snapshot', '45 3 * * *', async () => {
@@ -1034,12 +1053,23 @@ export async function buildServer() {
         } catch {
           /* uploads dir absent */
         }
+        // #1368 / #1411 — session recordings' stored size (database and
+        // storage driver), for the runway.
+        const replay = await import('./services/session-replay-cost.js')
+          .then((m) => m.replayStorageFigures())
+          .catch(() => null)
         await db('nivaro_storage_snapshots')
           .insert({
             snapshot_date: today,
             db_mb: dbMb,
             uploads_mb: uploadsMb,
             top_tables: JSON.stringify(topTables),
+            ...(replay
+              ? {
+                  replay_mb: Math.round(replay.hot_bytes / 1_048_576),
+                  replay_cold_mb: Math.round(replay.cold_bytes / 1_048_576)
+                }
+              : {}),
             created_at: new Date()
           })
           .catch(() => {})
@@ -1860,6 +1890,12 @@ export async function buildServer() {
       {
         const { registerTuningReadiness } = await import('./services/db-tuning/readiness.js')
         registerTuningReadiness()
+      }
+      // #1412 — session recording health (upload failures, nothing landing,
+      // the daily cap, retention behind).
+      {
+        const { registerReplayReadiness } = await import('./services/session-replay-health.js')
+        registerReplayReadiness()
       }
 
       // Integration obligation notifications: tell the record's owners and
