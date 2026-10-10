@@ -7,6 +7,7 @@ import { logActivity } from '../services/activity.js'
 import { scheduleReplayIndex } from '../services/session-replay-index.js'
 import { buildEventRail, type RailRecording } from '../services/session-replay-rail.js'
 import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
+import { recordChunkStats } from '../services/session-replay-stats.js'
 
 type RrwebEventLike = { type: number; timestamp: number; data?: Record<string, unknown> }
 
@@ -281,6 +282,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       // #1374 / #1372 — routes, records, field names and selectors touched;
       // queued, so the upload never waits on it (services/session-replay-index.ts).
       scheduleReplayIndex(rec.id, seq, events)
+      await recordChunkStats(rec.id, events)
       return reply.send({ data: { ok: true } })
     }
   )
@@ -342,7 +344,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     return reply.send({ data: rows })
   })
 
-  app.get<{ Querystring: { user?: string; page?: string; origins?: string } }>(
+  app.get<{ Querystring: { user?: string; page?: string; origins?: string; sort?: string } }>(
     '/',
     { preHandler: requireAdmin },
     async (req, reply) => {
@@ -351,6 +353,10 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const q = db('nivaro_session_recordings as r')
         .leftJoin('nivaro_users as u', 'r.user', 'u.id')
         .leftJoin('nivaro_users as ma', 'r.masquerade_admin', 'ma.id')
+        // ?sort=active (#1358): most active time first; unmeasured rows last.
+        .modify((qb) => {
+          if (req.query.sort === 'active') qb.orderByRaw('COALESCE(r.active_ms, -1) DESC')
+        })
         .orderBy('r.started_at', 'desc')
         .select(
           'r.id',
@@ -365,6 +371,8 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           'r.event_count',
           'r.byte_size',
           'r.truncated',
+          'r.active_ms',
+          'r.chapter_count',
           db.raw(
             "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
           ),
@@ -412,6 +420,8 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         'r.event_count',
         'r.byte_size',
         'r.truncated',
+        'r.active_ms',
+        'r.chapter_count',
         db.raw(
           "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
         ),

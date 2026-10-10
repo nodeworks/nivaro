@@ -6,11 +6,16 @@
  * server-side event rail (#1356) under it and the Console / Network panel (#1357) beside it.)
  */
 import { TipLayer } from '@nivaro/shared'
+import { PictureInPicture2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { ChapterList, useChapterKeys } from './ChapterList'
+import { buildChapters, chapterIndexAt } from './chapters'
+import type { ReplayControls } from './controls'
 import { EventRail } from './EventRail'
 import { type InspectableReplayer, ReplayInspector } from './Inspector'
+import { findInactiveGaps, type InactiveGap } from './inactivity'
 import {
   activeIndex,
   fmtClock,
@@ -27,6 +32,8 @@ import { crossedEnd } from './play-all-logic'
 import { RangeActions, RangeTrack } from './RangeBar'
 import type { ReplayRange } from './range'
 import { ReplaySidePanel } from './SidePanel'
+import { SkipBands, SkippingBadge, SkipToggle, useSkipInactivity } from './SkipInactivity'
+import { WatchTogetherBar } from './WatchTogether'
 
 const SPEEDS = [1, 2, 4, 8]
 
@@ -57,7 +64,9 @@ export function ReplayPlayer({
   minHeight = 400,
   panel = 'side',
   eventsUrl,
-  span
+  span,
+  onFloat,
+  controlsRef
 }: {
   recordingId: string
   /** Offset into the recording (ms); playback opens 5 s before it. */
@@ -77,13 +86,17 @@ export function ReplayPlayer({
    * Session replays sheet; stacks on a narrow window) or 'stacked' (under the
    * controls — narrow hosts like the Traffic Map's Recording level).
    */
-  panel?: 'side' | 'stacked'
+  panel?: 'side' | 'stacked' | 'none'
   /**
    * Play events from here instead of the admin endpoint — a share link
    * (#1362) plays only its window, for a viewer who may not be an admin: no
    * event rail and no range actions.
    */
   eventsUrl?: string
+  /** #1401 — shows a Float button; called with the playhead to hand over. */
+  onFloat?: (time: number) => void
+  /** Filled while the replay is ready: read / drive the playhead from the host. */
+  controlsRef?: { current: ReplayControls | null }
 }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const replayerRef = useRef<{
@@ -151,6 +164,11 @@ export function ReplayPlayer({
     () => (rail ? railMarkers(rail.items, rail.first, total) : []),
     [rail, total]
   )
+  // #1358 skip inactivity: idle stretches crossed at 8× (or real time).
+  const [gaps, setGaps] = useState<InactiveGap[]>([])
+  const skip = useSkipInactivity(replayerRef, gaps, speed, ready && !following && playing)
+  const skipTickRef = useRef(skip.onTick)
+  skipTickRef.current = skip.onTick
 
   useEffect(() => {
     let cancelled = false
@@ -160,6 +178,7 @@ export function ReplayPlayer({
     setRange(null)
     spanDoneRef.current = false
     prevTimeRef.current = 0
+    setGaps([])
 
     function rescale() {
       const rep = replayerRef.current
@@ -210,6 +229,7 @@ export function ReplayPlayer({
             setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
           })
           setCtx(parseReplayContext(events, first))
+          setGaps(findInactiveGaps(events, first))
         }
         if (events.length < 2) {
           setError('Not enough events to replay this session.')
@@ -221,7 +241,8 @@ export function ReplayPlayer({
         frameRef.current.replaceChildren()
         const replayer = new rrweb.Replayer(events as never[], {
           root: frameRef.current,
-          skipInactive: !following,
+          // Inactivity is skipped by our own driver (#1358, ./SkipInactivity).
+          skipInactive: false,
           // Live-follow: rrweb's liveMode plays events as they are appended,
           // pinned to the tail of the stream.
           liveMode: following,
@@ -285,6 +306,7 @@ export function ReplayPlayer({
               endSpan()
             }
             prevTimeRef.current = cur
+            skipTickRef.current(cur)
           }
           raf = requestAnimationFrame(tick)
         }
@@ -373,10 +395,51 @@ export function ReplayPlayer({
   // A shared window (eventsUrl) is watched by someone who may not be an admin: no notes.
   const noteList = useReplayNoteList(recordingId, !eventsUrl).data?.data
 
+  // #1397 chapters: a new one at every page change (recorder stamps + page trail).
+  const chapters = useMemo(
+    () =>
+      buildChapters(
+        ctx.routes,
+        railMarks
+          .filter((m) => m.kind === 'route')
+          .map((m) => ({ offset: m.offset, text: m.label })),
+        total
+      ),
+    [ctx.routes, railMarks, total]
+  )
+  useChapterKeys(chapters, getTime, stableSeek, ready && !following)
+
+  // #1401 / #1399: the host reads and drives the playhead (refs and setters
+  // only, so the first render's closures stay valid).
+  const speedRef = useRef(speed)
+  speedRef.current = speed
+  // biome-ignore lint/correctness/useExhaustiveDependencies: playAt / changeSpeed only touch refs and setters
+  const controls = useMemo<ReplayControls>(
+    () => ({
+      getTime: () => timeRef.current,
+      isPlaying: () => playingRef.current,
+      getSpeed: () => speedRef.current,
+      seek: (ms) => seekRef.current(ms),
+      playAt,
+      setSpeed: changeSpeed
+    }),
+    []
+  )
+  const ownControlsRef = useRef<ReplayControls | null>(null)
+  useEffect(() => {
+    const live = ready && !following ? controls : null
+    ownControlsRef.current = live
+    if (controlsRef) controlsRef.current = live
+    return () => {
+      ownControlsRef.current = null
+      if (controlsRef) controlsRef.current = null
+    }
+  }, [controlsRef, controls, ready, following])
+
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
   const activeNetwork = activeIndex(ctx.network, time)
-  const showPanel = ready && !following && hasPanel
+  const showPanel = ready && !following && hasPanel && panel !== 'none'
   const side = showPanel && sideBySide
   // The frame's width budget moved: scale it again.
   const lastSideRef = useRef(side)
@@ -385,6 +448,16 @@ export function ReplayPlayer({
     lastSideRef.current = side
     rescaleRef.current?.()
   }, [side])
+
+  function playAt(on: boolean, ms: number) {
+    const rep = replayerRef.current
+    if (!rep) return
+    setTime(ms)
+    if (on) rep.play(ms)
+    else rep.pause(ms)
+    playingRef.current = on
+    setPlaying(on)
+  }
 
   function changeSpeed(v: number) {
     setSpeed(v)
@@ -411,6 +484,7 @@ export function ReplayPlayer({
           never remount under a live Replayer. */}
       <div className={side ? 'flex items-stretch gap-3' : ''}>
         <div className={side ? 'relative min-w-0 flex-1' : 'relative'}>
+          <SkippingBadge gap={skip.current} />
           <div
             ref={frameRef}
             className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
@@ -482,6 +556,7 @@ export function ReplayPlayer({
                   />
                 ))}
             </div>
+            <SkipBands gaps={gaps} total={total} enabled={skip.enabled} />
             <input
               type='range'
               min={0}
@@ -505,6 +580,21 @@ export function ReplayPlayer({
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(total)}
           </span>
+          {onFloat && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1 px-2 text-[12px]'
+              onClick={() => onFloat(time)}
+              data-tip='Float — keep watching in a corner window while you use the admin'
+              data-replay-float=''
+            >
+              <PictureInPicture2 className='h-3 w-3' /> Float
+            </Button>
+          )}
+          {gaps.length > 0 && (
+            <SkipToggle enabled={skip.enabled} onChange={skip.setEnabled} count={gaps.length} />
+          )}
           <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
             {SPEEDS.map((v) => (
               <button
@@ -531,6 +621,20 @@ export function ReplayPlayer({
           total={total}
           onChange={setRange}
           onSeek={stableSeek}
+        />
+      )}
+      {ready && !following && (
+        <ChapterList
+          chapters={chapters}
+          current={chapterIndexAt(chapters, time)}
+          onSeek={stableSeek}
+        />
+      )}
+      {!eventsUrl && (
+        <WatchTogetherBar
+          recordingId={recordingId}
+          controlsRef={ownControlsRef}
+          ready={ready && !following}
         />
       )}
       {showPanel && !side && panelEl('stacked')}
