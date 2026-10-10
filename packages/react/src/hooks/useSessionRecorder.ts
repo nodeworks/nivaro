@@ -7,11 +7,13 @@ import {
 } from '@nivaro/sdk'
 import {
   clipEndOffset,
+  emitReplayTap,
   instrumentConsole,
   instrumentRequests,
   type ReplayClipKind,
   redactSecrets,
   registerReplayCapture,
+  setReplayRecorderMode,
   withClipKind
 } from '@nivaro/shared'
 import { useEffect, useRef } from 'react'
@@ -31,6 +33,7 @@ import {
   splitBySize,
   writeResume
 } from './replayUploadQueue'
+import { useAutoRecord } from './useAutoRecord'
 
 /**
  * rrweb session recorder for headless frontends — two modes, one hook
@@ -245,6 +248,8 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
   const client = options.client ?? contextClient
   const appLabel = options.app
   const disabled = options.disabled ?? false
+  // #1371 — replay:record signals (rage click, monitor, breaker…).
+  useAutoRecord({ client, disabled })
 
   const stateRef = useRef<{
     // Full mode's recording id and seq live in its ReplayUploader.
@@ -479,6 +484,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
         if (!uploader.recordingId) return null
         return { recording_id: uploader.recordingId, offset_ms: offset }
       }
+      setReplayRecorderMode('full')
       snapshotFn = () => {
         if (!uploader.recordingId) return null
         const offset = Date.now() - state.startedAt
@@ -498,6 +504,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       state.stop =
         record({
           emit(event: unknown, isCheckout?: boolean) {
+            emitReplayTap(event) // #1371 — an auto recording rides the buffer
             if (isCheckout) {
               // A checkout event is a full DOM snapshot — it starts a
               // self-sufficient window, so the one before last can drop.
@@ -518,6 +525,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
         )
       )
 
+      setReplayRecorderMode('clip')
       // #1377 — the buffer as it is NOW; nothing uploads until commit.
       snapshotFn = (kind) => {
         const events = [...state.prevWindow, ...state.buffer]
@@ -605,6 +613,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       cancelled = true
       captureFn = null
       snapshotFn = null
+      setReplayRecorderMode(null)
       document.removeEventListener('visibilitychange', onHide)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('online', onOnline)

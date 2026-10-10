@@ -576,6 +576,7 @@ export { NivaroField } from './components/NivaroField'
 export { NivaroForm } from './components/NivaroForm'
 // Context
 export { NivaroProvider, useNivaroClient } from './context'
+export { useAutoRecord } from './hooks/useAutoRecord'
 export {
   clearFormSchemaCache,
   fetchSchema,

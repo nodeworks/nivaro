@@ -22,7 +22,7 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
       .filter(
         (e) =>
           typeof e.route === 'string' &&
-          (e.kind === 'load' || e.kind === 'route' || e.kind === 'rage')
+          (e.kind === 'load' || e.kind === 'route' || e.kind === 'rage' || e.kind === 'dead')
       )
       .map((e) => ({
         route: String(e.route).slice(0, 300),
@@ -39,6 +39,15 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
       await db('nivaro_rum_events')
         .insert(rows)
         .catch(() => {})
+    // #1371 — a rage click or a dead-click burst asks this person's browser
+    // to record the next three minutes (when replay_auto_signals is on).
+    const frustrated = rows.find((r) => r.kind === 'rage') ?? rows.find((r) => r.kind === 'dead')
+    if (frustrated && req.user?.id) {
+      const { fireReplaySignal } = await import('../services/replay-auto-signals.js')
+      void fireReplaySignal(frustrated.kind === 'rage' ? 'rage-click' : 'dead-click', {
+        userIds: [req.user.id]
+      })
+    }
     return { data: { accepted: rows.length } }
   })
 

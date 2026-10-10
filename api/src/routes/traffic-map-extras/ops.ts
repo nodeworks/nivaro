@@ -260,6 +260,14 @@ export async function trafficOpsRoutes(app: FastifyInstance): Promise<void> {
       at: now
     }
     await setBreaker(breaker)
+    // #1371 — opening a breaker on an entity: people on its pages record.
+    if (kind === 'entity') {
+      const { fireReplaySignal, pagePrefixesFor } = await import(
+        '../../services/replay-auto-signals.js'
+      )
+      const prefixes = pagePrefixesFor(target)
+      if (prefixes.length) void fireReplaySignal('breaker', { pathPrefixes: prefixes })
+    }
     await logActivity({
       action: 'traffic-map-breaker-set',
       user: req.user?.id,

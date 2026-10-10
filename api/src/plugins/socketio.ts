@@ -25,6 +25,15 @@ export function usersOnPath(path: string): Array<{ id: string; name: string; sin
   return pagePresenceReader ? pagePresenceReader(path) : []
 }
 
+let pagePrefixReader: ((prefixes: string[]) => string[]) | null = null
+/**
+ * #1371 — users whose latest page ping sits under any of `prefixes` (this
+ * replica's sockets): who an auto-record signal about a route reaches.
+ */
+export function usersOnPathPrefix(prefixes: string[]): string[] {
+  return pagePrefixReader ? pagePrefixReader(prefixes) : []
+}
+
 import { noteSocket } from '../services/traffic-map.js'
 import type { User } from '../types.js'
 
@@ -313,6 +322,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!cur || p.since < cur.since) seen.set(p.user.id, { ...p.user, since: p.since })
     }
     return [...seen.values()]
+  }
+
+  pagePrefixReader = (prefixes: string[]) => {
+    const ids = new Set<string>()
+    for (const p of pagePresence.values()) {
+      if (
+        prefixes.some(
+          (x) => p.path === x || p.path.startsWith(`${x}/`) || p.path.startsWith(`${x}?`)
+        )
+      )
+        ids.add(p.user.id)
+    }
+    return [...ids]
   }
 
   // Journey trail — last persisted journey row per socket, so the next ping

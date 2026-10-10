@@ -1,8 +1,15 @@
-import { clipEndOffset, type ReplayClipKind, registerReplayCapture } from '@nivaro/shared'
+import {
+  clipEndOffset,
+  emitReplayTap,
+  type ReplayClipKind,
+  registerReplayCapture,
+  setReplayRecorderMode
+} from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef } from 'react'
 import { api, WORKSPACE_KEY } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { useAutoRecordListener } from '@/lib/auto-record-listener'
 import { readMasquerade } from '@/lib/masquerade'
 import {
   backoffDelay,
@@ -250,6 +257,8 @@ function instrumentReplayContext(
 
 export function useSessionRecorder() {
   const { user } = useAuth()
+  // #1371 — replay:record signals (rage click, monitor, breaker…).
+  useAutoRecordListener()
 
   const { data: modes } = useQuery({
     queryKey: ['session-recording-enabled'],
@@ -494,6 +503,7 @@ export function useSessionRecorder() {
           if (!uploader.recordingId) return null
           return { recording_id: uploader.recordingId, offset_ms: offset }
         }
+        setReplayRecorderMode('full')
         snapshotFn = () => {
           if (!uploader.recordingId) return null
           const offset = Date.now() - state.startedAt
@@ -544,6 +554,7 @@ export function useSessionRecorder() {
       cancelled = true
       captureFn = null
       snapshotFn = null
+      setReplayRecorderMode(null)
       document.removeEventListener('visibilitychange', onHide)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('online', onOnline)
@@ -582,6 +593,7 @@ export function useSessionRecorder() {
         state.stop =
           record({
             emit(event, isCheckout) {
+              emitReplayTap(event) // #1371 — an auto recording rides the buffer
               if (isCheckout) {
                 // A checkout event is a full DOM snapshot — it starts a
                 // self-sufficient window, so the one before last can drop.
@@ -605,6 +617,7 @@ export function useSessionRecorder() {
           )
         }
 
+        setReplayRecorderMode('clip')
         // #1377 — the buffer as it is NOW; nothing uploads until commit.
         snapshotFn = (kind) => {
           const events = [...state.prevWindow, ...state.buffer]
@@ -648,6 +661,7 @@ export function useSessionRecorder() {
       cancelled = true
       captureFn = null
       snapshotFn = null
+      setReplayRecorderMode(null)
       state.uninstrument?.()
       state.uninstrument = null
       state.stop?.()

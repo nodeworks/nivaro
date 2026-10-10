@@ -121,6 +121,12 @@ export async function purgeExpiredRecordings(): Promise<void> {
   await db('nivaro_session_recordings').where('started_at', '<', cutoff).del()
 }
 
+/** #1371 — the signal an auto-record token was minted for (consumed), or null. */
+async function autoStartSignal(token: unknown, userId: string): Promise<string | null> {
+  const { autoTokenStore, consumeAutoToken } = await import('../services/replay-auto-signals.js')
+  return consumeAutoToken(await autoTokenStore(), token, userId)
+}
+
 /** A clip's app label, from an allowlist — never the caller's free text. */
 export function clipAppLabel(kind: unknown): 'error-clip' | 'support-clip' {
   return kind === 'support' ? 'support-clip' : 'error-clip'
@@ -159,6 +165,8 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       clip?: boolean
       /** #1377 — why the clip was cut: 'error' (default) or 'support'. */
       clip_kind?: string
+      /** #1371 — the single-use token a `replay:record` signal carried. */
+      auto_token?: string
       meta?: Record<string, unknown>
     }
   }>('/start', { preHandler: requireAuth }, async (req, reply) => {
@@ -166,7 +174,16 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     // bit — clips exist precisely so operators can keep continuous
     // recording OFF and still get the last minute before an error.
     const isClip = req.body?.clip === true
-    if (isClip) {
+    // #1371 — an auto recording (rage click, dead clicks, monitor, breaker)
+    // runs while recording is off, but only with the server's own token.
+    const autoSignal =
+      req.body?.auto_token != null ? await autoStartSignal(req.body.auto_token, req.user!.id) : null
+    if (req.body?.auto_token != null && !autoSignal) {
+      return reply.code(409).send({ error: 'Auto-record token is invalid or used' })
+    }
+    if (autoSignal) {
+      // allowed: the token was minted for this person and this signal
+    } else if (isClip) {
       const row = await db('nivaro_settings').where({ id: 1 }).first('error_replay_enabled')
       if (!(row as { error_replay_enabled?: unknown } | undefined)?.error_replay_enabled) {
         return reply.code(409).send({ error: 'Error replay is disabled' })
@@ -175,11 +192,13 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       return reply.code(409).send({ error: 'Session recording is disabled' })
     }
     const id = randomUUID()
-    const appLabel = isClip
-      ? clipAppLabel(req.body?.clip_kind)
-      : typeof req.body?.app === 'string'
-        ? req.body.app.slice(0, 100)
-        : null
+    const appLabel = autoSignal
+      ? `auto:${autoSignal}`
+      : isClip
+        ? clipAppLabel(req.body?.clip_kind)
+        : typeof req.body?.app === 'string'
+          ? req.body.app.slice(0, 100)
+          : null
     // Where this happened. Taken from the client's own origin, falling back
     // to the request's host — a recording whose environment is unknown is
     // hard to act on, and the referer is the closest thing we have.

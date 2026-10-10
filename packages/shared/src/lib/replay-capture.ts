@@ -131,3 +131,37 @@ export function clipEndOffset(events: unknown[], kind: ReplayClipKind): number |
 export function withClipKind<T extends { _body?: unknown }>(cmd: T, kind: ReplayClipKind): T {
   return { ...cmd, _body: { ...((cmd._body as object | undefined) ?? {}), clip_kind: kind } }
 }
+
+// ── Auto-record on a signal (#1371) ──────────────────────────────────────────
+// rrweb records one stream per page. While the error-clip buffer runs, an
+// auto recording cannot start a second record(); it taps the buffer's events
+// instead. The recorders say which mode they run and feed the tap.
+
+export type ReplayRecorderMode = 'full' | 'clip' | null
+let recorderMode: ReplayRecorderMode = null
+const taps = new Set<(event: unknown) => void>()
+
+/** Recorders call this as a mode starts (and with null as it stops). */
+export function setReplayRecorderMode(mode: ReplayRecorderMode): void {
+  recorderMode = mode
+}
+export function replayRecorderMode(): ReplayRecorderMode {
+  return recorderMode
+}
+/** Clip-mode recorders pass every rrweb event here (no-op without a tap). */
+export function emitReplayTap(event: unknown): void {
+  if (taps.size === 0) return
+  for (const t of taps) {
+    try {
+      t(event)
+    } catch {
+      /* a tap must never break recording */
+    }
+  }
+}
+export function tapReplayEvents(cb: (event: unknown) => void): () => void {
+  taps.add(cb)
+  return () => {
+    taps.delete(cb)
+  }
+}

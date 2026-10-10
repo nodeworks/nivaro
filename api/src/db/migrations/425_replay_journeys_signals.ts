@@ -12,6 +12,9 @@ import type { Knex } from 'knex'
  *   asked. NULL = no replay was on.
  * - nivaro_tasks.issue_id (#1390) — the issue a Report a problem filed with
  *   the request (plain int, no FK: an issue may be deleted, the request stays).
+ * - nivaro_settings.replay_auto_signals (#1371) — auto-record three minutes
+ *   when a rage click, a dead-click burst, a monitor flip or a breaker opening
+ *   says someone is having trouble. Off by default.
  */
 export async function up(knex: Knex): Promise<void> {
   if (
@@ -39,9 +42,22 @@ export async function up(knex: Knex): Promise<void> {
       })
     }
   }
+  if (
+    (await knex.schema.hasTable('nivaro_settings')) &&
+    !(await knex.schema.hasColumn('nivaro_settings', 'replay_auto_signals'))
+  ) {
+    await knex.schema.alterTable('nivaro_settings', (t) => {
+      t.boolean('replay_auto_signals').notNullable().defaultTo(false)
+    })
+  }
 }
 
 export async function down(knex: Knex): Promise<void> {
+  if (await knex.schema.hasColumn('nivaro_settings', 'replay_auto_signals')) {
+    await knex.schema.alterTable('nivaro_settings', (t) => {
+      t.dropColumn('replay_auto_signals')
+    })
+  }
   for (const col of ['issue_id', 'replay_offset_ms', 'replay_recording_id']) {
     if (await knex.schema.hasColumn('nivaro_tasks', col)) {
       await knex.schema.alterTable('nivaro_tasks', (t) => {

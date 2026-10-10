@@ -69,3 +69,47 @@ describe('clip kinds', () => {
     expect(h.inserts).toHaveLength(0)
   })
 })
+
+describe('auto-record starts (#1371)', () => {
+  async function signalToken(userId: string): Promise<string> {
+    const { fireReplaySignal, resetAutoSignalsForTest } = await import(
+      '../../../services/replay-auto-signals.js'
+    )
+    resetAutoSignalsForTest()
+    let token = ''
+    await fireReplaySignal(
+      'rage-click',
+      { userIds: [userId] },
+      {
+        emit: (_u, p) => {
+          token = p.token
+        }
+      }
+    )
+    return token
+  }
+
+  it('start with the server token while recording is off, labelled auto:<signal>', async () => {
+    h.settings = {
+      session_recording_enabled: false,
+      error_replay_enabled: false,
+      replay_auto_signals: true
+    }
+    const token = await signalToken('U1')
+    expect(token).toMatch(/^[0-9a-f]{36}$/)
+    const res = await start({ auto_token: token, app: 'whatever' })
+    expect(res.statusCode).toBe(200)
+    expect(h.inserts[0]).toMatchObject({ user: 'U1', app: 'auto:rage-click' })
+    // single use
+    const again = await start({ auto_token: token })
+    expect(again.statusCode).toBe(409)
+  })
+
+  it('refuse a made-up or someone else’s token', async () => {
+    h.settings = { session_recording_enabled: true, replay_auto_signals: true }
+    expect((await start({ auto_token: 'f'.repeat(36) })).statusCode).toBe(409)
+    const theirs = await signalToken('U2')
+    expect((await start({ auto_token: theirs })).statusCode).toBe(409)
+    expect(h.inserts).toHaveLength(0)
+  })
+})

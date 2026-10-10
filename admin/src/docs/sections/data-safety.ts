@@ -230,6 +230,21 @@ componentDidCatch(error, info) {
       type: 'p',
       text: "Support clips: with Error clips on, a support request (Get help, Request a change) cuts the same in-memory buffer into an app='support-clip' recording, taken when the dialog opens and uploaded only if the request is sent; the requester can untick it. POST /session-recordings/start takes clip_kind ('error' | 'support') from an allowlist, so a clip's label is never free text."
     },
+    { type: 'h2', id: 'session-replay-auto', text: 'Auto-record on a signal' },
+    {
+      type: 'p',
+      text: 'With "Auto-record on signals" on (Session Replays header; nivaro_settings.replay_auto_signals, off by default), trouble starts a short recording even while recording is off: the next three minutes of the people affected, labelled auto:<signal>, inputs masked as always.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'rage-click — three clicks on one element within 600ms; dead-click — three clicks on buttons or links that changed nothing (no DOM change, no navigation within a second) inside ten seconds. Both arrive with the RUM beacon, sent at once, and record the person who clicked.',
+        'monitor — an ops monitor flips to failing; breaker — an operator opens a Traffic Map breaker on an entity. Both record the people currently on the pages that show it (/collections/<c>…, /records/<c>…), as seen by the API process that noticed (the page pings of the admin and of portals using usePageAt).',
+        'The server sends replay:record { signal, minutes: 3, token } over the socket; the token is single-use, minted for that person and that signal, and lives two minutes. POST /session-recordings/start honours an auto start only with it, so a page cannot start one itself.',
+        'Capped at 12 auto recordings per hour for the instance (counted in Redis across API processes) and one per person per ten minutes; at most ten people per signal.',
+        'With full recording already on, the signal is only marked on the live recording (a signal tick). With error clips on, the auto recording rides the clip buffer instead of starting a second rrweb stream.'
+      ]
+    },
     {
       type: 'note',
       text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'

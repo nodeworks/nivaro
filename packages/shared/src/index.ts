@@ -395,6 +395,14 @@ export {
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
+  type AutoRecordDeps,
+  type AutoRecordRequest,
+  autoRecordingActive,
+  parseAutoRecord,
+  runAutoRecording,
+  stopAutoRecording
+} from './lib/auto-record'
+export {
   type AutofillRun,
   dismissAutofillRun,
   getAutofillRuns,
@@ -489,12 +497,17 @@ export {
 export {
   captureReplayClip,
   clipEndOffset,
+  emitReplayTap,
   type PreparedReplayClip,
   prepareReplayClip,
   type ReplayClipKind,
   type ReplayLink,
+  type ReplayRecorderMode,
   registerReplayCapture,
   replayHref,
+  replayRecorderMode,
+  setReplayRecorderMode,
+  tapReplayEvents,
   withClipKind
 } from './lib/replay-capture'
 export {
