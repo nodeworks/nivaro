@@ -4,9 +4,12 @@ import {
   bodyDuration,
   cropOf,
   editedDuration,
+  holdsIn,
   introMs,
   musicShare,
+  pieceEditedMs,
   type Rect,
+  type Speed,
   sourceToEdited,
   type VideoEdits,
   type Zoom,
@@ -173,13 +176,38 @@ export function musicShareWindows(
   const out: Array<{ start_ms: number; end_ms: number; share: number }> = []
   let acc = introMs(e)
   for (const s of e.segments) {
-    const len = (s.end_ms - s.start_ms) / s.speed
+    const len = pieceEditedMs(e, s)
     const share = musicShare(s.music)
     if (share !== 1) out.push({ start_ms: acc, end_ms: acc + len, share })
     acc += len
   }
   return out
 }
+
+/** What the render concatenates, in order: each kept piece split around its
+ *  held frames (#1537) into played stretches and holds. A hold is the source
+ *  frame at `at_ms`, held for `hold_ms`; the stretch after it starts at that
+ *  same moment, so no frame is skipped or shown twice. */
+export type RenderPiece =
+  | { kind: 'play'; start_ms: number; end_ms: number; speed: Speed }
+  | { kind: 'hold'; at_ms: number; hold_ms: number }
+export function renderPieces(e: VideoEdits): RenderPiece[] {
+  const out: RenderPiece[] = []
+  for (const s of e.segments) {
+    let cur = s.start_ms
+    for (const h of holdsIn(e, s)) {
+      if (h.at_ms > cur) out.push({ kind: 'play', start_ms: cur, end_ms: h.at_ms, speed: s.speed })
+      out.push({ kind: 'hold', at_ms: h.at_ms, hold_ms: h.hold_ms })
+      cur = h.at_ms
+    }
+    if (s.end_ms > cur) out.push({ kind: 'play', start_ms: cur, end_ms: s.end_ms, speed: s.speed })
+  }
+  return out
+}
+/** A held frame is found this far around its moment (the recording may skip
+ *  frames while the screen is still, and its picture may end before its
+ *  sound does: the branch is padded with its last frame first). */
+const HOLD_REACH_MS = 100
 
 /** The music's volume expression over the edited timeline: its base volume
  *  times each piece's share. */
@@ -373,7 +401,9 @@ export function buildRenderArgs(input: RenderInput): string[] {
   const finalV = banners.length ? 'vcards' : 'vout'
 
   const segs = e.segments
-  const untouched = segs.length === 1 && segs[0].start_ms === 0 && segs[0].speed === 1
+  const pieces = renderPieces(e)
+  const holds = pieces.some((p) => p.kind === 'hold')
+  const untouched = segs.length === 1 && segs[0].start_ms === 0 && segs[0].speed === 1 && !holds
   const maps: string[] = ['-map', '[vout]']
   // The finished sound is built in steps: the edits' narration lands on
   // [anar], ripple ticks are mixed over it, then background music (lowered
@@ -404,20 +434,41 @@ export function buildRenderArgs(input: RenderInput): string[] {
       parts.push(`[0:a]atrim=end=${sec(segs[0].end_ms)},asetpts=PTS-STARTPTS[${ab}]`)
     }
   } else {
-    const k = segs.length
-    parts.push(`[${label}]split=${k}${segs.map((_, i) => `[s${i}]`).join('')}`)
-    if (input.hasAudio) parts.push(`[0:a]asplit=${k}${segs.map((_, i) => `[as${i}]`).join('')}`)
-    segs.forEach((s, i) => {
+    const k = pieces.length
+    const played = pieces.map((p, i) => (p.kind === 'play' ? i : -1)).filter((i) => i >= 0)
+    parts.push(`[${label}]split=${k}${pieces.map((_, i) => `[s${i}]`).join('')}`)
+    if (input.hasAudio && played.length)
+      parts.push(`[0:a]asplit=${played.length}${played.map((i) => `[as${i}]`).join('')}`)
+    pieces.forEach((p, i) => {
+      if (p.kind === 'play') {
+        parts.push(
+          `[s${i}]trim=start=${sec(p.start_ms)}:end=${sec(p.end_ms)},setpts=(PTS-STARTPTS)/${p.speed}[c${i}]`
+        )
+        if (input.hasAudio) {
+          // Next to a hold's silence the pieces' sound has to match it exactly.
+          parts.push(
+            `[as${i}]atrim=start=${sec(p.start_ms)}:end=${sec(p.end_ms)},asetpts=PTS-STARTPTS,${atempo(p.speed)}${holds ? `,${AUDIO_FORMAT}` : ''}[ca${i}]`
+          )
+        }
+        return
+      }
+      // The held frame (#1537): the picture is made steady (fps) and padded
+      // with its last frame, so a frame exists at the moment even when the
+      // recording skipped frames there or its picture ended early; that one
+      // frame is picked and looped for the hold's length, over silence.
+      const frames = Math.max(1, Math.round((p.hold_ms / 1000) * CARD_FPS))
       parts.push(
-        `[s${i}]trim=start=${sec(s.start_ms)}:end=${sec(s.end_ms)},setpts=(PTS-STARTPTS)/${s.speed}[c${i}]`
+        `[s${i}]fps=${CARD_FPS},tpad=stop_mode=clone:stop_duration=${sec(p.at_ms + HOLD_REACH_MS)},` +
+          `trim=start=${sec(p.at_ms)}:end=${sec(p.at_ms + HOLD_REACH_MS)},setpts=PTS-STARTPTS,trim=end_frame=1,` +
+          `loop=loop=${frames - 1}:size=1:start=0,setpts=N/(${CARD_FPS}*TB)[c${i}]`
       )
       if (input.hasAudio) {
         parts.push(
-          `[as${i}]atrim=start=${sec(s.start_ms)}:end=${sec(s.end_ms)},asetpts=PTS-STARTPTS,${atempo(s.speed)}[ca${i}]`
+          `anullsrc=r=48000:cl=stereo,atrim=duration=${sec((frames / CARD_FPS) * 1000)},${AUDIO_FORMAT}[ca${i}]`
         )
       }
     })
-    const ins = segs.map((_, i) => (input.hasAudio ? `[c${i}][ca${i}]` : `[c${i}]`)).join('')
+    const ins = pieces.map((_, i) => (input.hasAudio ? `[c${i}][ca${i}]` : `[c${i}]`)).join('')
     parts.push(
       `${ins}concat=n=${k}:v=1:a=${input.hasAudio ? 1 : 0}[${vb}]${input.hasAudio ? `[${ab}]` : ''}`
     )

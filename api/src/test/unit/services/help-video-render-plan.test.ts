@@ -4,8 +4,11 @@ import {
   blurPower,
   buildPosterArgs,
   buildRenderArgs,
+  musicShareWindows,
   outputSize,
-  pixelRect
+  pixelRect,
+  renderPieces,
+  rippleTickEditedTimes
 } from '../../../services/help-video-render-plan.js'
 
 const base = {
@@ -337,5 +340,93 @@ describe('audio chain, interleaving and chaining', () => {
       expect(graph).toContain('split=1[s0]')
       expect(graph).toContain('concat=n=1:v=1:a=1[vout][aout]')
     }
+  })
+})
+
+describe('held frames (#1537)', () => {
+  const held = normalizeEdits(
+    {
+      segments: [{ start_ms: 0, end_ms: 10_000, speed: 1 }],
+      holds: [{ id: 'h1', at_ms: 4000, hold_ms: 2000 }]
+    },
+    10_000
+  )
+  it('splits each kept piece around its holds into played stretches and holds', () => {
+    expect(renderPieces(held)).toEqual([
+      { kind: 'play', start_ms: 0, end_ms: 4000, speed: 1 },
+      { kind: 'hold', at_ms: 4000, hold_ms: 2000 },
+      { kind: 'play', start_ms: 4000, end_ms: 10_000, speed: 1 }
+    ])
+    const edge = normalizeEdits(
+      {
+        segments: [
+          { start_ms: 0, end_ms: 2000, speed: 1 },
+          { start_ms: 5000, end_ms: 9000, speed: 2 }
+        ],
+        holds: [
+          { at_ms: 5000, hold_ms: 500 },
+          { at_ms: 7000, hold_ms: 1000 }
+        ]
+      },
+      10_000
+    )
+    expect(renderPieces(edge)).toEqual([
+      { kind: 'play', start_ms: 0, end_ms: 2000, speed: 1 },
+      { kind: 'hold', at_ms: 5000, hold_ms: 500 },
+      { kind: 'play', start_ms: 5000, end_ms: 7000, speed: 2 },
+      { kind: 'hold', at_ms: 7000, hold_ms: 1000 },
+      { kind: 'play', start_ms: 7000, end_ms: 9000, speed: 2 }
+    ])
+  })
+  it('holds one frame in the same graph: a steady, padded pick, looped over silence', () => {
+    const graph = fc(buildRenderArgs({ ...base, edits: held }))
+    expect(graph).toContain('split=3[s0][s1][s2]')
+    expect(graph).toContain('[0:a]asplit=2[as0][as2]')
+    expect(graph).toContain('[s0]trim=start=0.000:end=4.000,setpts=(PTS-STARTPTS)/1[c0]')
+    expect(graph).toContain(
+      '[s1]fps=30,tpad=stop_mode=clone:stop_duration=4.100,trim=start=4.000:end=4.100,setpts=PTS-STARTPTS,trim=end_frame=1,loop=loop=59:size=1:start=0,setpts=N/(30*TB)[c1]'
+    )
+    expect(graph).toContain(
+      'anullsrc=r=48000:cl=stereo,atrim=duration=2.000,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[ca1]'
+    )
+    expect(graph).toContain('[s2]trim=start=4.000:end=10.000,setpts=(PTS-STARTPTS)/1[c2]')
+    // The pieces' sound is brought to the hold's format before the concat.
+    expect(graph).toContain(
+      '[as2]atrim=start=4.000:end=10.000,asetpts=PTS-STARTPTS,anull,aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo[ca2]'
+    )
+    expect(graph).toContain('[c0][ca0][c1][ca1][c2][ca2]concat=n=3:v=1:a=1[vout][aout]')
+    expect(graph).not.toContain('trim=end=10.000,setpts=PTS-STARTPTS[vout]')
+  })
+  it('holds without sound, and leaves a video without holds exactly as before', () => {
+    const silent = fc(buildRenderArgs({ ...base, hasAudio: false, edits: held }))
+    expect(silent).not.toContain('anullsrc')
+    expect(silent).toContain('[c0][c1][c2]concat=n=3:v=1:a=0[vout]')
+    const plain = normalizeEdits({ segments: [{ start_ms: 0, end_ms: 10_000, speed: 1 }] }, 10_000)
+    const graph = fc(buildRenderArgs({ ...base, edits: plain }))
+    expect(graph).toContain('trim=end=10.000,setpts=PTS-STARTPTS[vout]')
+    expect(graph).not.toContain('aformat')
+  })
+  it('music shares and ticks follow the longer edited pieces', () => {
+    const e = normalizeEdits(
+      {
+        segments: [
+          { start_ms: 0, end_ms: 4000, speed: 1, music: 0.5 },
+          { start_ms: 4000, end_ms: 8000, speed: 1 }
+        ],
+        holds: [{ at_ms: 2000, hold_ms: 1500 }],
+        annotations: [
+          {
+            type: 'ripple',
+            start_ms: 6000,
+            end_ms: 6500,
+            rect: { x: 0.5, y: 0.5, w: 0.05, h: 0.05 }
+          }
+        ],
+        music: { enabled: true, source: 'library', track: 'calm', name: 'Calm', volume: 0.3 }
+      },
+      8000
+    )
+    expect(musicShareWindows(e)).toEqual([{ start_ms: 0, end_ms: 5500, share: 0.5 }])
+    expect(rippleTickEditedTimes(e)).toEqual([7500])
   })
 })

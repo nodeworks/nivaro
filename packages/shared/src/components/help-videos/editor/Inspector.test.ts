@@ -30,7 +30,8 @@ const base: VideoEdits = {
     { id: 'z2', start_ms: 4000, end_ms: 6000, rect: { x: 0, y: 0, w: 0.5, h: 0.5 }, ease_ms: 300 }
   ],
   blurs: [],
-  captions: []
+  captions: [],
+  holds: [{ id: 'h1', at_ms: 6000, hold_ms: 3000 }]
 }
 
 let api: { edits: VideoEdits }
@@ -52,7 +53,8 @@ function Harness({ selection }: { selection: Selection }) {
     },
     onSelect: setSel,
     onSeek: () => {},
-    onError
+    onError,
+    playhead: () => 8000
   })
 }
 async function mount(selection: Selection) {
@@ -166,5 +168,88 @@ describe('Inspector timing from the keyboard', () => {
     await click(q('[data-hv-move="later"]'))
     await click(q('[data-hv-tone="accent"]')) // already blue
     expect(changes.mock.calls.length).toBe(m)
+  })
+})
+
+describe('Inspector with several items selected (#1543)', () => {
+  const group: Selection = {
+    lane: 'multi',
+    items: [
+      { lane: 'annotations', id: 'a1' },
+      { lane: 'zooms', id: 'z1' }
+    ]
+  }
+  // Zooms are kept sorted, so z1 is found by id once it moves past z2.
+  const zoom1 = () => api.edits.zooms.find((z) => z.id === 'z1')
+  it('sums the group up and nudges, aligns, duplicates and removes it together', async () => {
+    await mount(group)
+    expect(q('[data-hv-inspector="multi"] h3').textContent).toBe('2 items selected')
+    expect(q('[data-hv-multi-summary]').textContent).toMatch(
+      /^1 callout and 1 zoom, 0:01 to 0:05\./
+    )
+    await click(q('[data-hv-multi-nudge="later"]'))
+    expect(callout()).toMatchObject({ start_ms: 2033, end_ms: 5033 })
+    expect(zoom1()).toMatchObject({ start_ms: 1033, end_ms: 3033 })
+    await click(q('[data-hv-multi-nudge="earlier"]'), { shiftKey: true })
+    // Shift: a whole second, both together.
+    expect(zoom1()?.start_ms).toBe(33)
+    expect(callout().start_ms).toBe(1033)
+    await click(q('[data-hv-multi-nudge="earlier"]'), { shiftKey: true })
+    // The next second back stops where the zoom reaches the start.
+    expect(zoom1()?.start_ms).toBe(0)
+    expect(callout().start_ms).toBe(1000)
+    await click(q('[data-hv-multi-align="start"]'))
+    expect(callout()).toMatchObject({ start_ms: 8000, end_ms: 11_000 })
+    expect(zoom1()).toMatchObject({ start_ms: 8000, end_ms: 10_000 })
+    await click(q('[data-hv-multi-align="end"]'))
+    expect(callout()).toMatchObject({ start_ms: 5000, end_ms: 8000 })
+    expect(zoom1()).toMatchObject({ start_ms: 6000, end_ms: 8000 })
+    // Duplicate puts copies right after the group (it spans 5–8 s, so 3 s on)
+    // and selects them; Remove then takes the copies away.
+    await click(q('[data-hv-multi-duplicate]'))
+    expect(onError).not.toHaveBeenCalled()
+    expect(api.edits.annotations.map((a) => [a.start_ms, a.end_ms])).toEqual([
+      [5000, 8000],
+      [8000, 11_000]
+    ])
+    expect(api.edits.zooms.map((z) => z.start_ms)).toEqual([4000, 6000, 9000])
+    expect(q('[data-hv-inspector="multi"] h3').textContent).toBe('2 items selected')
+    await click(q('[data-hv-multi-remove]'))
+    expect(api.edits.annotations.map((a) => a.id)).toEqual(['a1'])
+    expect(api.edits.zooms.map((z) => z.id)).toEqual(['z2', 'z1'])
+    expect(q('[data-hv-inspector="none"]')).not.toBeNull()
+    // A copied zoom that would land on another zoom is refused with the reason.
+    await act(async () => root.unmount())
+    await mount({
+      lane: 'multi',
+      items: [
+        { lane: 'zooms', id: 'z1' },
+        { lane: 'annotations', id: 'a1' }
+      ]
+    })
+    await click(q('[data-hv-multi-duplicate]'))
+    expect(onError).toHaveBeenLastCalledWith(expect.stringMatching(/overlap/))
+    expect(api.edits.zooms).toHaveLength(2)
+  })
+})
+
+describe('Inspector on a held frame (#1537)', () => {
+  it('sets where it holds and for how long, and refuses a moment inside a cut', async () => {
+    await mount({ lane: 'holds', id: 'h1' })
+    expect(q('[data-hv-inspector="holds"] h3').textContent).toBe('Held frame')
+    const range = q<HTMLInputElement>('[data-hv-hold-ms]')
+    expect(range.value).toBe('3000')
+    await type(range, '5000')
+    expect(api.edits.holds?.[0].hold_ms).toBe(5000)
+    const at = q<HTMLInputElement>('[data-hv-time="at"]')
+    await type(at, '7')
+    await key(at, 'Enter')
+    expect(api.edits.holds?.[0].at_ms).toBe(7000)
+    await type(at, '25')
+    await key(at, 'Enter')
+    expect(onError).toHaveBeenLastCalledWith('A hold has to sit on a part viewers see')
+    expect(api.edits.holds?.[0].at_ms).toBe(7000)
+    await click(q('[data-hv-remove]'))
+    expect('holds' in api.edits).toBe(false)
   })
 })

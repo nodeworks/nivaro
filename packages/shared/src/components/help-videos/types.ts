@@ -69,6 +69,15 @@ export interface Caption {
   end_ms: number
   text: string
 }
+/** A held frame (#1537): the edited timeline freezes on the source frame at
+ *  `at_ms` for `hold_ms` (edited time, 0.2–10 s). Extra edited time with no
+ *  source advance, like 0.5x slow motion; everything on screen at that moment
+ *  stays up for the hold. A hold has to sit inside a kept piece. */
+export interface Hold {
+  id: string
+  at_ms: number
+  hold_ms: number
+}
 /** A title card before the recording (real extra edited time). Blank
  *  `title` / `subtitle` mean the video's title and the first line of its
  *  description. */
@@ -195,6 +204,8 @@ export interface VideoEdits {
    *  picture along the recorded pointer path, and with `shortcuts` a badge
    *  for each keyboard shortcut pressed. Stored only while on. */
   cursor?: CursorEdits
+  /** Held frames (#1537), sorted by `at_ms`; stored only when there are any. */
+  holds?: Hold[]
 }
 
 /** The cursor switches (#1517): only `{ show: true }` (plus `shortcuts: true`)

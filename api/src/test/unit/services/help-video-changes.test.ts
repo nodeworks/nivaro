@@ -186,3 +186,42 @@ describe('notes', () => {
     expect(readEdits(JSON.stringify(base()), SRC)?.segments.length).toBe(2)
   })
 })
+
+describe('firstChange with held frames (#1537)', () => {
+  it('a hold added, removed or changed counts at its moment', () => {
+    const held = base({ holds: [{ id: 'h1', at_ms: 10_000, hold_ms: 2000 }] })
+    expect(firstChange(base(), held, true)).toEqual({ at_ms: 10_000, whole: false })
+    expect(firstChange(held, base(), true)).toEqual({ at_ms: 10_000, whole: false })
+    const longer = base({ holds: [{ id: 'h1', at_ms: 10_000, hold_ms: 4000 }] })
+    expect(firstChange(held, longer, true)).toEqual({ at_ms: 10_000, whole: false })
+    const same = base({ holds: [{ id: 'h1', at_ms: 10_000, hold_ms: 2000 }] })
+    expect(firstChange(held, same, true)).toBeNull()
+  })
+  it('a later change lands past the hold, in the new version’s edited time', () => {
+    const held = { holds: [{ id: 'h1', at_ms: 500, hold_ms: 2000 }] }
+    const old = base(held)
+    const next = base({
+      ...held,
+      captions: [{ id: 'k1', start_ms: 1000, end_ms: 3000, text: 'Hi' }]
+    })
+    expect(firstChange(old, next, true)).toEqual({ at_ms: 3000, whole: false })
+    // The second piece's start moves on by the hold too.
+    const trimmed = base({
+      ...held,
+      segments: [
+        { start_ms: 0, end_ms: 20_000, speed: 1 },
+        { start_ms: 30_000, end_ms: 50_000, speed: 1 }
+      ]
+    })
+    expect(firstChange(old, trimmed, true)).toEqual({ at_ms: 42_000, whole: false })
+    // A piece trimmed shorter changes where the shorter one ends, holds included.
+    const shorter = base({
+      ...held,
+      segments: [
+        { start_ms: 0, end_ms: 15_000, speed: 1 },
+        { start_ms: 30_000, end_ms: 60_000, speed: 1 }
+      ]
+    })
+    expect(firstChange(old, shorter, true)).toEqual({ at_ms: 17_000, whole: false })
+  })
+})

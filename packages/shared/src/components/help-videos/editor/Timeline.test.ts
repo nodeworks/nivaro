@@ -266,3 +266,114 @@ describe('Timeline keyboard', () => {
     expect(q('[data-hv-timeline-note]').textContent).toMatch(/Zooms can.t overlap\..*\.$/)
   })
 })
+
+Element.prototype.setPointerCapture ??= () => {}
+const press = (el: Element, type: string, init: MouseEventInit = {}) =>
+  act(async () => {
+    el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, ...init }))
+  })
+
+describe('Timeline multi-select (#1543)', () => {
+  it('adds bars to the selection with Shift-click, across lanes, and takes them out again', async () => {
+    await press(q('[data-hv-item="annotations:a1"]'), 'pointerdown', { shiftKey: true })
+    expect(api.selection).toEqual({ lane: 'annotations', id: 'a1' })
+    await press(q('[data-hv-item="captions:k1"]'), 'pointerdown', { metaKey: true })
+    await press(q('[data-hv-chapter="c1"]'), 'pointerdown', { shiftKey: true })
+    expect(api.selection).toEqual({
+      lane: 'multi',
+      items: [
+        { lane: 'annotations', id: 'a1' },
+        { lane: 'captions', id: 'k1' },
+        { lane: 'chapters', id: 'c1' }
+      ]
+    })
+    expect(q('[data-hv-item="captions:k1"]').getAttribute('aria-pressed')).toBe('true')
+    expect(q('[data-hv-chapter="c1"]').className).toMatch(/ring-nvr-cyan/)
+    // Focus following the click keeps the group (Chrome focuses a pressed button).
+    await act(async () => q<HTMLButtonElement>('[data-hv-item="captions:k1"]').focus())
+    expect(api.selection?.lane).toBe('multi')
+    await press(q('[data-hv-item="captions:k1"]'), 'pointerdown', { shiftKey: true })
+    expect(api.selection).toEqual({
+      lane: 'multi',
+      items: [
+        { lane: 'annotations', id: 'a1' },
+        { lane: 'chapters', id: 'c1' }
+      ]
+    })
+    // A plain click selects that bar alone again.
+    await press(q('[data-hv-item="annotations:a2"]'), 'pointerdown')
+    expect(api.selection).toEqual({ lane: 'annotations', id: 'a2' })
+  })
+
+  it('selects what a marquee over empty lane space crosses, on every lane it crosses', async () => {
+    const lanes = q('[data-hv-lanes]')
+    lanes.getBoundingClientRect = () => ({ left: 0, top: 0, width: 1600, height: 196 }) as DOMRect
+    // 40 px a second (no width to fit): the callout a1 (2–5 s) sits at
+    // x 80–200 on the annotations lane (y 84–112), the caption k1 (0.5–3 s)
+    // at x 20–120 on the captions lane (y 168–196).
+    await press(lanes, 'pointerdown', { clientX: 90, clientY: 90 })
+    expect(q('[data-hv-marquee]')).toBeNull()
+    await press(lanes, 'pointermove', { clientX: 150, clientY: 190 })
+    expect(q('[data-hv-marquee]')).not.toBeNull()
+    await press(lanes, 'pointerup', { clientX: 150, clientY: 190 })
+    expect(q('[data-hv-marquee]')).toBeNull()
+    expect(api.selection).toEqual({
+      lane: 'multi',
+      items: [
+        { lane: 'annotations', id: 'a1' },
+        { lane: 'captions', id: 'k1' }
+      ]
+    })
+    // Shift adds to it; a plain click on empty space clears it.
+    await press(lanes, 'pointerdown', { clientX: 1210, clientY: 120, shiftKey: true })
+    await press(lanes, 'pointermove', { clientX: 1300, clientY: 130, shiftKey: true })
+    await press(lanes, 'pointerup', { clientX: 1300, clientY: 130 })
+    expect(api.selection?.lane === 'multi' && api.selection.items.map((i) => i.id)).toEqual([
+      'a1',
+      'k1',
+      'z1'
+    ])
+    await press(lanes, 'pointerdown', { clientX: 1000, clientY: 150 })
+    await press(lanes, 'pointerup', { clientX: 1001, clientY: 150 })
+    expect(api.selection).toBeNull()
+  })
+
+  it('shows held frames on their own lane, hollow inside a cut, and keeps the group keys for the editor', async () => {
+    await act(async () =>
+      api.setEdits({
+        ...api.edits,
+        holds: [
+          { id: 'h1', at_ms: 6000, hold_ms: 2500 },
+          { id: 'h2', at_ms: 11_000, hold_ms: 1000 }
+        ]
+      })
+    )
+    const h1 = q('[data-hv-item="holds:h1"]')
+    expect(h1.textContent).toBe('Hold 2.5 s')
+    expect(h1.getAttribute('aria-label')).toBe('Held frame at 0:06, 2.5 seconds')
+    expect(h1.style.left).toBe('240px')
+    const h2 = q('[data-hv-item="holds:h2"]')
+    expect(h2.getAttribute('aria-label')).toMatch(/hidden by a cut$/)
+    expect(h2.className).toMatch(/border-dashed/)
+    expect(q('[data-hv-lane-label="holds"]').textContent).toBe('Holds')
+    // Alone, Alt+arrow nudges a hold; in a group the bar leaves the keys alone.
+    await act(async () => (h1 as HTMLButtonElement).focus())
+    await key(h1, 'ArrowRight', { altKey: true })
+    expect(api.edits.holds?.[0].at_ms).toBe(6100)
+    await act(async () =>
+      api.setSelection({
+        lane: 'multi',
+        items: [
+          { lane: 'holds', id: 'h1' },
+          { lane: 'annotations', id: 'a1' }
+        ]
+      })
+    )
+    const ev = new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true, bubbles: true })
+    await act(async () => {
+      q('[data-hv-item="holds:h1"]').dispatchEvent(ev)
+    })
+    expect(ev.defaultPrevented).toBe(false)
+    expect(api.edits.holds?.[0].at_ms).toBe(6100)
+  })
+})

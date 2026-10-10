@@ -197,6 +197,7 @@ export const EditorSidebar = memo(function EditorSidebar({
           clicks={clicks}
           pointer={pointer}
           uploaded={uploaded}
+          playhead={playhead}
         />
       </div>
       <SideSection

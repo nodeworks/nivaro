@@ -16,9 +16,15 @@ const actions = (over: Partial<EditorShortcutActions> = {}): EditorShortcutActio
   split: vi.fn(),
   deletePiece: vi.fn(),
   addChapter: vi.fn(),
+  addHold: vi.fn(),
   stopDrawing: vi.fn(),
   toggleShortcuts: vi.fn(),
   pieceSelected: false,
+  itemsSelected: 0,
+  nudgeSelection: vi.fn(),
+  deleteSelection: vi.fn(),
+  duplicateSelection: vi.fn(),
+  alignSelection: vi.fn(),
   ...over
 })
 const press = (key: string, init: KeyboardEventInit = {}) =>
@@ -79,6 +85,44 @@ describe('useEditorShortcuts', () => {
     input.dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }))
     expect(a.addChapter).toHaveBeenCalledTimes(2)
     input.remove()
+    await act(async () => root.unmount())
+  })
+
+  it('holds the frame with H', async () => {
+    const root = createRoot(document.createElement('div'))
+    const a = actions()
+    await act(async () => root.render(createElement(Probe, { active: true, actions: a })))
+    press('h')
+    press('h', { ctrlKey: true })
+    expect(a.addHold).toHaveBeenCalledTimes(1)
+    await act(async () => root.unmount())
+  })
+
+  it('nudges, aligns, duplicates and deletes a group of selected items (#1543)', async () => {
+    const root = createRoot(document.createElement('div'))
+    const one = actions({ itemsSelected: 1 })
+    await act(async () => root.render(createElement(Probe, { active: true, actions: one })))
+    // One item: the arrows and Delete keep their single-item meaning (the
+    // focused bar handles them), but [ ] and Ctrl+D act on it.
+    press('ArrowRight')
+    press('Delete')
+    expect(one.nudgeSelection).not.toHaveBeenCalled()
+    expect(one.deleteSelection).not.toHaveBeenCalled()
+    press('[')
+    press(']')
+    press('d', { ctrlKey: true })
+    expect(vi.mocked(one.alignSelection).mock.calls).toEqual([['start'], ['end']])
+    expect(one.duplicateSelection).toHaveBeenCalledTimes(1)
+    const group = actions({ itemsSelected: 3, pieceSelected: false })
+    await act(async () => root.render(createElement(Probe, { active: true, actions: group })))
+    press('ArrowRight')
+    press('ArrowLeft', { shiftKey: true })
+    expect(vi.mocked(group.nudgeSelection).mock.calls).toEqual([[33], [-1000]])
+    press('Backspace')
+    expect(group.deleteSelection).toHaveBeenCalledTimes(1)
+    expect(group.deletePiece).not.toHaveBeenCalled()
+    press('d', { metaKey: true })
+    expect(group.duplicateSelection).toHaveBeenCalledTimes(1)
     await act(async () => root.unmount())
   })
 })
