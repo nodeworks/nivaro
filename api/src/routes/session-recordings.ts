@@ -237,6 +237,15 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         return reply.code(409).send({ error: 'Recording is closed' })
       }
 
+      // Recorders retry a chunk under the SAME seq (#1369) — after a timeout
+      // whose request actually landed, or a pagehide keepalive copy the next
+      // page sends again. A seq this recording already holds is a success
+      // that adds nothing: no second row, no bytes counted twice.
+      const existing = await db('nivaro_session_events')
+        .where({ recording: rec.id, seq })
+        .first('id')
+      if (existing) return reply.send({ data: { ok: true, duplicate: true } })
+
       const payload = JSON.stringify(events)
       if (payload.length > MAX_CHUNK) {
         return reply.code(413).send({ error: 'Chunk too large' })

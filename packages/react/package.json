@@ -39,7 +39,8 @@
     "build": "vite build && pnpm build:css",
     "build:watch": "pnpm build:css && VITE_WATCH=1 vite build --watch",
     "build:css": "tailwindcss -c tailwind-build.config.cjs -i full.src.css -o dist/_tw.css --minify && cat styles.css dist/_tw.css > dist/full.css && rm dist/_tw.css",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "vitest run"
   },
   "peerDependencies": {
     "@nivaro/sdk": ">=0.1.0",
@@ -90,7 +91,8 @@
     "typescript": "^5.0.0",
     "vite": "^6.0.0",
     "vite-plugin-dts": "^5.0.2",
-    "rrweb": "^2.0.0-alpha.18"
+    "rrweb": "^2.0.0-alpha.18",
+    "vitest": "^2.1.0"
   },
   "peerDependenciesMeta": {
     "rrweb": {
