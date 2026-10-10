@@ -200,6 +200,21 @@ export function parseReplayContext(events: unknown[], first: number): ReplayCont
   return ctx
 }
 
+/**
+ * Live follow: add the entries parsed from freshly streamed events. Returns
+ * `ctx` itself when nothing is new, so a quiet poll does not re-render the panel.
+ */
+export function appendReplayContext(ctx: ReplayContext, more: ReplayContext): ReplayContext {
+  if (!more.routes.length && !more.console.length && !more.network.length) return ctx
+  const merge = <T extends { offset: number }>(a: T[], b: T[]) =>
+    b.length ? [...a, ...b].sort((x, y) => x.offset - y.offset) : a
+  return {
+    routes: merge(ctx.routes, more.routes),
+    console: merge(ctx.console, more.console),
+    network: merge(ctx.network, more.network)
+  }
+}
+
 /** Index of the last entry at or before `time` (entries sorted by offset); −1 before the first. */
 export function activeIndex(entries: Array<{ offset: number }>, time: number): number {
   let lo = 0

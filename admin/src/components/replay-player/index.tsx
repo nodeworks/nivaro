@@ -12,6 +12,7 @@ import { api } from '@/lib/api'
 import { EventRail } from './EventRail'
 import {
   activeIndex,
+  appendReplayContext,
   fmtClock,
   parseReplayContext,
   type RailItem,
@@ -83,6 +84,10 @@ export function ReplayPlayer({
   const playingRef = useRef(false)
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
+  // First event's clock: streamed (live) custom events are placed against it.
+  const firstRef = useRef(0)
+  // A row clicked while following live: exit live, then open the recording there.
+  const pendingSeekRef = useRef<number | null>(null)
   const [following, setFollowing] = useState(!!live)
   // Replay context: route changes, the user's console lines and (#1357) the
   // page's requests ride the recording as rrweb custom events (type 5) —
@@ -107,7 +112,7 @@ export function ReplayPlayer({
   const sideBySide = panel === 'side' && wide
   // Read by rescale() inside the load effect: the frame's width budget.
   const sideReserveRef = useRef(0)
-  sideReserveRef.current = sideBySide && hasPanel && !following ? SIDE_PANEL_PX : 0
+  sideReserveRef.current = sideBySide && hasPanel ? SIDE_PANEL_PX : 0
   const rescaleRef = useRef<(() => void) | null>(null)
   // #1356 event rail: the person's requests / errors / page changes /
   // transitions from the server, placed against the first event's clock.
@@ -168,6 +173,7 @@ export function ReplayPlayer({
               (e) => typeof e?.timestamp === 'number'
             )?.timestamp ?? 0
           )
+          firstRef.current = first
           void railReq.then((d) => {
             if (cancelled || !d || !first) return
             setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
@@ -213,10 +219,14 @@ export function ReplayPlayer({
           // ?t= deep link (issue log's Watch-replay): open AT the error moment,
           // a few seconds early so the action that caused it is on screen.
           const meta = replayer.getMetaData()
+          const pending = pendingSeekRef.current
+          pendingSeekRef.current = null
           const seekTo =
-            startAt != null && Number.isFinite(startAt)
-              ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
-              : 0
+            pending != null
+              ? Math.max(0, Math.min(pending, meta.totalTime))
+              : startAt != null && Number.isFinite(startAt)
+                ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
+                : 0
           replayer.play(seekTo)
           setPlaying(true)
         }
@@ -267,6 +277,11 @@ export function ReplayPlayer({
           addEvent?: (e: unknown) => void
         } | null
         if (rep?.addEvent) for (const e of fresh) rep.addEvent(e)
+        // The Console / Network panel follows the stream too (#1357).
+        if (fresh.length && firstRef.current) {
+          const more = parseReplayContext(fresh, firstRef.current)
+          setCtx((c) => appendReplayContext(c, more))
+        }
       } catch {
         /* transient poll failure — next tick retries */
       }
@@ -299,13 +314,19 @@ export function ReplayPlayer({
 
   // Stable for the memoised rail and panel — they must not re-render every animation frame.
   const seekRef = useRef(seek)
-  seekRef.current = seek
+  seekRef.current = following
+    ? (ms: number) => {
+        // Live mode has no scrubbing: leave it and open the recording at that row.
+        pendingSeekRef.current = ms
+        setFollowing(false)
+      }
+    : seek
   const stableSeek = useCallback((ms: number) => seekRef.current(ms), [])
 
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
   const activeNetwork = activeIndex(ctx.network, time)
-  const showPanel = ready && !following && hasPanel
+  const showPanel = ready && hasPanel
   const side = showPanel && sideBySide
   // The frame's width budget moved: scale it again.
   const lastSideRef = useRef(side)

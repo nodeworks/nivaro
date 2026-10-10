@@ -234,7 +234,7 @@ function App() {
       type: 'ul',
       items: [
         'The player’s scrubber shows the markers as colored ticks — blue for route changes, red for console errors, amber for warnings. Clicking a tick seeks the replay to just before that moment. Info-level console lines are kept out of the scrubber to avoid clutter.',
-        'Beside the player, a Console / Network panel lists the console lines and requests. The line at the playhead is highlighted, later lines are dimmed, and the list scrolls itself to follow the replay unless your pointer is over it or you have just scrolled it. Clicking a line seeks the replay to it. Console has a filter per level with counts.',
+        'Beside the player, a Console / Network panel lists the console lines and requests. The line at the playhead is highlighted, later lines are dimmed, and the list scrolls itself to follow the replay unless your pointer is over it or you have just scrolled it. Clicking a line seeks the replay to it. Console has a filter per level with counts. While you follow a session live, the panel stays open and new lines arrive as the person works; clicking a line then leaves live mode and opens the recording at that moment.',
         'On a narrow window, and in the Traffic Map’s Recording level, the panel sits under the player instead.',
         'This makes "what was the user doing when that error fired" a one-click question — find the red tick, click it, watch.'
       ]

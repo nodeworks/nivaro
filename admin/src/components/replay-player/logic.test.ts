@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   activeIndex,
+  appendReplayContext,
   fmtClock,
   groupTip,
   markerTone,
@@ -149,6 +150,43 @@ describe('parseReplayContext (#1357)', () => {
       { offset: 3_000, method: 'GET', route: '/api/items/x/:id', status: 404, duration_ms: 31 },
       { offset: 4_000, method: 'POST', route: '/api/flows', status: 0, duration_ms: null }
     ])
+  })
+})
+
+describe('appendReplayContext (live follow)', () => {
+  it('adds streamed entries in offset order and returns the same object when nothing is new', () => {
+    const base = parseReplayContext(
+      [
+        {
+          type: 5,
+          timestamp: FIRST + 1_000,
+          data: { tag: 'console', payload: { level: 'warn', msg: 'a' } }
+        },
+        {
+          type: 5,
+          timestamp: FIRST + 3_000,
+          data: { tag: 'request', payload: { method: 'GET', route: '/api/x', status: 200 } }
+        }
+      ],
+      FIRST
+    )
+    const more = parseReplayContext(
+      [
+        {
+          type: 5,
+          timestamp: FIRST + 2_000,
+          data: { tag: 'request', payload: { method: 'POST', route: '/api/y', status: 201 } }
+        },
+        { type: 5, timestamp: FIRST + 4_000, data: { tag: 'route', payload: { path: '/queues' } } }
+      ],
+      FIRST
+    )
+    const next = appendReplayContext(base, more)
+    expect(next.network.map((n) => n.route)).toEqual(['/api/y', '/api/x'])
+    expect(next.console).toHaveLength(1)
+    expect(next.routes).toEqual([{ offset: 4_000, text: '/queues' }])
+    expect(base.network).toHaveLength(1)
+    expect(appendReplayContext(base, { routes: [], console: [], network: [] })).toBe(base)
   })
 })
 
