@@ -119,3 +119,53 @@ describe('POST /support/tickets — replay', () => {
     expect(await ownReplayLink('U1', { recording_id: "1' OR 1=1" })).toBeNull()
   })
 })
+
+async function report(body: Record<string, unknown>) {
+  const app = Fastify()
+  await app.register(supportRoutes, { prefix: '/api/support' })
+  return app.inject({ method: 'POST', url: '/api/support/report-problem', payload: body })
+}
+
+describe('POST /support/report-problem (#1390)', () => {
+  it('files an issue raised by the person and a request linked to it', async () => {
+    h.queues.set('nivaro_session_recordings', [{ id: REC }])
+    h.queues.set('nivaro_issues', [[{ id: 55 }]])
+    h.queues.set('nivaro_tasks', [[{ id: 7 }]])
+    h.queues.set('nivaro_tasks as t', [{ ...TICKET, issue_id: 55 }])
+    const res = await report({
+      sentence: 'The upload spins forever',
+      route: '/claims/7/upload',
+      app: 'efp',
+      screenshot: 'data:image/jpeg;base64,AAAA',
+      context: 'Requests (last 1):\n  POST 500 /api/files',
+      replay: { recording_id: REC, offset_ms: 52000 }
+    })
+    expect(res.statusCode).toBe(201)
+    const issue = h.calls.find(([t, m]) => t === 'nivaro_issues' && m === 'insert')?.[2][0]
+    expect(issue).toMatchObject({
+      title: 'The upload spins forever',
+      source: 'client',
+      raised_by: 'U1',
+      screenshot: 'data:image/jpeg;base64,AAAA',
+      recording_id: REC,
+      recording_offset_ms: 52000
+    })
+    expect(String((issue as { details: string }).details)).toContain('Page: /claims/7/upload (efp)')
+    expect(String((issue as { details: string }).details)).toContain('POST 500 /api/files')
+    const task = h.calls.find(([t, m]) => t === 'nivaro_tasks' && m === 'insert')?.[2][0]
+    expect(task).toMatchObject({
+      kind: 'support',
+      created_by: 'U1',
+      issue_id: 55,
+      replay_recording_id: REC
+    })
+    expect(res.json().data).toMatchObject({ issue_id: 55, ticket: { id: 7, issue_id: 55 } })
+  })
+
+  it('needs a sentence and refuses a non-image screenshot', async () => {
+    expect((await report({ sentence: '  ' })).statusCode).toBe(400)
+    const bad = await report({ sentence: 'x', screenshot: 'javascript:alert(1)' })
+    expect(bad.statusCode).toBe(400)
+    expect(h.calls.some(([t, m]) => t === 'nivaro_issues' && m === 'insert')).toBe(false)
+  })
+})

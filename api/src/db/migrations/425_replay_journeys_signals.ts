@@ -10,6 +10,8 @@ import type { Knex } from 'knex'
  *   'Watch what they saw' link on a support request: the requester's own
  *   recording (a support clip, or the live recording) and where in it they
  *   asked. NULL = no replay was on.
+ * - nivaro_tasks.issue_id (#1390) — the issue a Report a problem filed with
+ *   the request (plain int, no FK: an issue may be deleted, the request stays).
  */
 export async function up(knex: Knex): Promise<void> {
   if (
@@ -31,11 +33,16 @@ export async function up(knex: Knex): Promise<void> {
         t.integer('replay_offset_ms').nullable()
       })
     }
+    if (!(await knex.schema.hasColumn('nivaro_tasks', 'issue_id'))) {
+      await knex.schema.alterTable('nivaro_tasks', (t) => {
+        t.integer('issue_id').nullable()
+      })
+    }
   }
 }
 
 export async function down(knex: Knex): Promise<void> {
-  for (const col of ['replay_offset_ms', 'replay_recording_id']) {
+  for (const col of ['issue_id', 'replay_offset_ms', 'replay_recording_id']) {
     if (await knex.schema.hasColumn('nivaro_tasks', col)) {
       await knex.schema.alterTable('nivaro_tasks', (t) => {
         t.dropColumn(col)

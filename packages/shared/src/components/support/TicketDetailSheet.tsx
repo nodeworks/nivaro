@@ -255,6 +255,25 @@ export function TicketDetailSheet({
                       </a>
                     )
                   })()}
+                {t.issue_id != null &&
+                  t.can.work &&
+                  (() => {
+                    // #1390 — Report a problem filed an issue with the screenshot.
+                    const path = `/issues/${t.issue_id}`
+                    const href = nav.consoleUrl ? nav.consoleUrl(path) : path
+                    if (!href) return null
+                    return (
+                      <a
+                        href={href}
+                        target='_blank'
+                        rel='noreferrer'
+                        data-ticket-issue={t.issue_id}
+                        className='ml-2 mt-2 inline-flex items-center gap-1 text-[12px] text-slate-600 hover:underline dark:text-slate-300'
+                      >
+                        Issue #{t.issue_id}
+                      </a>
+                    )
+                  })()}
                 {t.files.length > 0 && (
                   <ul className='mt-2 flex flex-wrap gap-1.5'>
                     {t.files.map((f) => (

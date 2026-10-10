@@ -349,6 +349,11 @@ export { type ReadViewLayout, RecordReadView } from './components/RecordReadView
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
+export {
+  buildReportPayload,
+  ReportProblemButton,
+  type ReportProblemPayload
+} from './components/support/ReportProblem'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
 export {
@@ -521,6 +526,7 @@ export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from '.
 export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
+export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export {

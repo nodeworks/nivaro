@@ -781,6 +781,7 @@ export const collabSupportRequests: DocSection = {
         '**Status**: Open → In progress → Done, or Cancelled. The requester can withdraw an open request or reopen a finished one.',
         '**Request types** (`nivaro_task_categories`, administrators, Request types tab): a type tied to a collection is offered on those records only; with no team a request goes to every administrator; a default assignee skips the desk.',
         "**Privacy**: a request is visible to its requester, its assignee, the administrators and the members of its team — never in a colleague's record task list.",
+        "**Report a problem** (portals): @nivaro/react exports ReportProblemButton for a host shell to mount (`<ReportProblemButton app='efp' />`, a corner button, or inline with floating={false}). The person writes one sentence; a screenshot is taken before the dialog opens with every typed value masked (html2canvas, an optional peer dependency: without it the report goes without a picture), plus the same what-they-saw context as below. It files an issue (source client, raised by the person, screenshot and details attached) AND a support request linked to it (nivaro_tasks.issue_id), which they follow under My requests; the desk sees Issue #N on the ticket.",
         "**What they saw** (ticked by default, the requester can untick it): Get help and Request a change take the moment the dialog opens. With Error clips on, the last minute of the screen becomes an app='support-clip' recording (inputs masked); with full recording on, the live recording is marked at that moment. A text attachment (what-they-saw-….txt) carries the page, the last 30 console warnings/errors and the last 20 requests (method, route pattern, status, ms; no bodies or query strings, secrets redacted). Nothing uploads unless the request is sent. On the desk, the ticket shows Watch what they saw, opening /session-replays?recording=<id>&t=<ms> at the moment of asking (administrators only)."
       ]
     },
@@ -790,6 +791,11 @@ export const collabSupportRequests: DocSection = {
 { "title": "Change the ship-to address", "description": "…", "category_id": 3,
   "collection": "orders", "item": "42", "attachments": ["<file id>"],
   "replay": { "recording_id": "<their own recording>", "offset_ms": 41000 } }
+
+POST  /api/support/report-problem       // Report a problem: issue + linked request
+{ "sentence": "The upload spins forever", "route": "/claims/7/upload", "app": "efp",
+  "screenshot": "data:image/jpeg;base64,…", "context": "…", "attachments": ["<file id>"],
+  "replay": { "recording_id": "…", "offset_ms": 52000 } }
 
 GET   /api/support/tickets?scope=mine|desk&status=open|closed&assignee=me|unassigned&q=
 GET   /api/support/tickets/:id           // thread + history
