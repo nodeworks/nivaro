@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { EventRail } from './EventRail'
+import { type InspectableReplayer, ReplayInspector } from './Inspector'
 import {
   activeIndex,
   fmtClock,
@@ -19,6 +20,7 @@ import {
   type ReplayContext,
   railMarkers
 } from './logic'
+import { crossedEnd } from './play-all-logic'
 import { RangeActions, RangeTrack } from './RangeBar'
 import type { ReplayRange } from './range'
 import { ReplaySidePanel } from './SidePanel'
@@ -50,11 +52,19 @@ export function ReplayPlayer({
   live,
   minHeight = 400,
   panel = 'side',
-  eventsUrl
+  eventsUrl,
+  span
 }: {
   recordingId: string
   /** Offset into the recording (ms); playback opens 5 s before it. */
   startAt?: number | null
+  /**
+   * Wall-clock window (epoch ms) — a replay search hit (#1374) opens where the
+   * record or field was touched. `from` wins over `startAt`. With `to`,
+   * playback pauses the first time it crosses it and calls `onEnd` (also when
+   * the recording finishes first) — Play all (#1398) moves to the next segment.
+   */
+  span?: { from: number; to?: number; onEnd?: () => void } | null
   live?: boolean
   /** Frame height before the first snapshot scales it (a narrow panel wants less). */
   minHeight?: number
@@ -92,6 +102,12 @@ export function ReplayPlayer({
   const playingRef = useRef(false)
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
+  const spanRef = useRef(span)
+  spanRef.current = span
+  /** Timestamp of the first event — offsets are measured from it. */
+  const firstTsRef = useRef(0)
+  const spanDoneRef = useRef(false)
+  const prevTimeRef = useRef(0)
   const [following, setFollowing] = useState(!!live)
   // #1366 / #1415 / #1362 range on the scrubber: raise an issue, save a clip, share it.
   const [range, setRange] = useState<ReplayRange | null>(null)
@@ -138,6 +154,8 @@ export function ReplayPlayer({
     setRail(null)
     setCtx(NO_CONTEXT)
     setRange(null)
+    spanDoneRef.current = false
+    prevTimeRef.current = 0
 
     function rescale() {
       const rep = replayerRef.current
@@ -182,6 +200,7 @@ export function ReplayPlayer({
               (e) => typeof e?.timestamp === 'number'
             )?.timestamp ?? 0
           )
+          firstTsRef.current = first
           void railReq.then((d) => {
             if (cancelled || !d || !first) return
             setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
@@ -211,9 +230,17 @@ export function ReplayPlayer({
         replayer.on('resize', rescale)
         // Sheet slide-in animation settles ~300ms after mount — re-measure after
         for (const delay of [100, 400, 800]) setTimeout(rescale, delay)
+        // Play all (#1398): a segment ends once — after that the player is free.
+        const endSpan = () => {
+          const sp = spanRef.current
+          if (!sp?.onEnd || spanDoneRef.current) return
+          spanDoneRef.current = true
+          sp.onEnd()
+        }
         replayer.on('finish', () => {
           playingRef.current = false
           setPlaying(false)
+          endSpan()
         })
         setReady(true)
         if (following) {
@@ -227,18 +254,33 @@ export function ReplayPlayer({
           // ?t= deep link (issue log's Watch-replay): open AT the error moment,
           // a few seconds early so the action that caused it is on screen.
           const meta = replayer.getMetaData()
-          const seekTo =
-            startAt != null && Number.isFinite(startAt)
-              ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
-              : 0
+          const want =
+            spanRef.current && firstTsRef.current
+              ? spanRef.current.from - firstTsRef.current
+              : startAt != null && Number.isFinite(startAt)
+                ? startAt - 5000
+                : 0
+          const seekTo = Math.max(0, Math.min(want, Math.max(0, meta.totalTime - 1000)))
           replayer.play(seekTo)
           setPlaying(true)
         }
         const tick = () => {
           if (replayerRef.current && playingRef.current) {
-            setTime(
-              Math.min(replayerRef.current.getCurrentTime(), total || Number.MAX_SAFE_INTEGER)
-            )
+            const cur = replayerRef.current.getCurrentTime()
+            setTime(Math.min(cur, total || Number.MAX_SAFE_INTEGER))
+            const end = spanRef.current?.to
+            if (
+              end != null &&
+              !spanDoneRef.current &&
+              firstTsRef.current &&
+              crossedEnd(prevTimeRef.current, cur, end - firstTsRef.current)
+            ) {
+              replayerRef.current.pause()
+              playingRef.current = false
+              setPlaying(false)
+              endSpan()
+            }
+            prevTimeRef.current = cur
           }
           raf = requestAnimationFrame(tick)
         }
@@ -307,6 +349,7 @@ export function ReplayPlayer({
     const rep = replayerRef.current
     if (!rep) return
     setTime(ms)
+    prevTimeRef.current = ms // a seek is not playback crossing a segment end
     if (playing) rep.play(ms)
     else rep.pause(ms)
   }
@@ -315,6 +358,10 @@ export function ReplayPlayer({
   const seekRef = useRef(seek)
   seekRef.current = seek
   const stableSeek = useCallback((ms: number) => seekRef.current(ms), [])
+  const getInspectable = useCallback(
+    () => replayerRef.current as unknown as InspectableReplayer | null,
+    []
+  )
 
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
@@ -353,11 +400,17 @@ export function ReplayPlayer({
       {/* Same element tree with or without the side column — the frame must
           never remount under a live Replayer. */}
       <div className={side ? 'flex items-stretch gap-3' : ''}>
-        <div className={side ? 'min-w-0 flex-1' : ''}>
+        <div className={side ? 'relative min-w-0 flex-1' : 'relative'}>
           <div
             ref={frameRef}
             className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
             style={{ minHeight }}
+          />
+          {/* #1372 — click an element of the paused replay to inspect it. */}
+          <ReplayInspector
+            getReplayer={getInspectable}
+            active={ready && !following && !playing}
+            recordingId={recordingId}
           />
         </div>
         {side && panelEl('side')}

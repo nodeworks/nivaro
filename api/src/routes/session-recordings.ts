@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { scheduleReplayIndex } from '../services/session-replay-index.js'
 import { buildEventRail, type RailRecording } from '../services/session-replay-rail.js'
 import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
 
@@ -277,6 +278,9 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           event_count: db.raw('event_count + ?', [events.length]),
           byte_size: db.raw('byte_size + ?', [stored.length])
         })
+      // #1374 / #1372 — routes, records, field names and selectors touched;
+      // queued, so the upload never waits on it (services/session-replay-index.ts).
+      scheduleReplayIndex(rec.id, seq, events)
       return reply.send({ data: { ok: true } })
     }
   )

@@ -133,6 +133,8 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'DELETE', path: '/api/session-replay-shares/:id' },
   { method: 'GET', path: '/api/session-replay-shares/view/:token' },
   { method: 'GET', path: '/api/session-replay-shares/view/:token/events' },
+  { method: 'GET', path: '/api/session-recordings/search' },
+  { method: 'GET', path: '/api/session-recordings/search/keys' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

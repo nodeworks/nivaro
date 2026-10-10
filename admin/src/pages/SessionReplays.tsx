@@ -14,6 +14,7 @@ import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatFileSize, formatRelative } from '@/lib/utils'
 import { ReplayLibrary } from './session-replays/ReplayLibrary'
+import { ReplaySearchTab } from './session-replays/SearchTab'
 import { SharedReplay } from './session-replays/SharedReplay'
 import { ReplayTabs, useReplayTab } from './session-replays/tabs'
 
@@ -258,7 +259,7 @@ function SessionReplaysAdmin() {
   const [selectedUser, setSelectedUser] = useState<string | null>(null)
   // ?recording=<id> deep link — the chat online list links straight to
   // someone's live session, which is worthless if it only opens the list.
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const deepLinkId = searchParams.get('recording')
   const deepLinkT = searchParams.get('t')
   const deepLinkApplied = useRef(false)
@@ -594,6 +595,7 @@ function SessionReplaysAdmin() {
       </header>
 
       {tab === 'library' && <ReplayLibrary />}
+      {tab === 'search' && <ReplaySearchTab />}
       <div className={cn('flex flex-1 min-h-0 overflow-hidden', tab !== 'list' && 'hidden')}>
         {/* People rail */}
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>

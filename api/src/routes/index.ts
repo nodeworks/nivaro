@@ -188,6 +188,7 @@ import { semanticSearchRoutes } from './semantic-search.js'
 import { sequenceRoutes } from './sequences.js'
 import { sessionRecordingRoutes } from './session-recordings.js'
 import { sessionReplayClipRoutes } from './session-replay-clips.js'
+import { sessionReplaySearchRoutes } from './session-replay-search.js'
 import { sessionReplayShareRoutes } from './session-replay-shares.js'
 import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
@@ -474,6 +475,8 @@ export async function registerRoutes(app: FastifyInstance) {
   // Clips / library / shares of recordings — full paths, no prefix (#1366).
   await app.register(sessionReplayClipRoutes)
   await app.register(sessionReplayShareRoutes)
+  // #1374 / #1372 — search over the replay index (/search, /search/keys)
+  await app.register(sessionReplaySearchRoutes, { prefix: '/session-recordings' })
   await app.register(reportStudioRoutes, { prefix: '/report-studio' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)

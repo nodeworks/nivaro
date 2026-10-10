@@ -295,6 +295,29 @@ function App() {
         'Revoke deletes the link at once. A link also stops working when it expires or when its recording is purged by retention — save the range as a clip first if it must outlive the recording.',
         'Only a fingerprint of the link is stored, so the link itself cannot be read back from the database.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-search', text: 'Search by record or field' },
+    {
+      type: 'p',
+      text: 'As each recording uploads, the server indexes what it touched: the pages visited (with ids replaced by :id), the records opened (collection and id), the names of the fields focused or typed into, and the elements clicked, as selectors. The Search tab on the Session Replays page finds recordings by collection and record id, by field name or by selector, and opens each one at the moment it matched. A record’s Timeline (the History button) links to Replays of this record.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Only field names (the data-field a form row carries) are indexed, never what was typed: inputs are masked before they leave the browser, and the index never reads values or page text.',
+        'Selectors are built from stable hooks only (data-testid, data-field, data-cbv-* and fixed ids), so the same element matches across recordings.',
+        'Indexing runs after the upload has been answered and never slows it down. Recordings uploaded before the index existed are not searchable.',
+        'Index rows are deleted with their recording, by retention or by Delete.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Following one record: search by collection and record id, then Play all. Every recording that opened the record plays as one timeline, oldest first, each cut to the time the person was on the record plus a minute either side. The strip above the player names the person and time of each part; under it, Record as they found it links to the revision in effect when they arrived, and Saved here to any revision saved during that part. When a part ends the next one starts, unless you turn that off; click a part in the strip to jump to it.'
+    },
+    { type: 'h2', id: 'session-replay-inspector', text: 'Inspecting an element' },
+    {
+      type: 'p',
+      text: 'Pause a replay and click anything in it: the inspector outlines the element and shows its selector (with a Copy button), its data-* attributes, and the nearest data-field and data-cbv-* hooks on it or above it. Find in other recordings lists the other recordings in which someone clicked or typed into the same element, from the replay index; Open in Search shows them all with a Watch button that opens each one at that moment. An element with no stable hook on it or above it gets a plain selector such as button, which cannot be searched for. The inspector reads attributes only, never text or what was typed.'
     }
   ]
 }

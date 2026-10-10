@@ -5,9 +5,11 @@
  */
 import { useSearchParams } from 'react-router'
 import { cn } from '@/lib/utils'
+import { wantsSearchTab } from './search-logic'
 
 export const REPLAY_TABS = [
   { key: 'list', label: 'Sessions' },
+  { key: 'search', label: 'Search' },
   { key: 'library', label: 'Library' }
 ] as const
 
@@ -15,14 +17,16 @@ export type ReplayTab = (typeof REPLAY_TABS)[number]['key']
 
 export function useReplayTab(): [ReplayTab, (t: ReplayTab) => void] {
   const [params, setParams] = useSearchParams()
-  const raw = params.get('tab')
+  // A search link (?collection=&item=, ?field=…) opens Search without ?tab=.
+  const raw = params.get('tab') ?? (wantsSearchTab(params) ? 'search' : null)
   const tab = (REPLAY_TABS.find((t) => t.key === raw)?.key ?? 'list') as ReplayTab
   const set = (t: ReplayTab) =>
     setParams(
       (prev) => {
         const next = new URLSearchParams(prev)
-        if (t === 'list') next.delete('tab')
-        else next.set('tab', t)
+        next.delete('tab')
+        // Leaving Search keeps its criteria in the URL, so say list outright.
+        if (t !== 'list' || wantsSearchTab(next)) next.set('tab', t)
         return next
       },
       { replace: true }

@@ -41,6 +41,9 @@ vi.mock('../../../middleware/authenticate.js', () => ({
   },
   requireAdmin: async () => undefined
 }))
+// #1374 — the upload hands each stored chunk to the replay indexer.
+const scheduleReplayIndex = vi.hoisted(() => vi.fn())
+vi.mock('../../../services/session-replay-index.js', () => ({ scheduleReplayIndex }))
 
 import { sessionRecordingRoutes } from '../../../routes/session-recordings.js'
 
@@ -61,6 +64,7 @@ beforeEach(() => {
   h.existing = null
   h.inserts = []
   h.updates = []
+  scheduleReplayIndex.mockClear()
 })
 
 describe('POST /session-recordings/:id/events', () => {
@@ -71,6 +75,7 @@ describe('POST /session-recordings/:id/events', () => {
     expect(h.inserts).toHaveLength(1)
     expect(h.inserts[0]).toMatchObject({ recording: REC, seq: 3 })
     expect(h.updates).toHaveLength(1)
+    expect(scheduleReplayIndex).toHaveBeenCalledWith(REC, 3, [{ type: 3, timestamp: 1 }])
   })
 
   it('answers ok for a seq it already holds, without a second row or more bytes', async () => {
@@ -80,6 +85,7 @@ describe('POST /session-recordings/:id/events', () => {
     expect(res.json()).toEqual({ data: { ok: true, duplicate: true } })
     expect(h.inserts).toHaveLength(0)
     expect(h.updates).toHaveLength(0)
+    expect(scheduleReplayIndex).not.toHaveBeenCalled()
   })
 
   it('still answers 409 for a closed recording, duplicate or not', async () => {
