@@ -121,6 +121,7 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'POST', path: '/api/session-recordings/:id/events' },
   { method: 'GET', path: '/api/session-recordings/' },
   { method: 'GET', path: '/api/session-recordings/:id/events' },
+  { method: 'GET', path: '/api/session-recordings/:id/events-rail' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

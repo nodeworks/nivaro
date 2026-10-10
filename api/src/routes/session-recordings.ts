@@ -4,6 +4,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { buildEventRail, type RailRecording } from '../services/session-replay-rail.js'
 import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
 
 type RrwebEventLike = { type: number; timestamp: number; data?: Record<string, unknown> }
@@ -500,6 +501,26 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         }
       }
       return reply.send({ data: { events, last_seq: chunks[chunks.length - 1].seq } })
+    }
+  )
+
+  /**
+   * #1356 — what else this person's tab did while the recording ran: API
+   * requests (with status), client errors, admin route changes and workflow
+   * transitions, as markers for the player's event rail. Admin-only like
+   * every read here; no activity row, like /:id/events.
+   */
+  app.get<{ Params: { id: string } }>(
+    '/:id/events-rail',
+    { preHandler: requireAdmin },
+    async (req, reply) => {
+      const rec = (await db('nivaro_session_recordings')
+        .where({ id: req.params.id })
+        .first('id', 'user', 'app', 'started_at', 'ended_at', 'last_event_at')) as
+        | RailRecording
+        | undefined
+      if (!rec) return reply.code(404).send({ error: 'Not found' })
+      return reply.send({ data: await buildEventRail(rec) })
     }
   )
 

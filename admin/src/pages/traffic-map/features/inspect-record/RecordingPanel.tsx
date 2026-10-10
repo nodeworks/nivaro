@@ -168,6 +168,7 @@ export default function RecordingPanel(props: InspectPanelProps) {
           startAt={d.offset_ms}
           live={r.live && d.offset_ms == null}
           minHeight={240}
+          panel='stacked'
         />
       </div>
     </div>
