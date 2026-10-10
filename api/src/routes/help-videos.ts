@@ -174,7 +174,10 @@ async function requireAuthor(req: FastifyRequest, reply: FastifyReply): Promise<
 // authenticate hook has already run; a key limited to named collections stays
 // out (the same rule as requireAdmin).
 async function requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<void> {
-  if (!req.isAdmin || req.user?.api_key_scopes) {
+  // A masquerade session runs as the admin here only to record and edit
+  // videos (actAsMasqueradeAuthor): never for packages or release videos, so a
+  // masquerade token is worth no more than recording.
+  if (!req.isAdmin || req.user?.api_key_scopes || req.authMethod === 'masquerade') {
     return reply.code(403).send({ error: 'Only administrators can do this', code: 'ADMIN_ONLY' })
   }
 }
