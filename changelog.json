@@ -1,10 +1,197 @@
 {
-  "generated_at": "2026-10-10T21:04:44.200Z",
+  "generated_at": "2026-10-10T21:53:33.730Z",
   "releases": [
+    {
+      "version": "0.2.38",
+      "tag": "v0.2.38",
+      "date": "2026-10-10T17:53:19-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "restore the xlsx tarball integrity the last replay merge dropped",
+              "hash": "8d301071"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: auto-record on a signal (#1371)",
+              "hash": "5607ff13"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Report a problem from the portal (#1390)",
+              "hash": "2f27e99b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: the cold-object purge spares clips the library holds (merge follow-up)",
+              "hash": "946bc3f7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "report a problem from the portal (#1390)",
+              "hash": "228c3315"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: recording health check (#1412)",
+              "hash": "14d0ac85"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: storage tiering (#1411)",
+              "hash": "716915b9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "clip attached to a support request (#1377)",
+              "hash": "5813ecf9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: watch together (#1399)",
+              "hash": "d2792ed6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: a Playwright spec from a recording (#1393)",
+              "hash": "9c526fab"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: recording cost per route (#1368)",
+              "hash": "2cb7e861"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "idle or stuck (#1394)",
+              "hash": "a9dfda23"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: picture-in-picture player (#1401)",
+              "hash": "4aa3e469"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: frustration score (#1388)",
+              "hash": "8ef635d1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: follow a record across recordings (#1398)",
+              "hash": "5fe9b5df"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: export a recording as HTML or WebM (#1375)",
+              "hash": "9ad22e0e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: shareable replay links (#1362)",
+              "hash": "370b9556"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: element inspector in the player (#1372)",
+              "hash": "1a2e2846"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: journeys for the portal, the day view's app filter (#1391)",
+              "hash": "369bf92c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: chapters (#1397)",
+              "hash": "5de8acde"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: search by record or field (#1374)",
+              "hash": "c3215216"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: click and scroll heatmaps (#1364)",
+              "hash": "7ee0e6eb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: clip library (#1415)",
+              "hash": "2677c494"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: journeys for the portal (#1391)",
+              "hash": "b3014bba"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: masking rules per field (#1361)",
+              "hash": "ef87f2a2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: skip inactivity (#1358)",
+              "hash": "719d8cf6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: timestamped notes on a recording (#1363)",
+              "hash": "5b6bf153"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: clip to a bug report (#1366)",
+              "hash": "b10a0018"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay: error clips from the portal (#1370)",
+              "hash": "b2cee10c"
+            }
+          ]
+        }
+      ],
+      "count": 29
+    },
     {
       "version": "0.2.37",
       "tag": "v0.2.37",
-      "date": "2026-10-10T17:04:31-04:00",
+      "date": "2026-10-10T17:04:44-04:00",
       "sections": [
         {
           "label": "Other",
