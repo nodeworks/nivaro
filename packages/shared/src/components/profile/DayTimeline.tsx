@@ -20,7 +20,7 @@ import {
   shiftDate,
   type TimeView
 } from './dayTimelineLayout'
-import { fmtDuration, pageLabel } from './PersonActivity'
+import { fetchJourneyDays, fmtDuration, pageLabel } from './PersonActivity'
 import { EmptyLine, SectionCard } from './primitives'
 
 // ─── One day of one person (#1367) ───────────────────────────────────────────
@@ -43,6 +43,8 @@ interface DayPage {
   start: string
   end: string
   duration_seconds: number | null
+  /** #1391 — 'admin' or the portal's app label. */
+  app?: string
 }
 interface DayTransition {
   id: number
@@ -107,24 +109,30 @@ export function DayTimelineCard({ userId, initialDate }: { userId: string; initi
   const today = localDateKey(new Date())
   const [date, setDate] = useState(initialDate ?? today)
   const [wholeDay, setWholeDay] = useState(false)
+  // #1391 — null = pages from every front end.
+  const [app, setApp] = useState<string | null>(null)
   const tzOffset = localDayOffset(date)
 
   // Same key and source as the Pages visited card's chips — one fetch for both.
-  const { data: days = [] } = useQuery<Array<{ date: string; steps: number }>>({
-    queryKey: ['nvr-journey-days', userId],
-    queryFn: () =>
-      client
-        .request<{ data: Array<{ date: string; steps: number }> }>(get(`/journeys/days/${userId}`))
-        .then((r) => r.data)
-        .catch(() => [])
+  const { data: dayData } = useQuery({
+    queryKey: ['nvr-journey-days', userId, null],
+    queryFn: () => fetchJourneyDays(client, userId, null)
   })
+  const days = dayData?.days ?? []
+  const apps = dayData?.apps ?? []
   // Each fetch is an audited read, so no refetch on focus: a day is read when
   // it is opened, or when the reader asks again.
   const { data, isLoading, isError } = useQuery<PersonDay>({
-    queryKey: ['nvr-person-day', userId, date, tzOffset],
+    queryKey: ['nvr-person-day', userId, date, tzOffset, app],
     queryFn: () =>
       client
-        .request<{ data: PersonDay }>(get(`/journeys/day/${userId}`, { date, tz_offset: tzOffset }))
+        .request<{ data: PersonDay }>(
+          get(`/journeys/day/${userId}`, {
+            date,
+            tz_offset: tzOffset,
+            ...(app ? { app } : {})
+          })
+        )
         .then((r) => r.data),
     staleTime: 5 * 60_000,
     refetchOnWindowFocus: false,
@@ -179,6 +187,27 @@ export function DayTimelineCard({ userId, initialDate }: { userId: string; initi
       testId='day-timeline'
       actions={dateControls}
     >
+      {(apps.length > 1 || (apps.length === 1 && apps[0] !== 'admin')) && (
+        <div className='mb-2 flex flex-wrap items-center gap-1.5' data-day-apps>
+          {[null, ...apps].map((a) => (
+            <button
+              key={a ?? '__all'}
+              type='button'
+              aria-pressed={app === a}
+              data-day-app-filter={a ?? 'all'}
+              onClick={() => setApp(a)}
+              className={cn(
+                'rounded-md border px-2 py-0.5 text-[11px]',
+                app === a
+                  ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                  : 'border-slate-200 text-slate-500 dark:border-border dark:text-slate-400'
+              )}
+            >
+              {a ?? 'All apps'}
+            </button>
+          ))}
+        </div>
+      )}
       {days.length > 0 && (
         <div className='mb-3 flex flex-wrap gap-1.5' data-day-chips>
           {days.slice(0, 14).map((d) => (
@@ -307,8 +336,10 @@ export function DayTimelineCard({ userId, initialDate }: { userId: string; initi
                     })}
                   {l.key === 'pages' &&
                     layout.pages.map(({ p, box, row }) => {
-                      const href = isSafeAdminPath(p.path) ? adminHref(p.path) : null
-                      const text = `${pageLabel(p.path)} · ${fmtTime(p.start)}${
+                      // A portal page is not an admin route — show it, don't link it.
+                      const portal = (p.app ?? 'admin') !== 'admin'
+                      const href = !portal && isSafeAdminPath(p.path) ? adminHref(p.path) : null
+                      const text = `${portal ? `${p.app} · ` : ''}${pageLabel(p.path)} · ${fmtTime(p.start)}${
                         p.duration_seconds != null ? ` · ${fmtDuration(p.duration_seconds)}` : ''
                       }`
                       return (

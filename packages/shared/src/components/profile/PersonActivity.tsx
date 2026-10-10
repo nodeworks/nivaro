@@ -572,6 +572,21 @@ export function fmtDuration(seconds: number | null): string {
   return m < 60 ? `${m}m ${seconds % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`
 }
 
+/** Days with page data (last 30) and the front ends seen — shared by the
+ *  Pages visited card and the Day view, keyed ['nvr-journey-days', id, app]. */
+export function fetchJourneyDays(
+  client: ReturnType<typeof useNivaroClient>,
+  userId: string,
+  app: string | null
+): Promise<{ days: Array<{ date: string; steps: number }>; apps: string[] }> {
+  return client
+    .request<{ data: Array<{ date: string; steps: number }>; apps?: string[] }>(
+      get(`/journeys/days/${userId}`, app ? { app } : undefined)
+    )
+    .then((r) => ({ days: r.data ?? [], apps: r.apps ?? [] }))
+    .catch(() => ({ days: [], apps: [] }))
+}
+
 export function JourneyCard({ userId }: { userId: string }) {
   const client = useNivaroClient()
   const nav = useNavigation()
@@ -579,18 +594,9 @@ export function JourneyCard({ userId }: { userId: string }) {
   const [date, setDate] = useState(today)
   // #1391 — journeys cover the admin and the portal; null = every app.
   const [appFilter, setAppFilter] = useState<string | null>(null)
-  const { data: dayData } = useQuery<{
-    days: Array<{ date: string; steps: number }>
-    apps: string[]
-  }>({
+  const { data: dayData } = useQuery({
     queryKey: ['nvr-journey-days', userId, appFilter],
-    queryFn: () =>
-      client
-        .request<{ data: Array<{ date: string; steps: number }>; apps?: string[] }>(
-          get(`/journeys/days/${userId}`, appFilter ? { app: appFilter } : undefined)
-        )
-        .then((r) => ({ days: r.data, apps: r.apps ?? [] }))
-        .catch(() => ({ days: [], apps: [] }))
+    queryFn: () => fetchJourneyDays(client, userId, appFilter)
   })
   const days = dayData?.days ?? []
   const apps = dayData?.apps ?? []

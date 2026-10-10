@@ -132,7 +132,7 @@ type TaskRow = { id: number; title: string; collection: string | null; item: str
  * is missing (or whose read fails) answers null so the timeline drops that
  * lane instead of the whole day failing.
  */
-export async function loadPersonDay(userId: string, w: DayWindow) {
+export async function loadPersonDay(userId: string, w: DayWindow, app?: string) {
   const { start, end } = w
   const capped = new Set<string>()
   const lane = async <T>(name: string, read: () => Promise<T[]>, cap?: number) => {
@@ -178,14 +178,18 @@ export async function loadPersonDay(userId: string, w: DayWindow) {
   }
 
   const readPages = async () => {
-    const rows = (await db('nivaro_admin_journeys')
+    // #1391 — pages come from the admin and the portal; ?app= narrows them.
+    const withApp = await hasColumn('nivaro_admin_journeys', 'app')
+    const q = db('nivaro_admin_journeys')
       .where({ user: userId })
       .where('entered_at', '>=', start)
       .where('entered_at', '<', end)
       .orderBy('entered_at', 'asc')
       .limit(DAY_CAPS.pages)
-      .select('session_id', 'path', 'entered_at', 'duration_seconds')) as Array<
-      Pick<JourneyRow, 'session_id' | 'path' | 'entered_at' | 'duration_seconds'>
+      .select('session_id', 'path', 'entered_at', 'duration_seconds', ...(withApp ? ['app'] : []))
+    await applyAppFilter(q, app)
+    const rows = (await q) as Array<
+      Pick<JourneyRow, 'session_id' | 'path' | 'entered_at' | 'duration_seconds' | 'app'>
     >
     // A step with no duration lasted until the next step of its session (at
     // most 30 minutes), else a nominal minute.
@@ -210,7 +214,8 @@ export async function loadPersonDay(userId: string, w: DayWindow) {
         session_id: r.session_id,
         start: iso(r.entered_at),
         end: new Date(Math.max(s, e)).toISOString(),
-        duration_seconds: r.duration_seconds
+        duration_seconds: r.duration_seconds,
+        app: r.app ?? 'admin'
       }
     })
   }
@@ -423,28 +428,28 @@ export async function journeyRoutes(app: FastifyInstance) {
     }
   )
 
-  // GET /journeys/day/:id?date=YYYY-MM-DD&tz_offset=<minutes> — #1367, the
+  // GET /journeys/day/:id?date=YYYY-MM-DD&tz_offset=<minutes>&app= — #1367, the
   // People page's Day view: recordings, pages, requests per minute,
   // transitions and tasks for one day in the VIEWER's zone. Reading someone's
   // day writes an activity row, as an administrator reading the chat log does.
-  app.get<{ Params: { id: string }; Querystring: { date?: string; tz_offset?: string } }>(
-    '/day/:id',
-    { preHandler: requireAdmin },
-    async (req, reply) => {
-      const w = dayWindow(req.query.date, req.query.tz_offset)
-      if ('error' in w) return reply.code(400).send({ error: w.error })
-      const data = await loadPersonDay(req.params.id, w)
-      void logActivity({
-        action: 'person-day-read',
-        user: req.user?.id,
-        collection: 'nivaro_users',
-        item: req.params.id,
-        comment: `Opened the day of ${w.date} (${fmtOffset(w.tzOffset)}) on the People page`,
-        req
-      })
-      return reply.send({ data })
-    }
-  )
+  // ?app= (#1391) narrows the pages lane to one front end.
+  app.get<{
+    Params: { id: string }
+    Querystring: { date?: string; tz_offset?: string; app?: string }
+  }>('/day/:id', { preHandler: requireAdmin }, async (req, reply) => {
+    const w = dayWindow(req.query.date, req.query.tz_offset)
+    if ('error' in w) return reply.code(400).send({ error: w.error })
+    const data = await loadPersonDay(req.params.id, w, req.query.app)
+    void logActivity({
+      action: 'person-day-read',
+      user: req.user?.id,
+      collection: 'nivaro_users',
+      item: req.params.id,
+      comment: `Opened the day of ${w.date} (${fmtOffset(w.tzOffset)}) on the People page`,
+      req
+    })
+    return reply.send({ data })
+  })
 
   // GET /journeys/days/:id?app= — which days have data (for the day picker),
   // last 30; `apps` lists the front ends seen in that window (the app filter).

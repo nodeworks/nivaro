@@ -34,6 +34,7 @@ vi.mock('../../../db/index.js', () => {
   return { db }
 })
 vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: vi.fn(async () => state.hasApp) }))
+vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 vi.mock('../../../middleware/authenticate.js', () => ({
   requireAdmin: async (req: Record<string, unknown>) => {
     req.user = { id: 'A1' }
@@ -141,5 +142,28 @@ describe('GET /journeys/days/:id', () => {
     ])
     const res = await (await app()).inject({ method: 'GET', url: '/api/journeys/days/U1' })
     expect(res.json()).toEqual({ apps: ['admin', 'efp'], data: [{ date: '2026-10-10', steps: 4 }] })
+  })
+})
+
+describe('GET /journeys/day/:id?app=', () => {
+  it('narrows the pages lane and labels each page with its app', async () => {
+    state.rows.set('nivaro_admin_journeys', [
+      [
+        {
+          session_id: 's1',
+          path: '/claims/9',
+          entered_at: new Date('2026-10-10T15:00:00Z'),
+          duration_seconds: 60,
+          app: 'efp'
+        }
+      ]
+    ])
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/api/journeys/day/U1?date=2026-10-10&tz_offset=0&app=efp'
+    })
+    expect(res.statusCode).toBe(200)
+    expect(state.calls).toContainEqual(['where', ['app', 'efp']])
+    expect(res.json().data.pages[0]).toMatchObject({ path: '/claims/9', app: 'efp' })
   })
 })
