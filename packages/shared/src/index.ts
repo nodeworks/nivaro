@@ -523,6 +523,7 @@ export {
   useMyScopes
 } from './lib/use-my-scopes'
 export { useOnlineUsers } from './lib/use-online-users'
+export { pageAtPayload, usePageAt } from './lib/use-page-at'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'

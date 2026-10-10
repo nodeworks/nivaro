@@ -151,8 +151,8 @@ export const journeyTrailDocs: DocSection = {
     },
     {
       type: 'pre',
-      code: `GET /api/journeys/user/:id?date=YYYY-MM-DD   # sessions + steps for one day
-GET /api/journeys/days/:id                   # which of the last 30 days have data`
+      code: `GET /api/journeys/user/:id?date=YYYY-MM-DD&app=   # sessions + steps for one day
+GET /api/journeys/days/:id?app=                     # which of the last 30 days have data, + apps seen`
     },
     {
       type: 'ul',
@@ -160,7 +160,8 @@ GET /api/journeys/days/:id                   # which of the last 30 days have da
         'Admin-only — this is user tracking; the API refuses non-admins.',
         'Durations stamp when the user moves to the next page or disconnects (capped at 8h against dangling sessions).',
         'UI: the Journey Trail card on a user profile (admin view), with a day picker of active days.',
-        'Rows purge automatically after 30 days in the daily retention pass.'
+        'Rows purge automatically after 30 days in the daily retention pass.',
+        "Portals too: a front end built on @nivaro/react calls usePageAt({ app: 'efp', path }) inside its realtime provider and its pages land in the same trail, labelled with the app. ?app= narrows either route to one front end ('admin' includes rows from before the label existed); the card shows an app filter and a per-session app chip once a person has used more than one. Portal pages are listed, not linked."
       ]
     }
   ]

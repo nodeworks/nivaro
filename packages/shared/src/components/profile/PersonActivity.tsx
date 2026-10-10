@@ -544,10 +544,13 @@ interface JourneyStep {
   path: string
   entered_at: string
   duration_seconds: number | null
+  /** #1391 — 'admin' or the portal's app label. */
+  app?: string
 }
 interface JourneySession {
   session_id: string
   started_at: string
+  app?: string
   steps: JourneyStep[]
 }
 
@@ -574,33 +577,64 @@ export function JourneyCard({ userId }: { userId: string }) {
   const nav = useNavigation()
   const today = new Date().toISOString().slice(0, 10)
   const [date, setDate] = useState(today)
-  const { data: days = [] } = useQuery<Array<{ date: string; steps: number }>>({
-    queryKey: ['nvr-journey-days', userId],
+  // #1391 — journeys cover the admin and the portal; null = every app.
+  const [appFilter, setAppFilter] = useState<string | null>(null)
+  const { data: dayData } = useQuery<{
+    days: Array<{ date: string; steps: number }>
+    apps: string[]
+  }>({
+    queryKey: ['nvr-journey-days', userId, appFilter],
     queryFn: () =>
       client
-        .request<{ data: Array<{ date: string; steps: number }> }>(get(`/journeys/days/${userId}`))
-        .then((r) => r.data)
-        .catch(() => [])
+        .request<{ data: Array<{ date: string; steps: number }>; apps?: string[] }>(
+          get(`/journeys/days/${userId}`, appFilter ? { app: appFilter } : undefined)
+        )
+        .then((r) => ({ days: r.data, apps: r.apps ?? [] }))
+        .catch(() => ({ days: [], apps: [] }))
   })
+  const days = dayData?.days ?? []
+  const apps = dayData?.apps ?? []
   const { data, isLoading } = useQuery<{ sessions: JourneySession[] } | null>({
-    queryKey: ['nvr-journey', userId, date],
+    queryKey: ['nvr-journey', userId, date, appFilter],
     queryFn: () =>
       client
         .request<{ data: { sessions: JourneySession[] } }>(
-          get(`/journeys/user/${userId}`, { date })
+          get(`/journeys/user/${userId}`, appFilter ? { date, app: appFilter } : { date })
         )
         .then((r) => r.data)
         .catch(() => null)
   })
+  const multiApp = apps.length > 1 || (apps.length === 1 && apps[0] !== 'admin')
   const sessions = data?.sessions ?? []
   const adminHref = (path: string) => (nav.consoleUrl ? nav.consoleUrl(path) : path)
   return (
     <SectionCard
       icon={<Footprints className='h-4 w-4' />}
       title='Pages visited'
-      hint='Their path through the admin, per session — kept 30 days'
+      hint='Their path through the admin and the portal, per session — kept 30 days'
       testId='journey'
     >
+      {multiApp && (
+        <div className='mb-2 flex flex-wrap items-center gap-1.5' data-journey-apps>
+          {[null, ...apps].map((a) => (
+            <button
+              key={a ?? '__all'}
+              type='button'
+              aria-pressed={appFilter === a}
+              data-journey-app-filter={a ?? 'all'}
+              onClick={() => setAppFilter(a)}
+              className={cn(
+                'rounded-md border px-2 py-0.5 text-[11px]',
+                appFilter === a
+                  ? 'border-nvr-cyan bg-accent text-nvr-navy dark:text-nvr-cyan'
+                  : 'border-slate-200 text-slate-500 dark:border-border dark:text-slate-400'
+              )}
+            >
+              {a ?? 'All apps'}
+            </button>
+          ))}
+        </div>
+      )}
       {days.length > 0 && (
         <div className='mb-3 flex flex-wrap gap-1.5'>
           {days.slice(0, 14).map((d) => (
@@ -625,7 +659,7 @@ export function JourneyCard({ userId }: { userId: string }) {
       {isLoading ? (
         <EmptyLine>Loading…</EmptyLine>
       ) : sessions.length === 0 ? (
-        <EmptyLine>No admin pages recorded {date === today ? 'today' : `on ${date}`}.</EmptyLine>
+        <EmptyLine>No pages recorded {date === today ? 'today' : `on ${date}`}.</EmptyLine>
       ) : (
         <div className='space-y-4'>
           {sessions.map((s, si) => (
@@ -633,10 +667,20 @@ export function JourneyCard({ userId }: { userId: string }) {
               <p className='mb-1.5 text-[11px] font-medium text-slate-400'>
                 Session {si + 1} · started {formatRelative(s.started_at)} · {s.steps.length} page
                 {s.steps.length === 1 ? '' : 's'}
+                {multiApp && (
+                  <span
+                    className='ml-1.5 rounded bg-slate-100 px-1.5 py-px text-[10px] font-medium text-slate-600 dark:bg-muted dark:text-slate-300'
+                    data-journey-app={s.app ?? 'admin'}
+                  >
+                    {s.app ?? 'admin'}
+                  </span>
+                )}
               </p>
               <ol className='relative ml-2 border-l border-slate-200 dark:border-border'>
                 {s.steps.map((step, i) => {
+                  // A portal page is not an admin route — show it, don't link it.
                   const safe =
+                    (step.app ?? 'admin') === 'admin' &&
                     step.path.startsWith('/') &&
                     !step.path.startsWith('//') &&
                     !step.path.includes(':')

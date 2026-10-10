@@ -4,6 +4,7 @@ import fp from 'fastify-plugin'
 import { Redis } from 'ioredis'
 import { Server as SocketIOServer } from 'socket.io'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { canSeeRoom } from '../services/chat.js'
 import {
   type ClientVersion,
@@ -12,6 +13,7 @@ import {
   olderReason
 } from '../services/client-version.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
+import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
 
@@ -296,7 +298,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   // per-node like recordViewers — same accepted Redis-adapter limitation)
   const pagePresence = new Map<
     string,
-    { user: { id: string; name: string }; path: string; since: number }
+    { user: { id: string; name: string }; path: string; since: number; app?: string | null }
   >()
 
   function presenceSnapshot() {
@@ -331,14 +333,22 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
   }
 
-  async function openJourneyRow(socketId: string, userId: string, path: string) {
+  async function openJourneyRow(
+    socketId: string,
+    userId: string,
+    path: string,
+    app: string | null
+  ) {
     try {
+      // #1391 — which front end (admin / a portal); skipped until migration 425 lands.
+      const withApp = app && (await hasColumn('nivaro_admin_journeys', 'app')) ? { app } : {}
       const [row] = await db('nivaro_admin_journeys')
         .insert({
           user: userId,
           session_id: socketId,
           path,
-          entered_at: new Date()
+          entered_at: new Date(),
+          ...withApp
         })
         .returning('id')
       const rowId = typeof row === 'object' ? (row as { id: number }).id : row
@@ -784,22 +794,25 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('pulse:leave', () => socket.leave('pulse'))
 
     // ── Presence map — who's on which admin page right now ──────────────────
-    socket.on('page:at', (payload: { path?: string }) => {
+    // #1391 — the portal (@nivaro/react usePageAt) pings too, labelled with its app.
+    socket.on('page:at', (payload: { path?: string; app?: string }) => {
       const user = authenticatedUser
-      if (!user || typeof payload?.path !== 'string') return
-      // Same-origin absolute path only — never persist something that could
-      // later render as a javascript:/protocol-relative link in the admin.
-      if (!/^\/(?!\/)[A-Za-z0-9/_\-?=&.%~]*$/.test(payload.path)) return
-      const path = payload.path.slice(0, 200)
+      if (!user) return
+      const ping = parsePageAt(payload, socketMeta.get(socket.id)?.app)
+      if (!ping) return
+      const { path, app: pageApp } = ping
       const existing = pagePresence.get(socket.id)
       const changed = existing?.path !== path
       pagePresence.set(socket.id, {
         user: { id: user.id, name: displayName(user) },
         path,
-        since: changed ? Date.now() : existing.since
+        since: changed ? Date.now() : existing.since,
+        app: pageApp
       })
       if (changed) {
-        void closeJourneyRow(socket.id).then(() => openJourneyRow(socket.id, user.id, path))
+        void closeJourneyRow(socket.id).then(() =>
+          openJourneyRow(socket.id, user.id, path, pageApp)
+        )
       }
       io.to('presence-map').emit('presence-map:update', presenceSnapshot())
     })

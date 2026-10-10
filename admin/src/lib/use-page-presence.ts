@@ -38,7 +38,7 @@ export function usePagePresence() {
     })
     socket.on('auth:ok', () => {
       readyRef.current = true
-      socket.emit('page:at', { path: pathRef.current })
+      socket.emit('page:at', { path: pathRef.current, app: 'admin' })
     })
     socket.on('disconnect', () => {
       readyRef.current = false
@@ -52,6 +52,7 @@ export function usePagePresence() {
   }, [user])
 
   useEffect(() => {
-    if (readyRef.current) socketRef.current?.emit('page:at', { path: location.pathname })
+    if (readyRef.current)
+      socketRef.current?.emit('page:at', { path: location.pathname, app: 'admin' })
   }, [location.pathname])
 }
