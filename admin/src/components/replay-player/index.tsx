@@ -19,6 +19,9 @@ import {
   type ReplayContext,
   railMarkers
 } from './logic'
+import { ReplayNotesPanel } from './NotesPanel'
+import { NotesRail } from './NotesRail'
+import { useReplayNoteList } from './notes'
 import { ReplaySidePanel } from './SidePanel'
 
 const SPEEDS = [1, 2, 4, 8]
@@ -29,6 +32,7 @@ const SIDE_PANEL_PX = 320 + 12
 const SIDE_MIN_VIEWPORT = 1100
 
 const NO_CONTEXT: ReplayContext = { routes: [], console: [], network: [] }
+const NO_NOTES: never[] = []
 
 function useWideViewport(): boolean {
   const [wide, setWide] = useState(() =>
@@ -301,6 +305,11 @@ export function ReplayPlayer({
   const seekRef = useRef(seek)
   seekRef.current = seek
   const stableSeek = useCallback((ms: number) => seekRef.current(ms), [])
+  // #1363 notes: a rail under the scrubber, the list under the controls.
+  const timeRef = useRef(time)
+  timeRef.current = time
+  const getTime = useCallback(() => timeRef.current, [])
+  const noteList = useReplayNoteList(recordingId).data?.data
 
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
@@ -420,6 +429,7 @@ export function ReplayPlayer({
               truncated={rail?.truncated ?? []}
               onSeek={stableSeek}
             />
+            <NotesRail notes={noteList ?? NO_NOTES} total={total} onSeek={stableSeek} />
           </div>
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(total)}
@@ -443,6 +453,9 @@ export function ReplayPlayer({
         </div>
       )}
       {showPanel && !side && panelEl('stacked')}
+      {ready && !following && (
+        <ReplayNotesPanel recordingId={recordingId} getTime={getTime} onSeek={stableSeek} />
+      )}
     </div>
   )
 }

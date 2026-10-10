@@ -254,6 +254,19 @@ function App() {
         'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
         'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-notes', text: 'Notes on a recording' },
+    {
+      type: 'p',
+      text: 'Under the player, the Notes list pins a remark to a moment of the replay. A note is pinned to the playhead at the moment you start typing it (click the time chip to re-pin it to where the playhead is now), and shows as a violet flag in a row under the event rail. Click a flag or a note’s time to seek to it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Notes are admin-only, like the recordings themselves, and are shown as plain text. Only the author can edit a note; any admin can delete one. Notes go when the recording goes.',
+        'Copy a note onto an issue linked to the recording (it lands as a comment on the issue, shown in the issue’s detail) or onto an open investigation notebook from the Traffic Map (appended to its notes). Either way the copy carries a link that opens the recording at that second.',
+        'Adding, deleting and copying a note are recorded in the activity log.'
+      ]
     }
   ]
 }

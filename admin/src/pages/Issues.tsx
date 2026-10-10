@@ -12,6 +12,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { IssueComments } from '@/components/issue-comments'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -407,6 +408,9 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
           Save assignee
         </Button>
       </div>
+
+      {/* Comments — replay notes copied onto this issue land here (#1363) */}
+      <IssueComments issueId={issue.id} />
 
       {/* Resolution notes */}
       <div className='space-y-1'>

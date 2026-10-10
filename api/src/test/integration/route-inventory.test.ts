@@ -122,6 +122,12 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-recordings/' },
   { method: 'GET', path: '/api/session-recordings/:id/events' },
   { method: 'GET', path: '/api/session-recordings/:id/events-rail' },
+  // Session replay notes (#1363) — the player's notes rail + list, issue detail copy target
+  { method: 'GET', path: '/api/session-recordings/:id/notes' },
+  { method: 'POST', path: '/api/session-recordings/:id/notes' },
+  { method: 'PATCH', path: '/api/session-recordings/:id/notes/:noteId' },
+  { method: 'DELETE', path: '/api/session-recordings/:id/notes/:noteId' },
+  { method: 'POST', path: '/api/session-recordings/:id/notes/:noteId/copy' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },
