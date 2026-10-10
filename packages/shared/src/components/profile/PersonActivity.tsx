@@ -551,7 +551,7 @@ interface JourneySession {
   steps: JourneyStep[]
 }
 
-function pageLabel(path: string): string {
+export function pageLabel(path: string): string {
   if (path === '/') return 'Dashboard'
   const parts = path.split('/').filter(Boolean)
   if (parts[0] === 'collections' && parts[1]) {
@@ -562,7 +562,7 @@ function pageLabel(path: string): string {
     .join(' › ')
     .replace(/\b\w/g, (c) => c.toUpperCase())
 }
-function fmtDuration(seconds: number | null): string {
+export function fmtDuration(seconds: number | null): string {
   if (seconds == null) return ''
   if (seconds < 60) return `${seconds}s`
   const m = Math.floor(seconds / 60)
