@@ -741,6 +741,10 @@ export const collabChat: DocSection = {
     },
     {
       type: 'p',
+      text: 'The Online tab tells three states apart. Active: input recently and things moving. Idle: no input for five minutes (or "appear away"). Stuck: input in the last five minutes, but on the same route with no save, transition or any other request that changed something for ten minutes, shown as "stuck on CM26-80332 for 12m". Stuck reads the person\'s own route history (journeys) and request log, so only administrators and the person\'s manager see it, on the Online tab, on the people page header, and as a count and per-person pill on the manager\'s Team load card. GET /api/presence/online answers it as state and stuck { minutes, label }; the page pings that feed it come from the admin and from portals on @nivaro/react (usePageAt).'
+    },
+    {
+      type: 'p',
       text: 'Admins manage the entity-room registry from the "Record rooms" button on `/chat`: register a prefix + collection + match field, or deactivate an existing type. Entity ids mentioned in messages render as links into the collection browser when a matching room type is registered.'
     },
     { type: 'h2', id: 'chat-edit-delete', text: 'Editing and deleting messages' },

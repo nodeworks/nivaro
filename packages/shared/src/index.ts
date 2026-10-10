@@ -472,6 +472,7 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export { type StuckState, stuckText } from './lib/presence-state'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
 export {

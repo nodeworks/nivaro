@@ -6,6 +6,7 @@ import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { resolveDisplayValue } from '../services/display-value.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
 import { can } from '../services/permissions.js'
+import { presenceRowIdle, stuckLabel, stuckMinutes } from '../services/presence-stuck.js'
 import type { User } from '../types.js'
 
 const KEY_PREFIX = 'presence:session:'
@@ -343,7 +344,7 @@ function titleCase(s: string): string {
  * needs the template and the row, and the chat panel has neither. Resolved in
  * one query per collection over the whole online list rather than per row.
  */
-async function resolveRecordLabels(
+export async function resolveRecordLabels(
   paths: Array<string | null | undefined>,
   viewer: User
 ): Promise<Map<string, string>> {
@@ -648,6 +649,44 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       return label ? `${titleCase(m[1])} › ${label}` : null
     }
 
+    // #1394 — stuck: at the keyboard, same route, nothing saved for ten
+    // minutes. Shown to admins and to the person's own manager only: it reads
+    // their request log, which is more than the page they are on.
+    const stuckByUser = new Map<string, { minutes: number; label: string | null }>()
+    try {
+      let mayKnow: Set<string> | null = null
+      if (!req.isAdmin) {
+        const mine = userIds.length
+          ? ((await db('nivaro_users')
+              .whereIn('id', userIds)
+              .where('manager_id', req.user!.id)
+              .select('id')) as Array<{ id: string }>)
+          : []
+        mayKnow = new Set(mine.map((m) => String(m.id).toUpperCase()))
+      }
+      const people = visibleRows
+        .filter((r) => !mayKnow || mayKnow.has(String(r.user_id ?? '').toUpperCase()))
+        .map((r) => ({
+          id: String(r.user_id ?? ''),
+          idle: presenceRowIdle(r, awayByUser.has(String(r.user_id ?? '').toUpperCase())),
+          lastActive: r.last_active ? new Date(r.last_active as string).getTime() : null
+        }))
+      if (people.length > 0) {
+        const stuck = await stuckMinutes(people)
+        for (const r of visibleRows) {
+          const uid = String(r.user_id ?? '').toUpperCase()
+          const minutes = stuck.get(uid)
+          if (minutes != null)
+            stuckByUser.set(uid, {
+              minutes,
+              label: stuckLabel(r.current_path as string | null, recordLabels)
+            })
+        }
+      }
+    } catch {
+      /* decoration only */
+    }
+
     return reply.send({
       data: visibleRows.map((r) => {
         const uid = String(r.user_id ?? '').toUpperCase()
@@ -667,17 +706,15 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           // nothing ever said otherwise. Recent activity wins.
           // "Appear away" beats activity: the person asked to read as away.
           away: awayByUser.has(uid),
-          is_idle: (() => {
-            if (awayByUser.has(uid)) return true
-            const flag = r.is_idle === true || r.is_idle === 1
-            const active = r.last_active ? new Date(r.last_active as string).getTime() : 0
-            // Idle when the client says so OR its last real input is stale —
-            // recent activity wins in both directions.
-            if (active && Date.now() - active > IDLE_AFTER_MS) return true
-            if (!flag) return false
-            if (!active) return true
-            return Date.now() - active > IDLE_AFTER_MS
-          })(),
+          is_idle: presenceRowIdle(r, awayByUser.has(uid)),
+          // #1394 — 'active' | 'idle' | 'stuck'; stuck only for viewers who
+          // may know it (admins, the person's manager), else active/idle.
+          state: presenceRowIdle(r, awayByUser.has(uid))
+            ? 'idle'
+            : stuckByUser.has(uid)
+              ? 'stuck'
+              : 'active',
+          stuck: stuckByUser.get(uid) ?? null,
           // How long they've been away from the keyboard, for the "Idle · 12m"
           // label — null while active or unknown.
           idle_minutes: (() => {
