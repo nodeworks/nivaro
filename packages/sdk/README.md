@@ -2494,6 +2494,8 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 - `recordHelpVideoProgress` takes `buckets` as a 20-character `0`/`1` string (the 5% sections seen) and answers `{ data: { completed } }`, or no body (204) for a masquerade session.
 - `listHelpVideos` and `helpVideosFor` carry `can_author`, so a screen can offer "Add a video" without a second call.
 - `download_urls` (`video`, `captions_vtt`, `captions_srt`) are ticketed attachment links, or `null` when the caller may not download. Authors also get `allow_downloads` and `draft_download_urls`.
+- The draft (`GET /help-videos/:id/draft/edits`, and `draft` on the video for authors) carries `peaks` (sound levels 0–1 per 100 ms, built by the server, the shape of `levels`) and `sprite` (`{ url, tile_w, tile_h, cols, count, interval_ms }`: a ticketed JPEG of small frames, one every `interval_ms`), each `null` until built or when there is none.
+- Clips: `GET /help-videos/:id/clips` lists them for anyone who can watch (`url` is the ticketed file once `status` is `ready`; add `&download=1` to save it); `POST /help-videos/:id/clips` with `{ kind: mp4|gif, start_ms, end_ms, label?, draft? }` (edited time, at most 30 s) queues one and `DELETE /help-videos/:id/clips/:clipId` removes it — authors only.
 
 #### Errors callers must handle
 
@@ -2501,6 +2503,9 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | --- | --- | --- |
 | 409 | `HELP_VIDEO_PROCESSING` | A viewer requested `stream_url` before a current render exists and the original cannot be shown. Check `published.playable`, retry later. |
 | 409 | `HELP_VIDEO_EDITS_CONFLICT` | `saveHelpVideoDraft` with a stale `base_hash`. The body carries `current_hash`; reload the draft and merge. |
+| 422 | `HELP_VIDEO_CLIP_RANGE` | A clip range that is backwards, past the end of the video, under half a second or over 30 seconds. |
+| 409 | `HELP_VIDEO_CLIP_LIMIT` | The video already has 20 clips (failed ones not counted). Delete one first. |
+| 503 | `HELP_VIDEO_CLIP_NO_FFMPEG` | The server cannot cut videos (ffmpeg is not installed). |
 | 409 | `UPLOAD_CLOSED` | The upload is already finalized or finishing; or, on discard, already used by a video or discarded. |
 | 422 | `UPLOAD_NOT_VIDEO` | A part is not a WebM or MP4 recording. |
 | 422 | `UPLOAD_TOO_LONG` | The recording is longer than 30 minutes (on finalize). |
@@ -2512,6 +2517,11 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | 403 | `HELP_VIDEO_DOWNLOAD_OFF` | A viewer asked for a download of a video whose downloads are turned off (`download_urls` is `null` then). |
 | 422 | `HELP_VIDEO_PACKAGE_INVALID` | A package that is not a help-video package, is damaged or holds no usable video. |
 | 404 | `HELP_VIDEO_NOT_FOUND` | Unknown id, or a video the caller may not see. |
+| 409 | `HELP_VIDEO_NO_DRAFT` | A draft suggestion or caption job for a video that has no draft yet (open it in the editor first). |
+| 503 | `HELP_VIDEO_AI_NOT_CONFIGURED` | Draft the edit without an AI provider (Settings → AI Features). |
+| 502 | `HELP_VIDEO_DRAFT_UNREADABLE` | The model’s answer was not the JSON asked for. |
+| 503 | `HELP_VIDEO_CAPTIONS_NOT_CONFIGURED` | Generate captions with neither a gateway speech-to-text model nor a working local Whisper command; the message says what to set up. |
+| 409 | `HELP_VIDEO_CAPTIONS_BUSY` | Generate captions (or discarding the set) while a job for the draft is queued or running. |
 
 | Command | Route | Auth |
 | --- | --- | --- |
@@ -2530,6 +2540,8 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | listHelpVideoVersions(id) | GET /help-videos/:id/versions | Author |
 | restoreHelpVideoVersion(id, versionId) | POST /help-videos/:id/versions/:vid/restore | Author |
 | rerenderHelpVideo(id, opts?) | POST /help-videos/:id/render | Author |
+| — (editor only) | POST /help-videos/:id/draft/suggest | Author |
+| — (editor only) | GET · POST · DELETE /help-videos/:id/captions/generate | Author |
 | recordHelpVideoProgress(id, body) | POST /help-videos/:id/progress | Authenticated |
 | readRequiredHelpVideos() | GET /help-videos/required/mine | Authenticated |
 | readHelpVideoAnalytics(id) | GET /help-videos/:id/analytics | Author |
@@ -2546,6 +2558,13 @@ const { data } = await nivaro.request(helpVideosFor({ collection: 'purchase_orde
 | previewHelpVideoPackageImport(id) | POST /help-videos/packages/imports/:id/preview | Admin |
 | applyHelpVideoPackageImport(id, video_ids?) | POST /help-videos/packages/imports/:id/apply | Admin |
 | discardHelpVideoPackageImport(id) | DELETE /help-videos/packages/imports/:id | Admin |
+| — (REST) | POST / GET /help-videos/paths | Author |
+| — (REST) | GET /help-videos/paths/mine | Authenticated |
+| — (REST) | GET / PATCH / DELETE /help-videos/paths/:pid | Author |
+| — (REST) | PUT /help-videos/paths/:pid/items · /roles | Author |
+| — (REST) | GET /help-videos/required/mine → { data, paths } | Authenticated |
+| — (REST) | GET /help-videos/releases | Authenticated |
+| — (REST) | PUT / DELETE /help-videos/releases/:version | Admin |
 
 ---
 
