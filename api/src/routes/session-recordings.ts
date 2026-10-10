@@ -363,6 +363,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           'r.byte_size',
           'r.truncated',
           'r.active_ms',
+          'r.chapter_count',
           db.raw(
             "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
           ),
@@ -411,6 +412,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         'r.byte_size',
         'r.truncated',
         'r.active_ms',
+        'r.chapter_count',
         db.raw(
           "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
         ),

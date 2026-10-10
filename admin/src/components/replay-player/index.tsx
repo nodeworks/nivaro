@@ -9,6 +9,8 @@ import { TipLayer } from '@nivaro/shared'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { ChapterList, useChapterKeys } from './ChapterList'
+import { buildChapters, chapterIndexAt } from './chapters'
 import { EventRail } from './EventRail'
 import { findInactiveGaps, type InactiveGap } from './inactivity'
 import {
@@ -312,6 +314,22 @@ export function ReplayPlayer({
   seekRef.current = seek
   const stableSeek = useCallback((ms: number) => seekRef.current(ms), [])
 
+  // #1397 chapters: a new one at every page change (recorder stamps + page trail).
+  const chapters = useMemo(
+    () =>
+      buildChapters(
+        ctx.routes,
+        railMarks
+          .filter((m) => m.kind === 'route')
+          .map((m) => ({ offset: m.offset, text: m.label })),
+        total
+      ),
+    [ctx.routes, railMarks, total]
+  )
+  const timeRef = useRef(time)
+  timeRef.current = time
+  useChapterKeys(chapters, () => timeRef.current, stableSeek, ready && !following)
+
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
   const activeNetwork = activeIndex(ctx.network, time)
@@ -456,6 +474,13 @@ export function ReplayPlayer({
             ))}
           </span>
         </div>
+      )}
+      {ready && !following && (
+        <ChapterList
+          chapters={chapters}
+          current={chapterIndexAt(chapters, time)}
+          onSeek={stableSeek}
+        />
       )}
       {showPanel && !side && panelEl('stacked')}
     </div>

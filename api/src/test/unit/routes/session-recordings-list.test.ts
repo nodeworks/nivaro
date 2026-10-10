@@ -1,7 +1,7 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-/** GET /session-recordings/ — the list's sort options (#1358). */
+/** GET /session-recordings/ — the list's sort options and stats columns (#1358, #1397). */
 
 const h = vi.hoisted(() => ({
   calls: [] as Array<[string, unknown[]]>
@@ -62,9 +62,10 @@ describe('GET /session-recordings/ sort', () => {
     expect(order[1]).toEqual(['orderBy', ['r.started_at', 'desc']])
   })
 
-  it('selects the active time for the row', async () => {
+  it('selects the active time and chapter count for the row (#1358, #1397)', async () => {
     await list('')
     const select = h.calls.find((c) => c[0] === 'select')?.[1] ?? []
     expect(select).toContain('r.active_ms')
+    expect(select).toContain('r.chapter_count')
   })
 })

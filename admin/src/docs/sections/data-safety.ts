@@ -266,6 +266,15 @@ function App() {
         'Each recording’s active time — the time between input or page changes, every idle stretch counted as at most 5 seconds — is worked out as its chunks upload and shown on the list ("4m 12s active"). Sort a person’s recordings by Most active to find the sessions where something actually happened.',
         'Recordings made before active time was measured show no figure and sort last.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-chapters', text: 'Chapters' },
+    {
+      type: 'p',
+      text: 'A recording splits into chapters at every page change — from the recorder’s own route markers and the server’s page trail, merged when both saw the same navigation. A change of query string alone (a filter, a tab) stays in the same chapter, and a page left within a moment (a redirect) is folded into where it landed. Under the scrubber the chapters are listed with their page and length, the current one highlighted; click one to jump to it, or press , (back) and . (next) while watching.'
+    },
+    {
+      type: 'p',
+      text: 'The list shows how many chapters each recording has, counted from the route markers as the recording uploads (recordings made before this show no count).'
     }
   ]
 }

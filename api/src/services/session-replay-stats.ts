@@ -11,8 +11,13 @@ import { db } from '../db/index.js'
  * recording left open over lunch is a few minutes of activity, not an hour.
  * The player's skip-inactivity uses the same threshold and the same events.
  *
- * The running state (`active_last_ts`) rides on the row, so the gap that
- * straddles two chunks counts once.
+ * Chapters (#1397): the recorder stamps a `route` custom event on every
+ * navigation (and once for the page it starts on); each change of page PATH
+ * opens a chapter — a query-string change (a filter, ?t=) does not. The player
+ * builds the same chapters, adding the server's page trail.
+ *
+ * The running state (`active_last_ts`, `chapter_last_route`) rides on the
+ * row, so the gap or the page that straddles two chunks counts once.
  */
 
 /** Gaps longer than this are inactivity — same constant as the player's skip. */
@@ -67,6 +72,39 @@ export function foldActiveTime(state: ActiveState, events: unknown[]): ActiveSta
   return { activeMs, lastTs }
 }
 
+export interface ChapterState {
+  count: number
+  lastRoute: string | null
+}
+
+/** '/items/orders?x=1#y' → '/items/orders' — chapters split on the path alone. */
+export function routePath(raw: unknown): string {
+  return String(raw ?? '')
+    .split(/[?#]/)[0]
+    .slice(0, 500)
+}
+
+/** Fold one chunk's `route` custom events (rrweb type 5) into the chapter count. */
+export function foldChapters(state: ChapterState, events: unknown[]): ChapterState {
+  const routes = (
+    events as Array<{
+      type?: unknown
+      timestamp?: unknown
+      data?: { tag?: unknown; payload?: { path?: unknown } | null } | null
+    } | null>
+  )
+    .filter((e) => e?.type === 5 && e.data?.tag === 'route' && typeof e.timestamp === 'number')
+    .sort((a, b) => (a?.timestamp as number) - (b?.timestamp as number))
+  let { count, lastRoute } = state
+  for (const e of routes) {
+    const path = routePath(e?.data?.payload?.path)
+    if (!path || path === lastRoute) continue
+    count += 1
+    lastRoute = path
+  }
+  return { count, lastRoute }
+}
+
 function num(v: unknown): number | null {
   if (v == null) return null
   const n = Number(v)
@@ -82,7 +120,9 @@ export async function recordChunkStats(recordingId: string, events: unknown[]): 
   try {
     const row = (await db('nivaro_session_recordings')
       .where({ id: recordingId })
-      .first('active_ms', 'active_last_ts')) as Record<string, unknown> | undefined
+      .first('active_ms', 'active_last_ts', 'chapter_count', 'chapter_last_route')) as
+      | Record<string, unknown>
+      | undefined
     if (!row) return
     const before: ActiveState = {
       activeMs: num(row.active_ms) ?? 0,
@@ -94,6 +134,15 @@ export async function recordChunkStats(recordingId: string, events: unknown[]): 
       patch.active_ms = Math.min(after.activeMs, 2_147_483_647)
     }
     if (after.lastTs !== before.lastTs) patch.active_last_ts = after.lastTs
+    const chBefore: ChapterState = {
+      count: num(row.chapter_count) ?? 0,
+      lastRoute: row.chapter_last_route == null ? null : String(row.chapter_last_route)
+    }
+    const chAfter = foldChapters(chBefore, events)
+    if (chAfter.count !== chBefore.count || row.chapter_count == null) {
+      patch.chapter_count = chAfter.count
+    }
+    if (chAfter.lastRoute !== chBefore.lastRoute) patch.chapter_last_route = chAfter.lastRoute
     if (Object.keys(patch).length === 0) return
     await db('nivaro_session_recordings').where({ id: recordingId }).update(patch)
   } catch {

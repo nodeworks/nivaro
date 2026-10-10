@@ -5,6 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ReplayPlayer } from '@/components/replay-player'
+import { ChapterCountChip } from '@/components/replay-player/ChapterList'
 import {
   ActiveTimeChip,
   RecordingSortToggle,
@@ -44,6 +45,8 @@ interface Recording {
   truncated: boolean
   /** #1358 — input / mutation time; null before it was measured. */
   active_ms?: number | null
+  /** #1397 — pages visited (chapters); null before it was counted. */
+  chapter_count?: number | null
 }
 
 function duration(rec: Recording): string {
@@ -743,6 +746,7 @@ export function SessionReplaysPage() {
                           <span className='shrink-0 text-[10.5px] text-amber-600'>truncated</span>
                         )}
                         <ActiveTimeChip activeMs={rec.active_ms} />
+                        <ChapterCountChip count={rec.chapter_count} />
                         <span className='min-w-0 flex-1 truncate text-right text-[11px] text-slate-400'>
                           {rec.event_count} events · {formatFileSize(rec.byte_size)}
                         </span>
