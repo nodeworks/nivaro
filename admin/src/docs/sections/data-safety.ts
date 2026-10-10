@@ -180,7 +180,7 @@ export const sessionReplayDocs: DocSection = {
       items: [
         'Privacy: every input and every record field value is masked client-side before events leave the browser (see Masking rules below); add the nvr-no-record class to block any element entirely.',
         'Events batch every 10 seconds; a full DOM snapshot every 60 seconds keeps replays seekable.',
-        'Recordings cap at 15MB (then mark truncated) and purge after 7 days.',
+        'Recordings cap at 15MB (then mark truncated) and purge after the retention period (7 days unless changed on the Session Replays page); after 3 days they move from the database to file storage.',
         'Watching, listing and deleting are admin-only; a recording can only be appended to by its own user.',
         'Tell your team before enabling — this records their screens.'
       ]
@@ -216,6 +216,20 @@ export const sessionReplayDocs: DocSection = {
         'Sampling: the share of sessions recorded, as a default and per page — an exact pattern such as /content/orders/:id, or a prefix such as /reports/* (the most specific rule wins; 0% never records the page). Each tab decides once per visit, so a page is either recorded or not for that person throughout; while a tab is on a page that is not recorded nothing is kept, and the replay picks up again on the next recorded page.',
         'Clips attached to errors are not sampled, but they count toward the cap and stop when it is reached.',
         'With @nivaro/react, pass useSessionRecorder({ build }) to name your app’s build; it defaults to the @nivaro/react version.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-storage', text: 'Older recordings move to storage' },
+    {
+      type: 'p',
+      text: 'Recordings older than 3 days (Settings → Session replay → Storage) leave the database: each one is compressed into a single file in the file storage driver — local disk, S3 or Azure Blob, as set under Settings → File storage — and its rows in the database are removed. An hourly job does the moving; a recording still receiving events is left until it has been quiet for an hour.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Opening an older recording loads it back first; the player says “Loading from storage…” for the few seconds that takes. It then stays loaded for 24 hours before the copy in the database is dropped again (the file stays).',
+        'When the retention period ends, or a recording is deleted, its file in storage is deleted too.',
+        'DB Health → Session replay shows how much sits in the database (hot) and in storage (cold), and the storage runway counts both.',
+        'Switching the storage driver does not move recordings already in storage: they are read from the active driver, then from local disk. Moving from one cloud driver to another leaves older recordings unreadable until they are purged.'
       ]
     },
     { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },

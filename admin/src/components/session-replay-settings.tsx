@@ -19,7 +19,8 @@ import { normalizeReplaySampling } from '../../../packages/shared/src/lib/replay
  * Settings → Session replay. The on/off switches and retention stay beside
  * the recordings (Session Replays page); this section holds the policy the
  * recorders apply: what is masked (#1361) and what recording may cost — a
- * daily byte cap and per-route sampling (#1368). Each card saves its own keys.
+ * daily byte cap and per-route sampling (#1368) — and when recordings move
+ * to the storage driver (#1411). Each card saves its own keys.
  */
 
 type ReplaySettingsRow = Record<string, unknown>
@@ -384,6 +385,71 @@ function CostCard({ settings }: { settings: ReplaySettingsRow | undefined }) {
   )
 }
 
+// ── #1411 Storage tiering ────────────────────────────────────────────────────
+
+function StorageCard({ settings }: { settings: ReplaySettingsRow | undefined }) {
+  const stored = settings?.replay_cold_after_days
+  const read = () => {
+    const n = Number(stored)
+    return Number.isFinite(n) && n > 0 ? String(n) : ''
+  }
+  const [days, setDays] = useState(read)
+  const [dirty, setDirty] = useState(false)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: re-read when the stored value changes
+  useEffect(() => {
+    if (!dirty) setDays(read())
+  }, [stored, dirty])
+  const save = useSaveSettings('Storage tiering saved', 'Could not save storage tiering', () =>
+    setDirty(false)
+  )
+  const t = days.trim()
+  const valid = t === '' || (/^\d+$/.test(t) && Number(t) >= 1 && Number(t) <= 365)
+  return (
+    <Card
+      data-replay-storage
+      title='Storage'
+      intro={
+        <>
+          Recent recordings live in the database. Older ones move to the file storage driver
+          (Settings → File storage: local disk, S3 or Azure Blob) as one compressed file each, and
+          opening one loads it back for a day first — the player says “Loading from storage…”.
+        </>
+      }
+    >
+      <div className='flex items-end gap-3'>
+        <div>
+          <Label className='text-[12px] font-medium'>Move to storage after (days)</Label>
+          <Input
+            data-replay-cold-days
+            inputMode='numeric'
+            value={days}
+            placeholder='3'
+            className='mt-1 h-8 w-28'
+            onChange={(e) => {
+              setDays(e.target.value)
+              setDirty(true)
+            }}
+          />
+        </div>
+        <Button
+          size='sm'
+          onClick={() => save.mutate({ replay_cold_after_days: t === '' ? null : Number(t) })}
+          disabled={!dirty || !valid || save.isPending}
+        >
+          {save.isPending ? 'Saving…' : 'Save'}
+        </Button>
+      </div>
+      {!valid && (
+        <p className='mt-1 text-[11px] text-amber-600'>A whole number of days from 1 to 365.</p>
+      )}
+      <p className='mt-2 text-[11px] text-muted-foreground'>
+        Blank = 3 days. Recordings are still deleted after the retention period set on the Session
+        Replays page, wherever they are.
+      </p>
+    </Card>
+  )
+}
+
 export function SessionReplaySettingsSection() {
   const { data } = useSettings()
   const settings = data as ReplaySettingsRow | undefined
@@ -403,6 +469,7 @@ export function SessionReplaySettingsSection() {
         <div className='space-y-5'>
           <MaskingCard settings={settings} />
           <CostCard settings={settings} />
+          <StorageCard settings={settings} />
         </div>
       </div>
     </div>

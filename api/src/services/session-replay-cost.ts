@@ -22,6 +22,7 @@
  *   — an exact route pattern, or a prefix ending in `/*` (the longest wins).
  */
 import { db } from '../db/index.js'
+import { replayTierSizes } from './session-replay-storage.js'
 
 export const FLUSH_MS = 15_000
 const CACHE_MS = 30_000
@@ -458,6 +459,8 @@ export interface ReplayCostSummary {
   sampling: ReplaySampling
   /** Stored today (UTC). */
   today_bytes: number
+  /** Hot (database) and cold (storage driver) sizes (#1411). */
+  storage: ReplayStorageFigures | null
   /** Stored bytes per day, averaged over the window — the recordings' share of the runway. */
   bytes_per_day: number
 }
@@ -471,7 +474,7 @@ export async function replayCostSummary(
 ): Promise<ReplayCostSummary> {
   await flushReplayUsage().catch(() => {})
   const since = utcDay(new Date(now.getTime() - (days - 1) * 86_400_000))
-  const [routes, builds, daily, cap, sampling] = await Promise.all([
+  const [routes, builds, daily, cap, sampling, storage] = await Promise.all([
     db('nivaro_session_replay_usage')
       .where('day', '>=', since)
       .groupBy('route')
@@ -493,7 +496,8 @@ export async function replayCostSummary(
       .orderBy('day', 'asc')
       .select('*') as unknown as Promise<Array<Record<string, unknown>>>,
     dailyCapStatus(now),
-    readReplaySampling()
+    readReplaySampling(),
+    replayStorageFigures(now).catch(() => null)
   ])
   const byDay = daily.map((d) => ({
     day: dayStr(d.day),
@@ -525,6 +529,7 @@ export async function replayCostSummary(
     cap,
     sampling,
     today_bytes: byDay.find((d) => d.day === utcDay(now))?.bytes ?? 0,
+    storage,
     bytes_per_day: Math.round(total / days)
   }
 }
@@ -533,8 +538,13 @@ export async function replayCostSummary(
 
 export interface ReplayStorageFigures {
   recordings: number
-  /** Stored chunk bytes in the database. */
+  /** Chunk bytes in the database for recordings that are not cold. */
   hot_bytes: number
+  /** Recordings moved to the storage driver (#1411) and their objects' bytes. */
+  cold_recordings: number
+  cold_bytes: number
+  /** Chunk bytes of cold recordings rehydrated into the 24-hour cache. */
+  cache_bytes: number
   /** Recent growth: stored bytes per day over the last 7 days of usage. */
   bytes_per_day: number
 }
@@ -542,20 +552,26 @@ export interface ReplayStorageFigures {
 /** The recordings' share of the storage runway (DB Health, the nightly snapshot). */
 export async function replayStorageFigures(now: Date = new Date()): Promise<ReplayStorageFigures> {
   const since = utcDay(new Date(now.getTime() - 6 * 86_400_000))
-  const [rec, usage] = await Promise.all([
-    db('nivaro_session_recordings')
-      .count({ n: '*' })
-      .sum({ bytes: 'byte_size' })
-      .first() as Promise<{ n?: unknown; bytes?: unknown } | undefined>,
+  const [sizes, usage] = await Promise.all([
+    replayTierSizes().catch(async () => {
+      // Before the tiering columns exist: everything is hot.
+      const r = (await db('nivaro_session_recordings')
+        .count({ n: '*' })
+        .sum({ bytes: 'byte_size' })
+        .first()) as { n?: unknown; bytes?: unknown } | undefined
+      return {
+        recordings: Number(r?.n) || 0,
+        hot_bytes: Number(r?.bytes) || 0,
+        cold_recordings: 0,
+        cold_bytes: 0,
+        cache_bytes: 0
+      }
+    }),
     db('nivaro_session_replay_usage')
       .where('day', '>=', since)
       .sum({ bytes: 'bytes' })
       .first()
       .catch(() => undefined) as Promise<{ bytes?: unknown } | undefined>
   ])
-  return {
-    recordings: Number(rec?.n) || 0,
-    hot_bytes: Number(rec?.bytes) || 0,
-    bytes_per_day: Math.round((Number(usage?.bytes) || 0) / 7)
-  }
+  return { ...sizes, bytes_per_day: Math.round((Number(usage?.bytes) || 0) / 7) }
 }

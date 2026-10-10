@@ -8,6 +8,11 @@ import { chunkMeta, dailyCapStatus, noteChunk } from '../services/session-replay
 import { replayClientPolicy } from '../services/session-replay-policy.js'
 import { buildEventRail, type RailRecording } from '../services/session-replay-rail.js'
 import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
+import {
+  deleteColdObject,
+  ensureRecordingHot,
+  purgeColdObjects
+} from '../services/session-replay-storage.js'
 
 type RrwebEventLike = { type: number; timestamp: number; data?: Record<string, unknown> }
 
@@ -120,6 +125,8 @@ function originsClause(raw: string | undefined): { clause: string; binds: string
 export async function purgeExpiredRecordings(): Promise<void> {
   const days = await recordingRetentionDays()
   const cutoff = new Date(Date.now() - days * 86_400_000)
+  // #1411 — cold recordings' objects in the storage driver go with them.
+  await purgeColdObjects(cutoff)
   await db('nivaro_session_recordings').where('started_at', '<', cutoff).del()
 }
 
@@ -456,6 +463,11 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         | Record<string, unknown>
         | undefined
       if (!rec) return reply.code(404).send({ error: 'Not found' })
+      // #1411 — a cold recording is loaded back from storage first.
+      const hot = await ensureRecordingHot(req.params.id, { wait: true })
+      if (hot.state === 'failed') {
+        return reply.code(502).send({ error: 'Could not load this recording from storage' })
+      }
 
       const chunks = (await db('nivaro_session_events')
         .where({ recording: req.params.id })
@@ -505,6 +517,15 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       // than what it already holds and feeds them into a liveMode Replayer.
       const afterSeq = Number(req.query?.after_seq)
       const incremental = Number.isFinite(afterSeq)
+      // #1411 — a cold recording answers 202 while it loads from storage;
+      // the player polls and says "Loading from storage…".
+      const hot = await ensureRecordingHot(req.params.id)
+      if (hot.state === 'loading') {
+        return reply.code(202).send({ data: { status: 'loading_from_storage' } })
+      }
+      if (hot.state === 'failed') {
+        return reply.code(502).send({ error: 'Could not load this recording from storage' })
+      }
       const chunks = (await db('nivaro_session_events')
         .where({ recording: req.params.id })
         .modify((qb) => {
@@ -553,6 +574,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     '/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
+      await deleteColdObject(req.params.id) // #1411 — its object in storage, if cold
       await db('nivaro_session_recordings').where({ id: req.params.id }).del()
       await logActivity({
         action: 'session-recording-delete',

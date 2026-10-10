@@ -10,6 +10,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { EventRail } from './EventRail'
+import { fetchRecordingEvents } from './load-events'
 import {
   activeIndex,
   fmtClock,
@@ -76,6 +77,8 @@ export function ReplayPlayer({
   } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+  // #1411 — a cold recording is being loaded back from storage.
+  const [fromStorage, setFromStorage] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [time, setTime] = useState(0)
@@ -156,12 +159,14 @@ export function ReplayPlayer({
           }>(`/session-recordings/${recordingId}/events-rail`)
           .then((x) => x.data.data)
           .catch(() => null)
-        const r = await api.get<{ data: { events: unknown[]; last_seq?: number } }>(
-          `/session-recordings/${recordingId}/events`
-        )
+        const loaded = await fetchRecordingEvents(recordingId, {
+          onFromStorage: () => !cancelled && setFromStorage(true),
+          cancelled: () => cancelled
+        })
         if (cancelled || !frameRef.current) return
-        const events = r.data.data.events
-        lastSeqRef.current = r.data.data.last_seq ?? -1
+        setFromStorage(false)
+        const events = loaded.events
+        lastSeqRef.current = loaded.last_seq ?? -1
         {
           const first = Number(
             (events as Array<{ timestamp?: unknown } | null>).find(
@@ -338,6 +343,11 @@ export function ReplayPlayer({
       <TipLayer />
       {/* Same element tree with or without the side column — the frame must
           never remount under a live Replayer. */}
+      {fromStorage && !ready && (
+        <p data-replay-from-storage className='mb-2 text-center text-[12.5px] text-slate-500'>
+          Loading from storage…
+        </p>
+      )}
       <div className={side ? 'flex items-stretch gap-3' : ''}>
         <div className={side ? 'min-w-0 flex-1' : ''}>
           <div

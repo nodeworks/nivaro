@@ -8,8 +8,14 @@ import {
   validateReplaySampling
 } from './session-replay-cost.js'
 import { validateReplayMasking } from './session-replay-masking.js'
+import { validateColdAfterDays } from './session-replay-storage.js'
 
-export const REPLAY_SETTINGS_KEYS = ['replay_masking', 'replay_daily_cap_mb', 'replay_sampling']
+export const REPLAY_SETTINGS_KEYS = [
+  'replay_masking',
+  'replay_daily_cap_mb',
+  'replay_sampling',
+  'replay_cold_after_days'
+]
 
 /**
  * Validate and normalise the replay keys present in a settings patch, in
@@ -31,6 +37,11 @@ export function applyReplaySettingsPatch(patch: Record<string, unknown>): string
     const r = validateReplaySampling(patch.replay_sampling)
     if ('error' in r) return r.error
     patch.replay_sampling = r.value
+  }
+  if ('replay_cold_after_days' in patch) {
+    const r = validateColdAfterDays(patch.replay_cold_after_days)
+    if ('error' in r) return r.error
+    patch.replay_cold_after_days = r.value
   }
   return null
 }

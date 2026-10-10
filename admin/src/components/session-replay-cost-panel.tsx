@@ -24,6 +24,14 @@ export interface ReplayCostSummary {
   cap: { cap_bytes: number | null; used_bytes: number; reached: boolean }
   today_bytes: number
   bytes_per_day: number
+  /** #1411 — where recordings live. */
+  storage: {
+    recordings: number
+    hot_bytes: number
+    cold_recordings: number
+    cold_bytes: number
+    cache_bytes: number
+  } | null
 }
 
 export function formatBytes(n: number): string {
@@ -155,6 +163,22 @@ export function SessionReplayCostPanel() {
                 <br />
                 <b>{formatBytes(total)}</b> · {formatBytes(d.bytes_per_day)}/day
               </div>
+              {d.storage && (
+                <div data-replay-tiers>
+                  <span className='text-slate-400'>Hot · cold</span>
+                  <br />
+                  <b>{formatBytes(d.storage.hot_bytes)}</b> in the database ·{' '}
+                  <b>{formatBytes(d.storage.cold_bytes)}</b> in storage (
+                  {d.storage.cold_recordings.toLocaleString()} of{' '}
+                  {d.storage.recordings.toLocaleString()} recordings)
+                  {d.storage.cache_bytes > 0 && (
+                    <span className='text-slate-400'>
+                      {' '}
+                      · {formatBytes(d.storage.cache_bytes)} reloaded for viewing
+                    </span>
+                  )}
+                </div>
+              )}
               <div>
                 <span className='text-slate-400'>Refused uploads (7 days)</span>
                 <br />

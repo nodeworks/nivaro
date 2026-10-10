@@ -257,7 +257,12 @@ export function DbHealthPage() {
     snapshots: Array<Record<string, unknown>>
     runway: { mb_per_day: number; days_history: number } | null
     /** #1368 — session recordings' share of the runway. */
-    recordings?: { recordings: number; hot_bytes: number; bytes_per_day: number } | null
+    recordings?: {
+      recordings: number
+      hot_bytes: number
+      cold_bytes?: number
+      bytes_per_day: number
+    } | null
   }>('/ops-db/storage')
 
   const bust = useMutation({
@@ -929,8 +934,9 @@ export function DbHealthPage() {
                       <div data-runway-recordings>
                         <span className='text-slate-400'>Session recordings</span>
                         <br />
-                        <b>{formatBytes(rec.hot_bytes)}</b> in {num(rec.recordings)} recording(s), +
-                        {formatBytes(rec.bytes_per_day)}/day
+                        <b>{formatBytes(rec.hot_bytes)}</b> in the database
+                        {rec.cold_bytes ? ` + ${formatBytes(rec.cold_bytes)} in storage` : ''} ·{' '}
+                        {num(rec.recordings)} recording(s), +{formatBytes(rec.bytes_per_day)}/day
                       </div>
                     )}
                   </div>
