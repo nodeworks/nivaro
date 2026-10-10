@@ -22,7 +22,6 @@ vi.mock('../../../services/help-videos.js', async (orig) => ({
     req.isAdmin = true
   })
 }))
-}))
 
 import { helpVideosRoutes } from '../../../routes/help-videos.js'
 
