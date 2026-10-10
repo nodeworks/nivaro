@@ -351,6 +351,46 @@ function App() {
         'Each signal adds its weight, at most ten of a kind, and the score is 100 × (1 − e^(−sum ÷ scale)), so it levels off toward 100. Defaults: rage 6, dead 3, client error 8, back-and-forth 3, slow call 2, abandoned form 5, scale 25 (one client error scores 27). Change them under Weights on the Worst sessions tab; a weight of 0 turns a signal off. They are stored in settings as frustration_weights.',
         'A nightly job (session-frustration, 02:25 UTC) rescores the last two days, so a session that ran past midnight or a late report is picked up. Scores are kept 90 days and are deleted with the person. Run it now from Background Jobs.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-notes', text: 'Notes on a recording' },
+    {
+      type: 'p',
+      text: 'Under the player, the Notes list pins a remark to a moment of the replay. A note is pinned to the playhead at the moment you start typing it (click the time chip to re-pin it to where the playhead is now), and shows as a violet flag in a row under the event rail. Click a flag or a note’s time to seek to it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Notes are admin-only, like the recordings themselves, and are shown as plain text. Only the author can edit a note; any admin can delete one. Notes go when the recording goes.',
+        'Copy a note onto an issue linked to the recording (it lands as a comment on the issue, shown in the issue’s detail) or onto an open investigation notebook from the Traffic Map (appended to its notes). Either way the copy carries a link that opens the recording at that second.',
+        'Adding, deleting and copying a note are recorded in the activity log.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-export', text: 'Exporting a recording' },
+    {
+      type: 'p',
+      text: 'Export (top right of the player) saves a recording outside the admin. Leave From and To empty for the whole recording, or give a window in m:ss.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'HTML replay: one file with the player and the events inside. It opens offline in any browser and plays like the admin’s player. The events are exactly as stored, so inputs that were masked when recorded stay masked.',
+        'WebM video: the server plays the recording in a headless browser and captures it in real time, so a video takes as long to make as the window lasts (at most 30 minutes). When it is ready you get a notification with a link to the file; if it cannot be made, the notification says why. The server needs ffmpeg for this.',
+        'A window starts at the last full snapshot before From, because a replay needs the page as it was; playback still begins at From.',
+        'Every export is recorded in the activity log. The video is stored as a file owned by you; treat both files like the recording itself, since they show someone’s session.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-spec', text: 'A Playwright spec from a recording' },
+    {
+      type: 'p',
+      text: 'Export → Playwright spec turns the clicks, typing and page changes in a window of the recording into the E2E recorder’s steps and opens them in the E2E recorder, where you can remove steps, add assertions, type in the values and save the spec into an extension’s tests folder (on a development machine) or download it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Selectors prefer a `data-*` hook on the element (or the nearest one above it), then role and accessible name, then id, label, name, placeholder and a short CSS path.',
+        'Typed values were masked when recorded, so they never reach the spec: each one is a placeholder such as `<value for data-field="po_number">`.',
+        'A click on an element the recording never captured is left out and counted. Making a spec is recorded in the activity log.'
+      ]
     }
   ]
 }

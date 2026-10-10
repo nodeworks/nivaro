@@ -143,6 +143,16 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-replay-insights/worst' },
   { method: 'GET', path: '/api/session-replay-insights/frustration-weights' },
   { method: 'PUT', path: '/api/session-replay-insights/frustration-weights' },
+  // Session replay notes (#1363) — the player's notes rail + list, issue detail copy target
+  { method: 'GET', path: '/api/session-recordings/:id/notes' },
+  { method: 'POST', path: '/api/session-recordings/:id/notes' },
+  { method: 'PATCH', path: '/api/session-recordings/:id/notes/:noteId' },
+  { method: 'DELETE', path: '/api/session-recordings/:id/notes/:noteId' },
+  { method: 'POST', path: '/api/session-recordings/:id/notes/:noteId/copy' },
+  // Export a recording (#1375) — the replay sheet's Export menu
+  { method: 'POST', path: '/api/session-recordings/:id/export' },
+  // Spec from a recording (#1393) — Export menu → opens in the E2E recorder
+  { method: 'POST', path: '/api/session-recordings/:id/spec' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

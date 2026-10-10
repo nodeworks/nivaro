@@ -236,6 +236,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_replay_heat_frames',
   // frustration scores (migration 426) — per environment, like the journeys they score
   'nivaro_session_scores',
+  // session replay notes, migration 423 (#1363) — per environment
+  'nivaro_replay_notes',
   'nivaro_item_locks',
   'nivaro_notifications',
   'nivaro_deferred_emails',

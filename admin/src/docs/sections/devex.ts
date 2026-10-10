@@ -1459,7 +1459,8 @@ export const devexDevTooling: DocSection = {
       items: [
         'Selector priority: `data-testid` and short `data-*` markers, then `#id`, then `[aria-label]`, then role + accessible name for buttons and links (rendered as `getByRole`), then a positional CSS path — a positional path in the spec is a hint that the element needs a stable hook.',
         'Passwords are never captured; the spec signs in through `POST /api/auth/login/token` with `NIVARO_E2E_TOKEN`, and the origin comes from `NIVARO_E2E_ORIGIN`.',
-        'Consecutive typing into one field collapses into one `fill`; back-to-back navigations (a redirect chain) keep only the last `goto`.'
+        'Consecutive typing into one field collapses into one `fill`; back-to-back navigations (a redirect chain) keep only the last `goto`.',
+        'A spec can also start from a session recording: on Session Replays, Export → Playwright spec turns a window of the recording into steps and opens them here. Typed values were masked when recorded, so each `fill` holds a placeholder such as `<value for data-field="po_number">` with a field to type the real value into. Its selectors prefer `data-*` hooks, then role + accessible name.'
       ]
     },
     {
