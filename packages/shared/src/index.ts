@@ -476,6 +476,14 @@ export {
   useOptionalRealtime
 } from './lib/realtime'
 export {
+  consoleLine,
+  instrumentConsole,
+  instrumentRequests,
+  type RequestEvent,
+  redactSecrets,
+  requestRoute
+} from './lib/replay-context'
+export {
   BATCH_READ_LIMIT,
   type BatchableRead,
   batchableRead,

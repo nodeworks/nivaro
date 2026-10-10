@@ -185,6 +185,11 @@ export const sessionReplayDocs: DocSection = {
         'Tell your team before enabling — this records their screens.'
       ]
     },
+    { type: 'h2', id: 'session-replay-uploads', text: 'Uploads that survive bad networks' },
+    {
+      type: 'p',
+      text: 'A chunk that cannot be sent — the browser is offline, the request fails or the server answers 5xx — waits in the browser (IndexedDB, at most about 20MB per tab, oldest dropped first) and is retried with backoff from 2 seconds up to a minute, and as soon as the browser comes back online. Reloading the tab within 10 minutes continues the same recording instead of starting a new one, and whatever the previous page had not sent goes first. When a page is closed or reloaded, the last few seconds are sent with the request that outlives the page (fetch keepalive); anything that does not fit goes on the next load. A recording that is closed or has reached its size cap still stops for good, and the next page load starts a new one. The headless hook in @nivaro/react does the same.'
+    },
     { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },
     {
       type: 'p',
@@ -204,24 +209,50 @@ function App() {
       items: [
         'The hook no-ops unless the instance toggle is on AND rrweb is installed — safe to ship always-on.',
         'Recordings attribute to the authenticated SDK identity (usually your service token user); the app label tells frontends apart in the replay list.',
-        'Raw SDK commands exist too: sessionRecordingEnabled, startSessionRecording(app), appendSessionRecordingEvents, endSessionRecording.'
+        'Raw SDK commands exist too: sessionRecordingEnabled, startSessionRecording(app), appendSessionRecordingEvents, endSessionRecording.',
+        'The hook keeps the same console and network log as the admin recorder (below), from your app’s own fetch and XMLHttpRequest calls.'
       ]
     },
     {
       type: 'note',
       text: 'Journey Trail (page breadcrumbs) covers most debugging needs without recording anything visual — reach for replay when you need the pixels.'
     },
-    { type: 'h2', id: 'session-replay-markers', text: 'Timeline markers and the console panel' },
+    { type: 'h2', id: 'session-replay-markers', text: 'Timeline markers, console and network' },
     {
       type: 'p',
-      text: 'Recordings now capture context alongside the pixels: every route change and every console info/warning/error the page emitted (plain console.log is deliberately skipped as noise; lines are truncated to 500 characters, capped at 500 markers per recording).'
+      text: 'Recordings capture context alongside the pixels: every route change, every console warning and error the page emitted, and a light log of the page’s requests. console.log and console.info are skipped as noise (recordings made before this also kept info lines, and still show them).'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Console lines are cut to 200 characters, at most 500 per page load. Anything that looks like a credential is replaced with [redacted] before it is kept: JWTs, Bearer and Basic credentials, long hex or base64 strings, and the value of anything named token, secret, password, API key, authorization or cookie.',
+        'Requests keep the method, the route with ids replaced by :id, the status and how long it took, at most 1,000 per page load. No query strings, bodies or headers; a call to another site keeps its host. A request that never got an answer shows as failed. The recorder’s own uploads are left out.',
+        'The page’s address in a route marker gets the same redaction, so a reset or invite link’s token is not kept.'
+      ]
     },
     {
       type: 'ul',
       items: [
         'The player’s scrubber shows the markers as colored ticks — blue for route changes, red for console errors, amber for warnings. Clicking a tick seeks the replay to just before that moment. Info-level console lines are kept out of the scrubber to avoid clutter.',
-        'When a recording has console output, a Console panel appears under the player: a scrollable list of every captured line with All / Info / Warn / Error filter buttons and per-level counts. Clicking a line seeks the replay to it.',
+        'Beside the player, a Console / Network panel lists the console lines and requests. The line at the playhead is highlighted, later lines are dimmed, and the list scrolls itself to follow the replay unless your pointer is over it or you have just scrolled it. Clicking a line seeks the replay to it. Console has a filter per level with counts.',
+        'On a narrow window, and in the Traffic Map’s Recording level, the panel sits under the player instead.',
         'This makes "what was the user doing when that error fired" a one-click question — find the red tick, click it, watch.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-rail', text: 'The event rail' },
+    {
+      type: 'p',
+      text: 'Under the scrubber, a second row of markers shows what the same person did on the server while the recording ran, from the API log, the issue log, the page trail and workflow history: their requests, client errors they reported, admin pages they entered and workflow transitions they made.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Colours: requests grey when they succeeded, amber for a 4xx and red for a 5xx; client errors red; page changes blue; transitions violet.',
+        'Hover a marker for what it was (method, path, status and time for a request). Markers a few pixels apart merge into one that lists what it holds, so a busy recording stays clickable.',
+        'Click a marker to seek to just before it. Ctrl-click (⌘-click on a Mac) an error or a transition to open the issue or the record.',
+        'Requests show method, path, status and duration only, never bodies or query strings. The recorder’s own uploads are left out.',
+        'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
+        'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
       ]
     }
   ]
