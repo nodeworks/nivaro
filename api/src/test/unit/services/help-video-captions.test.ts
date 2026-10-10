@@ -274,7 +274,7 @@ describe('captionProvider', () => {
     const none = await captionProvider()
     expect(none.kind).toBe('none')
     expect(none.kind === 'none' && none.reason).toMatch(
-      /model file \/no\/such\/model.bin is missing/
+      /Whisper model file \(HELP_VIDEO_WHISPER_MODEL\) is missing/
     )
   })
   it('explains what an administrator must set up when there is nothing', async () => {
@@ -283,7 +283,9 @@ describe('captionProvider', () => {
     expect(r.kind).toBe('none')
     expect(r.kind === 'none' && r.reason).toMatch(/Settings → AI Features/)
     expect(r.kind === 'none' && r.reason).toMatch(/HELP_VIDEO_WHISPER_CMD/)
-    expect(r.kind === 'none' && r.reason).toMatch(/no-such-whisper-binary" is not installed/)
+    // The command name and model path stay out of what the client sees.
+    expect(r.kind === 'none' && r.reason).toMatch(/configured command is not installed/)
+    expect(r.kind === 'none' && r.reason).not.toMatch(/no-such-whisper-binary/)
     settings.row = { ai_provider: 'gateway' }
     resetLocalWhisperCheck()
     expect((await captionProvider()) as { reason?: string }).toMatchObject({
@@ -396,8 +398,10 @@ describe('the job', () => {
     await whenCaptionsIdle()
     expect(await readCaptionJob(VER)).toMatchObject({
       status: 'failed',
-      error: 'The captions could not be generated: AI gateway 500: boom'
+      error: 'The AI gateway refused the request (AI gateway 500)'
     })
+    // Process output and paths never reach the job the author reads.
+    expect((await readCaptionJob(VER))?.error).not.toMatch(/boom/)
     expect(logs[0]).toMatchObject({ status: 'error', error: expect.stringMatching(/boom/) })
     const missing = deps({
       loadSource: async () => Promise.reject(new Error('Stored object not found'))

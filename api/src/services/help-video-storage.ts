@@ -59,6 +59,8 @@ export interface StorageVersion {
   is_published: boolean
   is_draft: boolean
   render_status: string
+  /** A clip (#1562) of this version is queued or being cut. */
+  clip_pending?: boolean
   files_removed_at: string | null
   files: StorageFile[]
   bytes: number
@@ -228,7 +230,9 @@ export function buildStorageReport(
   videos: Array<Raw>,
   versions: Array<Raw>,
   sizes: Map<string, number | null>,
-  setting: { migrated: boolean; retention_days: number | null }
+  setting: { migrated: boolean; retention_days: number | null },
+  /** Versions a queued or running clip (#1562) is reading. */
+  clipPending: Set<string> = new Set()
 ): StorageReport {
   const byVideo = new Map<string, Raw[]>()
   for (const v of versions) {
@@ -275,6 +279,7 @@ export function buildStorageReport(
         is_published: low(r.id) === low(v.published_version_id),
         is_draft: low(r.id) === low(v.draft_version_id),
         render_status: String(r.render_status ?? 'none'),
+        ...(clipPending.has(low(r.id)) ? { clip_pending: true } : {}),
         files_removed_at: r.files_removed_at
           ? new Date(r.files_removed_at as string).toISOString()
           : null,
@@ -322,7 +327,27 @@ export async function storageReport(): Promise<StorageReport> {
     for (const role of STORAGE_ROLES)
       if (r[ROLE_COLUMN[role]]) ids.push(String(r[ROLE_COLUMN[role]]))
   const sizes = await fileSizes(ids)
-  return buildStorageReport(videos, versions, sizes, await currentRetentionDays())
+  return buildStorageReport(
+    videos,
+    versions,
+    sizes,
+    await currentRetentionDays(),
+    await clipPendingVersions()
+  )
+}
+
+/** Versions a clip is still being cut from: their files must stay until it
+ *  is done. Empty before migration 412 (no clips table). */
+async function clipPendingVersions(): Promise<Set<string>> {
+  try {
+    const rows = (await db('nivaro_help_video_clips')
+      .whereIn('status', ['queued', 'rendering'])
+      .whereNotNull('version_id')
+      .select('version_id')) as Array<{ version_id: unknown }>
+    return new Set(rows.map((r) => low(r.version_id)))
+  } catch {
+    return new Set()
+  }
 }
 
 // ── the plan ───────────────────────────────────────────────────────────────
@@ -354,6 +379,7 @@ export function decideRemovals(
       else if (ver.is_draft) keep(ver, 'the current draft')
       else if (ver.files_removed_at) keep(ver, 'files already removed')
       else if (PENDING.has(ver.render_status)) keep(ver, 'a render is queued or running')
+      else if (ver.clip_pending) keep(ver, 'a clip is being cut from it')
       else if (new Date(ver.created_at).getTime() > cutoff) keep(ver, `newer than ${days} days`)
       else candidates.add(ver.id)
     }

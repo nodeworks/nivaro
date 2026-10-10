@@ -266,7 +266,8 @@ export async function listFiles(
   const { folder, limit = 50, offset = 0, search, ids, tag } = opts
   // Help-video recordings, renders, captions and posters never list here:
   // they are served only through the ticketed help-video media routes.
-  const { whereNotHelpVideoFile } = await import('./help-video-files.js')
+  const { helpVideoFileColumnsReady, whereNotHelpVideoFile } = await import('./help-video-files.js')
+  await helpVideoFileColumnsReady()
   const q = db('nivaro_files as f')
     .select(
       'f.*',

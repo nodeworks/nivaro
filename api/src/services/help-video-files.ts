@@ -44,10 +44,14 @@ export function helpVideoFileColumnsReady(): Promise<boolean> {
   if (!probe || (!has412 && Date.now() - probedAt > REPROBE_MS)) {
     probedAt = Date.now()
     probe = hasColumn('nivaro_help_video_versions', 'sprite_file')
-      .catch(() => false)
       .then((hit) => {
         has412 = hit
         return hit
+      })
+      .catch(() => {
+        // The database did not answer: ask again on the next call.
+        probedAt = 0
+        return has412
       })
   }
   return probe

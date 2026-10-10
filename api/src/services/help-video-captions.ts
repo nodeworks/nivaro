@@ -384,12 +384,16 @@ export function localWhisperAvailable(): Promise<{ ok: boolean; reason: string }
       const args = splitCommand(template)
       if (!args.length) return { ok: false, reason: 'HELP_VIDEO_WHISPER_CMD is empty' }
       if (!(await findOnPath(args[0])))
-        return { ok: false, reason: `the command "${args[0]}" is not installed on this server` }
+        return { ok: false, reason: 'the configured command is not installed on this server' }
       if (args.some((a) => a.includes('{model}'))) {
         const exists = await access(model, constants.R_OK)
           .then(() => true)
           .catch(() => false)
-        if (!exists) return { ok: false, reason: `the Whisper model file ${model} is missing` }
+        if (!exists)
+          return {
+            ok: false,
+            reason: 'the Whisper model file (HELP_VIDEO_WHISPER_MODEL) is missing'
+          }
       }
       return { ok: true, reason: '' }
     })()
@@ -681,7 +685,9 @@ export async function processCaptionJob(versionId: string, deps: CaptionDeps): P
       latency_ms: Date.now() - started,
       user: job.requested_by,
       route,
-      error: message
+      // The AI log (administrators) keeps the real error; the job (authors)
+      // gets the plain reason.
+      error: (err instanceof Error ? err.message : String(err)).slice(0, 500)
     })
     const failed: CaptionJob = {
       ...state,
@@ -705,7 +711,11 @@ export function friendlyCaptionError(err: unknown): string {
     return 'The original recording is missing from storage'
   if (/no audio|does not contain any stream|Output file is empty/i.test(msg))
     return 'The recording has no sound to transcribe'
-  return `The captions could not be generated: ${msg.split('\n').filter(Boolean).slice(-1)[0]?.slice(0, 300) ?? 'unknown error'}`
+  if (/^AI gateway \d{3}/.test(msg))
+    return `The AI gateway refused the request (${msg.slice(0, 14).trim()})`
+  // Anything else (ffmpeg or whisper output, paths) stays in the job run and
+  // the server log; the author gets the fact, not the process output.
+  return 'The captions could not be generated; the Background Jobs run has the details'
 }
 
 // ─── default dependencies ────────────────────────────────────────────────────

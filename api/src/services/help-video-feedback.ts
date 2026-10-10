@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
-import { authorRoleIds, isUuid, type VideoRow } from './help-videos.js'
+import { authorRoleIds, isUuid, type VideoRow, viewerMaySee } from './help-videos.js'
 import { getApp } from './io-holder.js'
 
 // "Was this helpful?" and questions at a moment (#1505). One vote per person
@@ -276,13 +276,13 @@ export async function answerQuestion(
   return serializeQuestion(fresh, { userId: user.id, author: true }, names)
 }
 
-async function activeUser(id: unknown): Promise<{ id: string } | null> {
+async function activeUser(id: unknown): Promise<{ id: string; role: string | null } | null> {
   if (!isUuid(id)) return null
   const u = await db('nivaro_users')
     .where({ id, status: 'active' })
     .where((w) => w.where('is_redacted', 0).orWhereNull('is_redacted'))
-    .first('id')
-  return u ? { id: String(u.id) } : null
+    .first('id', 'role')
+  return u ? { id: String(u.id), role: u.role ? String(u.role) : null } : null
 }
 
 /** Who hears about a new question: the video's creator while that person is
@@ -372,6 +372,10 @@ async function notifyAskerSafely(
     if (!app) return
     const asker = await activeUser(question.user)
     if (!asker) return
+    // The answer names the video and repeats the author's words: it goes only
+    // to someone who may still watch the video today (visibility may have
+    // narrowed, or their role changed, since they asked).
+    if (!viewerMaySee(video, asker.role, false)) return
     const { notifyUser } = await import('./notification-channels.js')
     const title = String(video.title ?? '')
     const id = low(video.id)

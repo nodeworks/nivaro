@@ -32,7 +32,11 @@ import { applyCrossRecordDefaults } from './cross-record-defaults.js'
 import { decryptItemFields, encryptItemFields, getEncryptedFields } from './encryption.js'
 import { evaluateRulesForTrigger } from './field-rules.js'
 import { getFormulaContext, networkdaysBetween } from './formula-context.js'
-import { isFilesCollection, whereNotHelpVideoFile } from './help-video-files.js'
+import {
+  helpVideoFileColumnsReady,
+  isFilesCollection,
+  whereNotHelpVideoFile
+} from './help-video-files.js'
 import { enforceContracts } from './integration-contracts.js'
 import { type AggregateRow, type AggregateSpec, runAggregate } from './item-aggregates.js'
 import {
@@ -1142,7 +1146,10 @@ async function expandRelations(
       .select(selectCols as string[])
       .limit(1000)
     // A record pointing at a help-video recording never expands it.
-    if (isFilesCollection(relCollection)) whereNotHelpVideoFile(relQ, `${relCollection}.id`)
+    if (isFilesCollection(relCollection)) {
+      await helpVideoFileColumnsReady()
+      whereNotHelpVideoFile(relQ, `${relCollection}.id`)
+    }
 
     // Workspace scope and row-level security
     await applyWorkspaceScope(relQ, relCollection, workspaceId)
@@ -3222,6 +3229,7 @@ export async function readItems(
   const countQ = dbRead(collection).count('* as count')
   // Help-video recordings, renders and posters never read as file rows.
   if (isFilesCollection(collection)) {
+    await helpVideoFileColumnsReady()
     whereNotHelpVideoFile(q, `${collection}.id`)
     whereNotHelpVideoFile(countQ, `${collection}.id`)
   }
