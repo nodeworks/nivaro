@@ -1,8 +1,10 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { readOne } from '../services/items.js'
+import { cleanAppLabel } from '../services/page-at.js'
 import {
   canSeeTicket,
   canWorkDesk,
@@ -141,6 +143,15 @@ async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>
       email: r.r_email as string | null
     }),
     attachments: parseAttachments(r.attachments),
+    // #1390 — the issue a Report a problem filed alongside this request.
+    issue_id: r.issue_id == null ? null : Number(r.issue_id),
+    // #1377 — 'Watch what they saw' (only admins can open a replay).
+    replay: r.replay_recording_id
+      ? {
+          recording_id: String(r.replay_recording_id),
+          offset_ms: r.replay_offset_ms == null ? null : Number(r.replay_offset_ms)
+        }
+      : null,
     replies: countOf.get(String(r.id)) ?? 0,
     legacy: r.legacy_id != null,
     created_at: r.created_at,
@@ -149,11 +160,120 @@ async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>
   }))
 }
 
+/**
+ * #1377 — the requester's replay link ('Watch what they saw'). Caller-supplied,
+ * so only a uuid-shaped id of a recording that exists AND belongs to the
+ * requester is kept — a client must not attach someone else's recording.
+ * The offset is ms into that recording (clamped, null when not given).
+ */
+export async function ownReplayLink(
+  userId: string,
+  raw: unknown
+): Promise<{ recording_id: string; offset_ms: number | null } | null> {
+  const r = raw as { recording_id?: unknown; offset_ms?: unknown } | null | undefined
+  if (typeof r?.recording_id !== 'string' || !/^[0-9a-f-]{36}$/i.test(r.recording_id)) return null
+  const rec = await db('nivaro_session_recordings')
+    .where({ id: r.recording_id, user: userId })
+    .first('id')
+    .catch(() => undefined)
+  if (!rec) return null
+  const n = r.offset_ms == null ? Number.NaN : Number(r.offset_ms)
+  return {
+    recording_id: r.recording_id,
+    offset_ms: Number.isFinite(n) ? Math.min(Math.max(0, Math.floor(n)), 2_000_000_000) : null
+  }
+}
+
 async function loadTicket(id: number): Promise<(TicketRow & Record<string, unknown>) | undefined> {
   if (!Number.isInteger(id) || id <= 0) return undefined
   return (await ticketQuery().where('t.id', id).first()) as
     | (TicketRow & Record<string, unknown>)
     | undefined
+}
+
+/** Only files the requester uploaded ride along (the admin will open them). */
+async function ownFilesOf(req: FastifyRequest, raw: unknown): Promise<string[]> {
+  const attachments = Array.isArray(raw)
+    ? raw
+        .map(String)
+        .filter((s) => /^[0-9a-f-]{32,36}$/i.test(s))
+        .slice(0, 20)
+    : []
+  if (!attachments.length || req.isAdmin) return attachments
+  const rows = (await db('nivaro_files')
+    .whereIn('id', attachments)
+    .where('uploaded_by', req.user!.id)
+    .select('id')) as Array<{ id: string }>
+  const ok = new Set(rows.map((r) => String(r.id).toLowerCase()))
+  return attachments.filter((a) => ok.has(a.toLowerCase()))
+}
+
+/**
+ * Insert a support request as the caller, log it and tell the desk. Shared
+ * by POST /tickets and POST /report-problem (#1390). Columns from migration
+ * 425 (replay, issue link) are written only once it has run.
+ */
+async function raiseTicket(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  f: {
+    title: string
+    description: string | null
+    collection: string | null
+    item: string | null
+    category: CategoryRow | null
+    priority: string
+    attachments: string[]
+    replay: { recording_id: string; offset_ms: number | null } | null
+    issueId?: number | null
+  }
+) {
+  const replayCols =
+    f.replay && (await hasColumn('nivaro_tasks', 'replay_recording_id'))
+      ? { replay_recording_id: f.replay.recording_id, replay_offset_ms: f.replay.offset_ms }
+      : {}
+  const issueCols =
+    f.issueId != null && (await hasColumn('nivaro_tasks', 'issue_id'))
+      ? { issue_id: f.issueId }
+      : {}
+  const now = new Date()
+  const [row] = (await db('nivaro_tasks')
+    .insert({
+      ...replayCols,
+      ...issueCols,
+      kind: SUPPORT_KIND,
+      collection: f.collection,
+      item: f.item,
+      title: f.title.slice(0, 500),
+      description: f.description,
+      assignee: f.category?.default_assignee ?? null,
+      category_id: f.category?.id ?? null,
+      team_id: f.category?.team_id ?? null,
+      attachments: f.attachments.length ? JSON.stringify(f.attachments) : null,
+      priority: f.priority,
+      status: f.category?.default_assignee ? 'in_progress' : 'open',
+      created_by: req.user!.id,
+      completed_at: null,
+      created_at: now,
+      updated_at: now
+    })
+    .returning('id')) as Array<{ id: number } | number>
+  const id = Number(typeof row === 'object' ? row.id : row)
+  await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
+  const t = (await loadTicket(id))!
+  const [s] = await serializeTickets([t])
+  const where = s.record_label ? ` on ${s.record_label}` : ' (General Support)'
+  const who = s.requester_name ?? 'Someone'
+  const audience = t.assignee ? [t.assignee] : await supportAudience(t.team_id)
+  await notifyTicket(app, t, audience, {
+    subject: `New support request: ${s.title}`,
+    message: `${who} asked${where}${s.category_name ? ` · ${s.category_name}` : ''}.${
+      s.description ? `\n\n${String(s.description).slice(0, 400)}` : ''
+    }`,
+    actorId: req.user!.id,
+    category: 'system'
+  })
+  return s
 }
 
 export async function supportRoutes(app: FastifyInstance) {
@@ -440,6 +560,8 @@ export async function supportRoutes(app: FastifyInstance) {
       item?: string | number | null
       priority?: string
       attachments?: string[]
+      /** #1377 — the requester's own recording + where they asked. */
+      replay?: { recording_id?: string; offset_ms?: number | null } | null
     }
   }>('/tickets', async (req, reply) => {
     const b = req.body ?? {}
@@ -475,58 +597,102 @@ export async function supportRoutes(app: FastifyInstance) {
       }
     }
     const priority = b.priority && PRIORITIES.includes(b.priority) ? b.priority : 'normal'
-    const attachments = Array.isArray(b.attachments)
-      ? b.attachments
-          .map(String)
-          .filter((s) => /^[0-9a-f-]{32,36}$/i.test(s))
-          .slice(0, 20)
-      : []
-    // Only files the requester uploaded ride along (the admin will open them).
-    let ownFiles = attachments
-    if (attachments.length && !req.isAdmin) {
-      const rows = (await db('nivaro_files')
-        .whereIn('id', attachments)
-        .where('uploaded_by', req.user!.id)
-        .select('id')) as Array<{ id: string }>
-      const ok = new Set(rows.map((r) => String(r.id).toLowerCase()))
-      ownFiles = attachments.filter((a) => ok.has(a.toLowerCase()))
+    const s = await raiseTicket(app, req, {
+      title,
+      description: b.description ?? null,
+      collection,
+      item,
+      category: category ?? null,
+      priority,
+      attachments: await ownFilesOf(req, b.attachments),
+      replay: await ownReplayLink(req.user!.id, b.replay)
+    })
+    return reply.code(201).send({ data: s })
+  })
+
+  // POST /report-problem (#1390) — the portal's (and any host's) "Report a
+  // problem": one sentence, a masked screenshot, the replay and the page's
+  // console/request tail become an ISSUE (source client, raised by the
+  // person) AND a support request linked to it, which they follow under My
+  // requests. The replay is kept only when it is the person's own recording;
+  // attachments only when they uploaded them.
+  app.post<{
+    Body: {
+      sentence?: string
+      route?: string
+      app?: string
+      screenshot?: string | null
+      context?: string | null
+      attachments?: string[]
+      replay?: { recording_id?: string; offset_ms?: number | null } | null
     }
+  }>('/report-problem', async (req, reply) => {
+    const b = req.body ?? {}
+    const sentence = String(b.sentence ?? '').trim()
+    if (!sentence) return reply.code(400).send({ error: 'Say what went wrong in a sentence' })
+    const shot = typeof b.screenshot === 'string' && b.screenshot ? b.screenshot : null
+    if (shot && !/^data:image\/(png|jpeg|webp);base64,/.test(shot)) {
+      return reply.code(400).send({ error: 'screenshot must be a data:image URI' })
+    }
+    if (shot && shot.length > 2_500_000) {
+      return reply.code(400).send({ error: 'screenshot too large (2MB cap)' })
+    }
+    const route =
+      typeof b.route === 'string' && /^\/(?!\/)[^\s]*$/.test(b.route) ? b.route.slice(0, 300) : null
+    const appLabel = cleanAppLabel(b.app)
+    const context = typeof b.context === 'string' ? b.context.slice(0, 6000) : ''
+    const replay = await ownReplayLink(req.user!.id, b.replay)
     const now = new Date()
-    const [row] = (await db('nivaro_tasks')
+    const details = [
+      sentence,
+      '',
+      `Page: ${route ?? 'unknown'}${appLabel ? ` (${appLabel})` : ''}`,
+      'Reported by the person through Report a problem.',
+      ...(context ? ['', context] : [])
+    ]
+      .join('\n')
+      .slice(0, 8000)
+    const [irow] = (await db('nivaro_issues')
       .insert({
-        kind: SUPPORT_KIND,
-        collection,
-        item,
-        title: title.slice(0, 500),
-        description: b.description ?? null,
-        assignee: category?.default_assignee ?? null,
-        category_id: category?.id ?? null,
-        team_id: category?.team_id ?? null,
-        attachments: ownFiles.length ? JSON.stringify(ownFiles) : null,
-        priority,
-        status: category?.default_assignee ? 'in_progress' : 'open',
-        created_by: req.user!.id,
-        completed_at: null,
+        title: sentence.slice(0, 500),
+        severity: 'medium',
+        status: 'open',
+        collection: null,
+        item: null,
+        assigned_to: null,
+        details,
+        screenshot: shot,
+        source: 'client',
+        raised_by: req.user!.id,
+        recording_id: replay?.recording_id ?? null,
+        recording_offset_ms: replay?.offset_ms ?? null,
         created_at: now,
         updated_at: now
       })
       .returning('id')) as Array<{ id: number } | number>
-    const id = Number(typeof row === 'object' ? row.id : row)
-    await logTicketEvent(id, req.user!.id, 'Raised the request', req, 'create')
-    const t = (await loadTicket(id))!
-    const [s] = await serializeTickets([t])
-    const where = s.record_label ? ` on ${s.record_label}` : ' (General Support)'
-    const who = s.requester_name ?? 'Someone'
-    const audience = t.assignee ? [t.assignee] : await supportAudience(t.team_id)
-    await notifyTicket(app, t, audience, {
-      subject: `New support request: ${s.title}`,
-      message: `${who} asked${where}${s.category_name ? ` · ${s.category_name}` : ''}.${
-        s.description ? `\n\n${String(s.description).slice(0, 400)}` : ''
-      }`,
-      actorId: req.user!.id,
-      category: 'system'
+    const issueId = Number(typeof irow === 'object' ? irow.id : irow)
+    await logActivity({
+      action: 'create',
+      user: req.user!.id,
+      collection: 'nivaro_issues',
+      item: String(issueId),
+      comment: 'Report a problem',
+      req
     })
-    return reply.code(201).send({ data: s })
+    const ticket = await raiseTicket(app, req, {
+      title: sentence,
+      description: `${sentence}\n\nReported from ${route ?? 'an unknown page'}${
+        appLabel ? ` (${appLabel})` : ''
+      }. Issue #${issueId} has the screenshot and the details.`,
+      collection: null,
+      item: null,
+      category: null,
+      priority: 'normal',
+      attachments: await ownFilesOf(req, b.attachments),
+      replay,
+      issueId
+    })
+    return reply.code(201).send({ data: { ticket, issue_id: issueId } })
   })
 
   // POST /tickets/:id/comments — reply on the thread.

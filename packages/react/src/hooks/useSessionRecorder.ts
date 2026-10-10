@@ -8,16 +8,22 @@ import {
 import {
   attributeChunkRoutes,
   buildReplayMaskingOptions,
+  clipEndOffset,
   currentReplayRoute,
+  emitReplayTap,
   instrumentConsole,
   instrumentRequests,
   isReplayRouteSampled,
   normalizeReplayMasking,
   normalizeReplaySampling,
-  type ReplayMaskingRules,
-  type ReplaySampling,
   redactSecrets,
-  replaySampleDraw
+  registerReplayCapture,
+  type ReplayClipKind,
+  type ReplayMaskingRules,
+  replaySampleDraw,
+  type ReplaySampling,
+  setReplayRecorderMode,
+  withClipKind
 } from '@nivaro/shared'
 import { useEffect, useRef } from 'react'
 import { useOptionalNivaroClient } from '../context'
@@ -37,6 +43,7 @@ import {
   splitBySize,
   writeResume
 } from './replayUploadQueue'
+import { useAutoRecord } from './useAutoRecord'
 
 /**
  * rrweb session recorder for headless frontends — two modes, one hook
@@ -180,7 +187,10 @@ const CLIP_REUSE_MS = 30_000
 
 let warnedMissingRrweb = false
 
-type ClipCapture = () => Promise<ErrorReplayLink | null>
+type ClipCapture = (kind: ReplayClipKind) => Promise<ErrorReplayLink | null>
+/** #1377 — take the moment now, upload on commit (see prepareReplayClip). */
+type ClipSnapshot = (kind: ReplayClipKind) => (() => Promise<ErrorReplayLink | null>) | null
+let snapshotFn: ClipSnapshot | null = null
 let captureFn: ClipCapture | null = null
 
 /**
@@ -189,11 +199,13 @@ let captureFn: ClipCapture | null = null
  * clip upload took longer than 4s) — error reporting must never wait on or
  * break because of replay capture.
  */
-export async function captureErrorClip(): Promise<ErrorReplayLink | null> {
+export async function captureErrorClip(
+  kind: ReplayClipKind = 'error'
+): Promise<ErrorReplayLink | null> {
   if (!captureFn) return null
   try {
     return await Promise.race([
-      captureFn(),
+      captureFn(kind),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 4000))
     ])
   } catch {
@@ -267,6 +279,8 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
   const appLabel = options.app
   const disabled = options.disabled ?? false
   const build = options.build ?? PACKAGE_BUILD
+  // #1371 — replay:record signals (rage click, monitor, breaker…).
+  useAutoRecord({ client, disabled })
 
   const stateRef = useRef<{
     // Full mode's recording id and seq live in its ReplayUploader.
@@ -542,6 +556,16 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
         if (!uploader.recordingId) return null
         return { recording_id: uploader.recordingId, offset_ms: offset }
       }
+      setReplayRecorderMode('full')
+      snapshotFn = () => {
+        if (!uploader.recordingId) return null
+        const offset = Date.now() - state.startedAt
+        return async () => {
+          await flush(true).catch(() => {})
+          if (!uploader.recordingId) return null
+          return { recording_id: uploader.recordingId, offset_ms: offset }
+        }
+      }
     }
 
     async function startClip() {
@@ -555,6 +579,7 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
       state.stop =
         record({
           emit(event: unknown, isCheckout?: boolean) {
+            emitReplayTap(event) // #1371 — an auto recording rides the buffer
             if (isCheckout) {
               // A checkout event is a full DOM snapshot — it starts a
               // self-sufficient window, so the one before last can drop.
@@ -580,24 +605,36 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
         }
       )
 
-      captureFn = async () => {
-        // One clip per burst — a render-loop error must not mint dozens.
-        if (state.lastClip && Date.now() - state.lastClip.at < CLIP_REUSE_MS) {
-          return state.lastClip.link
-        }
-        state.lastClip = { at: Date.now(), link: null }
+      setReplayRecorderMode('clip')
+      // #1377 — the buffer as it is NOW; nothing uploads until commit.
+      snapshotFn = (kind) => {
         const events = [...state.prevWindow, ...state.buffer]
         const startRoute = state.prevWindow.length > 0 ? state.prevWindowRoute : state.bufferRoute
         if (events.length === 0 || !client) return null
-        const started = await client.request(
-          startSessionRecording(appLabel ?? 'error-clip', undefined, true)
-        )
-        const id = started.data.id
-        let clipSeq = 0
-        await postEventChunks(client, id, () => clipSeq++, events, { startRoute, build })
-        await client.request(endSessionRecording(id)).catch(() => {})
-        const link: ErrorReplayLink = { recording_id: id, offset_ms: null }
-        state.lastClip = { at: Date.now(), link }
+        const offset = clipEndOffset(events, kind)
+        return async () => {
+          const started = await client.request(
+            withClipKind(startSessionRecording(appLabel ?? 'error-clip', undefined, true), kind)
+          )
+          const id = started.data.id
+          let clipSeq = 0
+          await postEventChunks(client, id, () => clipSeq++, events, { startRoute, build })
+          await client.request(endSessionRecording(id)).catch(() => {})
+          return { recording_id: id, offset_ms: offset }
+        }
+      }
+      captureFn = async (kind) => {
+        // One error clip per burst — a render-loop error must not mint dozens.
+        if (kind === 'error') {
+          if (state.lastClip && Date.now() - state.lastClip.at < CLIP_REUSE_MS) {
+            return state.lastClip.link
+          }
+          state.lastClip = { at: Date.now(), link: null }
+        }
+        const upload = snapshotFn?.(kind)
+        if (!upload) return null
+        const link = await upload()
+        if (kind === 'error') state.lastClip = { at: Date.now(), link }
         return link
       }
     }
@@ -666,6 +703,8 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     return () => {
       cancelled = true
       captureFn = null
+      snapshotFn = null
+      setReplayRecorderMode(null)
       document.removeEventListener('visibilitychange', onHide)
       window.removeEventListener('pagehide', onPageHide)
       window.removeEventListener('online', onOnline)
@@ -690,3 +729,11 @@ export function useSessionRecorder(options: SessionRecorderOptions = {}) {
     }
   }, [client, disabled, appLabel, build])
 }
+
+// #1370 — shared surfaces (reportClientCrash, the support dialog, Report a
+// problem) reach this recorder through the shared registry, never by
+// importing the host.
+registerReplayCapture(
+  (kind) => captureErrorClip(kind),
+  (kind) => snapshotFn?.(kind) ?? null
+)

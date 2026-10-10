@@ -349,6 +349,11 @@ export { type ReadViewLayout, RecordReadView } from './components/RecordReadView
 export type { ReportViewProps } from './components/ReportView'
 export { QueryWidgetBody, ReportView, ReportWidgetCard } from './components/ReportView'
 export { type SlaRule, SlaRulesView } from './components/SlaRulesView'
+export {
+  buildReportPayload,
+  ReportProblemButton,
+  type ReportProblemPayload
+} from './components/support/ReportProblem'
 export { SupportRequestDialog } from './components/support/SupportRequestDialog'
 export { SupportView } from './components/support/SupportView'
 export {
@@ -390,6 +395,14 @@ export {
 export type { AutoIdConfigLike, AutoIdVariant } from './lib/auto-id'
 export { autoIdVariantFields, resolveAutoIdPattern } from './lib/auto-id'
 export {
+  type AutoRecordDeps,
+  type AutoRecordRequest,
+  autoRecordingActive,
+  parseAutoRecord,
+  runAutoRecording,
+  stopAutoRecording
+} from './lib/auto-record'
+export {
   type AutofillRun,
   dismissAutofillRun,
   getAutofillRuns,
@@ -397,6 +410,11 @@ export {
   useAutofillRuns
 } from './lib/autofill-runs'
 export * from './lib/catalog-item-open'
+export {
+  buildClientCrashBody,
+  type ClientCrashBody,
+  reportClientCrash
+} from './lib/client-crash'
 export {
   CLIENT_HEADER,
   type ClientVersion,
@@ -467,6 +485,7 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export { type StuckState, stuckText } from './lib/presence-state'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
 export {
@@ -475,6 +494,22 @@ export {
   RealtimeContext,
   useOptionalRealtime
 } from './lib/realtime'
+export {
+  captureReplayClip,
+  clipEndOffset,
+  emitReplayTap,
+  type PreparedReplayClip,
+  prepareReplayClip,
+  type ReplayClipKind,
+  type ReplayLink,
+  type ReplayRecorderMode,
+  registerReplayCapture,
+  replayHref,
+  replayRecorderMode,
+  setReplayRecorderMode,
+  tapReplayEvents,
+  withClipKind
+} from './lib/replay-capture'
 export {
   consoleLine,
   instrumentConsole,
@@ -505,6 +540,14 @@ export {
   routeOfReplayEvent
 } from './lib/replay-sampling'
 export {
+  formatReplayTail,
+  getReplayTail,
+  installReplayTail,
+  type ReplayTail,
+  type TailConsoleLine,
+  type TailRequest
+} from './lib/replay-tail'
+export {
   BATCH_READ_LIMIT,
   type BatchableRead,
   batchableRead,
@@ -517,6 +560,7 @@ export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from '.
 export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
+export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export {
@@ -540,6 +584,7 @@ export {
   useMyScopes
 } from './lib/use-my-scopes'
 export { useOnlineUsers } from './lib/use-online-users'
+export { pageAtPayload, usePageAt } from './lib/use-page-at'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'

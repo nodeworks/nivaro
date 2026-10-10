@@ -42,6 +42,7 @@ const allowedSettingsKeys = [
   'presence_session_ttl',
   'session_recording_enabled',
   'error_replay_enabled',
+  'replay_auto_signals',
   'session_recording_retention_days',
   // Session replay policy (#1361 masking, #1368 cost, #1411 tiering)
   ...REPLAY_SETTINGS_KEYS,

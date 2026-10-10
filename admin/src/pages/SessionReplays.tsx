@@ -439,10 +439,16 @@ function SessionReplaysAdmin() {
     queryKey: ['session-recording-retention'],
     queryFn: () =>
       api
-        .get<{ data: { session_recording_retention_days?: number | null } }>('/settings/')
+        .get<{
+          data: {
+            session_recording_retention_days?: number | null
+            replay_auto_signals?: boolean | number | null
+          }
+        }>('/settings/')
         .then((r) => r.data.data)
   })
   const retention = settings?.session_recording_retention_days ?? 7
+  const autoSignals = !!settings?.replay_auto_signals
   const setRetention = useMutation({
     mutationFn: (days: number) =>
       api.patch('/settings/', { session_recording_retention_days: days }),
@@ -458,6 +464,7 @@ function SessionReplaysAdmin() {
     onSuccess: () => {
       toast.success('Setting saved')
       queryClient.invalidateQueries({ queryKey: ['session-recording-enabled'] })
+      queryClient.invalidateQueries({ queryKey: ['session-recording-retention'] })
     },
     onError: () => toast.error('Could not update the setting')
   })
@@ -646,6 +653,18 @@ function SessionReplaysAdmin() {
               disabled={toggle.isPending}
             />
           </label>
+          <div
+            className='flex items-center gap-2 text-[12.5px] text-slate-600 dark:text-slate-300'
+            title='When someone rage-clicks, a burst of their clicks does nothing, an ops monitor flips to failing or a breaker opens, the people affected record the next 3 minutes (labelled auto:<signal>, inputs masked) even with recording off. Capped per hour.'
+          >
+            Auto-record on signals {autoSignals ? 'on' : 'off'}
+            <Switch
+              checked={autoSignals}
+              aria-label='Auto-record on signals'
+              onCheckedChange={(v) => toggle.mutate({ replay_auto_signals: v })}
+              disabled={toggle.isPending}
+            />
+          </div>
         </div>
         <ReplayTabs tab={tab} onChange={setTab} />
       </header>

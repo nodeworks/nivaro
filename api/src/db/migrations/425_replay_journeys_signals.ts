@@ -1,0 +1,73 @@
+import type { Knex } from 'knex'
+
+/**
+ * Session replay backlog batch (migration 425):
+ *
+ * - nivaro_admin_journeys.app (#1391) — which front end the page ping came
+ *   from ('admin', or the portal's app label). NULL = a row written before
+ *   the column, which was always the admin.
+ * - nivaro_tasks.replay_recording_id / replay_offset_ms (#1377) — the
+ *   'Watch what they saw' link on a support request: the requester's own
+ *   recording (a support clip, or the live recording) and where in it they
+ *   asked. NULL = no replay was on.
+ * - nivaro_tasks.issue_id (#1390) — the issue a Report a problem filed with
+ *   the request (plain int, no FK: an issue may be deleted, the request stays).
+ * - nivaro_settings.replay_auto_signals (#1371) — auto-record three minutes
+ *   when a rage click, a dead-click burst, a monitor flip or a breaker opening
+ *   says someone is having trouble. Off by default.
+ */
+export async function up(knex: Knex): Promise<void> {
+  if (
+    (await knex.schema.hasTable('nivaro_admin_journeys')) &&
+    !(await knex.schema.hasColumn('nivaro_admin_journeys', 'app'))
+  ) {
+    await knex.schema.alterTable('nivaro_admin_journeys', (t) => {
+      t.string('app', 50).nullable()
+    })
+  }
+  if (await knex.schema.hasTable('nivaro_tasks')) {
+    if (!(await knex.schema.hasColumn('nivaro_tasks', 'replay_recording_id'))) {
+      await knex.schema.alterTable('nivaro_tasks', (t) => {
+        t.string('replay_recording_id', 36).nullable()
+      })
+    }
+    if (!(await knex.schema.hasColumn('nivaro_tasks', 'replay_offset_ms'))) {
+      await knex.schema.alterTable('nivaro_tasks', (t) => {
+        t.integer('replay_offset_ms').nullable()
+      })
+    }
+    if (!(await knex.schema.hasColumn('nivaro_tasks', 'issue_id'))) {
+      await knex.schema.alterTable('nivaro_tasks', (t) => {
+        t.integer('issue_id').nullable()
+      })
+    }
+  }
+  if (
+    (await knex.schema.hasTable('nivaro_settings')) &&
+    !(await knex.schema.hasColumn('nivaro_settings', 'replay_auto_signals'))
+  ) {
+    await knex.schema.alterTable('nivaro_settings', (t) => {
+      t.boolean('replay_auto_signals').notNullable().defaultTo(false)
+    })
+  }
+}
+
+export async function down(knex: Knex): Promise<void> {
+  if (await knex.schema.hasColumn('nivaro_settings', 'replay_auto_signals')) {
+    await knex.schema.alterTable('nivaro_settings', (t) => {
+      t.dropColumn('replay_auto_signals')
+    })
+  }
+  for (const col of ['issue_id', 'replay_offset_ms', 'replay_recording_id']) {
+    if (await knex.schema.hasColumn('nivaro_tasks', col)) {
+      await knex.schema.alterTable('nivaro_tasks', (t) => {
+        t.dropColumn(col)
+      })
+    }
+  }
+  if (await knex.schema.hasColumn('nivaro_admin_journeys', 'app')) {
+    await knex.schema.alterTable('nivaro_admin_journeys', (t) => {
+      t.dropColumn('app')
+    })
+  }
+}

@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { type StuckState, stuckText } from '../../lib/presence-state'
 import { cn, humanHours, titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect, SimpleSelectXs } from '../ui/SimpleSelect'
@@ -390,6 +391,8 @@ interface TeamLoadRow {
   hidden: number
   oldest_hours: number | null
   uncovered: boolean
+  /** #1394 — at the keyboard, same route, nothing saved for 10+ minutes. */
+  stuck_now?: StuckState | null
 }
 
 const shortDay = (iso: string | null) =>
@@ -415,13 +418,19 @@ export function TeamLoadCard({
     reports: TeamLoadRow[]
     total_reports: number
     truncated: boolean
+    stuck_now_count?: number
   }>({
     queryKey: ['nvr-person-team-load', userId],
     queryFn: () =>
       client
-        .request<{ data: { reports: TeamLoadRow[]; total_reports: number; truncated: boolean } }>(
-          get(`/users/${userId}/team-load`)
-        )
+        .request<{
+          data: {
+            reports: TeamLoadRow[]
+            total_reports: number
+            truncated: boolean
+            stuck_now_count?: number
+          }
+        }>(get(`/users/${userId}/team-load`))
         .then((r) => r.data),
     staleTime: 60_000
   })
@@ -441,7 +450,8 @@ export function TeamLoadCard({
               `${data.total_reports} direct report${data.total_reports === 1 ? '' : 's'}`,
               `${open} open`,
               breached ? `${breached} past SLA` : null,
-              uncovered ? `${uncovered} out with no cover` : null
+              uncovered ? `${uncovered} out with no cover` : null,
+              data.stuck_now_count ? `${data.stuck_now_count} stuck right now` : null
             ]
               .filter(Boolean)
               .join(' · ')
@@ -495,6 +505,15 @@ export function TeamLoadCard({
                   )}
                 </div>
                 <div className='flex shrink-0 items-center gap-1.5'>
+                  {r.stuck_now && (
+                    <span
+                      className='rounded-full bg-orange-500/10 px-1.5 py-px text-[10.5px] font-semibold text-orange-700 dark:text-orange-400'
+                      data-team-load-stuck={r.stuck_now.minutes}
+                      title='At the keyboard, on the same page, nothing saved for ten minutes'
+                    >
+                      {stuckText(r.stuck_now)}
+                    </span>
+                  )}
                   {r.breached > 0 && (
                     <span
                       className={cn(
