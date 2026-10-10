@@ -17,6 +17,7 @@ import {
   isMaskedTarget,
   isTypingTarget
 } from './activity'
+import type { RecordedMark } from './script'
 
 export const WARN_MS = 25 * 60_000
 /** From here the bar counts down the time that is left. */
@@ -43,6 +44,10 @@ export type CaptureMeta = {
   /** The pointer path and shortcuts on this tab (#1517); null when click
    *  capture was off. */
   pointer?: PointerPath | null
+  /** Script mode (#1491): the steps and where each one was marked. The
+   *  recorder fills `script`; `marks` is [] until Next is pressed. */
+  script?: string[] | null
+  marks?: RecordedMark[] | null
 }
 
 type Refs = {
@@ -70,6 +75,8 @@ type Refs = {
   pointerSampled: Point | null
   pointer: PointerSample[]
   shortcuts: RecordedShortcut[]
+  /** Script steps marked with Next (#1491), in recording time like clicks. */
+  marks: RecordedMark[]
   timers: number[]
 }
 
@@ -88,6 +95,7 @@ const fresh = (): Refs => ({
   pointerSampled: null,
   pointer: [],
   shortcuts: [],
+  marks: [],
   timers: []
 })
 
@@ -327,6 +335,15 @@ export function useScreenCapture(events: {
     setAnnounce('Recording.')
   }
 
+  /** Marks the start of script step `step` (0-based) at the recording's
+   *  current time (#1491). Nothing while paused or not recording. */
+  function mark(step: number): boolean {
+    const s = r.current
+    if (!s.live || s.pausedAt || !s.startedAt) return false
+    s.marks.push({ t_ms: Math.min(MAX_MS, Math.round(elapsedMs())), step })
+    return true
+  }
+
   /** The recording's data so far (call before `halt`). `clicks` is null when
    *  click capture was off, [] when it was on and caught nothing. */
   function meta(): CaptureMeta {
@@ -338,7 +355,8 @@ export function useScreenCapture(events: {
       activity: s.clickCapture ? s.activity.spans(Math.round(elapsedMs())) : null,
       pointer: s.clickCapture
         ? { samples: thinPointerPath(s.pointer), shortcuts: s.shortcuts.slice() }
-        : null
+        : null,
+      marks: s.marks
     }
   }
 
@@ -403,6 +421,7 @@ export function useScreenCapture(events: {
     arm,
     countdown,
     begin,
+    mark,
     meta,
     halt,
     cancel,

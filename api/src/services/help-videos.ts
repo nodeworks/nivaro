@@ -25,6 +25,7 @@ import {
 import { applyHouseStyleToNew, currentHouseStyle } from './help-video-house-style.js'
 import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
+import { normalizeScript, withScriptChapters } from './help-video-script.js'
 import {
   normalizeLabels,
   type StaleReason,
@@ -102,6 +103,10 @@ export interface VersionDto {
   /** Retention removed this version's files (#1531): it cannot be restored
    *  or played; the row stays as history. */
   files_removed_at: string | null
+  /** Draft, re-record and restore results only: the steps the author wrote
+   *  before recording (script mode, #1491), so a re-record can reuse them.
+   *  Null for a recording without one and for every uploaded file. */
+  script?: string[] | null
 }
 export interface HelpVideoDto {
   id: string
@@ -367,6 +372,7 @@ export function serializeVersion(v: VersionRow, opts: { withRecorderData: boolea
   if (opts.withRecorderData) {
     dto.clicks = json(v.clicks, null)
     dto.levels = json(v.levels, null)
+    dto.script = normalizeScript(json(v.script, null))
   }
   return dto
 }
@@ -676,6 +682,8 @@ async function insertVersion(
     levels: unknown
     edits: VideoEdits
     note?: string | null
+    /** The script the recording followed (#1491); absent or null = none. */
+    script?: string[] | null
   }
 ): Promise<string> {
   const id = randomUUID()
@@ -689,6 +697,7 @@ async function insertVersion(
     height: data.height,
     clicks: data.clicks == null ? null : JSON.stringify(data.clicks),
     levels: data.levels == null ? null : JSON.stringify(data.levels),
+    script: data.script?.length ? JSON.stringify(data.script) : null,
     edits: JSON.stringify(data.edits),
     edits_hash: hashEdits(data.edits),
     render_status: 'none',
@@ -734,7 +743,17 @@ export async function createVideo(
       height: upload.height,
       clicks: upload.clicks,
       levels: upload.levels,
-      edits: applyHouseStyleToNew(emptyEdits(upload.duration_ms ?? 0), house.style)
+      // A scripted recording (#1491) starts with a chapter per marked step.
+      edits: applyHouseStyleToNew(
+        withScriptChapters(
+          emptyEdits(upload.duration_ms ?? 0),
+          upload.script,
+          upload.marks,
+          upload.duration_ms ?? 0
+        ),
+        house.style
+      ),
+      script: upload.script
     })
   } catch (err) {
     // Nothing references the recording yet: give it back to its author (and
@@ -1208,7 +1227,13 @@ export async function rerecordVideo(
       height: upload.height,
       clicks: upload.clicks,
       levels: upload.levels,
-      edits: emptyEdits(upload.duration_ms ?? 0),
+      edits: withScriptChapters(
+        emptyEdits(upload.duration_ms ?? 0),
+        upload.script,
+        upload.marks,
+        upload.duration_ms ?? 0
+      ),
+      script: upload.script,
       note: 'Re-recorded'
     })
   } catch (err) {
@@ -1252,6 +1277,7 @@ export async function restoreVersion(
     clicks: json(src.clicks, null),
     levels: json(src.levels, null),
     edits: json<VideoEdits>(src.edits, emptyEdits(0)),
+    script: normalizeScript(json(src.script, null)),
     note: `Restored from version ${src.version}`
   })
   await db('nivaro_help_videos')

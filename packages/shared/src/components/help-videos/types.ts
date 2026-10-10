@@ -250,6 +250,10 @@ export interface VersionDto {
    *  so and restore answers 409 HELP_VIDEO_VERSION_FILES_REMOVED. Optional:
    *  older servers. */
   files_removed_at?: string | null
+  /** Draft, re-record and restore results only (#1491): the steps the author
+   *  wrote before recording, so a re-record can reuse them. Null for a
+   *  recording made without a script and for every uploaded file. */
+  script?: string[] | null
 }
 
 /** One sample of the pointer path (#1517): source time and frame fractions
@@ -261,6 +265,10 @@ export type PointerSample = { t_ms: number; x: number; y: number }
 export type RecordedShortcut = { t_ms: number; keys: string }
 /** The pointer path and shortcuts of a recording of the author's own tab. */
 export type PointerPath = { samples: PointerSample[]; shortcuts: RecordedShortcut[] }
+
+/** One "Next" press while recording with a script (#1491): step `step`
+ *  (0-based) starts at `t_ms` of the recording. */
+export type RecordedMark = { t_ms: number; step: number }
 
 /** A stretch of the recording where the author was typing in a text field,
  *  or touched nothing at all (#1518). Never what was typed. */

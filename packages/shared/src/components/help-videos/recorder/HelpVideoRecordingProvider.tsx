@@ -16,6 +16,13 @@ import type { HelpVideoContext, HelpVideoDto } from '../types'
 import { useHelpVideosPath } from '../viewer/HelpVideoSheet'
 import { HelpVideoWalkHost } from '../walk/HelpVideoWalk'
 import { HelpVideoRecorder } from './HelpVideoRecorder'
+import {
+  isRecordingWindow,
+  type RecordingHandoff,
+  takeHandoff,
+  tokenFromSearch,
+  withoutRecordParam
+} from './recordingWindow'
 
 export type StartRecordingOptions = {
   /** Where the new video shows (a new recording only). */
@@ -33,7 +40,30 @@ export type StartRecordingOptions = {
 
 export const RECORDING_BUSY = 'A recording is already in progress.'
 
-type Session = StartRecordingOptions & { alive: () => boolean; host: HTMLElement | null }
+type Session = StartRecordingOptions & {
+  alive: () => boolean
+  host: HTMLElement | null
+  /** Inside a recording window (#1516): what the opener handed over. */
+  handoff?: RecordingHandoff | null
+}
+
+/**
+ * Inside a recording window (#1516), the setup the opener left under the
+ * token in the URL. The token leaves the URL either way, so a reload is a
+ * plain page. Null in every other window.
+ */
+export function takeRecordingHandoff(): RecordingHandoff | null {
+  if (typeof window === 'undefined') return null
+  const token = tokenFromSearch(window.location.search)
+  if (!token) return null
+  const handoff = isRecordingWindow() ? takeHandoff(token) : null
+  try {
+    window.history.replaceState(window.history.state, '', withoutRecordParam(window.location.href))
+  } catch {
+    /* the token stays in the URL; it is spent anyway */
+  }
+  return handoff
+}
 
 type RecordingContextValue = {
   start: (session: Session) => boolean
@@ -84,6 +114,20 @@ export function HelpVideoRecordingProvider({ children }: { children: ReactNode }
 
   const value = useMemo(() => ({ start, active: !!session }), [start, session])
 
+  // A recording window (#1516) opens the recorder as soon as the app is up,
+  // with the setup the opener handed over.
+  useEffect(() => {
+    const h = takeRecordingHandoff()
+    if (!h) return
+    start({
+      videoId: h.videoId,
+      contexts: h.contexts,
+      handoff: h,
+      alive: () => true,
+      host: null
+    })
+  }, [start])
+
   return (
     <RecordingContext.Provider value={value}>
       {children}
@@ -91,6 +135,8 @@ export function HelpVideoRecordingProvider({ children }: { children: ReactNode }
         open={!!session}
         videoId={session?.videoId}
         contexts={session?.contexts}
+        defaultTitle={session?.handoff?.defaultTitle}
+        handoff={session?.handoff}
         barHost={session?.host}
         // "Gone", never "cancelled": the limit notice calls onDone and then onClose.
         onClose={() => {

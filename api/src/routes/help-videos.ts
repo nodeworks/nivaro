@@ -208,6 +208,8 @@ export async function helpVideosRoutes(app: FastifyInstance) {
       clicks?: unknown
       levels?: unknown
       activity?: unknown
+      script?: unknown
+      marks?: unknown
     }
     const result = await finalizeUpload(req.user!, id, meta)
     // An uploaded file is checked (and maybe converted) in the background:

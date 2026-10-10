@@ -31,6 +31,14 @@ export const helpVideosGuide: DocSection = {
       type: 'p',
       text: "Clean screen while recording (on by default, remembered per browser) keeps the author's own things out of the video: from the countdown until you stop, notification counts, the chat button and panel, toasts, banners (announcements, update and reload notices, View as) and floating chips are hidden, notification sounds stay silent, and your name, email and photo in the app's menus read Demo User. Pausing keeps the screen clean; stopping, cancelling or closing the recorder brings everything back at once. Other people's names and photos on the page are not changed — check the screen before you start, or blur in the editor."
     },
+    {
+      type: 'p',
+      text: 'Script (optional): write the steps before you record, one per line (up to 60 steps of 200 characters). While you record they show above the recording bar as a teleprompter — the current step large, the next one dimmed, "Step 2 of 5" — and Next (the button, or Alt+Shift+N / ⌥⇧N, which works even while you are typing in a field and is never typed into it) moves on and marks the moment. The new draft opens with a chapter per step you reached, titled with the step\'s text, the first at 0:00; a step you never marked makes no chapter, and you can move or rename them in the editor as usual. The script is kept with the version, so Re-record offers it again, pre-filled; an uploaded file has no script.'
+    },
+    {
+      type: 'p',
+      text: 'Recording window: Open a recording window (under the script, with a size: 1280 × 800, 1440 × 900 or 1920 × 1080, remembered per browser) opens the same page again in a separate window of exactly that size and records that window, so every video has the same frame and readable text. The recorder opens in the new window with your settings carried over (microphone, clicks, clean screen, script); press Start there and, if the browser asks what to share, choose that window. This tab shows only how it is going (starting, recording with the time, saving) and warns when the browser could not make the window the size asked for (the bar in the window shows its real size too); when the recording is saved, this tab opens the editor on the new draft and the window closes itself. Clean screen applies inside the window, a recording window never opens another, and if pop-ups are blocked the recorder says so and records in this tab as before.'
+    },
     { type: 'h3', text: 'Uploading a video file' },
     {
       type: 'p',
@@ -140,7 +148,7 @@ export const helpVideosGuide: DocSection = {
     { type: 'h3', text: 'Moving videos to another instance' },
     {
       type: 'p',
-      text: 'Content Promotion → Help videos moves published videos to another instance: record and polish on staging, then bring them to production. Export packages the chosen videos (each one’s published version with its edits, chapters and captions, the recording, the render, captions and poster, and where it shows) into one file. On the other instance, Choose package uploads it, checks it and shows what applying it would do before anything is written. A video keeps its id, so a later package of the same video adds a new version there instead of a second video. Who can watch and required viewing do not travel, because role ids differ between instances: a new video arrives published but visible to authors only until someone chooses who can watch, and an updated one keeps its settings there. Screens on a collection or step that does not exist there are listed and skipped, and the render is reused when it matches the edits, otherwise the video is rendered after the import. Administrators only, on both ends.'
+      text: 'Content Promotion → Help videos moves published videos to another instance: record and polish on staging, then bring them to production. Export packages the chosen videos (each one’s published version with its edits, chapters and captions, its script when it was recorded with one, the recording, the render, captions and poster, and where it shows) into one file. On the other instance, Choose package uploads it, checks it and shows what applying it would do before anything is written. A video keeps its id, so a later package of the same video adds a new version there instead of a second video. Who can watch and required viewing do not travel, because role ids differ between instances: a new video arrives published but visible to authors only until someone chooses who can watch, and an updated one keeps its settings there. Screens on a collection or step that does not exist there are listed and skipped, and the render is reused when it matches the edits, otherwise the video is rendered after the import. Administrators only, on both ends.'
     },
     { type: 'h3', text: 'Ask AI answers with a video' },
     {
@@ -231,7 +239,7 @@ export const helpVideosApi: DocSection = {
         [
           'POST /help-videos/uploads, PUT …/parts/:n, POST …/finalize',
           'authors',
-          'Chunked upload (parts ≤ 8 MB, total ≤ 1.2 GB). A recording sends mime webm/mp4; a picked file sends source "upload" with its name and size, the first part decides its container, and finalize answers 202 while the file is checked or converted. A recording’s finalize may carry `activity`: `[{ kind: "typing" | "idle", start_ms, end_ms }]` (only that it happened, never what was typed; checked, merged and capped at 1,000 spans); GET …/draft/edits returns it as `activity`'
+          'Chunked upload (parts ≤ 8 MB, total ≤ 1.2 GB). A recording sends mime webm/mp4; a picked file sends source "upload" with its name and size, the first part decides its container, and finalize answers 202 while the file is checked or converted. A recording’s finalize may carry `activity`: `[{ kind: "typing" | "idle", start_ms, end_ms }]` (only that it happened, never what was typed; checked, merged and capped at 1,000 spans); GET …/draft/edits returns it as `activity`. With a script it also carries `script` (the steps, ≤ 60 of ≤ 200 characters) and `marks`: `[{ t_ms, step }]` per Next press in recording time; the video made from it (POST /help-videos or …/rerecord) opens with a chapter per marked step, the first at 0, and keeps the steps on the version, returned as `script` to authors (draft, re-record and restore results)'
         ],
         [
           'GET · POST · DELETE /item-locks/nivaro_help_videos/:id/lock (+ /heartbeat, /lock/request, /lock/queue, /lock/force)',

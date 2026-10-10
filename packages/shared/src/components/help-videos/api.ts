@@ -20,6 +20,7 @@ import type {
   OpenverseSearch,
   PointerPath,
   RecordedClick,
+  RecordedMark,
   ReleaseVideoDto,
   UploadedMusic,
   VersionDto,
@@ -477,6 +478,10 @@ export function helpVideoApi(client: NivaroClient) {
      *   [{ t_ms, keys }] }` — where the pointer went (sampled ~20 times a
      *   second while it moved) and the keyboard shortcuts pressed (`Meta+S`,
      *   `Ctrl+K`, `Enter`…), never text typed into a field. Null when not captured.
+     * - `script` and `marks` (optional, #1491): the steps the author wrote
+     *   before recording (≤ 60 of ≤ 200 chars) and `{ t_ms, step }` per Next
+     *   press, in recording time; the first draft gets a chapter per marked
+     *   step (the first at 0) and keeps the script for a re-record.
      * Matches `HelpVideoVersion.clicks` / `.levels` in @nivaro/sdk.
      * 422 UPLOAD_TOO_LONG past 31 minutes, 409 UPLOAD_CLOSED when finished.
      */
@@ -488,6 +493,8 @@ export function helpVideoApi(client: NivaroClient) {
         levels: number[] | null
         activity?: ActivitySpan[] | null
         pointer?: PointerPath | null
+        script?: string[] | null
+        marks?: RecordedMark[] | null
       }
     ) =>
       r(
