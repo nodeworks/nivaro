@@ -1,9 +1,16 @@
+import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
 
+const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as {
+  version?: string
+}
+
 export default defineConfig({
+  // The package version, stamped on recorded chunks as their build (#1368).
+  define: { __NIVARO_REACT_VERSION__: JSON.stringify(pkg.version ?? '') },
   plugins: [
     react(),
     dts({

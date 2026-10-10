@@ -38,6 +38,7 @@ import { Link, Navigate, Outlet, useLocation, useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { DevStaleBanner } from '@/components/dev-stale-banner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
+import { FloatingReplaySlot } from '@/components/replay-player/FloatingReplaySlot'
 import { getRecorderState, subscribeRecorder } from '@/lib/e2e-recorder'
 import { adminRealtime } from '@/lib/socket'
 import { applyThemeSettings } from '@/lib/theme-settings'
@@ -515,6 +516,7 @@ export function AppLayout() {
           <ViewAsBar />
           <DevStaleBanner />
           <RecorderBadge />
+          <FloatingReplaySlot />
           <SessionExpiryWatcher />
           <OfflineBanner />
           <DbOutageBanner />

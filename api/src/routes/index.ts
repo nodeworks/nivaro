@@ -187,6 +187,13 @@ import { securityRoutes, securitySelfRoutes } from './security.js'
 import { semanticSearchRoutes } from './semantic-search.js'
 import { sequenceRoutes } from './sequences.js'
 import { sessionRecordingRoutes } from './session-recordings.js'
+import { sessionReplayClipRoutes } from './session-replay-clips.js'
+import { sessionReplayExportRoutes } from './session-replay-export.js'
+import { sessionReplayInsightRoutes } from './session-replay-insights.js'
+import { sessionReplayNotesRoutes } from './session-replay-notes.js'
+import { sessionReplaySearchRoutes } from './session-replay-search.js'
+import { sessionReplayShareRoutes } from './session-replay-shares.js'
+import { sessionReplaySpecRoutes } from './session-replay-spec.js'
 import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
 import { shareLinksRoutes } from './share-links.js'
@@ -469,6 +476,19 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(dashboardLinkRoutes, { prefix: '/dashboard-links' })
   await app.register(journeyRoutes, { prefix: '/journeys' })
   await app.register(sessionRecordingRoutes, { prefix: '/session-recordings' })
+  // Clips / library / shares of recordings — full paths, no prefix (#1366).
+  await app.register(sessionReplayClipRoutes)
+  await app.register(sessionReplayShareRoutes)
+  // #1374 / #1372 — search over the replay index (/search, /search/keys)
+  await app.register(sessionReplaySearchRoutes, { prefix: '/session-recordings' })
+  // #1364 / #1388 — heatmaps and frustration scores folded from recordings
+  await app.register(sessionReplayInsightRoutes, { prefix: '/session-replay-insights' })
+  // #1363 timestamped notes on a recording (admin-only, own file beside the recordings routes)
+  await app.register(sessionReplayNotesRoutes, { prefix: '/session-recordings' })
+  // #1375 export a recording as a self-contained HTML replay or a WebM (background job)
+  await app.register(sessionReplayExportRoutes, { prefix: '/session-recordings' })
+  // #1393 a Playwright spec (golden-path recorder steps) from a stretch of a recording
+  await app.register(sessionReplaySpecRoutes, { prefix: '/session-recordings' })
   await app.register(reportStudioRoutes, { prefix: '/report-studio' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)

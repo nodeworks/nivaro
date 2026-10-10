@@ -178,9 +178,9 @@ export const sessionReplayDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'Privacy: every input is masked client-side before events leave the browser; add the nvr-no-record class to block any element entirely.',
+        'Privacy: every input and every record field value is masked client-side before events leave the browser (see Masking rules below); add the nvr-no-record class to block any element entirely.',
         'Events batch every 10 seconds; a full DOM snapshot every 60 seconds keeps replays seekable.',
-        'Recordings cap at 15MB (then mark truncated) and purge after 7 days.',
+        'Recordings cap at 15MB (then mark truncated) and purge after the retention period (7 days unless changed on the Session Replays page); after 3 days they move from the database to file storage.',
         'Watching, listing and deleting are admin-only; a recording can only be appended to by its own user.',
         'Tell your team before enabling — this records their screens.'
       ]
@@ -189,6 +189,62 @@ export const sessionReplayDocs: DocSection = {
     {
       type: 'p',
       text: 'A chunk that cannot be sent — the browser is offline, the request fails or the server answers 5xx — waits in the browser (IndexedDB, at most about 20MB per tab, oldest dropped first) and is retried with backoff from 2 seconds up to a minute, and as soon as the browser comes back online. Reloading the tab within 10 minutes continues the same recording instead of starting a new one, and whatever the previous page had not sent goes first. When a page is closed or reloaded, the last few seconds are sent with the request that outlives the page (fetch keepalive); anything that does not fit goes on the next load. A recording that is closed or has reached its size cap still stops for good, and the next page load starts a new one. The headless hook in @nivaro/react does the same.'
+    },
+    { type: 'h2', id: 'session-replay-masking', text: 'Masking rules' },
+    {
+      type: 'p',
+      text: 'Besides every input, the recorders mask the value of every field on a record — in the edit form and the read view — so a replay shows the layout and what the person did, not the data. Settings → Session replay → Masking lists fields that are safe to watch (a status, a code) as collection.field, or *.field for any collection; those show in replays and everything else stays masked. Field labels always show.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Mask rich text (on by default): editors such as notes and descriptions show as asterisks wherever they appear, even in an allowed field.',
+        'Mask file names (on by default): file names are masked and file thumbnails blocked, in file fields and the file library, even in an allowed field.',
+        'Passwords are never shown. Text in attributes (a tooltip, an image’s alt text) is not masked; keep sensitive values out of them or mark the element nvr-no-record.',
+        'The rules apply to the admin app and to frontends using useSessionRecorder from @nivaro/react; a changed rule reaches a recorder on its next page load. Recordings already made are not changed.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-cost', text: 'Recording cost' },
+    {
+      type: 'p',
+      text: 'Every uploaded chunk names the page (route pattern) it was recorded on and the frontend build that recorded it. DB Health → Session replay shows what recording stored per page and per build over the last 7 days, day by day, and the recordings’ share of the storage runway.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Daily cap (Settings → Session replay → Recording cost): megabytes the whole instance may store per UTC day. Once reached, recorders stop and no new recording starts until the next day. Replicas see each other’s uploads within about 30 seconds, so the cap can be passed by that much.',
+        'Sampling: the share of sessions recorded, as a default and per page — an exact pattern such as /content/orders/:id, or a prefix such as /reports/* (the most specific rule wins; 0% never records the page). Each tab decides once per visit, so a page is either recorded or not for that person throughout; while a tab is on a page that is not recorded nothing is kept, and the replay picks up again on the next recorded page.',
+        'Clips attached to errors are not sampled, but they count toward the cap and stop when it is reached.',
+        'With @nivaro/react, pass useSessionRecorder({ build }) to name your app’s build; it defaults to the @nivaro/react version.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-storage', text: 'Older recordings move to storage' },
+    {
+      type: 'p',
+      text: 'Recordings older than 3 days (Settings → Session replay → Storage) leave the database: each one is compressed into a single file in the file storage driver — local disk, S3 or Azure Blob, as set under Settings → File storage — and its rows in the database are removed. An hourly job does the moving; a recording still receiving events is left until it has been quiet for an hour.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Opening an older recording loads it back first; the player says “Loading from storage…” for the few seconds that takes. It then stays loaded for 24 hours before the copy in the database is dropped again (the file stays).',
+        'When the retention period ends, or a recording is deleted, its file in storage is deleted too.',
+        'DB Health → Session replay shows how much sits in the database (hot) and in storage (cold), and the storage runway counts both.',
+        'Switching the storage driver does not move recordings already in storage: they are read from the active driver, then from local disk. Moving from one cloud driver to another leaves older recordings unreadable until they are purged.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-health', text: 'Health check' },
+    {
+      type: 'p',
+      text: 'While recording or error clips are on, the readiness scorecard runs a Session recording is healthy check. It warns, with the figure and the likely cause, when:'
+    },
+    {
+      type: 'ul',
+      items: [
+        'more than 5% of chunk uploads failed since yesterday (at least 20 uploads) — refusals the server saw (too large, recording closed or at its size cap) plus failed attempts the recorders report on their next successful upload. A browser that never gets through again cannot report, so the real figure can be higher;',
+        'no recording started in the last 24 hours while people were signed in (the recorder is blocked, starts are failing, or sampling records nobody);',
+        'the daily recording cap was reached, naming the page that stored the most that day;',
+        'the oldest recording is more than a day past the retention period (the daily purge is not running).'
+      ]
     },
     { type: 'h2', id: 'session-replay-headless', text: 'Recording your own frontends' },
     {
@@ -253,6 +309,182 @@ function App() {
         'Requests show method, path, status and duration only, never bodies or query strings. The recorder’s own uploads are left out.',
         'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
         'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-clips', text: 'Clips: select a range' },
+    {
+      type: 'p',
+      text: 'Drag along the thin track under the scrubber to select a range; drag either handle, or focus it and use the arrow keys (Shift for 5 seconds), to adjust it, and Escape to clear it. The strip under the player shows the range and can move either end to the playhead.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Raise an issue cuts the range into a replay of its own (labelled clip in the list) and opens a new issue linked to it. The issue says which page the clip opens on, lists the console errors in it and the person’s requests in its window (from the event rail), and adds your note.',
+        'A clip starts from the last full page snapshot before the range, so it plays exactly what was on screen at its first second. Its events are copied as they were stored: masked inputs stay masked.',
+        'A clip raised as an issue is kept for the same number of days as any recording.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-library', text: 'Clip library' },
+    {
+      type: 'p',
+      text: 'Save clip keeps the selected range in the library with a name, an optional description and tags. Session Replays → Library lists saved clips newest first: search by name, description or tag, filter by a tag, play a clip in place and delete it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'A saved clip is a replay of its own, cut from the recording the same way as a clip raised as an issue, with the masking it was recorded with.',
+        'Retention skips recordings the library holds: the clip stays until someone deletes it, while the rest of the recording it came from expires as usual. Delete clips you no longer need — the library is the one place recordings are kept indefinitely.',
+        'Saving and deleting clips is recorded in the activity log.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-share', text: 'Sharing a replay with one person' },
+    {
+      type: 'p',
+      text: 'Share… on a selected range creates a link for one person you pick, valid for 1 hour to 30 days (3 days by default). They get a notification with the link; you see it once, to copy.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Never public: the link opens only for the person it names, signed in as themselves — they do not need to be an administrator. Anyone else signed in gets a refusal, and so does a masquerade session.',
+        'They see only the shared window, with the masking it was recorded with — not the rest of the recording, its event rail or any other session. The page says who shared it and when the link expires.',
+        'Every open is recorded in the activity log, and so is every refused attempt. The share dialog lists the links made from a recording: who shared it with whom, the window, the expiry and how often it was opened.',
+        'Revoke deletes the link at once. A link also stops working when it expires or when its recording is purged by retention — save the range as a clip first if it must outlive the recording.',
+        'Only a fingerprint of the link is stored, so the link itself cannot be read back from the database.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-search', text: 'Search by record or field' },
+    {
+      type: 'p',
+      text: 'As each recording uploads, the server indexes what it touched: the pages visited (with ids replaced by :id), the records opened (collection and id), the names of the fields focused or typed into, and the elements clicked, as selectors. The Search tab on the Session Replays page finds recordings by collection and record id, by field name or by selector, and opens each one at the moment it matched. A record’s Timeline (the History button) links to Replays of this record.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Only field names (the data-field a form row carries) are indexed, never what was typed: inputs are masked before they leave the browser, and the index never reads values or page text.',
+        'Selectors are built from stable hooks only (data-testid, data-field, data-cbv-* and fixed ids), so the same element matches across recordings.',
+        'Indexing runs after the upload has been answered and never slows it down. Recordings uploaded before the index existed are not searchable.',
+        'Index rows are deleted with their recording, by retention or by Delete.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Following one record: search by collection and record id, then Play all. Every recording that opened the record plays as one timeline, oldest first, each cut to the time the person was on the record plus a minute either side. The strip above the player names the person and time of each part; under it, Record as they found it links to the revision in effect when they arrived, and Saved here to any revision saved during that part. When a part ends the next one starts, unless you turn that off; click a part in the strip to jump to it.'
+    },
+    { type: 'h2', id: 'session-replay-inspector', text: 'Inspecting an element' },
+    {
+      type: 'p',
+      text: 'Pause a replay and click anything in it: the inspector outlines the element and shows its selector (with a Copy button), its data-* attributes, and the nearest data-field and data-cbv-* hooks on it or above it. Find in other recordings lists the other recordings in which someone clicked or typed into the same element, from the replay index; Open in Search shows them all with a Watch button that opens each one at that moment. An element with no stable hook on it or above it gets a plain selector such as button, which cannot be searched for. The inspector reads attributes only, never text or what was typed.'
+    },
+    { type: 'h2', id: 'session-replay-heat', text: 'Heatmaps' },
+    {
+      type: 'p',
+      text: 'The Heat tab shows where people click on a route and how far down they scroll, summed over every recording of that route in a date range. Pick a route on the left; the route is drawn as it was last recorded, with the clicks over it, the most-clicked elements and the share of visits that reached each screen beside it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Heat is aggregate-only. A nightly job (session-replay-heat, 02:05 UTC) folds finished recordings into counts per app, route pattern, day and screen size: click positions as 2% squares of the viewport, the element clicked, and the deepest point of each visit. No person, recording or session is stored with the counts, and nothing in them can be traced back to who clicked.',
+        'Routes are patterns (/collections/workflows/:id), never record ids. Element names prefer test hooks, labels and short button text, and leave out text with digits or addresses, so a record’s data does not become an element name.',
+        'Each run takes at most 300 recordings (about 250MB stored), oldest first, and marks them folded; a backlog drains over the following nights. Error clips are left out. Run it now from Background Jobs.',
+        'The drawing of the route comes from the newest recording that showed it. When that recording has expired with retention, the heat is drawn on a blank viewport instead; the counts themselves are kept for 180 days.',
+        'Positions are relative to the viewport, so a phone and a wide monitor put the same button in different places. Pick one screen size to sharpen the map.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-frustration', text: 'Frustration score and Worst sessions' },
+    {
+      type: 'p',
+      text: 'Every working session gets a frustration score from 0 to 100. A session is one browser tab’s run of admin pages on one day (the page trail’s session). The Worst sessions tab lists the highest scores in a date range with the person, the route they spent most time on, what made the score and a Watch button when a recording overlaps the session. The People page’s Day view shows the day’s worst score beside its summary; it links to that session’s replay when there is one. Unlike heat, a score is about one person, so every read is admin-only.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Rage clicks: three or more clicks on one element within 600 ms (real-user monitoring).',
+        'Dead clicks: clicks that changed nothing, when the page reports them to real-user monitoring.',
+        'Client errors: errors the page reported to the issue log during the session.',
+        'Back-and-forth: page A, then B, then A, then B again within two minutes (the same exact pages; browsing a list and different records is not counted).',
+        'Slow calls: requests slower than that route’s 95th percentile for the same window (at least 20 calls to judge by) and slower than one second.',
+        'Abandoned forms: a new record held at least 10 seconds, or an existing record held at least a minute, and left with no save to that collection or record while it was open. A page whose length is unknown never counts.',
+        'Each signal adds its weight, at most ten of a kind, and the score is 100 × (1 − e^(−sum ÷ scale)), so it levels off toward 100. Defaults: rage 6, dead 3, client error 8, back-and-forth 3, slow call 2, abandoned form 5, scale 25 (one client error scores 27). Change them under Weights on the Worst sessions tab; a weight of 0 turns a signal off. They are stored in settings as frustration_weights.',
+        'A nightly job (session-frustration, 02:25 UTC) rescores the last two days, so a session that ran past midnight or a late report is picked up. Scores are kept 90 days and are deleted with the person. Run it now from Background Jobs.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-notes', text: 'Notes on a recording' },
+    {
+      type: 'p',
+      text: 'Under the player, the Notes list pins a remark to a moment of the replay. A note is pinned to the playhead at the moment you start typing it (click the time chip to re-pin it to where the playhead is now), and shows as a violet flag in a row under the event rail. Click a flag or a note’s time to seek to it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Notes are admin-only, like the recordings themselves, and are shown as plain text. Only the author can edit a note; any admin can delete one. Notes go when the recording goes.',
+        'Copy a note onto an issue linked to the recording (it lands as a comment on the issue, shown in the issue’s detail) or onto an open investigation notebook from the Traffic Map (appended to its notes). Either way the copy carries a link that opens the recording at that second.',
+        'Adding, deleting and copying a note are recorded in the activity log.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-export', text: 'Exporting a recording' },
+    {
+      type: 'p',
+      text: 'Export (top right of the player) saves a recording outside the admin. Leave From and To empty for the whole recording, or give a window in m:ss.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'HTML replay: one file with the player and the events inside. It opens offline in any browser and plays like the admin’s player. The events are exactly as stored, so inputs that were masked when recorded stay masked.',
+        'WebM video: the server plays the recording in a headless browser and captures it in real time, so a video takes as long to make as the window lasts (at most 30 minutes). When it is ready you get a notification with a link to the file; if it cannot be made, the notification says why. The server needs ffmpeg for this.',
+        'A window starts at the last full snapshot before From, because a replay needs the page as it was; playback still begins at From.',
+        'Every export is recorded in the activity log. The video is stored as a file owned by you; treat both files like the recording itself, since they show someone’s session.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-spec', text: 'A Playwright spec from a recording' },
+    {
+      type: 'p',
+      text: 'Export → Playwright spec turns the clicks, typing and page changes in a window of the recording into the E2E recorder’s steps and opens them in the E2E recorder, where you can remove steps, add assertions, type in the values and save the spec into an extension’s tests folder (on a development machine) or download it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Selectors prefer a `data-*` hook on the element (or the nearest one above it), then role and accessible name, then id, label, name, placeholder and a short CSS path.',
+        'Typed values were masked when recorded, so they never reach the spec: each one is a placeholder such as `<value for data-field="po_number">`.',
+        'A click on an element the recording never captured is left out and counted. Making a spec is recorded in the activity log.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-skip', text: 'Skipping inactivity' },
+    {
+      type: 'p',
+      text: 'Stretches longer than 5 seconds with no input (mouse, keys, scroll, touch) and no change on the page play at 8×; a stretch that would still take more than a few seconds at 8× is jumped over to its last 2 seconds. The scrubber shades each one with how long it was ("skipped 2m 10s") and a badge over the replay says when it is skipping. The Skip idle / Real time button beside the speeds turns it off; the choice is remembered in this browser.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Each recording’s active time — the time between input or page changes, every idle stretch counted as at most 5 seconds — is worked out as its chunks upload and shown on the list ("4m 12s active"). Sort a person’s recordings by Most active to find the sessions where something actually happened.',
+        'Recordings made before active time was measured show no figure and sort last.'
+      ]
+    },
+    { type: 'h2', id: 'session-replay-chapters', text: 'Chapters' },
+    {
+      type: 'p',
+      text: 'A recording splits into chapters at every page change — from the recorder’s own route markers and the server’s page trail, merged when both saw the same navigation. A change of query string alone (a filter, a tab) stays in the same chapter, and a page left within a moment (a redirect) is folded into where it landed. Under the scrubber the chapters are listed with their page and length, the current one highlighted; click one to jump to it, or press , (back) and . (next) while watching.'
+    },
+    {
+      type: 'p',
+      text: 'The list shows how many chapters each recording has, counted from the route markers as the recording uploads (recordings made before this show no count).'
+    },
+    { type: 'h2', id: 'session-replay-float', text: 'Floating player' },
+    {
+      type: 'p',
+      text: 'Float (beside the speeds) detaches the replay into a small window in a corner of the admin, so it keeps playing while you open the record it is about, a drill-down or anything else — moving between admin pages does not stop it. Drag the window by its title bar; it settles into the nearest corner, and that corner is remembered in this browser. A pinned chat panel moves it over instead of covering it. Closing the window takes you back to Session Replays with the replay open at the moment it had reached; the square button stops it without going anywhere. Opening another replay on the Session Replays page closes the floating one.'
+    },
+    { type: 'h2', id: 'session-replay-together', text: 'Watching together' },
+    {
+      type: 'p',
+      text: 'Watch together (under the player) starts a shared viewing and copies its link. Every admin who opens the link follows your playhead: when you play, pause, seek, jump a chapter or change speed, their replay does the same, and a small roster shows who is watching (you lead, with a crown). Copy watch link copies it again; Stop ends it, and closing the replay leaves. A follower can still scrub on their own, but your next move brings them back. If you close the replay while others watch, they can carry on, and one of them can take the lead.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Only admins can join, and only on a recording that exists for them; a watch link opens that recording and no other.',
+        'Discuss posts a link to the current moment — and the shared viewing, when there is one — into one of your chat rooms with an optional note, then opens the room. Copy link in the same menu copies it instead. The link opens Session Replays at that moment (a few seconds before it).',
+        'It runs over the admin’s live connection: nothing about the viewing is stored.'
       ]
     }
   ]

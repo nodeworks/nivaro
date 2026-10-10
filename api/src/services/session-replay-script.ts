@@ -37,7 +37,7 @@ export interface ReplayPlan {
   unresolved: number
 }
 
-type SerializedNode = {
+export type SerializedNode = {
   id: number
   type: number
   tagName?: string
@@ -56,11 +56,16 @@ type RrwebEvent = {
 const MOUSE_CLICK = 2
 const MOUSE_DBLCLICK = 4
 
+export interface NodeIndex {
+  nodes: Map<number, SerializedNode>
+  parents: Map<number, number>
+}
+
 /**
  * Index the snapshot by node id, remembering each node's parent so a selector
  * can be built by walking upward.
  */
-function indexTree(root: SerializedNode) {
+export function indexTree(root: SerializedNode): NodeIndex {
   const nodes = new Map<number, SerializedNode>()
   const parents = new Map<number, number>()
   const walk = (node: SerializedNode, parentId: number | null) => {
@@ -72,7 +77,7 @@ function indexTree(root: SerializedNode) {
   return { nodes, parents }
 }
 
-const attr = (node: SerializedNode, name: string): string | null => {
+export const attr = (node: SerializedNode, name: string): string | null => {
   const v = node.attributes?.[name]
   return typeof v === 'string' && v.trim() !== '' ? v.trim() : null
 }
@@ -83,7 +88,11 @@ const attr = (node: SerializedNode, name: string): string | null => {
  * div chain — especially here, where nodes added after the snapshot have no
  * recorded sibling order to count against.
  */
-function visibleText(node: SerializedNode, nodes: Map<number, SerializedNode>, depth = 0): string {
+export function visibleText(
+  node: SerializedNode,
+  nodes: Map<number, SerializedNode>,
+  depth = 0
+): string {
   if (depth > 4) return ''
   let out = ''
   for (const child of node.childNodes ?? []) {
@@ -158,6 +167,60 @@ export function selectorFor(
 }
 
 /**
+ * Fold one rrweb mutation (incremental source 0) into the index: added nodes
+ * (attached to their parent's children too), removed nodes, and changed
+ * attributes and texts — so a later interaction resolves against the page as
+ * it was at that moment, not as it was snapshotted.
+ */
+export function applyMutation(index: NodeIndex, data: Record<string, unknown>): void {
+  const adds = (data.adds ?? []) as Array<{ parentId?: number; node?: SerializedNode }>
+  for (const add of adds) {
+    if (!add.node) continue
+    const sub = indexTree(add.node)
+    for (const [nid, n] of sub.nodes) index.nodes.set(nid, n)
+    for (const [nid, pid] of sub.parents) index.parents.set(nid, pid)
+    if (add.parentId != null) {
+      index.parents.set(add.node.id, add.parentId)
+      // Attach to the parent's children too, not just the id map. rrweb
+      // streams adds one node at a time, so without this a node rendered
+      // after the snapshot has no text and no sibling order — which is
+      // most of what a session actually clicks on.
+      const parent = index.nodes.get(add.parentId)
+      if (parent) {
+        parent.childNodes = parent.childNodes ?? []
+        if (!parent.childNodes.some((c) => c.id === add.node?.id)) parent.childNodes.push(add.node)
+      }
+    }
+  }
+  const removes = (data.removes ?? []) as Array<{ parentId?: number; id?: number }>
+  for (const rem of removes) {
+    if (rem.id == null) continue
+    const parent = rem.parentId != null ? index.nodes.get(rem.parentId) : undefined
+    if (parent?.childNodes) parent.childNodes = parent.childNodes.filter((c) => c.id !== rem.id)
+    index.nodes.delete(rem.id)
+    index.parents.delete(rem.id)
+  }
+  const attrs = (data.attributes ?? []) as Array<{
+    id?: number
+    attributes?: Record<string, unknown>
+  }>
+  for (const a of attrs) {
+    const node = a.id != null ? index.nodes.get(a.id) : undefined
+    if (!node || !a.attributes) continue
+    node.attributes = { ...(node.attributes ?? {}) }
+    for (const [k, v] of Object.entries(a.attributes)) {
+      if (v === null) delete node.attributes[k]
+      else if (typeof v === 'string') node.attributes[k] = v
+    }
+  }
+  const texts = (data.texts ?? []) as Array<{ id?: number; value?: unknown }>
+  for (const t of texts) {
+    const node = t.id != null ? index.nodes.get(t.id) : undefined
+    if (node && typeof t.value === 'string') node.textContent = t.value
+  }
+}
+
+/**
  * Reduce a recording's events to an ordered plan. Mouse moves and DOM mutations
  * are skipped — they are how the page RESPONDED, not what the operator did —
  * but node additions are folded into the index so a later click on newly
@@ -203,34 +266,7 @@ export function buildReplayPlan(events: RrwebEvent[]): ReplayPlan {
 
     // Mutations: keep the index current so later interactions resolve.
     if (source === 0) {
-      const adds = (event.data?.adds ?? []) as Array<{ parentId?: number; node?: SerializedNode }>
-      for (const add of adds) {
-        if (!add.node) continue
-        const sub = indexTree(add.node)
-        for (const [nid, n] of sub.nodes) index.nodes.set(nid, n)
-        for (const [nid, pid] of sub.parents) index.parents.set(nid, pid)
-        if (add.parentId != null) {
-          index.parents.set(add.node.id, add.parentId)
-          // Attach to the parent's children too, not just the id map. rrweb
-          // streams adds one node at a time, so without this a node rendered
-          // after the snapshot has no text and no sibling order — which is
-          // most of what a session actually clicks on.
-          const parent = index.nodes.get(add.parentId)
-          if (parent) {
-            parent.childNodes = parent.childNodes ?? []
-            if (!parent.childNodes.some((c) => c.id === add.node?.id))
-              parent.childNodes.push(add.node)
-          }
-        }
-      }
-      const removes = (event.data?.removes ?? []) as Array<{ parentId?: number; id?: number }>
-      for (const rem of removes) {
-        if (rem.id == null) continue
-        const parent = rem.parentId != null ? index.nodes.get(rem.parentId) : undefined
-        if (parent?.childNodes) parent.childNodes = parent.childNodes.filter((c) => c.id !== rem.id)
-        index.nodes.delete(rem.id)
-        index.parents.delete(rem.id)
-      }
+      applyMutation(index, event.data ?? {})
       continue
     }
 

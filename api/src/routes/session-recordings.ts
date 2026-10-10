@@ -4,8 +4,17 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { chunkMeta, dailyCapStatus, noteChunk } from '../services/session-replay-cost.js'
+import { scheduleReplayIndex } from '../services/session-replay-index.js'
+import { replayClientPolicy } from '../services/session-replay-policy.js'
 import { buildEventRail, type RailRecording } from '../services/session-replay-rail.js'
 import { buildReplayPlan, renderPlaywrightScript } from '../services/session-replay-script.js'
+import { recordChunkStats } from '../services/session-replay-stats.js'
+import {
+  deleteColdObject,
+  ensureRecordingHot,
+  purgeColdObjects
+} from '../services/session-replay-storage.js'
 
 type RrwebEventLike = { type: number; timestamp: number; data?: Record<string, unknown> }
 
@@ -83,12 +92,12 @@ const MAX_BYTES = 15_000_000 // 15MB STORED (gzip) per recording ≈ 100MB+ of r
 const MAX_CHUNK = 8_000_000
 const CHUNK_BODY_LIMIT = 9_000_000
 
-function encodeChunk(json: string): string {
+export function encodeChunk(json: string): string {
   return `gz:${gzipSync(Buffer.from(json, 'utf8')).toString('base64')}`
 }
 
 /** Chunks written before gzip storage are plain JSON — both shapes read. */
-function decodeChunk(stored: string): string {
+export function decodeChunk(stored: string): string {
   if (stored.startsWith('gz:')) {
     return gunzipSync(Buffer.from(stored.slice(3), 'base64')).toString('utf8')
   }
@@ -118,7 +127,14 @@ function originsClause(raw: string | undefined): { clause: string; binds: string
 export async function purgeExpiredRecordings(): Promise<void> {
   const days = await recordingRetentionDays()
   const cutoff = new Date(Date.now() - days * 86_400_000)
-  await db('nivaro_session_recordings').where('started_at', '<', cutoff).del()
+  // #1411 — cold recordings' objects in the storage driver go with them.
+  await purgeColdObjects(cutoff)
+  // A saved library clip (#1415) is its own cut recording, kept until someone
+  // deletes the clip — retention purges everything else, its source included.
+  await db('nivaro_session_recordings')
+    .where('started_at', '<', cutoff)
+    .whereNotIn('id', db('nivaro_replay_clips').select('recording'))
+    .del()
 }
 
 async function recordingEnabled(): Promise<boolean> {
@@ -142,7 +158,9 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         // Error-clip buffer mode: record into a rolling in-memory buffer,
         // upload only when an error is reported (see migration 210).
         error_replay: !!(row as { error_replay_enabled?: unknown } | undefined)
-          ?.error_replay_enabled
+          ?.error_replay_enabled,
+        // #1361 masking rules (and the cost policy) the recorders apply.
+        ...(await replayClientPolicy())
       }
     })
   })
@@ -161,6 +179,10 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       }
     } else if (!(await recordingEnabled())) {
       return reply.code(409).send({ error: 'Session recording is disabled' })
+    }
+    // #1368 — today's byte cap reached: nothing new starts until tomorrow (UTC).
+    if ((await dailyCapStatus()).reached) {
+      return reply.code(409).send({ error: 'Daily recording cap reached', reason: 'daily_cap' })
     }
     const id = randomUUID()
     const appLabel = isClip
@@ -220,11 +242,16 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     return reply.send({ data: { id } })
   })
 
-  app.post<{ Params: { id: string }; Body: { seq?: number; events?: unknown[] } }>(
+  app.post<{
+    Params: { id: string }
+    // route / build / retries: #1368 cost attribution and failure counts.
+    Body: { seq?: number; events?: unknown[]; route?: string; build?: string; retries?: number }
+  }>(
     '/:id/events',
     { preHandler: requireAuth, bodyLimit: CHUNK_BODY_LIMIT },
     async (req, reply) => {
       const { seq, events } = req.body ?? {}
+      const meta = chunkMeta(req.body)
       if (!Array.isArray(events) || events.length === 0 || typeof seq !== 'number') {
         return reply.code(400).send({ error: 'seq and events[] are required' })
       }
@@ -235,6 +262,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       // Only the recording's own user appends to it
       if (rec.user !== req.user!.id) return reply.code(403).send({ error: 'Forbidden' })
       if (rec.truncated || rec.ended_at) {
+        noteChunk('closed', meta)
         return reply.code(409).send({ error: 'Recording is closed' })
       }
 
@@ -245,10 +273,19 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const existing = await db('nivaro_session_events')
         .where({ recording: rec.id, seq })
         .first('id')
-      if (existing) return reply.send({ data: { ok: true, duplicate: true } })
+      if (existing) {
+        noteChunk('duplicate', meta)
+        return reply.send({ data: { ok: true, duplicate: true } })
+      }
+      // #1368 — the instance's daily byte cap: the recorder stops on this 409.
+      if ((await dailyCapStatus()).reached) {
+        noteChunk('daily_cap', meta)
+        return reply.code(409).send({ error: 'Daily recording cap reached', reason: 'daily_cap' })
+      }
 
       const payload = JSON.stringify(events)
       if (payload.length > MAX_CHUNK) {
+        noteChunk('too_large', meta)
         return reply.code(413).send({ error: 'Chunk too large' })
       }
       const stored = encodeChunk(payload)
@@ -256,6 +293,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         await db('nivaro_session_recordings')
           .where({ id: rec.id })
           .update({ truncated: true, ended_at: new Date() })
+        noteChunk('size_cap', meta)
         return reply.code(409).send({ error: 'Recording size cap reached' })
       }
 
@@ -272,6 +310,11 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           event_count: db.raw('event_count + ?', [events.length]),
           byte_size: db.raw('byte_size + ?', [stored.length])
         })
+      // #1374 / #1372 — routes, records, field names and selectors touched;
+      // queued, so the upload never waits on it (services/session-replay-index.ts).
+      scheduleReplayIndex(rec.id, seq, events)
+      await recordChunkStats(rec.id, events)
+      noteChunk('accepted', meta, stored.length)
       return reply.send({ data: { ok: true } })
     }
   )
@@ -333,7 +376,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     return reply.send({ data: rows })
   })
 
-  app.get<{ Querystring: { user?: string; page?: string; origins?: string } }>(
+  app.get<{ Querystring: { user?: string; page?: string; origins?: string; sort?: string } }>(
     '/',
     { preHandler: requireAdmin },
     async (req, reply) => {
@@ -342,6 +385,10 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       const q = db('nivaro_session_recordings as r')
         .leftJoin('nivaro_users as u', 'r.user', 'u.id')
         .leftJoin('nivaro_users as ma', 'r.masquerade_admin', 'ma.id')
+        // ?sort=active (#1358): most active time first; unmeasured rows last.
+        .modify((qb) => {
+          if (req.query.sort === 'active') qb.orderByRaw('COALESCE(r.active_ms, -1) DESC')
+        })
         .orderBy('r.started_at', 'desc')
         .select(
           'r.id',
@@ -356,6 +403,8 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
           'r.event_count',
           'r.byte_size',
           'r.truncated',
+          'r.active_ms',
+          'r.chapter_count',
           db.raw(
             "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
           ),
@@ -403,6 +452,8 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         'r.event_count',
         'r.byte_size',
         'r.truncated',
+        'r.active_ms',
+        'r.chapter_count',
         db.raw(
           "LTRIM(RTRIM(CONCAT(COALESCE(u.first_name, ''), ' ', COALESCE(u.last_name, '')))) as user_name"
         ),
@@ -431,6 +482,11 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
         | Record<string, unknown>
         | undefined
       if (!rec) return reply.code(404).send({ error: 'Not found' })
+      // #1411 — a cold recording is loaded back from storage first.
+      const hot = await ensureRecordingHot(req.params.id, { wait: true })
+      if (hot.state === 'failed') {
+        return reply.code(502).send({ error: 'Could not load this recording from storage' })
+      }
 
       const chunks = (await db('nivaro_session_events')
         .where({ recording: req.params.id })
@@ -480,6 +536,15 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
       // than what it already holds and feeds them into a liveMode Replayer.
       const afterSeq = Number(req.query?.after_seq)
       const incremental = Number.isFinite(afterSeq)
+      // #1411 — a cold recording answers 202 while it loads from storage;
+      // the player polls and says "Loading from storage…".
+      const hot = await ensureRecordingHot(req.params.id)
+      if (hot.state === 'loading') {
+        return reply.code(202).send({ data: { status: 'loading_from_storage' } })
+      }
+      if (hot.state === 'failed') {
+        return reply.code(502).send({ error: 'Could not load this recording from storage' })
+      }
       const chunks = (await db('nivaro_session_events')
         .where({ recording: req.params.id })
         .modify((qb) => {
@@ -528,6 +593,7 @@ export async function sessionRecordingRoutes(app: FastifyInstance) {
     '/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
+      await deleteColdObject(req.params.id) // #1411 — its object in storage, if cold
       await db('nivaro_session_recordings').where({ id: req.params.id }).del()
       await logActivity({
         action: 'session-recording-delete',

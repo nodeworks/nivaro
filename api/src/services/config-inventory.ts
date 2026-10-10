@@ -228,6 +228,16 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tuning_proposals',
   'nivaro_tuning_param_sets',
   'nivaro_session_events',
+  'nivaro_replay_clips', // session replay library (migration 422) — per environment, like its recordings
+  'nivaro_replay_shares', // replay share links (migration 422)
+  'nivaro_replay_index', // what each recording touched (migration 421) — goes with its recording
+  // session replay heatmaps (migration 426) — folded from this environment's recordings
+  'nivaro_replay_heat',
+  'nivaro_replay_heat_frames',
+  // frustration scores (migration 426) — per environment, like the journeys they score
+  'nivaro_session_scores',
+  // session replay notes, migration 423 (#1363) — per environment
+  'nivaro_replay_notes',
   'nivaro_item_locks',
   'nivaro_notifications',
   'nivaro_deferred_emails',

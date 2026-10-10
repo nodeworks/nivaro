@@ -122,6 +122,40 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'GET', path: '/api/session-recordings/' },
   { method: 'GET', path: '/api/session-recordings/:id/events' },
   { method: 'GET', path: '/api/session-recordings/:id/events-rail' },
+  // Session replay clips (#1366)
+  { method: 'POST', path: '/api/session-recordings/:id/clip-issue' },
+  { method: 'POST', path: '/api/session-recordings/:id/clips' },
+  { method: 'GET', path: '/api/session-replay-clips' },
+  { method: 'DELETE', path: '/api/session-replay-clips/:id' },
+  // Shareable replay links (#1362)
+  { method: 'POST', path: '/api/session-recordings/:id/share' },
+  { method: 'GET', path: '/api/session-recordings/:id/shares' },
+  { method: 'DELETE', path: '/api/session-replay-shares/:id' },
+  { method: 'GET', path: '/api/session-replay-shares/view/:token' },
+  { method: 'GET', path: '/api/session-replay-shares/view/:token/events' },
+  { method: 'GET', path: '/api/session-recordings/search' },
+  { method: 'GET', path: '/api/session-recordings/search/keys' },
+  // Session replay heatmaps (#1364)
+  { method: 'GET', path: '/api/session-replay-insights/heat/routes' },
+  { method: 'GET', path: '/api/session-replay-insights/heat' },
+  { method: 'GET', path: '/api/session-replay-insights/heat/frame' },
+  // Frustration score (#1388)
+  { method: 'GET', path: '/api/session-replay-insights/worst' },
+  { method: 'GET', path: '/api/session-replay-insights/frustration-weights' },
+  { method: 'PUT', path: '/api/session-replay-insights/frustration-weights' },
+  // Session replay notes (#1363) — the player's notes rail + list, issue detail copy target
+  { method: 'GET', path: '/api/session-recordings/:id/notes' },
+  { method: 'POST', path: '/api/session-recordings/:id/notes' },
+  { method: 'PATCH', path: '/api/session-recordings/:id/notes/:noteId' },
+  { method: 'DELETE', path: '/api/session-recordings/:id/notes/:noteId' },
+  { method: 'POST', path: '/api/session-recordings/:id/notes/:noteId/copy' },
+  // Export a recording (#1375) — the replay sheet's Export menu
+  { method: 'POST', path: '/api/session-recordings/:id/export' },
+  // Spec from a recording (#1393) — Export menu → opens in the E2E recorder
+  { method: 'POST', path: '/api/session-recordings/:id/spec' },
+  // Session replay cost on DB Health (#1368)
+  { method: 'GET', path: '/api/ops-db/storage' },
+  { method: 'GET', path: '/api/ops-db/session-replay' },
 
   // Report Studio (2026-07)
   { method: 'GET', path: '/api/report-studio/' },

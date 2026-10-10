@@ -25,10 +25,26 @@ export type RecordedStep =
   | { kind: 'select'; selector: string; value: string; label: string; at: number }
   | { kind: 'expect'; selector: string; text: string; label: string; at: number }
 
+/** Where loaded steps came from (#1393: a stretch of a session recording). */
+export interface RecorderSource {
+  recordingId: string
+  fromMs: number | null
+  toMs: number | null
+  /** Suggested spec name / title. */
+  name: string
+  title: string
+  /** Fills whose value is a `<value for …>` placeholder to replace. */
+  placeholders: number
+  unresolved: number
+}
+
 interface RecorderState {
   recording: boolean
   startedAt: number | null
   steps: RecordedStep[]
+  /** The recorded viewport, when the steps came from a recording. */
+  viewport?: { width: number; height: number } | null
+  source?: RecorderSource | null
 }
 
 const KEY = 'nvr_e2e_recorder'
@@ -295,6 +311,26 @@ export function stopRecording(): void {
   disarm()
   persist()
 }
+/**
+ * Load steps made elsewhere — a session recording's spec (#1393) — into the
+ * recorder for review, editing and saving, replacing whatever it held. Not
+ * recording afterwards: the steps are a draft, not a live session.
+ */
+export function loadRecordedSteps(
+  steps: RecordedStep[],
+  opts: { viewport?: { width: number; height: number } | null; source?: RecorderSource | null } = {}
+): void {
+  disarm()
+  state = {
+    recording: false,
+    startedAt: null,
+    steps,
+    viewport: opts.viewport ?? null,
+    source: opts.source ?? null
+  }
+  persist()
+}
+
 export function clearRecording(): void {
   disarm()
   state = { recording: false, startedAt: null, steps: [] }
@@ -302,6 +338,16 @@ export function clearRecording(): void {
 }
 export function removeStep(index: number): void {
   state = { ...state, steps: state.steps.filter((_, i) => i !== index) }
+  persist()
+}
+/** Set the value a fill / select step types — a recording's placeholder replaced by hand. */
+export function setStepValue(index: number, value: string): void {
+  state = {
+    ...state,
+    steps: state.steps.map((s, i) =>
+      i === index && (s.kind === 'fill' || s.kind === 'select') ? { ...s, value } : s
+    )
+  }
   persist()
 }
 /** Add an assertion step by hand: "this text is visible after that click". */

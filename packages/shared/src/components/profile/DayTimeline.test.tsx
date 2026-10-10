@@ -53,6 +53,16 @@ const DAY = {
     }
   ],
   tasks: null,
+  frustration: {
+    score: 64,
+    sessions: 2,
+    worst: {
+      top_route: '/collections/orders/:id',
+      recording_id: 'R1',
+      session_start: '2026-10-10T09:05:00.000Z',
+      components: { counts: { rage_clicks: 2, client_errors: 1, loops: 0 } }
+    }
+  },
   capped: []
 }
 
@@ -107,6 +117,16 @@ afterEach(() => {
 })
 
 describe('DayTimelineCard', () => {
+  it('shows the day’s frustration score, explained, linking to the worst session’s replay', async () => {
+    await mount()
+    const chip = host.querySelector<HTMLAnchorElement>('[data-day-frustration]')
+    expect(chip?.textContent).toBe('Frustration 64')
+    expect(chip?.getAttribute('href')).toBe('https://console.example/session-replays?recording=R1')
+    expect(chip?.getAttribute('title')).toMatch(
+      /worst of 2 sessions .*2 rage clicks, 1 client error/
+    )
+  })
+
   it('asks for the viewer’s day and draws a lane per answered source', async () => {
     await mount()
     const day = calls.find((c) => c.path === '/journeys/day/U-1')

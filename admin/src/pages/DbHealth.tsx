@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { PlanViewer } from '@/components/plan-viewer'
+import { formatBytes, SessionReplayCostPanel } from '@/components/session-replay-cost-panel'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -255,6 +256,13 @@ export function DbHealthPage() {
     current: Maybe<Record<string, unknown>>
     snapshots: Array<Record<string, unknown>>
     runway: { mb_per_day: number; days_history: number } | null
+    /** #1368 — session recordings' share of the runway. */
+    recordings?: {
+      recordings: number
+      hot_bytes: number
+      cold_bytes?: number
+      bytes_per_day: number
+    } | null
   }>('/ops-db/storage')
 
   const bust = useMutation({
@@ -897,6 +905,7 @@ export function DbHealthPage() {
               const cur = storage.data?.data?.current
               const run = storage.data?.data?.runway
               const snaps = storage.data?.data?.snapshots ?? []
+              const rec = storage.data?.data?.recordings
               const curData = (cur as Maybe<Record<string, unknown>>)?.data as
                 | {
                     total_mb?: unknown
@@ -921,6 +930,15 @@ export function DbHealthPage() {
                           : `Collecting daily snapshots (${snaps.length} so far — projection needs 7)`}
                       </b>
                     </div>
+                    {rec && (
+                      <div data-runway-recordings>
+                        <span className='text-slate-400'>Session recordings</span>
+                        <br />
+                        <b>{formatBytes(rec.hot_bytes)}</b> in the database
+                        {rec.cold_bytes ? ` + ${formatBytes(rec.cold_bytes)} in storage` : ''} ·{' '}
+                        {num(rec.recordings)} recording(s), +{formatBytes(rec.bytes_per_day)}/day
+                      </div>
+                    )}
                   </div>
                   <MiniTable
                     head={['Table', 'Rows', 'Size']}
@@ -932,6 +950,8 @@ export function DbHealthPage() {
               )
             })()}
           </Panel>
+
+          <SessionReplayCostPanel />
 
           <div className='grid gap-5 xl:grid-cols-2'>
             <Panel

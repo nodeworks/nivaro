@@ -5,6 +5,21 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { ReplayPlayer } from '@/components/replay-player'
+import { ChapterCountChip } from '@/components/replay-player/ChapterList'
+import {
+  closeFloatingReplay,
+  floatReplay,
+  resumeStartAt,
+  useDockedReplay
+} from '@/components/replay-player/floating-store'
+import {
+  ActiveTimeChip,
+  RecordingSortToggle,
+  readRecordingSort,
+  writeRecordingSort
+} from '@/components/replay-player/ListStats'
+import { RecordingExport } from '@/components/replay-player/RecordingExport'
+import { setWatchSession, WATCH_KEY_RE } from '@/components/replay-player/watch-together'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,6 +28,13 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatFileSize, formatRelative } from '@/lib/utils'
+import { offsetInto } from './session-replays/frustrationLogic'
+import { HeatTab } from './session-replays/HeatTab'
+import { ReplayLibrary } from './session-replays/ReplayLibrary'
+import { ReplaySearchTab } from './session-replays/SearchTab'
+import { SharedReplay } from './session-replays/SharedReplay'
+import { ReplayTabs, useReplayTab } from './session-replays/tabs'
+import { WorstSessionsTab } from './session-replays/WorstSessionsTab'
 
 /**
  * Session replays — list recorded admin sessions (rrweb), watch them in the
@@ -36,6 +58,10 @@ interface Recording {
   event_count: number
   byte_size: number
   truncated: boolean
+  /** #1358 — input / mutation time; null before it was measured. */
+  active_ms?: number | null
+  /** #1397 — pages visited (chapters); null before it was counted. */
+  chapter_count?: number | null
 }
 
 function duration(rec: Recording): string {
@@ -241,21 +267,49 @@ interface PersonGroup {
 }
 
 export function SessionReplaysPage() {
+  // ?share=<token> (#1362): a window shared with this person, who need not
+  // be an admin — the admin page and its admin-only queries never mount.
+  const [params] = useSearchParams()
+  const share = params.get('share')
+  return share ? <SharedReplay token={share} /> : <SessionReplaysAdmin />
+}
+
+function SessionReplaysAdmin() {
   const queryClient = useQueryClient()
   const [playing, setPlaying] = useState<Recording | null>(null)
   const [startAt, setStartAt] = useState<number | null>(null)
   const [selectedUser, setSelectedUser] = useState<string | null>(null)
   // ?recording=<id> deep link — the chat online list links straight to
   // someone's live session, which is worthless if it only opens the list.
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
   const deepLinkId = searchParams.get('recording')
   const deepLinkT = searchParams.get('t')
+  // #1399 — a watch link: join that replay's watch party as a follower.
+  const deepLinkWatch = searchParams.get('watch')
   const deepLinkApplied = useRef(false)
   const [appFilter, setAppFilter] = useState<string | null>(null)
   // Environment filter — buckets by recording origin host, defaulting to the
   // environment this admin is running in. null = all environments.
   const [envFilter, setEnvFilter] = useState<string | null | undefined>(undefined)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
+  const [tab, setTab] = useReplayTab()
+  // Worst sessions (#1388): open the overlapping recording at the session's start.
+  const watchFromSession = (recordingId: string, sessionStart: string | null) => {
+    void api
+      .get<{ data: Recording }>(`/session-recordings/${recordingId}`)
+      .then((r) => {
+        setStartAt(offsetInto(sessionStart, r.data.data.started_at))
+        setPlaying(r.data.data)
+      })
+      .catch(() =>
+        toast.error('That recording no longer exists (recordings expire with retention)')
+      )
+  }
+  const [sort, setSortState] = useState(readRecordingSort)
+  const setSort = (v: typeof sort) => {
+    setSortState(v)
+    writeRecordingSort(v)
+  }
 
   const { data: modes } = useQuery({
     queryKey: ['session-recording-enabled'],
@@ -351,6 +405,9 @@ export function SessionReplaysPage() {
     deepLinkApplied.current = true
     const match = recordings.find((r) => String(r.id) === deepLinkId)
     const openIt = (rec: Recording) => {
+      if (deepLinkWatch && WATCH_KEY_RE.test(deepLinkWatch)) {
+        setWatchSession({ recordingId: String(rec.id), key: deepLinkWatch, role: 'follower' })
+      }
       setPlaying(rec)
       if (deepLinkT && Number.isFinite(Number(deepLinkT))) setStartAt(Number(deepLinkT))
     }
@@ -366,7 +423,17 @@ export function SessionReplaysPage() {
       .catch(() =>
         toast.error('That recording no longer exists (recordings expire with retention)')
       )
-  }, [deepLinkId, deepLinkT, recordings])
+  }, [deepLinkId, deepLinkT, deepLinkWatch, recordings])
+
+  // #1401 — a floated replay comes back here at the moment it reached; a
+  // replay opened here replaces a floating one (one player at a time).
+  useDockedReplay((rec, at) => {
+    setPlaying(rec as Recording)
+    setStartAt(resumeStartAt(at))
+  })
+  useEffect(() => {
+    if (playing) closeFloatingReplay()
+  }, [playing])
 
   const { data: settings } = useQuery({
     queryKey: ['session-recording-retention'],
@@ -433,11 +500,11 @@ export function SessionReplaysPage() {
   // The selected person's sessions come from THEIR filtered fetch — the
   // newest 50 of that user, not whatever survived the global page.
   const { data: selectedRecordings = [] } = useQuery({
-    queryKey: ['session-recordings-user', selected?.user ?? null, originsParam],
+    queryKey: ['session-recordings-user', selected?.user ?? null, originsParam, sort],
     queryFn: () =>
       api
         .get<{ data: Recording[] }>(
-          `/session-recordings/?user=${selected?.user}${originsParam ? `&${originsParam}` : ''}`
+          `/session-recordings/?user=${selected?.user}${originsParam ? `&${originsParam}` : ''}${sort === 'active' ? '&sort=active' : ''}`
         )
         .then((r) => r.data.data),
     enabled: !!selected,
@@ -451,8 +518,10 @@ export function SessionReplaysPage() {
     [selectedRecordings, appFilter]
   )
 
-  // Selected person's sessions grouped by day, newest first
+  // Selected person's sessions grouped by day, newest first — or one list,
+  // most active first (#1358).
   const days = useMemo(() => {
+    if (sort === 'active') return [['Most active first', selectedFiltered] as [string, Recording[]]]
     const byDay = new Map<string, Recording[]>()
     for (const rec of selectedFiltered) {
       const label = dayLabel(rec.started_at)
@@ -461,7 +530,7 @@ export function SessionReplaysPage() {
       byDay.set(label, list)
     }
     return [...byDay.entries()]
-  }, [selectedFiltered])
+  }, [selectedFiltered, sort])
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -578,9 +647,14 @@ export function SessionReplaysPage() {
             />
           </label>
         </div>
+        <ReplayTabs tab={tab} onChange={setTab} />
       </header>
 
-      <div className='flex flex-1 min-h-0 overflow-hidden'>
+      {tab === 'library' && <ReplayLibrary />}
+      {tab === 'search' && <ReplaySearchTab />}
+      {tab === 'heat' && <HeatTab />}
+      {tab === 'worst' && <WorstSessionsTab onWatch={watchFromSession} />}
+      <div className={cn('flex flex-1 min-h-0 overflow-hidden', tab !== 'list' && 'hidden')}>
         {/* People rail */}
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
           {isLoading ? (
@@ -672,6 +746,7 @@ export function SessionReplaysPage() {
                   {selected.count} session{selected.count === 1 ? '' : 's'} ·{' '}
                   {formatFileSize(selected.totalBytes)} recorded
                 </span>
+                <RecordingSortToggle value={sort} onChange={setSort} />
                 {(selectedRecordings[0]?.scopes ?? []).map((sc) => (
                   <span
                     key={sc}
@@ -726,6 +801,8 @@ export function SessionReplaysPage() {
                         {rec.truncated && (
                           <span className='shrink-0 text-[10.5px] text-amber-600'>truncated</span>
                         )}
+                        <ActiveTimeChip activeMs={rec.active_ms} />
+                        <ChapterCountChip count={rec.chapter_count} />
                         <span className='min-w-0 flex-1 truncate text-right text-[11px] text-slate-400'>
                           {rec.event_count} events · {formatFileSize(rec.byte_size)}
                         </span>
@@ -778,7 +855,14 @@ export function SessionReplaysPage() {
         </div>
       </div>
 
-      <Sheet open={!!playing} onOpenChange={(o) => !o && setPlaying(null)}>
+      <Sheet
+        open={!!playing}
+        onOpenChange={(o) => {
+          if (o) return
+          setPlaying(null)
+          setStartAt(null)
+        }}
+      >
         <SheetContent className='w-[85%] overflow-y-auto sm:max-w-[85%]'>
           <SheetHeader>
             <SheetTitle className='flex items-center gap-2 text-[15px]'>
@@ -810,10 +894,25 @@ export function SessionReplaysPage() {
               <span className='text-[12px] font-normal text-slate-400'>
                 {playing && formatRelative(playing.started_at)}
               </span>
+              {playing && <RecordingExport recordingId={playing.id} className='ml-auto mr-8' />}
             </SheetTitle>
           </SheetHeader>
           {playing && (
-            <ReplayPlayer recordingId={playing.id} startAt={startAt} live={isLive(playing)} />
+            <ReplayPlayer
+              recordingId={playing.id}
+              startAt={startAt}
+              live={isLive(playing)}
+              onFloat={(at) => {
+                floatReplay({
+                  recording: playing,
+                  title: playing.user_name || 'Session replay',
+                  at,
+                  live: isLive(playing)
+                })
+                setPlaying(null)
+                setStartAt(null)
+              }}
+            />
           )}
         </SheetContent>
       </Sheet>

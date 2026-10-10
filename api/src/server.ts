@@ -750,6 +750,41 @@ export async function buildServer() {
         const { computeNextTable } = await import('./services/help-video-next.js')
         await computeNextTable()
       })
+      // Session replay heatmaps (#1364): fold settled recordings into
+      // per-route click / scroll aggregates (no person in them). Bounded per
+      // run with a high-water mark, so a backlog drains over several nights.
+      app.cron.schedule(
+        'session-replay-heat',
+        '5 2 * * *',
+        async () => {
+          const { runHeatFold } = await import('./services/session-replay-heat.js')
+          app.log.info({ summary: await runHeatFold() }, '[session-replay-heat] fold')
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          timezone: 'UTC',
+          description:
+            'Folds finished session recordings into per-route click and scroll heatmaps (aggregates only — no person, recording or session is kept with them).'
+        }
+      )
+      // Frustration score (#1388): score each journey session of the last two
+      // UTC days from rage / dead clicks, client errors, back-and-forth loops,
+      // slow calls and abandoned forms. Weights: settings.frustration_weights.
+      app.cron.schedule(
+        'session-frustration',
+        '25 2 * * *',
+        async () => {
+          const { runFrustrationScoring } = await import('./services/session-frustration.js')
+          app.log.info({ summary: await runFrustrationScoring() }, '[session-frustration] scored')
+        },
+        {
+          idempotent: 'safe',
+          timezone: 'UTC',
+          description:
+            'Scores each working session of the last two days for frustration (rage and dead clicks, client errors, back-and-forth loops, slow calls, abandoned forms) for the Worst sessions tab and the People Day view.'
+        }
+      )
       // Every process clears its own stale render scratch; only a process
       // that owns the render queue (ticks crons or VIDEO_RENDER=on) drains it.
       void import('./services/help-video-render.js')
@@ -952,6 +987,25 @@ export async function buildServer() {
         )
       }, 60_000)
 
+      // Session replay storage tiering (#1411): recordings older than
+      // replay_cold_after_days move to the storage driver as one object each;
+      // rehydrated recordings' 24-hour hot cache is dropped again.
+      app.cron.schedule(
+        'session-replay-tiering',
+        '25 * * * *',
+        async () => {
+          const { runReplayTiering } = await import('./services/session-replay-storage.js')
+          const r = await runReplayTiering()
+          if (r.moved || r.evicted || r.failed) app.log.info(`session-replay-tiering: ${r.summary}`)
+        },
+        {
+          idempotent: 'safe',
+          heavy: true,
+          description:
+            'Hourly at :25 — moves session recordings older than replay_cold_after_days (default 3) to the file storage driver as one gzipped object each, marks them cold and deletes their event rows; drops the event rows of cold recordings rehydrated more than 24 hours ago (the object stays). A recording whose upload fails stays hot and is retried next hour.'
+        }
+      )
+
       // Storage snapshots (#291/#155): one row per day of DB + uploads size,
       // feeding the runway projection on /db-health.
       app.cron.schedule('storage-snapshot', '45 3 * * *', async () => {
@@ -999,12 +1053,23 @@ export async function buildServer() {
         } catch {
           /* uploads dir absent */
         }
+        // #1368 / #1411 — session recordings' stored size (database and
+        // storage driver), for the runway.
+        const replay = await import('./services/session-replay-cost.js')
+          .then((m) => m.replayStorageFigures())
+          .catch(() => null)
         await db('nivaro_storage_snapshots')
           .insert({
             snapshot_date: today,
             db_mb: dbMb,
             uploads_mb: uploadsMb,
             top_tables: JSON.stringify(topTables),
+            ...(replay
+              ? {
+                  replay_mb: Math.round(replay.hot_bytes / 1_048_576),
+                  replay_cold_mb: Math.round(replay.cold_bytes / 1_048_576)
+                }
+              : {}),
             created_at: new Date()
           })
           .catch(() => {})
@@ -1825,6 +1890,12 @@ export async function buildServer() {
       {
         const { registerTuningReadiness } = await import('./services/db-tuning/readiness.js')
         registerTuningReadiness()
+      }
+      // #1412 — session recording health (upload failures, nothing landing,
+      // the daily cap, retention behind).
+      {
+        const { registerReplayReadiness } = await import('./services/session-replay-health.js')
+        registerReplayReadiness()
       }
 
       // Integration obligation notifications: tell the record's owners and

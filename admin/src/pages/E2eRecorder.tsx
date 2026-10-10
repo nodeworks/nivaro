@@ -1,6 +1,16 @@
 import { useMutation, useQuery } from '@tanstack/react-query'
-import { Circle, Copy, Download, FolderInput, Square, Trash2, Video } from 'lucide-react'
+import {
+  Circle,
+  Clapperboard,
+  Copy,
+  Download,
+  FolderInput,
+  Square,
+  Trash2,
+  Video
+} from 'lucide-react'
 import { useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -13,6 +23,7 @@ import {
   type RecordedStep,
   removeStep,
   renderSpec,
+  setStepValue,
   startRecording,
   stopRecording,
   subscribeRecorder
@@ -70,9 +81,28 @@ export function E2eRecorderPage() {
     if (!extension && targets?.targets?.[0]) setExtension(targets.targets[0].extension)
   }, [targets, extension])
 
+  // Steps loaded from a session recording (#1393) bring a name, a title and
+  // the recorded viewport with them.
+  const source = state.source ?? null
+  useEffect(() => {
+    if (!source) return
+    setName(source.name)
+    setTitle(source.title)
+  }, [source])
+  const placeholdersLeft = state.steps.filter(
+    (s) => (s.kind === 'fill' || s.kind === 'select') && s.value.startsWith('<value for ')
+  ).length
+
   const spec = useMemo(
-    () => renderSpec({ name: name || 'golden-path', title, origin, steps: state.steps }),
-    [name, title, origin, state.steps]
+    () =>
+      renderSpec({
+        name: name || 'golden-path',
+        title,
+        origin,
+        steps: state.steps,
+        viewport: state.viewport ?? undefined
+      }),
+    [name, title, origin, state.steps, state.viewport]
   )
 
   const save = useMutation({
@@ -150,6 +180,30 @@ export function E2eRecorderPage() {
               )}
             </p>
           </div>
+          {source && (
+            <div
+              className='border-b border-slate-100 bg-violet-50 px-4 py-2 text-[11.5px] text-slate-600 dark:border-border/60 dark:bg-violet-500/10 dark:text-slate-300'
+              data-e2e-source
+            >
+              <p className='flex items-center gap-1.5 font-medium text-slate-800 dark:text-slate-100'>
+                <Clapperboard className='h-3.5 w-3.5 text-violet-500' />
+                From a session recording
+                <Link
+                  to={`/session-replays?recording=${source.recordingId}${source.fromMs != null ? `&t=${source.fromMs}` : ''}`}
+                  className='ml-auto font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
+                >
+                  Watch it
+                </Link>
+              </p>
+              <p className='mt-0.5'>
+                {placeholdersLeft > 0
+                  ? `Typed values were masked when recorded: fill in the ${placeholdersLeft} value${placeholdersLeft === 1 ? '' : 's'} below before saving.`
+                  : 'Every typed value is filled in.'}
+                {source.unresolved > 0 &&
+                  ` ${source.unresolved} interaction${source.unresolved === 1 ? '' : 's'} hit elements the recording never captured and were left out.`}
+              </p>
+            </div>
+          )}
           <ol className='flex-1 overflow-y-auto p-2' data-e2e-steps>
             {state.steps.length === 0 && (
               <li className='px-2 py-6 text-center text-[12px] text-slate-400'>
@@ -171,6 +225,18 @@ export function E2eRecorderPage() {
                   <span className='block text-slate-800 dark:text-slate-100'>
                     {describeStep(s)}
                   </span>
+                  {source && (s.kind === 'fill' || s.kind === 'select') && (
+                    <Input
+                      value={s.value}
+                      onChange={(e) => setStepValue(i, e.target.value)}
+                      className={cn(
+                        'mt-1 h-6 font-mono text-[11px]',
+                        s.value.startsWith('<value for ') && 'border-violet-300 text-violet-700'
+                      )}
+                      aria-label={`Value for ${s.label}`}
+                      data-e2e-step-value
+                    />
+                  )}
                   {s.kind !== 'goto' && (
                     <span className='block truncate font-mono text-[10.5px] text-slate-400'>
                       {s.kind === 'click' && s.role

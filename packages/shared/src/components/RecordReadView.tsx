@@ -1514,6 +1514,9 @@ export function RecordReadView({
                       {touchMark(a.field)}
                     </dt>
                     <dd
+                      // Session replay masking hook (#1361) — the value, not its label.
+                      data-replay-field={a.field}
+                      data-field-collection={collection}
                       className={`mt-1 min-w-0 ${
                         emphasis
                           ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
@@ -1586,7 +1589,11 @@ export function RecordReadView({
                 {labelFor(titleAssignment)}
                 <IntegrityMark field={titleAssignment.field} />
               </p>
-              <p className='truncate text-[22px] font-semibold leading-tight tracking-[-0.015em] text-slate-900 dark:text-white'>
+              <p
+                data-replay-field={titleAssignment.field}
+                data-field-collection={collection}
+                className='truncate text-[22px] font-semibold leading-tight tracking-[-0.015em] text-slate-900 dark:text-white'
+              >
                 {record ? renderValue(titleAssignment) : '…'}
               </p>
             </div>
@@ -1600,7 +1607,11 @@ export function RecordReadView({
                     <IntegrityMark field={a.field} />
                     {touchMark(a.field)}
                   </dt>
-                  <dd className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'>
+                  <dd
+                    data-replay-field={a.field}
+                    data-field-collection={collection}
+                    className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'
+                  >
                     {record ? renderValue(a) : '…'}
                   </dd>
                 </div>

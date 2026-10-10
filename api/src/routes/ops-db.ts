@@ -845,6 +845,19 @@ export async function opsDbRoutes(app: FastifyInstance) {
       const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx || 1)
       runway = { mb_per_day: Math.round(slope * 100) / 100, days_history: n }
     }
-    return reply.send({ data: { current, snapshots: snapshots.slice(0, 30), runway } })
+    // #1368 — session recordings in the runway: what they hold and add per day.
+    const recordings = await import('../services/session-replay-cost.js')
+      .then((m) => m.replayStorageFigures())
+      .catch(() => null)
+    return reply.send({
+      data: { current, snapshots: snapshots.slice(0, 30), runway, recordings }
+    })
+  })
+
+  // #1368 — session replay cost: bytes per route and build (7 days), the
+  // daily cap's use, per-route sampling.
+  app.get('/session-replay', async (_req, reply) => {
+    const { replayCostSummary } = await import('../services/session-replay-cost.js')
+    return reply.send({ data: await replayCostSummary(7) })
   })
 }

@@ -3,6 +3,7 @@ import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { frustrationForDay } from '../services/session-frustration.js'
 
 /**
  * Journey trail — per-session admin route breadcrumbs, persisted by the
@@ -320,6 +321,8 @@ export async function loadPersonDay(userId: string, w: DayWindow) {
     lane('transitions', readTransitions, DAY_CAPS.transitions),
     readTasks()
   ])
+  // #1388 — the day's worst frustration score; null when nothing was scored.
+  const frustration = await frustrationForDay(userId, start, end).catch(() => null)
 
   return {
     date: w.date,
@@ -331,6 +334,7 @@ export async function loadPersonDay(userId: string, w: DayWindow) {
     requests,
     transitions,
     tasks,
+    frustration,
     capped: [...capped]
   }
 }

@@ -333,6 +333,9 @@ importers:
       qrcode:
         specifier: ^1.5.4
         version: 1.5.4
+      rrweb:
+        specifier: ^2.1.0
+        version: 2.1.0
       sharp:
         specifier: ^0.34.5
         version: 0.34.5

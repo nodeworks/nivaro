@@ -6,10 +6,17 @@
  * server-side event rail (#1356) under it and the Console / Network panel (#1357) beside it.)
  */
 import { TipLayer } from '@nivaro/shared'
+import { PictureInPicture2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
+import { ChapterList, useChapterKeys } from './ChapterList'
+import { buildChapters, chapterIndexAt } from './chapters'
+import type { ReplayControls } from './controls'
 import { EventRail } from './EventRail'
+import { type InspectableReplayer, ReplayInspector } from './Inspector'
+import { findInactiveGaps, type InactiveGap } from './inactivity'
+import { fetchRecordingEvents } from './load-events'
 import {
   activeIndex,
   appendReplayContext,
@@ -20,7 +27,15 @@ import {
   type ReplayContext,
   railMarkers
 } from './logic'
+import { ReplayNotesPanel } from './NotesPanel'
+import { NotesRail } from './NotesRail'
+import { useReplayNoteList } from './notes'
+import { crossedEnd } from './play-all-logic'
+import { RangeActions, RangeTrack } from './RangeBar'
+import type { ReplayRange } from './range'
 import { ReplaySidePanel } from './SidePanel'
+import { SkipBands, SkippingBadge, SkipToggle, useSkipInactivity } from './SkipInactivity'
+import { WatchTogetherBar } from './WatchTogether'
 
 const SPEEDS = [1, 2, 4, 8]
 
@@ -30,6 +45,7 @@ const SIDE_PANEL_PX = 320 + 12
 const SIDE_MIN_VIEWPORT = 1100
 
 const NO_CONTEXT: ReplayContext = { routes: [], console: [], network: [] }
+const NO_NOTES: never[] = []
 
 function useWideViewport(): boolean {
   const [wide, setWide] = useState(() =>
@@ -48,11 +64,22 @@ export function ReplayPlayer({
   startAt,
   live,
   minHeight = 400,
-  panel = 'side'
+  panel = 'side',
+  eventsUrl,
+  span,
+  onFloat,
+  controlsRef
 }: {
   recordingId: string
   /** Offset into the recording (ms); playback opens 5 s before it. */
   startAt?: number | null
+  /**
+   * Wall-clock window (epoch ms) — a replay search hit (#1374) opens where the
+   * record or field was touched. `from` wins over `startAt`. With `to`,
+   * playback pauses the first time it crosses it and calls `onEnd` (also when
+   * the recording finishes first) — Play all (#1398) moves to the next segment.
+   */
+  span?: { from: number; to?: number; onEnd?: () => void } | null
   live?: boolean
   /** Frame height before the first snapshot scales it (a narrow panel wants less). */
   minHeight?: number
@@ -61,7 +88,17 @@ export function ReplayPlayer({
    * Session replays sheet; stacks on a narrow window) or 'stacked' (under the
    * controls — narrow hosts like the Traffic Map's Recording level).
    */
-  panel?: 'side' | 'stacked'
+  panel?: 'side' | 'stacked' | 'none'
+  /**
+   * Play events from here instead of the admin endpoint — a share link
+   * (#1362) plays only its window, for a viewer who may not be an admin: no
+   * event rail and no range actions.
+   */
+  eventsUrl?: string
+  /** #1401 — shows a Float button; called with the playhead to hand over. */
+  onFloat?: (time: number) => void
+  /** Filled while the replay is ready: read / drive the playhead from the host. */
+  controlsRef?: { current: ReplayControls | null }
 }) {
   const frameRef = useRef<HTMLDivElement>(null)
   const replayerRef = useRef<{
@@ -77,6 +114,8 @@ export function ReplayPlayer({
   } | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [ready, setReady] = useState(false)
+  // #1411 — a cold recording is being loaded back from storage.
+  const [fromStorage, setFromStorage] = useState(false)
   const [playing, setPlaying] = useState(false)
   const [speed, setSpeed] = useState(1)
   const [time, setTime] = useState(0)
@@ -84,11 +123,20 @@ export function ReplayPlayer({
   const playingRef = useRef(false)
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
-  // First event's clock: streamed (live) custom events are placed against it.
-  const firstRef = useRef(0)
   // A row clicked while following live: exit live, then open the recording there.
   const pendingSeekRef = useRef<number | null>(null)
+  const spanRef = useRef(span)
+  spanRef.current = span
+  /**
+   * Timestamp of the first event — offsets are measured from it, and streamed
+   * (live) custom events are placed against it.
+   */
+  const firstTsRef = useRef(0)
+  const spanDoneRef = useRef(false)
+  const prevTimeRef = useRef(0)
   const [following, setFollowing] = useState(!!live)
+  // #1366 / #1415 / #1362 range on the scrubber: raise an issue, save a clip, share it.
+  const [range, setRange] = useState<ReplayRange | null>(null)
   // Replay context: route changes, the user's console lines and (#1357) the
   // page's requests ride the recording as rrweb custom events (type 5) —
   // ticks on the scrubber, the Console / Network panel beside the player.
@@ -125,12 +173,21 @@ export function ReplayPlayer({
     () => (rail ? railMarkers(rail.items, rail.first, total) : []),
     [rail, total]
   )
+  // #1358 skip inactivity: idle stretches crossed at 8× (or real time).
+  const [gaps, setGaps] = useState<InactiveGap[]>([])
+  const skip = useSkipInactivity(replayerRef, gaps, speed, ready && !following && playing)
+  const skipTickRef = useRef(skip.onTick)
+  skipTickRef.current = skip.onTick
 
   useEffect(() => {
     let cancelled = false
     let raf = 0
     setRail(null)
     setCtx(NO_CONTEXT)
+    setRange(null)
+    spanDoneRef.current = false
+    prevTimeRef.current = 0
+    setGaps([])
 
     function rescale() {
       const rep = replayerRef.current
@@ -155,30 +212,41 @@ export function ReplayPlayer({
     async function load() {
       try {
         // The rail rides alongside the events and never holds the replay up.
-        const railReq = api
-          .get<{
-            data: { items: RailItem[]; truncated_kinds?: RailKind[] }
-          }>(`/session-recordings/${recordingId}/events-rail`)
-          .then((x) => x.data.data)
-          .catch(() => null)
-        const r = await api.get<{ data: { events: unknown[]; last_seq?: number } }>(
-          `/session-recordings/${recordingId}/events`
-        )
+        const railReq = eventsUrl
+          ? Promise.resolve(null)
+          : api
+              .get<{
+                data: { items: RailItem[]; truncated_kinds?: RailKind[] }
+              }>(`/session-recordings/${recordingId}/events-rail`)
+              .then((x) => x.data.data)
+              .catch(() => null)
+        // A share link (#1362) reads its own window; a cold recording (#1411)
+        // reports 'loading from storage' until it is back.
+        const loaded = eventsUrl
+          ? await api
+              .get<{ data: { events: unknown[]; last_seq?: number } }>(eventsUrl)
+              .then((x) => x.data.data)
+          : await fetchRecordingEvents(recordingId, {
+              onFromStorage: () => !cancelled && setFromStorage(true),
+              cancelled: () => cancelled
+            })
         if (cancelled || !frameRef.current) return
-        const events = r.data.data.events
-        lastSeqRef.current = r.data.data.last_seq ?? -1
+        setFromStorage(false)
+        const events = loaded.events
+        lastSeqRef.current = loaded.last_seq ?? -1
         {
           const first = Number(
             (events as Array<{ timestamp?: unknown } | null>).find(
               (e) => typeof e?.timestamp === 'number'
             )?.timestamp ?? 0
           )
-          firstRef.current = first
+          firstTsRef.current = first
           void railReq.then((d) => {
             if (cancelled || !d || !first) return
             setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
           })
           setCtx(parseReplayContext(events, first))
+          setGaps(findInactiveGaps(events, first))
         }
         if (events.length < 2) {
           setError('Not enough events to replay this session.')
@@ -190,7 +258,8 @@ export function ReplayPlayer({
         frameRef.current.replaceChildren()
         const replayer = new rrweb.Replayer(events as never[], {
           root: frameRef.current,
-          skipInactive: !following,
+          // Inactivity is skipped by our own driver (#1358, ./SkipInactivity).
+          skipInactive: false,
           // Live-follow: rrweb's liveMode plays events as they are appended,
           // pinned to the tail of the stream.
           liveMode: following,
@@ -203,9 +272,17 @@ export function ReplayPlayer({
         replayer.on('resize', rescale)
         // Sheet slide-in animation settles ~300ms after mount — re-measure after
         for (const delay of [100, 400, 800]) setTimeout(rescale, delay)
+        // Play all (#1398): a segment ends once — after that the player is free.
+        const endSpan = () => {
+          const sp = spanRef.current
+          if (!sp?.onEnd || spanDoneRef.current) return
+          spanDoneRef.current = true
+          sp.onEnd()
+        }
         replayer.on('finish', () => {
           playingRef.current = false
           setPlaying(false)
+          endSpan()
         })
         setReady(true)
         if (following) {
@@ -219,22 +296,40 @@ export function ReplayPlayer({
           // ?t= deep link (issue log's Watch-replay): open AT the error moment,
           // a few seconds early so the action that caused it is on screen.
           const meta = replayer.getMetaData()
+          // A row clicked while following live wins: open exactly there.
           const pending = pendingSeekRef.current
           pendingSeekRef.current = null
+          const want =
+            spanRef.current && firstTsRef.current
+              ? spanRef.current.from - firstTsRef.current
+              : startAt != null && Number.isFinite(startAt)
+                ? startAt - 5000
+                : 0
           const seekTo =
             pending != null
               ? Math.max(0, Math.min(pending, meta.totalTime))
-              : startAt != null && Number.isFinite(startAt)
-                ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
-                : 0
+              : Math.max(0, Math.min(want, Math.max(0, meta.totalTime - 1000)))
           replayer.play(seekTo)
           setPlaying(true)
         }
         const tick = () => {
           if (replayerRef.current && playingRef.current) {
-            setTime(
-              Math.min(replayerRef.current.getCurrentTime(), total || Number.MAX_SAFE_INTEGER)
-            )
+            const cur = replayerRef.current.getCurrentTime()
+            setTime(Math.min(cur, total || Number.MAX_SAFE_INTEGER))
+            const end = spanRef.current?.to
+            if (
+              end != null &&
+              !spanDoneRef.current &&
+              firstTsRef.current &&
+              crossedEnd(prevTimeRef.current, cur, end - firstTsRef.current)
+            ) {
+              replayerRef.current.pause()
+              playingRef.current = false
+              setPlaying(false)
+              endSpan()
+            }
+            prevTimeRef.current = cur
+            skipTickRef.current(cur)
           }
           raf = requestAnimationFrame(tick)
         }
@@ -256,7 +351,7 @@ export function ReplayPlayer({
       replayerRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [recordingId, following])
+  }, [recordingId, following, eventsUrl])
 
   // Live-follow poll: fetch only chunks newer than what the player holds and
   // feed them straight into the live Replayer. 3s matches the recorder's
@@ -278,8 +373,8 @@ export function ReplayPlayer({
         } | null
         if (rep?.addEvent) for (const e of fresh) rep.addEvent(e)
         // The Console / Network panel follows the stream too (#1357).
-        if (fresh.length && firstRef.current) {
-          const more = parseReplayContext(fresh, firstRef.current)
+        if (fresh.length && firstTsRef.current) {
+          const more = parseReplayContext(fresh, firstTsRef.current)
           setCtx((c) => appendReplayContext(c, more))
         }
       } catch {
@@ -308,6 +403,7 @@ export function ReplayPlayer({
     const rep = replayerRef.current
     if (!rep) return
     setTime(ms)
+    prevTimeRef.current = ms // a seek is not playback crossing a segment end
     if (playing) rep.play(ms)
     else rep.pause(ms)
   }
@@ -322,11 +418,63 @@ export function ReplayPlayer({
       }
     : seek
   const stableSeek = useCallback((ms: number) => seekRef.current(ms), [])
+  const getInspectable = useCallback(
+    () => replayerRef.current as unknown as InspectableReplayer | null,
+    []
+  )
+  // #1363 notes: a rail under the scrubber, the list under the controls.
+  const timeRef = useRef(time)
+  timeRef.current = time
+  const getTime = useCallback(() => timeRef.current, [])
+  // A shared window (eventsUrl) is watched by someone who may not be an admin: no notes.
+  const noteList = useReplayNoteList(recordingId, !eventsUrl).data?.data
+
+  // #1397 chapters: a new one at every page change (recorder stamps + page trail).
+  const chapters = useMemo(
+    () =>
+      buildChapters(
+        ctx.routes,
+        railMarks
+          .filter((m) => m.kind === 'route')
+          .map((m) => ({ offset: m.offset, text: m.label })),
+        total
+      ),
+    [ctx.routes, railMarks, total]
+  )
+  useChapterKeys(chapters, getTime, stableSeek, ready && !following)
+
+  // #1401 / #1399: the host reads and drives the playhead (refs and setters
+  // only, so the first render's closures stay valid).
+  const speedRef = useRef(speed)
+  speedRef.current = speed
+  // biome-ignore lint/correctness/useExhaustiveDependencies: playAt / changeSpeed only touch refs and setters
+  const controls = useMemo<ReplayControls>(
+    () => ({
+      getTime: () => timeRef.current,
+      isPlaying: () => playingRef.current,
+      getSpeed: () => speedRef.current,
+      seek: (ms) => seekRef.current(ms),
+      playAt,
+      setSpeed: changeSpeed
+    }),
+    []
+  )
+  const ownControlsRef = useRef<ReplayControls | null>(null)
+  useEffect(() => {
+    const live = ready && !following ? controls : null
+    ownControlsRef.current = live
+    if (controlsRef) controlsRef.current = live
+    return () => {
+      ownControlsRef.current = null
+      if (controlsRef) controlsRef.current = null
+    }
+  }, [controlsRef, controls, ready, following])
 
   // The panel re-renders when the highlighted row changes, not every frame.
   const activeConsole = activeIndex(ctx.console, time)
   const activeNetwork = activeIndex(ctx.network, time)
-  const showPanel = ready && hasPanel
+  // The panel stays up while following live — it follows the stream too.
+  const showPanel = ready && hasPanel && panel !== 'none'
   const side = showPanel && sideBySide
   // The frame's width budget moved: scale it again.
   const lastSideRef = useRef(side)
@@ -335,6 +483,16 @@ export function ReplayPlayer({
     lastSideRef.current = side
     rescaleRef.current?.()
   }, [side])
+
+  function playAt(on: boolean, ms: number) {
+    const rep = replayerRef.current
+    if (!rep) return
+    setTime(ms)
+    if (on) rep.play(ms)
+    else rep.pause(ms)
+    playingRef.current = on
+    setPlaying(on)
+  }
 
   function changeSpeed(v: number) {
     setSpeed(v)
@@ -359,12 +517,24 @@ export function ReplayPlayer({
       <TipLayer />
       {/* Same element tree with or without the side column — the frame must
           never remount under a live Replayer. */}
+      {fromStorage && !ready && (
+        <p data-replay-from-storage className='mb-2 text-center text-[12.5px] text-slate-500'>
+          Loading from storage…
+        </p>
+      )}
       <div className={side ? 'flex items-stretch gap-3' : ''}>
-        <div className={side ? 'min-w-0 flex-1' : ''}>
+        <div className={side ? 'relative min-w-0 flex-1' : 'relative'}>
+          <SkippingBadge gap={skip.current} />
           <div
             ref={frameRef}
             className='w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-border dark:bg-muted [&_iframe]:border-0 [&_iframe]:bg-white'
             style={{ minHeight }}
+          />
+          {/* #1372 — click an element of the paused replay to inspect it. */}
+          <ReplayInspector
+            getReplayer={getInspectable}
+            active={ready && !following && !playing}
+            recordingId={recordingId}
           />
         </div>
         {side && panelEl('side')}
@@ -426,6 +596,7 @@ export function ReplayPlayer({
                   />
                 ))}
             </div>
+            <SkipBands gaps={gaps} total={total} enabled={skip.enabled} />
             <input
               type='range'
               min={0}
@@ -441,10 +612,29 @@ export function ReplayPlayer({
               truncated={rail?.truncated ?? []}
               onSeek={stableSeek}
             />
+            {!eventsUrl && <RangeTrack total={total} range={range} onChange={setRange} />}
+            {!eventsUrl && (
+              <NotesRail notes={noteList ?? NO_NOTES} total={total} onSeek={stableSeek} />
+            )}
           </div>
           <span className='w-10 font-mono text-[11px] tabular-nums text-slate-500'>
             {fmtClock(total)}
           </span>
+          {onFloat && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 gap-1 px-2 text-[12px]'
+              onClick={() => onFloat(time)}
+              data-tip='Float — keep watching in a corner window while you use the admin'
+              data-replay-float=''
+            >
+              <PictureInPicture2 className='h-3 w-3' /> Float
+            </Button>
+          )}
+          {gaps.length > 0 && (
+            <SkipToggle enabled={skip.enabled} onChange={skip.setEnabled} count={gaps.length} />
+          )}
           <span className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
             {SPEEDS.map((v) => (
               <button
@@ -463,7 +653,34 @@ export function ReplayPlayer({
           </span>
         </div>
       )}
+      {ready && !following && range && !eventsUrl && (
+        <RangeActions
+          recordingId={recordingId}
+          range={range}
+          time={time}
+          total={total}
+          onChange={setRange}
+          onSeek={stableSeek}
+        />
+      )}
+      {ready && !following && (
+        <ChapterList
+          chapters={chapters}
+          current={chapterIndexAt(chapters, time)}
+          onSeek={stableSeek}
+        />
+      )}
+      {!eventsUrl && (
+        <WatchTogetherBar
+          recordingId={recordingId}
+          controlsRef={ownControlsRef}
+          ready={ready && !following}
+        />
+      )}
       {showPanel && !side && panelEl('stacked')}
+      {ready && !following && !eventsUrl && (
+        <ReplayNotesPanel recordingId={recordingId} getTime={getTime} onSeek={stableSeek} />
+      )}
     </div>
   )
 }
