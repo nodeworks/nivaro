@@ -7,7 +7,8 @@ import {
   ItemEditAuthContext,
   NavigationContext,
   NivaroProvider,
-  RenderSettingsButton
+  RenderSettingsButton,
+  StorageButton
 } from '@nivaro/shared'
 import { useNavigate, useSearchParams } from 'react-router'
 import { useAuth } from '@/lib/auth'
@@ -53,6 +54,7 @@ export function HelpVideosPage() {
                   <AuthorRolesButton />
                   <RenderSettingsButton />
                   <HouseStyleButton />
+                  <StorageButton />
                 </>
               }
             />

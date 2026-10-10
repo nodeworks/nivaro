@@ -1,4 +1,4 @@
-import { MousePointerClick, PictureInPicture2, Sparkles } from 'lucide-react'
+import { History, MousePointerClick, PictureInPicture2, Sparkles } from 'lucide-react'
 import {
   type RefObject,
   useCallback,
@@ -320,6 +320,18 @@ export function HelpVideoSheet({
                 />
               )}
               <StageSlot stage={stage} />
+              {video.stale && (
+                <p
+                  className='flex items-start gap-1.5 text-[12px] text-muted-foreground'
+                  data-hv-stale={video.stale.kind}
+                >
+                  <History className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
+                  <span>
+                    Recorded before a change to this screen
+                    {video.visibility ? ` — ${video.stale.detail}` : ''}.
+                  </span>
+                </p>
+              )}
               {ended && next.length > 0 && onPick && (
                 <UpNextList videos={next} onPick={onPick} prominent />
               )}

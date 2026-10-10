@@ -8,11 +8,14 @@ import { RECORDING_BUSY, useHelpVideoRecording } from '../recorder/HelpVideoReco
 import type { HelpVideoContext } from '../types'
 import { useHelpVideoUpload } from '../upload/HelpVideoUpload'
 import { registerHelpVideoPage } from '../walk/store'
+import { collectPageLabels } from '../walk/target'
 import { isGettingReady, listMeta, progressLabel, showButton } from './format'
 import { HelpVideoSheet, useHelpVideosPath } from './HelpVideoSheet'
 
 const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none'
+/** How long after the button mounts the page's click labels are read. */
+const PAGE_LABELS_DELAY_MS = 3000
 
 export function HelpVideoButton({
   collection,
@@ -50,11 +53,22 @@ export function HelpVideoButton({
 
   // Page keys become pickable in the editor once a page has rendered a button.
   // Only authors may register one (the route answers 403 to everyone else).
+  // A little later, once the screen has settled, the same registration
+  // carries the click labels on show (#1495, "may be out of date"); the
+  // server keeps them once per 10 minutes per page.
   useEffect(() => {
     if (page && canAuthor) {
       void helpVideoApi(clientRef.current)
         .registerPage(page, pageLabel ?? page)
         .catch(() => null)
+      const t = window.setTimeout(() => {
+        const labels = collectPageLabels()
+        if (!labels.length) return
+        void helpVideoApi(clientRef.current)
+          .registerPage(page, pageLabel ?? page, undefined, labels)
+          .catch(() => null)
+      }, PAGE_LABELS_DELAY_MS)
+      return () => window.clearTimeout(t)
     }
   }, [page, pageLabel, canAuthor])
 

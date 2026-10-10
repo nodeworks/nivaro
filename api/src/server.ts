@@ -756,6 +756,36 @@ export async function buildServer() {
         .catch(() => {})
 
       // Config health: nightly usage-hygiene + schema-lint sweep.
+      // Help videos (#1495): flag published videos whose screen changed since
+      // they were published (a layout version, a renamed or removed pipeline
+      // step, a click label gone from the page). One notification per flag.
+      app.cron.schedule('help-video-stale-check', '30 3 * * *', async () => {
+        const { withJobRun } = await import('./services/job-runs.js')
+        await withJobRun(
+          'cron',
+          'help-video-stale-check',
+          { label: 'Help videos: may be out of date' },
+          async () => {
+            const { runStaleCheck } = await import('./services/help-video-stale.js')
+            return runStaleCheck()
+          }
+        )
+      })
+      // Help videos (#1531): retention removes superseded versions' files
+      // after help_video_settings.retention_days (null = keep everything).
+      app.cron.schedule('help-video-storage-sweep', '40 3 * * *', async () => {
+        const { withJobRun } = await import('./services/job-runs.js')
+        await withJobRun(
+          'cron',
+          'help-video-storage-sweep',
+          { label: 'Help videos: storage sweep' },
+          async () => {
+            const { runStorageSweep } = await import('./services/help-video-storage.js')
+            return (await runStorageSweep()).summary
+          }
+        )
+      })
+
       app.cron.schedule('config-health-sweep', '10 3 * * *', async () => {
         const { runConfigHealthSweep } = await import('./services/config-health.js')
         await runConfigHealthSweep()

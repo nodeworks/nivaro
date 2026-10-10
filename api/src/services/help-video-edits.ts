@@ -589,7 +589,7 @@ export function zoomSquare(r: Rect): Rect {
 export function normalizeZoomKeyframes(
   raw: unknown,
   s: { start_ms: number; end_ms: number },
-  budget = EDIT_LIMITS.zoomKeyframesTotal
+  budget: number = EDIT_LIMITS.zoomKeyframesTotal
 ): ZoomKeyframe[] | null {
   const max = Math.min(EDIT_LIMITS.zoomKeyframes, Math.max(0, budget))
   if (max < 2) return null

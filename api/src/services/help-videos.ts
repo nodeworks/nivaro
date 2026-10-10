@@ -25,6 +25,12 @@ import {
 import { applyHouseStyleToNew, currentHouseStyle } from './help-video-house-style.js'
 import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
+import {
+  normalizeLabels,
+  type StaleReason,
+  staleClearPatch,
+  staleForDto
+} from './help-video-stale.js'
 import { releaseFinalizedUpload, takeFinalizedUpload } from './help-video-uploads.js'
 import { viewerCanPlay } from './help-video-views.js'
 import {
@@ -54,7 +60,8 @@ export type VersionRow = Record<string, unknown> & {
   video_id: string
   edits: string
   edits_hash: string
-  source_file: string
+  /** Null only once retention removed this version's files (#1531). */
+  source_file: string | null
   rendered_file: string | null
   rendered_hash: string | null
 }
@@ -92,6 +99,9 @@ export interface VersionDto {
   /** Draft load only: the pointer path and shortcuts the recorder logged
    *  (#1517), read from the source's upload row; null when there are none. */
   pointer?: PointerPath | null
+  /** Retention removed this version's files (#1531): it cannot be restored
+   *  or played; the row stays as history. */
+  files_removed_at: string | null
 }
 export interface HelpVideoDto {
   id: string
@@ -133,6 +143,9 @@ export interface HelpVideoDto {
   transcript_url: string | null
   /** What changed since this person last watched (#1497), else null. */
   whats_new: WhatsNew | null
+  /** The screen changed since this was published (#1495): null when nothing
+   *  was found, or once an author dismissed it. */
+  stale: StaleReason | null
 }
 
 /** `updated`: a newer version than the one this person watched is published.
@@ -341,7 +354,10 @@ export function serializeVersion(v: VersionRow, opts: { withRecorderData: boolea
     render_error: (v.render_error as string | null) ?? null,
     rendered_current: !!v.rendered_file && v.rendered_hash === v.edits_hash,
     note: (v.note as string | null) ?? null,
-    created_at: new Date(v.created_at as string).toISOString()
+    created_at: new Date(v.created_at as string).toISOString(),
+    files_removed_at: v.files_removed_at
+      ? new Date(v.files_removed_at as string).toISOString()
+      : null
   }
   if (opts.withRecorderData) {
     dto.clicks = json(v.clicks, null)
@@ -547,6 +563,7 @@ export async function serializeVideo(
     updated_at: new Date(video.updated_at as string).toISOString(),
     transcript_url: published && hasCaptions(published) ? `${base}/transcript.txt?st=${pt}` : null,
     whats_new: published && view ? await whatsNewFor(video, published, view, stale) : null,
+    stale: published ? staleForDto(video) : null,
     my_progress: view
       ? {
           position_ms: stale ? 0 : Number(view.position_ms ?? 0),
@@ -962,6 +979,8 @@ export async function publishVideo(
       draft_version_id: null,
       duration_ms: editedDuration(edits),
       ...(opts.watch_again ? { required_since: now } : {}),
+      // A new cut answers "may be out of date" (#1495).
+      ...(await staleClearPatch()),
       ...touch(user)
     })
   await queueRender(String(draft.id))
@@ -1187,6 +1206,13 @@ export async function restoreVersion(
     .where({ id: versionId, video_id: video.id })
     .first()
   if (!src) throw fail(404, 'HELP_VIDEO_VERSION_NOT_FOUND', 'Version not found')
+  if (src.files_removed_at || !src.source_file) {
+    throw fail(
+      409,
+      'HELP_VIDEO_VERSION_FILES_REMOVED',
+      `Version ${src.version} cannot be restored: its files were removed by retention`
+    )
+  }
   const id = await insertVersion(video.id, user, {
     source_file: String(src.source_file),
     source_duration_ms: src.source_duration_ms == null ? null : Number(src.source_duration_ms),
@@ -1417,25 +1443,72 @@ export async function listVideos(
 }
 
 const pageWrites = new Map<string, number>()
-export async function registerPage(key: string, label: string, app: string | null): Promise<void> {
-  if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(key)) throw fail(400, 'HELP_VIDEO_PAGE', 'Invalid page key')
-  const last = pageWrites.get(key) ?? 0
-  if (Date.now() - last < 10 * 60_000) return
-  if (pageWrites.size > 1000) {
-    const cutoff = Date.now() - 10 * 60_000
-    for (const [k, t] of pageWrites) if (t < cutoff) pageWrites.delete(k)
+const labelWrites = new Map<string, number>()
+const PAGE_WRITE_GAP_MS = 10 * 60_000
+let labelsColumn: { at: number; ok: boolean } | null = null
+
+function throttled(map: Map<string, number>, key: string): boolean {
+  const now = Date.now()
+  const last = map.get(key) ?? 0
+  if (now - last < PAGE_WRITE_GAP_MS) return true
+  if (map.size > 1000) {
+    const cutoff = now - PAGE_WRITE_GAP_MS
+    for (const [k, t] of map) if (t < cutoff) map.delete(k)
   }
-  pageWrites.set(key, Date.now())
-  const row = {
-    label: String(label || key).slice(0, 200),
-    app: app ? String(app).slice(0, 50) : null,
-    last_seen: new Date()
+  map.set(key, now)
+  return false
+}
+
+/** Registers a page key (once per 10 minutes per process) and, when the
+ *  client sent `labels` — the click targets it saw on that screen (#1495) —
+ *  stores them with the time, on their own 10-minute throttle. Labels are
+ *  kept only on a database that has migration 415's columns. */
+export async function registerPage(
+  key: string,
+  label: string,
+  app: string | null,
+  labels?: unknown
+): Promise<void> {
+  if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(key)) throw fail(400, 'HELP_VIDEO_PAGE', 'Invalid page key')
+  const seen = normalizeLabels(labels)
+  const writePage = !throttled(pageWrites, key)
+  const writeLabels = !!seen && !throttled(labelWrites, key) && (await pageLabelsColumn())
+  if (!writePage && !writeLabels) return
+  const row: Record<string, unknown> = writePage
+    ? {
+        label: String(label || key).slice(0, 200),
+        app: app ? String(app).slice(0, 50) : null,
+        last_seen: new Date()
+      }
+    : {}
+  if (writeLabels) {
+    row.labels = JSON.stringify(seen)
+    row.labels_at = new Date()
   }
   const updated = await db('nivaro_help_video_pages').where({ key }).update(row)
   if (!updated)
     await db('nivaro_help_video_pages')
-      .insert({ key, ...row })
+      .insert({
+        key,
+        label: String(label || key).slice(0, 200),
+        app: app ? String(app).slice(0, 50) : null,
+        last_seen: new Date(),
+        ...row
+      })
       .catch(() => null)
+}
+
+async function pageLabelsColumn(): Promise<boolean> {
+  if (labelsColumn && Date.now() - labelsColumn.at < 60_000) return labelsColumn.ok
+  let ok = false
+  try {
+    const { hasColumn } = await import('../lib/column-probe.js')
+    ok = await hasColumn('nivaro_help_video_pages', 'labels_at')
+  } catch {
+    ok = false
+  }
+  labelsColumn = { at: Date.now(), ok }
+  return ok
 }
 
 export async function listPages(): Promise<

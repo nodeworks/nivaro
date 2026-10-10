@@ -5,7 +5,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { Button } from '../../ui/button'
 import { Skeleton } from '../../ui/skeleton'
-import { helpVideoApi, helpVideoKeys } from '../api'
+import { helpVideoApi, helpVideoError, helpVideoKeys } from '../api'
 import type { HelpVideoDto } from '../types'
 import { DownloadMenu } from '../viewer/DownloadMenu'
 import { renderLabel, whenSaved } from './publish'
@@ -63,7 +63,13 @@ export function VersionsTab({
       void versions.refetch()
       onRestored()
     } catch (e) {
-      setNote(`Version ${version} couldn't be restored. ${(e as Error).message}`)
+      const code = helpVideoError(e)?.code
+      setNote(
+        code === 'HELP_VIDEO_VERSION_FILES_REMOVED'
+          ? `Version ${version} couldn't be restored: its files were removed by retention.`
+          : `Version ${version} couldn't be restored. ${(e as Error).message}`
+      )
+      if (code === 'HELP_VIDEO_VERSION_FILES_REMOVED') void versions.refetch()
     } finally {
       setRestoring(null)
     }
@@ -143,9 +149,19 @@ export function VersionsTab({
                 </span>
                 <span className='block text-[12px] text-muted-foreground'>
                   {new Date(v.created_at).toLocaleString()} · {v.created_by_name ?? 'Unknown'} ·{' '}
-                  {renderLabel(v).text}
+                  {v.files_removed_at
+                    ? `Files removed by retention on ${new Date(v.files_removed_at).toLocaleDateString()}`
+                    : renderLabel(v).text}
                 </span>
               </span>
+              {v.files_removed_at && (
+                <span
+                  className={`${pill} bg-muted text-muted-foreground`}
+                  data-hv-version-removed={v.version}
+                >
+                  Files removed
+                </span>
+              )}
               {v.is_published && (
                 <span
                   className={`${pill} bg-emerald-100 text-emerald-800 dark:bg-emerald-500/15 dark:text-emerald-300`}
@@ -160,7 +176,7 @@ export function VersionsTab({
                   Draft
                 </span>
               )}
-              {!v.is_draft && (
+              {!v.is_draft && !v.files_removed_at && (
                 <Button
                   size='sm'
                   variant='ghost'

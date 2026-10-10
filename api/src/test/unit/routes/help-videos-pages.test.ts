@@ -47,6 +47,17 @@ describe('POST /pages', () => {
       payload: { key: 'k', label: 'L' }
     })
     expect(res.statusCode).toBe(204)
-    expect(registerPage).toHaveBeenCalledWith('k', 'L', null)
+    expect(registerPage).toHaveBeenCalledWith('k', 'L', null, undefined)
+  })
+
+  it('passes the labels seen on the page along (#1495)', async () => {
+    state.author = true
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/help-videos/pages',
+      payload: { key: 'k', label: 'L', labels: ['Save', 'Approve'] }
+    })
+    expect(res.statusCode).toBe(204)
+    expect(registerPage).toHaveBeenCalledWith('k', 'L', null, ['Save', 'Approve'])
   })
 })
