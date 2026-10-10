@@ -47,11 +47,17 @@ export function ReplayPlayer({
   startAt,
   live,
   minHeight = 400,
-  panel = 'side'
+  panel = 'side',
+  span
 }: {
   recordingId: string
   /** Offset into the recording (ms); playback opens 5 s before it. */
   startAt?: number | null
+  /**
+   * Wall-clock window (epoch ms) — a replay search hit (#1374) opens where the
+   * record or field was touched. `from` wins over `startAt`.
+   */
+  span?: { from: number } | null
   live?: boolean
   /** Frame height before the first snapshot scales it (a narrow panel wants less). */
   minHeight?: number
@@ -83,6 +89,10 @@ export function ReplayPlayer({
   const playingRef = useRef(false)
   playingRef.current = playing
   const lastSeqRef = useRef<number>(-1)
+  const spanRef = useRef(span)
+  spanRef.current = span
+  /** Timestamp of the first event — offsets are measured from it. */
+  const firstTsRef = useRef(0)
   const [following, setFollowing] = useState(!!live)
   // Replay context: route changes, the user's console lines and (#1357) the
   // page's requests ride the recording as rrweb custom events (type 5) —
@@ -168,6 +178,7 @@ export function ReplayPlayer({
               (e) => typeof e?.timestamp === 'number'
             )?.timestamp ?? 0
           )
+          firstTsRef.current = first
           void railReq.then((d) => {
             if (cancelled || !d || !first) return
             setRail({ items: d.items ?? [], first, truncated: d.truncated_kinds ?? [] })
@@ -213,10 +224,13 @@ export function ReplayPlayer({
           // ?t= deep link (issue log's Watch-replay): open AT the error moment,
           // a few seconds early so the action that caused it is on screen.
           const meta = replayer.getMetaData()
-          const seekTo =
-            startAt != null && Number.isFinite(startAt)
-              ? Math.max(0, Math.min(startAt - 5000, Math.max(0, meta.totalTime - 1000)))
-              : 0
+          const want =
+            spanRef.current && firstTsRef.current
+              ? spanRef.current.from - firstTsRef.current
+              : startAt != null && Number.isFinite(startAt)
+                ? startAt - 5000
+                : 0
+          const seekTo = Math.max(0, Math.min(want, Math.max(0, meta.totalTime - 1000)))
           replayer.play(seekTo)
           setPlaying(true)
         }

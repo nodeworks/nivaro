@@ -187,6 +187,7 @@ import { securityRoutes, securitySelfRoutes } from './security.js'
 import { semanticSearchRoutes } from './semantic-search.js'
 import { sequenceRoutes } from './sequences.js'
 import { sessionRecordingRoutes } from './session-recordings.js'
+import { sessionReplaySearchRoutes } from './session-replay-search.js'
 import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
 import { shareLinksRoutes } from './share-links.js'
@@ -469,6 +470,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(dashboardLinkRoutes, { prefix: '/dashboard-links' })
   await app.register(journeyRoutes, { prefix: '/journeys' })
   await app.register(sessionRecordingRoutes, { prefix: '/session-recordings' })
+  // #1374 / #1372 — search over the replay index (/search, /search/keys)
+  await app.register(sessionReplaySearchRoutes, { prefix: '/session-recordings' })
   await app.register(reportStudioRoutes, { prefix: '/report-studio' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)

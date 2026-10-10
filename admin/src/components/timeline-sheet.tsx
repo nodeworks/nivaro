@@ -2,6 +2,7 @@ import { UserAvatar } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import {
   CheckSquare,
+  Clapperboard,
   FileEdit,
   GitBranch,
   History,
@@ -10,9 +11,11 @@ import {
   Zap
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { Link } from 'react-router'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 
 /**
@@ -74,6 +77,7 @@ export function TimelineSheet({
   onOpenChange: (v: boolean) => void
 }) {
   const [hidden, setHidden] = useState<Set<TimelineEvent['type']>>(new Set())
+  const { user } = useAuth()
   const { data: events = [], isLoading } = useQuery({
     queryKey: ['timeline', collection, item],
     queryFn: () =>
@@ -103,6 +107,16 @@ export function TimelineSheet({
         <SheetHeader>
           <SheetTitle className='flex items-center gap-2 text-[15px]'>
             <History className='h-4 w-4 text-nvr-cyan' /> Timeline
+            {/* #1374 — session replays are admin-only, like the link. */}
+            {user?.is_admin && (
+              <Link
+                to={`/session-replays?tab=search&collection=${encodeURIComponent(collection)}&item=${encodeURIComponent(item)}`}
+                className='ml-auto mr-6 inline-flex items-center gap-1 text-[12px] font-normal text-slate-500 hover:text-nvr-navy dark:hover:text-nvr-cyan'
+                title='Session recordings that opened this record'
+              >
+                <Clapperboard className='h-3.5 w-3.5' /> Replays of this record
+              </Link>
+            )}
           </SheetTitle>
         </SheetHeader>
 

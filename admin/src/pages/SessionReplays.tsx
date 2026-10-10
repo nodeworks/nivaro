@@ -13,6 +13,8 @@ import { SimpleSelect } from '@/components/ui/simple-select'
 import { Switch } from '@/components/ui/switch'
 import { api } from '@/lib/api'
 import { cn, formatFileSize, formatRelative } from '@/lib/utils'
+import { ReplaySearchTab } from './session-replays/SearchTab'
+import { wantsSearchTab } from './session-replays/search-logic'
 
 /**
  * Session replays — list recorded admin sessions (rrweb), watch them in the
@@ -202,6 +204,15 @@ function isLive(rec: Recording): boolean {
   )
 }
 
+/**
+ * Page tabs, kept in ?tab= so links can open one. Add a tab here and render
+ * its body next to the Search tab's below.
+ */
+const PAGE_TABS = [
+  { id: 'list', label: 'Sessions' },
+  { id: 'search', label: 'Search' }
+] as const
+
 function initials(name: string): string {
   return (
     name
@@ -247,7 +258,8 @@ export function SessionReplaysPage() {
   const [selectedUser, setSelectedUser] = useState<string | null>(null)
   // ?recording=<id> deep link — the chat online list links straight to
   // someone's live session, which is worthless if it only opens the list.
-  const [searchParams] = useSearchParams()
+  const [searchParams, setSearchParams] = useSearchParams()
+  const tab = searchParams.get('tab') ?? (wantsSearchTab(searchParams) ? 'search' : 'list')
   const deepLinkId = searchParams.get('recording')
   const deepLinkT = searchParams.get('t')
   const deepLinkApplied = useRef(false)
@@ -578,9 +590,36 @@ export function SessionReplaysPage() {
             />
           </label>
         </div>
+        <nav className='-mb-4 mt-3 flex gap-4'>
+          {PAGE_TABS.map((t) => (
+            <button
+              key={t.id}
+              type='button'
+              onClick={() =>
+                setSearchParams(
+                  (prev) => {
+                    const next = new URLSearchParams(prev)
+                    next.set('tab', t.id)
+                    return next
+                  },
+                  { replace: true }
+                )
+              }
+              className={cn(
+                'border-b-2 pb-2 text-[12.5px] font-medium',
+                tab === t.id
+                  ? 'border-nvr-cyan text-nvr-navy dark:text-nvr-cyan'
+                  : 'border-transparent text-slate-400 hover:text-slate-600'
+              )}
+            >
+              {t.label}
+            </button>
+          ))}
+        </nav>
       </header>
 
-      <div className='flex flex-1 min-h-0 overflow-hidden'>
+      {tab === 'search' && <ReplaySearchTab />}
+      <div className={cn('flex flex-1 min-h-0 overflow-hidden', tab !== 'list' && 'hidden')}>
         {/* People rail */}
         <aside className='w-[272px] shrink-0 overflow-y-auto border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
           {isLoading ? (

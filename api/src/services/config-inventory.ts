@@ -228,6 +228,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_tuning_proposals',
   'nivaro_tuning_param_sets',
   'nivaro_session_events',
+  'nivaro_replay_index', // what each recording touched (migration 421) — goes with its recording
   'nivaro_item_locks',
   'nivaro_notifications',
   'nivaro_deferred_emails',

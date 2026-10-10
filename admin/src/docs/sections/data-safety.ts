@@ -254,6 +254,20 @@ function App() {
         'A long recording shows at most the first 500 requests, 100 errors, 300 page changes and 200 transitions; hovering the rail says when a kind was cut.',
         'Times come from the server’s clock and the recording from the browser’s, so a marker can sit a second or two off the moment on screen.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-search', text: 'Search by record or field' },
+    {
+      type: 'p',
+      text: 'As each recording uploads, the server indexes what it touched: the pages visited (with ids replaced by :id), the records opened (collection and id), the names of the fields focused or typed into, and the elements clicked, as selectors. The Search tab on the Session Replays page finds recordings by collection and record id, by field name or by selector, and opens each one at the moment it matched. A record’s Timeline (the History button) links to Replays of this record.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Only field names (the data-field a form row carries) are indexed, never what was typed: inputs are masked before they leave the browser, and the index never reads values or page text.',
+        'Selectors are built from stable hooks only (data-testid, data-field, data-cbv-* and fixed ids), so the same element matches across recordings.',
+        'Indexing runs after the upload has been answered and never slows it down. Recordings uploaded before the index existed are not searchable.',
+        'Index rows are deleted with their recording, by retention or by Delete.'
+      ]
     }
   ]
 }
