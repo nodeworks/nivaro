@@ -1,17 +1,28 @@
-import { memo } from 'react'
+import { type FocusEvent, memo, type PointerEvent as ReactPointerEvent, useRef } from 'react'
 import {
   isHiddenByCuts,
   type ListKey,
   removeItem,
+  removeZoomKeyframe,
+  segmentIndexAt,
   trimSegment,
+  upsertItem,
   upsertItemChecked
 } from '../../edits'
-import type { Annotation, RecordedClick, VideoEdits } from '../../types'
+import type { Annotation, RecordedClick, VideoEdits, Zoom } from '../../types'
+import {
+  isItemSelected,
+  moveItems,
+  type SelectedItem,
+  type Selection,
+  selectedItems,
+  toggleItem
+} from '../selection'
 import { clickForRipple, clickTargetText } from '../tools'
 import { LANE_H, type laneLayout, type Packed, SUB_H } from './packRows'
 import type { useBarDrag } from './useBarDrag'
 
-export type Selection = { lane: 'cuts'; index: number } | { lane: ListKey; id: string } | null
+export type { Selection }
 
 type TimedKey = 'annotations' | 'zooms' | 'blurs' | 'captions'
 type TimedItem = { id: string; start_ms: number; end_ms: number; text?: string; type?: string }
@@ -25,6 +36,13 @@ type TimedItem = { id: string; start_ms: number; end_ms: number; text?: string; 
 export const LANES: Array<{ key: 'cuts' | ListKey; label: string; tone: string; hollow: string }> =
   [
     { key: 'cuts', label: 'Cuts', tone: '', hollow: '' },
+    {
+      key: 'holds',
+      label: 'Holds',
+      tone: 'border-slate-400 bg-slate-100 text-slate-950 dark:border-slate-400/60 dark:bg-card dark:bg-[linear-gradient(rgb(148_163_184/0.25),rgb(148_163_184/0.25))] dark:text-slate-50',
+      hollow:
+        'border-dashed border-slate-500 bg-card text-slate-950 dark:border-slate-400/70 dark:text-slate-100'
+    },
     {
       key: 'chapters',
       label: 'Chapters',
@@ -90,6 +108,8 @@ function itemName(k: TimedKey, it: TimedItem): string {
   const label = itemLabel(k, it)
   return k === 'annotations' || k === 'captions' ? `${laneOf(k)?.label}: ${label}` : label
 }
+/** "Hold 2.5 s": a held frame's label. */
+export const holdLabel = (ms: number) => `Hold ${(ms / 1000).toFixed(1).replace(/\.0$/, '')} s`
 
 /** Rank of each id when the lane is read left to right (keyboard order). */
 function orderOf<T extends { id: string }>(list: T[], start: (x: T) => number) {
@@ -135,13 +155,19 @@ function laneProps(key: 'cuts' | ListKey, count: number, height = LANE_H) {
   } as const
 }
 
+const withModifier = (e: ReactPointerEvent<HTMLElement>) => e.shiftKey || e.metaKey || e.ctrlKey
+
 /**
- * The six edit lanes: kept pieces over a hatched "cut away" ground, chapter
- * marks, and one lane each for callouts, zoom, blur and captions.
+ * The seven edit lanes: kept pieces over a hatched "cut away" ground, held
+ * frames, chapter marks, and one lane each for callouts, zoom, blur and
+ * captions.
  *
  * Memoised and never given the playhead: during playback only the playhead
  * moves, and these hundreds of bars stay put. Each lane is one tab stop (the
- * selected bar, else the first); arrows move along the lane.
+ * selected bar, else the first); arrows move along the lane. Shift- or
+ * ⌘-click adds a bar to the selection or takes it out (#1543); dragging a
+ * bar of a group moves the whole group, and the group's keys (arrows nudge,
+ * Delete) are the editor's.
  */
 export const Lanes = memo(function Lanes({
   edits,
@@ -153,7 +179,8 @@ export const Lanes = memo(function Lanes({
   nudge,
   hintId,
   layout,
-  clicks
+  clicks,
+  onSeek
 }: {
   edits: VideoEdits
   sourceMs: number
@@ -168,17 +195,59 @@ export const Lanes = memo(function Lanes({
   layout: Layout
   /** The recorder's clicks: a ripple's tip says what its click hit. */
   clicks?: RecordedClick[] | null
+  /** A zoom's stop (#1539) moves the playhead to it when pressed. */
+  onSeek?: (srcMs: number) => void
 }) {
   const toPx = (ms: number) => (ms / 1000) * pps
-  const selectedIn = (k: ListKey) =>
-    selection && selection.lane === k ? (selection as { id: string }).id : null
-  const isSelected = (k: ListKey, id: string) => selectedIn(k) === id
+  const group = selectedItems(selection)
+  const multi = group.length > 1
+  const isSelected = (k: ListKey, id: string) => isItemSelected(selection, k, id)
   /** The lane's one tab stop: its selected bar, else the earliest. */
   const tabStop = (k: ListKey, order: Map<string, number>) => {
-    const sel = selectedIn(k)
-    if (sel && order.has(sel)) return sel
+    const sel = group.find((it) => it.lane === k && order.has(it.id))
+    if (sel) return sel.id
     for (const [id, rank] of order) if (rank === 0) return id
     return null
+  }
+  // A modifier click changes the selection without the focus that follows
+  // it (Chrome focuses a pressed button) selecting that one bar alone.
+  const skipFocus = useRef(false)
+  const onFocus = (item: SelectedItem) => (_e: FocusEvent<HTMLElement>) => {
+    if (skipFocus.current) {
+      skipFocus.current = false
+      return
+    }
+    if (!isSelected(item.lane, item.id)) onSelect(item)
+  }
+  /** A press on a bar: with a modifier it joins or leaves the selection; on
+   *  a bar of a group it drags the group; else it selects and drags the bar. */
+  const press = (
+    e: ReactPointerEvent<HTMLElement>,
+    item: SelectedItem,
+    span: { start_ms: number; end_ms: number },
+    single: () => void
+  ) => {
+    if (e.button !== 0) return
+    if (withModifier(e)) {
+      e.preventDefault()
+      e.stopPropagation()
+      skipFocus.current = true
+      onSelect(toggleItem(selection, item))
+      return
+    }
+    if (multi && isSelected(item.lane, item.id)) {
+      drag(
+        e,
+        span.start_ms,
+        span.end_ms,
+        (st) => moveItems(edits, group, st - span.start_ms, sourceMs),
+        'multi:move',
+        false
+      )
+      return
+    }
+    onSelect(item)
+    single()
   }
   // A stale index (pieces were cut since) still leaves the lane one stop.
   const cutsStop =
@@ -187,6 +256,9 @@ export const Lanes = memo(function Lanes({
       : 0
   const chapterOrder = orderOf(edits.chapters, (c) => c.at_ms)
   const chapterStop = tabStop('chapters', chapterOrder)
+  const holds = edits.holds ?? []
+  const holdOrder = orderOf(holds, (h) => h.at_ms)
+  const holdStop = tabStop('holds', holdOrder)
 
   return (
     <>
@@ -261,6 +333,51 @@ export const Lanes = memo(function Lanes({
           </span>
         )}
       </div>
+      {/* holds (#1537): a moment each, held for a while of edited time */}
+      <div {...laneProps('holds', holds.length)}>
+        {holds.map((h) => {
+          const hidden = segmentIndexAt(edits, h.at_ms) < 0
+          const move = (at: number) =>
+            upsertItemChecked(edits, 'holds', {
+              ...h,
+              at_ms: Math.max(0, Math.min(sourceMs, at))
+            })
+          const item: SelectedItem = { lane: 'holds', id: h.id }
+          return (
+            <button
+              key={h.id}
+              type='button'
+              data-hv-item={`holds:${h.id}`}
+              data-hv-order={holdOrder.get(h.id)}
+              data-hv-hidden={hidden || undefined}
+              data-tip={hidden ? 'Hidden: this sits inside a cut' : undefined}
+              tabIndex={h.id === holdStop ? 0 : -1}
+              aria-label={`Held frame at ${clock(h.at_ms)}, ${(h.hold_ms / 1000).toFixed(1)} seconds${hidden ? ', hidden by a cut' : ''}`}
+              aria-describedby={hintId}
+              aria-pressed={isSelected('holds', h.id)}
+              onPointerDown={(e) =>
+                press(e, item, { start_ms: h.at_ms, end_ms: h.at_ms }, () =>
+                  drag(e, h.at_ms, h.at_ms + 1, (st) => move(st), `holds:${h.id}`, false)
+                )
+              }
+              onFocus={onFocus(item)}
+              onKeyDown={(e) => {
+                if (multi) return
+                nudge(
+                  e,
+                  (d) => move(h.at_ms + d),
+                  `holds:${h.id}`,
+                  () => removeItem(edits, 'holds', h.id)
+                )
+              }}
+              className={`${barBase} top-1 bottom-1 whitespace-nowrap px-1.5 tabular-nums ${hidden ? laneOf('holds')?.hollow : laneOf('holds')?.tone} ${isSelected('holds', h.id) ? selectedRing : ''}`}
+              style={{ left: toPx(h.at_ms) }}
+            >
+              {holdLabel(h.hold_ms)}
+            </button>
+          )
+        })}
+      </div>
       {/* chapters: a point in time each */}
       <div {...laneProps('chapters', edits.chapters.length)}>
         {edits.chapters.map((c) => {
@@ -269,6 +386,7 @@ export const Lanes = memo(function Lanes({
               ...c,
               at_ms: Math.max(0, Math.min(sourceMs, at))
             })
+          const item: SelectedItem = { lane: 'chapters', id: c.id }
           return (
             <button
               key={c.id}
@@ -279,19 +397,21 @@ export const Lanes = memo(function Lanes({
               aria-label={`Chapter ${clock(c.at_ms)}: ${c.title}`}
               aria-describedby={hintId}
               aria-pressed={isSelected('chapters', c.id)}
-              onPointerDown={(e) => {
-                onSelect({ lane: 'chapters', id: c.id })
-                drag(e, c.at_ms, c.at_ms + 1, (st) => move(st), `chapters:${c.id}`, false)
-              }}
-              onFocus={() => onSelect({ lane: 'chapters', id: c.id })}
-              onKeyDown={(e) =>
+              onPointerDown={(e) =>
+                press(e, item, { start_ms: c.at_ms, end_ms: c.at_ms }, () =>
+                  drag(e, c.at_ms, c.at_ms + 1, (st) => move(st), `chapters:${c.id}`, false)
+                )
+              }
+              onFocus={onFocus(item)}
+              onKeyDown={(e) => {
+                if (multi) return
                 nudge(
                   e,
                   (d) => move(c.at_ms + d),
                   `chapters:${c.id}`,
                   () => removeItem(edits, 'chapters', c.id)
                 )
-              }
+              }}
               className={`${barBase} top-1 bottom-1 max-w-[180px] truncate px-1.5 ${laneOf('chapters')?.tone} ${isSelected('chapters', c.id) ? selectedRing : ''}`}
               style={{ left: toPx(c.at_ms) }}
             >
@@ -321,6 +441,7 @@ export const Lanes = memo(function Lanes({
                 k === 'annotations'
                   ? clickTargetText(clickForRipple(it as unknown as Annotation, clicks))
                   : null
+              const item: SelectedItem = { lane: k, id: it.id }
               return (
                 <button
                   key={it.id}
@@ -340,12 +461,14 @@ export const Lanes = memo(function Lanes({
                   aria-label={`${itemName(k, it)}${hit ? ` on ${hit}` : ''}, ${clock(it.start_ms)} to ${clock(it.end_ms)}${hidden ? ', hidden by a cut' : ''}`}
                   aria-describedby={hintId}
                   aria-pressed={isSelected(k, it.id)}
-                  onPointerDown={(e) => {
-                    onSelect({ lane: k, id: it.id })
-                    drag(e, it.start_ms, it.end_ms, place, `${k}:${it.id}`)
-                  }}
-                  onFocus={() => onSelect({ lane: k, id: it.id })}
-                  onKeyDown={(e) =>
+                  onPointerDown={(e) =>
+                    press(e, item, it, () =>
+                      drag(e, it.start_ms, it.end_ms, place, `${k}:${it.id}`)
+                    )
+                  }
+                  onFocus={onFocus(item)}
+                  onKeyDown={(e) => {
+                    if (multi) return
                     nudge(
                       e,
                       (d) => {
@@ -358,7 +481,7 @@ export const Lanes = memo(function Lanes({
                       `${k}:${it.id}`,
                       () => removeItem(edits, k, it.id)
                     )
-                  }
+                  }}
                   className={`${barBase} truncate px-1.5 ${hidden ? lane?.hollow : lane?.tone} ${isSelected(k, it.id) ? selectedRing : ''}`}
                   style={{ left: toPx(it.start_ms), width: barW, ...rowBox(packed, it.id) }}
                 >
@@ -368,6 +491,40 @@ export const Lanes = memo(function Lanes({
                 </button>
               )
             })}
+            {/* A moving zoom's stops (#1539): diamonds on its bar. Pressing
+                one selects the zoom and moves the playhead there; Delete on
+                a focused one removes the stop. */}
+            {k === 'zooms' &&
+              (items as unknown as Zoom[]).flatMap((z) =>
+                (z.keyframes ?? []).map((kf) => {
+                  const box = rowBox(packed, z.id)
+                  return (
+                    <button
+                      key={`${z.id}:${kf.at_ms}`}
+                      type='button'
+                      tabIndex={-1}
+                      aria-label={`Zoom stop at ${clock(kf.at_ms)}`}
+                      title={`Stop at ${clock(kf.at_ms)}: press to go there, Delete to remove it`}
+                      data-hv-keyframe={`${z.id}:${kf.at_ms}`}
+                      onPointerDown={(e) => {
+                        e.stopPropagation()
+                        if (e.button !== 0) return
+                        e.preventDefault()
+                        e.currentTarget.focus({ preventScroll: true })
+                        onSelect({ lane: 'zooms', id: z.id })
+                        onSeek?.(kf.at_ms)
+                      }}
+                      onKeyDown={(e) =>
+                        nudge(e, null, `kf:${z.id}:${kf.at_ms}`, () =>
+                          upsertItem(edits, 'zooms', removeZoomKeyframe(z, kf.at_ms))
+                        )
+                      }
+                      className='absolute z-[6] h-2.5 w-2.5 -translate-x-1/2 rotate-45 cursor-pointer rounded-[1px] border border-emerald-700 bg-white outline-none hover:bg-emerald-200 focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-emerald-200 dark:bg-emerald-950 dark:hover:bg-emerald-800'
+                      style={{ left: toPx(kf.at_ms), top: box.top + box.height / 2 - 5 }}
+                    />
+                  )
+                })
+              )}
           </div>
         )
       })}

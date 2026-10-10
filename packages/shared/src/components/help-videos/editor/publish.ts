@@ -82,6 +82,7 @@ export function viewersWaitForRender(edits: VideoEdits, sourceMs: number | null)
   if (edits.intro || edits.outro || edits.chapter_banners) return true
   if (edits.music) return true
   if (edits.audio?.improve) return true
+  if (edits.cursor) return true
   if (edits.annotations.some((a) => a.type === 'callout' || a.type === 'box' || a.type === 'step'))
     return true
   if (edits.crop) return true

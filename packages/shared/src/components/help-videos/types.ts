@@ -38,12 +38,23 @@ export interface Annotation {
   text: string
   tone: Tone
 }
+/** One stop of a moving zoom (#1539): the area shown at `at_ms` (source
+ *  time), a square in frame fractions like `Zoom.rect`. */
+export interface ZoomKeyframe {
+  at_ms: number
+  rect: Rect
+}
 export interface Zoom {
   id: string
   start_ms: number
   end_ms: number
+  /** The area shown; with keyframes, always the first keyframe's area. */
   rect: Rect
   ease_ms: number
+  /** A zoom that moves (#1539): the area pans and resizes straight-line
+   *  between these stops (the first held before it, the last after it).
+   *  Stored only with two or more stops, sorted, inside the zoom's span. */
+  keyframes?: ZoomKeyframe[]
 }
 export interface Blur {
   id: string
@@ -57,6 +68,15 @@ export interface Caption {
   start_ms: number
   end_ms: number
   text: string
+}
+/** A held frame (#1537): the edited timeline freezes on the source frame at
+ *  `at_ms` for `hold_ms` (edited time, 0.2–10 s). Extra edited time with no
+ *  source advance, like 0.5x slow motion; everything on screen at that moment
+ *  stays up for the hold. A hold has to sit inside a kept piece. */
+export interface Hold {
+  id: string
+  at_ms: number
+  hold_ms: number
 }
 /** A title card before the recording (real extra edited time). Blank
  *  `title` / `subtitle` mean the video's title and the first line of its
@@ -180,6 +200,19 @@ export interface VideoEdits {
   /** How captions look to viewers who have not chosen their own (#1551);
    *  only the keys that differ from the default look are stored. */
   caption_style?: Partial<CaptionStyle>
+  /** The recorded cursor (#1517): a highlighted pointer drawn over the
+   *  picture along the recorded pointer path, and with `shortcuts` a badge
+   *  for each keyboard shortcut pressed. Stored only while on. */
+  cursor?: CursorEdits
+  /** Held frames (#1537), sorted by `at_ms`; stored only when there are any. */
+  holds?: Hold[]
+}
+
+/** The cursor switches (#1517): only `{ show: true }` (plus `shortcuts: true`)
+ *  is ever stored; off = the key is absent. */
+export interface CursorEdits {
+  show: true
+  shortcuts?: true
 }
 
 export type Visibility = { mode: 'everyone' | 'roles'; role_ids: string[] }
@@ -220,7 +253,80 @@ export interface VersionDto {
    *  idle (no input for 3 s+) on the recorded tab, in source time. Null for
    *  uploaded files and recordings made without it. */
   activity?: ActivitySpan[] | null
+  /** Draft load only (#1517): where the pointer went on the recorded tab and
+   *  which shortcuts were pressed. Null for uploaded files and recordings
+   *  made without it (the cursor switches then have nothing to show). */
+  pointer?: PointerPath | null
+  /** Retention removed this version's files (#1531): the Versions tab says
+   *  so and restore answers 409 HELP_VIDEO_VERSION_FILES_REMOVED. Optional:
+   *  older servers. */
+  files_removed_at?: string | null
+  /** Draft, re-record and restore results only (#1491): the steps the author
+   *  wrote before recording, so a re-record can reuse them. Null for a
+   *  recording made without a script and for every uploaded file. */
+  script?: string[] | null
+  /** Draft load only (#1560): the server's audio peaks, 0–1 per 100 ms of
+   *  source time (the shape of `levels`), built from the recording itself —
+   *  so an uploaded video has a waveform. Null until built or without sound. */
+  peaks?: number[] | null
+  /** Draft load only (#1560): the thumbnail sprite sheet (a ticketed JPEG of
+   *  small frames, one every `interval_ms`). Null until built, or when the
+   *  recording was too large for one. */
+  sprite?: SpriteSheet | null
 }
+
+/** One sample of the pointer path (#1517): source time and frame fractions
+ *  (0–1) of the captured frame, like a click. */
+export type PointerSample = { t_ms: number; x: number; y: number }
+/** A keyboard shortcut pressed while recording (#1517): source time and the
+ *  keys as `Meta+S`, `Ctrl+K`, `Shift+Tab`, `Enter`, `ArrowDown` (modifiers
+ *  first, letters upper-case). Never text typed into a field. */
+export type RecordedShortcut = { t_ms: number; keys: string }
+/** The pointer path and shortcuts of a recording of the author's own tab. */
+export type PointerPath = { samples: PointerSample[]; shortcuts: RecordedShortcut[] }
+
+/** One "Next" press while recording with a script (#1491): step `step`
+ *  (0-based) starts at `t_ms` of the recording. */
+export type RecordedMark = { t_ms: number; step: number }
+
+/** A thumbnail sprite sheet: `count` tiles of `tile_w`×`tile_h`, `cols` to a
+ *  row, tile i showing source time i × interval_ms. `url` is ticketed and
+ *  relative to the API origin. */
+export interface SpriteSheet {
+  url: string
+  tile_w: number
+  tile_h: number
+  cols: number
+  count: number
+  interval_ms: number
+}
+
+export type ClipKind = 'mp4' | 'gif'
+export type ClipStatus = 'queued' | 'rendering' | 'ready' | 'failed'
+/** A short clip or GIF of a video (#1562), as GET /help-videos/:id/clips lists it. */
+export interface ClipDto {
+  id: string
+  video_id: string
+  version_id: string | null
+  kind: ClipKind
+  status: ClipStatus
+  progress: number | null
+  error: string | null
+  /** Edited time of the version it was cut from. */
+  start_ms: number
+  end_ms: number
+  label: string | null
+  bytes: number | null
+  width: number | null
+  height: number | null
+  /** The ticketed file, relative to the API origin, once ready (add
+   *  `&download=1` to save it); null until then. */
+  url: string | null
+  created_by: string | null
+  created_at: string
+}
+/** What a clip is cut for (POST /help-videos/:id/clips). */
+export const CLIP_LIMITS = { maxMs: 30_000, minMs: 500, maxPerVideo: 20, labelMax: 120 } as const
 
 /** A stretch of the recording where the author was typing in a text field,
  *  or touched nothing at all (#1518). Never what was typed. */
@@ -320,6 +426,20 @@ export interface HelpVideoDto {
   transcript_url?: string | null
   /** What changed since this person last watched (#1497), else null. */
   whats_new?: HelpVideoWhatsNew | null
+  /** The screen changed since this was published (#1495): a layout version,
+   *  a renamed or removed pipeline step, or a recorded click label gone from
+   *  the page. Null when nothing was found or an author dismissed it;
+   *  publishing clears it. Optional: older servers. */
+  stale?: HelpVideoStale | null
+}
+
+/** Why a video may be out of date (#1495). */
+export interface HelpVideoStale {
+  kind: 'layout' | 'state' | 'label'
+  /** One sentence naming the change. */
+  detail: string
+  /** When the change happened (ISO). */
+  since: string
 }
 
 /** `updated`: a newer version than the one watched is published; `again`: the
@@ -344,6 +464,155 @@ export interface CaptionStyle {
   position: 'bottom' | 'top'
 }
 
+/** A question asked at a moment of the video (#1505; GET /help-videos/:id/questions).
+ *  `text` and `answer` are what people wrote — data, shown as is. */
+export interface HelpVideoQuestion {
+  id: string
+  video_id: string
+  version_id: string | null
+  /** Where it was asked, in the finished video (edited time). */
+  at_ms: number
+  text: string
+  /** Asked by this person. */
+  mine: boolean
+  /** Authors only: who asked. */
+  asked_by_name?: string | null
+  answer: string | null
+  answered_at: string | null
+  answered_by_name: string | null
+  created_at: string
+}
+
+/** Thumbs up / down counts (#1505). */
+export interface HelpVideoRatingSummary {
+  up: number
+  down: number
+  /** up / (up + down), 3 places; 0 with no votes. */
+  helpful_rate: number
+}
+
+/** GET /help-videos/:id/analytics (authors). */
+export interface HelpVideoAnalytics {
+  views: number
+  unique_viewers: number
+  completion_rate: number
+  /** Share of viewers who reached each 5% section (20 values). */
+  drop_off: number[]
+  watched_hours: number
+  /** Absent on older servers. */
+  ratings?: HelpVideoRatingSummary
+  questions?: HelpVideoQuestion[]
+}
+
+/**
+ * One suggestion of the AI first draft (#1487, POST /help-videos/:id/draft/
+ * suggest). Ids are stable for the same content; nothing is applied until
+ * the author accepts it in the editor. Mirrors api/src/services/help-video-draft.ts.
+ */
+export type DraftSuggestion =
+  | { id: string; kind: 'title'; text: string }
+  | { id: string; kind: 'description'; text: string }
+  | { id: string; kind: 'chapter'; chapter: Chapter }
+  | { id: string; kind: 'callout'; annotation: Annotation; click_index: number }
+  | { id: string; kind: 'context'; context: HelpVideoContext; label: string }
+
+export interface DraftSuggestions {
+  suggestions: DraftSuggestion[]
+  model: string | null
+}
+
+/** The automatic-captions job of the draft version (#1520), as GET
+ *  /help-videos/:id/captions/generate answers it. Mirrors
+ *  api/src/services/help-video-captions.ts. */
+export interface CaptionJob {
+  version_id: string
+  video_id: string
+  status: 'queued' | 'running' | 'done' | 'failed'
+  requested_by: string | null
+  requested_at: string
+  started_at?: string
+  finished_at?: string
+  phase?: 'extracting' | 'transcribing' | 'grouping'
+  provider?: 'gateway' | 'local'
+  model?: string
+  /** The pending suggestion set (done only), in source time. */
+  captions?: Caption[]
+  words?: number
+  audio_ms?: number
+  error?: string
+}
+
+export interface CaptionJobStatus {
+  job: CaptionJob | null
+  /** Which transcriber this server would use, or why none. */
+  provider: { kind: 'gateway' | 'local' | 'none'; model: string | null; reason: string | null }
+}
+
+// ── Learning paths (#1508) — mirror of api/src/services/help-video-paths.ts ──
+
+export interface HelpVideoPathItem {
+  video_id: string
+  position: number
+  title: string
+  status: string
+  duration_ms: number | null
+}
+export interface HelpVideoPathRole {
+  role_id: string
+  required: boolean
+}
+/** A path as authors see it (GET /help-videos/paths). */
+export interface HelpVideoPathDto {
+  id: string
+  title: string
+  description: string | null
+  status: 'draft' | 'published'
+  /** Shown to accounts that are new to the instance (their first week, or
+   *  the provisional new-user role), whatever their role. */
+  new_user: boolean
+  /** In order. */
+  items: HelpVideoPathItem[]
+  roles: HelpVideoPathRole[]
+  created_at: string
+  updated_at: string
+}
+export interface HelpVideoPathProgress {
+  total: number
+  completed: number
+  percent: number
+  finished: boolean
+}
+/** A path as the person it is for sees it (GET /help-videos/paths/mine). */
+export interface MyLearningPathDto {
+  id: string
+  title: string
+  description: string | null
+  /** Required for THIS person's role. */
+  required: boolean
+  /** Shown because the person is new, not because of their role. */
+  new_user: boolean
+  /** In order; only the published videos this person may watch. */
+  videos: HelpVideoDto[]
+  progress: HelpVideoPathProgress
+  /** The first unfinished video, or null once the path is finished. */
+  next_video_id: string | null
+}
+
+/** A moment in a video carried by a broadcast or a release (#1528). */
+export interface HelpVideoMomentCard {
+  id: string
+  title: string
+  duration_ms: number | null
+  start_ms: number
+  /** In-app path: `/help-videos?watch=<id>&t=<seconds>`. */
+  path: string
+}
+/** GET /help-videos/releases: one video per changelog release this reader may watch. */
+export interface ReleaseVideoDto {
+  version: string
+  video: HelpVideoMomentCard & { poster_url: string | null }
+}
+
 /** Error codes the help-video routes answer with (`{ error, code }`). */
 export type HelpVideoErrorCode =
   | 'HELP_VIDEO_PROCESSING'
@@ -352,3 +621,23 @@ export type HelpVideoErrorCode =
   | 'HELP_VIDEO_NOT_FOUND'
   | 'HELP_VIDEO_AUTHOR_ONLY'
   | 'HELP_VIDEO_DOWNLOAD_OFF'
+  | 'HELP_VIDEO_MASQUERADE'
+  | 'HELP_VIDEO_RATING_INVALID'
+  | 'HELP_VIDEO_QUESTION_INVALID'
+  | 'HELP_VIDEO_QUESTION_NOT_FOUND'
+  | 'HELP_VIDEO_NOT_STALE'
+  | 'HELP_VIDEO_VERSION_FILES_REMOVED'
+  | 'HELP_VIDEO_NO_DRAFT'
+  | 'HELP_VIDEO_AI_NOT_CONFIGURED'
+  | 'HELP_VIDEO_DRAFT_UNREADABLE'
+  | 'HELP_VIDEO_CAPTIONS_NOT_CONFIGURED'
+  | 'HELP_VIDEO_CAPTIONS_BUSY'
+  | 'HELP_VIDEO_PATH_NOT_FOUND'
+  | 'HELP_VIDEO_PATH_INVALID'
+  | 'HELP_VIDEO_RELEASE_INVALID'
+  | 'HELP_VIDEO_CLIP_NOT_FOUND'
+  | 'HELP_VIDEO_CLIP_RANGE'
+  | 'HELP_VIDEO_CLIP_LIMIT'
+  | 'HELP_VIDEO_CLIP_INVALID'
+  | 'HELP_VIDEO_CLIP_NO_FFMPEG'
+  | 'HELP_VIDEO_CLIPS_MIGRATION_PENDING'

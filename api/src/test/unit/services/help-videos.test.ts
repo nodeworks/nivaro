@@ -129,6 +129,7 @@ const versionRow = {
   height: 1080,
   clicks: '[{"t_ms":1,"x":0.1,"y":0.2}]',
   levels: '[1,2]',
+  script: '["Open the record","Press Approve"]',
   edits: JSON.stringify(edits),
   edits_hash: hashEdits(edits),
   render_status: 'ready',
@@ -148,11 +149,22 @@ describe('serializeVersion', () => {
     expect(v.id).toBe('v1')
     expect(v.rendered_current).toBe(true)
     expect(v.clicks).toBeUndefined()
+    expect(v.script).toBeUndefined()
   })
   it('includes recorder data only for authors working on a draft', () => {
     const v = serializeVersion(versionRow as never, { withRecorderData: true })
     expect(v.clicks).toEqual([{ t_ms: 1, x: 0.1, y: 0.2 }])
     expect(v.levels).toEqual([1, 2])
+    expect(v.script).toEqual(['Open the record', 'Press Approve'])
+  })
+  it('reads the script (#1491) as null when there is none or it is unreadable', () => {
+    expect(
+      serializeVersion({ ...versionRow, script: null } as never, { withRecorderData: true }).script
+    ).toBeNull()
+    expect(
+      serializeVersion({ ...versionRow, script: '{bad' } as never, { withRecorderData: true })
+        .script
+    ).toBeNull()
   })
   it('marks a render stale when the edits moved on', () => {
     const v = serializeVersion({ ...versionRow, rendered_hash: 'old' } as never, {

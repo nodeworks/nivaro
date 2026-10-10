@@ -13,6 +13,15 @@ import {
   runFfmpeg
 } from './ffmpeg.js'
 import { deleteFile, getFile, uploadFileFromPath } from './files.js'
+import { normalizePointer, type PointerPath } from './help-video-cursor.js'
+import {
+  extrasMigrated,
+  parsePeaks,
+  parseSprite,
+  type SpriteSheet,
+  startMediaExtras
+} from './help-video-extras.js'
+import { normalizeMarks, normalizeScript, type RecordedMark } from './help-video-script.js'
 import {
   buildUploadArgs,
   planUploadedVideo,
@@ -109,6 +118,17 @@ export interface FinalizedUpload {
   has_audio: boolean
   clicks: unknown
   levels: unknown
+  /** Script mode (#1491): the steps written before recording and where each
+   *  one was marked, in source time. Null for recordings made without a
+   *  script and for every uploaded file. */
+  script: string[] | null
+  marks: RecordedMark[] | null
+  /** Server-built thumbnails and waveform (#1560), when the background job
+   *  has finished by the time the recording is taken; else null (they reach
+   *  the version later). */
+  sprite_file?: string | null
+  sprite?: SpriteSheet | null
+  peaks?: number[] | null
 }
 
 function fail(statusCode: number, code: string, message: string): Error {
@@ -332,12 +352,24 @@ export async function appendPart(
 export async function finalizeUpload(
   user: User,
   id: string,
-  meta: { duration_ms?: number; clicks?: unknown; levels?: unknown; activity?: unknown }
+  meta: {
+    duration_ms?: number
+    clicks?: unknown
+    levels?: unknown
+    activity?: unknown
+    pointer?: unknown
+    script?: unknown
+    marks?: unknown
+  }
 ): Promise<FinalizedUpload | ProcessingUpload> {
   const rid = assertId(id)
   const clicks = normalizeClicks(meta.clicks)
   const levels = normalizeLevels(meta.levels)
   const activity = normalizeActivity(meta.activity)
+  const pointer = normalizePointer(meta.pointer)
+  // Script mode (#1491): marks mean nothing without the script they index.
+  const script = normalizeScript(meta.script)
+  const marks = script ? (normalizeMarks(meta.marks) ?? []) : null
   // Claim: only one finalize can flip open -> finalizing; appends are serialized
   // on the same lock so none is mid-write when the claim lands.
   const row = await withLock(rid, async () => {
@@ -424,16 +456,34 @@ export async function finalizeUpload(
         width: probe.width,
         height: probe.height,
         has_audio: probe.has_audio,
-        // Bounded by the normalizers (≈1.5 MB at most), so never cut mid-JSON.
-        // Activity (#1518) is read back by activityOfFile: the version table
-        // has no column for it, the upload row stays for as long as the video.
-        meta: JSON.stringify({ clicks, levels, activity }),
+        // Bounded by the normalizers (≈2 MB at most), so never cut mid-JSON.
+        // Activity (#1518) and the pointer path (#1517) are read back by
+        // activityOfFile / pointerOfFile: the version table has no column for
+        // them, the upload row stays for as long as the video. The script and
+        // its marks (#1491) ride along until the video is made.
+        meta: JSON.stringify({
+          clicks,
+          levels,
+          activity,
+          pointer,
+          ...(script ? { script, marks } : {})
+        }),
         updated_at: new Date()
       })
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
     recorded = true
     // The recording is stored and recorded: only now is the temp file expendable.
     await rm(raw, { force: true })
+    // Thumbnails and waveform (#1560) are built after the answer goes out.
+    startMediaExtras(user, {
+      uploadId: String(dbId).toLowerCase(),
+      fileId: String(file.id),
+      mime: String(row.mime),
+      durationMs,
+      width: probe.width,
+      height: probe.height,
+      hasAudio: probe.has_audio
+    })
     return {
       file_id: String(file.id),
       duration_ms: durationMs,
@@ -441,7 +491,9 @@ export async function finalizeUpload(
       height: probe.height,
       has_audio: probe.has_audio,
       clicks,
-      levels
+      levels,
+      script,
+      marks
     }
   } catch (err) {
     if (createdFile && !recorded) {
@@ -480,7 +532,7 @@ function uploadThreads(): number {
  *  encode, and an author starting several must not starve renders and
  *  requests. Copies (no re-encode) do not wait for the slot. */
 let conversionTail: Promise<void> = Promise.resolve()
-async function withConversionSlot<T>(
+export async function withConversionSlot<T>(
   onWait: () => Promise<unknown>,
   work: () => Promise<T>
 ): Promise<T> {
@@ -653,6 +705,17 @@ export async function processFile(
     if (!done) throw fail(409, 'UPLOAD_CLOSED', 'This upload is no longer finishing')
     recorded = true
     await rm(raw, { force: true })
+    // Thumbnails and waveform (#1560): an uploaded file has no microphone
+    // levels, so its peaks are what gives it a waveform.
+    startMediaExtras(user, {
+      uploadId: String(dbId).toLowerCase(),
+      fileId: String(file.id),
+      mime: plan.container,
+      durationMs: probe.duration_ms,
+      width: probe.width,
+      height: probe.height,
+      hasAudio: probe.has_audio
+    })
   } catch (err) {
     const e = err as Error & { statusCode?: number; code?: string }
     if (createdFile && !recorded && !(await discardFile(user, createdFile))) {
@@ -736,6 +799,26 @@ export async function activityOfFile(fileId: unknown): Promise<ActivitySpan[] | 
   }
 }
 
+/** The pointer path and shortcuts the recorder logged for a version's source
+ *  file (#1517), read from the upload row that produced it, like
+ *  activityOfFile. Null for an uploaded file, a recording made before #1517
+ *  or of another window, and a recording that arrived in a package. */
+export async function pointerOfFile(fileId: unknown): Promise<PointerPath | null> {
+  if (!fileId) return null
+  const row = (await db('nivaro_help_video_uploads')
+    .where({ file_id: fileId })
+    .whereIn('status', ['used', 'finalized'])
+    .first('meta')
+    .catch(() => null)) as { meta?: unknown } | null | undefined
+  const raw = row?.meta == null ? '' : String(row.meta)
+  if (!raw || raw.startsWith(UPLOAD_META_HEAD) || !raw.includes('"pointer"')) return null
+  try {
+    return normalizePointer((JSON.parse(raw) as { pointer?: unknown }).pointer)
+  } catch {
+    return null
+  }
+}
+
 /** Deletes a file nothing references (bytes and row). When the delete fails the
  *  file would stay listable, so its id is parked on an abandoned upload row
  *  (a column the files guard covers) and purgeStaleUploads retries it. */
@@ -788,12 +871,14 @@ export async function takeFinalizedUpload(user: User, uploadId: string): Promise
     .where({ id: uploadId, status: 'finalized' })
     .update({ status: 'used', updated_at: new Date() })
   if (!taken) throw fail(409, 'UPLOAD_USED', 'That recording was already used')
-  let meta: { clicks?: unknown; levels?: unknown } = {}
+  let meta: { clicks?: unknown; levels?: unknown; script?: unknown; marks?: unknown } = {}
   try {
     meta = JSON.parse(String(row.meta ?? '{}'))
   } catch {
     meta = {}
   }
+  const script = normalizeScript(meta.script)
+  const sprite = parseSprite(row.sprite)
   return {
     file_id: String(row.file_id),
     duration_ms: row.duration_ms == null ? null : Number(row.duration_ms),
@@ -801,7 +886,12 @@ export async function takeFinalizedUpload(user: User, uploadId: string): Promise
     height: row.height == null ? null : Number(row.height),
     has_audio: row.has_audio !== false && row.has_audio !== 0,
     clicks: meta.clicks ?? null,
-    levels: meta.levels ?? null
+    levels: meta.levels ?? null,
+    script,
+    marks: script ? (normalizeMarks(meta.marks) ?? []) : null,
+    sprite_file: sprite && row.sprite_file ? String(row.sprite_file) : null,
+    sprite,
+    peaks: parsePeaks(row.peaks)
   }
 }
 
@@ -850,6 +940,7 @@ async function deleteRecording(uploadId: unknown, fileId: string): Promise<boole
       .where({ id: uploadId })
       .update({ file_id: null, updated_at: new Date() })
     await deleteFile(fileId)
+    await deleteSprite(uploadId)
     return true
   } catch (err) {
     await db('nivaro_help_video_uploads')
@@ -862,6 +953,25 @@ async function deleteRecording(uploadId: unknown, fileId: string): Promise<boole
     )
     return false
   }
+}
+
+/** The thumbnail sheet of a discarded recording (#1560): unlinked from the
+ *  row first (its foreign key), then deleted. Nothing before migration 412. */
+async function deleteSprite(uploadId: unknown): Promise<void> {
+  if (!(await extrasMigrated())) return
+  const row = (await db('nivaro_help_video_uploads')
+    .where({ id: uploadId })
+    .first('sprite_file')) as { sprite_file?: unknown } | undefined
+  if (!row?.sprite_file) return
+  const spriteId = String(row.sprite_file)
+  await db('nivaro_help_video_uploads')
+    .where({ id: uploadId })
+    .update({ sprite_file: null, sprite: null, peaks: null })
+  await deleteFile(spriteId).catch((err) =>
+    console.warn(
+      `help-video upload ${String(uploadId).toLowerCase()}: could not delete sprite ${spriteId}: ${(err as Error).message}`
+    )
+  )
 }
 
 /** Discards an open upload, or a finished recording no video uses. Anything

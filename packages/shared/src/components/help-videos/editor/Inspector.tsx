@@ -1,4 +1,13 @@
-import { Crosshair, Trash2 } from 'lucide-react'
+import {
+  AlignEndVertical,
+  AlignStartVertical,
+  ChevronsLeft,
+  ChevronsRight,
+  Copy,
+  Crosshair,
+  MousePointer2,
+  Trash2
+} from 'lucide-react'
 import { memo, type ReactNode, useId, useRef } from 'react'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
@@ -9,10 +18,13 @@ import {
   type CalloutText,
   calloutTextOf,
   EDIT_LIMITS,
+  itemsOf,
   type ListKey,
   musicShare,
   removeItem,
   removeSegment,
+  removeZoomKeyframe,
+  segmentIndexAt,
   setCalloutText,
   setPieceMusic,
   setSpeed,
@@ -23,19 +35,33 @@ import {
   upsertItemChecked,
   zoomInView
 } from '../edits'
+import { followPointerKeyframes } from '../followPointer'
 import type {
   Annotation,
   Blur,
   Caption,
   Chapter,
+  Hold,
+  PointerPath,
   RecordedClick,
   StepStyle,
   Tone,
   VideoEdits,
   Zoom
 } from '../types'
+import {
+  alignItems,
+  deleteItems,
+  describeItems,
+  duplicateItems,
+  moveItems,
+  NUDGE_FRAME_MS,
+  NUDGE_SECOND_MS,
+  selectionBounds
+} from './selection'
 import { seconds, TimeField } from './TimeField'
 import type { Selection } from './Timeline'
+import { clock } from './timeline/Lanes'
 import { clickForRipple, clickTargetText, shortForText, withTypedText } from './tools'
 
 const TONES: Array<{ value: Tone; label: string }> = [
@@ -74,6 +100,10 @@ const PIECE_MUSIC = [
   { value: 1, label: 'Full' }
 ]
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n))
+const clockOf = (ms: number) => {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
 
 const label = 'text-[12px] font-medium text-foreground'
 const hint = 'text-[12px] leading-snug text-muted-foreground'
@@ -86,10 +116,12 @@ type Timed = { id: string; start_ms: number; end_ms: number }
 
 /**
  * Changes the selected thing: a kept piece (speed, trim, cut), a chapter
- * (title, place), or a callout, arrow, box, ripple, zoom, blur or caption
- * (text, colour, zoom easing, blur strength, timing). Times can be typed or
- * stepped from the keyboard. Every change goes through upsertItemChecked;
- * a refusal goes to `onError` (the editor's note).
+ * (title, place), a held frame (moment, length), or a callout, arrow, box,
+ * ripple, zoom, blur or caption (text, colour, zoom easing, blur strength,
+ * timing). Times can be typed or stepped from the keyboard. Every change
+ * goes through upsertItemChecked; a refusal goes to `onError` (the editor's
+ * note). Several items selected at once (#1543) get a summary and the group
+ * actions: nudge, align to the playhead, duplicate, remove.
  */
 export const Inspector = memo(function Inspector({
   edits,
@@ -99,17 +131,26 @@ export const Inspector = memo(function Inspector({
   onSelect,
   onSeek,
   onError,
-  clicks
+  clicks,
+  pointer,
+  uploaded,
+  playhead
 }: {
   edits: VideoEdits
   selection: Selection
   sourceMs: number
   /** The recorder's clicks: a ripple says what its click hit. */
   clicks?: RecordedClick[] | null
+  /** The recorder's pointer path (#1517): a zoom can follow it (#1540). */
+  pointer?: PointerPath | null
+  /** The source is an uploaded file (it never has a pointer path). */
+  uploaded?: boolean
   onChange: (e: VideoEdits, key?: string) => void
   onSelect: (s: Selection) => void
   onSeek: (srcMs: number) => void
   onError: (msg: string) => void
+  /** The playhead now (source time): where a group's edges align to. */
+  playhead?: () => number
 }) {
   const headingId = useId()
   const root = useRef<HTMLElement | null>(null)
@@ -268,8 +309,111 @@ export const Inspector = memo(function Inspector({
     )
   }
 
+  if (selection.lane === 'multi') {
+    const items = selection.items
+    const bounds = selectionBounds(edits, items)
+    /** Apply a group change; a refusal goes to the note, new copies get selected. */
+    const apply = (
+      r: { edits: VideoEdits; refused?: string; selection?: Selection },
+      key?: string
+    ) => {
+      if (r.refused) onError(r.refused)
+      else if (r.edits !== edits) {
+        onChange(r.edits, key)
+        if (r.selection !== undefined) onSelect(r.selection)
+      }
+    }
+    const nudge = (d: number) => apply(moveItems(edits, items, d, sourceMs), 'multi:nudge')
+    const align = (edge: 'start' | 'end') =>
+      apply(alignItems(edits, items, edge, playhead ? playhead() : 0, sourceMs))
+    return frame(
+      `${items.length} items selected`,
+      'multi',
+      <>
+        <p className={hint} data-hv-multi-summary>
+          {describeItems(items)}
+          {bounds ? `, ${clockOf(bounds.start_ms)} to ${clockOf(bounds.end_ms)}` : ''}. They move
+          together; Shift-click a bar to take it out.
+        </p>
+        <div className='flex items-center gap-2'>
+          <span className={hint} id={`${headingId}-nudge`}>
+            Nudge
+          </span>
+          <fieldset
+            className='inline-flex overflow-hidden rounded-md border border-input'
+            aria-labelledby={`${headingId}-nudge`}
+          >
+            <button
+              type='button'
+              className={`${segment} inline-flex items-center gap-1 ${off}`}
+              onClick={(e) => nudge(e.shiftKey ? -NUDGE_SECOND_MS : -NUDGE_FRAME_MS)}
+              aria-label='Move them a frame earlier'
+              title='Shift: a whole second'
+              data-hv-multi-nudge='earlier'
+            >
+              <ChevronsLeft className='!size-3.5' aria-hidden /> 1 frame
+            </button>
+            <button
+              type='button'
+              className={`${segment} inline-flex items-center gap-1 ${off}`}
+              onClick={(e) => nudge(e.shiftKey ? NUDGE_SECOND_MS : NUDGE_FRAME_MS)}
+              aria-label='Move them a frame later'
+              title='Shift: a whole second'
+              data-hv-multi-nudge='later'
+            >
+              1 frame <ChevronsRight className='!size-3.5' aria-hidden />
+            </button>
+          </fieldset>
+        </div>
+        <div className='space-y-1'>
+          <p className={label}>Align to the playhead</p>
+          <div className='flex flex-wrap gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12.5px]'
+              onClick={() => align('start')}
+              data-hv-multi-align='start'
+            >
+              <AlignStartVertical className='!size-3.5' aria-hidden /> Starts
+            </Button>
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-8 text-[12.5px]'
+              onClick={() => align('end')}
+              data-hv-multi-align='end'
+            >
+              <AlignEndVertical className='!size-3.5' aria-hidden /> Ends
+            </Button>
+          </div>
+        </div>
+        <div className='flex flex-wrap gap-2 border-t border-border pt-3'>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8 text-[12.5px]'
+            onClick={() => apply(duplicateItems(edits, items, sourceMs))}
+            data-hv-multi-duplicate
+          >
+            <Copy className='!size-3.5' aria-hidden /> Duplicate
+          </Button>
+          <Button
+            size='sm'
+            variant='ghost'
+            className='h-8 text-[12.5px] text-rose-700 hover:bg-rose-50 hover:text-rose-800 dark:text-rose-300 dark:hover:bg-rose-500/10 dark:hover:text-rose-200'
+            onClick={() => removed(deleteItems(edits, items))}
+            data-hv-multi-remove
+          >
+            <Trash2 className='!size-3.5' aria-hidden /> Remove all {items.length}
+          </Button>
+        </div>
+      </>
+    )
+  }
+
   const lane = selection.lane
-  const item = (edits[lane] as Array<{ id: string }>).find((x) => x.id === selection.id)
+  const item = (itemsOf(edits, lane) as Array<{ id: string }>).find((x) => x.id === selection.id)
   if (!item) return frame('Nothing selected', 'none', null)
   /** Write a changed copy of the item; a refusal goes to the note. */
   const update = (patch: Record<string, unknown>, key?: string) => {
@@ -330,6 +474,55 @@ export const Inspector = memo(function Inspector({
         />
         <div className='flex flex-wrap gap-2'>
           {jump(c.at_ms)}
+          {remove}
+        </div>
+      </>
+    )
+  }
+
+  if (lane === 'holds') {
+    const h = item as Hold
+    const hidden = segmentIndexAt(edits, h.at_ms) < 0
+    return frame(
+      'Held frame',
+      'holds',
+      <>
+        <p className={hint}>
+          {hidden
+            ? 'Inside a cut, so viewers never see it; move it onto a kept piece.'
+            : 'The video freezes on this frame, with everything drawn on it, then goes on from the same moment.'}
+        </p>
+        <TimeField
+          label='At'
+          ms={h.at_ms}
+          onCommit={(v) => update({ at_ms: clamp(v, 0, sourceMs) }, `time:${h.id}`)}
+          onInvalid={onError}
+          earlier='Hold 0.1 seconds earlier'
+          later='Hold 0.1 seconds later'
+          data='at'
+        />
+        <div className='flex flex-col gap-1'>
+          <label htmlFor={`${headingId}-hold`} className={label}>
+            Holds for{' '}
+            <span className='font-normal text-muted-foreground tabular-nums'>
+              {seconds(h.hold_ms)} s
+            </span>
+          </label>
+          <input
+            id={`${headingId}-hold`}
+            type='range'
+            min={EDIT_LIMITS.holdMinMs}
+            max={EDIT_LIMITS.holdMaxMs}
+            step={100}
+            value={h.hold_ms}
+            onChange={(e) => update({ hold_ms: Number(e.target.value) }, `hold:${h.id}`)}
+            className='accent-nvr-cyan'
+            data-hv-hold-ms
+          />
+          <p className={hint}>Between 0.2 and 10 seconds. The sound pauses with the picture.</p>
+        </div>
+        <div className='flex flex-wrap gap-2'>
+          {jump(h.at_ms)}
           {remove}
         </div>
       </>
@@ -604,6 +797,25 @@ export const Inspector = memo(function Inspector({
 
   if (lane === 'zooms') {
     const z = item as Zoom
+    const stops = z.keyframes ?? []
+    /** A changed zoom (its stops included); a refusal goes to the note. */
+    const writeZoom = (next: Zoom, key?: string) => {
+      const r = upsertItemChecked(edits, 'zooms', next)
+      if (r.refused) onError(r.refused)
+      else if (r.edits !== edits) onChange(r.edits, key)
+    }
+    const hasPath = !!pointer?.samples.length
+    const noPath = uploaded
+      ? 'An uploaded video has no pointer path to follow'
+      : 'This recording has no pointer path: it was made before the recorder kept one, or of another window or screen'
+    const follow = () => {
+      const keyframes = followPointerKeyframes(z, pointer?.samples)
+      if (!keyframes) {
+        onError('The pointer was not seen on this tab during this zoom')
+        return
+      }
+      writeZoom({ ...z, rect: keyframes[0].rect, keyframes }, `follow:${z.id}`)
+    }
     return frame(
       'Zoom',
       'zooms',
@@ -612,6 +824,60 @@ export const Inspector = memo(function Inspector({
           Shows the outlined area {zoomInView(edits, z.rect).mag.toFixed(1)} times larger. While it
           is selected the preview shows the whole picture, so you can place it.
         </p>
+        <div className='space-y-1.5' data-hv-zoom-motion>
+          <p className={label}>Movement</p>
+          {stops.length ? (
+            <ul className='space-y-1' data-hv-keyframes>
+              {stops.map((k) => (
+                <li key={k.at_ms} className='flex items-center gap-1 text-[12.5px]'>
+                  <button
+                    type='button'
+                    className='inline-flex h-7 min-w-0 flex-1 items-center gap-1.5 rounded-md px-1.5 text-left tabular-nums hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                    onClick={() => onSeek(k.at_ms)}
+                    data-hv-keyframe-go={k.at_ms}
+                  >
+                    <span
+                      className='h-2 w-2 shrink-0 rotate-45 border border-emerald-700 bg-white dark:border-emerald-200 dark:bg-emerald-950'
+                      aria-hidden
+                    />
+                    Stop at {clock(k.at_ms)}
+                  </button>
+                  <Button
+                    size='sm'
+                    variant='ghost'
+                    className='h-7 w-7 shrink-0 px-0 text-muted-foreground hover:text-rose-700 dark:hover:text-rose-300'
+                    onClick={() => writeZoom(removeZoomKeyframe(z, k.at_ms), `kf:${z.id}`)}
+                    aria-label={`Remove the stop at ${clock(k.at_ms)}`}
+                    data-hv-keyframe-remove={k.at_ms}
+                  >
+                    <Trash2 className='!size-3.5' aria-hidden />
+                  </Button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <p className={hint}>
+            {stops.length
+              ? 'The zoom pans between its stops. Move the playhead inside the zoom and drag the area to add or change a stop; down to one stop it stands still.'
+              : 'Still. To make it move, put the playhead inside the zoom and drag the area: that adds a stop there, and the zoom pans from its start to it.'}
+          </p>
+          <Button
+            size='sm'
+            variant='outline'
+            className='h-8 text-[12.5px]'
+            onClick={follow}
+            disabled={!hasPath}
+            title={hasPath ? undefined : noPath}
+            data-hv-follow-pointer
+          >
+            <MousePointer2 className='!size-3.5' aria-hidden /> Follow the pointer
+          </Button>
+          {!hasPath && (
+            <p className={hint} data-hv-follow-pointer-reason>
+              {noPath}.
+            </p>
+          )}
+        </div>
         <div className='flex flex-col gap-1'>
           <label htmlFor={`${headingId}-ease`} className={label}>
             Ease in and out{' '}

@@ -8,8 +8,11 @@ import {
   useRef,
   useState
 } from 'react'
-import type { RecordedClick, VideoEdits } from '../types'
+import { useApiFetchConfig } from '../../../context'
+import type { RecordedClick, SpriteSheet, VideoEdits } from '../types'
+import { lanesBetween, marqueeItems, selectedItems, selectionOf } from './selection'
 import type { Stretch } from './suggestCuts'
+import { filmstripTiles } from './timeline/filmstrip'
 import { clock, LANES, Lanes, type Selection } from './timeline/Lanes'
 import { Playhead } from './timeline/Playhead'
 import { laneLayout } from './timeline/packRows'
@@ -20,7 +23,12 @@ export type { Selection }
 
 const RULER_H = 24
 const SOUND_H = 32
+/** The frames row (#1560), shown only when the server built a sprite sheet. */
+const FRAMES_H = 44
 const MAX_PX_PER_SEC = 200
+/** A press on empty lane space that moves less than this is a click (it
+ *  clears the selection); further, it draws a marquee. */
+const MARQUEE_PX = 4
 /** Ruler label steps, in seconds; the first that leaves ≥ 64 px between labels wins. */
 const TICK_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600]
 
@@ -31,6 +39,7 @@ export function Timeline({
   sourceMs,
   playheadSrcMs,
   levels,
+  sprite,
   uploaded,
   silences,
   selection,
@@ -44,7 +53,12 @@ export function Timeline({
   edits: VideoEdits
   sourceMs: number
   playheadSrcMs: number
+  /** Sound levels (0–1 per 100 ms): the recorder's microphone levels, or the
+   *  server's audio peaks (#1560) when there are none. */
   levels: number[] | null
+  /** The server's thumbnail sheet (#1560): a frames row under the ruler.
+   *  Absent (older versions, large recordings) = no row. */
+  sprite?: SpriteSheet | null
   /** The source is an uploaded file: there are no microphone levels to draw. */
   uploaded?: boolean
   /** Suggested silent stretches, shaded on the sound lane. */
@@ -126,12 +140,68 @@ export function Timeline({
     el.addEventListener('pointercancel', up)
   }
 
+  // Marquee selection (#1543): a drag on empty lane space selects every bar
+  // it crosses, on every lane it crosses; with Shift or ⌘ held, they join
+  // the selection. A plain click on empty space clears it.
+  const lanesBox = useRef<HTMLDivElement | null>(null)
+  const [marquee, setMarquee] = useState<{ x0: number; y0: number; x1: number; y1: number } | null>(
+    null
+  )
+  const marqueeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0 || !lanesBox.current) return
+    if ((e.target as HTMLElement).closest('button')) return
+    const el = lanesBox.current
+    const rect = el.getBoundingClientRect()
+    const additive = e.shiftKey || e.metaKey || e.ctrlKey
+    const x0 = e.clientX - rect.left
+    const y0 = e.clientY - rect.top
+    let box: { x0: number; y0: number; x1: number; y1: number } | null = null
+    e.preventDefault()
+    el.setPointerCapture(e.pointerId)
+    const move = (ev: PointerEvent) => {
+      const x1 = ev.clientX - rect.left
+      const y1 = ev.clientY - rect.top
+      if (!box && Math.hypot(x1 - x0, y1 - y0) < MARQUEE_PX) return
+      box = { x0, y0, x1, y1 }
+      setMarquee(box)
+    }
+    const up = () => {
+      el.removeEventListener('pointermove', move)
+      el.removeEventListener('pointerup', up)
+      el.removeEventListener('pointercancel', up)
+      setMarquee(null)
+      setNote(null)
+      if (!box) {
+        if (!additive) onSelect(null)
+        return
+      }
+      const rows = LANES.map((l) => ({ key: l.key, height: layout.height[l.key] }))
+      const hit = marqueeItems(
+        edits,
+        toMs(Math.min(box.x0, box.x1)),
+        toMs(Math.max(box.x0, box.x1)),
+        lanesBetween(rows, box.y0, box.y1)
+      )
+      onSelect(selectionOf(additive ? [...selectedItems(selection), ...hit] : hit))
+    }
+    el.addEventListener('pointermove', move)
+    el.addEventListener('pointerup', up)
+    el.addEventListener('pointercancel', up)
+  }
+
   const tickStep = (TICK_STEPS.find((s) => s * pps >= 64) ?? 600) * 1000
   const ticks = Array.from({ length: Math.floor(sourceMs / tickStep) + 1 }, (_, i) => i * tickStep)
   const wave = useMemo(
     () => (levels?.length ? waveformPath(levels, pps, SOUND_H) : ''),
     [levels, pps]
   )
+  const { apiBase } = useApiFetchConfig()
+  const spriteUrl = sprite ? `${apiBase.replace(/\/api$/, '')}${sprite.url}` : null
+  const tiles = useMemo(
+    () => (sprite && sourceMs > 0 ? filmstripTiles(sprite, pps, sourceMs, FRAMES_H) : []),
+    [sprite, pps, sourceMs]
+  )
+  const framesH = tiles.length ? FRAMES_H : 0
 
   return (
     <section
@@ -187,11 +257,21 @@ export function Timeline({
       </div>
       <p id={hintId} className='sr-only'>
         Left and Right arrows move along the lane. Alt with an arrow moves the item a tenth of a
-        second, with Shift a whole second. Delete removes it.
+        second, with Shift a whole second. Delete removes it. Shift or Command with a click adds it
+        to the selection or takes it out; with several selected, the arrows move them all a frame
+        (Shift: a second) and Delete removes them all.
       </p>
       <div className='flex border-t border-border'>
         <div className='w-[76px] shrink-0 border-r border-border sm:w-[88px]' aria-hidden>
           <div style={{ height: RULER_H }} className='border-b border-border' />
+          {framesH > 0 && (
+            <div
+              className='border-b border-border px-2 text-[11px] text-muted-foreground'
+              style={{ height: framesH, lineHeight: `${framesH}px` }}
+            >
+              Frames
+            </div>
+          )}
           <div
             className='border-b border-border px-2 text-[11px] text-muted-foreground'
             style={{ height: SOUND_H, lineHeight: `${SOUND_H}px` }}
@@ -228,7 +308,33 @@ export function Timeline({
                 </span>
               ))}
             </div>
-            {/* sound, from the recorder's microphone levels */}
+            {/* frames, from the server's thumbnail sheet (#1560) */}
+            {framesH > 0 && spriteUrl && (
+              <div
+                className='relative overflow-hidden border-b border-border bg-muted/40'
+                style={{ height: framesH }}
+                onPointerDown={scrub}
+                data-hv-filmstrip={tiles.length}
+                aria-hidden
+              >
+                {tiles.map((t) => (
+                  <span
+                    key={t.left}
+                    className='absolute top-0 h-full'
+                    style={{
+                      left: t.left,
+                      width: t.width,
+                      backgroundImage: `url("${spriteUrl}")`,
+                      backgroundPosition: `${t.bgX}px ${t.bgY}px`,
+                      backgroundSize: `${t.bgW}px ${t.bgH}px`,
+                      backgroundRepeat: 'no-repeat'
+                    }}
+                    data-hv-filmstrip-tile={t.ms}
+                  />
+                ))}
+              </div>
+            )}
+            {/* sound, from the recorder's microphone levels or the server's peaks */}
             <div className='relative border-b border-border' style={{ height: SOUND_H }}>
               {silences?.map((r) => (
                 <span
@@ -259,18 +365,41 @@ export function Timeline({
                 </span>
               )}
             </div>
-            <Lanes
-              edits={edits}
-              sourceMs={sourceMs}
-              pps={pps}
-              selection={selection}
-              onSelect={onSelect}
-              drag={drag}
-              nudge={nudge}
-              hintId={hintId}
-              layout={layout}
-              clicks={clicks}
-            />
+            {/* The marquee is a pointer gesture over the lanes; every bar in
+                them is a button with its own keyboard handling. */}
+            <div
+              ref={lanesBox}
+              className='relative touch-none'
+              onPointerDown={marqueeDown}
+              data-hv-lanes
+            >
+              <Lanes
+                edits={edits}
+                sourceMs={sourceMs}
+                pps={pps}
+                selection={selection}
+                onSelect={onSelect}
+                drag={drag}
+                nudge={nudge}
+                hintId={hintId}
+                layout={layout}
+                clicks={clicks}
+                onSeek={onSeek}
+              />
+              {marquee && (
+                <div
+                  className='pointer-events-none absolute z-20 rounded-[3px] border border-nvr-cyan bg-nvr-cyan/15'
+                  style={{
+                    left: Math.min(marquee.x0, marquee.x1),
+                    top: Math.min(marquee.y0, marquee.y1),
+                    width: Math.abs(marquee.x1 - marquee.x0),
+                    height: Math.abs(marquee.y1 - marquee.y0)
+                  }}
+                  aria-hidden
+                  data-hv-marquee
+                />
+              )}
+            </div>
             <Playhead srcMs={playheadSrcMs} pps={pps} scroller={scroller} dragging={dragging} />
           </div>
         </div>

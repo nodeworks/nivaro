@@ -1,4 +1,5 @@
 import type React from 'react'
+import { DocVideoCard } from './DocVideoCard'
 import type { ContentNode, DocSection } from './types.js'
 
 // ─── Inline text parser ───────────────────────────────────────────────────────
@@ -137,6 +138,8 @@ function renderNode(node: ContentNode, i: number): React.ReactElement {
       )
     case 'divider':
       return <hr key={i} className='my-8 border-slate-200 dark:border-border' />
+    case 'video':
+      return <DocVideoCard key={i} node={node} />
   }
 }
 

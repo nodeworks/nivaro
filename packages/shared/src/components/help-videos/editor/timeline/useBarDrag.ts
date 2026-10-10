@@ -52,6 +52,7 @@ export function useBarDrag(opts: {
     for (const k of ['annotations', 'zooms', 'blurs', 'captions'] as const)
       for (const x of edits[k]) t.push(x.start_ms, x.end_ms)
     for (const c of edits.chapters) t.push(c.at_ms)
+    for (const h of edits.holds ?? []) t.push(h.at_ms)
     return t
   }, [edits, sourceMs])
   const targets = useRef(snapTargets)

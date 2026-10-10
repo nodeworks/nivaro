@@ -1,4 +1,12 @@
-import { EDIT_LIMITS, type ListKey, newId, textDurationMs, upsertItemChecked } from '../edits'
+import {
+  EDIT_LIMITS,
+  type ListKey,
+  newId,
+  setZoomKeyframe,
+  textDurationMs,
+  upsertItemChecked,
+  zoomRectAt
+} from '../edits'
 import type { Annotation, Blur, Point, RecordedClick, Rect, Tone, VideoEdits, Zoom } from '../types'
 import type { Selection } from './timeline/Lanes'
 
@@ -328,6 +336,34 @@ export function reshapeItem<T extends { rect: Rect; to?: Point | null }>(
       h: r3(clamp(r.h + dy, 0.02, 1 - r.y))
     }
   }
+}
+
+/** The shape's area on the picture at a SOURCE moment: a moving zoom's
+ *  area comes from its stops (#1539), everything else has one rect. */
+export function shapeRectAt<T extends { rect: Rect }>(
+  item: T,
+  lane: 'annotations' | 'zooms' | 'blurs',
+  srcMs: number
+): Rect {
+  return lane === 'zooms' ? zoomRectAt(item as unknown as Zoom, srcMs) : item.rect
+}
+
+/** reshapeItem at a moment: a zoom moved or resized while the playhead is
+ *  inside it keeps the change as a stop at that moment (#1539), so a zoom
+ *  that moves is made by scrubbing and dragging; a still zoom moved at its
+ *  start just moves. Other shapes reshape as usual. */
+export function reshapeItemAt<T extends { rect: Rect; to?: Point | null }>(
+  item: T,
+  lane: 'annotations' | 'zooms' | 'blurs',
+  mode: ReshapeMode,
+  dx: number,
+  dy: number,
+  srcMs: number
+): T {
+  if (lane !== 'zooms') return reshapeItem(item, lane, mode, dx, dy)
+  const z = item as unknown as Zoom
+  const now = reshapeItem({ ...z, rect: zoomRectAt(z, srcMs) }, lane, mode, dx, dy)
+  return setZoomKeyframe(z, srcMs, now.rect) as unknown as T
 }
 
 /** What the preview plays: while a zoom is selected it shows the whole

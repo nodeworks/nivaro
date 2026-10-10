@@ -27,11 +27,18 @@ export const MAX_SPANS = 1000
 const MASKED = '.nvr-no-record, [data-nvr-no-record], [data-hv-recorder-bar], [data-hv-walk]'
 const TEXT_TYPES = new Set(['', 'text', 'search', 'email', 'url', 'tel', 'password', 'number'])
 
+/** The event happened inside a masked area (.nvr-no-record, the recorder's
+ *  own bar, the walk overlay): nothing about it is kept beyond the moment. */
+export function isMaskedTarget(target: EventTarget | null): boolean {
+  const el = target as Element | null
+  return !!el && typeof el.closest === 'function' && !!el.closest(MASKED)
+}
+
 /** The key went to a text field the tutorial is about (not a masked one). */
 export function isTypingTarget(target: EventTarget | null): boolean {
   const el = target as (Element & { isContentEditable?: boolean }) | null
   if (!el || typeof el.closest !== 'function') return false
-  if (el.closest(MASKED)) return false
+  if (isMaskedTarget(el)) return false
   const tag = el.tagName
   if (tag === 'TEXTAREA') return true
   if (tag === 'INPUT') return TEXT_TYPES.has(((el as HTMLInputElement).type ?? '').toLowerCase())

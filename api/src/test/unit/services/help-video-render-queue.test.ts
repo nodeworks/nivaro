@@ -450,6 +450,25 @@ describe('cleanRenderScratch', () => {
     rmSync(base, { recursive: true, force: true })
   })
 
+  it('sweeps the clips, captions and extras areas by the same rules', async () => {
+    expect(r.SCRATCH_DIRS).toEqual(['render', 'clips', 'captions', 'extras'])
+    for (const area of ['clips', 'captions', 'extras']) {
+      const base = join(work, area)
+      for (const n of [`${ID}-0a1b2c3d`, `${ID}-ffffffff`, 'keep-me'])
+        mkdirSync(join(base, n), { recursive: true })
+      age(join(base, `${ID}-0a1b2c3d`))
+      age(join(base, 'keep-me'))
+    }
+    // An old upload-id-only extras directory (the earlier layout) goes too.
+    mkdirSync(join(work, 'extras', ID), { recursive: true })
+    age(join(work, 'extras', ID))
+    expect(await r.cleanRenderScratch()).toBe(4)
+    for (const area of ['clips', 'captions', 'extras']) {
+      expect(readdirSync(join(work, area)).sort()).toEqual([`${ID}-ffffffff`, 'keep-me'])
+      rmSync(join(work, area), { recursive: true, force: true })
+    }
+  })
+
   it('keeps a directory whose name is not a scratch name', async () => {
     const base = join(work, 'render')
     mkdirSync(join(base, 'keep-me'), { recursive: true })

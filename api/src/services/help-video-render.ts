@@ -16,6 +16,7 @@ import {
   loadCardBrand,
   shownBrand
 } from './help-video-cards.js'
+import { buildCursorAss } from './help-video-cursor.js'
 import {
   CALLOUT_TEXT_SCALE,
   calloutTextOf,
@@ -36,12 +37,12 @@ import {
 import { musicForRender } from './help-video-music.js'
 import {
   buildPosterArgs,
-  buildRenderArgs,
+  buildRenderPlan,
   type RenderInput,
   renderSizes
 } from './help-video-render-plan.js'
 import { ENCODER_DEFAULTS, renderEncoderSettings } from './help-video-settings.js'
-import { discardFile, videoWorkDir } from './help-video-uploads.js'
+import { discardFile, pointerOfFile, videoWorkDir } from './help-video-uploads.js'
 import { getApp } from './io-holder.js'
 import { isCancelled, requestCancel } from './job-cancel.js'
 import { startJobRun } from './job-runs.js'
@@ -324,6 +325,26 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     }))
     // Background music (#1547): a library track or the video's own file.
     const music = edits.music ? await musicForRender(String(v.video_id), edits.music, dir) : null
+    // The recorded cursor and shortcut badges (#1517): an ASS file burned in
+    // over the picture. A recording without a pointer path draws nothing.
+    let cursor: RenderInput['cursor'] = null
+    if (edits.cursor?.show) {
+      const pointer = await pointerOfFile(v.source_file)
+      if (pointer) {
+        const assPath = join(dir, 'cursor.ass')
+        await writeFile(
+          assPath,
+          buildCursorAss({
+            pointer,
+            edits,
+            out: size,
+            durationMs: Number(v.source_duration_ms ?? probe.duration_ms ?? 0),
+            shortcuts: !!edits.cursor.shortcuts
+          })
+        )
+        cursor = { assPath }
+      }
+    }
     const total = Math.max(1, editedDuration(edits))
     let lastWrite = 0
     const out = join(dir, 'video.mp4')
@@ -355,8 +376,12 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
             }
           : null,
       music,
+      cursor,
       outputPath: out,
-      threads: renderThreads()
+      threads: renderThreads(),
+      // The filter graph goes by file: as one argument it can pass the
+      // kernel's per-argument limit and ffmpeg never starts (E2BIG).
+      graphFile: join(dir, 'filters.txt')
     }
     // The encoder (#1561): the settings' choice, hardware when allowed and
     // working here. A hardware encode that fails is retried once in software.
@@ -381,26 +406,20 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
           .catch(() => null)
       }
     }
+    // One ffmpeg pass: the graph is written to its file, then ffmpeg runs.
+    const pass = async (input: RenderInput, onProgress: (ms: number) => void) => {
+      const plan = buildRenderPlan(input)
+      await writeFile(String(input.graphFile), plan.graph)
+      await runFfmpeg(plan.args, onProgress, abort.signal, { lowPriority: true })
+    }
     const encode = async (p: VideoEncodePlan) => {
       if (p.twoPass) {
         const logfile = join(dir, 'x264-pass')
-        await runFfmpeg(
-          buildRenderArgs({ ...base, video: p, pass: { n: 1, logfile } }),
-          progress(0, 0.5),
-          abort.signal,
-          { lowPriority: true }
-        )
+        await pass({ ...base, video: p, pass: { n: 1, logfile } }, progress(0, 0.5))
         stopIfCancelled()
-        await runFfmpeg(
-          buildRenderArgs({ ...base, video: p, pass: { n: 2, logfile } }),
-          progress(0.5, 0.5),
-          abort.signal,
-          { lowPriority: true }
-        )
+        await pass({ ...base, video: p, pass: { n: 2, logfile } }, progress(0.5, 0.5))
       } else {
-        await runFfmpeg(buildRenderArgs({ ...base, video: p }), progress(0, 1), abort.signal, {
-          lowPriority: true
-        })
+        await pass({ ...base, video: p }, progress(0, 1))
       }
     }
     try {
@@ -587,27 +606,33 @@ export async function sweepRenders(): Promise<number> {
   return n
 }
 
-/** A render scratch directory name: `<version id>-<8 hex>`, or the earlier
- *  `<version id>` layout. */
+/** A scratch directory name: `<id>-<8 hex>` (the id of the version, clip or
+ *  upload the work was for), or the earlier `<id>` layout. */
 const SCRATCH_NAME_RE = /^[0-9a-f-]{36}(-[0-9a-f]{8})?$/i
+/** The work directory's scratch areas: renders, clips (#1562), caption jobs
+ *  (#1520) and upload extras (sprite sheets, peaks). */
+export const SCRATCH_DIRS = ['render', 'clips', 'captions', 'extras'] as const
 
-/** Remove render scratch directories older than 24 h (a crash leaves source
- *  copies of up to 1.2 GB behind). Never touches a younger one, a name that is
- *  not a scratch name, or anything reached through a symlink. */
+/** Remove scratch directories older than 24 h (a crash leaves source copies
+ *  of up to 1.2 GB behind) under every scratch area. Never touches a younger
+ *  one, a name that is not a scratch name, or anything reached through a
+ *  symlink. */
 export async function cleanRenderScratch(maxAgeMs = SCRATCH_MAX_AGE_MS): Promise<number> {
-  const base = join(videoWorkDir(), 'render')
-  const baseStat = await lstat(base).catch(() => null)
-  if (!baseStat?.isDirectory()) return 0 // missing, a symlink, or not a directory
   let removed = 0
-  const names = await readdir(base).catch(() => [] as string[])
-  for (const name of names) {
-    if (!SCRATCH_NAME_RE.test(name)) continue
-    const path = join(base, name)
-    const st = await lstat(path).catch(() => null)
-    if (!st?.isDirectory() || Date.now() - st.mtimeMs < maxAgeMs) continue
-    await rm(path, { recursive: true, force: true })
-      .then(() => removed++)
-      .catch(() => null)
+  for (const area of SCRATCH_DIRS) {
+    const base = join(videoWorkDir(), area)
+    const baseStat = await lstat(base).catch(() => null)
+    if (!baseStat?.isDirectory()) continue // missing, a symlink, or not a directory
+    const names = await readdir(base).catch(() => [] as string[])
+    for (const name of names) {
+      if (!SCRATCH_NAME_RE.test(name)) continue
+      const path = join(base, name)
+      const st = await lstat(path).catch(() => null)
+      if (!st?.isDirectory() || Date.now() - st.mtimeMs < maxAgeMs) continue
+      await rm(path, { recursive: true, force: true })
+        .then(() => removed++)
+        .catch(() => null)
+    }
   }
   return removed
 }

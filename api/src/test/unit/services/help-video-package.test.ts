@@ -98,6 +98,11 @@ describe('checkManifest', () => {
     expect(c.pages).toEqual([{ key: 'my-work', label: 'My Work', app: 'efp-new' }])
   })
 
+  it('carries the script (#1491) when the package has one, cleaned', () => {
+    expect(checkManifest(manifest(), entries()).videos[0].script).toBeNull()
+    const c = checkManifest(manifest({}, { script: ['  Open ', '', 'Approve', 7] }), entries())
+    expect(c.videos[0].script).toEqual(['Open', 'Approve'])
+  })
   it('renders again when the render was not built for these edits', () => {
     const c = checkManifest(manifest({}, { rendered_hash: 'stale' }), entries())
     expect(c.videos[0].render_reusable).toBe(false)

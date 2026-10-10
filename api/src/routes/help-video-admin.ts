@@ -24,7 +24,14 @@ import {
   storedEncoder,
   TWO_PASS_MAX_MINUTES
 } from '../services/help-video-settings.js'
+import {
+  runStorageSweep,
+  saveRetentionDays,
+  storageReport,
+  sweepPlan
+} from '../services/help-video-storage.js'
 import { isAuthor } from '../services/help-videos.js'
+import { withJobRun } from '../services/job-runs.js'
 
 // Administrator routes for help videos that are not about one video:
 //   GET/PATCH /help-videos/settings           — render encoder (#1561)
@@ -32,6 +39,10 @@ import { isAuthor } from '../services/help-videos.js'
 //   PATCH     /help-videos/house-style        — house style, administrators
 //   GET       /help-videos/render-queue       — the queue (#1532)
 //   POST      /help-videos/render-queue/:versionId/cancel
+//   GET       /help-videos/storage            — sizes per video and version (#1531)
+//   PATCH     /help-videos/storage/retention  — {retention_days | null}
+//   GET       /help-videos/storage/plan       — what the next sweep removes and why
+//   POST      /help-videos/storage/sweep      — run the sweep now
 // Registered beside helpVideosRoutes under the same prefix; these static
 // paths win over its /:id routes.
 
@@ -131,6 +142,50 @@ export async function helpVideoAdminRoutes(app: FastifyInstance): Promise<void> 
       req
     })
     return reply.send({ data: await houseStyleBody() })
+  })
+
+  // ── Storage housekeeping (#1531) ─────────────────────────────────────────
+  app.get('/storage', { preHandler: requireAdmin }, async (_req, reply) => {
+    return reply.send({ data: await storageReport() })
+  })
+  app.patch('/storage/retention', { preHandler: requireAdmin }, async (req, reply) => {
+    const body = (req.body ?? {}) as { retention_days?: unknown }
+    if (!('retention_days' in body)) {
+      return reply
+        .code(400)
+        .send({ error: 'retention_days is required', code: 'HELP_VIDEO_SETTINGS_INVALID' })
+    }
+    let days: number | null
+    try {
+      days = await saveRetentionDays(body.retention_days)
+    } catch (err) {
+      return refuse(reply, err)
+    }
+    await logActivity({
+      action: 'help-video-settings',
+      user: req.user!.id,
+      collection: 'nivaro_settings',
+      item: '1',
+      comment: `retention_days: ${days === null ? 'keep everything' : days}`,
+      req
+    })
+    return reply.send({ data: { retention_days: days, migrated: true } })
+  })
+  app.get('/storage/plan', { preHandler: requireAdmin }, async (_req, reply) => {
+    return reply.send({ data: await sweepPlan() })
+  })
+  app.post('/storage/sweep', { preHandler: requireAdmin }, async (req, reply) => {
+    let result: Awaited<ReturnType<typeof runStorageSweep>> | null = null
+    await withJobRun(
+      'cron',
+      'help-video-storage-sweep',
+      { label: 'Help videos: storage sweep (run now)', triggeredBy: req.user!.id },
+      async () => {
+        result = await runStorageSweep({ user: req.user ?? null })
+        return result.summary
+      }
+    )
+    return reply.send({ data: result })
   })
 
   app.get('/render-queue', { preHandler: requireAdmin }, async (_req, reply) => {

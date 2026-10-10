@@ -4,7 +4,8 @@ import {
   outroMs,
   segmentIndexAt,
   sourceToEdited,
-  zoomInView
+  zoomInView,
+  zoomRectAt
 } from './edits'
 import type { Rect, VideoEdits } from './types'
 
@@ -75,7 +76,8 @@ export function liveBlurPx(
 /** Zoom inside the (cropped) picture as CSS: transform-origin 0 0,
  *  translate(tx·100%, ty·100%) scale(z). Same maths as the render's crop:
  *  offset = clamp(0.5 − centre·z, 1 − z, 0). Zoom rects are mapped into the
- *  crop first (zoomInView), as the render does. */
+ *  crop first (zoomInView), as the render does; a moving zoom's area at this
+ *  moment comes from its stops (zoomRectAt, #1539). */
 export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; ty: number } {
   for (const zm of e.zooms) {
     if (srcMs < zm.start_ms || srcMs > zm.end_ms) continue
@@ -87,7 +89,7 @@ export function zoomAt(e: VideoEdits, srcMs: number): { z: number; tx: number; t
             1
           )
         : 1
-    const v = zoomInView(e, zm.rect)
+    const v = zoomInView(e, zoomRectAt(zm, srcMs))
     const z = 1 + (v.mag - 1) * p
     const cx = 0.5 + (v.cx - 0.5) * p
     const cy = 0.5 + (v.cy - 0.5) * p
@@ -132,6 +134,31 @@ export function liveStep(
   }
   const next = e.segments.find((s) => s.start_ms > srcMs)
   return next ? { action: 'seek', toMs: next.start_ms, rate: next.speed } : { action: 'end' }
+}
+
+/** How far past a held frame's moment the live clock may be and still hold
+ *  it (further is a seek or a jump over a cut, not playback reaching it). */
+const HOLD_REACH_MS = 1000
+
+/**
+ * The held frame (#1537) live playback has just reached: one on a kept
+ * piece whose moment the clock passed between `prevMs` and `ms`, going
+ * forward by no more than a second. `skipId` is the hold playback just
+ * left (it goes on from that very moment, which must not hold again).
+ */
+export function holdReached(
+  e: VideoEdits,
+  prevMs: number,
+  ms: number,
+  skipId: string | null
+): { id: string; at_ms: number; hold_ms: number } | null {
+  if (!e.holds?.length || ms <= prevMs || ms - prevMs > HOLD_REACH_MS) return null
+  for (const h of e.holds) {
+    if (h.id === skipId || h.at_ms <= prevMs || h.at_ms > ms) continue
+    if (segmentIndexAt(e, h.at_ms) < 0) continue
+    return { id: h.id, at_ms: h.at_ms, hold_ms: h.hold_ms }
+  }
+  return null
 }
 
 export function resolveDurationMs(videoDuration: number, fallbackMs: number | null): number {

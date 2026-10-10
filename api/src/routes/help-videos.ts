@@ -8,6 +8,21 @@ import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { getFile } from '../services/files.js'
 import {
+  CaptionsError,
+  captionProvider,
+  clearCaptionJob,
+  readCaptionJob,
+  startCaptionJob
+} from '../services/help-video-captions.js'
+import {
+  clipRow,
+  createClip,
+  deleteClip,
+  listClips,
+  serializeClip
+} from '../services/help-video-clips.js'
+
+import {
   captionsVtt,
   contentDisposition,
   downloadsAllowed,
@@ -20,12 +35,21 @@ import {
   videoExtension,
   vttToSrt
 } from '../services/help-video-download.js'
+import { DraftError, suggestDraftForVideo } from '../services/help-video-draft.js'
 import {
   captionsToVtt,
   EditsError,
   emptyEdits,
   normalizeEdits
 } from '../services/help-video-edits.js'
+import {
+  answerQuestion,
+  askQuestion,
+  listQuestions,
+  myRating,
+  ratingSummary,
+  setRating
+} from '../services/help-video-feedback.js'
 import {
   deleteVideoMusic,
   importOpenverseMusic,
@@ -36,6 +60,7 @@ import {
   uploadMusic,
   videoMusicRow
 } from '../services/help-video-music.js'
+import { nextForViewer } from '../services/help-video-next.js'
 import {
   OpenverseError,
   openverseEnabled,
@@ -55,7 +80,27 @@ import {
   openImport,
   previewImport
 } from '../services/help-video-package.js'
+import {
+  createPath,
+  deletePath,
+  listPaths,
+  loadPath,
+  notifyRequiredPathViewersSafely,
+  pathsForUser,
+  replacePathItems,
+  replacePathRoles,
+  requiredRolesOf,
+  serializePath,
+  splitRequired,
+  updatePath
+} from '../services/help-video-paths.js'
+import {
+  deleteReleaseVideo,
+  releaseVideosFor,
+  setReleaseVideo
+} from '../services/help-video-releases.js'
 import { queueRender } from '../services/help-video-render.js'
+import { dismissStale, StaleError } from '../services/help-video-stale.js'
 import {
   abandonUpload,
   activityOfFile,
@@ -64,6 +109,7 @@ import {
   listOpenUploads,
   MAX_PART_BYTES,
   openUpload,
+  pointerOfFile,
   sourceKindOfFile,
   uploadStatus
 } from '../services/help-video-uploads.js'
@@ -76,6 +122,7 @@ import {
 import {
   archiveVideo,
   createVideo,
+  draftMedia,
   ensureDraft,
   isAuthor,
   isUuid,
@@ -131,6 +178,21 @@ async function requireAdmin(req: FastifyRequest, reply: FastifyReply): Promise<v
   }
 }
 
+/** Was this clip cut from the version viewers see (the published one)? */
+function clipOfPublished(
+  row: Record<string, unknown>,
+  video: { published_version_id: string | null }
+): boolean {
+  return (
+    !!row.version_id &&
+    !!video.published_version_id &&
+    String(row.version_id).toLowerCase() === String(video.published_version_id).toLowerCase()
+  )
+}
+
+/** The finalize body (the recording's metadata) may be this large. */
+export const FINALIZE_BODY_BYTES = 8 * 1024 * 1024
+
 function viewerCtx(req: FastifyRequest, author: boolean) {
   return { author, userId: req.user!.id, role: req.user!.role ?? null, sidTag: sessionTag(req) }
 }
@@ -163,20 +225,28 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     }
     return reply.send({ data: await appendPart(req.user!, id, Number(n), body) })
   })
-  app.post('/uploads/:id/finalize', { preHandler: requireAuthor }, async (req, reply) => {
-    const { id } = req.params as { id: string }
-    const meta = (req.body ?? {}) as {
-      duration_ms?: number
-      clicks?: unknown
-      levels?: unknown
-      activity?: unknown
+  // The metadata (clicks, levels, activity, script, marks) is bounded by its
+  // normalisers at under 3 MB, so the body need not parse under the global limit.
+  app.post(
+    '/uploads/:id/finalize',
+    { preHandler: requireAuthor, bodyLimit: FINALIZE_BODY_BYTES },
+    async (req, reply) => {
+      const { id } = req.params as { id: string }
+      const meta = (req.body ?? {}) as {
+        duration_ms?: number
+        clicks?: unknown
+        levels?: unknown
+        activity?: unknown
+        script?: unknown
+        marks?: unknown
+      }
+      const result = await finalizeUpload(req.user!, id, meta)
+      // An uploaded file is checked (and maybe converted) in the background:
+      // poll GET /uploads/:id until it is finalized.
+      if ('processing' in result) return reply.code(202).send({ data: result })
+      return reply.send({ data: result })
     }
-    const result = await finalizeUpload(req.user!, id, meta)
-    // An uploaded file is checked (and maybe converted) in the background:
-    // poll GET /uploads/:id until it is finalized.
-    if ('processing' in result) return reply.code(202).send({ data: result })
-    return reply.send({ data: result })
-  })
+  )
   app.get('/uploads/mine', { preHandler: requireAuthor }, async (req, reply) => {
     return reply.send({ data: await listOpenUploads(req.user!) })
   })
@@ -249,23 +319,104 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.send(await videosForContext(req, q))
   })
   app.get('/pages', async (_req, reply) => reply.send({ data: await listPages() }))
+  // `labels` (optional): the click targets the client saw on the page, for
+  // the nightly "may be out of date" check (#1495). Checked and capped.
   app.post('/pages', { preHandler: requireAuthor }, async (req, reply) => {
-    const b = (req.body ?? {}) as { key?: string; label?: string; app?: string }
-    await registerPage(String(b.key ?? ''), String(b.label ?? ''), b.app ?? null)
+    const b = (req.body ?? {}) as { key?: string; label?: string; app?: string; labels?: unknown }
+    await registerPage(String(b.key ?? ''), String(b.label ?? ''), b.app ?? null, b.labels)
+    return reply.code(204).send()
+  })
+
+  // ── Learning paths (#1508) ────────────────────────────────────────────────
+  // Authors make ordered lists of videos for roles; everyone gets the paths
+  // for their role (and the New User paths while their account is new) with
+  // their own progress. Every :pid is an exact uuid or 404.
+  app.post('/paths', { preHandler: requireAuthor }, async (req, reply) => {
+    const id = await createPath(req.user!, req.body)
+    return reply.code(201).send({ data: await serializePath(await loadPath(id)) })
+  })
+  app.get('/paths', { preHandler: requireAuthor }, async (_req, reply) => {
+    return reply.send({ data: await listPaths() })
+  })
+  app.get('/paths/mine', async (req, reply) => {
+    return reply.send({ data: await pathsForUser(req) })
+  })
+  app.get('/paths/:pid', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    return reply.send({ data: await serializePath(await loadPath(pid)) })
+  })
+  app.patch('/paths/:pid', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    const row = await loadPath(pid)
+    const { published_now } = await updatePath(row, req.user!, req.body)
+    const fresh = await loadPath(pid)
+    if (published_now) {
+      // Publishing tells the roles it is required for, like a required video.
+      const roles = await requiredRolesOf(row.id)
+      if (roles.length) {
+        void notifyRequiredPathViewersSafely(String(row.id), String(fresh.title ?? ''), roles)
+      }
+    }
+    return reply.send({ data: await serializePath(fresh) })
+  })
+  app.put('/paths/:pid/items', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    const row = await loadPath(pid)
+    await replacePathItems(row, req.user!, (req.body as { video_ids?: unknown })?.video_ids)
+    return reply.send({ data: await serializePath(await loadPath(pid)) })
+  })
+  app.put('/paths/:pid/roles', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    const row = await loadPath(pid)
+    const { added_required } = await replacePathRoles(
+      row,
+      req.user!,
+      (req.body as { roles?: unknown })?.roles
+    )
+    if (row.status === 'published' && added_required.length) {
+      void notifyRequiredPathViewersSafely(String(row.id), String(row.title ?? ''), added_required)
+    }
+    return reply.send({ data: await serializePath(await loadPath(pid)), added: added_required })
+  })
+  app.delete('/paths/:pid', { preHandler: requireAuthor }, async (req, reply) => {
+    const { pid } = req.params as { pid: string }
+    await deletePath(await loadPath(pid), req.user!)
+    return reply.code(204).send()
+  })
+
+  // ── Release videos (#1528b) ───────────────────────────────────────────────
+  // One video per changelog release. Readers get only what they may watch.
+  app.get('/releases', async (req, reply) => {
+    return reply.send({ data: await releaseVideosFor(req) })
+  })
+  app.put('/releases/:version', { preHandler: requireAdmin }, async (req, reply) => {
+    const { version } = req.params as { version: string }
+    return reply.send({ data: await setReleaseVideo(req.user!, version, req.body) })
+  })
+  app.delete('/releases/:version', { preHandler: requireAdmin }, async (req, reply) => {
+    const { version } = req.params as { version: string }
+    await deleteReleaseVideo(req.user!, version)
     return reply.code(204).send()
   })
 
   // ── Watching ──────────────────────────────────────────────────────────────
+  // The required list: single required videos, plus required learning paths
+  // (#1508) that are not finished — one entry per path, carrying its videos
+  // and the next one to watch. A video inside such a path is not listed on
+  // its own as well.
   app.get('/required/mine', async (req, reply) => {
     const ids = await requiredForUser(req.user!)
-    if (!ids.length) return reply.send({ data: [] })
-    const rows = (await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[]
-    const data = await Promise.all(
+    const rows = ids.length
+      ? ((await db('nivaro_help_videos').whereIn('id', ids)) as VideoRow[])
+      : []
+    const singles = await Promise.all(
       rows
         .filter((v) => viewerMaySee(v, req.user!.role, false))
         .map((v) => serializeVideo(v, viewerCtx(req, false)))
     )
-    return reply.send({ data })
+    const mine = await pathsForUser(req).catch(() => [])
+    const { data, paths } = splitRequired(singles, mine)
+    return reply.send({ data, paths })
   })
 
   app.get('/:id', async (req, reply) => {
@@ -389,10 +540,77 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     })
   })
 
+  // "May be out of date" (#1495): an author dismisses the note; publishing
+  // clears it by itself. 409 HELP_VIDEO_NOT_STALE when there is none.
+  app.post('/:id/stale/dismiss', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    try {
+      await dismissStale(video, req.user!)
+    } catch (err) {
+      if (err instanceof StaleError) {
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      }
+      throw err
+    }
+    const fresh = await loadVideoForUser(req, id)
+    return reply.send({ data: await serializeVideo(fresh.video, viewerCtx(req, true)) })
+  })
+
   app.get('/:id/analytics', { preHandler: requireAuthor }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const { video } = await loadVideoForUser(req, id)
-    return reply.send({ data: await videoAnalytics(video) })
+    const [analytics, ratings, questions] = await Promise.all([
+      videoAnalytics(video),
+      ratingSummary(video),
+      listQuestions(video, { userId: req.user!.id, author: true })
+    ])
+    return reply.send({ data: { ...analytics, ratings, questions } })
+  })
+
+  // ── "Was this helpful?" and questions at a moment (#1505) ─────────────────
+  // Like progress, nothing is written for a masquerade session: an admin
+  // looking as someone else must not vote or ask in that person's name.
+  const notWhileMasquerading = (reply: FastifyReply) =>
+    reply.code(403).send({
+      error: 'Not while viewing as someone else',
+      code: 'HELP_VIDEO_MASQUERADE'
+    })
+  app.put('/:id/rating', async (req, reply) => {
+    if (req.masqueradeAdminId) return notWhileMasquerading(reply)
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const body = (req.body ?? {}) as { helpful?: unknown }
+    return reply.send({ data: await setRating(req.user!, video, body.helpful) })
+  })
+  app.get('/:id/questions', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video, author } = await loadVideoForUser(req, id)
+    const [data, rating] = await Promise.all([
+      listQuestions(video, { userId: req.user!.id, author }),
+      myRating(video, req.user!.id)
+    ])
+    return reply.send({ data, my_rating: rating })
+  })
+  app.post('/:id/questions', async (req, reply) => {
+    if (req.masqueradeAdminId) return notWhileMasquerading(reply)
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const body = (req.body ?? {}) as { at_ms?: unknown; text?: unknown }
+    return reply.code(201).send({ data: await askQuestion(req.user!, video, body) })
+  })
+  app.post('/:id/questions/:qid/answer', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id, qid } = req.params as { id: string; qid: string }
+    const { video } = await loadVideoForUser(req, id)
+    const body = (req.body ?? {}) as { answer?: unknown }
+    return reply.send({ data: await answerQuestion(req.user!, video, qid, body) })
+  })
+
+  // ── "Up next" (#1530): what people in this role watched after this one ──
+  app.get('/:id/next', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    return reply.send({ data: await nextForViewer(req, video) })
   })
 
   // ── Draft edits ───────────────────────────────────────────────────────────
@@ -402,9 +620,14 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const draft = await ensureDraft(video, req.user!)
     return reply.send({
       data: {
-        ...serializeVersion(draft, { withRecorderData: true }),
+        ...serializeVersion(draft, {
+          withRecorderData: true,
+          // The sprite sheet (#1560) rides a draft ticket, like the draft stream.
+          media: draftMedia(String(video.id), req.user!.id, sessionTag(req))
+        }),
         source_kind: await sourceKindOfFile(draft.source_file),
-        activity: await activityOfFile(draft.source_file)
+        activity: await activityOfFile(draft.source_file),
+        pointer: await pointerOfFile(draft.source_file)
       }
     })
   })
@@ -421,6 +644,93 @@ export async function helpVideosRoutes(app: FastifyInstance) {
         return reply.code(422).send({ error: err.message, code: err.code })
       throw err
     }
+  })
+
+  // ── AI first draft (#1487) ────────────────────────────────────────────────
+  // Suggestions only: chapters, callouts at the clicks, a title, a
+  // description and the screens it explains. Nothing is written here; the
+  // editor accepts each one through the draft save and the detail routes.
+  app.post('/:id/draft/suggest', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const draft = await loadVersion(video.draft_version_id)
+    if (!draft) {
+      return reply.code(409).send({
+        error: 'This video has no draft yet. Open it in the editor first.',
+        code: 'HELP_VIDEO_NO_DRAFT'
+      })
+    }
+    try {
+      return reply.send({ data: await suggestDraftForVideo(video, draft, req.user!) })
+    } catch (err) {
+      if (err instanceof DraftError)
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      throw err
+    }
+  })
+
+  // ── Automatic captions (#1520) ───────────────────────────────────────────
+  // A background transcription of the draft's sound; the result is a pending
+  // set the editor shows until the author uses or discards it (24 h).
+  const captionsReply = (reply: FastifyReply, err: unknown) => {
+    if (err instanceof CaptionsError)
+      return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+    throw err
+  }
+  app.get('/:id/captions/generate', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const job = video.draft_version_id ? await readCaptionJob(video.draft_version_id) : null
+    const p = await captionProvider()
+    return reply.send({
+      data: {
+        job: job && job.video_id === String(video.id).toLowerCase() ? job : null,
+        provider: {
+          kind: p.kind,
+          model: p.kind === 'none' ? null : p.model,
+          reason: p.kind === 'none' ? p.reason : null
+        }
+      }
+    })
+  })
+  app.post('/:id/captions/generate', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const draft = await loadVersion(video.draft_version_id)
+    if (!draft) {
+      return reply.code(409).send({
+        error: 'This video has no draft yet. Open it in the editor first.',
+        code: 'HELP_VIDEO_NO_DRAFT'
+      })
+    }
+    try {
+      const job = await startCaptionJob({ id: String(video.id) }, String(draft.id), req.user!)
+      await logActivity({
+        action: 'help-video-captions',
+        user: req.user!.id,
+        collection: 'nivaro_help_videos',
+        item: String(video.id).toLowerCase(),
+        comment: `generate (${job.provider ?? 'unknown'})`
+      })
+      return reply.code(202).send({ data: job })
+    } catch (err) {
+      return captionsReply(reply, err)
+    }
+  })
+  app.delete('/:id/captions/generate', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    if (video.draft_version_id) {
+      const job = await readCaptionJob(video.draft_version_id)
+      if (job && (job.status === 'queued' || job.status === 'running')) {
+        return reply.code(409).send({
+          error: 'Captions are still being generated',
+          code: 'HELP_VIDEO_CAPTIONS_BUSY'
+        })
+      }
+      await clearCaptionJob(video.draft_version_id)
+    }
+    return reply.code(204).send()
   })
 
   // ── Versions ──────────────────────────────────────────────────────────────
@@ -470,6 +780,52 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const { id, vid } = req.params as { id: string; vid: string }
     const { video } = await loadVideoForUser(req, id)
     return reply.send({ data: await restoreVersion(video, req.user!, vid) })
+  })
+
+  // ── Clips and GIFs (#1562) ────────────────────────────────────────────────
+  // Anyone who can watch the video sees its clips (the list carries ticketed
+  // links); only authors make and delete them. A viewer sees only clips of
+  // the published version: one cut from the draft shows what is not
+  // published yet (the media route refuses it the same way).
+  const clipTicket = (req: FastifyRequest, videoId: string) =>
+    mediaTicket(String(videoId).toLowerCase(), req.user!.id, 'p', Date.now(), sessionTag(req))
+  app.get('/:id/clips', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video, author } = await loadVideoForUser(req, id)
+    const t = clipTicket(req, String(video.id))
+    const rows = (await listClips(String(video.id))).filter(
+      (r) => author || clipOfPublished(r, video)
+    )
+    return reply.send({ data: rows.map((r) => serializeClip(r, t, { author })) })
+  })
+  app.post('/:id/clips', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const row = await createClip(
+      {
+        id: String(video.id),
+        published_version_id: video.published_version_id,
+        draft_version_id: video.draft_version_id
+      },
+      req.user!,
+      (req.body ?? {}) as Parameters<typeof createClip>[2]
+    )
+    await logActivity({
+      action: 'help-video-clip',
+      user: req.user!.id,
+      collection: 'nivaro_help_videos',
+      item: String(video.id).toLowerCase(),
+      comment: `${String(row.kind)} ${Number(row.start_ms)}–${Number(row.end_ms)} ms`
+    })
+    return reply
+      .code(201)
+      .send({ data: serializeClip(row, clipTicket(req, String(video.id)), { author: true }) })
+  })
+  app.delete('/:id/clips/:clipId', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id, clipId } = req.params as { id: string; clipId: string }
+    const { video } = await loadVideoForUser(req, id)
+    await deleteClip(req.user!, String(video.id), clipId)
+    return reply.code(204).send()
   })
 
   // ── Background music (#1547) ──────────────────────────────────────────────
@@ -594,7 +950,7 @@ export async function helpVideosRoutes(app: FastifyInstance) {
  *  CURRENT status and role and the video's CURRENT visibility. Unknown,
  *  invisible, expired and unauthorised all answer the same 404. */
 export async function helpVideoMediaRoutes(app: FastifyInstance) {
-  async function resolve(req: FastifyRequest) {
+  async function resolve(req: FastifyRequest, opts: { needVersion?: boolean } = {}) {
     const { id } = req.params as { id: string }
     const { st } = req.query as { st?: string }
     const notFound = Object.assign(new Error('Video not found'), {
@@ -629,8 +985,14 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
     const version = await loadVersion(
       t.scope === 'd' ? video.draft_version_id : video.published_version_id
     )
-    if (!version) throw notFound
-    return { video, version, draft: t.scope === 'd', author, userId: String(user.id) }
+    if (!version && opts.needVersion !== false) throw notFound
+    return {
+      video,
+      version: version as NonNullable<typeof version>,
+      draft: t.scope === 'd',
+      author,
+      userId: String(user.id)
+    }
   }
 
   // no-cache on every media answer: a browser may keep the bytes but must ask
@@ -831,6 +1193,58 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       .header('Content-Type', 'text/vtt; charset=utf-8')
       .header('Cache-Control', 'private, no-cache')
       .send(vtt)
+  })
+
+  // The thumbnail sprite sheet (#1560) of the ticket's version: frames of the
+  // ORIGINAL recording (nothing blurred or cut), so authors only.
+  app.get('/:id/sprite', async (req, reply) => {
+    const { version, author } = await resolve(req)
+    if (!author)
+      return reply.code(404).send({ error: 'Video not found', code: 'HELP_VIDEO_NOT_FOUND' })
+    const file = version.sprite_file ? await getFile(String(version.sprite_file)) : undefined
+    if (!file?.filename_disk) return reply.code(404).send({ error: 'No thumbnails yet' })
+    reply.header('Cache-Control', 'private, no-cache')
+    return sendStoredObject(reply, file.filename_disk, { contentType: 'image/jpeg' })
+  })
+
+  // A clip (#1562): the same people as the video (no version needed — the
+  // clip row says which one it was cut from). A viewer gets only a clip of
+  // the published version; one cut from the draft is 404 like the draft
+  // itself. `download=1` saves it. Each fetch (not each resumed range) is an
+  // activity row — data egress, like /:id/download.
+  app.get('/:id/clips/:clipId', async (req, reply) => {
+    const { video, author, userId } = await resolve(req, { needVersion: false })
+    const { clipId } = req.params as { clipId: string }
+    const q = req.query as { download?: string }
+    const row = await clipRow(String(video.id), clipId)
+    const visible = !!row && (author || clipOfPublished(row, video))
+    const file =
+      visible && row.status === 'ready' && row.file_id
+        ? await getFile(String(row.file_id))
+        : undefined
+    if (!row || !file?.filename_disk) {
+      return reply.code(404).send({ error: 'Clip not found', code: 'HELP_VIDEO_CLIP_NOT_FOUND' })
+    }
+    const gif = row.kind === 'gif'
+    reply.header('Cache-Control', 'private, no-cache').header('X-Content-Type-Options', 'nosniff')
+    const name = safeDownloadName(
+      `${video.title || 'Help video'}${row.label ? ` - ${String(row.label)}` : ''}`,
+      gif ? 'gif' : 'mp4'
+    )
+    if (startsDownload(req.headers.range)) {
+      void logActivity({
+        action: 'help-video-download',
+        user: userId,
+        collection: 'nivaro_help_videos',
+        item: String(video.id).toLowerCase(),
+        comment: `clip ${String(row.id).toLowerCase()} (${gif ? 'gif' : 'mp4'})${q.download === '1' ? ' · download' : ''}`
+      })
+    }
+    return sendStoredObject(reply, file.filename_disk, {
+      rangeHeader: req.headers.range,
+      contentType: gif ? 'image/gif' : 'video/mp4',
+      ...(q.download === '1' ? { disposition: contentDisposition(name) } : {})
+    })
   })
 
   app.get('/:id/poster', async (req, reply) => {

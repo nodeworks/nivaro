@@ -1,11 +1,20 @@
 import { CornerUpLeft, X } from 'lucide-react'
-import { memo, useCallback, useRef } from 'react'
+import { memo, useCallback, useRef, useState } from 'react'
 import { Button } from '../../ui/button'
-import { setPoster, sourceToEdited, upsertItemChecked } from '../edits'
-import type { RecordedClick, VideoEdits } from '../types'
+import { editedDuration, setPoster, sourceToEdited, upsertItemChecked } from '../edits'
+import type { PointerPath, RecordedClick, VideoEdits } from '../types'
 import { CaptionsPanel } from './CaptionsPanel'
 import { CardsPanel } from './CardsPanel'
 import { ChaptersPanel } from './ChaptersPanel'
+import type { ClipPreset } from './ClipDialog'
+import { ClipsPanel } from './ClipsPanel'
+import { CursorPanel } from './CursorPanel'
+import {
+  type ClipRange,
+  clipRangeAround,
+  clipRangeForChapter,
+  clipRangeForSelection
+} from './clips'
 import { HouseStyleSection } from './HouseStylePanel'
 import { Inspector } from './Inspector'
 import { SideSection, useOpenSections } from './layout'
@@ -53,13 +62,16 @@ export const EditorSidebar = memo(function EditorSidebar({
   videoDescription,
   onShowCard,
   videoId,
-  hasLevels
+  hasLevels,
+  pointer
 }: {
   edits: VideoEdits
   selection: Selection
   sourceMs: number
   /** The recorder's captured clicks: null when click capture was off. */
   clicks: RecordedClick[] | null | undefined
+  /** The recorder's pointer path and shortcuts (#1517): null when there are none. */
+  pointer?: PointerPath | null
   /** The source is an uploaded file (it never has captured clicks). */
   uploaded?: boolean
   /** The playhead now (read when an action needs it, not every frame). */
@@ -130,6 +142,40 @@ export const EditorSidebar = memo(function EditorSidebar({
     if (refused) onNote(`Added ${added} of ${ripples.length} ripples. ${sentence(refused)}`)
   }, [clicks, sourceMs, onChange, onNote])
   const selectChapter = useCallback((id: string) => onSelect({ lane: 'chapters', id }), [onSelect])
+  // Clips (#1562): the dialog starts from the selection; a chapter row's
+  // clip button opens it on that chapter.
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  const [clipRequest, setClipRequest] = useState<{ n: number; range: ClipRange } | null>(null)
+  const clipChapter = useCallback(
+    (id: string) => {
+      const r = clipRangeForChapter(editsRef.current, id)
+      if (!r) onNote('That chapter starts in a part that is cut out, so it cannot be a clip')
+      else setClipRequest((cur) => ({ n: (cur?.n ?? 0) + 1, range: r }))
+    },
+    [onNote]
+  )
+  const clipPresets = useCallback((): ClipPreset[] => {
+    const e = editsRef.current
+    const out: ClipPreset[] = []
+    const sel = clipRangeForSelection(e, selectionRef.current)
+    if (sel) out.push({ key: 'selection', label: 'The selection', range: sel })
+    for (const c of e.chapters) {
+      const r = clipRangeForChapter(e, c.id)
+      if (r)
+        out.push({ key: `chapter:${c.id}`, label: `Chapter: ${c.title || 'Chapter'}`, range: r })
+    }
+    return out
+  }, [])
+  const clipInitial = useCallback(
+    () => clipRangeForSelection(editsRef.current, selectionRef.current),
+    []
+  )
+  const clipPlayhead = useCallback(() => {
+    const e = editsRef.current
+    const at = sourceToEdited(e, playhead())
+    return at === null ? null : clipRangeAround(at, editedDuration(e))
+  }, [playhead])
   const selectCaption = useCallback((id: string) => onSelect({ lane: 'captions', id }), [onSelect])
 
   const [open, toggle] = useOpenSections()
@@ -143,7 +189,7 @@ export const EditorSidebar = memo(function EditorSidebar({
 
   return (
     <aside
-      aria-label='Selected item, chapters, captions, cards, music and narration'
+      aria-label='Selected item, chapters, clips, captions, cards, music and narration'
       data-hvx-side
       data-hv-sidebar
     >
@@ -191,6 +237,9 @@ export const EditorSidebar = memo(function EditorSidebar({
           onSeek={onSeek}
           onError={onNote}
           clicks={clicks}
+          pointer={pointer}
+          uploaded={uploaded}
+          playhead={playhead}
         />
       </div>
       <SideSection
@@ -207,6 +256,26 @@ export const EditorSidebar = memo(function EditorSidebar({
           onAdd={onAddChapter}
           onSeek={onSeek}
           onSelect={selectChapter}
+          onClip={clipChapter}
+        />
+      </SideSection>
+      <SideSection
+        id='clips'
+        title='Clips'
+        summary='MP4 or GIF'
+        open={open.has('clips')}
+        onToggle={toggle}
+      >
+        <ClipsPanel
+          headless
+          videoId={videoId}
+          edits={edits}
+          draft
+          presets={clipPresets}
+          initialRange={clipInitial}
+          playheadRange={clipPlayhead}
+          request={clipRequest}
+          onNote={onNote}
         />
       </SideSection>
       <SideSection
@@ -218,6 +287,7 @@ export const EditorSidebar = memo(function EditorSidebar({
       >
         <CaptionsPanel
           headless
+          videoId={videoId}
           edits={edits}
           sourceMs={sourceMs}
           selectedId={selection?.lane === 'captions' ? selection.id : null}
@@ -270,6 +340,18 @@ export const EditorSidebar = memo(function EditorSidebar({
       >
         <NarrationPanel edits={edits} onChange={onChange} />
       </SideSection>
+      {/* An uploaded file has no pointer path: nothing to switch on. */}
+      {!uploaded && (
+        <SideSection
+          id='cursor'
+          title='Cursor and shortcuts'
+          summary={edits.cursor ? (edits.cursor.shortcuts ? 'Cursor, shortcuts' : 'Cursor') : 'Off'}
+          open={open.has('cursor')}
+          onToggle={toggle}
+        >
+          <CursorPanel edits={edits} pointer={pointer} onChange={onChange} />
+        </SideSection>
+      )}
       <SideSection
         id='poster'
         title='Poster'

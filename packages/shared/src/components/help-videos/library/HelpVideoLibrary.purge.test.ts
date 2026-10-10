@@ -41,6 +41,7 @@ vi.mock('../api', async () => {
   }
 })
 vi.mock('../editor/HelpVideoEditor', () => ({ HelpVideoEditor: () => null }))
+vi.mock('./LearningPathsPanel', () => ({ LearningPathsPanel: () => null }))
 vi.mock('../viewer/HelpVideoSheet', () => ({ HelpVideoSheet: () => null }))
 vi.mock('../recorder/HelpVideoRecorder', () => ({
   canRecord: () => true,

@@ -70,6 +70,9 @@ export function viewerMayPlaySource(rawEdits: unknown, sourceMs: unknown): boole
   if (e.intro || e.outro || e.chapter_banners) return false
   // Background music is mixed into the render; the original has none.
   if (e.music) return false
+  // The recorded cursor (#1517) is drawn only by the render and the author's
+  // live preview; the original recording shows the plain captured pointer.
+  if (e.cursor) return false
   // Cleaned-up narration (#1519) exists only in the render.
   if (e.audio?.improve) return false
   // A callout is an opaque filled panel: it hides what is under it, like a

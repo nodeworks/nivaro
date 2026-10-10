@@ -12,6 +12,8 @@ import {
   readEdits,
   viewerNote
 } from './help-video-changes.js'
+import { takeVideoClipFiles } from './help-video-clips.js'
+import type { PointerPath } from './help-video-cursor.js'
 import { downloadsAllowed, hasCaptions, withDownloads } from './help-video-download.js'
 import {
   EditsError,
@@ -21,9 +23,17 @@ import {
   normalizeEdits,
   type VideoEdits
 } from './help-video-edits.js'
+import { extrasMigrated, parsePeaks, parseSprite, type SpriteSheet } from './help-video-extras.js'
 import { applyHouseStyleToNew, currentHouseStyle } from './help-video-house-style.js'
 import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
+import { normalizeScript, withScriptChapters } from './help-video-script.js'
+import {
+  normalizeLabels,
+  type StaleReason,
+  staleClearPatch,
+  staleForDto
+} from './help-video-stale.js'
 import { releaseFinalizedUpload, takeFinalizedUpload } from './help-video-uploads.js'
 import { viewerCanPlay } from './help-video-views.js'
 import {
@@ -53,7 +63,8 @@ export type VersionRow = Record<string, unknown> & {
   video_id: string
   edits: string
   edits_hash: string
-  source_file: string
+  /** Null only once retention removed this version's files (#1531). */
+  source_file: string | null
   rendered_file: string | null
   rendered_hash: string | null
 }
@@ -88,6 +99,32 @@ export interface VersionDto {
   /** Draft load only: typing and idle spans the recorder logged (#1518), read
    *  from the source's upload row; null when there are none. */
   activity?: ActivitySpan[] | null
+  /** Draft load only: the pointer path and shortcuts the recorder logged
+   *  (#1517), read from the source's upload row; null when there are none. */
+  pointer?: PointerPath | null
+  /** Retention removed this version's files (#1531): it cannot be restored
+   *  or played; the row stays as history. */
+  files_removed_at: string | null
+  /** Draft, re-record and restore results only: the steps the author wrote
+   *  before recording (script mode, #1491), so a re-record can reuse them.
+   *  Null for a recording without one and for every uploaded file. */
+  script?: string[] | null
+  /** Recorder data only (#1560): the server's audio peaks, 0–1 per 100 ms of
+   *  source time (the shape of `levels`); null until built or without sound. */
+  peaks?: number[] | null
+  /** Recorder data only (#1560): the thumbnail sprite sheet behind a ticketed
+   *  URL; null until built, when the recording is too large, or when no
+   *  ticket could be minted. */
+  sprite?: SpriteDto | null
+}
+/** The sprite sheet as the editor sees it (the geometry plus a ticketed URL). */
+export interface SpriteDto {
+  url: string
+  tile_w: number
+  tile_h: number
+  cols: number
+  count: number
+  interval_ms: number
 }
 export interface HelpVideoDto {
   id: string
@@ -129,6 +166,9 @@ export interface HelpVideoDto {
   transcript_url: string | null
   /** What changed since this person last watched (#1497), else null. */
   whats_new: WhatsNew | null
+  /** The screen changed since this was published (#1495): null when nothing
+   *  was found, or once an author dismissed it. */
+  stale: StaleReason | null
 }
 
 /** `updated`: a newer version than the one this person watched is published.
@@ -226,6 +266,11 @@ export async function forgetHelpVideoRole(roleId: string): Promise<void> {
   if (!role) return
   const rid = up(role.id)
   await db('nivaro_help_video_requirements').where({ role_id: rid }).delete()
+  // Learning paths (#1508) name roles too; the table exists from migration 416.
+  await db('nivaro_help_video_path_roles')
+    .where({ role_id: rid })
+    .delete()
+    .catch(() => {})
   const settings = await db('nivaro_settings')
     .where({ id: 1 })
     .first('help_video_author_roles')
@@ -322,7 +367,14 @@ export function publishChecklist(video: { title: string }, contextCount: number)
   return missing
 }
 
-export function serializeVersion(v: VersionRow, opts: { withRecorderData: boolean }): VersionDto {
+export function serializeVersion(
+  v: VersionRow,
+  opts: {
+    withRecorderData: boolean
+    /** A media ticket for this video: with it the sprite sheet gets a URL. */
+    media?: { videoId: string; ticket: string } | null
+  }
+): VersionDto {
   const edits = json<VideoEdits>(v.edits, emptyEdits(Number(v.source_duration_ms ?? 0)))
   const dto: VersionDto = {
     id: low(v.id),
@@ -337,13 +389,48 @@ export function serializeVersion(v: VersionRow, opts: { withRecorderData: boolea
     render_error: (v.render_error as string | null) ?? null,
     rendered_current: !!v.rendered_file && v.rendered_hash === v.edits_hash,
     note: (v.note as string | null) ?? null,
-    created_at: new Date(v.created_at as string).toISOString()
+    created_at: new Date(v.created_at as string).toISOString(),
+    files_removed_at: v.files_removed_at
+      ? new Date(v.files_removed_at as string).toISOString()
+      : null
   }
   if (opts.withRecorderData) {
     dto.clicks = json(v.clicks, null)
     dto.levels = json(v.levels, null)
+    dto.script = normalizeScript(json(v.script, null))
+    dto.peaks = parsePeaks(v.peaks)
+    dto.sprite = spriteDto(v, opts.media ?? null)
   }
   return dto
+}
+
+/** The version's sprite sheet behind the sprite media route, or null. */
+export function spriteDto(
+  v: { id: unknown; sprite?: unknown; sprite_file?: unknown },
+  media: { videoId: string; ticket: string } | null
+): SpriteDto | null {
+  const s: SpriteSheet | null = parseSprite(v.sprite)
+  if (!s || !v.sprite_file || !media) return null
+  return {
+    url: `/api/help-videos/${low(media.videoId)}/sprite?st=${media.ticket}&v=${low(v.id)}`,
+    tile_w: s.tile_w,
+    tile_h: s.tile_h,
+    cols: s.cols,
+    count: s.count,
+    interval_ms: s.interval_ms
+  }
+}
+
+/** The media ticket a route hands serializeVersion for a draft DTO. */
+export function draftMedia(
+  videoId: string,
+  userId: string,
+  sidTag: string | null
+): { videoId: string; ticket: string } {
+  return {
+    videoId: low(videoId),
+    ticket: mediaTicket(low(videoId), userId, 'd', Date.now(), sidTag)
+  }
 }
 
 export async function loadVersion(id: string | null | undefined): Promise<VersionRow | undefined> {
@@ -543,6 +630,7 @@ export async function serializeVideo(
     updated_at: new Date(video.updated_at as string).toISOString(),
     transcript_url: published && hasCaptions(published) ? `${base}/transcript.txt?st=${pt}` : null,
     whats_new: published && view ? await whatsNewFor(video, published, view, stale) : null,
+    stale: published ? staleForDto(video) : null,
     my_progress: view
       ? {
           position_ms: stale ? 0 : Number(view.position_ms ?? 0),
@@ -554,10 +642,12 @@ export async function serializeVideo(
   if (ctx.author) {
     dto.visibility = parseVisibility(video.visibility)
     dto.required_role_ids = reqs.map((r: { role_id: unknown }) => up(r.role_id))
-    dto.draft = draft ? serializeVersion(draft, { withRecorderData: true }) : null
+    const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sidTag ?? null)
+    dto.draft = draft
+      ? serializeVersion(draft, { withRecorderData: true, media: { videoId: id, ticket: dt } })
+      : null
     dto.draft_matches_published = sameContent(draft, published)
     if (draft) {
-      const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sidTag ?? null)
       dto.draft_stream_url = `${base}/stream?st=${dt}&source=1`
       dto.draft_captions_url = `${base}/captions.vtt?st=${dt}`
       dto.draft_download_urls = downloadUrls(base, dt, hasCaptions(draft))
@@ -650,9 +740,15 @@ async function insertVersion(
     levels: unknown
     edits: VideoEdits
     note?: string | null
+    /** The script the recording followed (#1491); absent or null = none. */
+    script?: string[] | null
+    /** Thumbnails and waveform (#1560), carried from the upload or the
+     *  version this one is made from; written only once migration 412 ran. */
+    extras?: VersionExtras
   }
 ): Promise<string> {
   const id = randomUUID()
+  const extras = data.extras && (await extrasMigrated()) ? data.extras : null
   await db('nivaro_help_video_versions').insert({
     id,
     video_id: videoId,
@@ -663,6 +759,14 @@ async function insertVersion(
     height: data.height,
     clicks: data.clicks == null ? null : JSON.stringify(data.clicks),
     levels: data.levels == null ? null : JSON.stringify(data.levels),
+    script: data.script?.length ? JSON.stringify(data.script) : null,
+    ...(extras
+      ? {
+          sprite_file: extras.sprite_file,
+          sprite: extras.sprite == null ? null : JSON.stringify(extras.sprite),
+          peaks: extras.peaks == null ? null : JSON.stringify(extras.peaks)
+        }
+      : {}),
     edits: JSON.stringify(data.edits),
     edits_hash: hashEdits(data.edits),
     render_status: 'none',
@@ -675,6 +779,38 @@ async function insertVersion(
 
 function touch(user: User): Record<string, unknown> {
   return { updated_by: user.id, updated_at: new Date() }
+}
+
+type VersionExtras = {
+  sprite_file: string | null
+  sprite: SpriteSheet | null
+  peaks: number[] | null
+}
+
+/** The extras a finalized upload carries (none before the job finishes). */
+function uploadExtras(u: {
+  sprite_file?: string | null
+  sprite?: SpriteSheet | null
+  peaks?: number[] | null
+}): VersionExtras | undefined {
+  if (!u.sprite && !u.peaks) return undefined
+  return {
+    sprite_file: u.sprite && u.sprite_file ? u.sprite_file : null,
+    sprite: u.sprite && u.sprite_file ? u.sprite : null,
+    peaks: u.peaks ?? null
+  }
+}
+
+/** The extras of a stored version, to copy onto one made from it. */
+function rowExtras(v: Record<string, unknown>): VersionExtras | undefined {
+  const sprite = parseSprite(v.sprite)
+  const peaks = parsePeaks(v.peaks)
+  if (!sprite && !peaks) return undefined
+  return {
+    sprite_file: sprite && v.sprite_file ? String(v.sprite_file) : null,
+    sprite: sprite && v.sprite_file ? sprite : null,
+    peaks
+  }
 }
 
 export async function createVideo(
@@ -708,7 +844,18 @@ export async function createVideo(
       height: upload.height,
       clicks: upload.clicks,
       levels: upload.levels,
-      edits: applyHouseStyleToNew(emptyEdits(upload.duration_ms ?? 0), house.style)
+      // A scripted recording (#1491) starts with a chapter per marked step.
+      edits: applyHouseStyleToNew(
+        withScriptChapters(
+          emptyEdits(upload.duration_ms ?? 0),
+          upload.script,
+          upload.marks,
+          upload.duration_ms ?? 0
+        ),
+        house.style
+      ),
+      script: upload.script,
+      extras: uploadExtras(upload)
     })
   } catch (err) {
     // Nothing references the recording yet: give it back to its author (and
@@ -833,7 +980,8 @@ export async function ensureDraft(video: VideoRow, user: User): Promise<VersionR
     height: pub.height == null ? null : Number(pub.height),
     clicks: json(pub.clicks, null),
     levels: json(pub.levels, null),
-    edits: json<VideoEdits>(pub.edits, emptyEdits(Number(pub.source_duration_ms ?? 0)))
+    edits: json<VideoEdits>(pub.edits, emptyEdits(Number(pub.source_duration_ms ?? 0))),
+    extras: rowExtras(pub)
   })
   await db('nivaro_help_videos').where({ id: video.id }).update({ draft_version_id: id })
   return (await loadVersion(id)) as VersionRow
@@ -958,6 +1106,8 @@ export async function publishVideo(
       draft_version_id: null,
       duration_ms: editedDuration(edits),
       ...(opts.watch_again ? { required_since: now } : {}),
+      // A new cut answers "may be out of date" (#1495).
+      ...(await staleClearPatch()),
       ...touch(user)
     })
   await queueRender(String(draft.id))
@@ -1029,9 +1179,17 @@ async function askToWatchAgain(video: VideoRow, user: User, note: string | null)
 
 export function requiredNotice(
   title: string,
-  opts: { again?: boolean; note?: string | null } = {}
+  opts: { again?: boolean; note?: string | null; path?: boolean } = {}
 ): { subject: string; message: string; why: string } {
   const where = 'It is on your dashboard under Required videos.'
+  if (opts.path) {
+    // A learning path (#1508): several videos in order, finished when all are watched.
+    return {
+      subject: `Please complete: ${title}`.slice(0, 250),
+      message: `A learning path of short videos your role is asked to complete. ${where}`,
+      why: 'This learning path is required for your role.'
+    }
+  }
   if (opts.again) {
     return {
       subject: `Please watch again: ${title}`.slice(0, 250),
@@ -1064,14 +1222,33 @@ export async function notifyRequiredViewers(
 ): Promise<number> {
   let roles = [...new Set(roleIds.filter(isUuid).map(up))]
   if (!roles.length) return 0
-  const app = getApp()
-  if (!app) return 0
   const row = await db('nivaro_help_videos').where({ id: videoId }).first('visibility')
   const vis = parseVisibility(row?.visibility)
   if (vis.mode === 'roles') roles = roles.filter((r) => vis.role_ids.includes(r))
   if (!roles.length) return 0
+  return fanOutToRoles(roles, requiredNotice(title || 'Untitled video', notice), {
+    kind: 'help-video',
+    label: (title || 'Untitled video').slice(0, 250),
+    id: low(videoId)
+  })
+}
+
+/**
+ * One notification to each active person in the given roles (exact uuids
+ * only; at most NOTIFY_CAP people), landing on the dashboard's required list.
+ * Shared by required videos and required learning paths (#1508); the caller
+ * has already applied any visibility rule.
+ */
+export async function fanOutToRoles(
+  roleIds: string[],
+  text: { subject: string; message: string; why: string },
+  source: { kind: string; label: string; id: string }
+): Promise<number> {
+  const roles = [...new Set(roleIds.filter(isUuid).map(up))]
+  if (!roles.length) return 0
+  const app = getApp()
+  if (!app) return 0
   const { notifyUser } = await import('./notification-channels.js')
-  const sourceLabel = (title || 'Untitled video').slice(0, 250)
   // Ask for one more than the cap so a truncation is detectable.
   const found = await db('nivaro_users')
     .whereIn('role', roles)
@@ -1083,11 +1260,10 @@ export async function notifyRequiredViewers(
     .select('id')
   if (found.length > NOTIFY_CAP) {
     app.log?.warn?.(
-      `help video ${low(videoId)}: more than ${NOTIFY_CAP} people need this video; notified the first ${NOTIFY_CAP}`
+      `${source.kind} ${source.id}: more than ${NOTIFY_CAP} people need this; notified the first ${NOTIFY_CAP}`
     )
   }
   const users = found.slice(0, NOTIFY_CAP)
-  const text = requiredNotice(title || 'Untitled video', notice)
   let delivered = 0
   let failed = 0
   let firstError: unknown = null
@@ -1101,7 +1277,7 @@ export async function notifyRequiredViewers(
             category: 'system',
             why: text.why,
             target: { kind: 'home', focus: 'help-required' },
-            source: { kind: 'help-video', label: sourceLabel, id: low(videoId) }
+            source
           })
           delivered++
         } catch (err) {
@@ -1113,8 +1289,8 @@ export async function notifyRequiredViewers(
   }
   if (failed) {
     app.log?.warn?.(
-      { err: firstError, videoId: low(videoId), failed, total: users.length },
-      `help video required notify: ${failed} of ${users.length} notifications failed`
+      { err: firstError, source, failed, total: users.length },
+      `${source.kind} required notify: ${failed} of ${users.length} notifications failed`
     )
   }
   return delivered
@@ -1154,8 +1330,15 @@ export async function rerecordVideo(
       height: upload.height,
       clicks: upload.clicks,
       levels: upload.levels,
-      edits: emptyEdits(upload.duration_ms ?? 0),
-      note: 'Re-recorded'
+      edits: withScriptChapters(
+        emptyEdits(upload.duration_ms ?? 0),
+        upload.script,
+        upload.marks,
+        upload.duration_ms ?? 0
+      ),
+      script: upload.script,
+      note: 'Re-recorded',
+      extras: uploadExtras(upload)
     })
   } catch (err) {
     await releaseFinalizedUpload(uploadId).catch(() => undefined)
@@ -1183,6 +1366,13 @@ export async function restoreVersion(
     .where({ id: versionId, video_id: video.id })
     .first()
   if (!src) throw fail(404, 'HELP_VIDEO_VERSION_NOT_FOUND', 'Version not found')
+  if (src.files_removed_at || !src.source_file) {
+    throw fail(
+      409,
+      'HELP_VIDEO_VERSION_FILES_REMOVED',
+      `Version ${src.version} cannot be restored: its files were removed by retention`
+    )
+  }
   const id = await insertVersion(video.id, user, {
     source_file: String(src.source_file),
     source_duration_ms: src.source_duration_ms == null ? null : Number(src.source_duration_ms),
@@ -1191,7 +1381,9 @@ export async function restoreVersion(
     clicks: json(src.clicks, null),
     levels: json(src.levels, null),
     edits: json<VideoEdits>(src.edits, emptyEdits(0)),
-    note: `Restored from version ${src.version}`
+    script: normalizeScript(json(src.script, null)),
+    note: `Restored from version ${src.version}`,
+    extras: rowExtras(src)
   })
   await db('nivaro_help_videos')
     .where({ id: video.id })
@@ -1243,7 +1435,13 @@ export async function purgeVideo(video: VideoRow, user: User): Promise<void> {
   const fileIds = new Set<string>()
   if (video.poster_file) fileIds.add(String(video.poster_file))
   for (const v of versions) {
-    for (const k of ['source_file', 'rendered_file', 'captions_file', 'poster_file']) {
+    for (const k of [
+      'source_file',
+      'rendered_file',
+      'captions_file',
+      'poster_file',
+      'sprite_file'
+    ]) {
       if (v[k]) fileIds.add(String(v[k]))
     }
   }
@@ -1252,6 +1450,8 @@ export async function purgeVideo(video: VideoRow, user: User): Promise<void> {
     .update({ poster_file: null, published_version_id: null, draft_version_id: null })
   // Music uploaded to this video: its rows go here, its files below.
   for (const f of await takeVideoMusicFiles(String(video.id))) fileIds.add(f)
+  // Clips made of this video (#1562), the same way.
+  for (const f of await takeVideoClipFiles(String(video.id))) fileIds.add(f)
   await db('nivaro_help_videos').where({ id: video.id }).delete()
   // The upload rows that produced these recordings still reference the files
   // (nivaro_help_video_uploads.file_id, status 'used'); drop them first or the
@@ -1413,25 +1613,72 @@ export async function listVideos(
 }
 
 const pageWrites = new Map<string, number>()
-export async function registerPage(key: string, label: string, app: string | null): Promise<void> {
-  if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(key)) throw fail(400, 'HELP_VIDEO_PAGE', 'Invalid page key')
-  const last = pageWrites.get(key) ?? 0
-  if (Date.now() - last < 10 * 60_000) return
-  if (pageWrites.size > 1000) {
-    const cutoff = Date.now() - 10 * 60_000
-    for (const [k, t] of pageWrites) if (t < cutoff) pageWrites.delete(k)
+const labelWrites = new Map<string, number>()
+const PAGE_WRITE_GAP_MS = 10 * 60_000
+let labelsColumn: { at: number; ok: boolean } | null = null
+
+function throttled(map: Map<string, number>, key: string): boolean {
+  const now = Date.now()
+  const last = map.get(key) ?? 0
+  if (now - last < PAGE_WRITE_GAP_MS) return true
+  if (map.size > 1000) {
+    const cutoff = now - PAGE_WRITE_GAP_MS
+    for (const [k, t] of map) if (t < cutoff) map.delete(k)
   }
-  pageWrites.set(key, Date.now())
-  const row = {
-    label: String(label || key).slice(0, 200),
-    app: app ? String(app).slice(0, 50) : null,
-    last_seen: new Date()
+  map.set(key, now)
+  return false
+}
+
+/** Registers a page key (once per 10 minutes per process) and, when the
+ *  client sent `labels` — the click targets it saw on that screen (#1495) —
+ *  stores them with the time, on their own 10-minute throttle. Labels are
+ *  kept only on a database that has migration 415's columns. */
+export async function registerPage(
+  key: string,
+  label: string,
+  app: string | null,
+  labels?: unknown
+): Promise<void> {
+  if (!/^[A-Za-z0-9_.:-]{1,100}$/.test(key)) throw fail(400, 'HELP_VIDEO_PAGE', 'Invalid page key')
+  const seen = normalizeLabels(labels)
+  const writePage = !throttled(pageWrites, key)
+  const writeLabels = !!seen && !throttled(labelWrites, key) && (await pageLabelsColumn())
+  if (!writePage && !writeLabels) return
+  const row: Record<string, unknown> = writePage
+    ? {
+        label: String(label || key).slice(0, 200),
+        app: app ? String(app).slice(0, 50) : null,
+        last_seen: new Date()
+      }
+    : {}
+  if (writeLabels) {
+    row.labels = JSON.stringify(seen)
+    row.labels_at = new Date()
   }
   const updated = await db('nivaro_help_video_pages').where({ key }).update(row)
   if (!updated)
     await db('nivaro_help_video_pages')
-      .insert({ key, ...row })
+      .insert({
+        key,
+        label: String(label || key).slice(0, 200),
+        app: app ? String(app).slice(0, 50) : null,
+        last_seen: new Date(),
+        ...row
+      })
       .catch(() => null)
+}
+
+async function pageLabelsColumn(): Promise<boolean> {
+  if (labelsColumn && Date.now() - labelsColumn.at < 60_000) return labelsColumn.ok
+  let ok = false
+  try {
+    const { hasColumn } = await import('../lib/column-probe.js')
+    ok = await hasColumn('nivaro_help_video_pages', 'labels_at')
+  } catch {
+    ok = false
+  }
+  labelsColumn = { at: Date.now(), ok }
+  return ok
 }
 
 export async function listPages(): Promise<

@@ -10,6 +10,7 @@ import {
 } from '../../ui/dialog'
 import type { Failure } from './failure'
 import { sentence } from './failure'
+import { frameNote, type RemoteStatus, type Size, sizeLabel } from './recordingWindow'
 
 // The recorder's dialog views other than setup: saving, done, limit, error
 // and unsupported, plus the pieces setup shares with them.
@@ -349,6 +350,102 @@ export function ErrorView({
             )}
           </>
         )}
+      </DialogFooter>
+    </>
+  )
+}
+
+/** What the opener shows while a recording window (#1516) does the work. */
+export function remoteSentence(status: RemoteStatus | null): string {
+  if (!status) return 'Waiting for the recording window to open.'
+  const time = clockOf(status.elapsed)
+  switch (status.stage) {
+    case 'setup':
+      return 'Waiting for you to press Start in the recording window.'
+    case 'countdown':
+      return 'Recording is about to start in the recording window.'
+    case 'recording':
+      return status.paused ? `Paused at ${time}.` : `Recording, ${time} so far.`
+    case 'saving':
+      return status.pending > 1
+        ? `Saving: ${status.pending} parts still to upload.`
+        : 'Saving the recording.'
+    case 'uploaded':
+      return 'Saved. Opening the editor.'
+    case 'error':
+      return 'The recording window reports a problem; look there to keep or discard the recording.'
+  }
+}
+
+const clockOf = (ms: number) => {
+  const s = Math.max(0, Math.floor(ms / 1000))
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+export function RemoteView({
+  title,
+  status,
+  wanted,
+  note,
+  onFocus
+}: {
+  title: string
+  status: RemoteStatus | null
+  wanted: Size
+  /** Something the opener wants to say (the window closed, a load failed). */
+  note: string | null
+  onFocus: () => void
+}) {
+  const size = status?.size ?? null
+  const mismatch = size ? frameNote(wanted, size) : null
+  const live = status?.stage === 'recording' || status?.stage === 'countdown'
+  return (
+    <>
+      <DialogHeader className='pr-12'>
+        <DialogTitle className={titleCls}>{title}</DialogTitle>
+        <DialogDescription className={descCls}>
+          The recording happens in the recording window ({sizeLabel(wanted)}); this tab only shows
+          how it is going.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogBody className='space-y-3 text-[13px]'>
+        <div
+          role='status'
+          className='flex items-start gap-3 rounded-lg bg-muted/70 px-3.5 py-3'
+          data-hv-remote
+          data-hv-remote-stage={status?.stage ?? 'opening'}
+        >
+          {live ? (
+            <span
+              aria-hidden
+              className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${
+                status?.paused
+                  ? 'bg-slate-400'
+                  : 'animate-pulse bg-rose-500 motion-reduce:animate-none'
+              }`}
+            />
+          ) : (
+            <Loader2 className='mt-0.5 h-4 w-4 shrink-0 animate-spin text-muted-foreground motion-reduce:animate-none' />
+          )}
+          <div className='min-w-0'>
+            <p className='font-medium text-foreground' data-hv-remote-sentence>
+              {remoteSentence(status)}
+            </p>
+            {mismatch ? (
+              <p className='mt-0.5 text-amber-800 dark:text-amber-200' data-hv-remote-mismatch>
+                {mismatch}
+              </p>
+            ) : size ? (
+              <p className='mt-0.5 text-muted-foreground'>Window: {sizeLabel(size)}.</p>
+            ) : null}
+          </div>
+        </div>
+        {note && <ErrorNote data-hv-remote-note>{note}</ErrorNote>}
+      </DialogBody>
+      <DialogFooter className='border-border'>
+        <Button variant='outline' className={secondaryBtn} onClick={onFocus} data-hv-remote-focus>
+          Go to the recording window
+        </Button>
       </DialogFooter>
     </>
   )

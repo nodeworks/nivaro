@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Archive, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
+import { Archive, History, Pencil, Plus, Search, Trash2, Upload } from 'lucide-react'
 import { useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useItemEditAuth, useNivaroClient } from '../../../context'
@@ -21,9 +21,17 @@ import {
 } from '../viewer/format'
 import { HelpVideoSheet } from '../viewer/HelpVideoSheet'
 import { momentFromParams } from '../viewer/moments'
+import { LearningPathsPanel } from './LearningPathsPanel'
 import { type PurgeOutcome, PurgeVideoDialog } from './PurgeVideoDialog'
 
-type Status = 'published' | 'draft' | 'archived'
+/** The status tabs, plus Paths (#1508): learning paths live beside the videos. */
+type Status = 'published' | 'draft' | 'archived' | 'paths'
+const TAB_LABEL: Record<Status, string> = {
+  published: 'Published',
+  draft: 'Drafts',
+  archived: 'Archived',
+  paths: 'Paths'
+}
 
 const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none'
@@ -68,6 +76,7 @@ export function HelpVideoLibrary({
   const [archiving, setArchiving] = useState<Set<string>>(() => new Set())
   const { isAdmin } = useItemEditAuth()
   const [purgeTarget, setPurgeTarget] = useState<HelpVideoDto | null>(null)
+  const [dismissing, setDismissing] = useState<Set<string>>(() => new Set())
   const purgeTrigger = useRef<HTMLElement | null>(null)
   // After a delete the row is gone: focus moves to the next row's action (or the list).
   const focusAfter = useRef<{ gone: string; next: string | null } | null>(null)
@@ -78,7 +87,11 @@ export function HelpVideoLibrary({
     const t = window.setTimeout(() => setDebounced(search.trim()), 300)
     return () => window.clearTimeout(t)
   }, [search])
-  const q = useHelpVideoLibrary({ search: debounced || undefined, category, status })
+  // The Paths tab lists paths, not videos: the library query keeps the last
+  // video list (published) so switching back is instant.
+  const pathsTab = status === 'paths'
+  const listStatus = pathsTab ? 'published' : status
+  const q = useHelpVideoLibrary({ search: debounced || undefined, category, status: listStatus })
   const canAuthor = !!q.data?.can_author
   const shown = q.data?.data.length ?? 0
   const total = q.data?.total ?? 0
@@ -147,6 +160,32 @@ export function HelpVideoLibrary({
     return { ok: true }
   }
 
+  // "May be out of date" (#1495): the note goes for everyone; the same change
+  // is not raised again.
+  const dismissStale = async (v: HelpVideoDto) => {
+    if (dismissing.has(v.id)) return
+    setArchiveError(null)
+    setDismissing((cur) => new Set(cur).add(v.id))
+    try {
+      await helpVideoApi(client).dismissStale(v.id)
+      toast.success(`The note on "${v.title}" was dismissed`)
+      void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+    } catch (e) {
+      // Already gone (published again, or dismissed elsewhere): just refresh.
+      if (helpVideoError(e)?.code === 'HELP_VIDEO_NOT_STALE') {
+        void qc.invalidateQueries({ queryKey: helpVideoKeys.all })
+      } else {
+        setArchiveError(`The note on "${v.title}" could not be dismissed. ${(e as Error).message}`)
+      }
+    } finally {
+      setDismissing((cur) => {
+        const next = new Set(cur)
+        next.delete(v.id)
+        return next
+      })
+    }
+  }
+
   const archive = async (v: HelpVideoDto) => {
     if (archiving.has(v.id)) return
     setArchiveError(null)
@@ -188,7 +227,7 @@ export function HelpVideoLibrary({
         {canAuthor && (
           <fieldset className='m-0 flex min-w-0 gap-1 border-0 p-0'>
             <legend className='sr-only'>Show</legend>
-            {(['published', 'draft', 'archived'] as const).map((s) => (
+            {(['published', 'draft', 'archived', 'paths'] as const).map((s) => (
               <button
                 key={s}
                 type='button'
@@ -197,7 +236,7 @@ export function HelpVideoLibrary({
                 className={`rounded-md px-2.5 py-1 text-[12.5px] transition-colors ${focusRing} ${status === s ? 'bg-nvr-cyan/10 font-medium' : 'hover:bg-muted'}`}
                 data-hv-status-tab={s}
               >
-                {s === 'published' ? 'Published' : s === 'draft' ? 'Drafts' : 'Archived'}
+                {TAB_LABEL[s]}
               </button>
             ))}
           </fieldset>
@@ -237,7 +276,7 @@ export function HelpVideoLibrary({
           )}
         </div>
       </header>
-      {!!q.data?.categories.length && (
+      {!pathsTab && !!q.data?.categories.length && (
         <div className='flex shrink-0 flex-wrap gap-1 px-5 pt-3'>
           {[undefined, ...q.data.categories].map((c) => (
             <button
@@ -266,11 +305,17 @@ export function HelpVideoLibrary({
           {archiveError}
         </p>
       )}
+      {pathsTab && canAuthor && (
+        <div className='min-h-0 flex-1 overflow-y-auto p-5'>
+          <LearningPathsPanel />
+        </div>
+      )}
       <div
         ref={listRef}
         tabIndex={-1}
         className='min-h-0 flex-1 overflow-y-auto p-5 focus:outline-none'
         data-hv-list
+        hidden={pathsTab && canAuthor}
       >
         {q.isLoading && <p className='text-[13px] text-muted-foreground'>Loading…</p>}
         {q.isError && (
@@ -281,9 +326,10 @@ export function HelpVideoLibrary({
         {q.data && !q.data.data.length && !q.isError && (
           <div className='space-y-2' data-hv-empty>
             <p className='text-[13px] text-muted-foreground'>
-              {emptyCopy({ search: debounced, category, status, canAuthor }).text}
+              {emptyCopy({ search: debounced, category, status: listStatus, canAuthor }).text}
             </p>
-            {emptyCopy({ search: debounced, category, status, canAuthor }).offerRecord &&
+            {emptyCopy({ search: debounced, category, status: listStatus, canAuthor })
+              .offerRecord &&
               recordable && (
                 <Button
                   size='sm'
@@ -359,10 +405,34 @@ export function HelpVideoLibrary({
                     >
                       {meta}
                     </p>
+                    {v.stale && (
+                      <p
+                        className='flex items-start gap-1 text-[12px] text-amber-800 dark:text-amber-200'
+                        title={v.stale.detail}
+                        data-hv-stale={v.stale.kind}
+                      >
+                        <History className='mt-px h-3.5 w-3.5 shrink-0' aria-hidden />
+                        <span className='line-clamp-2'>
+                          May be out of date{canAuthor ? `: ${v.stale.detail}` : ''}
+                        </span>
+                      </p>
+                    )}
                   </div>
                 </button>
                 {canAuthor && (
                   <div className='flex flex-wrap gap-1 border-t border-border px-1.5 py-1'>
+                    {v.stale && (
+                      <Button
+                        size='sm'
+                        variant='ghost'
+                        onClick={() => void dismissStale(v)}
+                        disabled={dismissing.has(v.id)}
+                        aria-label={`Dismiss the out-of-date note on ${v.title || 'Untitled video'}`}
+                        data-hv-stale-dismiss={v.id}
+                      >
+                        <History className='h-3.5 w-3.5' /> Dismiss
+                      </Button>
+                    )}
                     <Button
                       size='sm'
                       variant='ghost'

@@ -3,6 +3,7 @@ import {
   EditsError,
   introMs,
   normalizeEdits,
+  pieceEditedMs,
   sourceToEdited,
   type VideoEdits
 } from './help-video-edits.js'
@@ -25,7 +26,7 @@ import {
 //       differs (start, end, speed or its music level). When both start at the
 //       same source moment at the same speed, the shared part plays the same,
 //       so the change is where the shorter one ends;
-//     - captions, chapters, annotations, zooms and blurs: each item added,
+//     - captions, chapters, annotations, zooms, blurs and held frames: each item added,
 //       removed or changed (compared whole, by id) at its source start, mapped
 //       to the new version's edited time (an item inside a cut moves to the
 //       next kept moment, past the end to the end of the recording);
@@ -61,7 +62,7 @@ function snapForward(e: VideoEdits, sourceMs: number): number {
   let acc = introMs(e)
   for (const s of e.segments) {
     if (sourceMs < s.start_ms) return Math.round(acc)
-    acc += (s.end_ms - s.start_ms) / s.speed
+    acc += pieceEditedMs(e, s)
   }
   return introMs(e) + bodyDuration(e)
 }
@@ -81,11 +82,17 @@ function firstPieceChange(oldE: VideoEdits, newE: VideoEdits): number | null {
       a.speed === b.speed &&
       (a.music ?? 1) === (b.music ?? 1)
     ) {
-      acc += (b.end_ms - b.start_ms) / b.speed
+      // Held frames inside it are compared by id below, so the piece itself
+      // plays the same; its edited length still counts them.
+      acc += pieceEditedMs(newE, b)
       continue
     }
     if (a.start_ms === b.start_ms && a.speed === b.speed && (a.music ?? 1) === (b.music ?? 1)) {
-      return Math.round(acc + (Math.min(a.end_ms, b.end_ms) - b.start_ms) / b.speed)
+      const to = Math.min(a.end_ms, b.end_ms)
+      const held = (newE.holds ?? [])
+        .filter((h) => h.at_ms >= b.start_ms && h.at_ms < to)
+        .reduce((t, h) => t + h.hold_ms, 0)
+      return Math.round(acc + (to - b.start_ms) / b.speed + held)
     }
     return Math.round(acc)
   }
@@ -139,8 +146,8 @@ export function firstChange(oldE: VideoEdits, newE: VideoEdits, sameSource: bool
   }
   const piece = firstPieceChange(oldE, newE)
   if (piece !== null) points.push(piece)
-  for (const key of ['captions', 'chapters', 'annotations', 'zooms', 'blurs'] as const) {
-    for (const s of changedItemStarts(oldE[key] as Timed[], newE[key] as Timed[])) {
+  for (const key of ['captions', 'chapters', 'annotations', 'zooms', 'blurs', 'holds'] as const) {
+    for (const s of changedItemStarts((oldE[key] ?? []) as Timed[], (newE[key] ?? []) as Timed[])) {
       points.push(snapForward(newE, s))
     }
   }

@@ -290,6 +290,37 @@ export function describeClickTarget(
   return out
 }
 
+/** At most this many labels go in a page's "labels seen" report (#1495). */
+export const PAGE_LABELS_LIMIT = 300
+
+/**
+ * The accessible names of the click targets on the screen right now, for the
+ * nightly "may be out of date" check (the server compares a published
+ * recording's click labels with what the page shows). Visible interactive
+ * elements only, named the way the recorder names a click (never a field's
+ * value), deduplicated with case and spacing ignored, at most 300.
+ */
+export function collectPageLabels(
+  root: ParentNode = document,
+  opts: { visible?: (el: Element) => boolean } = {}
+): string[] {
+  const visible = opts.visible ?? isVisibleElement
+  const out: string[] = []
+  const seen = new Set<string>()
+  for (const el of Array.from(root.querySelectorAll(INTERACTIVE))) {
+    if (interactiveTarget(el) !== el) continue
+    if (el.closest(`${MASKED}, ${OWN_UI}`) || !visible(el)) continue
+    const label = accessibleName(el)
+    if (!label) continue
+    const key = label.replace(/\s+/g, ' ').trim().toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(label)
+    if (out.length >= PAGE_LABELS_LIMIT) break
+  }
+  return out
+}
+
 /** A path with record ids folded (`/collections/workflows/12` → `/collections/workflows/:id`). */
 export function normalizePath(path: string): string {
   return (

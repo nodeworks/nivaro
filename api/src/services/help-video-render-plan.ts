@@ -2,12 +2,17 @@ import { devNull } from 'node:os'
 import { lockedInputArgs } from './ffmpeg.js'
 import {
   bodyDuration,
+  cropOf,
   editedDuration,
+  holdsIn,
   introMs,
   musicShare,
+  pieceEditedMs,
   type Rect,
+  type Speed,
   sourceToEdited,
   type VideoEdits,
+  type Zoom,
   zoomInView
 } from './help-video-edits.js'
 import { DEFAULT_VIDEO_ARGS, type VideoEncodePlan } from './help-video-encoder.js'
@@ -19,7 +24,10 @@ import { DEFAULT_VIDEO_ARGS, type VideoEncodePlan } from './help-video-encoder.j
 // recorded frame (their rects are fractions of it); the crop (#1544) then cuts
 // the picture down to what viewers see, and zooms move inside the cropped
 // picture. Cards and banners are full frames of the cropped output size. Expressions are single-quoted inside the graph so
-// commas and colons stay literal; ffmpeg receives the graph as one argument.
+// commas and colons stay literal. The graph is written to a file in the
+// render's scratch directory and named with -filter_complex_script: as one
+// argument it can pass Linux's 128 KiB per-argument limit (fifty moving zooms
+// with their stops alone come to about 110 KB) and ffmpeg never starts.
 
 export interface RenderInput {
   edits: VideoEdits
@@ -42,12 +50,43 @@ export interface RenderInput {
   outro?: (CardInput & { duration_ms: number; over_frame: boolean }) | null
   /** Background music (#1547): looped under the whole edited timeline. */
   music?: { path: string; mime: string } | null
+  /** The recorded cursor and shortcut badges (#1517): an ASS file written by
+   *  help-video-cursor.ts, burned in over the finished picture in SOURCE time. */
+  cursor?: { assPath: string } | null
   outputPath: string
   threads: number
   /** How the picture is encoded (#1561). Absent = libx264 veryfast / CRF 23. */
   video?: Pick<VideoEncodePlan, 'inputArgs' | 'hwFilter' | 'videoArgs'>
   /** One pass of a two-pass encode: pass 1 writes only the log (no file). */
   pass?: { n: 1 | 2; logfile: string }
+  /** Where the caller writes the filter graph (buildRenderPlan hands it
+   *  back): the arguments then name it with -filter_complex_script. Without
+   *  it the graph is one -filter_complex argument (tests). */
+  graphFile?: string
+}
+
+/** A filter graph is refused above this: a file has no argument limit, so
+ *  this is only a sanity bound (every cap in EDIT_LIMITS together stays well
+ *  under 1 MB). */
+export const MAX_GRAPH_BYTES = 4 * 1024 * 1024
+
+/** The finished graph and the arguments that hand it to ffmpeg: by file
+ *  (`-filter_complex_script`) when the plan names one, else inline. */
+export function graphArgs(
+  parts: string[],
+  graphFile: string | undefined
+): { graph: string; args: string[] } {
+  const graph = parts.join(';')
+  const bytes = Buffer.byteLength(graph)
+  if (bytes > MAX_GRAPH_BYTES) {
+    throw new Error(
+      `The filter graph is too large to render (${Math.round(bytes / 1024)} KB; the limit is ${MAX_GRAPH_BYTES / 1024} KB)`
+    )
+  }
+  return {
+    graph,
+    args: graphFile ? ['-filter_complex_script', graphFile] : ['-filter_complex', graph]
+  }
 }
 
 /** The narration cleanup (#1519): spectral noise reduction, then loudness
@@ -168,13 +207,38 @@ export function musicShareWindows(
   const out: Array<{ start_ms: number; end_ms: number; share: number }> = []
   let acc = introMs(e)
   for (const s of e.segments) {
-    const len = (s.end_ms - s.start_ms) / s.speed
+    const len = pieceEditedMs(e, s)
     const share = musicShare(s.music)
     if (share !== 1) out.push({ start_ms: acc, end_ms: acc + len, share })
     acc += len
   }
   return out
 }
+
+/** What the render concatenates, in order: each kept piece split around its
+ *  held frames (#1537) into played stretches and holds. A hold is the source
+ *  frame at `at_ms`, held for `hold_ms`; the stretch after it starts at that
+ *  same moment, so no frame is skipped or shown twice. */
+export type RenderPiece =
+  | { kind: 'play'; start_ms: number; end_ms: number; speed: Speed }
+  | { kind: 'hold'; at_ms: number; hold_ms: number }
+export function renderPieces(e: VideoEdits): RenderPiece[] {
+  const out: RenderPiece[] = []
+  for (const s of e.segments) {
+    let cur = s.start_ms
+    for (const h of holdsIn(e, s)) {
+      if (h.at_ms > cur) out.push({ kind: 'play', start_ms: cur, end_ms: h.at_ms, speed: s.speed })
+      out.push({ kind: 'hold', at_ms: h.at_ms, hold_ms: h.hold_ms })
+      cur = h.at_ms
+    }
+    if (s.end_ms > cur) out.push({ kind: 'play', start_ms: cur, end_ms: s.end_ms, speed: s.speed })
+  }
+  return out
+}
+/** A held frame is found this far around its moment (the recording may skip
+ *  frames while the screen is still, and its picture may end before its
+ *  sound does: the branch is padded with its last frame first). */
+const HOLD_REACH_MS = 100
 
 /** The music's volume expression over the edited timeline: its base volume
  *  times each piece's share. */
@@ -184,6 +248,54 @@ export function musicVolumeExpr(e: VideoEdits): string {
       `(${(w.share - 1).toFixed(2)})*between(t,${sec(w.start_ms)},${sec(Math.max(w.start_ms, w.end_ms - 1))})`
   )
   return terms.length ? `1+${terms.join('+')}` : '1'
+}
+
+const f4 = (n: number) => n.toFixed(4)
+
+/** A value that changes straight-line between stops, as an expression in t:
+ *  `if(lt(t,…))` pieces, the first value before the first stop and the last
+ *  after the last; one constant when every stop has the same value. */
+export function lerpChain(stops: Array<{ t_ms: number; v: number }>): string {
+  if (stops.every((s) => s.v === stops[0].v)) return f4(stops[0].v)
+  let expr = f4(stops[stops.length - 1].v)
+  for (let i = stops.length - 2; i >= 0; i--) {
+    const a = stops[i]
+    const b = stops[i + 1]
+    expr = `if(lt(t,${sec(b.t_ms)}),${f4(a.v)}+(${f4(b.v - a.v)})*(t-${sec(a.t_ms)})/${sec(b.t_ms - a.t_ms)},${expr})`
+  }
+  return `if(lt(t,${sec(stops[0].t_ms)}),${f4(stops[0].v)},${expr})`
+}
+
+/** A zoom's magnification and centre over its span, as expressions in t
+ *  less their resting values (mag − 1, cx − 0.5, cy − 0.5), ready to be
+ *  scaled by the ease ramp. A still zoom gives three constants (the graph a
+ *  video without moving zooms always had). A moving zoom (#1539) blends its
+ *  area straight-line between its stops (zoomRectAt): the centre is then a
+ *  chain of straight pieces and the magnification follows the blended side. */
+export function zoomMotionExprs(e: VideoEdits, z: Zoom): { mag: string; cx: string; cy: string } {
+  const k = z.keyframes
+  if (!k || k.length < 2) {
+    const v = zoomInView(e, z.rect)
+    return { mag: f4(v.mag - 1), cx: f4(v.cx - 0.5), cy: f4(v.cy - 0.5) }
+  }
+  const views = k.map((s) => ({ t_ms: s.at_ms, v: zoomInView(e, s.rect), side: s.rect.w }))
+  const c = cropOf(e)
+  const sides = lerpChain(views.map((s) => ({ t_ms: s.t_ms, v: s.side })))
+  const mag = views.every((s) => s.side === views[0].side)
+    ? f4(views[0].v.mag - 1)
+    : `max(1,${f4(Math.min(c.w, c.h))}/(${sides}))-1`
+  const centre = (pick: (v: { cx: number; cy: number }) => number) => {
+    const chain = lerpChain(views.map((s) => ({ t_ms: s.t_ms, v: pick(s.v) })))
+    return chain.startsWith('if(') ? `${chain}-0.5` : f4(Number(chain) - 0.5)
+  }
+  return { mag, cx: centre((v) => v.cx), cy: centre((v) => v.cy) }
+}
+
+/** A file path as a filter option inside the graph: escaped once for the
+ *  option parser (`\`, `'` and `:`) and once more for the graph parser
+ *  (`\`, `'`, `[`, `]`, `,` and `;`), the way ffmpeg's own docs show. */
+export function graphPath(path: string): string {
+  return path.replace(/([\\':])/g, '\\$1').replace(/([\\'[\],;])/g, '\\$1')
 }
 
 /** Passes beyond which a small blurred field is already uniform. */
@@ -203,6 +315,12 @@ export function blurPower(requested: number, radius: number): number {
 }
 
 export function buildRenderArgs(input: RenderInput): string[] {
+  return buildRenderPlan(input).args
+}
+
+/** The arguments and the filter graph of one render pass. With `graphFile`
+ *  the caller writes `graph` there before spawning ffmpeg. */
+export function buildRenderPlan(input: RenderInput): { args: string[]; graph: string } {
   // An unmapped mime yields no pinned demuxer; refuse rather than let ffmpeg probe.
   const sourceLock = lockedInputArgs(input.sourceMime)
   if (!sourceLock.includes('-f')) {
@@ -278,29 +396,38 @@ export function buildRenderArgs(input: RenderInput): string[] {
         ? `clip(min((t-${sec(a)})/${sec(ease)},(${sec(b)}-t)/${sec(ease)}),0,1)`
         : `between(t,${sec(a)},${sec(b)})`
     // Zoom rects are fractions of the whole recorded frame; inside a crop
-    // they are re-expressed in the cropped picture (zoomInView).
-    const views = e.zooms.map((z) => ({ z, v: zoomInView(e, z.rect) }))
-    const zTerms = views.map(
-      ({ z, v }) => `(${(v.mag - 1).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
-    )
-    const cxTerms = views.map(
-      ({ z, v }) => `(${(v.cx - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
-    )
-    const cyTerms = views.map(
-      ({ z, v }) => `(${(v.cy - 0.5).toFixed(4)})*${p(z.start_ms, z.end_ms, z.ease_ms)}`
-    )
+    // they are re-expressed in the cropped picture (zoomInView). A moving
+    // zoom's magnification and centre follow its stops (zoomMotionExprs).
+    const views = e.zooms.map((z) => ({ z, m: zoomMotionExprs(e, z) }))
+    const zTerms = views.map(({ z, m }) => `(${m.mag})*${p(z.start_ms, z.end_ms, z.ease_ms)}`)
+    const cxTerms = views.map(({ z, m }) => `(${m.cx})*${p(z.start_ms, z.end_ms, z.ease_ms)}`)
+    const cyTerms = views.map(({ z, m }) => `(${m.cy})*${p(z.start_ms, z.end_ms, z.ease_ms)}`)
     const Z = `(1+${zTerms.join('+')})`
     const CX = `(0.5+${cxTerms.join('+')})`
     const CY = `(0.5+${cyTerms.join('+')})`
+    // A moving zoom's Z is a chain of pieces: the crop offsets store it once
+    // (st/ld; `;` sequences the two, and the quotes keep it one option).
+    const moving = e.zooms.some((z) => z.keyframes)
+    const Zx = moving ? 'ld(0)' : Z
+    const pre = moving ? `st(0,${Z});` : ''
     const to = next()
     parts.push(
       `[${label}]scale=w='trunc(${out.width}*${Z}/2)*2':h='trunc(${out.height}*${Z}/2)*2':eval=frame,` +
         // crop's iw/ih are the size the graph was configured with (the unzoomed
         // frame), not the per-frame scaled size, so use the zoomed size explicitly.
         `crop=${out.width}:${out.height}:` +
-        `x='max(0,min(${CX}*(${out.width}*${Z})-${out.width}/2,${out.width}*${Z}-${out.width}))':` +
-        `y='max(0,min(${CY}*(${out.height}*${Z})-${out.height}/2,${out.height}*${Z}-${out.height}))'[${to}]`
+        `x='${pre}max(0,min(${CX}*(${out.width}*${Zx})-${out.width}/2,${out.width}*${Zx}-${out.width}))':` +
+        `y='${pre}max(0,min(${CY}*(${out.height}*${Zx})-${out.height}/2,${out.height}*${Zx}-${out.height}))'[${to}]`
     )
+    label = to
+  }
+
+  // The recorded cursor and shortcut badges (#1517), burned in from an ASS
+  // file in SOURCE time over the finished picture (crop and zoom applied), so
+  // cuts and speed changes carry the cursor with the frames it was on.
+  if (input.cursor) {
+    const to = next()
+    parts.push(`[${label}]ass=filename=${graphPath(input.cursor.assPath)}[${to}]`)
     label = to
   }
 
@@ -311,7 +438,9 @@ export function buildRenderArgs(input: RenderInput): string[] {
   const finalV = banners.length ? 'vcards' : 'vout'
 
   const segs = e.segments
-  const untouched = segs.length === 1 && segs[0].start_ms === 0 && segs[0].speed === 1
+  const pieces = renderPieces(e)
+  const holds = pieces.some((p) => p.kind === 'hold')
+  const untouched = segs.length === 1 && segs[0].start_ms === 0 && segs[0].speed === 1 && !holds
   const maps: string[] = ['-map', '[vout]']
   // The finished sound is built in steps: the edits' narration lands on
   // [anar], ripple ticks are mixed over it, then background music (lowered
@@ -342,20 +471,41 @@ export function buildRenderArgs(input: RenderInput): string[] {
       parts.push(`[0:a]atrim=end=${sec(segs[0].end_ms)},asetpts=PTS-STARTPTS[${ab}]`)
     }
   } else {
-    const k = segs.length
-    parts.push(`[${label}]split=${k}${segs.map((_, i) => `[s${i}]`).join('')}`)
-    if (input.hasAudio) parts.push(`[0:a]asplit=${k}${segs.map((_, i) => `[as${i}]`).join('')}`)
-    segs.forEach((s, i) => {
+    const k = pieces.length
+    const played = pieces.map((p, i) => (p.kind === 'play' ? i : -1)).filter((i) => i >= 0)
+    parts.push(`[${label}]split=${k}${pieces.map((_, i) => `[s${i}]`).join('')}`)
+    if (input.hasAudio && played.length)
+      parts.push(`[0:a]asplit=${played.length}${played.map((i) => `[as${i}]`).join('')}`)
+    pieces.forEach((p, i) => {
+      if (p.kind === 'play') {
+        parts.push(
+          `[s${i}]trim=start=${sec(p.start_ms)}:end=${sec(p.end_ms)},setpts=(PTS-STARTPTS)/${p.speed}[c${i}]`
+        )
+        if (input.hasAudio) {
+          // Next to a hold's silence the pieces' sound has to match it exactly.
+          parts.push(
+            `[as${i}]atrim=start=${sec(p.start_ms)}:end=${sec(p.end_ms)},asetpts=PTS-STARTPTS,${atempo(p.speed)}${holds ? `,${AUDIO_FORMAT}` : ''}[ca${i}]`
+          )
+        }
+        return
+      }
+      // The held frame (#1537): the picture is made steady (fps) and padded
+      // with its last frame, so a frame exists at the moment even when the
+      // recording skipped frames there or its picture ended early; that one
+      // frame is picked and looped for the hold's length, over silence.
+      const frames = Math.max(1, Math.round((p.hold_ms / 1000) * CARD_FPS))
       parts.push(
-        `[s${i}]trim=start=${sec(s.start_ms)}:end=${sec(s.end_ms)},setpts=(PTS-STARTPTS)/${s.speed}[c${i}]`
+        `[s${i}]fps=${CARD_FPS},tpad=stop_mode=clone:stop_duration=${sec(p.at_ms + HOLD_REACH_MS)},` +
+          `trim=start=${sec(p.at_ms)}:end=${sec(p.at_ms + HOLD_REACH_MS)},setpts=PTS-STARTPTS,trim=end_frame=1,` +
+          `loop=loop=${frames - 1}:size=1:start=0,setpts=N/(${CARD_FPS}*TB)[c${i}]`
       )
       if (input.hasAudio) {
         parts.push(
-          `[as${i}]atrim=start=${sec(s.start_ms)}:end=${sec(s.end_ms)},asetpts=PTS-STARTPTS,${atempo(s.speed)}[ca${i}]`
+          `anullsrc=r=48000:cl=stereo,atrim=duration=${sec((frames / CARD_FPS) * 1000)},${AUDIO_FORMAT}[ca${i}]`
         )
       }
     })
-    const ins = segs.map((_, i) => (input.hasAudio ? `[c${i}][ca${i}]` : `[c${i}]`)).join('')
+    const ins = pieces.map((_, i) => (input.hasAudio ? `[c${i}][ca${i}]` : `[c${i}]`)).join('')
     parts.push(
       `${ins}concat=n=${k}:v=1:a=${input.hasAudio ? 1 : 0}[${vb}]${input.hasAudio ? `[${ab}]` : ''}`
     )
@@ -516,8 +666,9 @@ export function buildRenderArgs(input: RenderInput): string[] {
   const passArgs = pass ? ['-pass', String(pass.n), '-passlogfile', pass.logfile] : []
   const output =
     pass?.n === 1 ? ['-f', 'null', devNull] : ['-movflags', '+faststart', input.outputPath]
+  const graph = graphArgs(parts, input.graphFile)
 
-  return [
+  const args = [
     '-y',
     '-v',
     'error',
@@ -567,8 +718,7 @@ export function buildRenderArgs(input: RenderInput): string[] {
     ),
     // Music last, looped for as long as the graph reads it (atrim bounds it).
     ...(music ? ['-stream_loop', '-1', ...lockedInputArgs(music.mime), '-i', music.path] : []),
-    '-filter_complex',
-    parts.join(';'),
+    ...graph.args,
     ...maps,
     ...(input.video?.videoArgs ?? DEFAULT_VIDEO_ARGS),
     ...passArgs,
@@ -577,6 +727,7 @@ export function buildRenderArgs(input: RenderInput): string[] {
     ...(withAudio ? ['-c:a', 'aac', '-b:a', '128k'] : []),
     ...output
   ]
+  return { args, graph: graph.graph }
 }
 
 export function buildPosterArgs(renderedPath: string, editedMs: number, outPath: string): string[] {

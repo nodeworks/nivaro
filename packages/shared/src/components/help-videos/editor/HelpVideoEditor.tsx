@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertCircle, Redo2, RotateCw, Scissors, Trash2, Undo2 } from 'lucide-react'
+import { AlertCircle, Pause, Redo2, RotateCw, Scissors, Trash2, Undo2 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { ItemLockBanner, LockHolderButton, useItemLock } from '../../panels/ItemLockBanner'
@@ -13,6 +13,7 @@ import { settledMs } from '../cardDesign'
 import { cardMotionAt } from '../cards'
 import {
   ALLOWED_SPEEDS,
+  addHoldAt,
   bodyDuration,
   cardPhaseAt,
   introMs,
@@ -23,7 +24,9 @@ import {
 } from '../edits'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
 import type { HelpVideoDto, VersionDto, VideoEdits } from '../types'
+import { addAnswerAsCaption, addAnswerAsChapter } from './answerEdits'
 import { addChapterAt } from './ChaptersPanel'
+import { DraftSuggestions } from './DraftSuggestions'
 import { EditorSidebar } from './EditorSidebar'
 import { historyReducer, initHistory } from './history'
 import { EditorLayoutStyle, ToolSep } from './layout'
@@ -33,6 +36,14 @@ import { PublishButton } from './PublishButton'
 import { SaveState } from './SaveState'
 import { ShortcutsCard } from './ShortcutsCard'
 import { SilenceSuggestions } from './SilenceSuggestions'
+import {
+  alignItems,
+  deleteItems,
+  duplicateItems,
+  moveItems,
+  pruneSelection,
+  selectedItems
+} from './selection'
 import { suggestCuts, suggestEdits } from './suggestCuts'
 import { type Selection, Timeline } from './Timeline'
 import { ToolPicker } from './ToolPicker'
@@ -220,7 +231,9 @@ function EditorBody({
     const ms = player.current?.editedMs?.()
     return ms == null ? 'body' : cardPhaseAt(editsRef.current, ms).phase
   }, [])
-  const [selection, setSelection] = useState<Selection>(null)
+  const [rawSelection, setSelection] = useState<Selection>(null)
+  // Items that went away (undo, a group deleted) leave the selection too.
+  const selection = useMemo(() => pruneSelection(edits, rawSelection), [edits, rawSelection])
   const [viewerPreview, setViewerPreview] = useState(false)
   const [tool, setTool] = useState<Tool | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
@@ -231,6 +244,9 @@ function EditorBody({
   const uploaded = draft.source_kind === 'upload'
   const segIndex = segmentIndexAt(edits, src)
   const silent = useMemo(() => suggestCuts(draft.levels ?? null, edits), [draft.levels, edits])
+  // The sound lane (#1560): the microphone levels, else the server's peaks
+  // (an uploaded video has only those).
+  const soundLevels = draft.levels?.length ? draft.levels : (draft.peaks ?? null)
   // Pauses plus, on a recording of the author's own tab, idle stretches and
   // typing (#1518) — the toolbar's suggestion list.
   const suggestions = useMemo(
@@ -274,14 +290,88 @@ function EditorBody({
     else set(r.edits)
     if (r.id) setSelection({ lane: 'chapters', id: r.id })
   }, [playhead, showNote, set])
+  // Stats → an answer to a viewer's question also lands in the draft as a
+  // chapter or caption at the moment it was asked (#1505); the usual save and
+  // publish follow.
+  const answerEdit = useCallback(
+    (kind: 'chapter' | 'caption', editedMs: number, text: string): string | null => {
+      const r =
+        kind === 'chapter'
+          ? addAnswerAsChapter(editsRef.current, editedMs, text)
+          : addAnswerAsCaption(editsRef.current, editedMs, text, sourceMs)
+      if (r.refused) return r.refused
+      set(r.edits)
+      return null
+    },
+    [set, sourceMs]
+  )
+  const jumpToMoment = useCallback(
+    (editedMs: number) => {
+      onTab('edit')
+      player.current?.seekEdited(editedMs)
+    },
+    [onTab]
+  )
+  // A held frame at the playhead (#1537): 3 s, selected so its length can be
+  // set at once.
+  const addHold = useCallback(() => {
+    const r = addHoldAt(editsRef.current, playhead())
+    if (r.refused) showNote(r.refused)
+    else set(r.edits)
+    if (r.id) setSelection({ lane: 'holds', id: r.id })
+  }, [playhead, showNote, set])
+  // Group actions on several selected items (#1543): each one undo step; a
+  // refusal (a zoom onto a zoom, a hold off the kept pieces) is the note.
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  const applyGroup = useCallback(
+    (r: { edits: VideoEdits; refused?: string; selection?: Selection }, key?: string) => {
+      if (r.refused) showNote(r.refused)
+      else if (r.edits !== editsRef.current) {
+        set(r.edits, key)
+        if (r.selection !== undefined) setSelection(r.selection)
+      }
+    },
+    [showNote, set]
+  )
+  const nudgeSelection = useCallback(
+    (d: number) =>
+      applyGroup(
+        moveItems(editsRef.current, selectedItems(selectionRef.current), d, sourceMs),
+        'multi:nudge'
+      ),
+    [applyGroup, sourceMs]
+  )
+  const deleteSelection = useCallback(() => {
+    const items = selectedItems(selectionRef.current)
+    if (!items.length) return
+    set(deleteItems(editsRef.current, items))
+    setSelection(null)
+  }, [set])
+  const duplicateSelection = useCallback(
+    () =>
+      applyGroup(duplicateItems(editsRef.current, selectedItems(selectionRef.current), sourceMs)),
+    [applyGroup, sourceMs]
+  )
+  const alignSelection = useCallback(
+    (edge: 'start' | 'end') =>
+      applyGroup(
+        alignItems(
+          editsRef.current,
+          selectedItems(selectionRef.current),
+          edge,
+          playhead(),
+          sourceMs
+        )
+      ),
+    [applyGroup, playhead, sourceMs]
+  )
   const stopDrawing = useCallback(() => setTool(null), [])
   // A jump made from the side panel (a chapter, a caption, Jump to it, Show
   // it) remembers where the playhead and selection were, so one click takes
   // the author back. Consecutive panel jumps keep the FIRST spot; moving the
   // playhead from the timeline or the picture forgets it.
   const [returnTo, setReturnTo] = useState<{ ms: number; selection: Selection } | null>(null)
-  const selectionRef = useRef(selection)
-  selectionRef.current = selection
   const rememberSpot = useCallback(() => {
     const ms = playhead()
     setReturnTo((cur) => cur ?? { ms, selection: selectionRef.current })
@@ -332,9 +422,15 @@ function EditorBody({
     split,
     deletePiece,
     addChapter,
+    addHold,
     stopDrawing,
     toggleShortcuts: () => setShortcutsOpen((o) => !o),
-    pieceSelected: selection?.lane === 'cuts'
+    pieceSelected: selection?.lane === 'cuts',
+    itemsSelected: selectedItems(selection).length,
+    nudgeSelection,
+    deleteSelection,
+    duplicateSelection,
+    alignSelection
   })
 
   // Close saves what's waiting first. If that save fails, the first Close
@@ -493,6 +589,17 @@ function EditorBody({
               >
                 <Trash2 className='!size-3.5' /> Cut piece
               </Button>
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-8 px-2.5 text-[12.5px]'
+                onClick={addHold}
+                disabled={segIndex < 0}
+                data-hv-add-hold
+                title='Hold this frame for a few seconds (H)'
+              >
+                <Pause className='!size-3.5' /> Hold
+              </Button>
             </div>
             <ToolSep />
             <div data-hvx-group>
@@ -528,6 +635,14 @@ function EditorBody({
               onChange={set}
               onSeek={sideSeek}
               onRefused={showNote}
+            />
+            <DraftSuggestions
+              video={video}
+              edits={edits}
+              onChange={set}
+              onSeek={sideSeek}
+              onNote={showNote}
+              disabled={blocked}
             />
             <div className='ml-auto flex items-center gap-0.5'>
               <ShortcutsCard open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
@@ -609,6 +724,7 @@ function EditorBody({
               onShowCard={showCard}
               videoId={video.id}
               hasLevels={!!draft.levels?.length}
+              pointer={draft.pointer}
             />
           )}
           <div data-hvx-timeline>
@@ -616,7 +732,8 @@ function EditorBody({
               edits={edits}
               sourceMs={sourceMs}
               playheadSrcMs={src}
-              levels={draft.levels ?? null}
+              levels={soundLevels}
+              sprite={draft.sprite ?? null}
               uploaded={uploaded}
               silences={silent}
               selection={selection}
@@ -634,6 +751,8 @@ function EditorBody({
           flush={save.flush}
           conflict={save.status === 'conflict'}
           onReload={onReload}
+          onJump={jumpToMoment}
+          onAnswerEdit={answerEdit}
         />
       </Tabs>
     </div>

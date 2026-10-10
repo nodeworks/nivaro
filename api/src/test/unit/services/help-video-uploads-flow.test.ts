@@ -327,6 +327,27 @@ describe('no orphaned file rows (finalize / take)', () => {
     await up.purgeStaleUploads()
     expect(files.deleted).toEqual(['old-render'])
   })
+  it('keeps a script and its marks with the recording until the video is made (#1491)', async () => {
+    const s = await ready()
+    const r = await up.finalizeUpload(user, s.id, {
+      script: ['Open the record', '  ', 'Press Approve'],
+      marks: [
+        { t_ms: 3000.2, step: 1 },
+        { t_ms: 'x', step: 1 }
+      ]
+    })
+    expect(r).toMatchObject({ script: ['Open the record', 'Press Approve'] })
+    expect(await up.takeFinalizedUpload(user, s.id)).toMatchObject({
+      script: ['Open the record', 'Press Approve'],
+      marks: [{ t_ms: 3000, step: 1 }]
+    })
+  })
+  it('marks without a script are dropped, and a plain recording has neither', async () => {
+    const s = await ready()
+    await up.finalizeUpload(user, s.id, { marks: [{ t_ms: 1, step: 1 }] })
+    expect(String(rows[0].meta)).not.toContain('marks')
+    expect(await up.takeFinalizedUpload(user, s.id)).toMatchObject({ script: null, marks: null })
+  })
   it('a taken upload put back is finalized-unused again: listed, and collectable', async () => {
     const s = await ready()
     await up.finalizeUpload(user, s.id, {})
@@ -526,7 +547,13 @@ describe('uploaded files (picked, not recorded)', () => {
     expect(ff.ran[0]).toEqual(expect.arrayContaining(['-c:v', 'copy', '-movflags', '+faststart']))
     expect(existsSync(partFile(s.id))).toBe(false)
     const taken = await up.takeFinalizedUpload(user, s.id)
-    expect(taken).toMatchObject({ file_id: 'file-1', clicks: null, levels: null })
+    expect(taken).toMatchObject({
+      file_id: 'file-1',
+      clicks: null,
+      levels: null,
+      script: null,
+      marks: null
+    })
     expect(await up.sourceKindOfFile('file-1')).toBe('upload')
   })
   it('a file with no video is refused with the reason, and its parts are deleted', async () => {

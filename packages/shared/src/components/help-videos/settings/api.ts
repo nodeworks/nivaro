@@ -78,10 +78,83 @@ export interface HouseStyleDto {
   defaults: HouseStyle
 }
 
+// ── Storage housekeeping (#1531) ─────────────────────────────────────────────
+export type StorageRole = 'source' | 'rendered' | 'captions' | 'poster'
+export interface StorageFile {
+  role: StorageRole
+  id: string
+  /** Null when the files row is gone (nothing left to count). */
+  bytes: number | null
+}
+export interface StorageVersion {
+  id: string
+  version: number
+  created_at: string
+  is_published: boolean
+  is_draft: boolean
+  render_status: string
+  files_removed_at: string | null
+  files: StorageFile[]
+  bytes: number
+}
+export interface StorageVideo {
+  id: string
+  title: string
+  status: string
+  poster: StorageFile | null
+  versions: StorageVersion[]
+  bytes: number
+  by_role: Record<StorageRole, number>
+}
+export interface StorageReportDto {
+  /** false = migration 410 has not run: retention cannot be saved. */
+  migrated: boolean
+  /** null = keep everything. */
+  retention_days: number | null
+  limits: { retention_min_days: number; retention_max_days: number }
+  videos: StorageVideo[]
+  totals: {
+    bytes: number
+    files: number
+    videos: number
+    versions: number
+    by_role: Record<StorageRole, number>
+  }
+}
+export interface StorageRemoval {
+  video_id: string
+  title: string
+  version_id: string
+  version: number
+  age_days: number
+  files: StorageFile[]
+  bytes: number
+  why: string
+}
+export interface StoragePlanDto {
+  /** false = migration 415 (or 410) has not run: the sweep does nothing. */
+  migrated: boolean
+  retention_days: number | null
+  removals: StorageRemoval[]
+  kept: Array<{ video_id: string; version_id: string; version: number; why: string }>
+  bytes: number
+  files: number
+}
+export interface StorageSweepDto {
+  retention_days: number | null
+  versions: number
+  files: number
+  bytes: number
+  failed: number
+  summary: string
+}
+
 export const helpVideoSettingsKeys = {
   settings: ['help-video-settings'] as const,
   queue: ['help-video-render-queue'] as const,
-  houseStyle: ['help-video-house-style'] as const
+  houseStyle: ['help-video-house-style'] as const,
+  storage: ['help-video-storage'] as const,
+  storagePlan: ['help-video-storage', 'plan'] as const
 }
 
 export function helpVideoSettingsApi(client: NivaroClient) {
@@ -107,6 +180,22 @@ export function helpVideoSettingsApi(client: NivaroClient) {
       ),
     queue: () => r(get<{ data: RenderQueueDto }>('/help-videos/render-queue')).then((x) => x.data),
     cancel: (versionId: string) =>
-      r(post(`/help-videos/render-queue/${encodeURIComponent(versionId)}/cancel`))
+      r(post(`/help-videos/render-queue/${encodeURIComponent(versionId)}/cancel`)),
+    /** Sizes per video and version, with the retention rule (#1531). */
+    storage: () => r(get<{ data: StorageReportDto }>('/help-videos/storage')).then((x) => x.data),
+    /** null = keep everything. 409 HELP_VIDEO_SETTINGS_MIGRATION_PENDING before 410. */
+    saveRetention: (retention_days: number | null) =>
+      r(
+        patch<{ data: { retention_days: number | null; migrated: boolean } }>(
+          '/help-videos/storage/retention',
+          { retention_days }
+        )
+      ).then((x) => x.data),
+    /** What the next sweep would remove, and why, before it runs. */
+    storagePlan: () =>
+      r(get<{ data: StoragePlanDto }>('/help-videos/storage/plan')).then((x) => x.data),
+    /** Runs the sweep now (a Background Jobs run). */
+    sweepStorage: () =>
+      r(post<{ data: StorageSweepDto }>('/help-videos/storage/sweep')).then((x) => x.data)
   }
 }

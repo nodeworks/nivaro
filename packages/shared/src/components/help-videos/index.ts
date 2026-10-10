@@ -1,9 +1,19 @@
 export {
   helpVideoApi,
   helpVideoKeys,
+  learningPathApi,
+  type RequiredList,
+  releaseVideoApi,
   useHelpVideo,
+  useHelpVideoClips,
+  useHelpVideoNext,
+  useHelpVideoQuestions,
   useHelpVideosFor,
   useHelpVideoWalk,
+  useLearningPaths,
+  useMyLearningPaths,
+  useReleaseVideos,
+  useRequiredList,
   useRequiredVideos
 } from './api'
 export { HelpVideoEditor } from './editor/HelpVideoEditor'
@@ -38,19 +48,33 @@ export {
   helpVideoSettingsApi,
   helpVideoSettingsKeys,
   type RenderQueueDto,
-  type RenderQueueItem
+  type RenderQueueItem,
+  type StoragePlanDto,
+  type StorageReportDto
 } from './settings/api'
 export { HouseStyleButton } from './settings/HouseStyleButton'
 export { RenderSettingsButton } from './settings/RenderSettingsButton'
+export { StorageButton } from './settings/StorageButton'
 export type {
+  ClipDto,
+  HelpVideoAnalytics,
   HelpVideoContext,
   HelpVideoDto,
+  HelpVideoMomentCard,
+  HelpVideoPathDto,
+  HelpVideoQuestion,
+  HelpVideoRatingSummary,
+  HelpVideoStale,
+  MyLearningPathDto,
   RecordedClick,
+  ReleaseVideoDto,
+  SpriteSheet,
   VideoEdits,
   WalkStep
 } from './types'
 export { HelpVideoButton } from './viewer/HelpVideoButton'
 export { HelpVideoSheet } from './viewer/HelpVideoSheet'
+export { LearningPathCard } from './viewer/LearningPathCard'
 export { RequiredVideosCard } from './viewer/RequiredVideosCard'
 export { HelpVideoWalkHost } from './walk/HelpVideoWalk'
 export {
@@ -61,6 +85,7 @@ export {
 } from './walk/store'
 export {
   accessibleName,
+  collectPageLabels,
   describeClickTarget,
   findStepElement,
   normalizePath,

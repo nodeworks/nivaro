@@ -1,12 +1,14 @@
 import { execFile } from 'node:child_process'
 import { mkdtempSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { describe, expect, it } from 'vitest'
 import { hasFfmpeg, probeVideo, runFfmpeg } from '../../services/ffmpeg.js'
 import { normalizeEdits } from '../../services/help-video-edits.js'
-import { buildPosterArgs, buildRenderArgs } from '../../services/help-video-render-plan.js'
+import { buildPosterArgs, buildRenderPlan } from '../../services/help-video-render-plan.js'
+import { runRenderPlan } from './help-video-graph-file.js'
 
 describe('render plan through real ffmpeg', () => {
   it('cuts, speeds up, blurs, zooms and overlays a test clip', async (ctx) => {
@@ -60,19 +62,17 @@ describe('render plan through real ffmpeg', () => {
       4000
     )
     const out = join(dir, 'out.mp4')
-    await runFfmpeg(
-      buildRenderArgs({
-        edits,
-        width: 640,
-        height: 360,
-        hasAudio: true,
-        sourcePath: src,
-        sourceMime: 'video/webm',
-        overlays: [{ path: png, start_ms: 500, end_ms: 1500 }],
-        outputPath: out,
-        threads: 2
-      })
-    )
+    await runRenderPlan({
+      edits,
+      width: 640,
+      height: 360,
+      hasAudio: true,
+      sourcePath: src,
+      sourceMime: 'video/webm',
+      overlays: [{ path: png, start_ms: 500, end_ms: 1500 }],
+      outputPath: out,
+      threads: 2
+    })
     const p = await probeVideo(out, 'video/mp4')
     expect(p.width).toBe(640)
     expect(p.height).toBe(360)
@@ -118,19 +118,17 @@ describe('render plan through real ffmpeg', () => {
       4000
     )
     const out = join(dir, 'out.mp4')
-    await runFfmpeg(
-      buildRenderArgs({
-        edits,
-        width: 640,
-        height: 360,
-        hasAudio: true,
-        sourcePath: src,
-        sourceMime: 'video/webm',
-        overlays: [],
-        outputPath: out,
-        threads: 2
-      })
-    )
+    await runRenderPlan({
+      edits,
+      width: 640,
+      height: 360,
+      hasAudio: true,
+      sourcePath: src,
+      sourceMime: 'video/webm',
+      overlays: [],
+      outputPath: out,
+      threads: 2
+    })
     const p = await probeVideo(out, 'video/mp4')
     expect(p.has_audio).toBe(true)
     expect(p.duration_ms).toBeGreaterThan(1200) // 3 s at 2x = 1.5 s
@@ -174,19 +172,17 @@ describe('render plan through real ffmpeg', () => {
     }>
   ): Promise<string> {
     const out = join(dir, `zoom-${zooms.length}-${Math.random().toString(36).slice(2)}.mp4`)
-    await runFfmpeg(
-      buildRenderArgs({
-        edits: normalizeEdits({ zooms }, 4000),
-        width: 640,
-        height: 360,
-        hasAudio: false,
-        sourcePath: src,
-        sourceMime: 'video/webm',
-        overlays: [],
-        outputPath: out,
-        threads: 2
-      })
-    )
+    await runRenderPlan({
+      edits: normalizeEdits({ zooms }, 4000),
+      width: 640,
+      height: 360,
+      hasAudio: false,
+      sourcePath: src,
+      sourceMime: 'video/webm',
+      overlays: [],
+      outputPath: out,
+      threads: 2
+    })
     return out
   }
 
@@ -325,7 +321,7 @@ describe('render plan through real ffmpeg', () => {
     ])
     // A 24x16 field at (96,72): the radius asked for (20) caps at
     // floor(16/4)-1 = 3, so the plan asks for ceil(20*21 / (3*4)) = 35 passes.
-    const args = buildRenderArgs({
+    const plan = buildRenderPlan({
       edits: normalizeEdits(
         {
           blurs: [
@@ -346,14 +342,17 @@ describe('render plan through real ffmpeg', () => {
       sourceMime: 'video/webm',
       overlays: [],
       outputPath: join(dir, 'after.mp4'),
-      threads: 2
+      threads: 2,
+      graphFile: join(dir, 'after.txt')
     })
-    const graph = args[args.indexOf('-filter_complex') + 1]
-    expect(graph).toContain('crop=24:16:96:72,boxblur=3:35')
-    await runFfmpeg(args)
-    const before = args.map((a) =>
-      a === graph
-        ? graph.replace('boxblur=3:35', 'boxblur=3:1')
+    expect(plan.graph).toContain('crop=24:16:96:72,boxblur=3:35')
+    await writeFile(join(dir, 'after.txt'), plan.graph)
+    await runFfmpeg(plan.args)
+    // The same render with one pass, from its own graph file.
+    await writeFile(join(dir, 'before.txt'), plan.graph.replace('boxblur=3:35', 'boxblur=3:1'))
+    const before = plan.args.map((a) =>
+      a === join(dir, 'after.txt')
+        ? join(dir, 'before.txt')
         : a === join(dir, 'after.mp4')
           ? join(dir, 'before.mp4')
           : a
@@ -367,5 +366,65 @@ describe('render plan through real ffmpeg', () => {
     expect(raw).toBeGreaterThan(1000) // the pattern is really there
     expect(planned).toBeLessThan(one / 4)
     expect(planned).toBeLessThan(raw / 100)
+  }, 120_000)
+})
+
+describe('held frames through real ffmpeg (#1537)', () => {
+  it('holds a frame for its length, sound and all, in one graph', async (ctx) => {
+    if (!(await hasFfmpeg())) ctx.skip()
+    const dir = mkdtempSync(join(tmpdir(), 'nvr-render-'))
+    const src = join(dir, 'src.webm')
+    await runFfmpeg([
+      '-y',
+      '-v',
+      'error',
+      '-f',
+      'lavfi',
+      '-i',
+      'testsrc=size=640x360:rate=15:duration=4',
+      '-f',
+      'lavfi',
+      '-i',
+      'sine=frequency=440:duration=4',
+      '-c:v',
+      'libvpx',
+      '-c:a',
+      'libopus',
+      src
+    ])
+    const edits = normalizeEdits(
+      {
+        segments: [
+          { start_ms: 0, end_ms: 1000, speed: 1 },
+          { start_ms: 2000, end_ms: 4000, speed: 2 }
+        ],
+        holds: [
+          { at_ms: 500, hold_ms: 1500 },
+          { at_ms: 3000, hold_ms: 1000 }
+        ],
+        zooms: [
+          { start_ms: 2000, end_ms: 4000, rect: { x: 0.25, y: 0.25, w: 0.5, h: 0.5 }, ease_ms: 300 }
+        ]
+      },
+      4000
+    )
+    const out = join(dir, 'out.mp4')
+    await runRenderPlan({
+      edits,
+      width: 640,
+      height: 360,
+      hasAudio: true,
+      sourcePath: src,
+      sourceMime: 'video/webm',
+      overlays: [],
+      outputPath: out,
+      threads: 2
+    })
+    const p = await probeVideo(out, 'video/mp4')
+    expect(p.width).toBe(640)
+    expect(p.has_audio).toBe(true)
+    // 1 s + 1.5 s held + 1 s (2 s at 2x) + 1 s held = 4.5 s
+    expect(p.duration_ms).toBeGreaterThan(4200)
+    expect(p.duration_ms).toBeLessThan(4900)
   }, 120_000)
 })

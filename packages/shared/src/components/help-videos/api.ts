@@ -5,12 +5,25 @@ import { del, get, patch, post, put } from '../../lib/commands'
 import { type CardBrand, cardAccent } from './cards'
 import type {
   ActivitySpan,
+  CaptionJob,
+  CaptionJobStatus,
+  ClipDto,
+  ClipKind,
+  DraftSuggestions,
+  HelpVideoAnalytics,
   HelpVideoContext,
   HelpVideoDto,
   HelpVideoErrorCode,
+  HelpVideoPathDto,
+  HelpVideoPathRole,
+  HelpVideoQuestion,
   MusicTrack,
+  MyLearningPathDto,
   OpenverseSearch,
+  PointerPath,
   RecordedClick,
+  RecordedMark,
+  ReleaseVideoDto,
   UploadedMusic,
   VersionDto,
   VideoEdits,
@@ -26,6 +39,16 @@ export const helpVideoKeys = {
   required: ['help-videos', 'required'] as const,
   pages: ['help-videos', 'pages'] as const,
   walk: (id: string) => ['help-videos', 'walk', id] as const,
+  /** This person's questions on a video and their vote (#1505). */
+  questions: (id: string) => ['help-videos', 'questions', id] as const,
+  /** "Up next" suggestions for a video (#1530). */
+  next: (id: string) => ['help-videos', 'next', id] as const,
+  /** Learning paths (#1508): the author list and this person's own. */
+  paths: ['help-videos', 'paths'] as const,
+  myPaths: ['help-videos', 'paths', 'mine'] as const,
+  /** The changelog's videos (#1528b). */
+  releases: ['help-videos', 'releases'] as const,
+  clips: (id: string) => ['help-videos', 'clips', id] as const,
   /** The editor's draft load. Outside the `all` prefix on purpose: GET
    *  /draft/edits creates a missing draft, so a broad invalidation must
    *  never refetch it. `n` bumps on Reload. */
@@ -109,14 +132,118 @@ export function useHelpVideoLibrary(params: {
   })
 }
 
+/** GET /help-videos/required/mine: single required videos plus the required
+ *  learning paths that are not finished (#1508). A video inside such a path
+ *  is listed under the path only. Older servers answer without `paths`. */
+export type RequiredList = { data: HelpVideoDto[]; paths: MyLearningPathDto[] }
+
+async function fetchRequired(client: NivaroClient): Promise<RequiredList> {
+  const r = await client.request(
+    get<{ data: HelpVideoDto[]; paths?: MyLearningPathDto[] }>('/help-videos/required/mine')
+  )
+  return { data: r.data ?? [], paths: r.paths ?? [] }
+}
+
+export function useRequiredList() {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.required,
+    staleTime: 60_000,
+    queryFn: () => fetchRequired(client)
+  })
+}
+
+/** The single required videos (the same fetch as useRequiredList). */
 export function useRequiredVideos() {
   const client = useNivaroClient()
   return useQuery({
     queryKey: helpVideoKeys.required,
     staleTime: 60_000,
-    queryFn: async () =>
-      (await client.request(get<{ data: HelpVideoDto[] }>('/help-videos/required/mine'))).data
+    queryFn: () => fetchRequired(client),
+    select: (r) => r.data
   })
+}
+
+/** This person's learning paths (#1508): their role's and, while their
+ *  account is new, the New User paths — each with progress and the next
+ *  unfinished video. */
+export function useMyLearningPaths(enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.myPaths,
+    enabled,
+    staleTime: 60_000,
+    queryFn: async () =>
+      (await client.request(get<{ data: MyLearningPathDto[] }>('/help-videos/paths/mine'))).data
+  })
+}
+
+/** Every path, for authors. */
+export function useLearningPaths(enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.paths,
+    enabled,
+    queryFn: async () =>
+      (await client.request(get<{ data: HelpVideoPathDto[] }>('/help-videos/paths'))).data
+  })
+}
+
+/** Learning-path mutations (authors). Every call answers the path as stored. */
+export function learningPathApi(client: NivaroClient) {
+  const r = client.request.bind(client)
+  type Details = {
+    title?: string
+    description?: string | null
+    status?: 'draft' | 'published'
+    new_user?: boolean
+  }
+  return {
+    create: (body: Details & { title: string }) =>
+      r(post<{ data: HelpVideoPathDto }>('/help-videos/paths', body)).then((x) => x.data),
+    update: (id: string, body: Details) =>
+      r(patch<{ data: HelpVideoPathDto }>(`/help-videos/paths/${id}`, body)).then((x) => x.data),
+    /** The ordered video list; unknown ids are dropped. */
+    setItems: (id: string, video_ids: string[]) =>
+      r(put<{ data: HelpVideoPathDto }>(`/help-videos/paths/${id}/items`, { video_ids })).then(
+        (x) => x.data
+      ),
+    /** The roles; a published path tells the roles that became required. */
+    setRoles: (id: string, roles: HelpVideoPathRole[]) =>
+      r(
+        put<{ data: HelpVideoPathDto; added: string[] }>(`/help-videos/paths/${id}/roles`, {
+          roles
+        })
+      ).then((x) => x.data),
+    remove: (id: string) => r(del(`/help-videos/paths/${id}`))
+  }
+}
+
+/** The changelog's videos this reader may watch (#1528b). */
+export function useReleaseVideos(enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.releases,
+    enabled,
+    staleTime: 60_000,
+    queryFn: async () =>
+      (await client.request(get<{ data: ReleaseVideoDto[] }>('/help-videos/releases'))).data
+  })
+}
+
+/** Release-video mutations (administrators). */
+export function releaseVideoApi(client: NivaroClient) {
+  const r = client.request.bind(client)
+  return {
+    set: (version: string, video_id: string, t_ms?: number | null) =>
+      r(
+        put<{ data: { version: string; video_id: string; t_ms: number | null } }>(
+          `/help-videos/releases/${encodeURIComponent(version)}`,
+          { video_id, t_ms: t_ms ?? null }
+        )
+      ).then((x) => x.data),
+    clear: (version: string) => r(del(`/help-videos/releases/${encodeURIComponent(version)}`))
+  }
 }
 
 /** "Show me on this page": the published version's labelled clicks. */
@@ -133,6 +260,51 @@ export function useHelpVideoWalk(id: string | null) {
         )
       ).data
   })
+}
+
+/** This person's questions (authors: everyone's) and their own vote. */
+export function useHelpVideoQuestions(id: string | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.questions(id ?? ''),
+    enabled: !!id,
+    staleTime: 30_000,
+    queryFn: () => helpVideoApi(client).questions(id as string)
+  })
+}
+
+/** Up to five videos to watch after this one (#1530). */
+export function useHelpVideoNext(id: string | null, enabled = true) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.next(id ?? ''),
+    enabled: enabled && !!id,
+    staleTime: 300_000,
+    queryFn: () => helpVideoApi(client).next(id as string)
+  })
+}
+
+/** A video's clips (#1562), polled while one is still being made. */
+export function useHelpVideoClips(id: string | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.clips(id ?? ''),
+    enabled: !!id,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const r = await client.request(get<{ data: ClipDto[] }>(`/help-videos/${id}/clips`))
+      // A server from before #1562 has no clips route: an odd answer is no clips.
+      return Array.isArray(r?.data) ? r.data : []
+    },
+    refetchInterval: (q) => (clipsInFlight(q.state.data) ? 2500 : false)
+  })
+}
+
+/** True while any clip is queued or rendering (the list keeps polling). */
+export function clipsInFlight(clips: ClipDto[] | undefined): boolean {
+  return (
+    Array.isArray(clips) && clips.some((c) => c.status === 'queued' || c.status === 'rendering')
+  )
 }
 
 export function useHelpVideoPages() {
@@ -259,17 +431,39 @@ export function helpVideoApi(client: NivaroClient) {
       body: { position_ms: number; watched_ms_delta: number; buckets: string; version_id?: string }
     ) => r(post<{ data: { completed: boolean } } | undefined>(`/help-videos/${id}/progress`, body)),
     analytics: (id: string) =>
+      r(get<{ data: HelpVideoAnalytics }>(`/help-videos/${id}/analytics`)).then((x) => x.data),
+    /** "Was this helpful?" — one vote per person per video, changeable. 403
+     *  HELP_VIDEO_MASQUERADE while viewing as someone else. */
+    rate: (id: string, helpful: boolean) =>
+      r(put<{ data: { helpful: boolean } }>(`/help-videos/${id}/rating`, { helpful })).then(
+        (x) => x.data
+      ),
+    /** This person's questions on the video (authors: everyone's, with who
+     *  asked) and their own vote (null = none yet). */
+    questions: (id: string) =>
       r(
-        get<{
-          data: {
-            views: number
-            unique_viewers: number
-            completion_rate: number
-            drop_off: number[]
-            watched_hours: number
-          }
-        }>(`/help-videos/${id}/analytics`)
+        get<{ data: HelpVideoQuestion[]; my_rating: boolean | null }>(
+          `/help-videos/${id}/questions`
+        )
+      ).then((x) => ({ questions: x.data, my_rating: x.my_rating ?? null })),
+    /** Asks a question at a moment (edited time); text ≤ 1000 characters
+     *  (400 HELP_VIDEO_QUESTION_INVALID). The authors are notified. */
+    ask: (id: string, body: { at_ms: number; text: string }) =>
+      r(post<{ data: HelpVideoQuestion }>(`/help-videos/${id}/questions`, body)).then(
+        (x) => x.data
+      ),
+    /** Authors: answers a question (≤ 2000 characters); the asker is notified. */
+    answer: (id: string, questionId: string, answer: string) =>
+      r(
+        post<{ data: HelpVideoQuestion }>(`/help-videos/${id}/questions/${questionId}/answer`, {
+          answer
+        })
       ).then((x) => x.data),
+    /** Up to five published videos to watch after this one: what people in
+     *  this person's role watched next, then anyone, then the same screen;
+     *  never one this person has finished. */
+    next: (id: string) =>
+      r(get<{ data: HelpVideoDto[] }>(`/help-videos/${id}/next`)).then((x) => x.data),
     openUpload: (mime: string) =>
       r(post<{ data: { id: string; next_part: number } }>('/help-videos/uploads', { mime })).then(
         (x) => x.data
@@ -306,6 +500,14 @@ export function helpVideoApi(client: NivaroClient) {
      *   `i * 100` ms. Null without a microphone.
      * - `activity` (optional): `{ kind: 'typing' | 'idle', start_ms, end_ms }`
      *   spans on the recorded tab — never what was typed. Null when not captured.
+     * - `pointer` (optional, #1517): `{ samples: [{ t_ms, x, y }], shortcuts:
+     *   [{ t_ms, keys }] }` — where the pointer went (sampled ~20 times a
+     *   second while it moved) and the keyboard shortcuts pressed (`Meta+S`,
+     *   `Ctrl+K`, `Enter`…), never text typed into a field. Null when not captured.
+     * - `script` and `marks` (optional, #1491): the steps the author wrote
+     *   before recording (≤ 60 of ≤ 200 chars) and `{ t_ms, step }` per Next
+     *   press, in recording time; the first draft gets a chapter per marked
+     *   step (the first at 0) and keeps the script for a re-record.
      * Matches `HelpVideoVersion.clicks` / `.levels` in @nivaro/sdk.
      * 422 UPLOAD_TOO_LONG past 31 minutes, 409 UPLOAD_CLOSED when finished.
      */
@@ -316,6 +518,9 @@ export function helpVideoApi(client: NivaroClient) {
         clicks: RecordedClick[] | null
         levels: number[] | null
         activity?: ActivitySpan[] | null
+        pointer?: PointerPath | null
+        script?: string[] | null
+        marks?: RecordedMark[] | null
       }
     ) =>
       r(
@@ -354,8 +559,43 @@ export function helpVideoApi(client: NivaroClient) {
           openverse_id: openverseId
         })
       ).then((x) => x.data),
-    registerPage: (key: string, label: string, app?: string) =>
-      r(post('/help-videos/pages', { key, label, app })),
+    /** `labels` (optional): the click targets seen on the page, for the
+     *  nightly "may be out of date" check (#1495); at most 300. */
+    registerPage: (key: string, label: string, app?: string, labels?: string[]) =>
+      r(post('/help-videos/pages', { key, label, app, ...(labels ? { labels } : {}) })),
+    /** Dismisses "may be out of date" (#1495). 409 HELP_VIDEO_NOT_STALE when
+     *  there is nothing to dismiss. Authors only. */
+    dismissStale: (id: string) =>
+      r(post<{ data: HelpVideoDto }>(`/help-videos/${id}/stale/dismiss`)).then((x) => x.data),
+    /** AI first draft of the edit (#1487): suggestions only, nothing applied.
+     *  409 HELP_VIDEO_NO_DRAFT, 503 HELP_VIDEO_AI_NOT_CONFIGURED, 502
+     *  HELP_VIDEO_DRAFT_UNREADABLE when the model's answer was not JSON. */
+    suggestDraft: (id: string) =>
+      r(post<{ data: DraftSuggestions }>(`/help-videos/${id}/draft/suggest`)).then((x) => x.data),
+    /** The draft's automatic-captions job (#1520) and which transcriber would run. */
+    captionJob: (id: string) =>
+      r(get<{ data: CaptionJobStatus }>(`/help-videos/${id}/captions/generate`)).then(
+        (x) => x.data
+      ),
+    /** Starts transcribing the draft's sound in the background (202). 409
+     *  HELP_VIDEO_NO_DRAFT / HELP_VIDEO_CAPTIONS_BUSY, 503
+     *  HELP_VIDEO_CAPTIONS_NOT_CONFIGURED with what an administrator must set up. */
+    generateCaptions: (id: string) =>
+      r(post<{ data: CaptionJob }>(`/help-videos/${id}/captions/generate`)).then((x) => x.data),
+    /** Forgets a finished or failed caption set (409 while one runs). */
+    discardCaptionJob: (id: string) => r(del(`/help-videos/${id}/captions/generate`)),
+    /** The video's clips, with ticketed links for the ready ones. */
+    clips: (id: string) =>
+      r(get<{ data: ClipDto[] }>(`/help-videos/${id}/clips`)).then((x) => x.data),
+    /** Queues a clip (#1562): `start_ms`/`end_ms` in edited time of the
+     *  published version (or the draft with `draft`), at most 30 s. 422
+     *  HELP_VIDEO_CLIP_RANGE, 409 HELP_VIDEO_CLIP_LIMIT past 20 clips, 503
+     *  HELP_VIDEO_CLIP_NO_FFMPEG. Poll `clips` until it is ready. */
+    createClip: (
+      id: string,
+      body: { kind: ClipKind; start_ms: number; end_ms: number; label?: string; draft?: boolean }
+    ) => r(post<{ data: ClipDto }>(`/help-videos/${id}/clips`, body)).then((x) => x.data),
+    deleteClip: (id: string, clipId: string) => r(del(`/help-videos/${id}/clips/${clipId}`)),
     authorRoles: () =>
       r(get<{ data: { help_video_author_roles?: unknown } }>('/settings')).then((x) =>
         parseRoleIdList(x.data?.help_video_author_roles)

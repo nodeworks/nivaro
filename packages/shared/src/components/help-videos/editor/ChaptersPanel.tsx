@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react'
+import { Film, Plus } from 'lucide-react'
 import { memo, useId } from 'react'
 import { Button } from '../../ui/button'
 import { newId, sourceToEdited, upsertItemChecked } from '../edits'
@@ -42,7 +42,8 @@ export const ChaptersPanel = memo(function ChaptersPanel({
   selectedId,
   onAdd,
   onSeek,
-  onSelect
+  onSelect,
+  onClip
 }: {
   /** The side panel shows the title itself (the heading stays for screen readers). */
   headless?: boolean
@@ -52,6 +53,8 @@ export const ChaptersPanel = memo(function ChaptersPanel({
   onAdd: () => void
   onSeek: (srcMs: number) => void
   onSelect: (id: string) => void
+  /** "Make a clip" of this chapter (#1562); absent = no clip button. */
+  onClip?: (id: string) => void
 }) {
   const headingId = useId()
   return (
@@ -86,11 +89,11 @@ export const ChaptersPanel = memo(function ChaptersPanel({
             const at = sourceToEdited(edits, c.at_ms)
             const current = c.id === selectedId
             return (
-              <li key={c.id}>
+              <li key={c.id} className='flex items-center gap-0.5'>
                 <button
                   type='button'
                   aria-current={current || undefined}
-                  className={`flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[13px] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none ${current ? 'bg-nvr-cyan/15 font-medium text-foreground' : 'text-foreground hover:bg-muted'}`}
+                  className={`flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-[13px] transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none ${current ? 'bg-nvr-cyan/15 font-medium text-foreground' : 'text-foreground hover:bg-muted'}`}
                   onClick={() => {
                     onSeek(c.at_ms)
                     onSelect(c.id)
@@ -107,6 +110,18 @@ export const ChaptersPanel = memo(function ChaptersPanel({
                   </span>
                   <span className='min-w-0 truncate'>{c.title || 'Chapter'}</span>
                 </button>
+                {onClip && at !== null && (
+                  <button
+                    type='button'
+                    className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none'
+                    onClick={() => onClip(c.id)}
+                    aria-label={`Make a clip of ${c.title || 'this chapter'}`}
+                    title='Make a clip of this chapter'
+                    data-hv-chapter-clip={c.id}
+                  >
+                    <Film className='h-3.5 w-3.5' aria-hidden />
+                  </button>
+                )}
               </li>
             )
           })}
