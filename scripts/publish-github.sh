@@ -53,6 +53,10 @@ STRIP_PATHS=(
 LEAK_TERMS=(
   'com''cast'
 )
+# Regexes (grep -E) checked over every blob alongside the literal terms.
+LEAK_PATTERNS=(
+  'sk_(live|test)_''[A-Za-z0-9]{16,}'
+)
 
 command -v git-filter-repo >/dev/null || {
   echo "git-filter-repo missing — brew install git-filter-repo" >&2
@@ -73,6 +77,10 @@ echo "→ redacting leak terms from remaining historical blobs"
 # Old revisions of otherwise-clean files (early README etc.) carried internal
 # hostnames; redact the strings everywhere without dropping the files.
 printf 'regex:[Cc]%s==>example\n' 'om''cast' > /tmp/nivaro-redactions.txt
+# Test fixtures shaped like provider keys trip GitHub push protection even
+# when fake (a Stripe-shaped value in replay-context.test.ts, 2026-10-10).
+# Built by concatenation so this script's own blob never matches.
+printf 'regex:sk_(live|test)_[A-Za-z0-9]{16,}==>%s\n' 'key_''example_redacted' >> /tmp/nivaro-redactions.txt
 git filter-repo --replace-text /tmp/nivaro-redactions.txt --force >/dev/null
 
 echo "→ verifying: stripped paths absent from all commits"
@@ -91,6 +99,14 @@ for term in "${LEAK_TERMS[@]}"; do
   HITS=$(git grep -l -i "$term" $(git rev-list --all) -- 2>/dev/null | head -3 || true)
   if [ -n "$HITS" ]; then
     echo "LEAK: '$term' found:" >&2
+    echo "$HITS" | sed 's/^/    /' >&2
+    FAIL=1
+  fi
+done
+for pat in "${LEAK_PATTERNS[@]}"; do
+  HITS=$(git grep -l -E "$pat" $(git rev-list --all) -- 2>/dev/null | head -3 || true)
+  if [ -n "$HITS" ]; then
+    echo "LEAK: pattern '$pat' found:" >&2
     echo "$HITS" | sed 's/^/    /' >&2
     FAIL=1
   fi

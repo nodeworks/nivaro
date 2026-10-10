@@ -20,7 +20,7 @@ describe('redactSecrets', () => {
     expect(redactSecrets('sent Bearer abc.def-123')).toBe(`sent Bearer ${REDACTED}`)
     expect(redactSecrets('Basic dXNlcjpwYXNz')).toBe(`Basic ${REDACTED}`)
     expect(redactSecrets('hash 9f86d081884c7d659a2feaa0c55ad015a3bf4f1b')).toBe(`hash ${REDACTED}`)
-    expect(redactSecrets('key key_example_redacted')).toBe(
+    expect(redactSecrets('key Zq7Xw2Lm9Pt4Vr8Ks3Nd6Hb1Jf5Gc0Ya')).toBe(
       `key ${REDACTED}`
     )
   })
