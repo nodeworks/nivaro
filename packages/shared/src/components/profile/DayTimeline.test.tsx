@@ -87,7 +87,11 @@ async function mount() {
       </QueryClientProvider>
     )
   })
-  for (let i = 0; i < 5; i++) await act(async () => await Promise.resolve())
+  // The day query resolves after a few ticks; a fixed count of microtask
+  // flushes raced it on a loaded machine.
+  for (let i = 0; i < 50 && !host.querySelector('[data-day-lane]'); i++) {
+    await act(async () => await new Promise((r) => setTimeout(r, 10)))
+  }
 }
 
 beforeEach(() => {
