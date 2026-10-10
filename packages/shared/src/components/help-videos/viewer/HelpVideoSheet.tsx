@@ -1,4 +1,5 @@
-import { History, MousePointerClick, PictureInPicture2, Sparkles } from 'lucide-react'
+import { useQueryClient } from '@tanstack/react-query'
+import { Film, History, MousePointerClick, PictureInPicture2, Sparkles } from 'lucide-react'
 import {
   type RefObject,
   useCallback,
@@ -11,9 +12,18 @@ import {
 import { createPortal } from 'react-dom'
 import { useNavigation } from '../../../context'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../../ui/sheet'
-import { useHelpVideo, useHelpVideoNext, useHelpVideoWalk } from '../api'
+import {
+  helpVideoKeys,
+  useHelpVideo,
+  useHelpVideoClips,
+  useHelpVideoNext,
+  useHelpVideoWalk
+} from '../api'
+import { ClipDialog, type ClipPreset } from '../editor/ClipDialog'
+import { ClipRows } from '../editor/ClipsPanel'
+import { type ClipRange, clipRangeForChapter } from '../editor/clips'
 import { HelpVideoPlayer, type PlayerHandle } from '../HelpVideoPlayer'
-import type { HelpVideoDto } from '../types'
+import type { ClipDto, HelpVideoDto } from '../types'
 import { HelpVideoWalkHost } from '../walk/HelpVideoWalk'
 import { startHelpVideoWalk, useCurrentHelpVideoPage } from '../walk/store'
 import { stepMatchesHere } from '../walk/target'
@@ -93,6 +103,35 @@ export function HelpVideoSheet({
   }, [open, video, live, kept?.id])
   const news = live ?? (kept && kept.id === videoId ? kept.news : null) ?? null
   const walk = useHelpVideoWalk(showMe && open && video?.published ? videoId : null)
+  // Clips (#1562): everyone who can watch sees the ready ones; an author can
+  // make one of a chapter from here (the published version).
+  const qc = useQueryClient()
+  const author = !!video?.visibility
+  const clips = useHelpVideoClips(open && video?.published ? videoId : null)
+  const shownClips = (clips.data ?? []).filter((c) =>
+    author ? c.status !== 'failed' : c.status === 'ready'
+  )
+  const [clipDialog, setClipDialog] = useState<{
+    initial: ClipRange
+    presets: ClipPreset[]
+  } | null>(null)
+  const clipChapter = (id: string) => {
+    if (!video?.published) return
+    const e = video.published.edits
+    const r = clipRangeForChapter(e, id)
+    if (!r) return
+    const presets: ClipPreset[] = []
+    for (const c of e.chapters) {
+      const cr = clipRangeForChapter(e, c.id)
+      if (cr)
+        presets.push({
+          key: `chapter:${c.id}`,
+          label: `Chapter: ${c.title || 'Chapter'}`,
+          range: cr
+        })
+    }
+    setClipDialog({ initial: r, presets })
+  }
   const pageKey = useCurrentHelpVideoPage()
   const steps = walk.data?.steps ?? []
   const here = { pageKey, path: typeof window === 'undefined' ? '' : window.location.pathname }
@@ -383,10 +422,10 @@ export function HelpVideoSheet({
                   <h3 className='mb-1 text-[12px] font-medium text-muted-foreground'>Chapters</h3>
                   <ol className='divide-y divide-border overflow-hidden rounded-md border border-border text-[13px]'>
                     {chapters.map((c) => (
-                      <li key={c.id}>
+                      <li key={c.id} className='flex items-center'>
                         <button
                           type='button'
-                          className={rowButton}
+                          className={`${rowButton} min-w-0 flex-1`}
                           onClick={() => {
                             player.current?.seekSource(c.source_ms)
                             player.current?.play()
@@ -398,6 +437,18 @@ export function HelpVideoSheet({
                           </span>
                           <span className='truncate'>{c.title}</span>
                         </button>
+                        {author && (
+                          <button
+                            type='button'
+                            className='mr-1.5 inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors duration-150 hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none'
+                            onClick={() => clipChapter(c.id)}
+                            aria-label={`Make a clip of ${c.title || 'this chapter'}`}
+                            title='Make a clip of this chapter'
+                            data-hv-chapter-clip={c.id}
+                          >
+                            <Film className='h-3.5 w-3.5' aria-hidden />
+                          </button>
+                        )}
                       </li>
                     ))}
                   </ol>
@@ -406,6 +457,31 @@ export function HelpVideoSheet({
             </>
           )}
           {!ended && next.length > 0 && onPick && <UpNextList videos={next} onPick={onPick} />}
+          {video?.published && shownClips.length > 0 && (
+            <section aria-label='Clips' data-hv-sheet-clips>
+              <h3 className='mb-1 text-[12px] font-medium text-muted-foreground'>Clips</h3>
+              <div className='rounded-md border border-border px-1.5 py-1'>
+                <ClipRows clips={shownClips} />
+              </div>
+            </section>
+          )}
+          {clipDialog && video?.published && (
+            <ClipDialog
+              videoId={video.id}
+              edits={video.published.edits}
+              draft={false}
+              initial={clipDialog.initial}
+              presets={clipDialog.presets}
+              onQueued={(clip) => {
+                qc.setQueryData<ClipDto[]>(helpVideoKeys.clips(video.id), (cur) => [
+                  clip,
+                  ...(cur ?? []).filter((x) => x.id !== clip.id)
+                ])
+                void qc.invalidateQueries({ queryKey: helpVideoKeys.clips(video.id) })
+              }}
+              onClose={() => setClipDialog(null)}
+            />
+          )}
           <div className='flex flex-wrap items-center justify-between gap-3'>
             <button
               type='button'

@@ -12,6 +12,7 @@ import {
   readEdits,
   viewerNote
 } from './help-video-changes.js'
+import { takeVideoClipFiles } from './help-video-clips.js'
 import type { PointerPath } from './help-video-cursor.js'
 import { downloadsAllowed, hasCaptions, withDownloads } from './help-video-download.js'
 import {
@@ -22,6 +23,7 @@ import {
   normalizeEdits,
   type VideoEdits
 } from './help-video-edits.js'
+import { extrasMigrated, parsePeaks, parseSprite, type SpriteSheet } from './help-video-extras.js'
 import { applyHouseStyleToNew, currentHouseStyle } from './help-video-house-style.js'
 import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
@@ -107,6 +109,22 @@ export interface VersionDto {
    *  before recording (script mode, #1491), so a re-record can reuse them.
    *  Null for a recording without one and for every uploaded file. */
   script?: string[] | null
+  /** Recorder data only (#1560): the server's audio peaks, 0–1 per 100 ms of
+   *  source time (the shape of `levels`); null until built or without sound. */
+  peaks?: number[] | null
+  /** Recorder data only (#1560): the thumbnail sprite sheet behind a ticketed
+   *  URL; null until built, when the recording is too large, or when no
+   *  ticket could be minted. */
+  sprite?: SpriteDto | null
+}
+/** The sprite sheet as the editor sees it (the geometry plus a ticketed URL). */
+export interface SpriteDto {
+  url: string
+  tile_w: number
+  tile_h: number
+  cols: number
+  count: number
+  interval_ms: number
 }
 export interface HelpVideoDto {
   id: string
@@ -349,7 +367,14 @@ export function publishChecklist(video: { title: string }, contextCount: number)
   return missing
 }
 
-export function serializeVersion(v: VersionRow, opts: { withRecorderData: boolean }): VersionDto {
+export function serializeVersion(
+  v: VersionRow,
+  opts: {
+    withRecorderData: boolean
+    /** A media ticket for this video: with it the sprite sheet gets a URL. */
+    media?: { videoId: string; ticket: string } | null
+  }
+): VersionDto {
   const edits = json<VideoEdits>(v.edits, emptyEdits(Number(v.source_duration_ms ?? 0)))
   const dto: VersionDto = {
     id: low(v.id),
@@ -373,8 +398,39 @@ export function serializeVersion(v: VersionRow, opts: { withRecorderData: boolea
     dto.clicks = json(v.clicks, null)
     dto.levels = json(v.levels, null)
     dto.script = normalizeScript(json(v.script, null))
+    dto.peaks = parsePeaks(v.peaks)
+    dto.sprite = spriteDto(v, opts.media ?? null)
   }
   return dto
+}
+
+/** The version's sprite sheet behind the sprite media route, or null. */
+export function spriteDto(
+  v: { id: unknown; sprite?: unknown; sprite_file?: unknown },
+  media: { videoId: string; ticket: string } | null
+): SpriteDto | null {
+  const s: SpriteSheet | null = parseSprite(v.sprite)
+  if (!s || !v.sprite_file || !media) return null
+  return {
+    url: `/api/help-videos/${low(media.videoId)}/sprite?st=${media.ticket}&v=${low(v.id)}`,
+    tile_w: s.tile_w,
+    tile_h: s.tile_h,
+    cols: s.cols,
+    count: s.count,
+    interval_ms: s.interval_ms
+  }
+}
+
+/** The media ticket a route hands serializeVersion for a draft DTO. */
+export function draftMedia(
+  videoId: string,
+  userId: string,
+  sidTag: string | null
+): { videoId: string; ticket: string } {
+  return {
+    videoId: low(videoId),
+    ticket: mediaTicket(low(videoId), userId, 'd', Date.now(), sidTag)
+  }
 }
 
 export async function loadVersion(id: string | null | undefined): Promise<VersionRow | undefined> {
@@ -586,10 +642,12 @@ export async function serializeVideo(
   if (ctx.author) {
     dto.visibility = parseVisibility(video.visibility)
     dto.required_role_ids = reqs.map((r: { role_id: unknown }) => up(r.role_id))
-    dto.draft = draft ? serializeVersion(draft, { withRecorderData: true }) : null
+    const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sidTag ?? null)
+    dto.draft = draft
+      ? serializeVersion(draft, { withRecorderData: true, media: { videoId: id, ticket: dt } })
+      : null
     dto.draft_matches_published = sameContent(draft, published)
     if (draft) {
-      const dt = mediaTicket(id, ctx.userId, 'd', Date.now(), ctx.sidTag ?? null)
       dto.draft_stream_url = `${base}/stream?st=${dt}&source=1`
       dto.draft_captions_url = `${base}/captions.vtt?st=${dt}`
       dto.draft_download_urls = downloadUrls(base, dt, hasCaptions(draft))
@@ -684,9 +742,13 @@ async function insertVersion(
     note?: string | null
     /** The script the recording followed (#1491); absent or null = none. */
     script?: string[] | null
+    /** Thumbnails and waveform (#1560), carried from the upload or the
+     *  version this one is made from; written only once migration 412 ran. */
+    extras?: VersionExtras
   }
 ): Promise<string> {
   const id = randomUUID()
+  const extras = data.extras && (await extrasMigrated()) ? data.extras : null
   await db('nivaro_help_video_versions').insert({
     id,
     video_id: videoId,
@@ -698,6 +760,13 @@ async function insertVersion(
     clicks: data.clicks == null ? null : JSON.stringify(data.clicks),
     levels: data.levels == null ? null : JSON.stringify(data.levels),
     script: data.script?.length ? JSON.stringify(data.script) : null,
+    ...(extras
+      ? {
+          sprite_file: extras.sprite_file,
+          sprite: extras.sprite == null ? null : JSON.stringify(extras.sprite),
+          peaks: extras.peaks == null ? null : JSON.stringify(extras.peaks)
+        }
+      : {}),
     edits: JSON.stringify(data.edits),
     edits_hash: hashEdits(data.edits),
     render_status: 'none',
@@ -710,6 +779,38 @@ async function insertVersion(
 
 function touch(user: User): Record<string, unknown> {
   return { updated_by: user.id, updated_at: new Date() }
+}
+
+type VersionExtras = {
+  sprite_file: string | null
+  sprite: SpriteSheet | null
+  peaks: number[] | null
+}
+
+/** The extras a finalized upload carries (none before the job finishes). */
+function uploadExtras(u: {
+  sprite_file?: string | null
+  sprite?: SpriteSheet | null
+  peaks?: number[] | null
+}): VersionExtras | undefined {
+  if (!u.sprite && !u.peaks) return undefined
+  return {
+    sprite_file: u.sprite && u.sprite_file ? u.sprite_file : null,
+    sprite: u.sprite && u.sprite_file ? u.sprite : null,
+    peaks: u.peaks ?? null
+  }
+}
+
+/** The extras of a stored version, to copy onto one made from it. */
+function rowExtras(v: Record<string, unknown>): VersionExtras | undefined {
+  const sprite = parseSprite(v.sprite)
+  const peaks = parsePeaks(v.peaks)
+  if (!sprite && !peaks) return undefined
+  return {
+    sprite_file: sprite && v.sprite_file ? String(v.sprite_file) : null,
+    sprite: sprite && v.sprite_file ? sprite : null,
+    peaks
+  }
 }
 
 export async function createVideo(
@@ -753,7 +854,8 @@ export async function createVideo(
         ),
         house.style
       ),
-      script: upload.script
+      script: upload.script,
+      extras: uploadExtras(upload)
     })
   } catch (err) {
     // Nothing references the recording yet: give it back to its author (and
@@ -878,7 +980,8 @@ export async function ensureDraft(video: VideoRow, user: User): Promise<VersionR
     height: pub.height == null ? null : Number(pub.height),
     clicks: json(pub.clicks, null),
     levels: json(pub.levels, null),
-    edits: json<VideoEdits>(pub.edits, emptyEdits(Number(pub.source_duration_ms ?? 0)))
+    edits: json<VideoEdits>(pub.edits, emptyEdits(Number(pub.source_duration_ms ?? 0))),
+    extras: rowExtras(pub)
   })
   await db('nivaro_help_videos').where({ id: video.id }).update({ draft_version_id: id })
   return (await loadVersion(id)) as VersionRow
@@ -1234,7 +1337,8 @@ export async function rerecordVideo(
         upload.duration_ms ?? 0
       ),
       script: upload.script,
-      note: 'Re-recorded'
+      note: 'Re-recorded',
+      extras: uploadExtras(upload)
     })
   } catch (err) {
     await releaseFinalizedUpload(uploadId).catch(() => undefined)
@@ -1278,7 +1382,8 @@ export async function restoreVersion(
     levels: json(src.levels, null),
     edits: json<VideoEdits>(src.edits, emptyEdits(0)),
     script: normalizeScript(json(src.script, null)),
-    note: `Restored from version ${src.version}`
+    note: `Restored from version ${src.version}`,
+    extras: rowExtras(src)
   })
   await db('nivaro_help_videos')
     .where({ id: video.id })
@@ -1330,7 +1435,13 @@ export async function purgeVideo(video: VideoRow, user: User): Promise<void> {
   const fileIds = new Set<string>()
   if (video.poster_file) fileIds.add(String(video.poster_file))
   for (const v of versions) {
-    for (const k of ['source_file', 'rendered_file', 'captions_file', 'poster_file']) {
+    for (const k of [
+      'source_file',
+      'rendered_file',
+      'captions_file',
+      'poster_file',
+      'sprite_file'
+    ]) {
       if (v[k]) fileIds.add(String(v[k]))
     }
   }
@@ -1339,6 +1450,8 @@ export async function purgeVideo(video: VideoRow, user: User): Promise<void> {
     .update({ poster_file: null, published_version_id: null, draft_version_id: null })
   // Music uploaded to this video: its rows go here, its files below.
   for (const f of await takeVideoMusicFiles(String(video.id))) fileIds.add(f)
+  // Clips made of this video (#1562), the same way.
+  for (const f of await takeVideoClipFiles(String(video.id))) fileIds.add(f)
   await db('nivaro_help_videos').where({ id: video.id }).delete()
   // The upload rows that produced these recordings still reference the files
   // (nivaro_help_video_uploads.file_id, status 'used'); drop them first or the

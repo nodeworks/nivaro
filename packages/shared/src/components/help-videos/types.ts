@@ -265,6 +265,14 @@ export interface VersionDto {
    *  wrote before recording, so a re-record can reuse them. Null for a
    *  recording made without a script and for every uploaded file. */
   script?: string[] | null
+  /** Draft load only (#1560): the server's audio peaks, 0–1 per 100 ms of
+   *  source time (the shape of `levels`), built from the recording itself —
+   *  so an uploaded video has a waveform. Null until built or without sound. */
+  peaks?: number[] | null
+  /** Draft load only (#1560): the thumbnail sprite sheet (a ticketed JPEG of
+   *  small frames, one every `interval_ms`). Null until built, or when the
+   *  recording was too large for one. */
+  sprite?: SpriteSheet | null
 }
 
 /** One sample of the pointer path (#1517): source time and frame fractions
@@ -280,6 +288,45 @@ export type PointerPath = { samples: PointerSample[]; shortcuts: RecordedShortcu
 /** One "Next" press while recording with a script (#1491): step `step`
  *  (0-based) starts at `t_ms` of the recording. */
 export type RecordedMark = { t_ms: number; step: number }
+
+/** A thumbnail sprite sheet: `count` tiles of `tile_w`×`tile_h`, `cols` to a
+ *  row, tile i showing source time i × interval_ms. `url` is ticketed and
+ *  relative to the API origin. */
+export interface SpriteSheet {
+  url: string
+  tile_w: number
+  tile_h: number
+  cols: number
+  count: number
+  interval_ms: number
+}
+
+export type ClipKind = 'mp4' | 'gif'
+export type ClipStatus = 'queued' | 'rendering' | 'ready' | 'failed'
+/** A short clip or GIF of a video (#1562), as GET /help-videos/:id/clips lists it. */
+export interface ClipDto {
+  id: string
+  video_id: string
+  version_id: string | null
+  kind: ClipKind
+  status: ClipStatus
+  progress: number | null
+  error: string | null
+  /** Edited time of the version it was cut from. */
+  start_ms: number
+  end_ms: number
+  label: string | null
+  bytes: number | null
+  width: number | null
+  height: number | null
+  /** The ticketed file, relative to the API origin, once ready (add
+   *  `&download=1` to save it); null until then. */
+  url: string | null
+  created_by: string | null
+  created_at: string
+}
+/** What a clip is cut for (POST /help-videos/:id/clips). */
+export const CLIP_LIMITS = { maxMs: 30_000, minMs: 500, maxPerVideo: 20, labelMax: 120 } as const
 
 /** A stretch of the recording where the author was typing in a text field,
  *  or touched nothing at all (#1518). Never what was typed. */
@@ -588,3 +635,9 @@ export type HelpVideoErrorCode =
   | 'HELP_VIDEO_PATH_NOT_FOUND'
   | 'HELP_VIDEO_PATH_INVALID'
   | 'HELP_VIDEO_RELEASE_INVALID'
+  | 'HELP_VIDEO_CLIP_NOT_FOUND'
+  | 'HELP_VIDEO_CLIP_RANGE'
+  | 'HELP_VIDEO_CLIP_LIMIT'
+  | 'HELP_VIDEO_CLIP_INVALID'
+  | 'HELP_VIDEO_CLIP_NO_FFMPEG'
+  | 'HELP_VIDEO_CLIPS_MIGRATION_PENDING'

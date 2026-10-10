@@ -15,6 +15,14 @@ import {
   startCaptionJob
 } from '../services/help-video-captions.js'
 import {
+  clipRow,
+  createClip,
+  deleteClip,
+  listClips,
+  serializeClip
+} from '../services/help-video-clips.js'
+
+import {
   captionsVtt,
   contentDisposition,
   downloadsAllowed,
@@ -114,6 +122,7 @@ import {
 import {
   archiveVideo,
   createVideo,
+  draftMedia,
   ensureDraft,
   isAuthor,
   isUuid,
@@ -590,7 +599,11 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     const draft = await ensureDraft(video, req.user!)
     return reply.send({
       data: {
-        ...serializeVersion(draft, { withRecorderData: true }),
+        ...serializeVersion(draft, {
+          withRecorderData: true,
+          // The sprite sheet (#1560) rides a draft ticket, like the draft stream.
+          media: draftMedia(String(video.id), req.user!.id, sessionTag(req))
+        }),
         source_kind: await sourceKindOfFile(draft.source_file),
         activity: await activityOfFile(draft.source_file),
         pointer: await pointerOfFile(draft.source_file)
@@ -748,6 +761,46 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     return reply.send({ data: await restoreVersion(video, req.user!, vid) })
   })
 
+  // ── Clips and GIFs (#1562) ────────────────────────────────────────────────
+  // Anyone who can watch the video sees its clips (the list carries ticketed
+  // links); only authors make and delete them.
+  const clipTicket = (req: FastifyRequest, videoId: string) =>
+    mediaTicket(String(videoId).toLowerCase(), req.user!.id, 'p', Date.now(), sessionTag(req))
+  app.get('/:id/clips', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const t = clipTicket(req, String(video.id))
+    const rows = await listClips(String(video.id))
+    return reply.send({ data: rows.map((r) => serializeClip(r, t)) })
+  })
+  app.post('/:id/clips', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const { video } = await loadVideoForUser(req, id)
+    const row = await createClip(
+      {
+        id: String(video.id),
+        published_version_id: video.published_version_id,
+        draft_version_id: video.draft_version_id
+      },
+      req.user!,
+      (req.body ?? {}) as Parameters<typeof createClip>[2]
+    )
+    await logActivity({
+      action: 'help-video-clip',
+      user: req.user!.id,
+      collection: 'nivaro_help_videos',
+      item: String(video.id).toLowerCase(),
+      comment: `${String(row.kind)} ${Number(row.start_ms)}–${Number(row.end_ms)} ms`
+    })
+    return reply.code(201).send({ data: serializeClip(row, clipTicket(req, String(video.id))) })
+  })
+  app.delete('/:id/clips/:clipId', { preHandler: requireAuthor }, async (req, reply) => {
+    const { id, clipId } = req.params as { id: string; clipId: string }
+    const { video } = await loadVideoForUser(req, id)
+    await deleteClip(req.user!, String(video.id), clipId)
+    return reply.code(204).send()
+  })
+
   // ── Background music (#1547) ──────────────────────────────────────────────
   // Authors only: the editor previews the mix itself; viewers always get the
   // render, which has the music baked in.
@@ -870,7 +923,7 @@ export async function helpVideosRoutes(app: FastifyInstance) {
  *  CURRENT status and role and the video's CURRENT visibility. Unknown,
  *  invisible, expired and unauthorised all answer the same 404. */
 export async function helpVideoMediaRoutes(app: FastifyInstance) {
-  async function resolve(req: FastifyRequest) {
+  async function resolve(req: FastifyRequest, opts: { needVersion?: boolean } = {}) {
     const { id } = req.params as { id: string }
     const { st } = req.query as { st?: string }
     const notFound = Object.assign(new Error('Video not found'), {
@@ -905,8 +958,14 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
     const version = await loadVersion(
       t.scope === 'd' ? video.draft_version_id : video.published_version_id
     )
-    if (!version) throw notFound
-    return { video, version, draft: t.scope === 'd', author, userId: String(user.id) }
+    if (!version && opts.needVersion !== false) throw notFound
+    return {
+      video,
+      version: version as NonNullable<typeof version>,
+      draft: t.scope === 'd',
+      author,
+      userId: String(user.id)
+    }
   }
 
   // no-cache on every media answer: a browser may keep the bytes but must ask
@@ -1107,6 +1166,43 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       .header('Content-Type', 'text/vtt; charset=utf-8')
       .header('Cache-Control', 'private, no-cache')
       .send(vtt)
+  })
+
+  // The thumbnail sprite sheet (#1560) of the ticket's version: frames of the
+  // ORIGINAL recording (nothing blurred or cut), so authors only.
+  app.get('/:id/sprite', async (req, reply) => {
+    const { version, author } = await resolve(req)
+    if (!author)
+      return reply.code(404).send({ error: 'Video not found', code: 'HELP_VIDEO_NOT_FOUND' })
+    const file = version.sprite_file ? await getFile(String(version.sprite_file)) : undefined
+    if (!file?.filename_disk) return reply.code(404).send({ error: 'No thumbnails yet' })
+    reply.header('Cache-Control', 'private, no-cache')
+    return sendStoredObject(reply, file.filename_disk, { contentType: 'image/jpeg' })
+  })
+
+  // A clip (#1562): the same people as the video (no version needed — the
+  // clip row says which one it was cut from). `download=1` saves it.
+  app.get('/:id/clips/:clipId', async (req, reply) => {
+    const { video } = await resolve(req, { needVersion: false })
+    const { clipId } = req.params as { clipId: string }
+    const q = req.query as { download?: string }
+    const row = await clipRow(String(video.id), clipId)
+    const file =
+      row?.status === 'ready' && row.file_id ? await getFile(String(row.file_id)) : undefined
+    if (!row || !file?.filename_disk) {
+      return reply.code(404).send({ error: 'Clip not found', code: 'HELP_VIDEO_CLIP_NOT_FOUND' })
+    }
+    const gif = row.kind === 'gif'
+    reply.header('Cache-Control', 'private, no-cache').header('X-Content-Type-Options', 'nosniff')
+    const name = safeDownloadName(
+      `${video.title || 'Help video'}${row.label ? ` - ${String(row.label)}` : ''}`,
+      gif ? 'gif' : 'mp4'
+    )
+    return sendStoredObject(reply, file.filename_disk, {
+      rangeHeader: req.headers.range,
+      contentType: gif ? 'image/gif' : 'video/mp4',
+      ...(q.download === '1' ? { disposition: contentDisposition(name) } : {})
+    })
   })
 
   app.get('/:id/poster', async (req, reply) => {

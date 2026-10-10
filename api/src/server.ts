@@ -738,6 +738,10 @@ export async function buildServer() {
       app.cron.schedule('help-video-render-sweep', '*/5 * * * *', async () => {
         const { sweepRenders } = await import('./services/help-video-render.js')
         await sweepRenders()
+        // Clips (#1562) whose process died mid-cut are failed so the author
+        // can make them again.
+        const { failStaleClips } = await import('./services/help-video-clips.js')
+        await failStaleClips().catch(() => 0)
       })
       // Help videos: "watched next" (#1530) — which video people in a role
       // started after each one, recomputed nightly from the view rows. The

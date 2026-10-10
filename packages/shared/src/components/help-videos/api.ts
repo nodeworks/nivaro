@@ -7,6 +7,8 @@ import type {
   ActivitySpan,
   CaptionJob,
   CaptionJobStatus,
+  ClipDto,
+  ClipKind,
   DraftSuggestions,
   HelpVideoAnalytics,
   HelpVideoContext,
@@ -46,6 +48,7 @@ export const helpVideoKeys = {
   myPaths: ['help-videos', 'paths', 'mine'] as const,
   /** The changelog's videos (#1528b). */
   releases: ['help-videos', 'releases'] as const,
+  clips: (id: string) => ['help-videos', 'clips', id] as const,
   /** The editor's draft load. Outside the `all` prefix on purpose: GET
    *  /draft/edits creates a missing draft, so a broad invalidation must
    *  never refetch it. `n` bumps on Reload. */
@@ -279,6 +282,29 @@ export function useHelpVideoNext(id: string | null, enabled = true) {
     staleTime: 300_000,
     queryFn: () => helpVideoApi(client).next(id as string)
   })
+}
+
+/** A video's clips (#1562), polled while one is still being made. */
+export function useHelpVideoClips(id: string | null) {
+  const client = useNivaroClient()
+  return useQuery({
+    queryKey: helpVideoKeys.clips(id ?? ''),
+    enabled: !!id,
+    staleTime: 30_000,
+    queryFn: async () => {
+      const r = await client.request(get<{ data: ClipDto[] }>(`/help-videos/${id}/clips`))
+      // A server from before #1562 has no clips route: an odd answer is no clips.
+      return Array.isArray(r?.data) ? r.data : []
+    },
+    refetchInterval: (q) => (clipsInFlight(q.state.data) ? 2500 : false)
+  })
+}
+
+/** True while any clip is queued or rendering (the list keeps polling). */
+export function clipsInFlight(clips: ClipDto[] | undefined): boolean {
+  return (
+    Array.isArray(clips) && clips.some((c) => c.status === 'queued' || c.status === 'rendering')
+  )
 }
 
 export function useHelpVideoPages() {
@@ -558,6 +584,18 @@ export function helpVideoApi(client: NivaroClient) {
       r(post<{ data: CaptionJob }>(`/help-videos/${id}/captions/generate`)).then((x) => x.data),
     /** Forgets a finished or failed caption set (409 while one runs). */
     discardCaptionJob: (id: string) => r(del(`/help-videos/${id}/captions/generate`)),
+    /** The video's clips, with ticketed links for the ready ones. */
+    clips: (id: string) =>
+      r(get<{ data: ClipDto[] }>(`/help-videos/${id}/clips`)).then((x) => x.data),
+    /** Queues a clip (#1562): `start_ms`/`end_ms` in edited time of the
+     *  published version (or the draft with `draft`), at most 30 s. 422
+     *  HELP_VIDEO_CLIP_RANGE, 409 HELP_VIDEO_CLIP_LIMIT past 20 clips, 503
+     *  HELP_VIDEO_CLIP_NO_FFMPEG. Poll `clips` until it is ready. */
+    createClip: (
+      id: string,
+      body: { kind: ClipKind; start_ms: number; end_ms: number; label?: string; draft?: boolean }
+    ) => r(post<{ data: ClipDto }>(`/help-videos/${id}/clips`, body)).then((x) => x.data),
+    deleteClip: (id: string, clipId: string) => r(del(`/help-videos/${id}/clips/${clipId}`)),
     authorRoles: () =>
       r(get<{ data: { help_video_author_roles?: unknown } }>('/settings')).then((x) =>
         parseRoleIdList(x.data?.help_video_author_roles)

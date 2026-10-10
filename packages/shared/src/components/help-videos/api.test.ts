@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { cardBrandFrom, helpVideoError, parseRoleIdList } from './api'
+import { cardBrandFrom, clipsInFlight, helpVideoError, parseRoleIdList } from './api'
+import type { ClipDto } from './types'
 
 describe('parseRoleIdList', () => {
   it('reads the stored JSON string', () => expect(parseRoleIdList('["A","B"]')).toEqual(['A', 'B']))
@@ -42,5 +43,18 @@ describe('cardBrandFrom', () => {
   it('falls back to the instance logo on an older server', () => {
     const b = cardBrandFrom({ name: 'Acme', color: null, logo_url: '/api/files/I' }, '')
     expect(b.logo).toBe('/api/files/I')
+  })
+})
+
+describe('clipsInFlight', () => {
+  const clip = (status: ClipDto['status']) => ({ status }) as ClipDto
+  it('keeps polling while a clip is queued or being made', () => {
+    expect(clipsInFlight([clip('ready'), clip('queued')])).toBe(true)
+    expect(clipsInFlight([clip('rendering')])).toBe(true)
+    expect(clipsInFlight([clip('ready'), clip('failed')])).toBe(false)
+  })
+  it('is false without a list', () => {
+    expect(clipsInFlight(undefined)).toBe(false)
+    expect(clipsInFlight({} as unknown as ClipDto[])).toBe(false)
   })
 })

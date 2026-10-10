@@ -5,6 +5,7 @@ export {
   type RequiredList,
   releaseVideoApi,
   useHelpVideo,
+  useHelpVideoClips,
   useHelpVideoNext,
   useHelpVideoQuestions,
   useHelpVideosFor,
@@ -55,6 +56,7 @@ export { HouseStyleButton } from './settings/HouseStyleButton'
 export { RenderSettingsButton } from './settings/RenderSettingsButton'
 export { StorageButton } from './settings/StorageButton'
 export type {
+  ClipDto,
   HelpVideoAnalytics,
   HelpVideoContext,
   HelpVideoDto,
@@ -66,6 +68,7 @@ export type {
   MyLearningPathDto,
   RecordedClick,
   ReleaseVideoDto,
+  SpriteSheet,
   VideoEdits,
   WalkStep
 } from './types'
