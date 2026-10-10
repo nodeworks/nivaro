@@ -189,6 +189,7 @@ import { sequenceRoutes } from './sequences.js'
 import { sessionRecordingRoutes } from './session-recordings.js'
 import { sessionReplayExportRoutes } from './session-replay-export.js'
 import { sessionReplayNotesRoutes } from './session-replay-notes.js'
+import { sessionReplaySpecRoutes } from './session-replay-spec.js'
 import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
 import { shareLinksRoutes } from './share-links.js'
@@ -475,6 +476,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(sessionReplayNotesRoutes, { prefix: '/session-recordings' })
   // #1375 export a recording as a self-contained HTML replay or a WebM (background job)
   await app.register(sessionReplayExportRoutes, { prefix: '/session-recordings' })
+  // #1393 a Playwright spec (golden-path recorder steps) from a stretch of a recording
+  await app.register(sessionReplaySpecRoutes, { prefix: '/session-recordings' })
   await app.register(reportStudioRoutes, { prefix: '/report-studio' })
   await app.register(bulkActionsRoutes)
   await app.register(itemActionsRoutes)

@@ -281,6 +281,19 @@ function App() {
         'A window starts at the last full snapshot before From, because a replay needs the page as it was; playback still begins at From.',
         'Every export is recorded in the activity log. The video is stored as a file owned by you; treat both files like the recording itself, since they show someone’s session.'
       ]
+    },
+    { type: 'h2', id: 'session-replay-spec', text: 'A Playwright spec from a recording' },
+    {
+      type: 'p',
+      text: 'Export → Playwright spec turns the clicks, typing and page changes in a window of the recording into the E2E recorder’s steps and opens them in the E2E recorder, where you can remove steps, add assertions, type in the values and save the spec into an extension’s tests folder (on a development machine) or download it.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Selectors prefer a `data-*` hook on the element (or the nearest one above it), then role and accessible name, then id, label, name, placeholder and a short CSS path.',
+        'Typed values were masked when recorded, so they never reach the spec: each one is a placeholder such as `<value for data-field="po_number">`.',
+        'A click on an element the recording never captured is left out and counted. Making a spec is recorded in the activity log.'
+      ]
     }
   ]
 }

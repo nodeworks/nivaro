@@ -3,15 +3,21 @@
  * or a WebM video (made in the background; a notification brings the file).
  * An optional window (m:ss to m:ss) cuts the export; empty means the whole
  * recording. Events go out exactly as stored, so masked inputs stay masked.
+ *
+ * #1393 — or a Playwright spec: the server turns the window's clicks, typing
+ * and page changes into the golden-path recorder's steps, which load into the
+ * E2E recorder page for editing and saving.
  */
 import { useMutation } from '@tanstack/react-query'
 import { Download } from 'lucide-react'
 import { useId, useState } from 'react'
+import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { api } from '@/lib/api'
+import { loadRecordedSteps, type RecordedStep } from '@/lib/e2e-recorder'
 import { cn } from '@/lib/utils'
 
 /** "1:23" / "1:02:03" / "83" → ms; '' → null; anything else → NaN. */
@@ -25,7 +31,19 @@ export function parseClock(raw: string): number | null {
   return secs * 1000
 }
 
-type Format = 'html' | 'webm'
+type Format = 'html' | 'webm' | 'spec'
+
+interface SpecResponse {
+  recording_id: string
+  from_ms: number | null
+  to_ms: number | null
+  name: string
+  title: string
+  steps: RecordedStep[]
+  viewport: { width: number; height: number } | null
+  placeholders: number
+  unresolved: number
+}
 
 async function saveBlob(data: Blob, name: string) {
   const url = URL.createObjectURL(data)
@@ -57,6 +75,7 @@ export function RecordingExport({
   className?: string
 }) {
   const uid = useId()
+  const navigate = useNavigate()
   const [open, setOpen] = useState(false)
   const [format, setFormat] = useState<Format>('html')
   const [from, setFrom] = useState('')
@@ -71,6 +90,27 @@ export function RecordingExport({
   const run = useMutation({
     mutationFn: async () => {
       const body = { format, from_ms: fromMs ?? undefined, to_ms: toMs ?? undefined }
+      if (format === 'spec') {
+        const res = await api.post<{ data: SpecResponse }>(
+          `/session-recordings/${recordingId}/spec`,
+          { from_ms: body.from_ms, to_ms: body.to_ms }
+        )
+        const d = res.data.data
+        if (d.steps.length === 0) throw new Error('Nothing to make a spec from in that window')
+        loadRecordedSteps(d.steps, {
+          viewport: d.viewport,
+          source: {
+            recordingId: d.recording_id,
+            fromMs: d.from_ms,
+            toMs: d.to_ms,
+            name: d.name,
+            title: d.title,
+            placeholders: d.placeholders,
+            unresolved: d.unresolved
+          }
+        })
+        return 'spec' as const
+      }
       if (format === 'html') {
         const res = await api.post(`/session-recordings/${recordingId}/export`, body, {
           responseType: 'blob'
@@ -83,13 +123,21 @@ export function RecordingExport({
     },
     onSuccess: (kind) => {
       setOpen(false)
-      if (kind === 'html') toast.success('Replay exported — open the file in any browser')
+      if (kind === 'spec') {
+        toast.success('Spec ready in the E2E recorder', {
+          description: 'Fill in the masked values, then save it into an extension or download it.'
+        })
+        navigate('/e2e-recorder')
+      } else if (kind === 'html') toast.success('Replay exported — open the file in any browser')
       else
         toast.success('WebM export started', {
           description: 'You will get a notification with the file when the video is ready.'
         })
     },
-    onError: async (err) => toast.error((await blobError(err)) ?? 'The export failed')
+    onError: async (err) =>
+      toast.error(
+        (await blobError(err)) ?? (err instanceof Error ? err.message : null) ?? 'The export failed'
+      )
   })
 
   return (
@@ -108,8 +156,9 @@ export function RecordingExport({
         <div className='flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
           {(
             [
-              ['html', 'HTML replay'],
-              ['webm', 'WebM video']
+              ['html', 'HTML'],
+              ['webm', 'WebM'],
+              ['spec', 'Playwright spec']
             ] as const
           ).map(([v, label]) => (
             <button
@@ -130,7 +179,9 @@ export function RecordingExport({
         <p className='text-[11.5px] text-slate-500'>
           {format === 'html'
             ? 'One file with the player and the events inside — opens offline in any browser. Inputs stay masked.'
-            : 'Played in a headless browser on the server and captured in real time (up to 30 minutes). You will be notified when the file is ready.'}
+            : format === 'webm'
+              ? 'Played in a headless browser on the server and captured in real time (up to 30 minutes). You will be notified when the file is ready.'
+              : 'The clicks, typing and page changes in the window as a Playwright spec, opened in the E2E recorder to edit. Typed values were masked, so each becomes a placeholder to fill in.'}
         </p>
         <div className='flex items-end gap-2'>
           <label htmlFor={`${uid}-from`} className='flex-1 text-[11px] text-slate-500'>
@@ -161,7 +212,13 @@ export function RecordingExport({
           disabled={badWindow || run.isPending}
           onClick={() => run.mutate()}
         >
-          {run.isPending ? 'Exporting…' : format === 'html' ? 'Download HTML' : 'Make the video'}
+          {run.isPending
+            ? 'Working…'
+            : format === 'html'
+              ? 'Download HTML'
+              : format === 'webm'
+                ? 'Make the video'
+                : 'Open in the E2E recorder'}
         </Button>
       </PopoverContent>
     </Popover>
