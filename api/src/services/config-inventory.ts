@@ -230,6 +230,8 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_session_events',
   'nivaro_replay_clips', // session replay library (migration 422) — per environment, like its recordings
   'nivaro_replay_shares', // replay share links (migration 422)
+  'nivaro_session_replay_usage', // replay storage usage (migration 424)
+  'nivaro_session_replay_daily', // replay daily roll-up (migration 424)
   'nivaro_replay_index', // what each recording touched (migration 421) — goes with its recording
   // session replay heatmaps (migration 426) — folded from this environment's recordings
   'nivaro_replay_heat',
