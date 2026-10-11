@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-10T21:53:33.730Z",
+  "generated_at": "2026-10-11T23:24:32.380Z",
   "releases": [
+    {
+      "version": "0.2.39",
+      "tag": "v0.2.39",
+      "date": "2026-10-11T19:24:18-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "45258766"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Config inventory: classify the replay usage tables as runtime",
+              "hash": "3a0de57c"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.38",
       "tag": "v0.2.38",
-      "date": "2026-10-10T17:53:19-04:00",
+      "date": "2026-10-10T17:53:33-04:00",
       "sections": [
         {
           "label": "Other",
