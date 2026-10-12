@@ -1,4 +1,5 @@
 import type { ReadinessCheck, ReadinessStatus } from '@nivaro/extension-kit'
+import { emitOps } from './ops-live.js'
 
 export type { ReadinessCheck, ReadinessResult, ReadinessStatus } from '@nivaro/extension-kit'
 
@@ -79,11 +80,13 @@ export function startRemediation(
       job.status = 'completed'
       job.detail = r.detail
       job.finished_at = new Date().toISOString()
+      emitOps('readiness', { remediation: { check_id: checkId, status: job.status } })
       await run.complete(r.detail)
     } catch (err) {
       job.status = 'error'
       job.detail = err instanceof Error ? err.message : String(err)
       job.finished_at = new Date().toISOString()
+      emitOps('readiness', { remediation: { check_id: checkId, status: job.status } })
       await run.fail(err)
     }
   })()
@@ -154,5 +157,10 @@ export async function runReadinessChecks(): Promise<ReadinessReport> {
             scored.length) *
             100
         )
-  return { score, counts, checks: results }
+  const report = { score, counts, checks: results }
+  // Every admin with the scorecard open sees this run land (admin-only room: the
+  // report names blockers). Receivers set it as their data — they must NOT refetch,
+  // or two open pages would re-run the checks at each other forever.
+  emitOps('readiness', { report })
+  return report
 }

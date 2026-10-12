@@ -192,6 +192,8 @@ export async function buildServer() {
     const { setAppRef, setIo } = await import('./services/io-holder.js')
     setIo(app.io)
     setAppRef(app)
+    const { wireOpsLive } = await import('./services/ops-live.js')
+    wireOpsLive()
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
     const { setExtensionRoutes, startTrafficMapEmitter } = await import('./services/traffic-map.js')
