@@ -5,6 +5,7 @@ import {
   LayoutDashboard,
   ListChecks,
   PlayCircle,
+  Sparkles,
   Table2,
   X
 } from 'lucide-react'
@@ -490,7 +491,7 @@ export function tsvToTable(text: string): string | null {
 // ── Link previews (#930, #947) ───────────────────────────────────────────────
 
 interface AppCardData {
-  kind: 'record' | 'queue' | 'report' | 'dashboard' | 'view' | 'ops-proposal'
+  kind: 'record' | 'queue' | 'report' | 'dashboard' | 'view' | 'ask' | 'ops-proposal'
   id: string
   name?: string
   label?: string
@@ -500,6 +501,53 @@ interface AppCardData {
   total?: number | null
   breached?: number | null
   widgets?: number
+  /** kind 'ask' (#1851): an Ask AI conversation posted to the room. */
+  question?: string
+  answer?: string | null
+  answer_hidden?: boolean
+  turns?: number
+  owner_name?: string
+}
+
+/** An Ask AI conversation posted to chat (#1851). The server built it for THIS
+ *  reader: the answer line only when it was answered within their access. */
+function AskConversationCard({
+  data,
+  path,
+  navigate
+}: {
+  data: AppCardData
+  path: string
+  navigate?: (u: string) => void
+}) {
+  return (
+    <button
+      type='button'
+      onClick={() => navigate?.(path)}
+      className='block w-full max-w-[360px] rounded-lg border border-slate-200 bg-white px-2.5 py-2 text-left text-slate-700 hover:border-slate-300 dark:border-border dark:bg-card dark:text-slate-200'
+      data-chat-app-card='ask'
+    >
+      <span className='flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400'>
+        <Sparkles className='h-3 w-3' /> Ask AI · {data.owner_name}
+        {(data.turns ?? 0) > 1 && ` · ${data.turns} questions`}
+      </span>
+      <span className='mt-0.5 block line-clamp-2 text-[12.5px] font-medium'>
+        {data.question ?? data.name}
+      </span>
+      {data.answer ? (
+        <span className='mt-0.5 block line-clamp-3 text-[11.5px] text-slate-600 dark:text-slate-300'>
+          {data.answer}
+        </span>
+      ) : data.answer_hidden ? (
+        <span className='mt-0.5 block text-[11px] italic text-slate-500 dark:text-slate-400'>
+          Answered with {data.owner_name}’s access — open it to get the answer with yours.
+        </span>
+      ) : null}
+      <span className='mt-1 block text-[11px] font-medium text-nvr-navy dark:text-nvr-cyan'>
+        Open conversation
+      </span>
+    </button>
+  )
 }
 
 function AppLinkCard({ path, navigate }: { path: string; navigate?: (u: string) => void }) {
@@ -517,6 +565,8 @@ function AppLinkCard({ path, navigate }: { path: string; navigate?: (u: string) 
   // #2015 — an ops assistant proposal: an approval card (admins only).
   if (data.kind === 'ops-proposal')
     return <OpsProposalCard path={path} card={data as unknown as OpsProposalCardData} />
+  if (data.kind === 'ask')
+    return <AskConversationCard data={data} path={path} navigate={navigate} />
   const Icon =
     data.kind === 'queue'
       ? ListChecks

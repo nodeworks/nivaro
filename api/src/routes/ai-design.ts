@@ -215,9 +215,15 @@ export async function aiDesignRoutes(app: FastifyInstance) {
           comment: `Designed with AI: "${proposal.name}" (${result.policies} policies)`,
           req
         })
-        return reply
-          .code(201)
-          .send({ data: { ...result, name: proposal.name, scopes: proposal.scopes } })
+        return reply.code(201).send({
+          data: {
+            ...result,
+            name: proposal.name,
+            // NOT applied: User Scopes belong to people, so the admin sets
+            // these on each member after adding them to the role.
+            scopes_to_set_per_member: proposal.scopes
+          }
+        })
       } catch (err) {
         const code = (err as { statusCode?: number }).statusCode ?? 500
         return reply.code(code).send({ error: (err as Error).message })

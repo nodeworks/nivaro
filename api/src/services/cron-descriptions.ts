@@ -115,6 +115,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Nightly — re-runs Data Integrity sweeps for collections with a schedule and notifies whoever scheduled it when violations grow.',
   'config-health-sweep':
     'Nightly — usage hygiene + schema lint findings (unopened queues, orphan relations, missing display templates…) into the Config Health page.',
+  'config-review-monthly':
+    'Monthly (1st, 04:20) — config review: contradicting field rules, unused fields, unreachable layouts, duplicate views, owner groups with only inactive members, cleanup suggestions and label inconsistencies into the Config Review page; notifies administrators.',
   'subscription-integrity':
     'Weekly (Sunday) — deactivates notification subscriptions whose collection, field, or queue no longer exists.',
   'integration-reconcile':

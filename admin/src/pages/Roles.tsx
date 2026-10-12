@@ -15,7 +15,7 @@ import {
   Users,
   X
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { RoleDesigner } from '@/components/ai-role-designer'
 import { RoleViewSuggestions } from '@/components/ai-role-views'
@@ -481,55 +481,68 @@ function PermissionsMatrix({
     if ((p.row_filter?.length ?? 0) > 0) filteredKeys.add(`${p.collection}:${p.action}`)
   }
 
-  const addPolicy = useMutation({
-    mutationFn: ({ collection, action }: { collection: string; action: string }) =>
-      api.post<{ data: Policy }>(`/roles/${roleId}/policies`, { collection, action }),
-    onMutate: async ({ collection, action }) => {
-      await queryClient.cancelQueries({ queryKey: ['role', roleId] })
-      const prev = queryClient.getQueryData<Role & { policies: Policy[] }>(['role', roleId])
-      if (prev) {
-        queryClient.setQueryData(['role', roleId], {
-          ...prev,
-          policies: [...prev.policies, { id: -Date.now(), role: roleId, collection, action }]
-        })
-      }
-      return { prev }
-    },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(['role', roleId], ctx.prev)
-      toast.error('Failed to add permission')
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['role', roleId] })
+  // #1958: toggles are staged, not saved — the change is summarised in words
+  // ("Vendor would gain read on invoices (2.7M rows)…") before Save applies it.
+  // key `${collection}:${action}` → the desired grant.
+  const [pending, setPending] = useState<Map<string, boolean>>(() => new Map())
+  useEffect(() => {
+    void roleId
+    setPending(new Map())
+  }, [roleId])
+  const changes = useMemo(
+    () =>
+      [...pending].map(([key, grant]) => {
+        const i = key.lastIndexOf(':')
+        return { collection: key.slice(0, i), action: key.slice(i + 1), grant }
+      }),
+    [pending]
+  )
+  const { data: impact, isFetching: impactLoading } = useQuery({
+    queryKey: ['role-change-explain', roleId, changes],
+    enabled: changes.length > 0,
+    staleTime: 30_000,
+    queryFn: () =>
+      api
+        .post<{ data: { summary: string; members: number } }>(
+          `/access-insights/roles/${roleId}/explain-change`,
+          { changes }
+        )
+        .then((r) => r.data.data)
   })
 
-  const removePolicy = useMutation({
-    mutationFn: (policyId: number) => api.delete(`/roles/policies/${policyId}`),
-    onMutate: async (policyId) => {
-      await queryClient.cancelQueries({ queryKey: ['role', roleId] })
-      const prev = queryClient.getQueryData<Role & { policies: Policy[] }>(['role', roleId])
-      if (prev) {
-        queryClient.setQueryData(['role', roleId], {
-          ...prev,
-          policies: prev.policies.filter((p) => p.id !== policyId)
-        })
+  const saveChanges = useMutation({
+    mutationFn: async () => {
+      // One at a time, in order — the policy routes are per-row.
+      for (const c of changes) {
+        if (c.grant) {
+          await api.post(`/roles/${roleId}/policies`, {
+            collection: c.collection,
+            action: c.action
+          })
+        } else {
+          const id = policyMap.get(`${c.collection}:${c.action}`)
+          if (id !== undefined) await api.delete(`/roles/policies/${id}`)
+        }
       }
-      return { prev }
     },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(['role', roleId], ctx.prev)
-      toast.error('Failed to remove permission')
+    onSuccess: () => {
+      toast.success(`${changes.length} permission change${changes.length === 1 ? '' : 's'} saved`)
+      setPending(new Map())
     },
+    onError: () => toast.error('Some permission changes could not be saved'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['role', roleId] })
   })
 
   const handleToggle = (collection: string, action: Action, currentlyChecked: boolean) => {
     if (isAdmin) return
-    if (currentlyChecked) {
-      const id = policyMap.get(`${collection}:${action}`)
-      if (id !== undefined) removePolicy.mutate(id)
-    } else {
-      addPolicy.mutate({ collection, action })
-    }
+    const key = `${collection}:${action}`
+    const desired = !currentlyChecked
+    setPending((prev) => {
+      const next = new Map(prev)
+      if (desired === policyMap.has(key)) next.delete(key)
+      else next.set(key, desired)
+      return next
+    })
   }
 
   const q = search.toLowerCase().trim()
@@ -546,7 +559,7 @@ function PermissionsMatrix({
     ...filteredCollections.map((c) => ({ key: c.collection, displayName: c.display_name }))
   ]
   const visibleRows = q ? allRows.filter((r) => r.key !== '*') : allRows
-  const isBusy = addPolicy.isPending || removePolicy.isPending
+  const isBusy = saveChanges.isPending
 
   return (
     <div className='space-y-3'>
@@ -565,6 +578,41 @@ function PermissionsMatrix({
           <p className='text-[12px] text-slate-700 dark:text-foreground'>
             Admin roles have full access to all collections.
           </p>
+        </div>
+      )}
+      {changes.length > 0 && (
+        <div
+          data-role-change-impact
+          className='sticky top-0 z-10 space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 dark:border-amber-500/30 dark:bg-[#2a2210]'
+        >
+          <p className='text-[12px] leading-relaxed text-slate-700 dark:text-slate-200'>
+            {impactLoading && !impact
+              ? 'Working out what this would change…'
+              : (impact?.summary ??
+                `${changes.length} unsaved change${changes.length === 1 ? '' : 's'}.`)}
+          </p>
+          <div className='flex items-center gap-2'>
+            <span className='text-[11px] text-slate-500'>
+              {changes.length} unsaved change{changes.length === 1 ? '' : 's'}
+            </span>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='ml-auto h-7 px-2.5 text-[12px]'
+              disabled={saveChanges.isPending}
+              onClick={() => setPending(new Map())}
+            >
+              Discard
+            </Button>
+            <Button
+              size='sm'
+              className='h-7 bg-nvr-cyan px-3 text-[12px] text-white'
+              disabled={saveChanges.isPending}
+              onClick={() => saveChanges.mutate()}
+            >
+              {saveChanges.isPending ? 'Saving…' : 'Save changes'}
+            </Button>
+          </div>
         </div>
       )}
       <div className='rounded-xl border overflow-hidden dark:border-border'>
@@ -626,7 +674,9 @@ function PermissionsMatrix({
                       )}
                     </td>
                     {ACTIONS.map((action) => {
-                      const checked = isAdmin || policyMap.has(`${row.key}:${action}`)
+                      const key = `${row.key}:${action}`
+                      const staged = pending.get(key)
+                      const checked = isAdmin || (staged ?? policyMap.has(key))
                       const hasFilter = filteredKeys.has(`${row.key}:${action}`)
                       return (
                         <td key={action} className='px-3 py-1.5 text-center'>
@@ -636,7 +686,11 @@ function PermissionsMatrix({
                               checked={checked}
                               disabled={isAdmin || isBusy}
                               onChange={() => handleToggle(row.key, action, checked)}
-                              className='h-4 w-4 rounded accent-nvr-cyan cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+                              className={cn(
+                                'h-4 w-4 rounded accent-nvr-cyan cursor-pointer disabled:cursor-not-allowed disabled:opacity-60',
+                                staged !== undefined &&
+                                  'outline outline-2 outline-offset-1 outline-amber-400'
+                              )}
                               aria-label={`${ACTION_TITLES[action]} on ${row.key}`}
                             />
                             {hasFilter && (

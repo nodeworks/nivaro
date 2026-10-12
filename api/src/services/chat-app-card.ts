@@ -22,6 +22,16 @@ export type AppCard =
   | { kind: 'dashboard'; id: string; name: string; widgets: number }
   | { kind: 'view'; id: string; name: string; collection: string; total: number | null }
   | OpsProposalCard
+  | {
+      kind: 'ask'
+      id: string
+      name: string
+      question: string
+      answer: string | null
+      answer_hidden: boolean
+      turns: number
+      owner_name: string
+    }
 
 function titleCase(s: string): string {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -54,6 +64,14 @@ export async function appCardFor(
     if (!isAdmin) return null
     const { proposalCardFor } = await import('./ops-proposals.js')
     return proposalCardFor(String(user.id), String(url.searchParams.get('proposal')))
+  }
+
+  // /ask?conversation=<id> — an Ask AI conversation posted to chat (#1851).
+  // Built for the reader: no access → no card; the answer line only when the
+  // sharing rule lets THIS reader read it.
+  if (parts[0] === 'ask' && url.searchParams.get('conversation')) {
+    const { askConversationCard } = await import('./ai-conversation-card.js')
+    return askConversationCard(user, url.searchParams.get('conversation') as string)
   }
 
   // /collections/:c/:id  |  /records/:c/:id

@@ -71,6 +71,11 @@ export function getSocket(): Socket {
       for (const room of new Set([...leaderWatchRefs.keys(), ...localWatchRefs.keys()]))
         socket?.emit('admin:join', { room })
     }
+    // Live operations pages (ops:join) ride the leader's socket like the watch rooms.
+    if (!leaderHandle || leaderHandle.isLeader()) {
+      for (const topic of new Set([...leaderOpsRefs.keys(), ...localOpsRefs.keys()]))
+        socket?.emit('ops:join', { topic })
+    }
     if (everAuthed && lastSeq > 0) {
       const cursor = lastSeq
       setTimeout(() => socket?.emit('catchup', { cursor }), Math.random() * 2000)
@@ -114,6 +119,11 @@ export function getSocket(): Socket {
 const joinedCollections = new Set<string>()
 /** This tab's own watch-room joins, reference counted (two panels may watch one room). */
 const localWatchRefs = new Map<string, number>()
+/** This tab's live-operations topic joins (`ops:join`), reference counted. */
+const localOpsRefs = new Map<string, number>()
+/** Leader only: every tab's topic joins (a follower's joins reach the leader as sentinels). */
+const leaderOpsRefs = new Map<string, number>()
+
 /**
  * Leader only: every tab's joins, reference counted. A follower closing its page sends
  * `__leave_watch`; the leader leaves the server room only when the LAST watcher is gone —
@@ -124,6 +134,10 @@ const leaderWatchRefs = new Map<string, number>()
 const RELAYED_EVENTS = new Set([
   'collection:update',
   'job:update',
+  'job:log',
+  'conformance:progress',
+  'help-video:changed',
+  'help-video:question',
   'monitor:status',
   'traffic:request',
   'traffic-map:frame',
@@ -132,7 +146,9 @@ const RELAYED_EVENTS = new Set([
   'lock:response',
   'lock:available',
   'lock:queued',
-  'record:uploading'
+  'record:uploading',
+  'ops:changed',
+  'notification:new'
 ])
 
 let leaderHandle: ReturnType<typeof createLeaderSocket> | null = null
@@ -154,6 +170,11 @@ function ensureLeaderSocket() {
         leaderWatchRefs.set(r, n)
         if (s.connected) s.emit('admin:join', { room: r })
       }
+      leaderOpsRefs.clear()
+      for (const [r, n] of localOpsRefs) {
+        leaderOpsRefs.set(r, n)
+        if (s.connected) s.emit('ops:join', { topic: r })
+      }
       s.onAny((event, payload) => {
         if (RELAYED_EVENTS.has(event)) deliver(event, payload)
       })
@@ -166,6 +187,16 @@ function ensureLeaderSocket() {
           const r = String(payload)
           leaderWatchRefs.set(r, (leaderWatchRefs.get(r) ?? 0) + 1)
           if (so.connected) so.emit('admin:join', { room: r })
+        } else if (event === '__join_ops' || event === '__leave_ops') {
+          const r = String(payload)
+          const n = (leaderOpsRefs.get(r) ?? 0) + (event === '__join_ops' ? 1 : -1)
+          if (n > 0) {
+            leaderOpsRefs.set(r, n)
+            if (event === '__join_ops' && so.connected) so.emit('ops:join', { topic: r })
+          } else {
+            leaderOpsRefs.delete(r)
+            if (so.connected) so.emit('ops:leave', { topic: r })
+          }
         } else if (event === '__leave_watch') {
           const r = String(payload)
           const n = (leaderWatchRefs.get(r) ?? 0) - 1
@@ -182,6 +213,7 @@ function ensureLeaderSocket() {
     resignLeader() {
       // The socket stays up for chat; we just stop being the feed source.
       leaderWatchRefs.clear()
+      leaderOpsRefs.clear()
     }
   })
   return leaderHandle
@@ -211,7 +243,21 @@ export const adminRealtime: RealtimeAdapter = {
     })
   },
   emit(event, payload) {
-    ensureLeaderSocket().emit(event, payload)
+    const handle = ensureLeaderSocket()
+    // Topic joins are reference counted and re-sent after a reconnect (auth:ok above).
+    if (event === 'ops:join' || event === 'ops:leave') {
+      const topic = String((payload as { topic?: string } | undefined)?.topic ?? '')
+      if (!topic) return
+      const n = (localOpsRefs.get(topic) ?? 0) + (event === 'ops:join' ? 1 : -1)
+      if (n > 0) localOpsRefs.set(topic, n)
+      else localOpsRefs.delete(topic)
+      handle.emit(event === 'ops:join' ? '__join_ops' : '__leave_ops', topic)
+      return
+    }
+    handle.emit(event, payload)
+  },
+  joinWatch(room) {
+    return joinWatchRoom(room)
   }
 }
 

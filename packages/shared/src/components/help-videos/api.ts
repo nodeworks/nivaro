@@ -1,7 +1,9 @@
 import type { NivaroClient } from '@nivaro/sdk'
-import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useInfiniteQuery, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRef } from 'react'
 import { useNivaroClient } from '../../context'
 import { del, get, patch, post, put } from '../../lib/commands'
+import { useLiveEvent } from '../../lib/live'
 import { type CardBrand, cardAccent } from './cards'
 import type {
   ActivitySpan,
@@ -55,6 +57,33 @@ export const helpVideoKeys = {
   draftEdits: (id: string, n: number) => ['help-video-draft', id, n] as const
 }
 
+const sameVideo = (a: unknown, b: unknown) =>
+  String(a ?? '').toLowerCase() === String(b ?? '').toLowerCase()
+
+/**
+ * Re-read these queries when a help video moves — rendered, published, made
+ * required, archived (`help-video:changed`, ids only; each query re-reads as
+ * this viewer, so nothing is learned from the signal itself). `videoId` limits
+ * it to one video. No realtime host: nothing happens and the query behaves as before.
+ */
+export function useHelpVideoLive(keys: ReadonlyArray<readonly unknown[]>, videoId?: string | null) {
+  const qc = useQueryClient()
+  const keysRef = useRef(keys)
+  keysRef.current = keys
+  useLiveEvent(
+    'help-video:changed',
+    () => {
+      for (const k of keysRef.current) void qc.invalidateQueries({ queryKey: [...k] })
+    },
+    {
+      debounceMs: 600,
+      includeOwn: true,
+      enabled: videoId !== null,
+      match: (p) => videoId == null || sameVideo(p?.video_id, videoId)
+    }
+  )
+}
+
 /** One video as this person may see it (fresh media tickets every call). */
 export async function fetchHelpVideo(client: NivaroClient, id: string): Promise<HelpVideoDto> {
   return (await client.request(get<{ data: HelpVideoDto }>(`/help-videos/${id}`))).data
@@ -62,6 +91,7 @@ export async function fetchHelpVideo(client: NivaroClient, id: string): Promise<
 
 export function useHelpVideo(id: string | null) {
   const client = useNivaroClient()
+  useHelpVideoLive([helpVideoKeys.one(id ?? '')], id)
   return useQuery({
     queryKey: helpVideoKeys.one(id ?? ''),
     enabled: !!id,
@@ -79,6 +109,8 @@ export function useHelpVideosFor(
   enabled = true
 ) {
   const client = useNivaroClient()
+  // The Videos button's count (required, not yet watched) follows publishes and requirement changes.
+  useHelpVideoLive([['help-videos', 'for']])
   return useQuery({
     queryKey: helpVideoKeys.forCtx(ctx),
     enabled: enabled && !!(ctx.collection || ctx.page),
@@ -116,6 +148,7 @@ export function useHelpVideoLibrary(params: {
   status?: string
 }) {
   const client = useNivaroClient()
+  useHelpVideoLive([['help-videos', 'library']])
   return useInfiniteQuery({
     queryKey: helpVideoKeys.library(params),
     initialPageParam: 1,
@@ -146,6 +179,7 @@ async function fetchRequired(client: NivaroClient): Promise<RequiredList> {
 
 export function useRequiredList() {
   const client = useNivaroClient()
+  useHelpVideoLive([helpVideoKeys.required])
   return useQuery({
     queryKey: helpVideoKeys.required,
     staleTime: 60_000,
@@ -156,6 +190,7 @@ export function useRequiredList() {
 /** The single required videos (the same fetch as useRequiredList). */
 export function useRequiredVideos() {
   const client = useNivaroClient()
+  useHelpVideoLive([helpVideoKeys.required])
   return useQuery({
     queryKey: helpVideoKeys.required,
     staleTime: 60_000,
@@ -265,6 +300,19 @@ export function useHelpVideoWalk(id: string | null) {
 /** This person's questions (authors: everyone's) and their own vote. */
 export function useHelpVideoQuestions(id: string | null) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
+  // An author's reply reaches the asker, and a new question reaches the authors, as it happens
+  // (`help-video:question` goes only to those people's own sockets; the text is re-read here).
+  useLiveEvent(
+    'help-video:question',
+    () => void qc.invalidateQueries({ queryKey: helpVideoKeys.questions(id ?? '') }),
+    {
+      debounceMs: 300,
+      includeOwn: true,
+      enabled: !!id,
+      match: (p) => sameVideo(p?.video_id, id)
+    }
+  )
   return useQuery({
     queryKey: helpVideoKeys.questions(id ?? ''),
     enabled: !!id,

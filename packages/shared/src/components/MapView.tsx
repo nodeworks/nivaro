@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { useNivaroClient } from '../context'
 import { get } from '../lib/commands'
+import { useLiveQueryRefresh } from '../lib/live-list'
 import { BaseMap, type BaseMapPin } from './BaseMap'
 
 /**
@@ -46,6 +47,8 @@ export function MapView({
         .then((r) => r.data ?? []),
     staleTime: 30_000
   })
+  // Pins others add or move appear in place (#2124).
+  useLiveQueryRefresh(collection, [['map-view', collection]])
 
   const pins: BaseMapPin[] = useMemo(
     () =>
@@ -56,7 +59,9 @@ export function MapView({
           lng: Number(r[lngField]),
           label: labelField && r[labelField] != null ? String(r[labelField]) : `#${r.id}`
         }))
-        .filter((p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && (p.lat !== 0 || p.lng !== 0)),
+        .filter(
+          (p) => Number.isFinite(p.lat) && Number.isFinite(p.lng) && (p.lat !== 0 || p.lng !== 0)
+        ),
     [rows, latField, lngField, labelField]
   )
 

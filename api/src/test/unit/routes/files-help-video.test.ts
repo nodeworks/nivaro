@@ -24,6 +24,7 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
 vi.mock('../../../services/file-usage.js', () => ({
   findOrphanFiles: vi.fn(async () => ({ data: [], total: 0 })),
+  forgetUnusedFiles: vi.fn(),
   getFileUsage: vi.fn(async () => [{ collection: 'x', count: 1 }]),
   getFileRefColumns: vi.fn(async () => [{ table: 'refs', column: 'file' }])
 }))

@@ -22,6 +22,26 @@ export class UnknownCollectionError extends Error {
   }
 }
 
+/**
+ * The reasons as the refused person may hear them: what hid the record and
+ * their OWN allowed values, never the record's value on that dimension
+ * (record_ids / record_values, and the "this record's Zone is …" clause) —
+ * that would read a field off a record they are not allowed to see. Admins
+ * explaining someone else's access get the full reasons instead.
+ */
+export function viewerSafeReasons(reasons: AccessReason[]): AccessReason[] {
+  return reasons.map(({ trash_id: _t, record_ids: _i, record_values: _v, ...r }) =>
+    r.type === 'scope'
+      ? {
+          ...r,
+          message: `This record is not visible to you: your ${r.dimension_label ?? 'access'} filter limits you to ${
+            (r.allowed_values ?? []).join(', ') || '(none)'
+          }.`
+        }
+      : r
+  )
+}
+
 export async function explainAccess(
   user: User,
   actingAdmin: boolean,

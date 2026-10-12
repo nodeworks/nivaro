@@ -1,7 +1,11 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
-import { explainAccess, UnknownCollectionError } from '../services/access-explain.js'
+import {
+  explainAccess,
+  UnknownCollectionError,
+  viewerSafeReasons
+} from '../services/access-explain.js'
 
 // ─── Access explain ──────────────────────────────────────────────────────────
 // "Why can't I see this record?" — a scoped user hitting a record outside
@@ -47,6 +51,10 @@ export async function accessExplainRoutes(app: FastifyInstance): Promise<void> {
       const result = await explainAccess(user, actingAdmin, collection, id)
       // trash_id is an admin affordance — strip it for everyone else.
       if (!actingAdmin) for (const r of result.reasons) delete r.trash_id
+      // A person asking about their own access never gets the hidden
+      // record's value on the dimension that hid it (only an administrator
+      // explaining someone else's access does).
+      if (!req.isAdmin) result.reasons = viewerSafeReasons(result.reasons)
       // ?act=1 (#519): the whole answer — can see, can change, available,
       // owns the current step — from the same resolver audits and coverage use.
       if ((req.query as { act?: string } | undefined)?.act === '1') {
