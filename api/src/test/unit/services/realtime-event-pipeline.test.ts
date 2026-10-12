@@ -170,7 +170,7 @@ describe('journaledEmit routing (#1737)', () => {
     setJournalRedis(fakeRedis([], 0) as never)
     stream.active = true
     const r = await journaledEmit('collection:orders', 'collection:update', { item: 1 })
-    expect(r).toEqual({ seq: 1, path: 'stream' })
+    expect(r).toEqual({ seq: 1, path: 'stream', room: 'collection:orders' })
     expect(emits.list).toEqual([
       { scope: 'local', room: 'collection:orders', event: 'collection:update' }
     ])

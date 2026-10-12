@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { flushJournal, journaledEmit, replaySince } from './event-journal.js'
 import { getIo } from './io-holder.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * Realtime delivery probe (#1682). A synthetic Socket.io client inside the
@@ -141,7 +142,9 @@ export async function runRealtimeProbe(
   }
 
   const probeId = randomUUID()
-  const room = `probe:${probeId}`
+  const roomName = `probe:${probeId}`
+  // The room journaledEmit will target (tenant-prefixed when run inside a tenant).
+  const room = tenantScopedRoom(roomName)
   const ws = new WebSocket(`ws://127.0.0.1:${port}/socket.io/?EIO=4&transport=websocket`)
   let sid: string | null = null
   let sentAt = 0
@@ -170,7 +173,7 @@ export async function runRealtimeProbe(
           room,
           'realtime:probe',
           { probe: probeId },
-          { selfViaStream: true }
+          { selfViaStream: true, roomScoped: true }
         ).then((r) => {
           emitted = { path: r.path, seq: r.seq }
         })

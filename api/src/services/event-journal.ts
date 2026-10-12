@@ -7,6 +7,7 @@ import {
 } from './event-journal-store.js'
 import { publishToStream, streamActive } from './event-stream.js'
 import { getIo } from './io-holder.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * Missed-event catch-up (#266): every journaled emit gets a global sequence
@@ -55,6 +56,8 @@ export interface EmitResult {
   seq: number | null
   /** How it left this process: 'stream' (local + Redis stream), 'adapter' (pub/sub). */
   path: 'stream' | 'adapter' | 'none'
+  /** The room it went to — tenant-prefixed in a tenant's context (tenant-rooms.ts). */
+  room: string
 }
 
 /**
@@ -64,15 +67,22 @@ export interface EmitResult {
  * `selfViaStream` (delivery probe only) skips the local emit and lets this
  * replica's own stream reader deliver it, so the probe measures the path an
  * event from another replica takes.
+ *
+ * Cloud mode: inside a tenant's context the room is that tenant's
+ * (`t:<tenant>:<room>`), so the live emit, the stream entry and both journals
+ * carry the tenant and only that tenant's sockets can receive or replay it.
  */
 export async function journaledEmit(
-  room: string,
+  roomName: string,
   event: string,
   payload: Record<string, unknown>,
-  opts: { selfViaStream?: boolean } = {}
+  /** `roomScoped`: the caller already applied tenantScopedRoom (the probe, whose
+   *  socket callbacks may not carry the tenant context it started in). */
+  opts: { selfViaStream?: boolean; roomScoped?: boolean } = {}
 ): Promise<EmitResult> {
+  const room = opts.roomScoped ? roomName : tenantScopedRoom(roomName)
   const io = getIo()
-  if (!io) return { seq: null, path: 'none' }
+  if (!io) return { seq: null, path: 'none', room }
   let seq: number | null = null
   const t0 = observer ? performance.now() : 0
   try {
@@ -109,7 +119,7 @@ export async function journaledEmit(
       /* a diagnostic never affects delivery */
     }
   }
-  return { seq, path }
+  return { seq, path, room }
 }
 
 /** Replay events after `cursor` for the given rooms. */

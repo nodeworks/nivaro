@@ -1,8 +1,16 @@
+import type { Knex } from 'knex'
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
+import {
+  getTenantDb,
+  getTenantSlug,
+  runWithoutTenant,
+  runWithTenantDb
+} from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { getIo } from './io-holder.js'
 import { broadcastCollectionUpdate } from './realtime.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Raw writers announce changes (#1875).
@@ -124,7 +132,17 @@ export function planBroadcasts(
 
 // ── In-process queue ──────────────────────────────────────────────────────
 
-let queue: RawWriteAnnouncement[] = []
+/**
+ * One batch per tenant (cloud mode; '' = no tenant). A batch is broadcast
+ * inside ITS tenant's context — a timer armed by one tenant's request must
+ * never send another tenant's ids and field names to the wrong sockets.
+ */
+interface TenantBatch {
+  tenant: { db: Knex; slug: string; tenantId: string } | null
+  list: RawWriteAnnouncement[]
+}
+let queue = new Map<string, TenantBatch>()
+let queued = 0
 let timer: ReturnType<typeof setTimeout> | null = null
 const stats = {
   announced: 0,
@@ -153,15 +171,23 @@ function broadcastPlanned(list: RawWriteAnnouncement[]): number {
   return planned.length
 }
 
-/** Broadcast everything queued now (tests, shutdown). */
+/** Broadcast everything queued now (tests, shutdown), each tenant in its own context. */
 export function flushRawWriteQueue(): number {
   if (timer) {
     clearTimeout(timer)
     timer = null
   }
-  const list = queue
-  queue = []
-  return list.length ? broadcastPlanned(list) : 0
+  const batches = queue
+  queue = new Map()
+  queued = 0
+  let sent = 0
+  for (const b of batches.values()) {
+    if (!b.list.length) continue
+    const t = b.tenant
+    if (t) runWithTenantDb(t.db, t.slug, () => (sent += broadcastPlanned(b.list)), t.tenantId)
+    else sent += runWithoutTenant(() => broadcastPlanned(b.list))
+  }
+  return sent
 }
 
 async function persist(list: RawWriteAnnouncement[]): Promise<void> {
@@ -216,8 +242,18 @@ export async function announceRawWrites(
     }
     return
   }
-  queue.push(a)
-  if (queue.length >= 5000) {
+  const key = currentTenantKey()
+  let batch = queue.get(key)
+  if (!batch) {
+    const tdb = getTenantDb()
+    batch = {
+      tenant: key && tdb ? { db: tdb, slug: getTenantSlug() ?? key, tenantId: key } : null,
+      list: []
+    }
+    queue.set(key, batch)
+  }
+  batch.list.push(a)
+  if (++queued >= 5000) {
     flushRawWriteQueue()
     return
   }
@@ -290,5 +326,5 @@ export async function drainRawWrites(): Promise<{ rows: number; broadcasts: numb
 }
 
 export function rawWriteStats(): typeof stats & { queued: number } {
-  return { ...stats, queued: queue.length }
+  return { ...stats, queued }
 }
