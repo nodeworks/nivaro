@@ -96,7 +96,7 @@ export function isUserViewing(collection: string, item: string, userId: string):
 }
 
 /** Per-socket connection metadata for the realtime diagnostics page (#270). */
-interface SocketMeta {
+export interface SocketMeta {
   user: { id: string; name: string } | null
   connectedAt: number
   rtt: number | null
@@ -212,7 +212,14 @@ export function getRealtimeStats(): {
  * sockets and people, whether it is the current build, and whether a "reload old tabs" would
  * reach it. Sockets that never said which build (an older client) group under build null.
  */
-export function getClientVersionGroups(): Array<{
+export function getClientVersionGroups(
+  tenant: string | null = null,
+  // Test seam: the node's socket metadata and how a socket id maps to its tenant.
+  deps: {
+    metas: Map<string, SocketMeta>
+    tenantOf: (socketId: string) => string | null
+  } = { metas: socketMeta, tenantOf: socketTenantKey }
+): Array<{
   app: string | null
   build: string | null
   api: string | null
@@ -222,7 +229,12 @@ export function getClientVersionGroups(): Array<{
   older: 'build' | 'api' | null
   newest_load: string | null
 }> {
-  const current = currentBuilds(socketMeta.values())
+  // Cloud: only the caller's tenant's tabs (the versions list on /realtime/stats). The
+  // "current build" is judged from those tabs too.
+  const metas = [...deps.metas.entries()]
+    .filter(([id]) => tenant == null || deps.tenantOf(id) === tenant)
+    .map(([, m]) => m)
+  const current = currentBuilds(metas)
   const groups = new Map<
     string,
     {
@@ -235,7 +247,7 @@ export function getClientVersionGroups(): Array<{
       loaded: number | null
     }
   >()
-  for (const meta of socketMeta.values()) {
+  for (const meta of metas) {
     if (!meta.user) continue
     const v = meta.version
     const older = olderReason(meta.app, v, current)
@@ -269,6 +281,12 @@ export function getClientVersionGroups(): Array<{
       newest_load: g.loaded != null ? new Date(g.loaded).toISOString() : null
     }))
     .sort((a, b) => (a.app ?? '').localeCompare(b.app ?? '') || b.sockets - a.sockets)
+}
+
+/** The tenant key a socket on this node resolved to (cloud), or null. */
+function socketTenantKey(socketId: string): string | null {
+  const key = _ioRef?.sockets.sockets.get(socketId)?.data?.nvrTenantKey
+  return typeof key === 'string' ? key : null
 }
 
 /** Local concurrency snapshot for the sampling cron (#275). */

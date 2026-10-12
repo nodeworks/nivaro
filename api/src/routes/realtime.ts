@@ -78,7 +78,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         traffic: transportStats(15, tenantScope()),
         // #1048 — open tabs by the build they run; `older` groups are what "Reload old tabs" reaches.
         api_version: NIVARO_VERSION,
-        versions: getClientVersionGroups(),
+        versions: getClientVersionGroups(tenantScope()),
         sockets: stats.sockets.map((s) => ({
           id: s.id,
           user:
