@@ -27,7 +27,7 @@ export const liveWidgetsDocs: DocSection = {
       type: 'ul',
       items: [
         'You must still be able to open the dashboard or report AND read every collection the widget reads; when that stops being true the push ends and the widget goes back to its normal refresh.',
-        'Every widget — pushed or polled, on a dashboard, a report, a public dashboard link or a record page — reads as the person viewing it: their read permission on each collection, their row filters and User Scopes, and only fields their role can read. A widget built on a field you cannot read shows "Forbidden" instead of a figure; a public dashboard link shows what its creator can see.',
+        'Every widget — pushed or polled, on a dashboard, a report, a public dashboard link or a record page — reads as the person viewing it: their read permission on each collection, their row filters and User Scopes, and only fields their role can read. A widget built on a field you cannot read shows "Forbidden" instead of a figure; a public dashboard link shows what its creator can see. A "latest rows" widget reads only its configured columns (Columns on the widget; without them it shows the record title, and nothing on a public link). On record-page rollups and review lists, values and labels from related records you cannot open stay blank.',
         'After a lost connection the widget refreshes once when it is back, then pushing resumes.',
         'Recomputes are capped per server (`WIDGET_LIVE_MAX_PER_MIN`, default 300 a minute); a widget over the cap catches up in the next minute.'
       ]

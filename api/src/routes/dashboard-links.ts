@@ -186,7 +186,7 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
     const resolved = await Promise.all(
       widgets.map(async (w) => {
         const result = creator
-          ? await computeWidgetData(w, [], { user: creator })
+          ? await computeWidgetData(w, [], { user: creator, public: true })
           : { error: 'No viewer', status: 403 }
         return {
           id: w.id,

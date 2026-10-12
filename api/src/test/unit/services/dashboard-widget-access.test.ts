@@ -58,6 +58,11 @@ vi.mock('../../../services/user-scopes.js', async (orig) => ({
   ...scopes
 }))
 
+vi.mock('../../../services/collections.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/collections.js')>()),
+  getCollection: vi.fn(async () => ({ collection: 'orders', display_template: '{{title}}' }))
+}))
+
 const items = vi.hoisted(() => ({
   readItems: vi.fn(),
   aggregateItems: vi.fn()
@@ -204,6 +209,31 @@ describe('dashboard widget data reads as the viewer', () => {
     )
   })
 
+  it('latest reads only the configured display columns (AA3)', async () => {
+    await computeWidgetData({ ...latest, field: 'title, zone' }, [], { user: user('ZONE1') })
+    expect(items.readItems).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'orders',
+      expect.objectContaining({ fields: ['id', 'title', 'zone'] })
+    )
+    // No list: the id and the display-template fields, never whole rows.
+    await computeWidgetData(latest, [], { user: user('ZONE1') })
+    expect(items.readItems).toHaveBeenLastCalledWith(
+      expect.anything(),
+      'orders',
+      expect.objectContaining({ fields: ['id', 'title'] })
+    )
+    // A configured column the viewer cannot read refuses.
+    expect(
+      await computeWidgetData({ ...latest, field: 'title,amount' }, [], { user: user('LIMITED') })
+    ).toEqual({ error: 'Forbidden', status: 403 })
+    // A public link needs an explicit list.
+    expect(await computeWidgetData(latest, [], { user: user('ZONE1'), public: true })).toEqual({
+      error: 'This widget has no column list',
+      status: 400
+    })
+  })
+
   it('no viewer (a public link without a creator) gets nothing', async () => {
     expect(await computeWidgetData(latest)).toEqual({ error: 'Forbidden', status: 403 })
   })
@@ -276,7 +306,11 @@ describe('public dashboard links', () => {
       if (t === 'nivaro_roles') c.first = vi.fn(async () => ({ admin_access: admin }))
       if (t === 'nivaro_dashboard_widgets') {
         // biome-ignore lint/suspicious/noThenProperty: a knex builder is thenable
-        c.then = (resolve: (v: unknown[]) => void) => resolve([{ id: 'w', ...latest }])
+        c.then = (resolve: (v: unknown[]) => void) =>
+          resolve([
+            { id: 'w', ...latest, field: 'title,zone' },
+            { id: 'w2', ...latest }
+          ])
       }
       c.increment = vi.fn(() => ({ catch: () => {} }))
       return c
@@ -291,7 +325,10 @@ describe('public dashboard links', () => {
       method: 'GET',
       url: `/dashboard-links/public/${'a'.repeat(48)}`
     })
-    return JSON.parse(res.body).data.widgets[0].data
+    const w = JSON.parse(res.body).data.widgets
+    // AA3: a `latest` widget without a column list shows nothing on a public link.
+    expect(w[1].data).toBeNull()
+    return w[0].data
   }
 
   it('renders as a creator who is still an administrator', async () => {

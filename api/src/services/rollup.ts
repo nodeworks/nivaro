@@ -9,11 +9,13 @@ import {
   type DotSpec,
   findM2mAlias,
   findM2oRelation,
+  HIDDEN_RELATED,
   isDotPathIdentifier,
   isPlainIdentifier,
   type Logger,
   normalizeColumnSpecs,
   type PathWalkConfig,
+  type RelatedVisibility,
   type RelRow,
   resolveDotSpecValues,
   resolveRelatedLabels,
@@ -293,7 +295,9 @@ export async function resolveRollupRows(
   logger: Logger = consoleLogger,
   staged?: RollupStaged,
   /** Narrow the walked ids to what the viewer can read (widgets-internal passes it). */
-  visible?: (ids: Array<string | number>) => Promise<Array<string | number>>
+  visible?: (ids: Array<string | number>) => Promise<Array<string | number>>,
+  /** Which related records (dot columns, intermediate levels, level labels) the viewer can read. */
+  relatedVisibility?: RelatedVisibility
 ): Promise<RollupResult> {
   const relations = (await database('nivaro_relations').select(
     'many_collection',
@@ -398,7 +402,8 @@ export async function resolveRollupRows(
     dotSpecs,
     targetRows,
     logger,
-    'rollup'
+    'rollup',
+    relatedVisibility
   )
 
   const getRaw = (row: Record<string, unknown>, field: string): unknown => {
@@ -409,7 +414,9 @@ export async function resolveRollupRows(
       if (row[field] !== undefined) return row[field]
       const raw = row[dot.fkField]
       const map = dotValueMaps.get(`${dot.fkField}.${dot.subField}`)
-      return raw == null ? null : (map?.get(String(raw)) ?? raw)
+      const v = raw == null ? null : map?.get(String(raw))
+      // A related (intermediate) record the viewer cannot read: blank, never its FK.
+      return raw == null || v === HIDDEN_RELATED ? null : (v ?? raw)
     }
     return row[field] ?? null
   }
@@ -446,7 +453,8 @@ export async function resolveRollupRows(
         ? resolveRelatedLabels(
             database,
             info.labelSourceCollection,
-            targetRows.map((r) => getRaw(r, info.field))
+            targetRows.map((r) => getRaw(r, info.field)),
+            relatedVisibility
           )
         : Promise.resolve(null)
     )

@@ -263,6 +263,43 @@ describe('resolveRollupRows — unit_workflows 2-hop m2o walk (pinned fixture)',
   })
 })
 
+describe('resolveRollupRows — related records as the viewer (AA2)', () => {
+  it('blanks dot columns, intermediate levels and labels of related records the viewer cannot read', async () => {
+    const db = makeDb(rollupResolver)
+    // Hidden from this viewer: line item wli-2 (an intermediate level), unit-2, part type dpt-2.
+    const hidden = new Set(['wli-2', 'unit-2', 'dpt-2'])
+    const asked: string[] = []
+    const related = vi.fn(async (collection: string, ids: string[]) => {
+      asked.push(collection)
+      return new Set(ids.filter((id) => !hidden.has(id)))
+    })
+    const result = await resolveRollupRows(
+      db as unknown as Parameters<typeof resolveRollupRows>[0],
+      rollupConfig,
+      'wf-1',
+      makeLogger(),
+      undefined,
+      undefined,
+      related
+    )
+    const byId = new Map(result.rows.map((r) => [String(r.id), r]))
+    // uw-3 hangs off the hidden line item: its level is blank, never the line item's id.
+    expect(byId.get('uw-3')?.levels).toEqual([null, 'dpt-2'])
+    // dpt-2's label is not shown; dpt-1's is.
+    expect(byId.get('uw-3')?.level_labels).toEqual([null, null])
+    expect(byId.get('uw-1')?.level_labels).toEqual(['Overhead', 'Conduit'])
+    // unit-2's fields are blank; unit-1's resolve.
+    expect(byId.get('uw-2')?.values).toEqual({ 'unit.name': null, 'unit.system_id': null })
+    expect(byId.get('uw-1')?.values).toEqual({
+      'unit.name': 'Transformer A',
+      'unit.system_id': 'SYS-100'
+    })
+    expect(new Set(asked)).toEqual(
+      new Set(['workflow_line_items', 'units', 'deployment_types', 'deployment_part_types'])
+    )
+  })
+})
+
 describe('resolveRollupRows — cap truncation', () => {
   const config: RollupConfig = {
     host_collection: 'units',

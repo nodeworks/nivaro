@@ -107,6 +107,7 @@ describe('POST /widgets-internal/:id/render — review_list dispatch', () => {
       reviewListConfig,
       '373944',
       undefined,
+      expect.any(Function),
       expect.any(Function)
     )
     // The walked ids are narrowed to what the caller can read, as the caller.

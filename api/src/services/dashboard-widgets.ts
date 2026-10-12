@@ -118,13 +118,30 @@ export async function widgetSourceRefusal(
     return `No read access to ${collection}`
   const readable = await readableTest(user, collection)
   const named = [
-    ...(widget.type !== 'saved_view' && widget.field ? [widget.field] : []),
+    ...(widget.type === 'latest'
+      ? latestColumns(widget.field)
+      : widget.type !== 'saved_view' && widget.field
+        ? [widget.field]
+        : []),
     ...(widget.type !== 'saved_view'
       ? normalizeWidgetFilters(widget.filters).map((f) => f.field)
       : [])
   ]
   const hidden = named.find((f) => !readable(f))
   return hidden ? `You do not have access to the field "${hidden}"` : null
+}
+
+/** A `latest` widget's display columns: `field` holds them as a comma list (max 8). */
+export function latestColumns(field: string | null | undefined): string[] {
+  if (!field) return []
+  return [
+    ...new Set(
+      String(field)
+        .split(',')
+        .map((f) => f.trim())
+        .filter((f) => /^[A-Za-z_][A-Za-z0-9_]*$/.test(f))
+    )
+  ].slice(0, 8)
 }
 
 /** System collections: never a source for count / sum / avg / latest / chart widgets. */
@@ -138,7 +155,8 @@ async function resolveCollection(name: string): Promise<boolean> {
 export async function computeWidgetData(
   widget: WidgetSpec,
   extraFilters: WidgetFilter[] = [],
-  ctx: { user?: User | null } = {}
+  /** `public`: a public dashboard link — `latest` shows only an explicit column list there. */
+  ctx: { user?: User | null; public?: boolean } = {}
 ): Promise<{ data: unknown } | { error: string; status: number }> {
   // #52 — a widget over a SAVED BROWSER VIEW: `field` holds the view id, the
   // view's own filters compile exactly as the browser compiles them, and the
@@ -261,9 +279,22 @@ export async function computeWidgetData(
     }
 
     if (widget.type === 'latest') {
-      // readItems narrows the columns to the role's field list and strips system secrets.
+      // Only the widget's display columns (`field` holds the comma list), never whole rows; a
+      // widget without a list shows the id and the collection's display-template fields —
+      // and on a public link, nothing. readItems still narrows to the role's field list.
+      const configured = latestColumns(widget.field).filter((f) => fieldSet.has(f))
+      if (configured.some((f) => !readable(f))) return { error: 'Forbidden', status: 403 }
+      if (configured.length === 0 && ctx.public)
+        return { error: 'This widget has no column list', status: 400 }
+      let fields = configured
+      if (fields.length === 0) {
+        const { getCollection } = await import('./collections.js')
+        const { extractTemplateFields } = await import('./display-value.js')
+        const template = (await getCollection(col).catch(() => null))?.display_template ?? null
+        fields = extractTemplateFields(template).filter((f) => fieldSet.has(f) && readable(f))
+      }
       const res = await items.readItems(user, col, {
-        fields: ['*'],
+        fields: [...new Set(['id', ...fields])],
         filter,
         sort: ['-created_at'],
         limit: 10

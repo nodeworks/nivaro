@@ -122,6 +122,7 @@ describe('POST /widgets-internal/:id/render — rollup dispatch', () => {
       '373944',
       undefined,
       undefined,
+      expect.any(Function),
       expect.any(Function)
     )
     expect(vi.mocked(assertHostReadable)).toHaveBeenCalledWith(
