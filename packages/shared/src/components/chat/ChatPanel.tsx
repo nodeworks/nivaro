@@ -107,6 +107,7 @@ import {
   usePeerReadAt,
   useRoomMembership,
   useRoomPins,
+  useChatThread,
   useSendChatMessage,
   useSetMyPreferences,
   useTogglePin,
@@ -990,7 +991,8 @@ export function ChatRoomView({
   onOpenSettings,
   renderMessageBody,
   initialUnread,
-  anchor: anchorProp = null
+  anchor: anchorProp = null,
+  openThread = null
 }: {
   room: string
   label: string
@@ -1002,6 +1004,8 @@ export function ChatRoomView({
   initialUnread?: number
   /** Open around a message (a search hit, #977) or a day (#976). */
   anchor?: ChatAnchor
+  /** Deep link (?thread=): open this thread's pane once the root is readable. */
+  openThread?: number | null
 }) {
   const cfg = useChatConfig()
   const th = useTheme()
@@ -1176,6 +1180,13 @@ export function ChatRoomView({
   const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [notifyMenuOpen, setNotifyMenuOpen] = useState(false)
   const [threadRoot, setThreadRoot] = useState<number | null>(null)
+  // A root the viewer cannot read (hidden, deleted) comes back empty, so the
+  // room just opens without the pane.
+  const linkedThread = useChatThread(openThread ? room : null, openThread)
+  const linkedRootOk = !!linkedThread.root && !linkedThread.root.deleted_at
+  useEffect(() => {
+    if (openThread && linkedRootOk) setThreadRoot(openThread)
+  }, [openThread, linkedRootOk])
   const [quote, setQuote] = useState<ChatMessage | null>(null)
   const [threadQuote, setThreadQuote] = useState<ChatMessage | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
