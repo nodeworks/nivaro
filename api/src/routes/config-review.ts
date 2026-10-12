@@ -128,7 +128,7 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
     }
   )
 
-  app.post<{ Params: { id: string }; Body: { label?: string } }>(
+  app.post<{ Params: { id: string }; Body: { label?: string; ids?: string[]; hash?: string } }>(
     '/:id/apply',
     async (req, reply) => {
       const f = await loadFinding(req.params.id)
@@ -138,7 +138,11 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
       busy.add(f.id)
       try {
         const userId = req.user?.id ?? null
-        const { changeSet, undo } = await applyFix(f, { userId, req, label: req.body?.label })
+        const { changeSet, undo, applied } = await applyFix(
+          f,
+          { userId, req, label: req.body?.label },
+          { ids: req.body?.ids, hash: req.body?.hash }
+        )
         const detail = {
           ...f.detail,
           applied: [
@@ -146,7 +150,7 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
               at: new Date().toISOString(),
               by: userId,
               title: changeSet.title,
-              total: changeSet.total,
+              total: applied,
               undo
             },
             ...(f.detail.applied ?? [])
@@ -160,10 +164,10 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
           user: userId,
           collection: 'nivaro_config_health',
           item: String(f.id),
-          comment: `${changeSet.title} (${changeSet.total} change(s))`.slice(0, 1000),
+          comment: `${changeSet.title} (${applied} change(s))`.slice(0, 1000),
           req
         })
-        return { data: { change_set: changeSet, undoable: !!undo } }
+        return { data: { change_set: changeSet, applied, undoable: !!undo } }
       } catch (err) {
         return fixError(reply, err)
       } finally {

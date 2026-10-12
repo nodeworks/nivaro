@@ -4,13 +4,15 @@ import { logActivity } from '../activity.js'
 import { snapshotLayoutVersion } from '../layout-versions.js'
 import { snapshotReportVersion } from '../report-versions.js'
 import { writeRevision } from '../revisions.js'
-import { collectLabelOccurrences, FILE_MIN_AGE_DAYS, orphanFiles } from './checks.js'
+import { collectLabelOccurrences } from './checks.js'
 import {
+  changeSetHash,
   cleanLabel,
   describeRule,
   type FieldRuleRow,
   findDuplicateViews,
   findRuleConflicts,
+  guardApply,
   type LabelOccurrence,
   type ReviewDetail,
   reviveRow,
@@ -25,6 +27,11 @@ import {
  * previewed as a change set, applied with the same writes the editors make
  * (layout / report versions captured first, activity rows, saved-view delete
  * revisions) and — where the kind allows — recorded with what an undo needs.
+ *
+ * The preview hands out the exact target ids and a hash of them; an apply
+ * re-plans, refuses (409) when the hash differs and touches only targets
+ * that are both in the fresh plan and in the preview it was given. The
+ * config review never deletes files: unreferenced files are report-only.
  */
 
 export class FixError extends Error {
@@ -52,7 +59,13 @@ export interface ChangeSet {
   total: number
   undoable: boolean
   note?: string
+  /** Every target this change set touches ('draft:12', 'view:3', …). */
+  ids: string[]
+  /** changeSetHash(kind, ids) — the apply must send it back. */
+  hash: string
 }
+
+type PlannedChangeSet = Omit<ChangeSet, 'ids' | 'hash'>
 
 export interface UndoPayload {
   kind: string
@@ -75,8 +88,11 @@ export interface FixContext {
 }
 
 interface Plan {
-  changeSet: ChangeSet
-  apply: () => Promise<UndoPayload | null>
+  changeSet: PlannedChangeSet
+  /** Target keys, one per row the fix would touch. */
+  targets: string[]
+  /** Acts only on the targets in `allowed`. */
+  apply: (allowed: Set<string>) => Promise<UndoPayload | null>
 }
 
 const PREVIEW_LINES = 60
@@ -138,6 +154,7 @@ async function planRuleDeactivate(f: FindingRow, ctx: FixContext): Promise<Plan>
           ? `Rule #${conflict.winner.id} does the same thing, so nothing changes on the form.`
           : `Rule #${conflict.winner.id} already overwrites it, so nothing changes on the form — the rules are merged into the one that takes effect.`
     },
+    targets: [`rule:${shadowed}`],
     apply: async () => {
       await db('nivaro_field_rules').where({ id: shadowed }).update({ is_active: false })
       await logActivity({
@@ -259,6 +276,7 @@ async function planViewDelete(f: FindingRow, ctx: FixContext): Promise<Plan> {
       undoable: true,
       note: `View #${group.keep.id} "${group.keep.name}" shows exactly the same thing and stays.`
     },
+    targets: [`view:${view.id}`],
     apply: async () => {
       await deleteViews([view], ctx, `duplicate of #${group.keep.id} (config review)`)
       return { kind: 'views', data: { views: [view] } }
@@ -311,9 +329,11 @@ async function planViewsDelete(f: FindingRow, ctx: FixContext): Promise<Plan> {
           ? `${listed.length - rows.length} listed view(s) were opened, subscribed to, made a default or deleted since the review ran and are left alone.`
           : undefined
     },
-    apply: async () => {
-      await deleteViews(rows, ctx, `not opened in ${days} days (config review cleanup)`)
-      return { kind: 'views', data: { views: rows } }
+    targets: rows.map((v) => `view:${v.id}`),
+    apply: async (allowed) => {
+      const picked = rows.filter((v) => allowed.has(`view:${v.id}`))
+      await deleteViews(picked, ctx, `not opened in ${days} days (config review cleanup)`)
+      return { kind: 'views', data: { views: picked } }
     }
   }
 }
@@ -354,9 +374,11 @@ async function planFieldRemove(f: FindingRow, ctx: FixContext): Promise<Plan> {
       undoable: true,
       note: 'Each layout gets a version first, so the Layouts tab history can restore it too. The column and its data are not touched.'
     },
-    apply: async () => {
+    targets: assignments.map((a) => `assignment:${a.id}`),
+    apply: async (allowed) => {
       const saved: Array<Record<string, unknown>> = []
       for (const a of assignments) {
+        if (!allowed.has(`assignment:${a.id}`)) continue
         const layoutId = Number(a.layout_id)
         await snapshotLayoutVersion(layoutId, 'before config review fix', ctx.userId)
         await db('nivaro_layout_field_assignments').where({ id: a.id }).delete()
@@ -457,8 +479,9 @@ async function planDraftsDelete(f: FindingRow, ctx: FixContext): Promise<Plan> {
           .filter(Boolean)
           .join(' ') || undefined
     },
-    apply: async () => {
-      const ids = rows.map((r) => r.id)
+    targets: rows.map((r) => `draft:${r.id}`),
+    apply: async (allowed) => {
+      const ids = rows.filter((r) => allowed.has(`draft:${r.id}`)).map((r) => r.id)
       const full = undoable
         ? ((await db('nivaro_drafts').whereIn('id', ids).select()) as Array<
             Record<string, unknown>
@@ -537,10 +560,12 @@ async function planTasksCancel(f: FindingRow, ctx: FixContext): Promise<Plan> {
       undoable: true,
       note: 'Each task gets a history line saying why. Nobody is notified.'
     },
-    apply: async () => {
+    targets: rows.map((t) => `task:${t.id}`),
+    apply: async (allowed) => {
       const { logTaskEvent } = await import('../tasks.js')
       const now = new Date()
-      for (const t of rows) {
+      const picked = rows.filter((t) => allowed.has(`task:${t.id}`))
+      for (const t of picked) {
         await db('nivaro_tasks')
           .where({ id: t.id })
           .whereIn('status', ['open', 'in_progress'])
@@ -555,7 +580,7 @@ async function planTasksCancel(f: FindingRow, ctx: FixContext): Promise<Plan> {
       return {
         kind: 'tasks',
         data: {
-          tasks: rows.map((t) => ({ id: t.id, status: t.status, completed_at: t.completed_at }))
+          tasks: picked.map((t) => ({ id: t.id, status: t.status, completed_at: t.completed_at }))
         }
       }
     }
@@ -580,48 +605,6 @@ async function undoTasks(
   return n
 }
 
-// ─── Files ───────────────────────────────────────────────────────────────────
-
-async function planFilesDelete(_f: FindingRow, ctx: FixContext): Promise<Plan> {
-  const rows = (await orphanFiles(new Date(Date.now() - FILE_MIN_AGE_DAYS * DAY))).slice(0, 200)
-  if (rows.length === 0) throw new FixError(409, 'No unreferenced file is left')
-  const bytes = rows.reduce((s, r) => s + Number(r.filesize ?? 0), 0)
-  return {
-    changeSet: {
-      kind: 'files-delete',
-      title: `Delete ${rows.length} unreferenced file(s)`,
-      lines: rows.slice(0, PREVIEW_LINES).map((r) => ({
-        action: 'delete' as const,
-        target: `${r.filename_download ?? r.id} · uploaded ${short(r.uploaded_on)}`
-      })),
-      total: rows.length,
-      undoable: false,
-      note: `Frees ${(bytes / 1e6).toFixed(1)} MB. The stored objects are removed too, so this cannot be undone.`
-    },
-    apply: async () => {
-      const { deleteFile } = await import('../files.js')
-      let deleted = 0
-      let failed = 0
-      for (const r of rows) {
-        try {
-          await deleteFile(String(r.id))
-          deleted++
-        } catch {
-          failed++
-        }
-      }
-      await logActivity({
-        action: 'files-orphans-purge',
-        user: ctx.userId,
-        collection: 'nivaro_files',
-        comment: `${deleted} unreferenced file(s) deleted by the config review${failed ? `, ${failed} failed` : ''}`,
-        req: ctx.req
-      })
-      return null
-    }
-  }
-}
-
 // ─── Labels ──────────────────────────────────────────────────────────────────
 
 interface LabelEdit {
@@ -631,6 +614,8 @@ interface LabelEdit {
   before: string
   after: string
 }
+
+const labelTarget = (e: LabelEdit) => `label:${e.source}:${e.ref}:${e.path}:${e.before}→${e.after}`
 
 /** Where each label occurrence is stored. */
 function labelColumn(o: Pick<LabelOccurrence, 'source' | 'path'>): {
@@ -735,8 +720,13 @@ async function planLabelRename(f: FindingRow, ctx: FixContext): Promise<Plan> {
       undoable: true,
       note: 'Layouts and reports get a version first. An undo puts back only labels nobody changed since.'
     },
-    apply: async () => {
-      const done = await writeLabels(edits, ctx, 'apply')
+    targets: edits.map(labelTarget),
+    apply: async (allowed) => {
+      const done = await writeLabels(
+        edits.filter((e) => allowed.has(labelTarget(e))),
+        ctx,
+        'apply'
+      )
       if (done.length === 0) throw new FixError(409, 'Every label changed since the preview')
       return { kind: 'labels', data: { edits: done } }
     }
@@ -752,7 +742,6 @@ const PLANNERS: Record<string, (f: FindingRow, ctx: FixContext) => Promise<Plan>
   'field-remove-from-layouts': planFieldRemove,
   'drafts-delete': planDraftsDelete,
   'tasks-cancel': planTasksCancel,
-  'files-delete': planFilesDelete,
   'label-rename': planLabelRename
 }
 
@@ -765,17 +754,29 @@ async function plan(f: FindingRow, ctx: FixContext): Promise<Plan> {
   return planner(f, ctx)
 }
 
-export async function previewFix(f: FindingRow, ctx: FixContext): Promise<ChangeSet> {
-  return (await plan(f, ctx)).changeSet
+function bound(p: Plan): ChangeSet {
+  return { ...p.changeSet, ids: p.targets, hash: changeSetHash(p.changeSet.kind, p.targets) }
 }
 
+export async function previewFix(f: FindingRow, ctx: FixContext): Promise<ChangeSet> {
+  return bound(await plan(f, ctx))
+}
+
+/**
+ * Apply what the preview showed: `sent` is its ids + hash. Re-planned from
+ * the rows as they are now; a different hash is a 409 and only targets in
+ * both the fresh plan and the preview are touched.
+ */
 export async function applyFix(
   f: FindingRow,
-  ctx: FixContext
-): Promise<{ changeSet: ChangeSet; undo: UndoPayload | null }> {
+  ctx: FixContext,
+  sent: { ids?: unknown; hash?: unknown }
+): Promise<{ changeSet: ChangeSet; undo: UndoPayload | null; applied: number }> {
   const p = await plan(f, ctx)
-  const undo = await p.apply()
-  return { changeSet: p.changeSet, undo }
+  const guard = guardApply(p.changeSet.kind, p.targets, sent)
+  if (!guard.ok) throw new FixError(guard.status, guard.error)
+  const undo = await p.apply(guard.allowed)
+  return { changeSet: bound(p), undo, applied: guard.allowed.size }
 }
 
 /** Reverse an applied fix; returns how many rows came back. */

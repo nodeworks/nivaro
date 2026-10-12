@@ -1,7 +1,12 @@
 import { db } from '../../db/index.js'
 import {
   describeRule,
+  dropReferenced,
+  extractFileIds,
   type FieldRuleRow,
+  type FileRefMeta,
+  fileRefSources,
+  fileRefTables,
   findDuplicateViews,
   findRuleConflicts,
   groupLabelConcepts,
@@ -563,66 +568,63 @@ export async function viewTrackingSince(): Promise<Date | null> {
 }
 
 /**
- * Columns that name a file WITHOUT a foreign key. Foreign keys alone call
- * avatars, brand logos and chat / task attachments orphans (the first dev
- * read counted 9,179 "unreferenced" files, user photos among them), so a file
- * any of these names is never offered for deletion. They are read once and
- * every id-shaped string in them is collected — a LIKE per file in SQL ran
- * past five minutes on dev.
+ * File ids named anywhere a foreign key does not cover (upper-cased) — see
+ * fileRefSources for the list. Fails CLOSED: a source that cannot be read
+ * throws, so the caller reports nothing rather than calling a file nobody
+ * could check an orphan. The values are read and matched in JS — a LIKE per
+ * file in SQL ran past five minutes on dev.
  */
-const TEXT_FILE_REFS: Array<{ table: string; column: string }> = [
-  { table: 'nivaro_users', column: 'avatar' },
-  { table: 'nivaro_settings', column: 'brand_logo' },
-  { table: 'nivaro_settings', column: 'help_video_card_logo_image' },
-  { table: 'nivaro_workspaces', column: 'mail_logo' },
-  { table: 'nivaro_import_queue', column: 'file' },
-  { table: 'nivaro_ai_autofill_events', column: 'file_id' },
-  { table: 'nivaro_tasks', column: 'attachments' },
-  { table: 'nivaro_addendums', column: 'attachments' },
-  { table: 'nivaro_chat_scheduled', column: 'attachments' },
-  { table: 'chat_messages', column: 'attachments' }
-]
-
-const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
-
-/** File ids named by columns that carry no foreign key (upper-cased). */
 async function textReferencedFileIds(): Promise<Set<string>> {
   const { getFileRefColumns } = await import('../file-usage.js')
-  const fk = new Set((await getFileRefColumns()).map((r) => `${r.table}.${r.column}`.toLowerCase()))
-  // File fields the metadata claims (M2O to the files collection) on legacy
-  // tables that carry no foreign key.
-  const claimed = await safe(
-    () =>
-      db('nivaro_relations')
-        .whereIn('one_collection', ['nivaro_files', 'directus_files'])
-        .select('many_collection as table', 'many_field as column') as Promise<
-        Array<{ table: string; column: string }>
-      >,
-    []
-  )
-  const wanted = [...TEXT_FILE_REFS, ...claimed].filter(
-    (r) =>
-      IDENT.test(r.table) && IDENT.test(r.column) && !fk.has(`${r.table}.${r.column}`.toLowerCase())
-  )
-  const present = new Set(
-    (
-      (await db('information_schema.columns')
-        .whereIn('table_name', [...new Set(wanted.map((r) => r.table))].concat(['__none__']))
-        .select('table_name', 'column_name')) as Array<{ table_name: string; column_name: string }>
-    ).map((c) => `${c.table_name}.${c.column_name}`.toLowerCase())
-  )
+  const [fkRefs, relations, fields] = await Promise.all([
+    getFileRefColumns(),
+    db('nivaro_relations').select(
+      'many_collection',
+      'many_field',
+      'one_collection',
+      'one_field',
+      'junction_field'
+    ) as Promise<FileRefMeta['relations']>,
+    db('nivaro_fields').select('collection', 'field', 'interface', 'special') as Promise<
+      FileRefMeta['fields']
+    >
+  ])
+  const tables = fileRefTables({ relations, fields })
+  const columns: FileRefMeta['columns'] = []
+  for (let i = 0; i < tables.length; i += 500) {
+    const rows = (await db('information_schema.columns')
+      .whereIn('table_name', tables.slice(i, i + 500))
+      .select('table_name', 'column_name', 'data_type')) as Array<{
+      table_name: string
+      column_name: string
+      data_type: string
+    }>
+    for (const r of rows)
+      columns.push({ table: r.table_name, column: r.column_name, data_type: r.data_type })
+  }
+  const fileUuids = (await db('information_schema.columns')
+    .where('data_type', 'uniqueidentifier')
+    .where('column_name', 'like', '%file%')
+    .select('table_name', 'column_name', 'data_type')) as Array<{
+    table_name: string
+    column_name: string
+    data_type: string
+  }>
+  for (const r of fileUuids)
+    columns.push({ table: r.table_name, column: r.column_name, data_type: r.data_type })
+
   const ids = new Set<string>()
-  const done = new Set<string>()
-  for (const r of wanted) {
-    const key = `${r.table}.${r.column}`.toLowerCase()
-    if (!present.has(key) || done.has(key)) continue
-    done.add(key)
+  for (const src of fileRefSources({ fkRefs, relations, fields, columns })) {
+    if (!IDENT.test(src.table) || !IDENT.test(src.column)) continue
+    const col = `CAST([${src.column}] AS nvarchar(max))`
+    const urlOnly = src.urlOnly
+      ? ` AND ([${src.column}] LIKE '%files/%' OR [${src.column}] LIKE '%assets/%')`
+      : ''
     const rows = (await db.raw(
-      `SELECT DISTINCT CAST([${r.column}] AS nvarchar(max)) AS v FROM [${r.table}] WHERE [${r.column}] IS NOT NULL`
+      `SELECT ${src.mode === 'id' ? 'DISTINCT ' : ''}${col} AS v FROM [${src.table}]
+        WHERE [${src.column}] IS NOT NULL${urlOnly}`
     )) as Array<{ v: string | null }>
-    for (const row of rows) {
-      for (const m of String(row.v ?? '').match(GUID) ?? []) ids.add(m.toUpperCase())
-    }
+    for (const row of rows) extractFileIds(row.v, ids)
   }
   return ids
 }
@@ -656,8 +658,7 @@ export async function orphanFiles(cutoff: Date): Promise<OrphanFile[]> {
     { timeoutMs: 120_000 }
   )
   if (rows.length === 0) return rows
-  const named = await textReferencedFileIds()
-  return rows.filter((r) => !named.has(String(r.id).toUpperCase()))
+  return dropReferenced(rows, await textReferencedFileIds())
 }
 
 export async function cleanupFindings(opts: CleanupOptions = {}): Promise<ReviewFinding[]> {
@@ -732,14 +733,22 @@ export async function cleanupFindings(opts: CleanupOptions = {}): Promise<Review
         severity: 'info',
         href: '/files',
         detail: {
-          reason: `No record, configuration or upload points at these files and they are over ${FILE_MIN_AGE_DAYS} days old.`,
+          reason: `No foreign key, file field, attachment list, configuration text or rich-text field names these files, and they are over ${FILE_MIN_AGE_DAYS} days old. Listed for review only — the config review never deletes files; check each in Files before removing it there.`,
           impact: { count, bytes },
-          fix: {
-            kind: 'files-delete',
-            label: 'Delete up to 200 of them',
-            undoable: false
-          },
-          data: { cutoff: cutoff.toISOString() }
+          fix: null,
+          data: {
+            cutoff: cutoff.toISOString(),
+            // The largest first: where the storage is.
+            files: [...files]
+              .sort((a, b) => Number(b.filesize ?? 0) - Number(a.filesize ?? 0))
+              .slice(0, 200)
+              .map((f) => ({
+                id: f.id,
+                name: f.filename_download,
+                bytes: Number(f.filesize ?? 0),
+                uploaded_on: f.uploaded_on
+              }))
+          }
         }
       })
     }

@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto'
+
 /**
  * Config review — the pure parts (no database), unit-tested on their own:
  * rule contradictions, duplicate saved views, label concepts, the detail
@@ -556,4 +558,224 @@ export function reviveRow(row: Record<string, unknown>): Record<string, unknown>
     out[k] = typeof v === 'string' && ISO_UTC.test(v) ? new Date(v) : v
   }
   return out
+}
+
+// ─── Change-set binding (#1961) ──────────────────────────────────────────────
+
+/**
+ * The fingerprint of a planned change set: its kind plus every target key
+ * (sorted, so plan order never matters). The preview hands it out with the
+ * ids; an apply re-plans from the rows as they are now and proceeds only
+ * when the fingerprint is unchanged.
+ */
+export function changeSetHash(kind: string, targets: string[]): string {
+  const text = `${kind}\n${[...targets].sort().join('\n')}`
+  return createHash('sha256').update(text).digest('hex').slice(0, 32)
+}
+
+export type ApplyGuard =
+  | { ok: true; allowed: Set<string> }
+  | { ok: false; status: number; error: string }
+
+/**
+ * What an apply may touch: the targets the fresh re-plan produced AND the
+ * preview listed — never a row the person did not see. A different
+ * fingerprint (rows came, went or changed since the preview) is a 409.
+ */
+export function guardApply(
+  kind: string,
+  fresh: string[],
+  sent: { ids?: unknown; hash?: unknown }
+): ApplyGuard {
+  if (!Array.isArray(sent.ids) || typeof sent.hash !== 'string') {
+    return { ok: false, status: 400, error: 'Apply needs the ids and hash from the preview' }
+  }
+  if (changeSetHash(kind, fresh) !== sent.hash) {
+    return {
+      ok: false,
+      status: 409,
+      error: 'What this fix would change is different now — preview it again'
+    }
+  }
+  const asked = new Set(sent.ids.map(String))
+  const allowed = new Set(fresh.filter((t) => asked.has(t)))
+  if (allowed.size === 0) return { ok: false, status: 409, error: 'Nothing left to apply' }
+  return { ok: true, allowed }
+}
+
+// ─── File references (#2020 unreferenced files) ──────────────────────────────
+
+export interface FileRefMeta {
+  /** Columns with a foreign key to nivaro_files — the SQL anti-join covers them. */
+  fkRefs: Array<{ table: string; column: string }>
+  relations: Array<{
+    many_collection: string | null
+    many_field: string | null
+    one_collection: string | null
+    one_field: string | null
+    junction_field: string | null
+  }>
+  fields: Array<{
+    collection: string
+    field: string
+    interface: string | null
+    special: string | null
+  }>
+  /** information_schema rows for every table named below (plus *file* uuid columns). */
+  columns: Array<{ table: string; column: string; data_type: string }>
+}
+
+/** Where a file id may be written without a foreign key. */
+export interface FileRefSource {
+  table: string
+  column: string
+  /** id = the column holds one id; scan = ids anywhere in its text. */
+  mode: 'id' | 'scan'
+  /** Only rows that look like they carry a file URL (rich text on business tables). */
+  urlOnly?: boolean
+}
+
+export const FILE_COLLECTIONS = new Set(['nivaro_files', 'directus_files'])
+const FILE_INTERFACES = new Set(['file', 'image', 'files', 'file-image', 'file-interface'])
+const RICH_INTERFACE = /rich|wysiwyg|markdown|html/i
+
+/** System columns that name files with no foreign key. */
+export const TEXT_FILE_REFS: Array<{ table: string; column: string; mode: 'id' | 'scan' }> = [
+  { table: 'nivaro_users', column: 'avatar', mode: 'id' },
+  { table: 'nivaro_workspaces', column: 'mail_logo', mode: 'id' },
+  { table: 'nivaro_import_queue', column: 'file', mode: 'id' },
+  { table: 'nivaro_ai_autofill_events', column: 'file_id', mode: 'id' },
+  { table: 'nivaro_tasks', column: 'attachments', mode: 'scan' },
+  { table: 'nivaro_addendums', column: 'attachments', mode: 'scan' },
+  { table: 'nivaro_chat_scheduled', column: 'attachments', mode: 'scan' },
+  { table: 'chat_messages', column: 'attachments', mode: 'scan' }
+]
+
+/**
+ * Configuration tables whose every text column is scanned for file ids:
+ * page builder layouts, dashboard / report / page widgets, PDF and mail
+ * templates, forms, settings, layouts, record templates, comments.
+ */
+export const CONFIG_FILE_TABLES = [
+  'nivaro_settings',
+  'nivaro_settings_overrides',
+  'nivaro_extension_settings',
+  'nivaro_pages',
+  'nivaro_widgets',
+  'nivaro_dashboards',
+  'nivaro_dashboard_widgets',
+  'nivaro_report_widgets',
+  'nivaro_report_widget_presets',
+  'nivaro_report_templates',
+  'nivaro_pdf_templates',
+  'nivaro_mail_templates',
+  'nivaro_notification_templates',
+  'nivaro_broadcast_templates',
+  'nivaro_submission_forms',
+  'nivaro_collection_layouts',
+  'nivaro_layout_field_assignments',
+  'nivaro_field_groups',
+  'nivaro_record_templates',
+  'nivaro_sub_row_templates',
+  'nivaro_workspace_templates',
+  'nivaro_workspaces',
+  'nivaro_collections',
+  'nivaro_fields',
+  'nivaro_comments',
+  'nivaro_chat_channels'
+]
+
+const TEXTISH = new Set([
+  'nvarchar',
+  'varchar',
+  'nchar',
+  'char',
+  'text',
+  'ntext',
+  'uniqueidentifier'
+])
+
+/** The tables fileRefSources may name — read their columns before calling it. */
+export function fileRefTables(meta: Pick<FileRefMeta, 'relations' | 'fields'>): string[] {
+  const out = new Set<string>([...CONFIG_FILE_TABLES, ...TEXT_FILE_REFS.map((r) => r.table)])
+  for (const r of meta.relations) if (r.many_collection) out.add(r.many_collection)
+  for (const f of meta.fields) out.add(f.collection)
+  return [...out]
+}
+
+/**
+ * Every place a file id can live without a foreign key, from metadata:
+ * relation legs to the files collection (M2O and M2M junction legs), the
+ * junction legs behind alias `files` fields, file-type fields with no
+ * relation row, uuid columns named *file* on any table (extension tables),
+ * the fixed system list, every text column of the config tables, and
+ * rich-text fields. Only columns that exist are returned, never one a
+ * foreign key already covers.
+ */
+export function fileRefSources(meta: FileRefMeta): FileRefSource[] {
+  const key = (t: string, c: string) => `${t}.${c}`.toLowerCase()
+  const cols = new Map(meta.columns.map((c) => [key(c.table, c.column), c.data_type.toLowerCase()]))
+  const fk = new Set(meta.fkRefs.map((r) => key(r.table, r.column)))
+  const out = new Map<string, FileRefSource>()
+  const add = (s: FileRefSource) => {
+    const k = key(s.table, s.column)
+    const type = cols.get(k)
+    if (!type || !TEXTISH.has(type) || fk.has(k)) return
+    // A scan finds everything an id read does; an unfiltered scan beats a URL-only one.
+    const rank = (x: FileRefSource) => (x.mode === 'id' ? 0 : x.urlOnly ? 1 : 2)
+    const prev = out.get(k)
+    if (!prev || rank(s) > rank(prev)) out.set(k, s)
+  }
+  const isFiles = (c: string | null) => !!c && FILE_COLLECTIONS.has(c.toLowerCase())
+
+  for (const r of meta.relations) {
+    if (isFiles(r.one_collection) && r.many_collection && r.many_field) {
+      add({ table: r.many_collection, column: r.many_field, mode: 'id' })
+    }
+  }
+  for (const f of meta.fields) {
+    const iface = String(f.interface ?? '').toLowerCase()
+    const special = String(f.special ?? '').toLowerCase()
+    if (FILE_INTERFACES.has(iface) || special.includes('file')) {
+      // A real column holding an id (a legacy file field with no relation row)…
+      add({ table: f.collection, column: f.field, mode: 'id' })
+      // …or an alias whose junction carries the file leg.
+      for (const r of meta.relations) {
+        if (
+          r.one_collection === f.collection &&
+          r.one_field === f.field &&
+          r.many_collection &&
+          r.junction_field
+        ) {
+          add({ table: r.many_collection, column: r.junction_field, mode: 'id' })
+        }
+      }
+    } else if (RICH_INTERFACE.test(iface) && !/^nivaro_/i.test(f.collection)) {
+      add({ table: f.collection, column: f.field, mode: 'scan', urlOnly: true })
+    }
+  }
+  for (const c of meta.columns) {
+    if (c.data_type.toLowerCase() === 'uniqueidentifier' && /file/i.test(c.column)) {
+      add({ table: c.table, column: c.column, mode: 'id' })
+    }
+  }
+  for (const r of TEXT_FILE_REFS) add(r)
+  const config = new Set(CONFIG_FILE_TABLES.map((t) => t.toLowerCase()))
+  for (const c of meta.columns) {
+    if (config.has(c.table.toLowerCase())) add({ table: c.table, column: c.column, mode: 'scan' })
+  }
+  return [...out.values()]
+}
+
+const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+
+/** Every id-shaped string in a value, upper-cased. */
+export function extractFileIds(value: unknown, into = new Set<string>()): Set<string> {
+  for (const m of String(value ?? '').match(GUID) ?? []) into.add(m.toUpperCase())
+  return into
+}
+
+/** Candidates no source names. */
+export function dropReferenced<T extends { id: string }>(candidates: T[], named: Set<string>): T[] {
+  return candidates.filter((c) => !named.has(String(c.id).toUpperCase()))
 }

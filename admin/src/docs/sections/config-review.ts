@@ -61,7 +61,7 @@ export const configReviewDocs: DocSection = {
       items: [
         '**Old drafts**: form drafts not saved for N months (default 3). Shows the count and storage. Delete removes up to 500 per round and keeps a copy for undo when they hold under 2 MB.',
         '**Idle tasks**: open tasks untouched for N months (default 3). Support requests are left out. Cancel marks them cancelled with a history line and notifies nobody; undo reopens the ones still cancelled.',
-        '**Unreferenced files**: files no record or configuration points at, over 30 days old. Shows the storage. Delete removes up to 200 per round and cannot be undone.',
+        '**Unreferenced files** (report only): files over 30 days old that nothing names — no foreign key, file field (with or without a relation row), M2M file junction, attachment list, configuration text (pages, widgets, report and PDF/mail templates, forms, settings, layouts, comments) or rich-text field. Shows the count, storage and the 200 largest. The config review never deletes files; review them in Files.',
         '**Unopened views**: saved views nobody opened in N days (default 90). Default and subscribed views are left out. Opens are recorded from the view pills (one row per person and view per hour), and the check waits until opens have been recorded for the whole window.'
       ]
     },
@@ -77,7 +77,7 @@ export const configReviewDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'API: `GET /api/config-review?family=review|cleanup|label&status=open|fixed|dismissed`, `POST /api/config-review/run` (202; the page polls `running`), `GET /api/config-review/:id/preview?label=`, `POST /api/config-review/:id/apply`, `POST /api/config-review/:id/undo`, `POST /api/config-review/:id/dismiss`. A fix plans from the rows as they are now and answers 409 when the finding is stale. Fixed findings stay listed for 30 days.'
+      text: 'API: `GET /api/config-review?family=review|cleanup|label&status=open|fixed|dismissed`, `POST /api/config-review/run` (202; the page polls `running`), `GET /api/config-review/:id/preview?label=`, `POST /api/config-review/:id/apply`, `POST /api/config-review/:id/undo`, `POST /api/config-review/:id/dismiss`. The preview returns the exact target `ids` and a `hash`; apply must send both back, re-plans from the rows as they are now, answers 409 when the hash differs and touches only targets that are in both. Fixed findings stay listed for 30 days.'
     }
   ]
 }

@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import {
   canonicalJson,
+  changeSetHash,
   decodeDetail,
+  dropReferenced,
+  extractFileIds,
   type FieldRuleRow,
+  type FileRefMeta,
+  fileRefSources,
   findDuplicateViews,
   findRuleConflicts,
   groupLabelConcepts,
+  guardApply,
   type LabelOccurrence,
   parseAiPhrasing,
   publicDetail,
@@ -292,5 +298,91 @@ describe('phraseFindings — what the model sees and what comes back', () => {
     const { phraseFindings } = await import('../../../services/config-review/ai-phrasing.js')
     const res = await phraseFindings([], { model: async () => 'm', getClient: async () => null })
     expect(res.note).toBe('AI is not configured')
+  })
+})
+
+describe('unreferenced files (#2020) — what counts as a reference', () => {
+  const A = '11111111-2222-3333-4444-555555555555'
+  const B = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+  const C = '99999999-8888-7777-6666-555555555555'
+  const meta: FileRefMeta = {
+    fkRefs: [{ table: 'workflows_files', column: 'directus_files_id' }],
+    relations: [
+      // Alias M2M: the junction's file leg is named by junction_field.
+      {
+        one_collection: 'inventory_request',
+        one_field: 'files',
+        many_collection: 'inventory_request_files',
+        many_field: 'inventory_request_id',
+        junction_field: 'directus_files_id'
+      }
+    ],
+    fields: [
+      // A legacy file field with NO relation row.
+      { collection: 'projects', field: 'cover', interface: 'file-image', special: null },
+      { collection: 'inventory_request', field: 'files', interface: 'files', special: 'files' },
+      { collection: 'projects', field: 'scope', interface: 'rich_text', special: null }
+    ],
+    columns: [
+      { table: 'projects', column: 'cover', data_type: 'nvarchar' },
+      { table: 'projects', column: 'scope', data_type: 'nvarchar' },
+      {
+        table: 'inventory_request_files',
+        column: 'directus_files_id',
+        data_type: 'uniqueidentifier'
+      },
+      { table: 'workflows_files', column: 'directus_files_id', data_type: 'uniqueidentifier' },
+      { table: 'nivaro_pages', column: 'layout', data_type: 'nvarchar' },
+      { table: 'nivaro_pdf_templates', column: 'template', data_type: 'nvarchar' },
+      { table: 'ext_reports', column: 'logo_file', data_type: 'uniqueidentifier' }
+    ]
+  }
+  const sources = fileRefSources(meta)
+  const has = (t: string, c: string) => sources.find((x) => x.table === t && x.column === c)
+
+  it('covers file fields without a relation row, M2M junction legs, config text, rich text and *file* uuid columns', () => {
+    expect(has('projects', 'cover')?.mode).toBe('id')
+    expect(has('inventory_request_files', 'directus_files_id')?.mode).toBe('id')
+    expect(has('nivaro_pages', 'layout')?.mode).toBe('scan')
+    expect(has('nivaro_pdf_templates', 'template')?.mode).toBe('scan')
+    expect(has('projects', 'scope')).toMatchObject({ mode: 'scan', urlOnly: true })
+    expect(has('ext_reports', 'logo_file')?.mode).toBe('id')
+  })
+  it('skips columns a foreign key covers and columns that do not exist', () => {
+    expect(has('workflows_files', 'directus_files_id')).toBeUndefined()
+    expect(has('nivaro_users', 'avatar')).toBeUndefined()
+  })
+  it('a file named only in JSON config, or only by a file field with no relation row, is NOT an orphan', () => {
+    const named = new Set<string>()
+    // nivaro_pages.layout (scan) and projects.cover (id) as read back.
+    extractFileIds(JSON.stringify({ widgets: [{ type: 'image', src: `/api/files/${A}` }] }), named)
+    extractFileIds(B.toUpperCase(), named)
+    const left = dropReferenced([{ id: A }, { id: B }, { id: C }], named)
+    expect(left.map((f) => f.id)).toEqual([C])
+  })
+})
+
+describe('apply binds to the previewed change set (I2)', () => {
+  const ids = ['draft:1', 'draft:2', 'draft:3']
+  const hash = changeSetHash('drafts-delete', ids)
+  it('the hash ignores order and changes with the kind or any id', () => {
+    expect(changeSetHash('drafts-delete', [...ids].reverse())).toBe(hash)
+    expect(changeSetHash('tasks-cancel', ids)).not.toBe(hash)
+    expect(changeSetHash('drafts-delete', ['draft:1', 'draft:2'])).not.toBe(hash)
+  })
+  it('same rows: applies the intersection of the fresh plan and the previewed ids', () => {
+    const g = guardApply('drafts-delete', ids, { ids: ['draft:1', 'draft:3', 'draft:99'], hash })
+    expect(g.ok && [...g.allowed].sort()).toEqual(['draft:1', 'draft:3'])
+  })
+  it('rows changed since the preview: 409, nothing applied', () => {
+    const g = guardApply('drafts-delete', ['draft:1', 'draft:2', 'draft:4'], { ids, hash })
+    expect(g).toMatchObject({ ok: false, status: 409 })
+  })
+  it('an apply without the preview ids + hash is refused', () => {
+    expect(guardApply('drafts-delete', ids, {})).toMatchObject({ ok: false, status: 400 })
+    expect(guardApply('drafts-delete', ids, { ids: [], hash })).toMatchObject({
+      ok: false,
+      status: 409
+    })
   })
 })

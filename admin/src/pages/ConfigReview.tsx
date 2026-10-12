@@ -36,6 +36,7 @@ interface Detail {
     ai_label?: string
     labels?: Array<{ label: string; count: number }>
     blocked?: string | null
+    files?: Array<{ id: string; name: string | null; bytes: number; uploaded_on: string }>
     [k: string]: unknown
   }
   applied?: Applied[]
@@ -68,6 +69,8 @@ interface ChangeSet {
   total: number
   undoable: boolean
   note?: string
+  ids: string[]
+  hash: string
 }
 
 interface ReviewResponse {
@@ -419,6 +422,27 @@ function FindingCard({
               )}
             </p>
           )}
+          {!!d.data?.files?.length && (
+            <details className='mt-1 text-[11px]' data-cr-files={d.data.files.length}>
+              <summary className='cursor-pointer text-slate-500 hover:text-slate-700 dark:text-muted-foreground'>
+                The {d.data.files.length} largest — review them in Files
+              </summary>
+              <ul className='mt-1 max-h-60 space-y-0.5 overflow-y-auto'>
+                {d.data.files.map((file) => (
+                  <li
+                    key={file.id}
+                    className='flex gap-2 text-slate-600 dark:text-muted-foreground'
+                  >
+                    <span className='min-w-0 flex-1 truncate'>{file.name ?? file.id}</span>
+                    <span className='shrink-0 tabular-nums'>{formatFileSize(file.bytes)}</span>
+                    <span className='shrink-0 text-slate-400'>
+                      {new Date(file.uploaded_on).toLocaleDateString()}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
           {f.status === 'fixed' && last && (
             <p className='mt-1 text-[11px] text-emerald-700 dark:text-emerald-400'>
               Fixed {new Date(last.at).toLocaleString()} — {last.title} ({last.total} change
@@ -499,22 +523,25 @@ function FixPanel({ f, onApplied }: { f: Finding; onApplied: () => void }) {
     placeholderData: keepPreviousData
   })
   const apply = useMutation({
-    mutationFn: () =>
+    // Apply exactly what the preview showed: its ids + hash. The server
+    // re-plans and answers 409 when the change set moved since.
+    mutationFn: (cs: ChangeSet) =>
       api
-        .post<{ data: { change_set: ChangeSet; undoable: boolean } }>(
+        .post<{ data: { change_set: ChangeSet; applied: number; undoable: boolean } }>(
           `/config-review/${f.id}/apply`,
-          isLabel ? { label: asked } : {}
+          { ...(isLabel ? { label: asked } : {}), ids: cs.ids, hash: cs.hash }
         )
         .then((r) => r.data.data),
     onSuccess: (r) => {
       toast.success(
-        `${r.change_set.title} — done${r.undoable ? '; undo it from the Fixed list' : ''}`
+        `${r.change_set.title} — ${r.applied} change${r.applied === 1 ? '' : 's'} made${r.undoable ? '; undo it from the Fixed list' : ''}`
       )
       onApplied()
     },
     onError: (e) => {
       setConfirm(false)
       toast.error(errText(e, 'The fix failed'))
+      void preview.refetch()
     }
   })
   const cs = preview.data
@@ -627,7 +654,7 @@ function FixPanel({ f, onApplied }: { f: Finding; onApplied: () => void }) {
               type='button'
               disabled={apply.isPending || preview.isFetching || (isLabel && asked !== label)}
               data-cr-apply={needsConfirm && confirm ? 'confirm' : 'ask'}
-              onClick={() => (needsConfirm && !confirm ? setConfirm(true) : apply.mutate())}
+              onClick={() => (needsConfirm && !confirm ? setConfirm(true) : apply.mutate(cs))}
               onBlur={() => setConfirm(false)}
               className={
                 needsConfirm && confirm
