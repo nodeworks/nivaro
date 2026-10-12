@@ -97,14 +97,17 @@ export async function isAdminUser(user: User): Promise<boolean> {
   return isAdminRole(user.role)
 }
 
+/** Labels read AS `viewer` (ai-link-labels.ts) — a label is a value of the
+ *  record, so only the columns they may read go into it; else `#id`. */
 export async function labelsFor(
   collection: string,
-  ids: string[]
+  ids: string[],
+  viewer: User
 ): Promise<Record<string, string>> {
   if (ids.length === 0) return {}
   try {
-    const { getLabels } = await import('./queues.js')
-    const raw = await getLabels(new Map([[collection, new Set(ids)]]))
+    const { linkLabelsAsUser } = await import('./ai-link-labels.js')
+    const raw = await linkLabelsAsUser(viewer, new Map([[collection, new Set(ids)]]))
     const out: Record<string, string> = {}
     for (const id of ids) out[id] = raw[`${collection}:${id}`] ?? `#${id}`
     return out
@@ -736,7 +739,8 @@ export async function checkStepCondition(user: User, step: PlanStepDef): Promise
   // Labels only for records the person can read now; any other is `#id`.
   const labels = await labelsFor(
     t.collection,
-    t.ids.filter((id) => visible.has(id))
+    t.ids.filter((id) => visible.has(id)),
+    user
   )
   const failing: PlanSkippedRecord[] = []
   const passing: string[] = []

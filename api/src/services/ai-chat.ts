@@ -24,7 +24,6 @@ import {
   readItems
 } from './items.js'
 import { can, getRowFilter } from './permissions.js'
-import { getLabels } from './queues.js'
 import { applyUserScopesToQuery, isAdminRole } from './user-scopes.js'
 
 /**
@@ -672,9 +671,18 @@ function validateQueryFields(
 /**
  * Plain foreign keys come back as bare ids (vendor: 1201). The model then
  * prints the id as if it were the answer. Resolve every M2O value in the page
- * to `{id, label}` — one label read per target collection, never per row.
+ * to `{id, label}` — one label read per target collection, never per row —
+ * AS THE ASKER (ai-link-labels.ts): a linked record they cannot read keeps
+ * its bare id, people get names only. `labels: false` leaves every id bare
+ * (the chat assistant in an open room, where a label could differ per reader).
  */
-async function labelForeignKeys(rows: unknown[], rel: ChatRelations): Promise<unknown[]> {
+async function labelForeignKeys(
+  user: User,
+  rows: unknown[],
+  rel: ChatRelations,
+  opts: { labels?: boolean } = {}
+): Promise<unknown[]> {
+  if (opts.labels === false) return rows
   const byTarget = new Map<string, Set<string>>()
   const links = rel.m2o.filter((r) => r.field !== 'id')
   for (const row of rows) {
@@ -687,33 +695,15 @@ async function labelForeignKeys(rows: unknown[], rel: ChatRelations): Promise<un
     }
   }
   if (byTarget.size === 0) return rows
-  const labels: Record<string, string> = {}
-  const users = byTarget.get('nivaro_users')
-  if (users?.size) {
-    byTarget.delete('nivaro_users')
-    const people = (await db('nivaro_users')
-      .whereIn('id', [...users])
-      .select('id', 'first_name', 'last_name', 'email')
-      .catch(() => [])) as Array<{
-      id: string
-      first_name: string | null
-      last_name: string | null
-      email: string | null
-    }>
-    for (const u of people) {
-      const name = [u.first_name, u.last_name].filter(Boolean).join(' ')
-      labels[`nivaro_users:${String(u.id).toUpperCase()}`] = name || u.email || String(u.id)
-    }
-  }
-  Object.assign(labels, await getLabels(byTarget).catch(() => ({})))
+  const { linkLabelsAsUser, linkLabelKey } = await import('./ai-link-labels.js')
+  const labels = await linkLabelsAsUser(user, byTarget)
   return rows.map((row) => {
     if (!row || typeof row !== 'object') return row
     const r = { ...(row as Record<string, unknown>) }
     for (const link of links) {
       const v = r[link.field]
       if (v == null || typeof v === 'object') continue
-      const key = `${link.collection}:${link.collection === 'nivaro_users' ? String(v).toUpperCase() : String(v)}`
-      const label = labels[key]
+      const label = labels[linkLabelKey(link.collection, v)]
       r[link.field] = label != null ? { id: v, label } : v
     }
     return r
@@ -1028,7 +1018,9 @@ async function runChatTool(
         { fields: fields?.length ? fields : undefined, sort, limit, ...(search ? { search } : {}) },
         fakeReq
       )) as { data?: unknown[]; total?: number }
-      const rows = await labelForeignKeys(res.data ?? [], rel)
+      const rows = await labelForeignKeys(user, res.data ?? [], rel, {
+        labels: input.link_labels !== false
+      })
       const total = typeof res.total === 'number' ? res.total : rows.length
       return {
         result: { total, rows },
@@ -1785,21 +1777,36 @@ export async function buildChatSystemPrompt(
     playbooks?: string
     /** The newest question — picks the data guides and glossary terms it touches. */
     question?: string
+    /**
+     * false = leave out everything that lists what THIS user can reach
+     * (readable collections, saved queries, queues, saved views, the glossary
+     * terms and guides gated on them). The chat assistant answering in a room
+     * other people read: its first words stream before any tool, and the
+     * catalogue would let it name things the other readers cannot see. It
+     * learns the collections from list_collections, a call the room check
+     * replays.
+     */
+    catalogues?: boolean
   } = {}
 ): Promise<string> {
+  const catalogues = opts.catalogues !== false
   const { userTimeZone, timeInstructions } = await import('./user-time.js')
   // Lazy so this module's import graph stays small (the queue service pulls
   // in the SLA routes); a failure here only drops the queue list.
-  const queueLines = import('./ai-queue-summary.js')
-    .then((m) => m.queueCatalogue(user))
-    .catch(() => [] as string[])
-  const viewLines = import('./ai-panel.js')
-    .then((m) => m.savedViewCatalogue(user))
-    .catch(() => [] as Array<{ collection: string; line: string }>)
+  const queueLines = catalogues
+    ? import('./ai-queue-summary.js')
+        .then((m) => m.queueCatalogue(user))
+        .catch(() => [] as string[])
+    : Promise.resolve([] as string[])
+  const viewLines = catalogues
+    ? import('./ai-panel.js')
+        .then((m) => m.savedViewCatalogue(user))
+        .catch(() => [] as Array<{ collection: string; line: string }>)
+    : Promise.resolve([] as Array<{ collection: string; line: string }>)
   const [readable, settings, queries, zone, queues, allViewLines] = await Promise.all([
-    readableCollections(user),
+    catalogues ? readableCollections(user) : Promise.resolve([]),
     settingsRow(),
-    savedQueryCatalogue(user),
+    catalogues ? savedQueryCatalogue(user) : Promise.resolve([] as string[]),
     userTimeZone(user as { preferences?: unknown }),
     queueLines,
     viewLines
@@ -1831,8 +1838,12 @@ Follow-ups: end EVERY answer that used tools with ONE fenced block with the lang
 
 Charts: when the answer is a breakdown or a series of 2–30 numbers (per state, per month, per vendor), add ONE fenced block with the language tag "chart" after the prose, holding JSON {"type": "bar"|"line"|"pie", "title": "…", "data": [{"label": "…", "value": 123}]} — value a plain number, labels short. Never chart a single figure or a list of records.
 ${guide ? `\nHow this instance's data is organised (written by its administrators — trust it over guesses):\n${guide}\n` : ''}${knowledge.stable ? `\n${knowledge.stable}\n` : ''}
-Readable collections (${readable.length}):
-${lines.join(', ')}${
+${
+  catalogues
+    ? `Readable collections (${readable.length}):
+${lines.join(', ')}`
+    : 'Which collections you can read is not listed here: call list_collections (no collection) to get them before querying.'
+}${
   queries.length
     ? `
 

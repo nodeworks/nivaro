@@ -74,8 +74,9 @@ vi.mock('../../../services/ai-chat-loop.js', () => ({
 }))
 
 const executeChatTool = vi.fn(async () => ({ result: { rows: [{ id: 1 }] }, summary: '1 row(s)' }))
+const buildChatSystemPrompt = vi.fn(async (_u: unknown, _o?: unknown) => 'system')
 vi.mock('../../../services/ai-chat.js', () => ({
-  buildChatSystemPrompt: async () => 'system',
+  buildChatSystemPrompt: (u: unknown, o?: unknown) => buildChatSystemPrompt(u, o),
   CHAT_TOOLS: [],
   MAX_ROUNDS: 4,
   executeChatTool
@@ -179,6 +180,8 @@ describe('handleBotMention', () => {
     // Others read the room: the step line says nothing about what is read.
     expect(stream.find((s) => s.body.phase === 'status')?.body.text).toBe('Looking that up…')
     expect(stream.at(-1)?.body).toMatchObject({ message_id: posted[0].id, audience: 'room' })
+    // Others read the room: none of the asker's own catalogues in the prompt.
+    expect(buildChatSystemPrompt).toHaveBeenCalledWith(asker, { catalogues: false })
   })
 
   it('an answer not every reader may see moves to the asker before it is written', async () => {
@@ -211,6 +214,8 @@ describe('handleBotMention', () => {
     verdict = 'room'
     const { app } = fakeApp()
     await handleBotMention(app, asker, 'ch:proj', '@efp status?')
+    // Alone with the assistant: the full prompt.
+    expect(buildChatSystemPrompt).toHaveBeenCalledWith(asker, { catalogues: true })
     const first = created[0] as { messages: Array<{ content: string }> }
     const prompt = first.messages[0].content
     expect(prompt).toContain('<<<ROOM CONTEXT')

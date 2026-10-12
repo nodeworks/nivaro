@@ -254,6 +254,17 @@ describe('verifyCall', () => {
   describe('open rooms', () => {
     const open = (over: Partial<VerifyContext> = {}) =>
       ctx({ room: 'wf:CR26-1', audience: { kind: 'open' }, record: REC, ...over })
+    // What the assistant runs in an open room: the record's row, links bare.
+    const bare = (over: Partial<BotCall> = {}) =>
+      call({
+        input: {
+          collection: 'workflows',
+          filter: { id: { _eq: '42' } },
+          fields: ['id', 'status'],
+          link_labels: false
+        },
+        ...over
+      })
 
     it('anything but a read of the room record goes private', async () => {
       const deps = verifyDeps()
@@ -266,13 +277,37 @@ describe('verifyCall', () => {
         )
       ).toBe('private')
       // General: no record at all.
-      expect(await verifyCall(call({}), open({ room: 'global', record: null }), deps)).toBe(
-        'private'
-      )
+      expect(await verifyCall(bare(), open({ room: 'global', record: null }), deps)).toBe('private')
+    })
+    it('a read with link labels on stays private (a label is another record)', async () => {
+      expect(await verifyCall(call({}), open(), verifyDeps())).toBe('private')
+    })
+    it('only the row itself: event paths, owners and who-can-act stay private', async () => {
+      const replay = vi.fn(async () => ({ rows: [{ id: 42, status: 'open' }] }))
+      const deps = verifyDeps({ replay })
+      for (const tool of ['record_event_path', 'who_can_act', 'explain_owners', 'explain_access']) {
+        expect(
+          await verifyCall(
+            call({ tool, input: { collection: 'workflows', id: '42' } }),
+            open(),
+            deps
+          )
+        ).toBe('private')
+      }
+      expect(replay).not.toHaveBeenCalled()
+      for (const tool of ['integration_status', 'record_integrity']) {
+        expect(
+          await verifyCall(
+            call({ tool, input: { collection: 'workflows', id: '42' } }),
+            open(),
+            deps
+          )
+        ).toBe('room')
+      }
     })
     it('a record read reaches the room when one reader of every role sees the same', async () => {
       const replay = vi.fn(async () => ({ rows: [{ id: 42, status: 'open' }] }))
-      expect(await verifyCall(call({}), open(), verifyDeps({ replay }))).toBe('room')
+      expect(await verifyCall(bare(), open(), verifyDeps({ replay }))).toBe('room')
       expect(replay).toHaveBeenCalledTimes(2)
     })
     it('a role that reads fewer fields sends it private', async () => {
@@ -280,7 +315,7 @@ describe('verifyCall', () => {
         replay: async (u) =>
           u.role === 'R2' ? { rows: [{ id: 42 }] } : { rows: [{ id: 42, status: 'open' }] }
       })
-      expect(await verifyCall(call({}), open(), deps)).toBe('private')
+      expect(await verifyCall(bare(), open(), deps)).toBe('private')
     })
     it('a role whose tried members are all outside the room is unverifiable', async () => {
       const full = verifyDeps({
@@ -288,10 +323,10 @@ describe('verifyCall', () => {
         roleMembers: async (roleId) =>
           Array.from({ length: 5 }, (_, i) => ({ id: `${roleId}-${i}`, role: roleId }) as User)
       })
-      expect(await verifyCall(call({}), open(), full)).toBe('private')
+      expect(await verifyCall(bare(), open(), full)).toBe('private')
       // …but a role whose EVERY active member is outside the room is not an audience.
       const few = verifyDeps({ canSeeRoom: async (u) => u.role !== 'R2' })
-      expect(await verifyCall(call({}), open(), few)).toBe('room')
+      expect(await verifyCall(bare(), open(), few)).toBe('room')
     })
   })
 })
