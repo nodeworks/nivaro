@@ -27,7 +27,9 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
 import { ExplainButton } from '@/components/explain-button'
+import { IssueGroupsView } from '@/components/issue-groups-view'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -523,6 +525,8 @@ export function IssuesPage() {
   const [sourceFilter, setSourceFilter] = useState('')
   const [creating, setCreating] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
+  const [view, setView] = useState<'list' | 'grouped'>('list')
+  const { user: me } = useAuth()
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [bulkBusy, setBulkBusy] = useState(false)
   // Deep link /issues/:id (Traffic Map's open issues): expand that row once the list has it.
@@ -680,7 +684,28 @@ export function IssuesPage() {
             Clear
           </Button>
         )}
-        <span className='ml-auto flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+        {me?.is_admin && (
+          <span className='ml-auto flex rounded-md border border-slate-200 p-0.5 dark:border-border'>
+            {(['list', 'grouped'] as const).map((v) => (
+              <button
+                key={v}
+                type='button'
+                data-issues-view={v}
+                onClick={() => setView(v)}
+                className={
+                  view === v
+                    ? 'rounded bg-nvr-cyan/10 px-2 py-0.5 text-[11px] font-medium text-slate-800 dark:text-foreground'
+                    : 'rounded px-2 py-0.5 text-[11px] font-medium text-slate-400 hover:text-slate-600 dark:hover:text-muted-foreground'
+                }
+              >
+                {v === 'list' ? 'List' : 'Grouped'}
+              </button>
+            ))}
+          </span>
+        )}
+        <span
+          className={`${me?.is_admin ? '' : 'ml-auto '}flex rounded-md border border-slate-200 p-0.5 dark:border-border`}
+        >
           {[
             { value: '', label: 'All sources' },
             { value: 'client', label: 'Client' },
@@ -756,7 +781,18 @@ export function IssuesPage() {
       )}
       {/* Table */}
       <div className='flex-1 overflow-y-auto'>
-        {isLoading ? (
+        {view === 'grouped' && me?.is_admin ? (
+          <IssueGroupsView
+            onOpen={(id) => {
+              setStatusFilter('')
+              setSeverityFilter('')
+              setCollectionFilter('')
+              setSourceFilter('')
+              setExpandedId(id)
+              setView('list')
+            }}
+          />
+        ) : isLoading ? (
           <div className='space-y-2 p-6'>
             {[1, 2, 3].map((i) => (
               <div key={i} className='h-10 animate-pulse rounded-lg bg-muted' />

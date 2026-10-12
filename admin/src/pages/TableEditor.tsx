@@ -2,6 +2,7 @@ import type { Modifier } from '@dnd-kit/core'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { LayoutReviewSection } from '@/components/ai-layout-review'
+import { ExplainButton } from '@/components/explain-button'
 import {
   closestCenter,
   DndContext,
@@ -19873,6 +19874,12 @@ function LayoutsTab({
                       />
                       <LayoutVersionsSection layoutId={selected.id} />
                       <LayoutReviewSection layoutId={selected.id} />
+                      <ExplainButton
+                        key={selected.id}
+                        kind='config'
+                        params={{ type: 'layout', id: selected.id }}
+                        label='Describe this layout'
+                      />
                       <PreviewAsRoleSection
                         tableName={tableName}
                         roles={roles}

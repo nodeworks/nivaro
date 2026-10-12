@@ -19,7 +19,13 @@ import {
   tablesOf
 } from '../../../services/ai-explain.js'
 import { isMonday } from '../../../services/ai-explain-weekly.js'
-import { clusterByVectors, normalizeForGrouping } from '../../../services/issue-groups.js'
+import {
+  applyGroupOverrides,
+  clusterByVectors,
+  type IssueGroup,
+  nextOverrides,
+  normalizeForGrouping
+} from '../../../services/issue-groups.js'
 
 const facts = (extra: Record<string, unknown> = {}) => ({
   title: 'Subject',
@@ -179,5 +185,67 @@ describe('free text reaching the model', () => {
   it('scrubs log text and issue details', () => {
     expect(scrubText('log: password=hunter22 ok')).not.toMatch(/hunter22/)
     expect(scrubText('stack\nat x (https://h.example/a?token=zzz&id=1)')).not.toMatch(/zzz/)
+  })
+})
+
+describe('issue group overrides (#1861)', () => {
+  const mk = (id: number, occ = 1) => ({
+    id,
+    title: `t${id}`,
+    severity: 'error',
+    occurrences: occ
+  })
+  const auto = (): IssueGroup[] => [
+    {
+      lead: mk(1, 5),
+      total_occurrences: 8,
+      variants: [
+        { ...mk(2, 2), similarity: 0.9 },
+        { ...mk(3, 1), similarity: 0.85 }
+      ]
+    },
+    { lead: mk(4, 3), total_occurrences: 3, variants: [] }
+  ]
+  const ids = (g: IssueGroup) => [g.lead.id, ...g.variants.map((v) => v.id)].sort()
+
+  it('is a no-op without overrides', () => {
+    const a = auto()
+    expect(applyGroupOverrides(a, {})).toBe(a)
+  })
+
+  it('splits a variant out to stand alone', () => {
+    const out = applyGroupOverrides(auto(), { '2': 'alone' })
+    expect(out.map(ids)).toEqual(expect.arrayContaining([[1, 3], [2], [4]]))
+    expect(out).toHaveLength(3)
+  })
+
+  it("hands a split lead's group to the busiest remaining variant", () => {
+    const out = applyGroupOverrides(auto(), { '1': 'alone' })
+    const g = out.find((x) => x.variants.length > 0)
+    expect(g?.lead.id).toBe(2)
+    expect(ids(g as IssueGroup)).toEqual([2, 3])
+    expect(out.some((x) => x.lead.id === 1 && x.variants.length === 0)).toBe(true)
+  })
+
+  it('merges a whole group into another and keeps the target as lead', () => {
+    const out = applyGroupOverrides(auto(), { '1': 4, '2': 4, '3': 4 })
+    expect(out).toHaveLength(1)
+    expect(out[0].lead.id).toBe(4)
+    expect(out[0].total_occurrences).toBe(11)
+    expect(out[0].variants.every((v) => v.manual)).toBe(true)
+  })
+
+  it('ignores an override whose target is gone and never loses an issue', () => {
+    const out = applyGroupOverrides(auto(), { '2': 99, '77': 'alone' })
+    expect(out.flatMap(ids).sort()).toEqual([1, 2, 3, 4])
+  })
+
+  it('nextOverrides records split, merge and reset', () => {
+    let o = nextOverrides({}, { op: 'split', ids: [2] })
+    expect(o).toEqual({ '2': 'alone' })
+    o = nextOverrides(o, { op: 'merge', ids: [2, 3, 4], into: 4 })
+    expect(o).toEqual({ '2': 4, '3': 4 })
+    expect(nextOverrides(o, { op: 'reset', ids: [2] })).toEqual({ '3': 4 })
+    expect(nextOverrides(o, { op: 'reset' })).toEqual({})
   })
 })

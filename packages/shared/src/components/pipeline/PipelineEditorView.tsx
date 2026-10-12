@@ -46,6 +46,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import { ExplainCard } from '../ai/ExplainButton'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { Badge } from '../ui/badge'
@@ -3361,6 +3362,12 @@ export function PipelineEditorView({
             />
           </div>
         </div>
+
+        <ExplainCard
+          kind='config'
+          params={{ type: 'pipeline', id: templateId }}
+          label='Describe this pipeline in plain English'
+        />
 
         {/* States + Transitions — two columns on large screens */}
         {(!hiddenSet.has('states') || !hiddenSet.has('transitions')) && (
