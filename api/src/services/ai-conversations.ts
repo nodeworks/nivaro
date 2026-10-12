@@ -84,6 +84,20 @@ export const EXPORTABLE_TOOLS = new Set(
   [...REPLAYABLE_TOOLS, 'run_custom_query'].filter((t) => t !== 'list_collections')
 )
 
+/**
+ * A tombstone: a message whose content and trace are gone but whose place in
+ * the thread is kept. It is what a branch holds where the brancher could not
+ * read an answer, and what deleting someone else's message leaves. A
+ * tombstone counts as a HIDDEN answer for every viewer — so the
+ * earlier-answers chain in messagesForViewer can never be unblocked by
+ * copying or deleting rows.
+ */
+export const WITHHELD_META = '{"withheld":true}'
+
+export function isWithheld(row: Pick<MessageRow, 'meta'>): boolean {
+  return parseJsonObject(row.meta).withheld === true
+}
+
 const CONTENT_CAP = 60_000
 const TRACE_CAP = 32_000
 
@@ -319,10 +333,12 @@ export async function messagesForViewer(
   let earlierAllVisible = true
   for (const r of rows) {
     const own = sameId(r.author, viewer.id)
+    const withheld = isWithheld(r)
     const visible =
-      r.role === 'user' ||
-      own ||
-      (earlierAllVisible && (await answerVisibleTo(viewer, r, replay, budget)))
+      !withheld &&
+      (r.role === 'user' ||
+        own ||
+        (earlierAllVisible && (await answerVisibleTo(viewer, r, replay, budget))))
     if (r.role === 'assistant' && !visible) earlierAllVisible = false
     // Proposals are single-use and only their proposer may act on them.
     const proposals = own && visible ? parseJsonArray<Record<string, unknown>>(r.proposals) : []
@@ -440,6 +456,18 @@ export async function appendMessage(
   return String(id)
 }
 
+/**
+ * Remove a message's content but keep its place (see WITHHELD_META). Used
+ * whenever the message is not the remover's own: the row stays a hidden
+ * turn, so later answers that may quote it stay hidden too.
+ */
+export async function tombstoneMessage(conversationId: string, messageId: string): Promise<void> {
+  await db('nivaro_ai_conversation_messages')
+    .where({ conversation_id: conversationId, id: messageId })
+    .update({ content: '', trace: null, proposals: null, meta: WITHHELD_META })
+}
+
+/** Delete outright — only ever for the caller's OWN message (or a failed turn). */
 export async function deleteMessage(conversationId: string, messageId: string): Promise<void> {
   const n = await db('nivaro_ai_conversation_messages')
     .where({ conversation_id: conversationId, id: messageId })
@@ -454,8 +482,10 @@ export async function deleteMessage(conversationId: string, messageId: string): 
 
 /**
  * Branch (#1883): a new conversation owned by `user`, holding every message
- * of the source BEFORE the edited question. The copies keep their author and
- * trace, so the sharing rule still decides who reads each answer. The caller
+ * of the source BEFORE the edited question, as `user` may read them — an
+ * answer withheld from them is copied as a tombstone. Readable copies keep
+ * their author and trace, so the sharing rule still decides who else reads
+ * each answer. The caller
  * then asks the edited question in the branch.
  */
 export async function branchConversation(
@@ -475,15 +505,20 @@ export async function branchConversation(
     { parent_id: source.id, branch_from: Number(rows[idx].id) }
   )
   const prefix = rows.slice(0, idx)
-  for (const r of prefix) {
+  // Copy only what the brancher may read: an answer withheld from them (or
+  // already a tombstone) becomes a tombstone — never its content or trace —
+  // keeping its author, so it still counts as hidden in the new thread.
+  const view = await messagesForViewer(user, prefix)
+  for (const [i, r] of prefix.entries()) {
+    const shown = view[i]?.visible === true && !isWithheld(r)
     await db('nivaro_ai_conversation_messages').insert({
       conversation_id: branch.id,
       role: r.role,
       author: r.author,
-      content: r.content,
-      trace: r.trace,
+      content: shown ? r.content : '',
+      trace: shown ? r.trace : null,
       proposals: null,
-      meta: r.meta,
+      meta: shown ? r.meta : WITHHELD_META,
       created_at: r.created_at
     })
   }
