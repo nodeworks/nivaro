@@ -274,8 +274,17 @@ export class ViewStreamSession {
       this.opts.conditions()
     )
     if (now == null) this.membership = previous.length ? new Set(previous) : null
-    else this.membership = new Set([...previous, ...now])
+    else {
+      this.membership = new Set([...previous, ...now])
+      // Ids the last connection knew that the identity cannot read now: kept only through the
+      // replay (a delete or leave made while away still reaches the partner), then dropped.
+      const nowSet = new Set(now)
+      this.stale = new Set(previous.filter((id) => !nowSet.has(id)))
+    }
   }
+
+  /** Ids from a previous connection awaiting the post-replay prune. */
+  private stale = new Set<string>()
 
   /** Queue a change (live or replayed). Changes for other collections are ignored. */
   push(change: CollectionChange): void {
@@ -296,9 +305,17 @@ export class ViewStreamSession {
   }
 
   /** Start draining (after the baseline and any replay are queued). */
-  start(): Promise<void> {
+  async start(): Promise<void> {
     this.ready = true
-    return this.kick()
+    await this.kick()
+    // The replay has been handled: a remembered id the identity can no longer read (and that
+    // nothing in the replay confirmed) leaves the membership without an event.
+    if (this.stale.size > 0 && this.membership) {
+      for (const id of this.stale) {
+        if (this.membership.delete(id)) this.membershipChanged = true
+      }
+    }
+    this.stale.clear()
   }
 
   /** Resolves when the queue is empty (tests, shutdown). */
@@ -367,6 +384,7 @@ export class ViewStreamSession {
         this.opts.write({ id: c.seq, event: 'record.leave', data: { item: c.item } })
         continue
       }
+      this.stale.delete(c.item) // matched as this identity just now: no longer stale
       if (!known && this.membership) {
         this.membership.add(c.item)
         this.membershipChanged = true

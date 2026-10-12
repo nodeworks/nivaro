@@ -1,16 +1,15 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import type { FastifyInstance } from 'fastify'
-import { db } from '../db/index.js'
 import { authenticate } from '../middleware/authenticate.js'
 import { currentSeq, replaySince } from '../services/event-journal.js'
 import { collectionChangeOf, onJournalEntry } from '../services/journal-listeners.js'
+import { bindFromRequest, type SocketBind } from '../services/socket-access.js'
 import {
-  bindFromRequest,
-  checkBind,
-  parseWsTokenValue,
-  type SocketBind,
-  userWithApiKey
-} from '../services/socket-access.js'
+  loadStreamIdentity,
+  recheckStreamIdentity,
+  redeemStreamTicket,
+  type StreamIdentity
+} from '../services/stream-ticket.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import {
   frameText,
@@ -42,30 +41,6 @@ import type { User } from '../types.js'
 
 const HEARTBEAT_MS = 25_000
 
-async function redeemTicket(
-  app: FastifyInstance,
-  ticket: string
-): Promise<{ user: User; bind: SocketBind } | null> {
-  const raw = (await app.redis.getdel(`sse:ticket:${ticket}`).catch(() => null)) as string | null
-  const minted = raw ? parseWsTokenValue(raw) : null
-  if (!minted?.userId || !minted.bind) return null
-  if (await checkBind(app.redis, minted.userId, minted.bind)) return null
-  let row = (await db('nivaro_users').where({ id: minted.userId }).first()) as User | undefined
-  if (row && minted.bind.kind === 'apikey')
-    row = (await userWithApiKey(row, minted.bind.id)) ?? undefined
-  return row ? { user: row, bind: minted.bind } : null
-}
-
-/** The sign-in as it stands now: the account row, narrowed by the API key when it is one. */
-async function freshIdentity(userId: string, bind: SocketBind): Promise<User | null> {
-  const row = (await db('nivaro_users').where({ id: userId, status: 'active' }).first()) as
-    | User
-    | undefined
-  if (!row) return null
-  if (bind.kind === 'apikey') return userWithApiKey(row, bind.id)
-  return row
-}
-
 function cursorOf(raw: unknown): number | null {
   const v = Array.isArray(raw) ? raw[0] : raw
   if (v == null || v === '') return null
@@ -78,24 +53,27 @@ export async function viewStreamRoutes(app: FastifyInstance) {
     const q = req.query as { ticket?: string; values?: string; last_event_id?: string }
     const viewId = Number((req.params as { id: string }).id)
 
+    // The event stream's ticket model (services/stream-ticket.ts): one use, minted in this
+    // tenant, a sign-in still good; then the identity read fresh (active, not redacted, the
+    // API key's narrowing) — the same reads the heartbeat re-runs.
+    let userId: string | null = null
     let bind: SocketBind | null = null
-    if (q.ticket && /^[a-f0-9-]{36}$/i.test(q.ticket) && !req.headers.authorization) {
-      const redeemed = await redeemTicket(app, q.ticket)
+    if (q.ticket && !req.headers.authorization) {
+      const redeemed = await redeemStreamTicket(app.redis, q.ticket)
       if (redeemed) {
-        req.user = redeemed.user as never
+        userId = redeemed.userId
         bind = redeemed.bind
       }
     }
-    if (!req.user) {
+    if (!userId) {
       await authenticate(req, reply)
       bind = bindFromRequest(req)
+      userId = req.user ? String(req.user.id) : null
     }
-    if (!req.user || !bind) return reply.code(401).send({ error: 'Unauthorized' })
-    const userId = String(req.user.id)
-    // An API-key request already carries the key's narrowing; re-read it the same way the
-    // heartbeat does so the stream starts from exactly what it will be re-checked against.
-    let user: User | null = await freshIdentity(userId, bind)
-    if (!user) return reply.code(401).send({ error: 'Unauthorized' })
+    if (!userId || !bind) return reply.code(401).send({ error: 'Unauthorized' })
+    let identity: StreamIdentity | null = await loadStreamIdentity(userId, bind)
+    if (!identity) return reply.code(401).send({ error: 'Unauthorized' })
+    let user: User = identity.user
 
     const opened = await openView(user, viewId)
     if (!opened.ok) return reply.code(opened.status).send({ error: opened.error })
@@ -127,7 +105,7 @@ export async function viewStreamRoutes(app: FastifyInstance) {
       }
     }
     const session = new ViewStreamSession({
-      user: () => user as User,
+      user: () => user,
       view,
       conditions: () => conditions,
       includeValues: q.values === '1' || q.values === 'true',
@@ -168,10 +146,15 @@ export async function viewStreamRoutes(app: FastifyInstance) {
       if (closed) return
       void (async () => {
         try {
-          const ended = await checkBind(app.redis, userId, bind)
-          if (ended) return closeWith('session.ended', ended)
-          const next = await freshIdentity(userId, bind as SocketBind)
-          if (!next) return closeWith('session.ended', 'signed_out')
+          const checked = await recheckStreamIdentity(
+            app.redis,
+            userId as string,
+            bind as SocketBind,
+            identity as StreamIdentity
+          )
+          if (!checked.identity) return closeWith('session.ended', checked.reason ?? 'signed_out')
+          identity = checked.identity
+          const next = checked.identity.user
           const again = await openView(next, view.id)
           if (!again.ok)
             return closeWith('view.closed', again.status === 404 ? 'not_found' : 'forbidden')
