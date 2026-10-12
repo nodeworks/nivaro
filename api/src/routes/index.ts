@@ -13,6 +13,7 @@ import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
+import { aiKnowledgeRoutes } from './ai-knowledge.js'
 import { aiSettingsRoutes } from './ai-settings.js'
 import { aiWatchRoutes } from './ai-watches.js'
 import { alertsRoutes } from './alerts.js'
@@ -565,6 +566,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(workflowsRoutes, { prefix: '/workflows' })
   await app.register(crossTriggersRoutes, { prefix: '/cross-triggers' })
   await app.register(aiSettingsRoutes, { prefix: '/ai-settings' })
+  await app.register(aiKnowledgeRoutes, { prefix: '/ai-knowledge' })
   await app.register(zapierRoutes, { prefix: '/zapier' })
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })

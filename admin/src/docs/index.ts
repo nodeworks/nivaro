@@ -3,6 +3,7 @@ import type { DocSection } from './types.js'
 // ─── Section imports ──────────────────────────────────────────────────────────
 
 export * from './sections/admin-ux.js'
+export * from './sections/ai-knowledge.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
@@ -59,6 +60,7 @@ import {
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
+import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
 import {
   adminI18nDocs,
   aiChatDocs,
@@ -600,6 +602,7 @@ export const navSections: NavGroup[] = [
     label: 'AI Features',
     items: [
       aiChatDocs,
+      aiKnowledgeDocs,
       aiActionsDocs,
       aiOverview,
       aiGenerate,

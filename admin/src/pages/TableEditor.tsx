@@ -70,7 +70,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
-import { seedQuickPickerSteps } from '@nivaro/shared'
+import { DataGuideCard, seedQuickPickerSteps } from '@nivaro/shared'
 import {
   createContext,
   type ReactNode,
@@ -26125,6 +26125,9 @@ export function TableEditorPage() {
                 onRefresh={() => refetch()}
                 onGoToLayouts={() => setTab('groups')}
               />
+            )}
+            {tab === 'settings' && isAdmin && !isSystem && table && (
+              <DataGuideCard collection={table} className='mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card' />
             )}
           </>
         )}

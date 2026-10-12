@@ -1517,7 +1517,8 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const question = history[history.length - 1].content
     const playbooks = await retrievePlaybooks(question)
     const system = await buildChatSystemPrompt(req.user!, {
-      playbooks: formatPlaybooksForPrompt(playbooks)
+      playbooks: formatPlaybooksForPrompt(playbooks),
+      question
     })
     const playbooksUsed = playbooks.length
     // `convo` below aliases `history` and grows per round — judge "standalone" now.

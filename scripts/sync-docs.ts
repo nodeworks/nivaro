@@ -292,6 +292,16 @@ if (noMarker.length) {
   for (const s of noMarker) console.log(`    • ${s}`)
 }
 
+// Ask AI's docs search index (#1803) — the same sections, as plain text.
+spawnSync(
+  resolve(ROOT, 'api/node_modules/.bin/tsx'),
+  [resolve(ROOT, 'scripts/build-docs-index.ts')],
+  {
+    stdio: 'inherit',
+    cwd: ROOT
+  }
+)
+
 // ─── www/openapi.json (feeds api-reference.html) ─────────────────────────────
 
 console.log('→ Regenerating www/openapi.json …')
