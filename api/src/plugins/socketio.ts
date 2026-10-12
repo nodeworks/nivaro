@@ -333,7 +333,9 @@ const WATCH_ROOMS = new Set([
   'flows',
   'traffic-map',
   'conformance',
-  'imports'
+  'imports',
+  // #2016 — incident mode on/off (payload-free; the banner re-reads the admin route)
+  'ops'
 ])
 
 /**

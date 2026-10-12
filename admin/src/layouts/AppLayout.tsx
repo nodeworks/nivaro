@@ -66,6 +66,7 @@ import {
   defaultItemUrl,
   ErrorSurface,
   HelpVideoRecordingProvider,
+  IncidentBanner,
   JobsTray,
   NavigationContext,
   NivaroProvider,
@@ -531,6 +532,7 @@ export function AppLayout() {
           <NivaroProvider client={announcementsClient}>
             <AnnouncementBanner />
           </NivaroProvider>
+          <IncidentBannerHost />
           <div className='flex min-h-0 flex-1 overflow-hidden'>
             <a
               href='#main-content'
@@ -1025,6 +1027,21 @@ function HelpVideoHost({ children }: { children: ReactNode }) {
         <HelpVideoRecordingProvider>
           <AskPanelHost>{children}</AskPanelHost>
         </HelpVideoRecordingProvider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
+
+/** Incident mode banner (#2016): administrators only; in the banner stack, above the outlet. */
+function IncidentBannerHost() {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider
+        value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+      >
+        <IncidentBanner enabled={!!user?.is_admin} />
       </NavigationContext.Provider>
     </NivaroProvider>
   )
