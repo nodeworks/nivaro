@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Bot, Copy, EyeOff, FileUp, Trash2, UploadCloud } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useItemEditAuth, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import {
   batchTouches,
@@ -13,7 +13,7 @@ import {
   useLiveRecordEvent
 } from '../../lib/live'
 import { useOptionalRealtime } from '../../lib/realtime'
-import { useRecordTabs } from '../../lib/record-tabs'
+import { useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { formatRelative } from '../../lib/utils'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
@@ -270,6 +270,15 @@ export function RecordLiveSync({
         ['comments', collection, itemId],
         ['comments-related', collection, itemId]
       ])
+    // #1970: Notes also lists machine entries — transition comments, partner events, import
+    // runs, change reasons. Anything that moves those surfaces refreshes the thread too.
+    else if (
+      touched(LIVE_ASPECTS.state) ||
+      touched(LIVE_ASPECTS.integrations) ||
+      touched(LIVE_ASPECTS.addendums) ||
+      !batch.aspectsOnly
+    )
+      invalidate([['comments-related', collection, itemId]])
     if (touched(LIVE_ASPECTS.tasks)) invalidate([['tasks', collection, itemId]])
     if (touched(LIVE_ASPECTS.integrations))
       invalidate([
@@ -287,6 +296,9 @@ export function RecordLiveSync({
       ])
       return
     }
+    refreshRecord()
+  }
+  const refreshRecord = () => {
     invalidate([
       ['item', collection, itemId],
       // Summary mode reads its own copy (#1869) — it diffs + highlights.
@@ -301,6 +313,21 @@ export function RecordLiveSync({
     flashTimer.current = setTimeout(() => setFlash(false), 4000)
   }
   useLiveRecord(collection, itemId, onBatch)
+  // #2131: this person saved the record in another window (a popped-out
+  // record, another tab). Their own writes never come back over the socket.
+  const { userId } = useItemEditAuth()
+  useRecordTabsSignal(userId, 'saved', collection, itemId, () => {
+    if (goneRef.current) return
+    refreshRecord()
+    invalidate([
+      ['pipeline-instance', collection, itemId],
+      ['comments', collection, itemId],
+      ['tasks', collection, itemId],
+      // Lines and links saved with it (the keys are per relation, not per record).
+      ['o2m-rows'],
+      ['m2m-items']
+    ])
+  })
   useEffect(
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current)
@@ -393,7 +420,7 @@ export function RecordLiveSync({
   }, [loadDenied])
 
   // #1745: another tab of this browser has unsaved edits to this record.
-  const tabs = useRecordTabs(collection, itemId, dirty)
+  const tabs = useRecordTabs(collection, itemId, dirty, userId)
   const [tabsDismissed, setTabsDismissed] = useState(false)
   useEffect(() => {
     if (!tabs.otherDirty) setTabsDismissed(false)

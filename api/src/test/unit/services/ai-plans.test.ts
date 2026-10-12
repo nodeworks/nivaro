@@ -64,6 +64,10 @@ const getLabels = vi.fn(async (_m: Map<string, Set<string>>) => ({
 vi.mock('../../../services/queues.js', () => ({
   getLabels: (m: Map<string, Set<string>>) => getLabels(m)
 }))
+// Labels are read as the viewer (ai-link-labels.ts) — same stub.
+vi.mock('../../../services/ai-link-labels.js', () => ({
+  linkLabelsAsUser: (_u: unknown, m: Map<string, Set<string>>) => getLabels(m)
+}))
 const compiled = vi.fn(async (_c: string, _w: unknown): Promise<unknown[]> => [])
 vi.mock('../../../services/ai-chat.js', () => ({
   compileChatFilterFor: (c: string, w: unknown) => compiled(c, w),

@@ -12,6 +12,8 @@
  * the moment it is read.
  */
 
+import { clearRecordOutboxFor } from '@nivaro/shared'
+
 const KEY = 'nvr_masq'
 
 export interface MasqueradeTab {
@@ -31,9 +33,31 @@ export function readMasquerade(): MasqueradeTab | null {
   }
 }
 
+/**
+ * A popped-out record (#2131) opened from a "View as" tab is that same
+ * person: browsers copy the opener's session storage into a window it opens,
+ * and where one does not, the opener (same origin only) still has the token.
+ * Only a pop-out adopts it — any other window opened from a View-as tab stays
+ * the admin.
+ */
+function adoptOpenerMasquerade(): void {
+  try {
+    if (readMasquerade()) return
+    const isPopout =
+      new URLSearchParams(window.location.search).get('popout') === '1' ||
+      window.name.startsWith('nvr-record:')
+    if (!isPopout || !window.opener) return
+    const raw = (window.opener as Window).sessionStorage.getItem(KEY)
+    if (raw) sessionStorage.setItem(KEY, raw)
+  } catch {
+    /* cross-origin opener or blocked storage: the window opens as the cookie session */
+  }
+}
+
 /** Run once at boot, before anything fetches. */
 export function captureMasqueradeFromHash(): void {
   if (typeof window === 'undefined') return
+  adoptOpenerMasquerade()
   const hash = window.location.hash.replace(/^#/, '')
   if (!hash.includes('masq=')) return
   const params = new URLSearchParams(hash)
@@ -106,6 +130,8 @@ export async function stopMasquerade(): Promise<void> {
   } catch {
     /* the token expires on its own within four hours */
   }
+  // Nothing queued under the viewed person may outlive the View-as tab.
+  if (m?.user_id) await clearRecordOutboxFor(m.user_id).catch(() => {})
   try {
     sessionStorage.removeItem(KEY)
   } catch {

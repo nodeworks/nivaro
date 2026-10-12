@@ -5,6 +5,7 @@ import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
 import { useLiveOps } from '../lib/live-ops'
 import { cn } from '../lib/utils'
+import { BroadcastDraftPanel } from './BroadcastDraft'
 import { useHelpVideoLibrary } from './help-videos/api'
 import { formatDuration } from './help-videos/viewer/format'
 import { PickList } from './imports/ServiceConfigBuilder'
@@ -352,6 +353,16 @@ export function BroadcastView({ className }: { className?: string }) {
       {/* ── Message + channels ─────────────────────────────────────────── */}
       <div className='max-w-[760px] rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
         <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>Message</p>
+        {/* #2379 — AI drafts per channel from a few bullets; the sender edits and sends. */}
+        <BroadcastDraftPanel
+          audience={fullAudience}
+          channels={channels}
+          severity={severity}
+          onUse={(d) => {
+            if (d.subject !== undefined) setSubject(d.subject)
+            setMessage(d.message)
+          }}
+        />
         <input
           value={subject}
           onChange={(e) => setSubject(e.target.value)}

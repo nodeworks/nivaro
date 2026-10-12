@@ -358,6 +358,7 @@ const RELAYED_EVENTS = new Set([
   'lock:queued',
   'record:uploading',
   'ops:changed',
+  'ops:incident',
   'notification:new',
   'presence:changed',
   'read:changed',
