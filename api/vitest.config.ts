@@ -8,8 +8,11 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
       reporter: ['text', 'html'],
-      exclude: ['src/db/migrations/**', 'src/index.ts'],
+      exclude: ['src/db/migrations/**', 'src/index.ts']
     },
     setupFiles: ['src/test/setup.ts'],
-  },
+    // graphql-ws imports `graphql` itself: inlined, it shares the test's graphql instance
+    // (otherwise Node loads the CJS build beside vite's ESM one — "another realm").
+    server: { deps: { inline: ['graphql-ws'] } }
+  }
 })

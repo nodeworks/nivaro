@@ -15,7 +15,8 @@ import {
   GraphQLString,
   GraphQLUnionType,
   Kind,
-  type SelectionNode
+  type SelectionNode,
+  specifiedDirectives
 } from 'graphql'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
@@ -49,6 +50,7 @@ import {
   updateOne,
   upsertInfoOf
 } from './items.js'
+import { LiveDirective, type LiveTypeInfo, setLiveTypes } from './live-query.js'
 import { peopleReadable } from './m2a-expand.js'
 import { boundCollections, resolveRecordInstanceGql } from './record-instance.js'
 import { timedGate, timedResolver } from './traffic-taps/graphql-resolvers.js'
@@ -592,11 +594,15 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
 
   // ── Type registry (build ALL types first so thunks can cross-reference) ────
   const typeRegistry = new Map<string, GraphQLObjectType>()
+  // Live queries (#2126): which collections a type's objects come from. `any` = a write
+  // anywhere in them may change the result (lists, page facts, aggregates, link rows).
+  const liveTypes = new Map<string, LiveTypeInfo>()
 
   // nivaro_files is a system table (never in nivaro_collections), but business
   // M2M aliases point at it (a record's attached files). Give it a fixed,
   // safe read type so `files { id filename_download }` resolves.
   if ([...m2mMap.values()].some((m) => m.otherCollection === 'nivaro_files')) {
+    liveTypes.set('nivaro_files', { collections: ['nivaro_files'], any: false })
     typeRegistry.set(
       'nivaro_files',
       new GraphQLObjectType({
@@ -632,6 +638,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     const name = `${parentCol}_${field}_m2m`
     const have = m2mRowTypes.get(name)
     if (have) return have
+    liveTypes.set(name, { collections: [info.junction, info.otherCollection], any: true })
     const t = new GraphQLObjectType({
       name,
       description: `${info.junction} rows linking ${parentCol} to ${info.otherCollection}`,
@@ -694,6 +701,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     const name = `${parentCol}_${field}_m2a`
     const have = m2aRowTypes.get(name)
     if (have) return have
+    liveTypes.set(name, { collections: [info.junction, ...info.allowed], any: true })
     const members = m2aMemberTypes(info)
     const memberTypes = [...new Set(members.values())]
     const itemType: GraphQLOutputType =
@@ -811,6 +819,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     const colName = col.collection
     const fields = allFields.get(colName) ?? []
 
+    liveTypes.set(colName, { collections: [colName], any: false })
     typeRegistry.set(
       colName,
       new GraphQLObjectType({
@@ -1129,6 +1138,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       })
     })
     relationWrapperTypes.push(t)
+    liveTypes.set(t.name, { collections: [junction], any: true })
     linkTypes.set(junction, t)
     return t
   }
@@ -1137,6 +1147,8 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     const colName = col.collection
     const fields = allFields.get(colName) ?? []
 
+    // A filter over a collection (and every relation filter below) reads that collection.
+    liveTypes.set(`${colName}_filter`, { collections: [colName], any: true })
     filterRegistry.set(
       colName,
       new GraphQLInputObjectType({
@@ -1171,6 +1183,10 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                       fields: () => ({ ...own, _link: { type: link } })
                     })
                     relationWrapperTypes.push(some)
+                    liveTypes.set(some.name, {
+                      collections: [m2mInfo.junction, m2mOtherCollection],
+                      any: true
+                    })
                     return {
                       _some: { type: some },
                       _none: { type: some },
@@ -1181,6 +1197,10 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   }
                 })
                 relationWrapperTypes.push(wrapperType)
+                liveTypes.set(wrapperType.name, {
+                  collections: [m2mInfo.junction, m2mOtherCollection],
+                  any: true
+                })
                 f[field.field] = { type: wrapperType }
               }
               continue
@@ -1205,6 +1225,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   }
                 })
                 relationWrapperTypes.push(wrapperType)
+                liveTypes.set(wrapperType.name, { collections: [o2mManyCollection], any: true })
                 f[field.field] = { type: wrapperType }
               }
               continue
@@ -1228,6 +1249,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
                   })
                 })
                 relationWrapperTypes.push(m2oWrapper)
+                liveTypes.set(m2oWrapper.name, { collections: [m2oTarget], any: true })
                 f[field.field] = { type: m2oWrapper }
               } else {
                 f[field.field] = { type: opsType }
@@ -1313,6 +1335,8 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       })
     }
 
+    liveTypes.set(`${name}_metadata`, { collections: [name], any: true })
+    liveTypes.set(`${name}_aggregated`, { collections: [name], any: true })
     const metadataType = new GraphQLObjectType({
       name: `${name}_metadata`,
       fields: {
@@ -1847,7 +1871,7 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
     mutationFields._empty = { type: GraphQLBoolean, resolve: () => null }
   }
 
-  return new GraphQLSchema({
+  const schema = new GraphQLSchema({
     query: new GraphQLObjectType({ name: 'Query', fields: queryFields }),
     mutation: new GraphQLObjectType({ name: 'Mutation', fields: mutationFields }),
     subscription: new GraphQLObjectType({ name: 'Subscription', fields: domainSubscriptionFields }),
@@ -1858,8 +1882,11 @@ export async function buildGraphQLSchema(): Promise<GraphQLSchema> {
       ...ALL_FILTER_TYPES,
       ...[...filterRegistry.values()],
       ...relationWrapperTypes
-    ]
+    ],
+    directives: [...specifiedDirectives, LiveDirective]
   })
+  setLiveTypes(schema, liveTypes)
+  return schema
 }
 
 // ─── OpenAPI 3.1 spec generator ───────────────────────────────────────────────

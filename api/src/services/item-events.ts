@@ -24,6 +24,8 @@ export interface ItemEvent {
   at: string
   /** Cloud: the tenant whose write this was ('' self-hosted) — topics are per tenant. */
   tenant?: string
+  /** The event journal position of the matching collection:update (null when unjournaled). */
+  seq?: number | null
 }
 
 // REDIS_CHANNEL_PREFIX: see plugins/socketio.ts (pub/sub ignores the db index).
@@ -34,7 +36,9 @@ let sub: Redis | null = null
 
 function deliver(ev: ItemEvent): void {
   const { tenant = '', ...event } = ev
-  const payload = { itemMutated: { ...event, data: null } }
+  const payload = {
+    itemMutated: { ...event, seq: event.seq == null ? null : String(event.seq), data: null }
+  }
   // Only subscribers of the same tenant hear it (they subscribe under their own tenant key).
   // A raw bulk write (#1875) arrives as item '*' — publish it once.
   if (ev.item !== '*') pubsub.publish(topics.itemMutated(ev.collection, ev.item, tenant), payload)
