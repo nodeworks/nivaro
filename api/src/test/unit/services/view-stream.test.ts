@@ -195,6 +195,32 @@ describe('ViewStreamSession', () => {
   })
 })
 
+describe('remembered ids after a resume (Y6)', () => {
+  it('drops ids the identity can no longer read once the replay is handled', async () => {
+    // Baseline now: 1 only. The last connection knew 1, 7 and 8; 7 was deleted while away
+    // (replayed), 8 is simply no longer readable.
+    const d = deps({ materialize: async () => ['1'] })
+    const frames: StreamFrame[] = []
+    const s = new ViewStreamSession({
+      user: () => partner,
+      view,
+      conditions: () => [],
+      includeValues: false,
+      write: (f) => frames.push(f),
+      deps: d
+    })
+    await s.init(['1', '7', '8'])
+    s.push(change('7', 71, { action: 'delete' }))
+    await s.start()
+    expect(frames).toEqual([{ id: 71, event: 'record.delete', data: { item: '7' } }])
+    expect([...(s.membership ?? [])]).toEqual(['1'])
+    // A later delete of 8 is no longer reported: the stream stopped knowing it.
+    s.push(change('8', 72, { action: 'delete' }))
+    await s.kick()
+    expect(frames).toHaveLength(1)
+  })
+})
+
 describe('helpers', () => {
   it('collectionChangeOf reads tenant rooms and ignores other events', () => {
     expect(
