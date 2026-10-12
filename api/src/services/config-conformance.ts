@@ -6,6 +6,7 @@ import {
   integrityCheckCounts,
   integrityChecksFor
 } from './integrity-checks.js'
+import { getIo } from './io-holder.js'
 import { buildCascade, type CascadeRule, resolveOptionFilter } from './picker-rules.js'
 import { getLabels } from './queues.js'
 import { reachableGroupedLayouts } from './reachable-layouts.js'
@@ -22,6 +23,7 @@ import {
   parentFieldsFor,
   planRowRuleChanges
 } from './row-rules-apply.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 import { applyValidationRule, type ValidationRule } from './validation-rules.js'
 
 /**
@@ -885,14 +887,70 @@ export interface ConformanceSummary {
   fieldCounts: Record<string, number>
 }
 
+/**
+ * #1973 — a sweep's progress, live: counts and the collection name only (the
+ * findings themselves are re-read through the permission-checked run route).
+ * To the admin-only `conformance` watch room of the current tenant.
+ */
+function emitConformanceProgress(payload: {
+  run: number
+  collection: string
+  status: 'running' | 'completed' | 'error'
+  checked: number
+  violations: number
+  total: number | null
+}): void {
+  try {
+    getIo()?.to(tenantScopedRoom('watch:conformance')).emit('conformance:progress', payload)
+  } catch {
+    /* decoration */
+  }
+}
+
+/** Rows a sweep will look at: the table's row count (catalog estimate) capped by the run limit. */
+async function sweepTotal(collection: string, rowCap: number): Promise<number | null> {
+  if (!IDENT.test(collection)) return null
+  try {
+    const res = (await db.raw(
+      `SELECT SUM(row_count) AS n FROM sys.dm_db_partition_stats
+       WHERE object_id = OBJECT_ID(?) AND index_id IN (0, 1)`,
+      [collection]
+    )) as Array<{ n?: unknown }>
+    const n = Number(res?.[0]?.n)
+    if (!Number.isFinite(n) || n <= 0) return null
+    return Math.min(n, rowCap)
+  } catch {
+    return null
+  }
+}
+
 export async function runConformance(
   runId: number,
   collection: string,
   rowCap = DEFAULT_ROW_CAP
 ): Promise<void> {
+  let total: number | null = null
   try {
+    total = await sweepTotal(collection, rowCap)
+    emitConformanceProgress({
+      run: runId,
+      collection,
+      status: 'running',
+      checked: 0,
+      violations: 0,
+      total
+    })
     const checks = await compileChecks(collection)
-    const summary = await evaluate(runId, checks, rowCap)
+    const summary = await evaluate(runId, checks, rowCap, (checked, violations) =>
+      emitConformanceProgress({
+        run: runId,
+        collection,
+        status: 'running',
+        checked,
+        violations,
+        total
+      })
+    )
     await db('nivaro_conformance_runs')
       .where('id', runId)
       .update({
@@ -904,6 +962,14 @@ export async function runConformance(
         field_counts: JSON.stringify(summary.fieldCounts),
         finished_at: new Date()
       })
+    emitConformanceProgress({
+      run: runId,
+      collection,
+      status: 'completed',
+      checked: summary.checked,
+      violations: summary.violations,
+      total
+    })
   } catch (err) {
     await db('nivaro_conformance_runs')
       .where('id', runId)
@@ -913,6 +979,14 @@ export async function runConformance(
         finished_at: new Date()
       })
       .catch(() => {})
+    emitConformanceProgress({
+      run: runId,
+      collection,
+      status: 'error',
+      checked: 0,
+      violations: 0,
+      total
+    })
   }
 }
 
@@ -1917,7 +1991,8 @@ export async function readRecordResult(
 async function evaluate(
   runId: number,
   checks: CompiledChecks,
-  rowCap: number
+  rowCap: number,
+  onChunk?: (checked: number, violations: number) => void
 ): Promise<ConformanceSummary> {
   const { collection } = checks
   const { physical, selectable } = await columnsFor(checks)
@@ -1982,6 +2057,7 @@ async function evaluate(
         field_counts: JSON.stringify(Object.fromEntries(fieldCounts))
       })
       .catch(() => {})
+    onChunk?.(checked, violations)
 
     if (rows.length < CHUNK) break
   }
@@ -2033,7 +2109,12 @@ async function evaluateRowFieldCheck(
         }
       }
       for (const rule of f.rules) {
-        const msg = applyValidationRule(rule as unknown as ValidationRule, line[f.field], f.label, line)
+        const msg = applyValidationRule(
+          rule as unknown as ValidationRule,
+          line[f.field],
+          f.label,
+          line
+        )
         if (msg) {
           fails.push(msg)
           break
