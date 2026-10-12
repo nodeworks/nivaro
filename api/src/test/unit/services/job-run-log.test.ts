@@ -79,3 +79,22 @@ describe('job run log', () => {
     expect(last?.line).toContain('boom')
   })
 })
+
+describe('job run events are tenant scoped', () => {
+  it('emits job:update and job:log to the run tenant room, never the global one', async () => {
+    const tenantCtx = await import('../../../db/tenant-context.js')
+    const run = await new Promise<Awaited<ReturnType<typeof startJobRun>>>((resolve) => {
+      // biome-ignore lint/suspicious/noExplicitAny: stub tenant db
+      tenantCtx.runWithTenantDb(
+        {} as any,
+        'acme',
+        () => void startJobRun('cron', 'tenant-job', {}).then(resolve),
+        'acme'
+      )
+    })
+    run.log('hello')
+    expect(emitted.calls.length).toBeGreaterThan(0)
+    for (const c of emitted.calls) expect(c.room).toBe('t:acme:watch:jobs')
+    expect(emitted.calls.some((c) => c.room === 'watch:jobs')).toBe(false)
+  })
+})

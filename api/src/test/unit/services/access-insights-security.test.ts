@@ -56,10 +56,10 @@ vi.mock('../../../services/access-explain.js', async () => {
 
 import { explainAccess, viewerSafeReasons } from '../../../services/access-explain.js'
 import { explainDenied, TransitionNotFoundError } from '../../../services/denied-explain.js'
-import { redactOwnerFacts } from '../../../services/owner-explain.js'
+import { type OwnerExplanation, redactOwnerFacts } from '../../../services/owner-explain.js'
 import { getAllowedFields } from '../../../services/permissions.js'
 import { summarizePersonAccess } from '../../../services/person-access.js'
-import { compileAccessGates, countVisible } from '../../../services/record-access.js'
+import { compileAccessGates, countVisible, visibleIds } from '../../../services/record-access.js'
 import type { User } from '../../../types.js'
 
 const BETH = { id: 'B-1', role: 'R-1', email: 'beth@x' } as unknown as User
@@ -69,7 +69,7 @@ afterEach(() => vi.clearAllMocks())
 
 // ── G1 / G2: owner facts on fields the caller cannot read ───────────────────
 
-const ownerEx = () => ({
+const ownerEx = (): OwnerExplanation => ({
   collection: 'requests',
   item: '1',
   instance_id: 'I',
@@ -128,10 +128,92 @@ describe('redactOwnerFacts (G1, G2)', () => {
     expect(sentence).toContain("this record's Zone is Zone 1")
     expect(sentence).not.toMatch(/\bis A\b/)
   })
+  it('G1b: a fallback field the caller cannot read is not named', async () => {
+    vi.mocked(getAllowedFields).mockResolvedValue(['id', 'zone', 'salary_band'])
+    const ex = ownerEx()
+    ex.owners[0].sources = [
+      { kind: 'fallback', field: 'hr_partner', field_label: 'Hr Partner' } as never
+    ]
+    const out = await redactOwnerFacts(ex, BETH, false)
+    expect(out.owners[0].sentences).toEqual([
+      'Kim owns this record because a field on the record names them.'
+    ])
+    expect(JSON.stringify(out)).not.toMatch(/hr_partner|Hr Partner/)
+  })
+  it('G1b: a readable fallback field is still named', async () => {
+    vi.mocked(getAllowedFields).mockResolvedValue(['id', 'zone', 'salary_band', 'requester'])
+    const ex = ownerEx()
+    ex.owners[0].sources = [
+      { kind: 'fallback', field: 'requester', field_label: 'Requester' } as never
+    ]
+    const out = await redactOwnerFacts(ex, BETH, false)
+    expect(out.owners[0].sentences[0]).toBe('Kim owns this record because they are its Requester.')
+  })
+  it('G1c: a related label the caller cannot read shows as #id', async () => {
+    vi.mocked(getAllowedFields).mockResolvedValue(['id', 'zone', 'salary_band', 'region'])
+    const ex = ownerEx()
+    const fact = {
+      field: 'region.name',
+      label: 'Region',
+      wants: 'North',
+      record_value: 'North',
+      related_collection: 'regions',
+      record_ids: ['7'],
+      wants_id: '7'
+    }
+    ex.groups[0].filters = [fact]
+    ex.owners[0].sources = [
+      {
+        kind: 'group' as const,
+        group_name: 'North',
+        matched: [{ field: 'region.name', label: 'Region', wants: 'North', record_value: 'North' }]
+      }
+    ]
+    const { can } = await import('../../../services/permissions.js')
+    vi.mocked(can).mockResolvedValueOnce(false)
+    const out = await redactOwnerFacts(ex, BETH, false)
+    expect(out.groups[0].filters[0]).toEqual({
+      field: 'region.name',
+      label: 'Region',
+      wants: '#7',
+      record_value: '#7'
+    })
+    expect(out.owners[0].sentences[0]).toContain("this record's Region is #7")
+    expect(out.owners[0].sentences[0]).not.toContain('is North')
+  })
+  it('G1c: the label stays when the caller reads the collection and sees the record', async () => {
+    vi.mocked(getAllowedFields).mockResolvedValue(['id', 'zone', 'salary_band', 'region'])
+    const ex = ownerEx()
+    ex.groups[0].filters = [
+      {
+        field: 'region.name',
+        label: 'Region',
+        wants: 'North',
+        record_value: 'North',
+        related_collection: 'regions',
+        record_ids: ['7'],
+        wants_id: '7'
+      }
+    ]
+    vi.mocked(compileAccessGates).mockResolvedValue({} as never)
+    vi.mocked(visibleIds).mockResolvedValue(new Set(['7']))
+    const out = await redactOwnerFacts(ex, BETH, false)
+    expect(out.groups[0].filters[0]).toEqual({
+      field: 'region.name',
+      label: 'Region',
+      wants: 'North',
+      record_value: 'North'
+    })
+    vi.mocked(visibleIds).mockResolvedValue(new Set())
+    const hiddenRow = await redactOwnerFacts(ex, BETH, false)
+    expect(hiddenRow.groups[0].filters[0].record_value).toBe('#7')
+  })
   it('treats null from getAllowedFields as every field (nothing blanked)', async () => {
     vi.mocked(getAllowedFields).mockResolvedValue(null)
     const ex = ownerEx()
-    expect(await redactOwnerFacts(ex, BETH, false)).toBe(ex)
+    const out = await redactOwnerFacts(ex, BETH, false)
+    expect(out.groups).toEqual(ex.groups)
+    expect(out.owners[0].sentences[0]).toContain("this record's Salary band is A")
   })
   it('fails closed when the field list cannot be read', async () => {
     vi.mocked(getAllowedFields).mockRejectedValue(new Error('down'))
@@ -251,17 +333,21 @@ describe('summarizePersonAccess self view (G7)', () => {
     tables.set('divisions', [{ id: 1, label: 'Zone 1' }])
     vi.mocked(countVisible).mockResolvedValue(4271)
   })
-  it('an admin view says "4,271 of 88,000"', async () => {
-    const out = await summarizePersonAccess('B-1')
+  it('an administrator gets "4,271 of 88,000" (exact count when stats are missing)', async () => {
+    const out = await summarizePersonAccess('B-1', { viewerIsAdmin: true })
     expect(out?.collections[0].total).toBe(88000)
-    expect(out?.sentences[0]).toContain('4,271 of 88,000 workflows')
+    expect(out?.sentences[0]).toContain('Beth Ng sees 4,271 of 88,000 workflows')
   })
-  it('a self view gives the visible count only', async () => {
-    const out = await summarizePersonAccess('B-1', { selfView: true })
+  it('anyone else gets no total and is never counted past their gates', async () => {
+    const out = await summarizePersonAccess('B-1')
     expect(out?.collections[0].total).toBeNull()
+    expect(out?.lead).toBe('You have the Vendor role.')
     expect(out?.sentences[0]).toBe(
-      'Beth Ng sees 4,271 workflows because their Zone filter is Zone 1 and their role reads workflows, and can edit them.'
+      'You see 4,271 workflows, limited by your Zone filter (Zone 1), and can edit them.'
     )
     expect(JSON.stringify(out)).not.toContain('88')
+    // The exact hidden-row count (a bypassed COUNT) is never run for them.
+    for (const call of vi.mocked(countVisible).mock.calls)
+      expect((call[0] as { bypass: boolean }).bypass).toBe(false)
   })
 })

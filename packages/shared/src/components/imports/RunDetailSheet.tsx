@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNivaroClient } from '../../context'
+import { ExplainButton } from '../ai/ExplainButton'
 import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
 import { type ImportLogError, type ImportLogLine, parseImportLog } from '../../lib/import-log'
@@ -1427,6 +1428,22 @@ export function RunDetailSheet({
                 )}
               </section>
 
+              {isAdmin &&
+                run.status !== 'running' &&
+                (run.status === 'error' || (run.duration ?? 0) >= SLOW_RUN_SECONDS) && (
+                  <section data-run-explain>
+                    <ExplainButton
+                      kind='import-run'
+                      params={{ id: run.id }}
+                      label={
+                        run.status === 'completed'
+                          ? 'Explain why this was slow'
+                          : 'Explain this failure'
+                      }
+                    />
+                  </section>
+                )}
+
               <section data-run-log>
                 {report ? (
                   <details>
@@ -1491,6 +1508,9 @@ export function RunDetailSheet({
 }
 
 const LOG_VALUE_CAP = 40
+
+/** A finished run at least this long gets an "Explain why this was slow" button (#2023). */
+const SLOW_RUN_SECONDS = 120
 
 const chipClass =
   'rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 font-mono text-[11px] text-slate-700 dark:border-border dark:bg-muted/40 dark:text-foreground'
