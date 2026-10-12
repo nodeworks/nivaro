@@ -90,6 +90,9 @@ export function AiMemorySuggestions({
                 <span className='min-w-0 flex-1 text-slate-700 dark:text-slate-200'>
                   <span className='font-medium'>Remember this?</span>{' '}
                   <span className='text-slate-600 dark:text-slate-300'>“{s.text}”</span>
+                  <span className='block text-[11px] text-slate-500 dark:text-slate-400'>
+                    This note is added to every future question you ask.
+                  </span>
                 </span>
                 <span className='flex items-center gap-1'>
                   <button

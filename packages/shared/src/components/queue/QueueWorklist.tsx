@@ -54,10 +54,14 @@ import { useDebounced } from '../../hooks/useDebounced'
 import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
+import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
 import { LIVE_ASPECTS } from '../../lib/live'
+import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
+import { isOwnWrite } from '../../lib/own-writes'
 import { buildGroups } from '../../lib/queue-grouping'
+import { useOptionalRealtime } from '../../lib/realtime'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
 import { effectiveScopeSeedIds, matchScopeDimension, useMyScopes } from '../../lib/use-my-scopes'
 import { useNewItemLayouts } from '../../lib/use-new-item-layouts'
@@ -74,11 +78,13 @@ import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
 import { RowActionsMenu } from '../CollectionBrowserView'
 import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
+import { FocusModeToggle } from '../FocusModeToggle'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill } from '../FulfilmentPill'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/IntegrationDots'
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
+import { LiveRowMark } from '../LiveRowMark'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { TickerNumber } from '../TickerNumber'
@@ -106,7 +112,12 @@ export interface QueueRealtimeAdapter {
    *  `collection:update` payload when the host has it); return unsubscribe. */
   subscribe: (
     collections: string[],
-    onUpdate: (ev?: { item?: unknown; action?: string; changed_fields?: string[] }) => void
+    onUpdate: (ev?: {
+      collection?: string
+      item?: unknown
+      action?: string
+      changed_fields?: string[]
+    }) => void
   ) => () => void
 }
 
@@ -625,6 +636,23 @@ export function QueueWorklist({
   // Socket-driven updates no longer refetch under the user — they accumulate here
   // and surface as a "N updates · Refresh" pill the user triggers explicitly.
   const [pendingUpdates, setPendingUpdates] = useState(0)
+  // Live rows (#1743 #1828 #1872 #1932 #2125 #2386): flash + "changed by", new
+  // rows marked, edit locks, stats tiles that tick, kanban that follows moves.
+  const rowChanges = useRowChanges()
+  const ctxRealtime = useOptionalRealtime()
+  const liveOwner = useRef({}).current
+  const visibleKeysRef = useRef<Set<string>>(new Set())
+  const [lockTick, setLockTick] = useState(0)
+  const [statsTick, setStatsTick] = useState(0)
+  // Set while a live-triggered refetch is in flight: the table keeps its rows
+  // (no enter replay), and the rows that changed / arrived flash when it lands.
+  const liveRefetchRef = useRef(false)
+  const livePendingRef = useRef<Array<{ key: string; by: string | null }>>([])
+  const prevKeysRef = useRef<Set<string> | null>(null)
+  const draggingRef = useRef(false)
+  const selectedCountRef = useRef(0)
+  const viewRef = useRef<'table' | 'kanban' | 'workload'>('table')
+  viewRef.current = view
   const limit = 25
 
   const { data: queue, error: queueError } = useQuery<QueueMeta>({
@@ -812,11 +840,19 @@ export function QueueWorklist({
   }, [queue, view, allowedViews])
 
   // Live-refresh: subscribe to update events for this queue's collection-type
-  // sources via the host-injected realtime adapter (socket.io on the admin
-  // side); accumulate pending updates rather than auto-refetching, surfaced as
-  // a "N updates · Refresh" pill the user triggers explicitly.
+  // sources (the app's realtime context, else the host-injected adapter).
+  // What the client can place without moving things under the cursor happens
+  // by itself: a change to a row on screen, a new record, a kanban move or a
+  // stats tick refetch quietly (the SERVER re-judges membership as the viewer)
+  // and the rows that changed flash; everything else accumulates into the
+  // "N updates · Refresh" pill. Focus mode holds the whole feed back.
   useEffect(() => {
-    if (!realtime || !queue?.sources) return
+    if (!queue?.sources) return
+    const subscribe = ctxRealtime
+      ? (cols: string[], cb: NonNullable<Parameters<QueueRealtimeAdapter['subscribe']>[1]>) =>
+          ctxRealtime.subscribeCollections(cols, cb)
+      : realtime?.subscribe
+    if (!subscribe) return
     const collections = [
       ...new Set(
         queue.sources
@@ -825,32 +861,88 @@ export function QueueWorklist({
       )
     ]
     if (collections.length === 0) return
+    type LiveEv = {
+      collection?: string
+      item?: unknown
+      action?: string
+      changed_fields?: string[]
+    }
     // Aspect notices (`$tasks`, `$addendums`, `$integrations`, …) move a
     // row's counts and badges, not its columns (#1874): refresh those reads
     // in place, coalesced, instead of counting them as pending updates.
     const aspectKeys = new Set<string>()
     let aspectTimer: ReturnType<typeof setTimeout> | null = null
-    const unsub = realtime.subscribe(collections, (ev) => {
-      const fields = ev?.changed_fields
-      if (ev && !ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
-        if (fields.includes(LIVE_ASPECTS.tasks)) aspectKeys.add('queue-task-counts')
-        if (fields.includes(LIVE_ASPECTS.integrations)) aspectKeys.add('queue-integrations-summary')
-        if (fields.includes(LIVE_ASPECTS.addendums)) aspectKeys.add('queue-collection-addendums')
-        if (!aspectTimer)
-          aspectTimer = setTimeout(() => {
-            aspectTimer = null
-            for (const k of aspectKeys) void qc.invalidateQueries({ queryKey: [k] })
-            aspectKeys.clear()
-          }, 300)
-        return
+    let refetchTimer: ReturnType<typeof setTimeout> | null = null
+    let statsTimer: ReturnType<typeof setTimeout> | null = null
+    const scheduleStats = () => {
+      if (statsTimer) return
+      statsTimer = setTimeout(() => {
+        statsTimer = null
+        setStatsTick((n) => n + 1)
+      }, 1500)
+    }
+    const scheduleRefetch = () => {
+      if (refetchTimer) return
+      refetchTimer = setTimeout(() => {
+        refetchTimer = null
+        // The viewer is mid-selection or mid-drag: do not move rows under
+        // them — fall back to the pill, which they apply when ready.
+        if (selectedCountRef.current > 0 || draggingRef.current) {
+          livePendingRef.current = []
+          setPendingUpdates((n) => n + 1)
+          return
+        }
+        liveRefetchRef.current = true
+        void qc.invalidateQueries({ queryKey: ['queue-items', queueId] })
+        void qc.invalidateQueries({ queryKey: ['queue-workload', queueId] })
+      }, 900)
+    }
+    const handle = (evs: LiveEv[]) => {
+      let refresh = false
+      let pill = 0
+      let stats = false
+      for (const ev of evs) {
+        const fields = ev?.changed_fields
+        const key = ev?.collection != null ? `${ev.collection}:${String(ev.item)}` : null
+        const visible = key != null && visibleKeysRef.current.has(key)
+        if (ev && !ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
+          if (fields.includes(LIVE_ASPECTS.tasks)) aspectKeys.add('queue-task-counts')
+          if (fields.includes(LIVE_ASPECTS.integrations))
+            aspectKeys.add('queue-integrations-summary')
+          if (fields.includes(LIVE_ASPECTS.addendums)) aspectKeys.add('queue-collection-addendums')
+          if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
+          if (fields.includes(LIVE_ASPECTS.state)) {
+            stats = true
+            if (visible || viewRef.current === 'kanban') refresh = true
+          }
+          if (!aspectTimer)
+            aspectTimer = setTimeout(() => {
+              aspectTimer = null
+              for (const k of aspectKeys) void qc.invalidateQueries({ queryKey: [k] })
+              aspectKeys.clear()
+            }, 300)
+          continue
+        }
+        stats = true
+        const own = ev?.collection != null && isOwnWrite(ev.collection, ev.item as string)
+        if (key && (visible || ev?.action === 'create' || viewRef.current === 'kanban')) {
+          refresh = true
+          if (!own) livePendingRef.current.push({ key, by: null })
+        } else pill += 1
       }
-      setPendingUpdates((n) => n + 1)
-    })
+      if (pill > 0) setPendingUpdates((n) => n + pill)
+      if (refresh) scheduleRefetch()
+      if (stats) scheduleStats()
+    }
+    const unsub = subscribe(collections, (ev) => deliverLive(liveOwner, [ev ?? {}], handle))
     return () => {
       unsub()
+      releaseLiveOwner(liveOwner)
       if (aspectTimer) clearTimeout(aspectTimer)
+      if (refetchTimer) clearTimeout(refetchTimer)
+      if (statsTimer) clearTimeout(statsTimer)
     }
-  }, [realtime, queue?.sources, qc])
+  }, [ctxRealtime, realtime, queue?.sources, qc, queueId, userId, liveOwner])
 
   // Inputs stay bound to filterValues (instant UI); the items query keys off
   // this trailing copy so text filters don't fire a request per keystroke.
@@ -1167,7 +1259,9 @@ export function QueueWorklist({
   const showLoading = (isLoading && !data) || !displayReady || (!scopeGateOpen && !data)
   // True while a sort/filter/page change is in flight over kept-previous data —
   // the table dims slightly instead of unmounting (no layout shift).
-  const isRefetching = (isFetching && !isLoading) || (isPlaceholderData && isFetching)
+  // A live refetch (others changed rows) is invisible: no dimming, no spinner.
+  const isRefetching =
+    ((isFetching && !isLoading) || (isPlaceholderData && isFetching)) && !liveRefetchRef.current
 
   // Poll record-viewer counts for the current page (#272). Per-node data —
   // treated as a hint, never as truth.
@@ -1198,7 +1292,7 @@ export function QueueWorklist({
     }
   }, [viewerRowsKey, client])
   // Long-request honesty (#370)
-  const loadElapsed = useElapsedLoading(isFetching)
+  const loadElapsed = useElapsedLoading(isFetching && !liveRefetchRef.current)
 
   async function performTransition(item: QueueItemRow, targetState: string) {
     const instanceRes = await client.request<{
@@ -1354,8 +1448,72 @@ export function QueueWorklist({
   // only for records with a workflow instance (#85).
   const fulfilmentEnabled = items.some((i) => i.fulfilment !== undefined)
   const sendBacksEnabled = items.some((i) => i.send_backs !== undefined)
-  const stats = data?.stats
-  const filteredStats = data?.filtered_stats ?? null
+  // Stats tiles tick live (#1932): after a burst of changes one stats-only
+  // read (page 1, one row) re-counts totals / SLA / at-risk as the viewer; the
+  // newer of that and the list's own read wins.
+  const { data: liveStats, dataUpdatedAt: liveStatsAt } = useQuery<{
+    stats: QueueStats
+    filtered_stats: QueueStats | null
+    state_counts?: Record<string, number>
+  }>({
+    queryKey: ['queue-live-stats', queueId, scope, debouncedFilterValues, statsTick],
+    queryFn: () =>
+      client.request(
+        get(`/queues/${queueId}/items`, {
+          scope,
+          filters: JSON.stringify(apiFilters),
+          page: 1,
+          limit: 1
+        })
+      ),
+    enabled: statsTick > 0 && !!data,
+    staleTime: Number.POSITIVE_INFINITY,
+    placeholderData: (prev) => prev,
+    retry: false
+  })
+  const liveStatsNewer = !!liveStats && liveStatsAt > dataUpdatedAt
+  const stats = liveStatsNewer ? liveStats.stats : data?.stats
+  const filteredStats = liveStatsNewer
+    ? (liveStats.filtered_stats ?? null)
+    : (data?.filtered_stats ?? null)
+  const liveStateCounts = liveStatsNewer ? liveStats.state_counts : data?.state_counts
+
+  // Rows on screen (live events match against them) + edit locks on them.
+  visibleKeysRef.current = new Set(items.map((r) => `${r.collection}:${r.item_id}`))
+  const rowLocks = useRowLocksByCollection(
+    items.map((r) => ({ collection: r.collection, id: r.item_id })),
+    lockTick
+  )
+  // A stable enter key through live refetches, so rows that did not change
+  // do not replay their enter animation.
+  const enterKeyRef = useRef(dataUpdatedAt)
+  const skipEnterForRef = useRef(0)
+  if (!liveRefetchRef.current && dataUpdatedAt !== skipEnterForRef.current)
+    enterKeyRef.current = dataUpdatedAt
+  // When a live refetch lands: flash the rows others changed, mark the ones
+  // that arrived (the server decided they belong), then go back to normal.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: keyed on data identity
+  useEffect(() => {
+    const keys = new Set(items.map((r) => `${r.collection}:${r.item_id}`))
+    if (liveRefetchRef.current) {
+      liveRefetchRef.current = false
+      skipEnterForRef.current = dataUpdatedAt
+      const notes = livePendingRef.current
+      livePendingRef.current = []
+      const prev = prevKeysRef.current
+      const noted = new Set<string>()
+      for (const n of notes) {
+        if (!keys.has(n.key) || noted.has(n.key)) continue
+        noted.add(n.key)
+        rowChanges.note([n.key], n.by, prev && !prev.has(n.key) ? 'create' : 'update')
+      }
+      if (prev) {
+        const arrived = [...keys].filter((k) => !prev.has(k) && !noted.has(k))
+        if (arrived.length > 0 && arrived.length <= 20) rowChanges.note(arrived, null, 'create')
+      }
+    }
+    prevKeysRef.current = keys
+  }, [dataUpdatedAt])
 
   // Any completed refetch clears the pending-updates pill — the data on screen
   // is current again, however the refetch was triggered.
@@ -2088,6 +2246,7 @@ export function QueueWorklist({
 
   // ── Bulk actions ──
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  selectedCountRef.current = selectedIds.length
   const [bulkBusy, setBulkBusy] = useState(false)
 
   async function runBulk(label: string, fn: (row: QueueItemRow) => Promise<unknown>) {
@@ -2177,7 +2336,10 @@ export function QueueWorklist({
   // Single-collection queues waste a column repeating the same badge on every
   // row — only offer/show Collection when the queue actually mixes collections.
   const multiCollection = (data?.available_values.collection?.length ?? 0) > 1
-  const anyUnseen = items.some((r) => !!r.unseen)
+  const anyUnseen =
+    items.some((r) => !!r.unseen) ||
+    rowLocks.size > 0 ||
+    items.some((r) => rowChanges.isNew(rowId(r)))
 
   const baseColumns: Column<QueueItemRow>[] = [
     ...(multiCollection
@@ -2205,7 +2367,16 @@ export function QueueWorklist({
           {/* #643 — someone else changed this since you last opened it. The
             mark hangs in the column's widened left padding, so item names
             stay aligned with each other and with the header. */}
-          <UnseenDot change={row.unseen} dataAttr='data-queue-unseen' hang />
+          {rowLocks.get(rowId(row)) || rowChanges.isNew(rowId(row)) ? (
+            <LiveRowMark
+              lock={rowLocks.get(rowId(row))}
+              isNew={rowChanges.isNew(rowId(row))}
+              dataAttr='data-queue-live-mark'
+              hang
+            />
+          ) : (
+            <UnseenDot change={row.unseen} dataAttr='data-queue-unseen' hang />
+          )}
           <span
             className='block max-w-[160px] truncate font-medium underline decoration-slate-300 decoration-dotted underline-offset-2 group-hover/row:decoration-nvr-cyan dark:decoration-slate-600'
             title={row.label}
@@ -2791,7 +2962,7 @@ export function QueueWorklist({
         value: s,
         // How many rows sit in it under the other active filters (the State
         // filter itself left out, or every other state would read 0).
-        count: data?.state_counts ? (data.state_counts[s] ?? 0) : stats?.by_state?.[s]
+        count: liveStateCounts ? (liveStateCounts[s] ?? 0) : stats?.by_state?.[s]
       }))
     },
     {
@@ -3296,6 +3467,7 @@ export function QueueWorklist({
               }
             />
           )}
+          <FocusModeToggle />
           {pendingUpdates > 0 && (
             <button
               type='button'
@@ -4025,6 +4197,7 @@ export function QueueWorklist({
                 scrolls internally (DataTable fillHeight). */}
             <div className='flex min-h-0 flex-1'>
               <div
+                ref={rowChanges.rootRef}
                 className={cn(
                   'relative min-w-0 flex-1 transition-opacity duration-200',
                   isRefetching && 'pointer-events-none opacity-60'
@@ -4038,7 +4211,7 @@ export function QueueWorklist({
                 )}
                 <DataTable<QueueItemRow>
                   fillHeight
-                  enterKey={dataUpdatedAt}
+                  enterKey={enterKeyRef.current}
                   density={density}
                   minBodyHeight={360}
                   columns={columns}
@@ -4053,6 +4226,13 @@ export function QueueWorklist({
                   onRowContextMenu={(row, e) => {
                     e.preventDefault()
                     setRowCtxMenu({ x: e.clientX, y: e.clientY, row })
+                  }}
+                  rowTitle={(row) => {
+                    const lock = rowLocks.get(rowId(row))
+                    return (
+                      rowChanges.titleFor(rowId(row)) ??
+                      (lock && !lock.is_mine ? lockLabel(lock) : undefined)
+                    )
                   }}
                   rowClassName={(row) =>
                     highlightedId === rowId(row)
@@ -4186,6 +4366,9 @@ export function QueueWorklist({
             stateLabels={stateLabelByKey}
             laneLabel={swimlaneBy === 'collection' ? collectionLabel : undefined}
             claimsEnabled={claimsEnabled}
+            onDraggingChange={(d) => {
+              draggingRef.current = d
+            }}
           />
         ) : (
           <QueueWorkloadView queueId={queueId} />

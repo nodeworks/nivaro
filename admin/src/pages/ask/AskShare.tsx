@@ -31,14 +31,20 @@ export interface ShareRow {
 const errorOf = (err: unknown) =>
   (err as { response?: { data?: { error?: string } } })?.response?.data?.error ?? 'Failed'
 
+/** Shown on Share / Post to chat while the person's Ask AI history is off. */
+const OFF_TIP = 'Needs a saved conversation — your Ask AI history is off'
+
 export function ShareMenu({
   conversationId,
   shares,
-  detailKey
+  detailKey,
+  disabled
 }: {
   conversationId: string
   shares: ShareRow[]
   detailKey: readonly unknown[]
+  /** History off (#1833): nothing new is saved, so nothing is shared. */
+  disabled?: boolean
 }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -72,7 +78,13 @@ export function ShareMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button size='sm' variant='ghost' data-ask-share>
+        <Button
+          size='sm'
+          variant='ghost'
+          disabled={disabled}
+          data-tip={disabled ? OFF_TIP : undefined}
+          data-ask-share
+        >
           <UserPlus className='mr-1 h-3.5 w-3.5' />
           Share{people_shares.length ? ` (${people_shares.length})` : ''}
         </Button>
@@ -139,10 +151,12 @@ interface RoomRow {
 
 export function PostToChatMenu({
   conversationId,
-  detailKey
+  detailKey,
+  disabled
 }: {
   conversationId: string
   detailKey: readonly unknown[]
+  disabled?: boolean
 }) {
   const qc = useQueryClient()
   const [open, setOpen] = useState(false)
@@ -174,7 +188,13 @@ export function PostToChatMenu({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button size='sm' variant='ghost' data-ask-post>
+        <Button
+          size='sm'
+          variant='ghost'
+          disabled={disabled}
+          data-tip={disabled ? OFF_TIP : undefined}
+          data-ask-post
+        >
           <Send className='mr-1 h-3.5 w-3.5' />
           Post to chat
         </Button>

@@ -3,8 +3,14 @@ export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
+export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
-export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  AiMarkdown,
+  type AiMarkdownBlock,
+  type ChartPointHandler,
+  parseAiMarkdown
+} from './components/ai/AiMarkdown'
 export {
   type AiMemorySuggestion,
   AiMemorySuggestions
@@ -102,6 +108,7 @@ export { EmptyState } from './components/EmptyState'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
 export { FirstLoginChecklist } from './components/FirstLoginChecklist'
+export { FocusModeToggle } from './components/FocusModeToggle'
 export {
   FORCE_RELOAD_EVENT,
   ForceReloadBanner,
@@ -226,6 +233,7 @@ export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeBut
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
+export { LiveRowMark } from './components/LiveRowMark'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
@@ -412,6 +420,19 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export {
+  type DrillSource,
+  defaultQuestionFor,
+  drillSourceFor,
+  type LiveSource,
+  liveSourcesFor,
+  type PanelTraceEntry,
+  parseSlash,
+  SLASH_COMMANDS,
+  type SlashCommand,
+  slashMatches,
+  stripFollowUps
+} from './lib/ai-panel'
 export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
@@ -474,6 +495,7 @@ export {
   getFiscalStartMonth,
   setFiscalStartMonth
 } from './lib/fiscal'
+export * from './lib/focus-mode'
 export * from './lib/format-value'
 export {
   type GlossaryTerm,
@@ -488,6 +510,8 @@ export { dotsForRecord } from './lib/integration-dots'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export * from './lib/live'
+export * from './lib/live-list'
+export * from './lib/live-ops'
 export {
   type NotificationSound,
   playNotificationSound,

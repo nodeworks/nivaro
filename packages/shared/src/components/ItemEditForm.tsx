@@ -167,7 +167,7 @@ import {
   invalidateRecordNotes,
   RecordInsightsButton
 } from './item-edit/RecordInsights'
-import { type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
+import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
@@ -1350,9 +1350,16 @@ export function ItemEditForm({
     return () => document.removeEventListener('mousedown', handleOutside)
   }, [showPdfDropdown])
 
-  // Deleted by someone else (#1871) or hidden by an access change (#1925)
-  // while open: the form stays on screen, read-only, and stops re-reading.
+  // Deleted by someone else (#1871): the form stays on screen, read-only, and
+  // stops re-reading. Hidden by an access change (#1925): the form is
+  // replaced by the access-lost panel and the record's cached data dropped.
   const [recordGone, setRecordGone] = useState<RecordGone | null>(null)
+  // Another record on the same mount starts clean (RecordLiveSync, which
+  // also resets it, is not mounted while the access-lost panel shows).
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on identity only
+  useEffect(() => {
+    setRecordGone(null)
+  }, [collection, itemId])
   const {
     data: itemData,
     isLoading: itemLoading,
@@ -8707,11 +8714,23 @@ export function ItemEditForm({
     }
   }, [itemData, colMeta, collection, isNew, documentTitle])
 
+  // ── Lost access while open (#1925, F7) ────────────────────────────────────
+  // No fields, no cached values, no unsaved edits — RecordLiveSync dropped
+  // the record's queries; only the reason and a way back remain.
+  if (recordGone?.kind === 'access') {
+    return (
+      <div className={cn('nvr-fade-in flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>
+        <RecordAccessLostPanel onBack={onBack ?? (() => window.history.back())} />
+      </div>
+    )
+  }
+
   // ── Access denied / not found ──────────────────────────────────────────────
   // A 403/404 on the record load used to leave a silently empty form —
   // explain WHY (role permission, RLS, or which User Scope excludes it).
-  // A record that was showing and then stopped answering keeps its form —
-  // RecordLiveSync says why (deleted / access) and saving is off.
+  // A record that was showing and then stopped answering keeps its form
+  // while RecordLiveSync works out why (deleted: form stays, saving off;
+  // lost access: the panel above replaces it).
   if (itemLoadDenied && !itemData) {
     return (
       <div className={cn('nvr-fade-in flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>

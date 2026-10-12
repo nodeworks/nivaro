@@ -59,10 +59,29 @@ function emitTo(
 export async function openConversationTurn(
   app: FastifyInstance,
   user: User,
-  opts: { conversationId?: unknown; save?: unknown; question: string }
+  opts: {
+    conversationId?: unknown
+    save?: unknown
+    question: string
+    /** The asker's history opt-out, when the caller already read it. */
+    historyOff?: boolean
+  }
 ): Promise<TurnOpenResult> {
   const wanted = typeof opts.conversationId === 'string' ? opts.conversationId.trim() : ''
   if (!wanted && opts.save !== true) return null
+  // History off: nothing is stored. A new question answers live; a question
+  // into an existing thread would store it, so it is refused.
+  const off =
+    opts.historyOff ?? (await import('./ai-memory.js').then((m) => m.aiHistoryOff(String(user.id))))
+  if (off) {
+    return wanted
+      ? {
+          status: 409,
+          error:
+            'Your Ask AI history is off, so questions are not saved and cannot be added to a conversation.'
+        }
+      : null
+  }
 
   let conv: ConversationRow | null
   let history: ConversationTurn['history'] = []
@@ -102,6 +121,8 @@ export async function openConversationTurn(
         'cached_at',
         'remembered',
         'plans',
+        'choices',
+        'followups',
         'memory_suggestions'
       ]) {
         const v = payload[k]

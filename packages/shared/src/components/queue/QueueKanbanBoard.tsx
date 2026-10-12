@@ -170,7 +170,8 @@ export function QueueKanbanBoard({
   swimlaneBy = null,
   stateLabels,
   laneLabel,
-  claimsEnabled = true
+  claimsEnabled = true,
+  onDraggingChange
 }: {
   items: QueueItemRow[]
   onDrop: (item: QueueItemRow, targetState: string) => void
@@ -185,6 +186,8 @@ export function QueueKanbanBoard({
   laneLabel?: (key: string) => string
   /** When false the per-card Claim/Release button is hidden. */
   claimsEnabled?: boolean
+  /** Tells the host a card is mid-drag, so live updates do not reshuffle cards under it. */
+  onDraggingChange?: (dragging: boolean) => void
 }) {
   const [activeItem, setActiveItem] = useState<QueueItemRow | null>(null)
   const [collapsedLanes, setCollapsedLanes] = useState<Set<string>>(new Set())
@@ -218,10 +221,12 @@ export function QueueKanbanBoard({
 
   function handleDragStart(event: DragStartEvent) {
     setActiveItem((event.active.data.current as QueueItemRow) ?? null)
+    onDraggingChange?.(true)
   }
 
   function handleDragEnd(event: DragEndEvent) {
     setActiveItem(null)
+    onDraggingChange?.(false)
     const { active, over } = event
     if (!over) return
     const item = active.data.current as QueueItemRow
@@ -269,6 +274,10 @@ export function QueueKanbanBoard({
       collisionDetection={pointerWithin}
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragCancel={() => {
+        setActiveItem(null)
+        onDraggingChange?.(false)
+      }}
     >
       {lanes ? (
         <div className='space-y-4'>
