@@ -2,7 +2,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { fieldLabel, type OwnerSource, ownerSourceSentence, personName } from './access-words.js'
 import { findRecordInstance } from './branch-instances.js'
-import { getAllowedFields } from './permissions.js'
+import { can, getAllowedFields } from './permissions.js'
 import {
   buildDelegationSubstitutions,
   getOwnerGroupsForStates,
@@ -18,7 +18,7 @@ import {
   resolveStateOwnersBatch
 } from './pipeline-engine.js'
 import { ADDENDUM_COLLECTION, resolvePipelineSubject } from './pipeline-subject.js'
-import { unavailabilityOf } from './record-access.js'
+import { compileAccessGates, unavailabilityOf, visibleIds } from './record-access.js'
 
 /**
  * #1956 / #1907 — WHY each person owns a record's current step.
@@ -54,7 +54,7 @@ export interface OwnerExplanation {
     id: string
     name: string | null
     is_default: boolean
-    filters: Array<{ field: string; label: string; wants: string; record_value: string }>
+    filters: GroupFilterFact[]
   }>
   /** Other candidate groups the record ALSO matched but lost to a more specific one. */
   outranked: number
@@ -68,6 +68,64 @@ export interface OwnerExplanation {
     until: string | null
   }>
   summary: string
+}
+
+export interface GroupFilterFact {
+  field: string
+  label: string
+  wants: string
+  record_value: string
+  /** Dotted relation filters: the collection the label is read from (null =
+   *  could not be worked out), the record's related ids there, and the
+   *  group's own id value — redactOwnerFacts shows `#id` instead of a label
+   *  the caller may not read. Stripped from every non-admin answer. */
+  related_collection?: string | null
+  record_ids?: string[]
+  wants_id?: string | null
+}
+
+function idsOf(v: ResolvedFilterValue | undefined): string[] {
+  if (!v) return []
+  const ids = v.ids instanceof Set ? [...v.ids] : v.ids != null ? [v.ids] : []
+  return ids.map(String).sort()
+}
+
+/** One hop: an M2O field, or an O2M / M2M alias (through its junction). */
+async function hopTarget(collection: string, field: string): Promise<string | null> {
+  type Rel = {
+    many_collection: string
+    many_field: string
+    one_collection: string | null
+    junction_field?: string | null
+  }
+  const m2o = (await db('nivaro_relations')
+    .where({ many_collection: collection, many_field: field })
+    .first('one_collection')
+    .catch(() => null)) as Pick<Rel, 'one_collection'> | null | undefined
+  if (m2o?.one_collection) return m2o.one_collection
+  const alias = (await db('nivaro_relations')
+    .where({ one_collection: collection, one_field: field })
+    .first('many_collection', 'junction_field')
+    .catch(() => null)) as Pick<Rel, 'many_collection' | 'junction_field'> | null | undefined
+  if (!alias) return null
+  if (!alias.junction_field) return alias.many_collection
+  const leg = (await db('nivaro_relations')
+    .where({ many_collection: alias.many_collection, many_field: alias.junction_field })
+    .first('one_collection')
+    .catch(() => null)) as Pick<Rel, 'one_collection'> | null | undefined
+  return leg?.one_collection ?? null
+}
+
+/** 'project.project_type.name' on workflows → 'project_types' (the label's table). */
+async function relatedCollectionOf(collection: string, path: string): Promise<string | null> {
+  const segs = path.split('.')
+  let cur = collection
+  for (const seg of segs.slice(0, -1)) {
+    const next = await hopTarget(cur, seg)
+    if (!next) return null
+    cur = next
+  }
+  return cur
 }
 
 function display(v: ResolvedFilterValue | undefined, raw: unknown): string {
@@ -164,20 +222,32 @@ export async function explainRecordOwners(
     if (pickWinningGroupsPrepared(one, record, relations, resolved).length > 0) matchedCandidates++
   }
   const winnerIsDefault = winners.length > 0 && winners.every((g) => !!g.is_default)
-  const groups = winners.map((g) => {
-    const filters = (parseJson(g.filters) as RecordFilter[] | null) ?? []
-    return {
-      id: String(g.id),
-      name: g.name,
-      is_default: !!g.is_default,
-      filters: filters.map((f) => ({
-        field: f.field,
-        label: fieldLabel(f.field, labels),
-        wants: String(f.value ?? f.id_value ?? ''),
-        record_value: display(resolved?.get(f.field), record[f.field.split('.')[0]])
-      }))
-    }
-  })
+  const groups = await Promise.all(
+    winners.map(async (g) => {
+      const filters = (parseJson(g.filters) as RecordFilter[] | null) ?? []
+      return {
+        id: String(g.id),
+        name: g.name,
+        is_default: !!g.is_default,
+        filters: await Promise.all(
+          filters.map(async (f): Promise<GroupFilterFact> => {
+            const fact: GroupFilterFact = {
+              field: f.field,
+              label: fieldLabel(f.field, labels),
+              wants: String(f.value ?? f.id_value ?? ''),
+              record_value: display(resolved?.get(f.field), record[f.field.split('.')[0]])
+            }
+            if (f.field.includes('.')) {
+              fact.related_collection = await relatedCollectionOf(subject.collection, f.field)
+              fact.record_ids = idsOf(resolved?.get(f.field))
+              fact.wants_id = f.id_value != null ? String(f.id_value) : null
+            }
+            return fact
+          })
+        )
+      }
+    })
+  )
 
   // Membership provenance: direct vs through a team, per winning group.
   const winnerIds = winners.map((g) => String(g.id))
@@ -339,7 +409,11 @@ export async function explainRecordOwners(
     }
     if (manualBy.has(k)) sources.push({ kind: 'manual', added_by: manualBy.get(k) ?? null })
     if (fallback && String(fallback.user).toUpperCase() === k)
-      sources.push({ kind: 'fallback', field_label: fieldLabel(fallback.field) })
+      sources.push({
+        kind: 'fallback',
+        field: fallback.field,
+        field_label: fieldLabel(fallback.field)
+      })
     const u = availById.get(k)
     const unavailable = u ? unavailabilityOf(u as never) : null
     return {
@@ -388,7 +462,15 @@ export async function explainRecordOwners(
 /** What a filter on a field the caller cannot read is shown as. */
 export const HIDDEN_FIELD_LABEL = 'a field you cannot see'
 
-/** Blank everything a filter on a field the caller's role cannot read would reveal. */
+/**
+ * What a non-admin may hear about a record's owners. A field their role
+ * cannot read is never named nor valued: the winning group MATCHED this
+ * record, so its wanted value is the record's value too — both go, and so
+ * does a fallback field that names the owner. A related-record label (a
+ * dotted filter such as region.name) is shown only when they can read that
+ * collection and see those records; otherwise the record's related ids
+ * stand in as `#id`.
+ */
 export async function redactOwnerFacts(
   ex: OwnerExplanation,
   user: User,
@@ -398,31 +480,82 @@ export async function redactOwnerFacts(
   // null = every field (getAllowedFields' own convention); a lookup failure
   // reads as nothing readable, so it fails closed.
   const allowed = await getAllowedFields(user, 'read', ex.collection).catch(() => [] as string[])
-  if (allowed === null || allowed.includes('*')) return ex
-  const ok = new Set(allowed)
-  const hidden = (field: string) => !ok.has(field.split('.')[0])
-  const anyHidden = ex.groups.some((g) => g.filters.some((f) => hidden(f.field)))
-  if (!anyHidden) return ex
-  // The winning group MATCHED this record, so its wanted value on a field
-  // is the record's value too — blank both, and the field's name, for any
-  // field the caller cannot read.
-  const masked = { field: '', label: HIDDEN_FIELD_LABEL, wants: '', record_value: '' }
-  const groups = ex.groups.map((g) => ({
-    ...g,
-    filters: g.filters.map((f) => (hidden(f.field) ? masked : f))
-  }))
+  const all = allowed === null || allowed.includes('*')
+  const ok = new Set(all ? [] : allowed)
+  const hidden = (field: string) => !all && !ok.has(field.split('.')[0])
+
+  // Related labels: one verdict per (collection, ids), as the caller.
+  const labelOk = new Map<string, boolean>()
+  for (const f of ex.groups.flatMap((g) => g.filters)) {
+    if (f.related_collection === undefined || hidden(f.field)) continue
+    const ids = f.record_ids ?? []
+    const key = `${f.related_collection}|${ids.join(',')}`
+    if (labelOk.has(key)) continue
+    labelOk.set(key, await canSeeRelated(user, f.related_collection, ids))
+  }
+  const relatedHidden = (f: GroupFilterFact) =>
+    f.related_collection !== undefined &&
+    !labelOk.get(`${f.related_collection}|${(f.record_ids ?? []).join(',')}`)
+
+  const masked: GroupFilterFact = {
+    field: '',
+    label: HIDDEN_FIELD_LABEL,
+    wants: '',
+    record_value: ''
+  }
+  const clean = (f: GroupFilterFact): GroupFilterFact => {
+    if (hidden(f.field)) return masked
+    const out: GroupFilterFact = {
+      field: f.field,
+      label: f.label,
+      wants: f.wants,
+      record_value: f.record_value
+    }
+    if (relatedHidden(f)) {
+      out.wants = f.wants_id ? `#${f.wants_id}` : ''
+      out.record_value = (f.record_ids ?? []).map((id) => `#${id}`).join(', ')
+    }
+    return out
+  }
+  const byField = new Map(ex.groups.flatMap((g) => g.filters).map((f) => [f.field, f]))
+  const groups = ex.groups.map((g) => ({ ...g, filters: g.filters.map(clean) }))
   const owners = ex.owners.map((o) => {
-    const sources = o.sources.map((s) =>
-      s.kind === 'group' && s.matched
-        ? {
-            ...s,
-            matched: s.matched.map((m) =>
-              m.field && hidden(m.field) ? { ...masked, hidden: true } : m
-            )
-          }
-        : s
-    )
+    const sources = o.sources.map((s): OwnerSource => {
+      if (s.kind === 'group' && s.matched)
+        return {
+          ...s,
+          matched: s.matched.map((m) => {
+            if (m.field && hidden(m.field)) return { ...masked, hidden: true }
+            const fact = m.field ? byField.get(m.field) : undefined
+            if (!fact) return m
+            const c = clean(fact)
+            return { ...m, wants: c.wants, record_value: c.record_value }
+          })
+        }
+      if (s.kind === 'fallback' && s.field && hidden(s.field))
+        return { kind: 'fallback', field: null, field_label: null, field_hidden: true }
+      if (s.kind === 'fallback') return { ...s, field: null }
+      return s
+    })
     return { ...o, sources, sentences: sources.map((s) => ownerSourceSentence(o.name, s)) }
   })
   return { ...ex, groups, owners }
+}
+
+/** The caller may read the collection AND sees every one of these records. */
+async function canSeeRelated(
+  user: User,
+  collection: string | null,
+  ids: string[]
+): Promise<boolean> {
+  if (!collection) return false
+  if (!(await can(user, 'read', collection).catch(() => false))) return false
+  if (ids.length === 0) return true
+  try {
+    const gates = await compileAccessGates(user, collection)
+    const seen = await visibleIds(gates, ids)
+    return ids.every((id) => seen.has(id))
+  } catch {
+    return false
+  }
 }

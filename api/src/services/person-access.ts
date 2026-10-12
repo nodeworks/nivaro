@@ -105,12 +105,14 @@ async function scopeLabels(
 }
 
 /**
- * `selfView`: a non-admin reading their OWN access. Totals are left out —
- * "4,271 of 88,000" would tell them roughly how much is hidden from them.
+ * `viewerIsAdmin`: totals ("of 88,000") are given ONLY to an administrator.
+ * Anyone else is reading their own access, and a total — approximate or,
+ * when partition stats are missing, an exact count — would tell them how
+ * many rows are hidden from them; they get "limited by your Zone filter".
  */
 export async function summarizePersonAccess(
   userId: string,
-  opts: { selfView?: boolean } = {}
+  opts: { viewerIsAdmin?: boolean } = {}
 ): Promise<PersonAccessSummary | null> {
   const user = (await db('nivaro_users').where({ id: userId }).first()) as
     | (User & { first_name?: string | null; last_name?: string | null; email?: string | null })
@@ -171,8 +173,11 @@ export async function summarizePersonAccess(
       const label = humanCollection(c, names.get(c))
       const gates = await compileAccessGates(user, c)
       const narrowed = !!gates.rowFilter || gates.scopes.length > 0 || !!gates.strict
-      const total = sizes.get(c) ?? (await countVisible({ ...gates, bypass: true }))
-      const visible = narrowed ? await countVisible(gates) : total
+      // Unnarrowed: what they see IS the whole table, so its size is theirs
+      // to know. Narrowed: the table's size is computed for admins only.
+      const tableSize = async () => sizes.get(c) ?? (await countVisible({ ...gates, bypass: true }))
+      const visible = narrowed ? await countVisible(gates) : await tableSize()
+      const total = narrowed ? (opts.viewerIsAdmin ? await tableSize() : null) : visible
       // Stats lag a little; never print "4,300 of 4,271".
       const shownTotal = total != null && visible != null ? Math.max(total, visible) : total
       const [canUpdate, canCreate, canDelete] = await Promise.all([
@@ -190,7 +195,7 @@ export async function summarizePersonAccess(
         collection: c,
         collection_label: label,
         visible,
-        total: opts.selfView ? null : shownTotal,
+        total: shownTotal,
         can_update: canUpdate,
         can_create: canCreate,
         can_delete: canDelete,
@@ -202,12 +207,18 @@ export async function summarizePersonAccess(
   )
 
   const cannot = facts.filter((f) => !f.can_update).map((f) => f.collection_label)
-  const sentences = facts.map((f) => personCollectionSentence(name, f))
-  const cannotLine = personCannotSentence(name, cannot)
+  const voice = opts.viewerIsAdmin ? 'third' : 'self'
+  const sentences = facts.map((f) => personCollectionSentence(name, f, voice))
+  const cannotLine = personCannotSentence(name, cannot, voice)
+  const roleName = roleRow?.name ? `the ${roleRow.name} role` : 'a role'
   const lead =
-    facts.length === 0
-      ? `${name}'s role (${roleRow?.name ?? 'no name'}) cannot read any of the main collections.`
-      : `${name} has the ${roleRow?.name ?? ''} role.`.replace('the  role', 'a role')
+    voice === 'self'
+      ? facts.length === 0
+        ? `Your role (${roleRow?.name ?? 'no name'}) cannot read any of the main collections.`
+        : `You have ${roleName}.`
+      : facts.length === 0
+        ? `${name}'s role (${roleRow?.name ?? 'no name'}) cannot read any of the main collections.`
+        : `${name} has ${roleName}.`
   return {
     user: head,
     collections: facts,
