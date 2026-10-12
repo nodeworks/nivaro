@@ -129,6 +129,16 @@ function validateRedirectUrl(url: string): string | null {
 
 // ── as-the-viewer helpers (#1675 security pass) ──────────────────────────────
 
+/** System tables (users with tokens, settings with secrets, API keys) are never a widget source. */
+const SYSTEM_COLLECTION = /^(nivaro|directus)_/i
+
+function assertNotSystem(...collections: Array<string | null | undefined>): void {
+  for (const c of collections) {
+    if (c && SYSTEM_COLLECTION.test(c))
+      throw Object.assign(new Error('Unknown collection'), { statusCode: 400 })
+  }
+}
+
 /** `{col: {_eq: v}}` widget filters as items-service `_and` members. */
 function eqFilters(raw: Record<string, unknown>): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = []
@@ -197,7 +207,10 @@ async function gateWalk(
 ): Promise<void> {
   if (recordId != null) await assertHostReadable(user, cfg.host_collection, recordId)
   await assertWidgetFieldsReadable(user, cfg.collection, fields)
-  for (const l of lookups) await assertLookupReadable(user, l)
+  for (const l of lookups) {
+    assertNotSystem(l.collection)
+    await assertLookupReadable(user, l)
+  }
 }
 
 // ── render engine ─────────────────────────────────────────────────────────────
@@ -222,6 +235,7 @@ async function renderWidget(
     const field = config.field as string
     const aggregation = (config.aggregation as string) ?? 'none'
 
+    assertNotSystem(collection)
     if (!(await can(user, 'read', collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
@@ -270,6 +284,7 @@ async function renderWidget(
     const collection = config.collection as string
     const fields = (config.fields as string[]) ?? []
 
+    assertNotSystem(collection)
     if (!(await can(user, 'read', collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
@@ -299,6 +314,7 @@ async function renderWidget(
 
     // Permission check — caller must be able to read the target collection
     if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    assertNotSystem(cfg.collection, cfg.host_collection)
     if (!(await can(user, 'read', cfg.collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
@@ -330,6 +346,7 @@ async function renderWidget(
 
     // Permission check — caller must be able to read the target collection
     if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    assertNotSystem(cfg.collection, cfg.host_collection)
     if (!(await can(user, 'read', cfg.collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
@@ -763,7 +780,7 @@ async function renderWidget(
           resolved.toggle_on_value = tOnValue
           resolved.action_config = acConf
           // resolve current state from DB so display doesn't depend on inputs (reliable for bit fields)
-          if (tCollection && tField) {
+          if (tCollection && tField && !SYSTEM_COLLECTION.test(tCollection)) {
             const itemId = inputs[tIdInput]
             if (itemId) {
               try {
@@ -946,6 +963,8 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     const draft = body.draft as Record<string, unknown> | undefined
     const itemCollection = body.item_collection as string | undefined
     if (bindings && draft && itemCollection) {
+      if (SYSTEM_COLLECTION.test(itemCollection))
+        return reply.code(400).send({ error: 'Unknown collection' })
       // Guard: caller must be able to read the source collection
       if (req.user && !(await can(req.user, 'read', itemCollection))) {
         return reply.code(403).send({ error: 'Forbidden' })
@@ -966,7 +985,8 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
           .whereNull('junction_field')
           .whereNotNull('one_collection')
           .first()
-        if (!rel?.one_collection) {
+        // A system table (users with tokens, settings with secrets) never binds a value.
+        if (!rel?.one_collection || SYSTEM_COLLECTION.test(rel.one_collection)) {
           inputs[b.key] = null
           continue
         }
