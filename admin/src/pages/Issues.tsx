@@ -327,6 +327,33 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
   // Live occurrences of THIS issue (admin room): who hit it, on which route and build, as it
   // happens. Held in this open row only — the log itself keeps a count, not each hit.
   const [live, setLive] = useState<LiveOccurrence[]>([])
+  // The stored tail (last 50 hits, 30 days) — what a reload would otherwise lose.
+  const { data: stored = [] } = useQuery<LiveOccurrence[]>({
+    queryKey: ['issue-occurrences', issue.id],
+    queryFn: () =>
+      api
+        .get<{
+          data: Array<{
+            occurred_at: string
+            user_id: string | null
+            route: string | null
+            build: string | null
+            source: string | null
+          }>
+        }>(`/issues/${issue.id}/occurrences`)
+        .then((r) =>
+          r.data.data.map((o) => ({
+            route: o.route ?? '',
+            source: o.source ?? '',
+            user_id: o.user_id,
+            build: o.build,
+            count: 0,
+            at: new Date(o.occurred_at).getTime()
+          }))
+        ),
+    staleTime: 30_000,
+    retry: false
+  })
   useLiveOps(
     `issue:${issue.id}`,
     (d) => {
@@ -336,6 +363,12 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
     },
     { debounceMs: 0 }
   )
+  const shownRows = [
+    ...live,
+    ...stored.filter(
+      (o) => !live.some((l) => l.at >= o.at - 1000 && l.at <= o.at + 1000 && l.route === o.route)
+    )
+  ].slice(0, 50)
   const shownCount = live[0]?.count ?? full?.occurrence_count ?? issue.occurrence_count ?? null
 
   const replayId = issue.recording_id ?? full?.recording_id
@@ -359,15 +392,15 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
       {shownCount != null && shownCount > 1 && (
         <p className='text-[12px] text-muted-foreground' data-issue-occurrences={shownCount}>
           Seen <span className='font-medium text-foreground'>{shownCount}</span> times
-          {live.length > 0 ? ' — newest first' : ''}
+          {shownRows.length > 0 ? ' — newest first' : ''}
         </p>
       )}
-      {live.length > 0 && (
+      {shownRows.length > 0 && (
         <ul
           className='divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-[11.5px] dark:divide-border/60 dark:border-border dark:bg-card'
           data-issue-live-occurrences
         >
-          {live.map((o) => {
+          {shownRows.map((o) => {
             const who = o.user_id
               ? users.find((u) => u.id.toLowerCase() === o.user_id?.toLowerCase())
               : null

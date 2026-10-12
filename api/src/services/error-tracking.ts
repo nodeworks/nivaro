@@ -29,6 +29,48 @@ export function issueFingerprint(source: string, route: string, message: string)
     .digest('hex')
 }
 
+const OCCURRENCE_KEEP = 50
+const OCCURRENCE_DAYS = 30
+
+/** Best-effort: store the hit, then keep only the last 50 (and 30 days) for that issue. */
+async function recordOccurrence(
+  issueId: number,
+  opts: { source: string; route: string; userId?: string | null; build?: string | null }
+): Promise<void> {
+  try {
+    if (!(await db.schema.hasTable('nivaro_issue_occurrences'))) return
+    await db('nivaro_issue_occurrences').insert({
+      issue: issueId,
+      occurred_at: new Date(),
+      user_id: opts.userId ?? null,
+      route: opts.route.slice(0, 300),
+      build: (opts.build ?? (opts.source === 'server' ? NIVARO_VERSION : null))?.slice(0, 60) ?? null,
+      source: opts.source.slice(0, 10)
+    })
+    const keep = (await db('nivaro_issue_occurrences')
+      .where('issue', issueId)
+      .orderBy([
+        { column: 'occurred_at', order: 'desc' },
+        { column: 'id', order: 'desc' }
+      ])
+      .limit(OCCURRENCE_KEEP)
+      .select('id')) as Array<{ id: number }>
+    await db('nivaro_issue_occurrences')
+      .where('issue', issueId)
+      .where((w) => {
+        void w
+          .whereNotIn(
+            'id',
+            keep.map((k) => k.id)
+          )
+          .orWhere('occurred_at', '<', new Date(Date.now() - OCCURRENCE_DAYS * 86_400_000))
+      })
+      .del()
+  } catch {
+    /* the log is best-effort */
+  }
+}
+
 export async function trackError(opts: {
   source: 'server' | 'client'
   route: string
@@ -51,7 +93,8 @@ export async function trackError(opts: {
 
     // The occurrence an open issue page streams (admin room): who, where, which build.
     // Names a person by id only — the page resolves it through an admin-only route.
-    const announce = (issueId: number, count: number) =>
+    const announce = (issueId: number, count: number) => {
+      void recordOccurrence(issueId, opts)
       emitOps(`issue:${issueId}`, {
         occurrence: {
           route: opts.route.slice(0, 300),
@@ -61,6 +104,7 @@ export async function trackError(opts: {
           count
         }
       })
+    }
 
     const existing = await db('nivaro_issues')
       .where({ fingerprint })
