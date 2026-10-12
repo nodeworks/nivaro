@@ -769,6 +769,19 @@ export const collabChat: DocSection = {
     {
       type: 'note',
       text: 'To reach a whole group at once, use @channel in a channel room — it notifies up to 300 members and is limited to the channel’s creator or an admin. Regular @mentions are per-person.'
+    },
+    { type: 'h2', id: 'collab-chat-polls', text: 'Polls, slash commands and search by meaning' },
+    {
+      type: 'p',
+      text: 'Type `/poll` in the composer to ask a room a question: 2–10 options, single or several answers, anonymous votes, and an optional close time. Results update live; when the poll closes (by its author or an admin, or at the close time) a summary line is posted in the room. Anonymous polls show counts only, never who voted.'
+    },
+    {
+      type: 'p',
+      text: 'Typing `/` lists the commands: `/task` (on the room’s record or for a person), `/remind`, `/poll` and `/note` (on the record) each open a small form above the box. Extensions add their own with `ctx.chat.registerCommand({ name, description, run })`; they run as the person typing.'
+    },
+    {
+      type: 'p',
+      text: 'Chat search also finds messages by meaning, listed after the exact matches and limited to rooms you can see. The room info drawer’s Files and Links tabs are searchable and each link has a Show jump. The @mention picker lists people who are online first.'
     }
   ]
 }

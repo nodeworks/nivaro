@@ -114,6 +114,7 @@ import {
   useUserSearch
 } from './chat-core'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
+import { PollCard } from './PollCard'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
 import {
   ChannelIntro,
@@ -1721,6 +1722,7 @@ export function ChatRoomView({
                     navigate={cfg.navigate}
                   />
                 ))}
+              {m.poll && <PollCard poll={m.poll} room={m.room} mine={mine} />}
               {(m.attachments ?? []).length > 0 && (
                 <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
                   {(m.attachments ?? []).map((aid) => {

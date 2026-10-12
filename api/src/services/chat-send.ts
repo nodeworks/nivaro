@@ -413,6 +413,11 @@ async function postInner(
     for (const p of parsedRoom.participants ?? []) app.io?.to(`user:${p}`).emit('chat:message', row)
   }
 
+  // Search by meaning (#2354): index the words, never blocking the send.
+  if (!system) {
+    void import('./chat-semantic.js').then((m) => m.indexChatMessage(id, room, message, system))
+  }
+
   if (!system && senderId) {
     void fanOut(app, actor, row, parsedRoom).catch((err) =>
       app.log.warn({ err, room }, 'chat fan-out failed')

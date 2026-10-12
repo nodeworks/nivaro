@@ -32,6 +32,27 @@ export interface ChatReaction {
   user_name: string | null
 }
 
+/** A poll posted into a room (#2337); counts are server-side, anonymous polls carry no voters. */
+export interface ChatPoll {
+  id: number
+  message_id: number
+  question: string
+  multiple: boolean
+  anonymous: boolean
+  closes_at: string | null
+  closed_at: string | null
+  closed: boolean
+  options: Array<{
+    index: number
+    label: string
+    count: number
+    voters?: Array<{ id: string; name: string | null }>
+  }>
+  mine: number[]
+  total_voters: number
+  can_close: boolean
+}
+
 export interface ChatMessage {
   id: number
   sender: string
@@ -71,6 +92,7 @@ export interface ChatMessage {
   mentions?: string[]
   /** Times written in the message, as stored instants (#962). */
   time_refs?: Array<{ text: string; at: string }>
+  poll?: ChatPoll | null
 }
 
 /** Where a room view opens: the newest messages, or around a message / day. */

@@ -1445,6 +1445,16 @@ export async function buildServer() {
         },
         { quiet: true }
       )
+      // Close chat polls whose time has passed and post their summary line (#2337).
+      app.cron.schedule(
+        'chat-polls-close',
+        '*/30 * * * * *',
+        async () => {
+          const { closeDuePolls } = await import('./services/chat-polls.js')
+          await closeDuePolls(app)
+        },
+        { quiet: true }
+      )
       // Email fallback for unread DMs (#965) — opt-in per person.
       app.cron.schedule('chat-dm-email-fallback', '*/5 * * * *', async () => {
         const { sweepDmEmailFallback } = await import('./services/chat-send.js')

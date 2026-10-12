@@ -586,6 +586,10 @@ export function registrationMembers(
       )
     },
     chat: {
+      registerCommand: (def) => {
+        note('chat')
+        void import('../services/chat-commands.js').then((m) => m.registerChatCommand(extId, def))
+      },
       post: async (room, text, o) => {
         note('chat')
         try {
@@ -1234,6 +1238,7 @@ async function loadExtension(
     const extId = ext.id
     extensionRoutes.delete(extId)
     clearHelpVideoRegistrations(extId)
+    void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(extId))
 
     // Capability manifest (#660): the ctx members register() touches are noted
     // as observed capabilities, compared against the declared list in the UI.
@@ -1691,6 +1696,7 @@ export function removeExtension(id: string): boolean {
 
   extensionRegistry.delete(id)
   hooks.removeExtensionHooks(id)
+  void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(id))
 
   const config = readConfig()
   delete config[id]
