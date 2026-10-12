@@ -298,7 +298,7 @@ export const userFiles: DocSection = {
     },
     {
       type: 'p',
-      text: 'The Unused scope lists files no record references (every foreign key into nivaro_files is checked live). "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).'
+      text: 'The Unused scope lists files nothing uses and that are older than 30 days: no foreign key points at them, and no file field, many-to-many file link, config JSON (pages, widgets, templates, settings), rich text or `*file*` column names them — the same check Config review uses. The scan is cached for five minutes; if any place a file can be named cannot be read, nothing is listed and the purge deletes nothing. "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).'
     },
     {
       type: 'p',
