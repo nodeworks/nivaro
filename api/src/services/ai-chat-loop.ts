@@ -48,6 +48,8 @@ export interface ChatLoopOptions extends ChatLoopCallbacks {
   /** The conversation; the loop APPENDS to it. */
   convo: Anthropic.MessageParam[]
   maxTokens?: number
+  /** Replay runs (#1916): propose_action is refused so a re-run never stores a proposal. */
+  readOnly?: boolean
   warn?: (err: unknown, msg: string) => void
 }
 
@@ -179,6 +181,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       const input = (block.input ?? {}) as Record<string, unknown>
       onStatus?.({ round, tool: block.name, text: describeToolCall(block.name, input) })
       try {
+        if (opts.readOnly && block.name === 'propose_action')
+          throw new Error('Proposals are disabled in a replay run')
         const { result, summary } = await executeChatTool(user, block.name, input)
         trace.push({ tool: block.name, input, summary })
         if (block.name === 'propose_action' && result && typeof result === 'object') {

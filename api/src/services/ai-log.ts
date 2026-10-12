@@ -1,5 +1,6 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
+import { emitAiCallLive } from './ai-quality.js'
 import {
   type AiMessageStream,
   type AiStreamEvent,
@@ -135,6 +136,19 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
         cached,
         cost: costOf(res.model || base.model, { input, cached, output })
       })
+      emitAiCallLive({
+        at: new Date().toISOString(),
+        request_id: base.request_id,
+        feature: base.feature,
+        model: res.model || base.model,
+        provider,
+        user: base.user,
+        status: 'ok',
+        latency_ms: latency,
+        cost_usd: costOf(res.model || base.model, { input, cached, output }),
+        input_tokens: input,
+        output_tokens: output
+      })
       void db('nivaro_ai_calls')
         .insert({
           ...base,
@@ -160,6 +174,20 @@ function beginAiCall(provider: AiProviderKind, params: MessageParams) {
         model: base.model,
         ok: false,
         ms: Math.round(performance.now() - started)
+      })
+      emitAiCallLive({
+        at: new Date().toISOString(),
+        request_id: base.request_id,
+        feature: base.feature,
+        model: base.model,
+        provider,
+        user: base.user,
+        status: 'error',
+        latency_ms: Math.round(performance.now() - started),
+        cost_usd: null,
+        input_tokens: null,
+        output_tokens: null,
+        error: String((err as Error)?.message ?? err).slice(0, 200)
       })
       void db('nivaro_ai_calls')
         .insert({

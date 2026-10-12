@@ -14,6 +14,7 @@ import {
   recordPlaybook,
   retrievePlaybooks
 } from '../services/ai-playbooks.js'
+import { takeFallbackNote } from '../services/ai-quality.js'
 import { consumeText, streamMessage } from '../services/ai-stream.js'
 import {
   pickStreamMode,
@@ -1607,7 +1608,8 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             playbooks_used: playbooksUsed
           }
         }
-        const text = result.text
+        // #1821 — an answer written by the fallback model says so
+        const text = result.text ? result.text + (takeFallbackNote(requestId) ?? '') : result.text
         // A standalone question (no earlier turns) answered with tool calls
         // becomes a playbook. Follow-ups ("and for 2025?") are skipped —
         // they mean nothing without the conversation. A stopped answer is

@@ -61,6 +61,7 @@ import {
 import {
   adminI18nDocs,
   aiChatDocs,
+  aiQualityDocs,
   fieldImpactDocs,
   formsV2Docs,
   pipelineHealthDocs,
@@ -598,6 +599,7 @@ export const navSections: NavGroup[] = [
     label: 'AI Features',
     items: [
       aiChatDocs,
+      aiQualityDocs,
       aiActionsDocs,
       aiOverview,
       aiGenerate,

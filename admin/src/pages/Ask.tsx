@@ -7,6 +7,7 @@ import {
   NivaroProvider,
   useAiStream
 } from '@nivaro/shared'
+import { useQuery } from '@tanstack/react-query'
 import { Loader2, Mic, Send, Sparkles, Square, Volume2, VolumeX, Wrench } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
@@ -188,6 +189,18 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
 function AskPageInner() {
   const [turns, setTurns] = useState<ChatTurn[]>([])
   const [input, setInput] = useState('')
+  // #1893 — remaining daily AI budget; the route says enabled:false (nothing shown) with no caps
+  const budget = useQuery({
+    queryKey: ['ai-quality', 'budget-me', turns.length],
+    queryFn: async () =>
+      (await api.get('/ai/budget/me', { params: { feature: 'chat' } })).data.data as {
+        enabled: boolean
+        remaining_usd?: number | null
+        resets_at?: string
+        exhausted?: boolean
+      },
+    staleTime: 30_000
+  })
   const scrollRef = useRef<HTMLDivElement>(null)
   const [searchParams, setSearchParams] = useSearchParams()
 
@@ -510,6 +523,15 @@ function AskPageInner() {
       </div>
 
       <div className='shrink-0 border-t border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+        {budget.data?.enabled && (
+          <p className='mx-auto mb-2 w-full max-w-3xl text-[11px] text-slate-500 dark:text-muted-foreground'>
+            {budget.data.exhausted
+              ? 'Today’s AI budget is used up'
+              : `AI budget left today: $${(budget.data.remaining_usd ?? 0).toFixed(2)}`}
+            {budget.data.resets_at &&
+              ` · resets ${new Date(budget.data.resets_at).toLocaleTimeString()}`}
+          </p>
+        )}
         <div className='mx-auto flex w-full max-w-3xl items-end gap-2'>
           <textarea
             value={input}

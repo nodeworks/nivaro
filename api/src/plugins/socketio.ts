@@ -248,7 +248,15 @@ export function getRecordViewerSnapshot(): Array<{
 
 // Watch rooms admins may join via admin:join (traffic feed, job progress,
 // monitor flips). Allowlisted — a socket can't invent a privileged room name.
-const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors', 'firehose', 'flows', 'traffic-map'])
+const WATCH_ROOMS = new Set([
+  'traffic',
+  'jobs',
+  'monitors',
+  'firehose',
+  'flows',
+  'traffic-map',
+  'ai-calls'
+])
 
 /**
  * Per-socket join/leave ordering for watch rooms. `admin:join` awaits a role lookup while

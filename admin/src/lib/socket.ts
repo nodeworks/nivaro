@@ -126,6 +126,7 @@ const RELAYED_EVENTS = new Set([
   'job:update',
   'monitor:status',
   'traffic:request',
+  'ai:call',
   'traffic-map:frame',
   'traffic-map:viewer',
   'lock:requested',
