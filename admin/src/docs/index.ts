@@ -2,6 +2,7 @@ import type { DocSection } from './types.js'
 
 // ─── Section imports ──────────────────────────────────────────────────────────
 
+export * from './sections/access-insights.js'
 export * from './sections/admin-ux.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
@@ -47,6 +48,7 @@ export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
 export * from './sections/workflows-pipelines.js'
 
+import { accessInsightsDocs } from './sections/access-insights.js'
 import {
   adminUxAiMapping,
   adminUxAiQuery,
@@ -599,6 +601,7 @@ export const navSections: NavGroup[] = [
     items: [
       aiChatDocs,
       aiActionsDocs,
+      accessInsightsDocs,
       aiOverview,
       aiGenerate,
       aiSummarize,

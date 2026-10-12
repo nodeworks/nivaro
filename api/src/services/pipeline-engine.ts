@@ -429,7 +429,7 @@ export async function warmOwnerGroupCache(): Promise<number> {
  * module default (a transaction, a tenant DB) bypasses the cache — a cached
  * answer from a different connection would be wrong in cloud mode.
  */
-async function getOwnerGroupsForStates(
+export async function getOwnerGroupsForStates(
   stateIds: string[],
   database: typeof db
 ): Promise<Map<string, { groups: OwnerGroup[]; prepared: PreparedOwnerGroups }>> {
@@ -581,7 +581,7 @@ export interface OwnerResolutionRequest {
 //     the final hop (category id) and the display column value.
 // Fields that fail to resolve are simply omitted — pickWinningGroups falls back
 // to its legacy prefix behavior for them.
-async function resolveFilterValues(
+export async function resolveFilterValues(
   collection: string,
   records: Map<string, Record<string, unknown>>,
   fields: string[],
