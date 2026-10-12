@@ -3,13 +3,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const linkLabels = vi.fn()
 vi.mock('../../../services/ai-link-labels.js', () => ({ linkLabelsAsUser: linkLabels }))
 vi.mock('../../../db/index.js', () => ({
-  db: vi.fn((table: string) => {
+  db: vi.fn(() => {
     const b: Record<string, unknown> = {}
     b.where = vi.fn((w: { collection?: string }) => {
       b._c = w.collection
       return b
     })
-    b.first = vi.fn(async () => (b._c === 'requests' || b._c === 'salaries' ? { collection: b._c } : undefined))
+    b.first = vi.fn(async () =>
+      b._c === 'requests' || b._c === 'salaries' ? { collection: b._c } : undefined
+    )
     return b
   })
 }))
