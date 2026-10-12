@@ -53,8 +53,6 @@ export const LIVE_WINDOW_EVENT = 'nvr:live-event'
 export interface LiveEvent extends CollectionUpdateEvent {
   /** This tab (or this user) made the write. */
   own: boolean
-  /** 'raw' when a procedure/import announced the write (rt-events #1875). */
-  source?: string
   /** Number of records a bulk raw write touched (with item '*'). */
   bulk?: number
 }
