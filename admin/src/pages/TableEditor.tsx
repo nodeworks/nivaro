@@ -1,5 +1,7 @@
 import type { Modifier } from '@dnd-kit/core'
 import { SimpleSelect } from '@/components/ui/simple-select'
+import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
+import { LayoutReviewSection } from '@/components/ai-layout-review'
 import {
   closestCenter,
   DndContext,
@@ -4627,6 +4629,7 @@ function SettingsTab({
       <DependencyMapSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
+      <HelpTextDraftsSection tableName={tableName} />
     </div>
   )
 }
@@ -19869,6 +19872,7 @@ function LayoutsTab({
                         }
                       />
                       <LayoutVersionsSection layoutId={selected.id} />
+                      <LayoutReviewSection layoutId={selected.id} />
                       <PreviewAsRoleSection
                         tableName={tableName}
                         roles={roles}
