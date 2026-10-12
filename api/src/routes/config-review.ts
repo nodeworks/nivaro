@@ -12,11 +12,15 @@ import {
 import { REVIEW_FAMILIES, runConfigReview } from '../services/config-review/index.js'
 import {
   APPLIED_KEEP,
+  CLEANUP_BOUNDS,
+  CLEANUP_DEFAULTS,
   decodeDetail,
   encodeDetail,
   publicDetail,
-  undoableFix
+  undoableFix,
+  validateCleanup
 } from '../services/config-review/pure.js'
+import { loadCleanupDefaults, saveCleanupDefaults } from '../services/config-review/settings.js'
 
 /**
  * Config review (#1913 / #1961 / #2020 / #1999): the monthly report, its
@@ -77,6 +81,33 @@ export async function configReviewRoutes(app: FastifyInstance): Promise<void> {
       running,
       last_run: last ?? null
     }
+  })
+
+  // Cleanup thresholds (#2020): the saved defaults the monthly run and the
+  // page start from, with the bounds a save must respect.
+  app.get('/settings', async () => ({
+    data: {
+      cleanup: await loadCleanupDefaults(),
+      defaults: CLEANUP_DEFAULTS,
+      bounds: CLEANUP_BOUNDS
+    }
+  }))
+
+  app.put<{ Body: { cleanup?: unknown } }>('/settings', async (req, reply) => {
+    const checked = validateCleanup(req.body?.cleanup)
+    if (!checked.ok) return reply.code(400).send({ error: checked.error })
+    const before = await loadCleanupDefaults()
+    await saveCleanupDefaults(checked.value)
+    const v = checked.value
+    await logActivity({
+      action: 'config-review-settings',
+      user: req.user?.id ?? null,
+      collection: 'nivaro_extension_settings',
+      item: 'nivaro-core:config_review_cleanup',
+      comment: `Cleanup defaults: drafts ${before.draftMonths}→${v.draftMonths} months, tasks ${before.taskMonths}→${v.taskMonths} months, views ${before.viewDays}→${v.viewDays} days`,
+      req
+    })
+    return { data: { cleanup: v } }
   })
 
   // Run now — in the background (the empty-field scan reads every small
