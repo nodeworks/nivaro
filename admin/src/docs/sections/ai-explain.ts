@@ -18,8 +18,17 @@ export const aiExplainGuide: DocSection = {
         'Background jobs: a failed run, from its log and error.',
         'Webhooks: a failed delivery, from the receiver response, with whether a retry is safe.',
         'Go-Live Readiness: steps to fix a warning or failing check.',
-        'Data Model: a plain-words description of the collections, how they relate and their life cycle.'
+        'Data Model: a plain-words description of the collections, how they relate and their life cycle.',
+        'Imports (admin and every app that hosts the Import Console): open a failed run, or one that took two minutes or more, for "Explain this failure" / "Explain why this was slow" (phases against the definition\'s usual runs).',
+        'Integrations console: every open row has "Explain this failure": the plain cause from the partner response, whether a retry is safe and the integration owner to contact.',
+        'API Analytics, Real-user timings: Explain on a route says where the time goes (server wait, rendering, navigation) and what would help most.',
+        "Pipeline editor, a collection's Field rules and the layout editor: Describe this pipeline / these rules / this layout in plain English."
       ]
+    },
+    { type: 'h2', id: 'ai-explain-groups', text: 'Grouped issues' },
+    {
+      type: 'p',
+      text: 'On the Issues page (administrators), switch from List to Grouped to see open issues clustered by meaning: ten variants of one bug read as one problem with the variants underneath. Split out sends a variant (or a whole group) back to standing alone; tick several groups and Merge to fold them into the first one ticked. Your changes are stored on the server, apply on top of every later re-clustering and can be undone with Reset my changes.'
     },
     { type: 'h2', id: 'ai-explain-privacy', text: 'What the model never sees' },
     {
@@ -43,7 +52,11 @@ export const aiExplainGuide: DocSection = {
         ['GET /api/ai-explain/kinds', 'The kinds on offer.'],
         [
           'GET /api/ai-explain/issue-groups',
-          'Open issues clustered by meaning (message and route), variants under each lead.'
+          'Open issues clustered by meaning (message and route), variants under each lead, admin overrides applied.'
+        ],
+        [
+          'POST /api/ai-explain/issue-groups/overrides',
+          "Body {op: split|merge|reset, ids, into?}: split issues out, merge them into another issue's group, or reset. Returns the regrouped list. Admin only."
         ]
       ]
     },

@@ -4,7 +4,7 @@ export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
-export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
 export {
   type AiPlan,
   AiPlanCard,
@@ -14,6 +14,15 @@ export {
   type AiPlanSubscribe
 } from './components/ai/AiPlanCard'
 export { AiStepList } from './components/ai/AiStepList'
+export {
+  type AnswerFormat,
+  type AnswerRows,
+  cellNumber,
+  chartOf,
+  formatsFor,
+  listOf,
+  rowsOfBlock
+} from './components/ai/answer-formats'
 export { DataGuideCard } from './components/ai/DataGuideCard'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
@@ -120,6 +129,7 @@ export {
   startDocumentExtraction,
   useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'
@@ -478,6 +488,7 @@ export * from './lib/jobs-tray'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export * from './lib/live'
+export * from './lib/live-ops'
 export {
   type NotificationSound,
   playNotificationSound,

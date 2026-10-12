@@ -16,6 +16,7 @@ import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
+import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
 import { aiExplainRoutes } from './ai-explain.js'
 import { aiKnowledgeRoutes } from './ai-knowledge.js'
@@ -52,6 +53,7 @@ import { commentsRoutes } from './comments.js'
 import { configConformanceRecordRoutes, configConformanceRoutes } from './config-conformance.js'
 import { configDiffRoutes } from './config-diff.js'
 import { configHealthRoutes } from './config-health.js'
+import { configReviewRoutes } from './config-review.js'
 import { configSearchRoutes } from './config-search.js'
 import { configSeedRoutes } from './config-seeds.js'
 import { contentExportRoutes } from './content-export.js'
@@ -361,6 +363,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(integrationPartnersRoutes)
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
+  await app.register(aiConversationRoutes, { prefix: '/ai/conversations' })
   await app.register(aiWatchRoutes, { prefix: '/ai/watches' })
   await app.register(aiPlanRoutes, { prefix: '/ai' })
   await app.register(aiDesignRoutes, { prefix: '/ai-design' })
@@ -377,6 +380,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(securityRoutes, { prefix: '/security' })
   await app.register(securitySelfRoutes, { prefix: '/security' })
   await app.register(configHealthRoutes, { prefix: '/config-health' })
+  await app.register(configReviewRoutes, { prefix: '/config-review' })
   await app.register(legalHoldRoutes, { prefix: '/legal-holds' })
   await app.register(automationTestRoutes, { prefix: '/automation-tests' })
   await app.register(bulkRecipeRoutes, { prefix: '/bulk-recipes' })

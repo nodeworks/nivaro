@@ -1,4 +1,6 @@
+import { useLiveOps } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRef } from 'react'
 import { toast } from 'sonner'
 import { AlertTriangle, CheckCircle2, CircleSlash, RefreshCw, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -71,9 +73,24 @@ export default function Readiness() {
       q.state.data?.some((j) => j.status === 'running') ? 2_500 : false,
     retry: false
   })
+  const startedHere = useRef(new Set<string>())
+  // Live: another admin's re-run lands here as the finished report (set, never refetched —
+  // a refetch would re-run every check and the two pages would trigger each other), and a
+  // fix finishing anywhere refreshes the job list.
+  useLiveOps('readiness', (d) => {
+    if (d.report) qc.setQueryData(['readiness'], d.report as Report)
+    if (d.remediation) {
+      void qc.invalidateQueries({ queryKey: ['readiness-remediations'] })
+      // Only the tab that started the fix re-runs the checks to show its effect; the run
+      // is broadcast, so every other open page picks the new results up from it.
+      const id = String(d.remediation.check_id)
+      if (d.remediation.status !== 'running' && startedHere.current.delete(id)) void refetch()
+    }
+  })
   const remediate = useMutation({
     mutationFn: (checkId: string) => api.post(`/readiness/${checkId}/remediate`, {}),
-    onSuccess: () => {
+    onSuccess: (_r, checkId) => {
+      startedHere.current.add(checkId)
       toast.success('Fix started — running in the background')
       void qc.invalidateQueries({ queryKey: ['readiness-remediations'] })
     },
