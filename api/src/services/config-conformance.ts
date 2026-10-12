@@ -9,6 +9,7 @@ import {
 import { buildCascade, type CascadeRule, resolveOptionFilter } from './picker-rules.js'
 import { getLabels } from './queues.js'
 import { reachableGroupedLayouts } from './reachable-layouts.js'
+import { emitRecordEvent } from './record-events.js'
 import { failingLints } from './row-lints.js'
 import {
   type GridFieldConfig,
@@ -1846,6 +1847,9 @@ export async function storeRecordResult(
           .update({ findings: payload, checked_at: now, source })
       })
   }
+  // #1829: viewers of the record refresh the integrity banner + field marks now
+  // (a notice only — they read the stored result through the gated route).
+  if (source !== 'sweep') emitRecordEvent(collection, id, 'record:integrity')
   const run = (await db('nivaro_conformance_runs')
     .where({ collection, status: 'completed' })
     .orderBy('id', 'desc')

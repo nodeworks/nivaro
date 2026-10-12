@@ -3,7 +3,28 @@ export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
-export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
+export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  type AiPlan,
+  AiPlanCard,
+  type AiPlanStatus,
+  type AiPlanStep,
+  type AiPlanStepState,
+  type AiPlanSubscribe
+} from './components/ai/AiPlanCard'
+export { AiStepList } from './components/ai/AiStepList'
+export {
+  type AnswerFormat,
+  type AnswerRows,
+  cellNumber,
+  chartOf,
+  formatsFor,
+  listOf,
+  rowsOfBlock
+} from './components/ai/answer-formats'
+export { DataGuideCard } from './components/ai/DataGuideCard'
+export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
   AlertRuleDrawer,
@@ -107,6 +128,7 @@ export {
   startDocumentExtraction,
   useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'
@@ -387,6 +409,7 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
   getApiUpdate,
@@ -449,13 +472,25 @@ export {
   setFiscalStartMonth
 } from './lib/fiscal'
 export * from './lib/format-value'
+export {
+  type GlossaryTerm,
+  glossarySegments,
+  invalidateGlossary,
+  useGlossary
+} from './lib/glossary'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
-export { type NotificationSound, playNotificationSound } from './lib/notification-sound'
+export * from './lib/live'
+export * from './lib/live-ops'
+export {
+  type NotificationSound,
+  playNotificationSound,
+  soundForCategory
+} from './lib/notification-sound'
 export {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -499,6 +534,7 @@ export {
   useOptionalRealtime,
   useRealtimeStatus
 } from './lib/realtime'
+export { useRecordTabs } from './lib/record-tabs'
 export {
   captureReplayClip,
   clipEndOffset,

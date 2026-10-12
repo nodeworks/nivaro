@@ -27,9 +27,49 @@ export const aiChatDocs: DocSection = {
         'Every answer shows the tool trace: exactly which queries produced it.',
         'A breakdown or a series (per state, per month, per vendor) comes with a chart: the model attaches a fenced `chart` block ({type, title, data:[{label, value}]}) that renders as a bar, line or pie under the prose.',
         'The same standalone question by the same person inside the answer-cache window (Settings → AI Features, default 15 minutes) answers from cache — the page says when it was first answered and offers "Ask again". Answers that propose an action are never cached; `fresh: true` in the request skips the cache.',
+        'Under a single number (an ungrouped count, sum, average, minimum or maximum) the page offers "Tell me when this goes over…": pick a threshold (goes over, reaches, drops under, falls to) or a trend watch (alerts when the series changes direction or moves outside its recent range, using the anomaly engine statistics), and how often to check (daily or hourly). The watch is re-read hourly AS YOU, so permissions and row-level security apply; you get an in-app notification when it crosses (once per crossing, not every check). "Numbers you watch" at the top of /ask lists each with its current value, change today, threshold and last alert — edit the threshold, pause or stop watching. Watches live in your own account preferences (20 at most) via `GET/POST/PATCH/DELETE /api/ai/watches` (`POST /:id/check` reads one now), and appear in your daily summary with the change since yesterday and whether they are close to the threshold. Ask "what am I watching" to have the assistant list them (my_watches).',
+        'The past_state tool reads revision and pipeline history under the same read gates as the revision API: "what did this record look like on March 1" (as_of), "when did the amount change and who changed it" (changes), "how long was it in Finance Review" (time_in_state).',
         'Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.',
         'Answers stream as they are written: send `stream: true` and the route answers `202 {data: {stream_id}}` at once, then emits `ai:delta` (text, with its round), `ai:status` (the tool running), `ai:done` (the full normal body — proposals, trace, request_id) and `ai:error` to your Socket.io user room; add `Accept: text/event-stream` to get the same events as SSE instead (widgets, hosts without the socket). A caller with neither gets the plain reply. `POST /api/ai/chat/:stream_id/stop` halts a running answer. /summarize and /generate take the same `stream` option with text deltas only. The /ask page streams by default, shows what the model is doing while tools run, and has a Stop button.'
       ]
+    }
+  ]
+}
+
+export const aiPlansDocs: DocSection = {
+  id: 'ai-plans',
+  label: 'Multi-step Plans',
+  content: [
+    { type: 'h1', id: 'ai-plans', text: 'Multi-step Plans' },
+    {
+      type: 'p',
+      text: 'A request that needs several changes together — "close out the lines on these 12 POs and tell their owners" — comes back from Ask AI as one numbered plan instead of separate proposals. Each step carries its own preview, built as you when the plan is proposed; nothing runs until you approve.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Approve & run all runs every step in order; Run next step runs one and pauses, so you can approve step by step. Every step runs as you through the normal services — permissions, row security, validation, hooks and activity all apply.',
+        'Step kinds: update records (bulk_update), create a record, create a task, create a dashboard, send a message (an in-app notification to named people and/or the current owners of records — owners are resolved again when the step runs), post to a chat room you can see, and run an active manual flow (administrators only).',
+        'A refused step stops the plan with the reason; the steps after it stay pending. A bulk step where some records refuse reports how many and which.',
+        'Conditions: a step can say "only if still in Finance Review" (a filter the records must still match) or "only if the amount is unchanged" (fields that must still hold the value they had when the plan was made). A step whose condition fails is skipped and named in the result; on a bulk update only the records that fail are left out and the rest run.',
+        'While a plan runs, the card shows each step start, finish, fail or skip as it happens, with a running count of records changed.',
+        'Retry: after fixing the cause, Re-check and retry rebuilds the failed step and the ones after it as you now — a bulk step re-reads its filter and, after a partial run, keeps only the records that refused — shows which steps changed, then runs from where the plan stopped.',
+        'While an answer is being built, each tool step is listed as a plain line ("Reading workflows… 42 found") above the answer and folds away once the answer starts.',
+        'A plan nobody started expires after an hour, like a single proposal.'
+      ]
+    },
+    { type: 'h2', id: 'ai-plans-api', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET  /api/ai/plans/step-kinds     the step kinds the model may use
+GET  /api/ai/plans/:id            the plan with each step's state (owner or administrator)
+POST /api/ai/plans/:id/run        {mode: "all" | "next"} → 202; steps run in the background
+POST /api/ai/plans/:id/retry      re-check the failed + remaining steps → status paused
+POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its next step`
+    },
+    {
+      type: 'p',
+      text: 'The chat answer carries proposed plans in `plans` next to `proposals`. Progress is pushed to your Socket.io user room as `ai:plan` ({plan_id, status, records_changed, step, plan}); `ai:status` events of a streamed answer now also arrive with `done: true` and a short `result` when each tool returns. Plans are stored in nivaro_ai_proposals with action_type `plan`.'
     }
   ]
 }

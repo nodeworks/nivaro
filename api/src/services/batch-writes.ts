@@ -382,6 +382,34 @@ async function stampsFor(
  * updated stamps) are added here. A row that cannot be written is reported
  * and never stops the others.
  */
+/**
+ * #1875 — a batch writes set-based, so no per-record hook broadcasts it. Tell
+ * open pages which records changed (ids + field names, coalesced; a large
+ * batch becomes one collection-wide event).
+ */
+async function announceBatch(
+  collection: string,
+  action: 'create' | 'update' | 'delete',
+  out: BatchOutcome
+): Promise<void> {
+  const landed = out.rows.filter(
+    (r) => r.ok && r.id != null && (action !== 'update' || r.changes.length > 0)
+  )
+  if (!landed.length) return
+  const fields =
+    action === 'update' ? [...new Set(landed.flatMap((r) => r.changes.map((c) => c.field)))] : []
+  try {
+    const { announceRawWrites } = await import('./raw-write-announcer.js')
+    await announceRawWrites(
+      collection,
+      landed.map((r) => r.id as string | number),
+      { action, changed_fields: fields, source: `batch-${action}` }
+    )
+  } catch {
+    /* an announcement never fails a batch */
+  }
+}
+
 export async function batchUpdate(
   collection: string,
   rows: BatchUpdateRow[],
@@ -523,6 +551,7 @@ export async function batchUpdate(
   }
 
   out.rollups = await recalcParents(collection, touched)
+  await announceBatch(collection, 'update', out)
   out.ms = Math.round(performance.now() - began)
   return out
 }
@@ -666,6 +695,7 @@ export async function batchCreate(
   }
 
   out.rollups = await recalcParents(collection, touched)
+  await announceBatch(collection, 'create', out)
   out.ms = Math.round(performance.now() - began)
   return out
 }
@@ -735,6 +765,7 @@ export async function batchDelete(
     opts.onProgress?.(Math.min(s + READ_CHUNK, ids.length), ids.length)
   }
   out.rollups = await recalcParents(collection, touched)
+  await announceBatch(collection, 'delete', out)
   out.ms = Math.round(performance.now() - began)
   return out
 }

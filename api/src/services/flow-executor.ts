@@ -9,6 +9,7 @@ import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
 import { NOTIFY_CATEGORIES, NOTIFY_CATEGORY_LABELS, notifyUser } from './notification-channels.js'
+import { announceAutomation, flowRecordOf } from './record-events.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 import { noteTrafficSourceRun, type TrafficSource, withTrafficSource } from './traffic-source.js'
 import { flowTriggerKey, noteFlowTrigger } from './traffic-taps/sources.js'
@@ -452,6 +453,7 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
       item: linkCollection ? linkItem : null,
       ...(category ? { category } : {}),
       always_inbox: opts.always_inbox !== false,
+      ...(opts.ack_required === true ? { ack_required: true } : {}),
       channels: { inapp: true, email: false }
     })
     ctx.log.info({ flowId: ctx.flowId, key: op.key, recipient }, 'Notification sent')
@@ -1279,6 +1281,7 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
   // dry (side-effect ops render but never send/write) and records the run
   // with a 'shadow:' trigger prefix — a trial period before it acts for real.
   let lockTracked = false
+  let automationRecord: { collection: string; item: string } | null = null
   if (!ctx.dryRun) {
     try {
       const flowRow = (await db('nivaro_flows')
@@ -1340,9 +1343,15 @@ export async function executeFlow(ctx: ExecutionContext): Promise<FlowData> {
       trigger: flowTriggerKey(ctx.trigger, ctx.payload)
     }
     noteFlowTrigger(source)
+    // #2079: viewers of the trigger record see "Automation is updating this record".
+    automationRecord = flowRecordOf(ctx.payload)
+    if (automationRecord)
+      announceAutomation(automationRecord, { id: ctx.flowId, name: ctx.flowName }, 'start')
     return await withTrafficSource(source, () => executeFlowInner(ctx, source))
   } finally {
     if (lockTracked) runningFlows.delete(ctx.flowId)
+    if (automationRecord)
+      announceAutomation(automationRecord, { id: ctx.flowId, name: ctx.flowName }, 'end')
   }
 }
 

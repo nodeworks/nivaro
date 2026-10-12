@@ -6,6 +6,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { canSeeRoom } from './chat.js'
 import { getIo } from './io-holder.js'
+import { opsTopicGate } from './ops-live.js'
 import { can, scopesAreOpen } from './permissions.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
 import { inSocketTenant } from './socket-tenant.js'
@@ -338,8 +339,17 @@ export async function roomStillAllowed(
 ): Promise<boolean> {
   // Cloud rooms carry the tenant prefix (tenant-rooms.ts); the socket only ever joins its own
   // tenant's, so the gate is the room's own.
-  const room = splitTenantRoom(scopedRoom).room
+  const { tenant: roomTenant, room } = splitTenantRoom(scopedRoom)
   try {
+    // The tenant-wide notice room (record-events.ts TENANT_ALL_ROOM): own tenant only.
+    if (room === 'all') return !!roomTenant && (ctx.tenantNames ?? []).includes(roomTenant)
+    // Live operations pages (ops-live.ts): the topic's own gate — admin topics (readiness,
+    // broadcasts, issue:<id>) for administrators, the rest for anyone signed in.
+    if (room.startsWith('ops:')) {
+      const spec = opsTopicGate(room.slice(4))
+      if (!spec) return await isAdmin()
+      return spec.gate === 'auth' ? true : await isAdmin()
+    }
     if (room.startsWith('user:'))
       return room.slice(5).toLowerCase() === String(user.id).toLowerCase()
     if (room.startsWith('session:'))
