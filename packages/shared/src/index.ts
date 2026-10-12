@@ -5,7 +5,12 @@ export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
-export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  AiMarkdown,
+  type AiMarkdownBlock,
+  type ChartPointHandler,
+  parseAiMarkdown
+} from './components/ai/AiMarkdown'
 export {
   type AiPlan,
   AiPlanCard,
@@ -411,6 +416,19 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export {
+  type DrillSource,
+  defaultQuestionFor,
+  drillSourceFor,
+  type LiveSource,
+  liveSourcesFor,
+  type PanelTraceEntry,
+  parseSlash,
+  SLASH_COMMANDS,
+  type SlashCommand,
+  slashMatches,
+  stripFollowUps
+} from './lib/ai-panel'
 export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
