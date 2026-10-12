@@ -5,6 +5,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import {
   computeWidgetData,
+  latestColumns,
   normalizeWidgetFilters,
   registeredFieldSet,
   SYSTEM_COLLECTION,
@@ -457,8 +458,12 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       // Validate field is registered (prevents SQL injection via column name in sum/avg queries).
       // A saved-view widget's `field` is the VIEW id, not a column (#52).
       if (field && collection && type !== 'saved_view') {
-        const validField = await resolveField(collection, field)
-        if (!validField) return reply.code(400).send({ error: 'Unknown field' })
+        // `latest` carries its display columns as a comma list; each must be registered.
+        const names = type === 'latest' ? latestColumns(field) : [field]
+        for (const name of names) {
+          if (!(await resolveField(collection, name)))
+            return reply.code(400).send({ error: 'Unknown field' })
+        }
       }
       // A widget is built only over data its author can read (collection, field, filters).
       const refusal = await widgetSourceRefusal(req.user!, {
@@ -556,8 +561,11 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         const effType = (updates.type as string | undefined) ?? widget.type
         const effField = field !== undefined ? field : widget.field
         if (effField && collForField && effType !== 'saved_view') {
-          const validField = await resolveField(collForField, effField)
-          if (!validField) return reply.code(400).send({ error: 'Unknown field' })
+          const names = effType === 'latest' ? latestColumns(effField) : [effField]
+          for (const name of names) {
+            if (!(await resolveField(collForField, name)))
+              return reply.code(400).send({ error: 'Unknown field' })
+          }
         }
         if (field !== undefined) updates.field = field ?? null
         // The widget as it will be after this update: its author must be able to read it.

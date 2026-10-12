@@ -748,6 +748,23 @@ function AddWidgetSheet({
             </>
           )}
 
+          {/* Display columns (latest) — only these columns are read; a public link needs them */}
+          {form.type === 'latest' && (
+            <div className='space-y-1.5'>
+              <Label htmlFor='w-columns'>Columns</Label>
+              <Input
+                id='w-columns'
+                value={form.field}
+                onChange={(e) => setForm((p) => ({ ...p, field: e.target.value }))}
+                placeholder='e.g. name, status, amount'
+              />
+              <p className='text-[11px] text-slate-400'>
+                Up to 8 fields, comma separated. Empty shows the record title only and nothing on a
+                public link.
+              </p>
+            </div>
+          )}
+
           {/* Field (sum / avg) */}
           {needsField && (
             <div className='space-y-1.5'>

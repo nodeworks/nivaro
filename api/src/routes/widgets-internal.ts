@@ -17,6 +17,7 @@ import {
 import {
   type ColumnSpec,
   type LookupSpec,
+  type RelatedVisibility,
   type RelRow,
   type ReviewListConfig,
   resolveReviewListRows,
@@ -180,6 +181,12 @@ function rollupFields(cfg: RollupConfig): string[] {
   ].filter(Boolean)
 }
 
+/** Related records (dot columns, lookups, rollup levels and labels) as the viewer reads them. */
+function relatedAs(user: User): RelatedVisibility {
+  return async (collection, ids) =>
+    new Set((await readableIds(user, collection, ids)).map((id) => String(id)))
+}
+
 /** A record-slot walk: the host record readable, every configured field readable. */
 async function gateWalk(
   user: User,
@@ -308,8 +315,13 @@ async function renderWidget(
       reviewListFields(cfg),
       lookupsOf(cfg.group_meta, cfg.line_columns)
     )
-    return await resolveReviewListRows(db, cfg, String(recordId), undefined, (ids) =>
-      readableIds(user as User, cfg.collection, ids)
+    return await resolveReviewListRows(
+      db,
+      cfg,
+      String(recordId),
+      undefined,
+      (ids) => readableIds(user as User, cfg.collection, ids),
+      relatedAs(user)
     )
   }
 
@@ -344,11 +356,17 @@ async function renderWidget(
         throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
       }
       await gateWalk(user, cfg, null, rollupFields(cfg), lookupsOf(cfg.leaf_columns))
-      return await resolveRollupRows(db, cfg, null, undefined, staged)
+      return await resolveRollupRows(db, cfg, null, undefined, staged, undefined, relatedAs(user))
     }
     await gateWalk(user, cfg, String(recordId), rollupFields(cfg), lookupsOf(cfg.leaf_columns))
-    return await resolveRollupRows(db, cfg, String(recordId), undefined, staged, (ids) =>
-      readableIds(user, cfg.collection, ids)
+    return await resolveRollupRows(
+      db,
+      cfg,
+      String(recordId),
+      undefined,
+      staged,
+      (ids) => readableIds(user, cfg.collection, ids),
+      relatedAs(user)
     )
   }
 

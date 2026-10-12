@@ -618,6 +618,9 @@ export async function walkReversePath(
 // related-label approach in transition-requirements.ts's relatedLabel helper
 // — but resolving a NAMED sub-field, not a display template. Dead relation
 // degrades to the raw fk value (display polish must never crash the render).
+// With `relatedVisibility`, only related rows the viewer can read contribute a value; a row
+// they cannot read maps to HIDDEN_RELATED, which callers render blank — never its stored value
+// and never the raw FK standing in for it (a rollup level would group and label by that).
 // Shared by review_list (group_meta/line_columns) and rollup (levels/
 // leaf_columns/measure sum+filter fields) — same one-hop dot-path semantics.
 export async function resolveDotSpecValues(
@@ -627,7 +630,8 @@ export async function resolveDotSpecValues(
   dotSpecs: DotSpec[],
   targetRows: Array<Record<string, unknown>>,
   logger: Logger = consoleLogger,
-  logPrefix = 'review_list'
+  logPrefix = 'review_list',
+  relatedVisibility?: RelatedVisibility
 ): Promise<Map<string, Map<string, unknown>>> {
   const dotByFk = new Map<string, Set<string>>()
   for (const d of dotSpecs) {
@@ -652,13 +656,38 @@ export async function resolveDotSpecValues(
       .whereIn('id', distinctIds)
       .limit(500)
       .select(['id', ...subFieldList])) as Array<Record<string, unknown>>
+    const seen = await visibleRelatedIds(relatedVisibility, rel.one_collection, distinctIds)
     for (const sub of subFieldList) {
       const m = new Map<string, unknown>()
-      for (const r of related) m.set(String(r.id), r[sub] ?? null)
+      for (const r of related)
+        m.set(String(r.id), seen && !seen.has(String(r.id)) ? HIDDEN_RELATED : (r[sub] ?? null))
       dotValueMaps.set(`${fkField}.${sub}`, m)
     }
   }
   return dotValueMaps
+}
+
+/**
+ * Which related records the viewer can read (widgets-internal passes one built on the items
+ * service). Absent = trusted server path, everything. System tables (people names on stamps,
+ * owners) are directory data the app shows everywhere and are not narrowed.
+ */
+export type RelatedVisibility = (collection: string, ids: string[]) => Promise<Set<string>>
+
+/** A dot-path value whose related record the viewer cannot read. */
+export const HIDDEN_RELATED: unique symbol = Symbol('hidden-related')
+
+async function visibleRelatedIds(
+  related: RelatedVisibility | undefined,
+  collection: string,
+  ids: string[]
+): Promise<Set<string> | null> {
+  if (!related || ids.length === 0 || /^(nivaro|directus)_/i.test(collection)) return null
+  try {
+    return await related(collection, ids)
+  } catch {
+    return new Set() // a failed check shows nothing rather than everything
+  }
 }
 
 function chunkArray<T>(arr: T[], size: number): T[][] {
@@ -689,7 +718,8 @@ export async function resolveLookupColumnValues(
   lookupSpecs: Array<{ field: string; lookup: LookupSpec }>,
   targetRows: Array<Record<string, unknown>>,
   logger: Logger = consoleLogger,
-  logPrefix = 'review_list'
+  logPrefix = 'review_list',
+  relatedVisibility?: RelatedVisibility
 ): Promise<{ valueMaps: Map<string, Map<string, unknown>>; truncated: boolean }> {
   const valueMaps = new Map<string, Map<string, unknown>>()
   let truncated = false
@@ -742,9 +772,18 @@ export async function resolveLookupColumnValues(
           })
           .orderBy('id')
           .limit(LOOKUP_QUERY_LIMIT)
-          .select([...remoteCols, spec.field])) as Array<Record<string, unknown>>
+          .select([
+            ...new Set([...remoteCols, spec.field, ...(relatedVisibility ? ['id'] : [])])
+          ])) as Array<Record<string, unknown>>
         totalResolved += rows.length
+        // Only matched rows the viewer can read lend their value; the rest stay null.
+        const seen = await visibleRelatedIds(
+          relatedVisibility,
+          spec.collection,
+          dedupIds(rows.map((r) => r.id))
+        )
         for (const r of rows) {
+          if (seen && !seen.has(String(r.id))) continue
           const rk = lookupTupleKey(remoteCols.map((c) => r[c]))
           if (!sharedMap.has(rk)) sharedMap.set(rk, r[spec.field] ?? null)
         }
@@ -769,7 +808,8 @@ export async function resolveLookupColumnValues(
 export async function resolveRelatedLabels(
   database: Knex,
   collection: string,
-  ids: unknown[]
+  ids: unknown[],
+  relatedVisibility?: RelatedVisibility
 ): Promise<Map<string, string>> {
   const distinctIds = dedupIds(ids)
   if (distinctIds.length === 0) return new Map()
@@ -783,7 +823,13 @@ export async function resolveRelatedLabels(
     .whereIn('id', distinctIds)
     .limit(500)
     .select('*')) as Array<Record<string, unknown>>
-  return new Map(rows.map((r) => [String(r.id), resolveDisplayValue(r, template)]))
+  // A record the viewer cannot read gets no label (the caller shows its key).
+  const seen = await visibleRelatedIds(relatedVisibility, collection, distinctIds)
+  return new Map(
+    rows
+      .filter((r) => !seen || seen.has(String(r.id)))
+      .map((r) => [String(r.id), resolveDisplayValue(r, template)])
+  )
 }
 
 function toIso(v: unknown): string | null {
@@ -798,7 +844,9 @@ export async function resolveReviewListRows(
   recordId: string,
   logger: Logger = consoleLogger,
   /** Narrow the walked ids to what the viewer can read (widgets-internal passes it). */
-  visible?: (ids: Array<string | number>) => Promise<Array<string | number>>
+  visible?: (ids: Array<string | number>) => Promise<Array<string | number>>,
+  /** Which related records (dot columns, lookups) the viewer can read. */
+  relatedVisibility?: RelatedVisibility
 ): Promise<ReviewListResult> {
   const relations = (await database('nivaro_relations').select(
     'many_collection',
@@ -889,11 +937,20 @@ export async function resolveReviewListRows(
     relations,
     dotSpecs,
     targetRows,
-    logger
+    logger,
+    'review_list',
+    relatedVisibility
   )
 
   const { valueMaps: lookupValueMaps, truncated: lookupTruncated } =
-    await resolveLookupColumnValues(database, lookupSpecs, targetRows, logger)
+    await resolveLookupColumnValues(
+      database,
+      lookupSpecs,
+      targetRows,
+      logger,
+      'review_list',
+      relatedVisibility
+    )
   if (lookupTruncated) truncated = true
 
   // Stamp-user label resolution (audit tooltip).
@@ -927,7 +984,8 @@ export async function resolveReviewListRows(
       if (dot) {
         const raw = row[dot.fkField]
         const map = dotValueMaps.get(`${dot.fkField}.${dot.subField}`)
-        values[spec.field] = raw == null ? null : (map?.get(String(raw)) ?? raw)
+        const v = raw == null ? null : map?.get(String(raw))
+        values[spec.field] = raw == null || v === HIDDEN_RELATED ? null : (v ?? raw)
       } else {
         values[spec.field] = row[spec.field] ?? null
       }
