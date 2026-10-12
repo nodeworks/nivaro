@@ -306,6 +306,9 @@ const ChatAnalyticsPage = lazy(() =>
 const AiAnalyticsPage = lazy(() =>
   import('@/pages/AiAnalytics').then((m) => ({ default: m.AiAnalyticsPage }))
 )
+const AiKnowledgePage = lazy(() =>
+  import('@/pages/AiKnowledge').then((m) => ({ default: m.AiKnowledgePage }))
+)
 const ChangelogPage = lazy(() => import('@/pages/Changelog'))
 const ContrastAuditPage = lazy(() => import('@/pages/ContrastAudit'))
 const E2eRecorderPage = lazy(() => import('@/pages/E2eRecorder'))
@@ -639,6 +642,7 @@ export default function App() {
                   <Route path='p/:slug' element={<PageViewPage />} />
                   <Route path='api-analytics' element={<ApiAnalyticsPage />} />
                   <Route path='ai-analytics' element={<AiAnalyticsPage />} />
+                  <Route path='ai-knowledge' element={<AiKnowledgePage />} />
                   <Route path='chat-analytics' element={<ChatAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />

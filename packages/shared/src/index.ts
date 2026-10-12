@@ -3,7 +3,10 @@ export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
+export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
 export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export { DataGuideCard } from './components/ai/DataGuideCard'
+export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
   AlertRuleDrawer,
@@ -448,6 +451,12 @@ export {
   setFiscalStartMonth
 } from './lib/fiscal'
 export * from './lib/format-value'
+export {
+  type GlossaryTerm,
+  glossarySegments,
+  invalidateGlossary,
+  useGlossary
+} from './lib/glossary'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'

@@ -153,7 +153,9 @@ export const CONFIG_TABLES: string[] = [
   'nivaro_task_categories', // support request types (admin-edited)
   'nivaro_queue_labels',
   'nivaro_settings_overrides',
-  'nivaro_ai_playbooks'
+  'nivaro_ai_playbooks',
+  'nivaro_ai_glossary', // #1899 business terms (admin-curated)
+  'nivaro_ai_data_guides' // #1847 per-collection Ask AI hints
 ]
 
 /** Derived from business data — differing between environments proves nothing. */
@@ -291,6 +293,8 @@ export const RUNTIME_TABLES: string[] = [
   // ── classified 2026-09-17 — per-user state, logs, reactions, journals ──
   'nivaro_ai_calls',
   'nivaro_ai_feedback',
+  'nivaro_ai_knowledge_suggestions', // #1898/#1949 drafts awaiting an admin
+  'nivaro_ai_docs_misses', // #1855 docs searches that found nothing
   'nivaro_ai_autofill_events',
   'nivaro_concurrency_samples',
   'nivaro_outbox',
