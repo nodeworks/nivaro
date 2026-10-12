@@ -126,7 +126,7 @@ useLiveRecordEvent('record:integrity', 'orders', id, () => refetchIntegrity())`
       items: [
         'Handlers live in a ref — pass inline arrows. Options: `debounceMs` (default 250; 0 = per event), `includeOwn`, `match`, `enabled`.',
         'A batch reports `ids`, `changedFields` (null = unknown, treat as everything), `aspectsOnly`, `created`, `deleted`, `own`.',
-        'Without a host realtime adapter the collection hooks do nothing and the panel behaves as before. Hosts whose record room rides a separate socket forward its events with `relayLiveEvent(event, payload)`.',
+        'Without a host realtime adapter the collection hooks do nothing and the panel behaves as before. Hosts whose record room rides a separate socket forward its events with `relayLiveEvent(event, payload)`. A portal or headless app gets the adapter from the socket it already holds with `createSocketRealtime({ socket })` (see React — Live Data), and `useLiveRecord` / `useLiveList` in `@nivaro/react` wrap these hooks around a react-query read.',
         'Never trust a payload value — re-read through your own permission-checked query.'
       ]
     },
@@ -139,14 +139,34 @@ useLiveRecordEvent('record:integrity', 'orders', id, () => refetchIntegrity())`
       type: 'table',
       head: ['Topic', 'Who may join', 'What moves it'],
       rows: [
-        ['`readiness`', 'Administrators', 'A finished run of the checks (the report rides the event, so other open pages show it without re-running) and a fix finishing'],
-        ['`issues`', 'Signed-in users', 'Any write to the issue log: new issues appear at the top, occurrence counts tick'],
-        ['`issue:<id>`', 'Administrators', 'Each new occurrence of that issue: the person (id), route and build, streamed into the open issue'],
+        [
+          '`readiness`',
+          'Administrators',
+          'A finished run of the checks (the report rides the event, so other open pages show it without re-running) and a fix finishing'
+        ],
+        [
+          '`issues`',
+          'Signed-in users',
+          'Any write to the issue log: new issues appear at the top, occurrence counts tick'
+        ],
+        [
+          '`issue:<id>`',
+          'Administrators',
+          'Each new occurrence of that issue: the person (id), route and build, streamed into the open issue'
+        ],
         ['`support`', 'Signed-in users', 'Tickets, claims, replies and status moves'],
         ['`team`', 'Signed-in users', 'Owner changes, tasks, SLA acknowledgements and escalations'],
-        ['`my-work`', 'Signed-in users', 'Owner changes, tasks, approvals; new notifications arrive on your own room. New rows highlight briefly'],
+        [
+          '`my-work`',
+          'Signed-in users',
+          'Owner changes, tasks, approvals; new notifications arrive on your own room. New rows highlight briefly'
+        ],
         ['`delegation`', 'Signed-in users', 'Out-of-office, delegate and owner-seat changes'],
-        ['`broadcasts`', 'Administrators', 'Deliveries, acknowledgements and notifications being read']
+        [
+          '`broadcasts`',
+          'Administrators',
+          'Deliveries, acknowledgements and notifications being read'
+        ]
       ]
     },
     {
@@ -236,6 +256,17 @@ export const collabLiveOps: DocSection = {
 // Join an administrators-only room while mounted; false = no live adapter, keep polling.
 const live = useLiveWatchRoom('conformance')
 useLiveEvent('conformance:progress', (p) => setProgress(p), { includeOwn: true })`
+    },
+    { type: 'h2', id: 'live-surfaces', text: 'Live surfaces and the socket inspector' },
+    {
+      type: 'ul',
+      items: [
+        'Notes: comment edits, deletes and reactions (on comments and on recorded notes), plus machine entries (transitions, partner events, import runs, change reasons), refresh in an open record as they happen. The notice carries the `$comments` aspect only; each viewer re-reads the thread as themselves.',
+        "Tasks: assigning, claiming, editing, completing and deleting a task refresh the record's Tasks section (`$tasks`).",
+        'Record chips in chat and linked record tokens update their state pill when the record moves. No state name travels in the notice; each viewer re-reads the pill with their own access.',
+        'Queue item sheets follow their record (state, comments) the way the full record page does; drill sheets rendered by the record form already did.',
+        "Realtime console, Sockets and rooms, Inspect: pick a connected client to see its rooms and the last 100 events sent to it (name, room, size, time, never the payload). Recording is off until an administrator opens the panel and stops when it closes or after 10 minutes unread. Routes (administrators only, caller's tenant only): `GET|POST|DELETE /realtime/sockets/:id/inspect`."
+      ]
     }
   ]
 }

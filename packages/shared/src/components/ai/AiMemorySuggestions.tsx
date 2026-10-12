@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Brain, Check, X } from 'lucide-react'
 import { useState } from 'react'
-import { useOptionalNivaroClient } from '../../context'
+import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 
@@ -31,7 +31,8 @@ export function AiMemorySuggestions({
   const client = useOptionalNivaroClient()
   const qc = useQueryClient()
   const [state, setState] = useState<Record<string, RowState>>({})
-  const [error, setError] = useState<string | null>(null)
+  const [error, setError] = useState<{ text: string; full: boolean } | null>(null)
+  const nav = useNavigation()
   const list = (suggestions ?? []).filter((s) => s && typeof s.text === 'string' && s.text)
   // Same key and shape as Profile's AiMemoryCard: an offer already in the
   // person's memory (accepted earlier, or added since) shows as remembered.
@@ -59,10 +60,13 @@ export function AiMemorySuggestions({
       void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
     } catch (err) {
       setState((s) => ({ ...s, [text]: 'idle' }))
-      setError(
-        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
-          (err instanceof Error ? err.message : 'Could not remember that')
-      )
+      const data = (err as { response?: { data?: { error?: string; code?: string } } })?.response
+        ?.data
+      setError({
+        text: data?.error ?? (err instanceof Error ? err.message : 'Could not remember that'),
+        // A full memory refuses — nothing is dropped; the person picks on Profile.
+        full: data?.code === 'AI_MEMORY_FULL'
+      })
     }
   }
 
@@ -119,7 +123,24 @@ export function AiMemorySuggestions({
           </div>
         )
       })}
-      {error && <p className='text-[11.5px] text-red-600'>{error}</p>}
+      {error && (
+        <p className='text-[11.5px] text-red-600' data-ai-memory-error>
+          {error.text}
+          {error.full && (
+            <>
+              {' '}
+              <button
+                type='button'
+                className='underline underline-offset-2'
+                onClick={() => nav.navigate('/profile#ai-memory')}
+                data-ai-memory-open-profile
+              >
+                Open Ask AI memory
+              </button>
+            </>
+          )}
+        </p>
+      )}
     </div>
   )
 }
