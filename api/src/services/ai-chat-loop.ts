@@ -51,6 +51,8 @@ export interface ChatLoopResult {
   proposals: Array<Record<string, unknown>>
   /** Multi-step plans the model proposed (services/ai-plans.ts). */
   plans: Array<Record<string, unknown>>
+  /** Clarifying questions with inline options (ask_choice, #1937) — the turn ends on them. */
+  choices: Array<Record<string, unknown>>
   rounds: number
   /** The round cap was hit and the wrap-up call answered instead. */
   truncated: boolean
@@ -98,6 +100,12 @@ export function describeToolCall(tool: string, input: Record<string, unknown>): 
       return `Checking ${name(str('collection')) || 'the record'}…`
     case 'propose_plan':
       return 'Drafting a plan for you to approve…'
+    case 'ask_choice':
+      return 'Preparing a question for you…'
+    case 'saved_view':
+      return `Opening your ${str('name') ? `“${str('name').slice(0, 40)}” ` : ''}saved view…`
+    case 'compare':
+      return 'Comparing…'
     default:
       return `Using ${name(tool)}…`
   }
@@ -138,6 +146,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const trace: ChatTraceEntry[] = []
   const proposals: Array<Record<string, unknown>> = []
   const plans: Array<Record<string, unknown>> = []
+  const choices: Array<Record<string, unknown>> = []
 
   /** One streamed call; text deltas go out as they arrive, `stopped` when
    *  the caller halted it mid-stream (the partial message comes back). */
@@ -196,7 +205,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (shouldStop?.())
-      return { text: '', trace, proposals, plans, rounds: round, truncated: false, stopped: true }
+      return {
+        text: '',
+        trace,
+        proposals,
+        plans,
+        choices,
+        rounds: round,
+        truncated: false,
+        stopped: true
+      }
     const { message, stopped, partial } = await call(
       { model, max_tokens: maxTokens, system, tools: CHAT_TOOLS, messages: convo },
       round
@@ -207,6 +225,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         trace,
         proposals,
         plans,
+        choices,
         rounds: round + 1,
         truncated: false,
         stopped: true
@@ -218,6 +237,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         trace,
         proposals,
         plans,
+        choices,
         rounds: round + 1,
         truncated: false,
         stopped: false
@@ -250,6 +270,9 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         if (block.name === 'propose_plan' && result && typeof result === 'object') {
           plans.push(result as Record<string, unknown>)
         }
+        if (block.name === 'ask_choice' && result && typeof result === 'object') {
+          choices.push(result as Record<string, unknown>)
+        }
         results.push({
           type: 'tool_result',
           tool_use_id: block.id,
@@ -272,6 +295,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           trace,
           proposals,
           plans,
+          choices,
           rounds: round + 1,
           truncated: false,
           stopped: true
@@ -279,6 +303,21 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       }
     }
     convo.push({ role: 'user', content: results })
+    // A clarifying question ends the turn: the person picks inline and the
+    // pick arrives as the next question, so the loop spends no more rounds.
+    if (choices.length > 0) {
+      const lead = textOf(message).trim()
+      return {
+        text: lead || String((choices[0] as { question?: unknown }).question ?? ''),
+        trace,
+        proposals,
+        plans,
+        choices,
+        rounds: round + 1,
+        truncated: false,
+        stopped: false
+      }
+    }
   }
 
   // Out of rounds: one last call with NO tools and NO tool blocks (the
@@ -298,7 +337,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   } catch (err) {
     opts.warn?.(err, 'AI chat wrap-up call failed')
   }
-  return { text, trace, proposals, plans, rounds: MAX_ROUNDS, truncated: true, stopped }
+  return { text, trace, proposals, plans, choices, rounds: MAX_ROUNDS, truncated: true, stopped }
 }
 
 export { MAX_ROUNDS }

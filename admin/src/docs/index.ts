@@ -8,6 +8,7 @@ export * from './sections/ai-conversations.js'
 export * from './sections/ai-design.js'
 export * from './sections/ai-explain.js'
 export * from './sections/ai-knowledge.js'
+export * from './sections/ai-panel.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
@@ -71,6 +72,7 @@ import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
 import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
+import { aiPanelDocs } from './sections/ai-panel.js'
 import {
   adminI18nDocs,
   aiChatDocs,
@@ -617,6 +619,7 @@ export const navSections: NavGroup[] = [
     items: [
       aiChatDocs,
       aiConversationsDocs,
+      aiPanelDocs,
       aiKnowledgeDocs,
       aiActionsDocs,
       aiPlansDocs,
