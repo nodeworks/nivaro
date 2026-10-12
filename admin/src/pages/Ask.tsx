@@ -11,6 +11,7 @@ import { Loader2, Mic, Send, Sparkles, Square, Volume2, VolumeX, Wrench } from '
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { MyWatchesPanel, WatchThisNumber, watchableAggregate } from '@/components/ask-watches'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
@@ -395,6 +396,8 @@ function AskPageInner() {
             </div>
           )}
 
+          <MyWatchesPanel />
+
           {turns.map((t, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: append-only transcript
             <div
@@ -456,6 +459,10 @@ function AskPageInner() {
                         ))}
                       </div>
                     )}
+                    {(() => {
+                      const agg = watchableAggregate(t.trace)
+                      return agg ? <WatchThisNumber aggregate={agg} /> : null
+                    })()}
                     <div className='mt-1.5 flex items-center justify-between gap-2'>
                       <AiFeedbackButtons requestId={t.requestId} />
                       {(t.playbooksUsed ?? 0) > 0 && (
