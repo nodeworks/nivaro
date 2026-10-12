@@ -25,17 +25,16 @@ const THRESHOLD_LOCAL = 0.3
  * Which rooms may have their text sent to the embedding provider. Embeddings
  * can leave the box (Voyage / the AI gateway), so DMs and private channels stay
  * out by default. CHAT_MEANING_ROOMS: `public` (default: General, open
- * channels, record rooms) | `all` (also DMs and private channels) | `off`.
+ * channels, record rooms) | `off`. DMs and private channels are never embedded.
  */
-export type MeaningScope = 'public' | 'all' | 'off'
+export type MeaningScope = 'public' | 'off'
 export function meaningScope(): MeaningScope {
   const v = String(process.env.CHAT_MEANING_ROOMS ?? 'public').toLowerCase()
-  return v === 'all' || v === 'off' ? v : 'public'
+  return v === 'off' ? 'off' : 'public'
 }
 export async function roomMayBeEmbedded(room: string): Promise<boolean> {
   const scope = meaningScope()
   if (scope === 'off') return false
-  if (scope === 'all') return true
   const p = parseRoom(room)
   if (p.kind === 'global' || p.kind === 'entity') return true
   if (p.kind !== 'channel') return false

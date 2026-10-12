@@ -358,6 +358,7 @@ const RELAYED_EVENTS = new Set([
   'lock:queued',
   'record:uploading',
   'ops:changed',
+  'ops:incident',
   'notification:new',
   // #1675 — pushed widgets: the figure computed as this sign-in, for this tab's own watch key.
   'widget:watching',

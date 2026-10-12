@@ -273,6 +273,84 @@ export function resetTenantRealtime(): void {
   byTenant.clear()
 }
 
+// ── Socket inspector (#1731) ────────────────────────────────────────────────
+
+export const INSPECT_RING = 100
+/** An inspection nobody read for this long switches itself off. */
+export const INSPECT_IDLE_MS = 10 * 60_000
+const MAX_INSPECTED = 20
+
+export interface InspectedEvent {
+  at: string
+  event: string
+  /** The room the broadcast went to, tenant prefix off; null = a direct emit or a sign-in room. */
+  room: string | null
+  bytes: number
+}
+
+interface Inspection {
+  tenant: string | null
+  touched: number
+  ring: InspectedEvent[]
+}
+const inspections = new Map<string, Inspection>()
+
+/** Start (or keep) recording one socket's outbound events. False when too many are watched. */
+export function startInspect(socketId: string, tenant: string | null, now = Date.now()): boolean {
+  const cur = inspections.get(socketId)
+  if (cur) {
+    cur.touched = now
+    return true
+  }
+  for (const [id, i] of inspections) if (now - i.touched > INSPECT_IDLE_MS) inspections.delete(id)
+  if (inspections.size >= MAX_INSPECTED) return false
+  inspections.set(socketId, { tenant, touched: now, ring: [] })
+  return true
+}
+
+export function stopInspect(socketId: string): void {
+  inspections.delete(socketId)
+}
+
+export function isInspected(socketId: string): boolean {
+  return inspections.has(socketId)
+}
+
+/** One packet written to an inspected socket — names, sizes and times, never the payload. */
+export function noteInspected(
+  socketId: string,
+  event: string,
+  room: string | null,
+  bytes: number,
+  now = Date.now()
+): void {
+  const i = inspections.get(socketId)
+  if (!i) return
+  if (now - i.touched > INSPECT_IDLE_MS) {
+    inspections.delete(socketId)
+    return
+  }
+  i.ring.push({
+    at: new Date(now).toISOString(),
+    event,
+    room: room && !isCredentialRoom(room) ? splitTenantRoom(room).room : null,
+    bytes
+  })
+  if (i.ring.length > INSPECT_RING) i.ring.splice(0, i.ring.length - INSPECT_RING)
+}
+
+/** The recorded events, newest first; null when this socket is not being inspected for `tenant`. */
+export function inspectedEvents(
+  socketId: string,
+  tenant: string | null,
+  now = Date.now()
+): InspectedEvent[] | null {
+  const i = inspections.get(socketId)
+  if (!i || i.tenant !== tenant) return null
+  i.touched = now
+  return [...i.ring].reverse()
+}
+
 // ── Packet helpers ─────────────────────────────────────────────────────────
 
 /**

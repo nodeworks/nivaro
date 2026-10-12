@@ -39,6 +39,7 @@ export * from './sections/live-records.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
+export * from './sections/offline-popout.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
@@ -291,6 +292,7 @@ import {
   obsTrafficMapLenses,
   obsTrafficMapPlatform
 } from './sections/observability.js'
+import { collabOfflinePopout } from './sections/offline-popout.js'
 import {
   dbHealthDocs,
   deploysVersionsDocs,
@@ -377,6 +379,7 @@ import {
   sdkPipeline,
   sdkReact,
   sdkReactLayout,
+  sdkReactLive,
   sdkRealtime,
   sdkRest,
   sdkSetup,
@@ -572,6 +575,7 @@ export const navSections: NavGroup[] = [
       sdkForms,
       sdkReact,
       sdkReactLayout,
+      sdkReactLive,
       sdkNotifications,
       sdkActivity,
       sdkExternalApis,
@@ -813,6 +817,7 @@ export const navSections: NavGroup[] = [
       collabLiveRecords,
       liveWidgetsDocs,
       collabLiveProgress,
+      collabOfflinePopout,
       collabLiveLists,
       collabLiveOps,
       collabNotificationsCenter,
