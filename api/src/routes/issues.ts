@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
+import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
 import { trackError } from '../services/error-tracking.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
@@ -98,6 +99,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       message: body.message,
       stack: body.stack ?? null,
       userId: req.user?.id ?? null,
+      build: parseClientHeader(req.headers[CLIENT_HEADER])?.build ?? null,
       recordingId,
       recordingOffsetMs
     })
@@ -197,6 +199,22 @@ export async function issuesRoutes(app: FastifyInstance) {
       .first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data: row })
+  })
+
+  // GET /issues/:id/occurrences — the last hits (who, route, build). Admin only: it names people.
+  app.get('/:id/occurrences', { preHandler: requireAdmin }, async (req, reply) => {
+    const id = Number((req.params as { id: string }).id)
+    if (!Number.isFinite(id)) return reply.code(400).send({ error: 'Bad id' })
+    if (!(await db.schema.hasTable('nivaro_issue_occurrences'))) return reply.send({ data: [] })
+    const rows = await db('nivaro_issue_occurrences')
+      .where('issue', id)
+      .orderBy([
+        { column: 'occurred_at', order: 'desc' },
+        { column: 'id', order: 'desc' }
+      ])
+      .limit(50)
+      .select('occurred_at', 'user_id', 'route', 'build', 'source')
+    return reply.send({ data: rows })
   })
 
   // POST /issues

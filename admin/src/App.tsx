@@ -180,6 +180,7 @@ const TrafficMap = lazy(() => import('@/pages/traffic-map/TrafficMap'))
 const MonitorsPage = lazy(() => import('@/pages/Monitors'))
 const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
+const ConfigReview = lazy(() => import('@/pages/ConfigReview'))
 const LegalHolds = lazy(() => import('@/pages/LegalHolds'))
 const FindReplace = lazy(() => import('@/pages/FindReplace'))
 const M2MMatrix = lazy(() => import('@/pages/M2MMatrix'))
@@ -305,6 +306,10 @@ const ChatAnalyticsPage = lazy(() =>
 )
 const AiAnalyticsPage = lazy(() =>
   import('@/pages/AiAnalytics').then((m) => ({ default: m.AiAnalyticsPage }))
+)
+const AiPlansPage = lazy(() => import('@/pages/AiPlans').then((m) => ({ default: m.AiPlansPage })))
+const AiKnowledgePage = lazy(() =>
+  import('@/pages/AiKnowledge').then((m) => ({ default: m.AiKnowledgePage }))
 )
 const ChangelogPage = lazy(() => import('@/pages/Changelog'))
 const ContrastAuditPage = lazy(() => import('@/pages/ContrastAudit'))
@@ -568,6 +573,7 @@ export default function App() {
                   <Route path='monitors' element={<MonitorsPage />} />
                   <Route path='security-center' element={<SecurityCenter />} />
                   <Route path='config-health' element={<ConfigHealth />} />
+                  <Route path='config-review' element={<ConfigReview />} />
                   <Route path='legal-holds' element={<LegalHolds />} />
                   <Route path='find-replace' element={<FindReplace />} />
                   <Route path='m2m-matrix' element={<M2MMatrix />} />
@@ -639,6 +645,8 @@ export default function App() {
                   <Route path='p/:slug' element={<PageViewPage />} />
                   <Route path='api-analytics' element={<ApiAnalyticsPage />} />
                   <Route path='ai-analytics' element={<AiAnalyticsPage />} />
+                  <Route path='ai-knowledge' element={<AiKnowledgePage />} />
+                  <Route path='ai-plans' element={<AiPlansPage />} />
                   <Route path='chat-analytics' element={<ChatAnalyticsPage />} />
                   <Route path='health' element={<HealthDashboardPage />} />
                   <Route path='db-health' element={<DbHealthPage />} />

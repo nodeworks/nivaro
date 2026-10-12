@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { stripAiMemory } from './ai-memory.js'
 import { chainFields } from './chain-columns.js'
 import { getApp } from './io-holder.js'
 import { resolveRoleFromAdGroups } from './microsoft.js'
@@ -394,7 +395,8 @@ export async function listUsers(
           return r
         })
       : rows.map((u) => {
-          const r = parsePreferences(u)
+          // #1804 — a list never carries anyone's Ask AI memory.
+          const r = stripAiMemory(parsePreferences(u))
           if (hiddenOnly) (r as unknown as Record<string, unknown>).hidden_kind = hiddenKindOf(r)
           return r
         }),

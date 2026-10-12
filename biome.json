@@ -15,7 +15,8 @@
       "**/*.json",
       "!**/dist",
       "!**/node_modules",
-      "!**/*.d.ts"
+      "!**/*.d.ts",
+      "!api/src/services/docs-index.json"
     ]
   },
   "formatter": {

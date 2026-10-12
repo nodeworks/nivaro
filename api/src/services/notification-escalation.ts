@@ -3,11 +3,15 @@ import { db } from '../db/index.js'
 import { logActivity } from './activity.js'
 import { sendMail } from './mail.js'
 import {
+  ACK_DONE_LIKE,
+  ACK_PENDING_LIKE,
+  ackPending,
   getNotifyPrefs,
   NOTIFY_CATEGORY_LABELS,
   type NotificationDelivery,
   type NotifyCategory,
   type NotifyPrefs,
+  notifyUser,
   parseDelivery
 } from './notification-channels.js'
 import { parseStoredTarget, resolveTargetUrl } from './notification-target.js'
@@ -50,7 +54,7 @@ async function usersWithEscalation(): Promise<string[]> {
   return rows.map((r) => String(r.id))
 }
 
-export async function runNotificationEscalation(
+async function runChannelEscalation(
   app: FastifyInstance,
   now = new Date()
 ): Promise<{ pushed: number; emailed: number; checked: number }> {
@@ -73,7 +77,18 @@ export async function runNotificationEscalation(
       .where('timestamp', '>=', since)
       .whereIn('category', categories)
       .where((qb) => qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', now))
-      .select('id', 'subject', 'message', 'category', 'timestamp', 'delivery', 'target')) as Array<{
+      .select(
+        'id',
+        'subject',
+        'message',
+        'category',
+        'timestamp',
+        'delivery',
+        'target',
+        'collection',
+        'item',
+        'detail'
+      )) as Array<{
       id: number
       subject: string
       message: string | null
@@ -180,4 +195,137 @@ export async function runNotificationEscalation(
   }
   void app
   return out
+}
+
+const ACK_REMIND_HOURS = 4
+const ACK_MANAGER_HOURS = 24
+
+/**
+ * #2365 — notifications that asked for an acknowledgement. Unacknowledged
+ * after 4 hours: one push reminder to the recipient. After 24 hours: one
+ * notification to the recipient's manager (the chain), naming who has not
+ * acknowledged. Each step fires once (stamped in delivery.escalation); reading
+ * the notification does NOT stop it — only acknowledging does.
+ */
+export async function runAckEscalation(
+  app: FastifyInstance,
+  now = new Date()
+): Promise<{ reminded: number; escalated: number }> {
+  const out = { reminded: 0, escalated: 0 }
+  const since = new Date(now.getTime() - 14 * 86_400_000)
+  const rows = (await db('nivaro_notifications')
+    .where('timestamp', '>=', since)
+    .whereNot('status', 'archived')
+    .where('detail', 'like', ACK_PENDING_LIKE)
+    .whereNot('detail', 'like', ACK_DONE_LIKE)
+    .limit(500)
+    .select(
+      'id',
+      'recipient',
+      'subject',
+      'message',
+      'timestamp',
+      'delivery',
+      'target',
+      'collection',
+      'item',
+      'detail'
+    )) as Array<{
+    id: number
+    recipient: string
+    subject: string
+    message: string | null
+    timestamp: Date
+    delivery: string | null
+    target: string | null
+    collection: string | null
+    item: string | number | null
+    detail: string | null
+  }>
+  for (const row of rows) {
+    if (!ackPending(row.detail)) continue
+    const ageH = (now.getTime() - new Date(row.timestamp).getTime()) / 3_600_000
+    const delivery: NotificationDelivery = parseDelivery(row.delivery) ?? {}
+    const stamps = { ...(delivery.escalation ?? {}) }
+    let changed = false
+    if (ageH >= ACK_REMIND_HOURS && !stamps.ack_remind_at) {
+      const url =
+        (await resolveTargetUrl(parseStoredTarget(row.target), {
+          recipientUserId: row.recipient
+        }).catch(() => null)) ?? '/notifications'
+      await sendWebPush(row.recipient, {
+        title: `Needs your acknowledgement: ${row.subject}`.slice(0, 120),
+        body: (row.message ?? '').slice(0, 300),
+        url
+      }).catch(() => 0)
+      stamps.ack_remind_at = now.toISOString()
+      changed = true
+      out.reminded++
+    }
+    if (ageH >= ACK_MANAGER_HOURS && !stamps.ack_manager_at) {
+      const who = (await db('nivaro_users')
+        .where({ id: row.recipient })
+        .first('first_name', 'last_name', 'email', 'manager_id')) as
+        | {
+            first_name: string | null
+            last_name: string | null
+            email: string | null
+            manager_id: string | null
+          }
+        | undefined
+      if (who?.manager_id) {
+        const name =
+          `${who.first_name ?? ''} ${who.last_name ?? ''}`.trim() || who.email || 'Someone'
+        // The subject can carry record text: the manager only sees it when
+        // they can read that record; otherwise a neutral line.
+        let canSee = false
+        if (row.collection && row.item != null) {
+          try {
+            const mgr = await db('nivaro_users').where({ id: who.manager_id }).first()
+            if (mgr) {
+              const { readOne } = await import('./items.js')
+              canSee = !!(await readOne(mgr as never, row.collection, String(row.item)))
+            }
+          } catch {
+            canSee = false
+          }
+        }
+        const subj = canSee
+          ? `${name} has not acknowledged: ${row.subject}`
+          : row.collection && row.item != null
+            ? `${name} has not acknowledged a notification about ${row.collection} #${row.item}`
+            : `${name} has not acknowledged a notification`
+        await notifyUser(app, who.manager_id, {
+          subject: subj.slice(0, 255),
+          message:
+            'This notification asked for an acknowledgement and has been waiting over a day.',
+          category: 'workflow',
+          always_inbox: true,
+          why: 'you are this person\u2019s manager and an acknowledgement they owe is overdue'
+        }).catch(() => undefined)
+        out.escalated++
+      }
+      stamps.ack_manager_at = now.toISOString()
+      changed = true
+    }
+    if (changed) {
+      await db('nivaro_notifications')
+        .where({ id: row.id })
+        .update({ delivery: JSON.stringify({ ...delivery, escalation: stamps }) })
+        .catch(() => {})
+    }
+  }
+  return out
+}
+
+/** The 5-minute escalation tick: unread channel climbing + acknowledgements. */
+export async function runNotificationEscalation(
+  app: FastifyInstance,
+  now = new Date()
+): Promise<{ pushed: number; emailed: number; checked: number }> {
+  const res = await runChannelEscalation(app, now)
+  await runAckEscalation(app, now).catch((err) =>
+    console.warn('[notification-escalation] ack escalation failed:', err)
+  )
+  return res
 }

@@ -23,7 +23,7 @@ import {
 
 interface Monitor {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'ssl_cert' | 'traffic'
+  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'ssl_cert' | 'traffic' | 'realtime'
   name: string
   config: Record<string, unknown> | null
   is_active: boolean
@@ -37,6 +37,8 @@ const TYPE_LABEL: Record<Monitor['type'], string> = {
   deploy_regression: 'Deploy regression',
   synthetic: 'Synthetic probe',
   ssl_cert: 'SSL certificate',
+  // #1682 — a synthetic socket client measures write-to-delivery time.
+  realtime: 'Realtime delivery',
   // Created from a Traffic Map node (#1124), not from this form.
   traffic: 'Traffic threshold'
 }
@@ -231,6 +233,8 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   // ssl_cert
   const [sslHost, setSslHost] = useState('')
   const [warnDays, setWarnDays] = useState('30')
+  // realtime
+  const [rtThreshold, setRtThreshold] = useState('2000')
 
   const create = useMutation({
     mutationFn: () => {
@@ -241,7 +245,9 @@ function CreateForm({ onDone }: { onDone: () => void }) {
             ? { path: path.trim(), latency_warn_ms: Number(latency) || 5000 }
             : type === 'ssl_cert'
               ? { host: sslHost.trim(), warn_days: Number(warnDays) || 30 }
-              : { p95_worsen_pct: Number(worsen) || 50 }
+              : type === 'realtime'
+                ? { threshold_ms: Number(rtThreshold) || 2000 }
+                : { p95_worsen_pct: Number(worsen) || 50 }
       return api.post('/monitors', { type, name: name.trim(), config })
     },
     onSuccess: () => {
@@ -317,6 +323,11 @@ function CreateForm({ onDone }: { onDone: () => void }) {
             <input value={worsen} onChange={(e) => setWorsen(e.target.value)} type="number" className={inputCls} />
           </Field>
         )}
+        {type === 'realtime' && (
+          <Field label="Delivery limit (ms)">
+            <input value={rtThreshold} onChange={(e) => setRtThreshold(e.target.value)} type="number" className={inputCls} />
+          </Field>
+        )}
         {type === 'ssl_cert' && (
           <>
             <Field label="Domain">
@@ -343,6 +354,13 @@ function CreateForm({ onDone }: { onDone: () => void }) {
       {type === 'synthetic' && (
         <p className="mt-2 text-[11.5px] text-slate-400">
           Requests the path every 5 minutes; a non-200 answer or a slow response fails the check.
+        </p>
+      )}
+      {type === 'realtime' && (
+        <p className="mt-2 text-[11.5px] text-slate-400">
+          Every 5 minutes a test connection inside the server joins a private room and a probe event
+          goes out through the normal path (journal, Redis stream). Slow or missing delivery fails
+          the check and raises an issue. Results also show on the Realtime console.
         </p>
       )}
       {type === 'ssl_cert' && (

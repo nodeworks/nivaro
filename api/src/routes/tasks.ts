@@ -4,6 +4,7 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import {
   ACTIVE_STATUSES,
   bustDoneWhenCache,
@@ -561,6 +562,7 @@ export async function tasksRoutes(app: FastifyInstance) {
 
     const sentences = await describeTaskChange(existing, patch as Partial<TaskRow>)
     await db('nivaro_tasks').where({ id }).update(patch)
+    announceRecordAspect(existing.collection, existing.item, '$tasks')
     const updated = (await db('nivaro_tasks').where({ id }).first()) as TaskRow
 
     if (sentences.length) {
@@ -723,6 +725,7 @@ export async function tasksRoutes(app: FastifyInstance) {
     }
 
     await db('nivaro_tasks').where({ id }).delete()
+    announceRecordAspect(existing.collection, existing.item, '$tasks')
 
     await logActivity({
       action: 'delete',

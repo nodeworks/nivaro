@@ -562,12 +562,11 @@ export async function runConfigHealthSweep(): Promise<string> {
   }
   // Anything the sweep no longer produces is resolved — delete it so a
   // recurrence starts fresh (including previously dismissed rows).
-  const all = (await db('nivaro_config_health').select(
-    'id',
-    'family',
-    'code',
-    'subject'
-  )) as Array<{
+  // Only the sweep's own families — the monthly config review (#1913) keeps
+  // its findings in the same table under review | cleanup | label.
+  const all = (await db('nivaro_config_health')
+    .whereIn('family', ['hygiene', 'lint'])
+    .select('id', 'family', 'code', 'subject')) as Array<{
     id: number
     family: string
     code: string

@@ -66,7 +66,9 @@ const request = vi.fn()
 // One client for every render, as a real NivaroProvider gives (the editor
 // lock's effect keys on it).
 const client = { request }
-vi.mock('../../../context', () => ({
+vi.mock('../../../context', async () => ({
+  // The live hooks (lib/live) read the viewer from this context.
+  ItemEditAuthContext: (await import('react')).createContext({ isAdmin: false, userId: 'U1' }),
   useItemEditAuth: () => ({ isAdmin: false, userId: 'U1' }),
   useNivaroClient: () => client,
   useNavigation: () => ({ navigate: () => {} }),

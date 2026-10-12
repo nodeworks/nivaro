@@ -7,7 +7,9 @@ import {
   Loader2
 } from 'lucide-react'
 import { useId, useMemo, useRef, useState } from 'react'
+import { useItemEditAuth } from '../../../context'
 import { cn, titleCase } from '../../../lib/utils'
+import { ExplainButton } from '../../ai/ExplainButton'
 import { useDismissRows, useSignalAction, useSnooze } from './api'
 import { canDrill, RowDrill } from './drill'
 import { DismissButton, SnoozeMenu } from './SnoozeMenu'
@@ -456,6 +458,7 @@ function SignalRowView({
     (a) =>
       !(a.kind === 'open' && row.record) && !(a.kind === 'explain' && canExplain?.(a) === false)
   )
+  const { isAdmin } = useItemEditAuth()
   const [drillOpen, setDrillOpen] = useState(false)
   const drillId = useId()
   const disclosureRef = useRef<HTMLButtonElement>(null)
@@ -589,6 +592,15 @@ function SignalRowView({
           />
         </div>
       </div>
+      {isAdmin && (
+        <div className='pb-3 pl-11 pr-4' data-ic-explain={row.key}>
+          <ExplainButton
+            kind='signal-row'
+            params={{ signal: signal.id, row_key: row.key }}
+            label='Explain this failure'
+          />
+        </div>
+      )}
       {drillOpen && drillable && row.drill && (
         // Esc anywhere inside the open drill collapses it.
         <section

@@ -5,6 +5,8 @@ import { hasColumn } from '../lib/column-probe.js'
 import { hasChainColumns } from '../services/chain-columns.js'
 import { maskQueryString } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
+import { requestTenantKey } from '../services/socket-tenant.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { errorCode, hasCacheHit, noteRequest } from '../services/traffic-map.js'
 import { notePublicHit } from '../services/traffic-taps/public-clients.js'
 
@@ -374,9 +376,12 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
 
     // Live traffic view (#276): stream to admin watchers only when someone is
     // actually watching — the room-size probe is a local map lookup.
-    const watchers = app.io?.sockets?.adapter?.rooms?.get('watch:traffic')?.size ?? 0
+    // Cloud: the request's tenant's room (the tenant hook stamps it; onResponse may run
+    // outside the request's context).
+    const trafficRoom = tenantScopedRoom('watch:traffic', requestTenantKey(req))
+    const watchers = app.io?.sockets?.adapter?.rooms?.get(trafficRoom)?.size ?? 0
     if (watchers > 0) {
-      app.io.to('watch:traffic').emit('traffic:request', {
+      app.io.to(trafficRoom).emit('traffic:request', {
         method: req.method,
         path: path.slice(0, 300),
         status: reply.statusCode,

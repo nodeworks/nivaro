@@ -5,11 +5,19 @@ import {
   readUnreadNotificationCount
 } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Bell, Check, CheckCheck, ChevronDown, ExternalLink, History } from 'lucide-react'
+import {
+  Bell,
+  Check,
+  CheckCheck,
+  ChevronDown,
+  ExternalLink,
+  History,
+  ShieldCheck
+} from 'lucide-react'
 import { Fragment, type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
-import { get } from '../lib/commands'
+import { get, post } from '../lib/commands'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -59,6 +67,8 @@ export interface BellNotification {
   why?: NotificationWhy | null
   /** #1385 — the record's revision current when the row was written. */
   revision_id?: number | null
+  /** #2365 — the sender asked for an explicit acknowledgement. */
+  ack?: { required: boolean; at: string | null; by: string | null } | null
 }
 
 export type BellLaneTab = 'attention' | 'fyi' | 'all'
@@ -183,7 +193,11 @@ export function NotificationBell({
     queryKey: ['notifications', 'bell', app ?? null, tab],
     queryFn: () =>
       client
-        .request<{ data: BellNotification[]; bundles?: NotificationBundle<BellNotification>[] }>(
+        .request<{
+          data: BellNotification[]
+          bundles?: NotificationBundle<BellNotification>[]
+          pinned?: BellNotification[]
+        }>(
           get('/notifications', {
             limit: 60,
             app,
@@ -193,13 +207,17 @@ export function NotificationBell({
           })
         )
         .then((r) => {
-          const rows = r.data ?? []
-          if (r.bundles) return { rows, bundles: r.bundles }
-          return bundleLocally(rows)
+          const pinned = r.pinned ?? []
+          const ids = new Set(pinned.map((n) => n.id))
+          const rows = (r.data ?? []).filter((n) => !ids.has(n.id))
+          if (r.bundles) return { rows, bundles: r.bundles, pinned }
+          return { ...bundleLocally(rows), pinned }
         }),
     enabled: open
   })
   const notifications = page?.rows ?? []
+  // #2365 — acknowledgement-required rows stay pinned above the lists.
+  const pinnedRows = page?.pinned ?? []
   const bundles = page?.bundles ?? []
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   // The snapshot sheet lives OUTSIDE the panel: opening it closes the panel
@@ -241,6 +259,10 @@ export function NotificationBell({
     }
   }, [open, panelPlacement])
 
+  const acknowledge = useMutation({
+    mutationFn: (id: number) => client.request(post(`/notifications/${id}/acknowledge`)),
+    onSuccess: invalidate
+  })
   const markRead = useMutation({
     mutationFn: (id: number) => client.request(markNotificationRead(id)),
     onSuccess: invalidate
@@ -387,6 +409,20 @@ export function NotificationBell({
           </span>
         )}
       </button>
+      {n.ack?.required && !n.ack.at && (
+        <div className={`pb-2 pr-3 ${indent ? 'pl-[46px]' : 'pl-[30px]'}`}>
+          <button
+            type='button'
+            disabled={acknowledge.isPending}
+            onClick={() => acknowledge.mutate(n.id)}
+            data-notification-acknowledge={n.id}
+            className='inline-flex items-center gap-1 rounded-md bg-nvr-cyan px-2 py-1 text-[11px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+          >
+            <ShieldCheck className='h-3 w-3' />
+            Acknowledge
+          </button>
+        </div>
+      )}
       {n.actions && n.actions.length > 0 && !n.read && (
         <NotificationActions
           actions={n.actions}
@@ -639,7 +675,19 @@ export function NotificationBell({
               )}
             </div>
             <div className='max-h-96 overflow-y-auto'>
-              {groups.length === 0 && bundles.length === 0 ? (
+              {pinnedRows.length > 0 && (
+                <div data-notification-pinned>
+                  <div className='bg-amber-50 px-3 py-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'>
+                    Needs your acknowledgement
+                  </div>
+                  {pinnedRows.map((n) => (
+                    <Fragment key={n.id}>
+                      {renderRow(n, !!resolveNotificationTargetFor(n, routes))}
+                    </Fragment>
+                  ))}
+                </div>
+              )}
+              {groups.length === 0 && bundles.length === 0 && pinnedRows.length === 0 ? (
                 <p className='px-3 py-6 text-center text-[12px] text-slate-400'>
                   {tab === 'attention'
                     ? 'Nothing needs you right now.'

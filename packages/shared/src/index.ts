@@ -3,7 +3,42 @@ export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
-export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
+export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
+export {
+  AiMarkdown,
+  type AiMarkdownBlock,
+  type ChartPointHandler,
+  parseAiMarkdown
+} from './components/ai/AiMarkdown'
+export {
+  type AiMemorySuggestion,
+  AiMemorySuggestions
+} from './components/ai/AiMemorySuggestions'
+export {
+  type AiPlan,
+  AiPlanCard,
+  type AiPlanImpact,
+  type AiPlanStatus,
+  type AiPlanStep,
+  type AiPlanStepState,
+  type AiPlanSubscribe
+} from './components/ai/AiPlanCard'
+export { type AiPlanChangeRow, AiPlanChanges } from './components/ai/AiPlanChanges'
+export { AiPlansView } from './components/ai/AiPlansView'
+export { AiStepList } from './components/ai/AiStepList'
+export {
+  type AnswerFormat,
+  type AnswerRows,
+  cellNumber,
+  chartOf,
+  formatsFor,
+  listOf,
+  rowsOfBlock
+} from './components/ai/answer-formats'
+export { DataGuideCard } from './components/ai/DataGuideCard'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
+export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
   AlertRuleDrawer,
@@ -76,6 +111,7 @@ export { EmptyState } from './components/EmptyState'
 export { ErrorSurface } from './components/ErrorSurface'
 export { canPreviewFile, FilePreviewLightbox } from './components/FilePreviewLightbox'
 export { FirstLoginChecklist } from './components/FirstLoginChecklist'
+export { FocusModeToggle } from './components/FocusModeToggle'
 export {
   FORCE_RELOAD_EVENT,
   ForceReloadBanner,
@@ -200,6 +236,7 @@ export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeBut
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
+export { LiveRowMark } from './components/LiveRowMark'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
 export { MatrixEditor } from './components/MatrixEditor'
 export { MyWorkView } from './components/MyWorkView'
@@ -335,6 +372,7 @@ export { QueueKanbanBoard } from './components/queue/QueueKanbanBoard'
 export type { QueueRealtimeAdapter, QueueWorklistProps } from './components/queue/QueueWorklist'
 export { QueueWorklist } from './components/queue/QueueWorklist'
 export { QueueWorkloadView } from './components/queue/QueueWorkloadView'
+export { RealtimeStaleMark, RealtimeStatusBanner } from './components/RealtimeStatusBanner'
 export { RecentRecordsRail } from './components/RecentRecordsRail'
 export { RecordDrilldownSheet } from './components/RecordDrilldownSheet'
 export {
@@ -386,6 +424,20 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export {
+  type DrillSource,
+  defaultQuestionFor,
+  drillSourceFor,
+  type LiveSource,
+  liveSourcesFor,
+  type PanelTraceEntry,
+  parseSlash,
+  SLASH_COMMANDS,
+  type SlashCommand,
+  slashMatches,
+  stripFollowUps
+} from './lib/ai-panel'
+export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
   getApiUpdate,
@@ -447,14 +499,28 @@ export {
   getFiscalStartMonth,
   setFiscalStartMonth
 } from './lib/fiscal'
+export * from './lib/focus-mode'
 export * from './lib/format-value'
+export {
+  type GlossaryTerm,
+  glossarySegments,
+  invalidateGlossary,
+  useGlossary
+} from './lib/glossary'
 export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idle'
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
-export { type NotificationSound, playNotificationSound } from './lib/notification-sound'
+export * from './lib/live'
+export * from './lib/live-list'
+export * from './lib/live-ops'
+export {
+  type NotificationSound,
+  playNotificationSound,
+  soundForCategory
+} from './lib/notification-sound'
 export {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -492,8 +558,13 @@ export {
   type CollectionUpdateEvent,
   type RealtimeAdapter,
   RealtimeContext,
-  useOptionalRealtime
+  type RealtimeStatus,
+  updateItemIds,
+  updateTouches,
+  useOptionalRealtime,
+  useRealtimeStatus
 } from './lib/realtime'
+export { useRecordTabs } from './lib/record-tabs'
 export {
   captureReplayClip,
   clipEndOffset,
@@ -561,6 +632,13 @@ export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
+export {
+  type ClockSample,
+  measureClockOffset,
+  serverClockOffset,
+  serverNow,
+  setServerClockOffset
+} from './lib/server-clock'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export {

@@ -637,7 +637,14 @@ export function registrationMembers(
     },
     sql: {
       runLong: (sql, o) =>
-        runLongSql(sql, runLongOnTenant ? { ...o, knex: ctx.database as never } : o)
+        runLongSql(sql, runLongOnTenant ? { ...o, knex: ctx.database as never } : o),
+      // #1875 — raw writes announce themselves so open pages refresh.
+      announceWrites: (collection, ids, o) =>
+        import('../services/raw-write-announcer.js')
+          .then(({ announceRawWrites }) =>
+            announceRawWrites(collection, ids, { ...o, source: `extension:${extId}` })
+          )
+          .catch(() => {})
     },
     logActivity: (entry) => {
       note('activity')
