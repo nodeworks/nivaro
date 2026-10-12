@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { computeWidgetData } from '../services/dashboard-widgets.js'
+import type { User } from '../types.js'
 
 /**
  * Public dashboard share links.
@@ -142,7 +143,7 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
     }
 
     const dashboard = (await db('nivaro_dashboards').where({ id: link.dashboard }).first()) as
-      | { id: string; name: string }
+      | { id: string; name: string; user: string | null }
       | undefined
     if (!dashboard) return reply.code(404).send({ error: 'Not found' })
 
@@ -161,9 +162,39 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
       height: number
     }>
 
+    // A public link shows what the dashboard's OWNER can see — the person who controls its
+    // widgets — never more: an administrator who minted a link on someone else's dashboard
+    // lends no rights to it. The link itself stays valid only while its creator is active and
+    // still the owner or an administrator (only they can mint one; created_by is always the
+    // minting user and no route changes it). An invalid link or an inactive owner: no data.
+    const owner = dashboard.user
+      ? ((await db('nivaro_users').where({ id: dashboard.user, status: 'active' }).first()) as
+          | User
+          | undefined)
+      : undefined
+    const creator = link.created_by
+      ? ((await db('nivaro_users').where({ id: link.created_by, status: 'active' }).first()) as
+          | User
+          | undefined)
+      : undefined
+    let valid = !!creator
+    if (
+      creator &&
+      String(dashboard.user ?? '').toUpperCase() !== String(creator.id).toUpperCase()
+    ) {
+      const role = creator.role
+        ? ((await db('nivaro_roles').where({ id: creator.role }).first('admin_access')) as
+            | { admin_access?: boolean | number }
+            | undefined)
+        : undefined
+      if (!role?.admin_access) valid = false
+    }
+    const viewer = valid ? owner : undefined
     const resolved = await Promise.all(
       widgets.map(async (w) => {
-        const result = await computeWidgetData(w)
+        const result = viewer
+          ? await computeWidgetData(w, [], { user: viewer, public: true })
+          : { error: 'No viewer', status: 403 }
         return {
           id: w.id,
           type: w.type,

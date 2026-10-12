@@ -33,12 +33,23 @@ vi.mock('../../../services/rollup.js', () => ({
   validateRollupConfig: vi.fn(() => null)
 }))
 
+// The as-the-viewer gates (#1675 security pass) are stand-ins here: the host record and the
+// configured fields pass, and the walked ids are narrowed by `readableIds`.
+vi.mock('../../../services/widget-access.js', () => ({
+  assertHostReadable: vi.fn(async () => {}),
+  assertWidgetFieldsReadable: vi.fn(async () => {}),
+  assertLookupReadable: vi.fn(async () => {}),
+  readableIds: vi.fn(async (_u: unknown, _c: string, ids: unknown[]) => ids.slice(0, 1)),
+  readOneAs: vi.fn(async () => null)
+}))
+
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../../../db/index.js'
 import { widgetsInternalRoutes } from '../../../routes/widgets-internal.js'
 import { can } from '../../../services/permissions.js'
 import { resolveRollupRows, validateRollupConfig } from '../../../services/rollup.js'
+import { assertHostReadable } from '../../../services/widget-access.js'
 
 function buildApp() {
   const app = Fastify({ logger: false })
@@ -110,7 +121,14 @@ describe('POST /widgets-internal/:id/render — rollup dispatch', () => {
       rollupConfig,
       '373944',
       undefined,
-      undefined
+      undefined,
+      expect.any(Function),
+      expect.any(Function)
+    )
+    expect(vi.mocked(assertHostReadable)).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'test-user' }),
+      rollupConfig.host_collection,
+      '373944'
     )
   })
 

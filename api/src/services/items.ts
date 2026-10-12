@@ -3355,7 +3355,12 @@ export async function readItems(
           )) as Array<{ c: string }>
         ).map((r) => r.c.toLowerCase())
       )
-      sumFields = wanted.filter((f) => numericCols.has(f.toLowerCase()))
+      // Readable fields only: a footer sum over a hidden field would show it in aggregate.
+      sumFields = wanted.filter(
+        (f) =>
+          numericCols.has(f.toLowerCase()) &&
+          (allowedFields === null || allowedFields.includes('*') || allowedFields.includes(f))
+      )
       if (sumFields.length) {
         const sq = countQ.clone().clearSelect()
         for (const f of sumFields) sq.sum(`${f} as ${f}`)

@@ -9,11 +9,13 @@ import {
   type DotSpec,
   findM2mAlias,
   findM2oRelation,
+  HIDDEN_RELATED,
   isDotPathIdentifier,
   isPlainIdentifier,
   type Logger,
   normalizeColumnSpecs,
   type PathWalkConfig,
+  type RelatedVisibility,
   type RelRow,
   resolveDotSpecValues,
   resolveRelatedLabels,
@@ -291,7 +293,11 @@ export async function resolveRollupRows(
    *  built from `staged` alone (a new record's pending lines + allocations). */
   recordId: string | null,
   logger: Logger = consoleLogger,
-  staged?: RollupStaged
+  staged?: RollupStaged,
+  /** Narrow the walked ids to what the viewer can read (widgets-internal passes it). */
+  visible?: (ids: Array<string | number>) => Promise<Array<string | number>>,
+  /** Which related records (dot columns, intermediate levels, level labels) the viewer can read. */
+  relatedVisibility?: RelatedVisibility
 ): Promise<RollupResult> {
   const relations = (await database('nivaro_relations').select(
     'many_collection',
@@ -307,11 +313,12 @@ export async function resolveRollupRows(
   const configError = validateRollupConfig(config, relations)
   if (configError) badConfig(`rollup: ${configError}`)
 
-  const { idSet, truncated: walkTruncated } =
+  const { idSet: walkedIds, truncated: walkTruncated } =
     recordId == null
       ? { idSet: [] as Array<string | number>, truncated: false }
       : await walkReversePath(database, config, relations, recordId, logger, 'rollup')
   let truncated = walkTruncated
+  const idSet = visible && walkedIds.length > 0 ? await visible(walkedIds) : walkedIds
 
   const leafSpecs = normalizeColumnSpecs(config.leaf_columns)
   const levelFields = config.levels.map((l) => l.field)
@@ -395,7 +402,8 @@ export async function resolveRollupRows(
     dotSpecs,
     targetRows,
     logger,
-    'rollup'
+    'rollup',
+    relatedVisibility
   )
 
   const getRaw = (row: Record<string, unknown>, field: string): unknown => {
@@ -406,7 +414,9 @@ export async function resolveRollupRows(
       if (row[field] !== undefined) return row[field]
       const raw = row[dot.fkField]
       const map = dotValueMaps.get(`${dot.fkField}.${dot.subField}`)
-      return raw == null ? null : (map?.get(String(raw)) ?? raw)
+      const v = raw == null ? null : map?.get(String(raw))
+      // A related (intermediate) record the viewer cannot read: blank, never its FK.
+      return raw == null || v === HIDDEN_RELATED ? null : (v ?? raw)
     }
     return row[field] ?? null
   }
@@ -443,7 +453,8 @@ export async function resolveRollupRows(
         ? resolveRelatedLabels(
             database,
             info.labelSourceCollection,
-            targetRows.map((r) => getRaw(r, info.field))
+            targetRows.map((r) => getRaw(r, info.field)),
+            relatedVisibility
           )
         : Promise.resolve(null)
     )

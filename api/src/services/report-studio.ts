@@ -1,9 +1,9 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
-import { getAiClient, getAiModelSettings } from './ai-client.js'
-import { runCustomQueryBySlug } from './custom-query-exec.js'
 import type { User } from '../types.js'
-import { can } from './permissions.js'
+import { getAiClient, getAiModelSettings } from './ai-client.js'
+import { runCustomQueryAsUser } from './custom-query-exec.js'
+import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
 import { applyScopeEnforcement, getUserScopeEnforcement } from './user-scopes.js'
 
 /**
@@ -238,6 +238,7 @@ export function applyFilters(
 
 /** Resolve FK dimension values to display labels via the related collection. */
 async function labelizeDimension<T extends { dim: unknown; value: number }>(
+  user: User,
   collection: string,
   field: string,
   rows: T[]
@@ -252,20 +253,8 @@ async function labelizeDimension<T extends { dim: unknown; value: number }>(
   }
   const ids = rows.map((r) => r.dim).filter((v) => v != null)
   if (ids.length === 0) return rows.map((r) => ({ ...r, dim: '(none)' }))
-  let related: Array<Record<string, unknown>> = []
-  try {
-    related = (await db(target).whereIn('id', ids as Array<string | number>)) as Array<
-      Record<string, unknown>
-    >
-  } catch {
-    /* labels are best-effort */
-  }
-  const label = new Map(
-    related.map((r) => [
-      String(r.id),
-      String(r.title ?? r.name ?? r.label ?? r.subject ?? r.id).slice(0, 80)
-    ])
-  )
+  // Only records the viewer can read are labelled; any other keeps its raw key.
+  const label = await readableLabels(user, target, ids as Array<string | number>, 80)
   return rows.map((r) => ({
     ...r,
     // raw carries the FK for drill-through — the label alone cannot rebuild
@@ -273,6 +262,124 @@ async function labelizeDimension<T extends { dim: unknown; value: number }>(
     raw: r.dim == null ? null : r.dim,
     dim: r.dim == null ? '(none)' : (label.get(String(r.dim)) ?? String(r.dim))
   }))
+}
+
+/** Display labels for the `ids` of `target` the viewer can read — through the items service. */
+export async function readableLabels(
+  user: User,
+  target: string,
+  ids: Array<string | number>,
+  max = 60
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>()
+  const unique = [...new Set(ids.map(String))]
+  if (unique.length === 0 || target.startsWith('nivaro_')) return out
+  if (!(await can(user, 'read', target).catch(() => false))) return out
+  const { readItems } = await import('./items.js')
+  for (let i = 0; i < unique.length; i += 500) {
+    const chunk = unique.slice(i, i + 500)
+    try {
+      const res = await readItems(user, target, {
+        fields: ['*'],
+        filter: { id: { _in: chunk } },
+        limit: chunk.length
+      })
+      for (const r of (res.data ?? []) as Array<Record<string, unknown>>) {
+        out.set(
+          String(r.id),
+          String(r.title ?? r.name ?? r.label ?? r.subject ?? r.id).slice(0, max)
+        )
+      }
+    } catch {
+      /* labels are best-effort: raw keys stand in */
+    }
+  }
+  return out
+}
+
+/** Physical columns of `collection`, and the ones `user` may read (id always). */
+export async function readableColumns(
+  user: User,
+  collection: string
+): Promise<{ physical: Set<string>; readable: Set<string> }> {
+  const physical = await physicalColumns(collection)
+  const allowed = await getAllowedFields(user, 'read', collection)
+  if (allowed == null || allowed.includes('*')) return { physical, readable: physical }
+  const ok = new Set(allowed)
+  return { physical, readable: new Set([...physical].filter((c) => c === 'id' || ok.has(c))) }
+}
+
+/** Every field a widget config names (metric, dimensions, axes, dates, columns, sort, filters). */
+export function widgetFieldRefs(cfg: WidgetQueryConfig): string[] {
+  const out: string[] = []
+  const add = (f: unknown) => {
+    if (typeof f === 'string' && f) out.push(f.startsWith('-') ? f.slice(1) : f)
+  }
+  add(cfg.metric?.field)
+  add(cfg.metric2?.field)
+  add(cfg.dimension?.field)
+  add(cfg.dimension2?.field)
+  add(cfg.row_dim?.field)
+  add(cfg.col_dim?.field)
+  add(cfg.x_field)
+  add(cfg.y_field)
+  add(cfg.date_field)
+  add(cfg.sort)
+  for (const c of cfg.columns ?? []) add(typeof c === 'string' ? c : c?.field)
+  for (const f of cfg.filters ?? []) add(f?.field)
+  return out
+}
+
+async function isAdminUser(user: User): Promise<boolean> {
+  if (!user.role) return false
+  const role = await db('nivaro_roles').where({ id: user.role }).first('admin_access')
+  return !!role?.admin_access
+}
+
+/** WidgetFilter list → an items-service filter (`_and` members), readable fields only. */
+export function widgetFiltersToItems(
+  filters: WidgetFilter[] | undefined,
+  valid: Set<string>
+): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = []
+  for (const f of filters ?? []) {
+    if (!f || !valid.has(f.field)) continue
+    const v = f.value
+    switch (f.op) {
+      case 'eq':
+        out.push({ [f.field]: v === null ? { _null: true } : { _eq: v } })
+        break
+      case 'neq':
+        out.push({ [f.field]: v === null ? { _nnull: true } : { _neq: v } })
+        break
+      case 'gt':
+      case 'gte':
+      case 'lt':
+      case 'lte':
+        out.push({ [f.field]: { [`_${f.op}`]: v } })
+        break
+      case 'in': {
+        const list = Array.isArray(v)
+          ? v
+          : String(v ?? '')
+              .split(',')
+              .map((x) => x.trim())
+              .filter(Boolean)
+        out.push({ [f.field]: { _in: list } })
+        break
+      }
+      case 'contains':
+        out.push({ [f.field]: { _contains: String(v ?? '') } })
+        break
+      case 'null':
+        out.push({ [f.field]: { _null: true } })
+        break
+      case 'nnull':
+        out.push({ [f.field]: { _nnull: true } })
+        break
+    }
+  }
+  return out
 }
 
 export interface WidgetData {
@@ -565,7 +672,9 @@ export async function resolveWidgetData(
       }
       params[k] = raw
     }
-    let rows = await runCustomQueryBySlug(qc.slug, params)
+    // The custom-query route's gate (access level + scope params) as the viewer: a report
+    // reader must not run an admin-only query, or an unscoped one, through a widget.
+    let rows = await runCustomQueryAsUser(qc.slug, params, user, await isAdminUser(user))
     if (qc.group_rows && qc.x_field) {
       const xf = qc.x_field
       const numFields =
@@ -632,7 +741,11 @@ export async function resolveWidgetData(
     }
     const filterMap: Record<string, unknown> = {}
     for (const f of entityFilters) if (f.values.length) filterMap[f.field] = f.values
-    const value = source ? await resolveMetricValue(source, filterMap) : null
+    // As the viewer: SLO metrics are admin-only, custom queries pass their access gate and
+    // scope params, collection counts read through the items service.
+    const value = source
+      ? await resolveMetricValue(source, filterMap, { user, isAdmin: await isAdminUser(user) })
+      : null
     return { value, row_count: value != null ? 1 : 0 }
   }
 
@@ -669,7 +782,18 @@ export async function resolveWidgetData(
     throw Object.assign(new Error(`No read access to ${collection}`), { statusCode: 403 })
   }
   const cfg = widget.config ?? {}
-  const valid = await physicalColumns(collection)
+  // Only columns the viewer's role may read (#1675 security pass): a widget that names a hidden
+  // field refuses rather than aggregating, grouping, filtering or listing it, and report-level
+  // filters on a hidden field simply do not bind here.
+  const { physical, readable: valid } = await readableColumns(user, collection)
+  const hiddenRef = widgetFieldRefs(cfg).find((f) => physical.has(f) && !valid.has(f))
+  if (hiddenRef) {
+    throw Object.assign(new Error(`This widget uses a field you cannot read ("${hiddenRef}")`), {
+      statusCode: 403
+    })
+  }
+  // The role's row filter, as readItems applies it.
+  const rowFilter = await getRowFilter(user, 'read', collection)
 
   const aggregate = cfg.metric?.aggregate ?? 'count'
   const metricField = cfg.metric?.field && valid.has(cfg.metric.field) ? cfg.metric.field : null
@@ -689,6 +813,7 @@ export async function resolveWidgetData(
   const base = (rangeOverride?: { start: Date; end: Date } | null) => {
     const q = db(collection)
     applyScopeEnforcement(q, collection, scopeEnforcement)
+    if (rowFilter) applyRowFilter(q, rowFilter, user)
     applyFilters(q, cfg.filters, valid)
     applyFilters(q, entityAsFilters, valid)
     const range = rangeOverride !== undefined ? rangeOverride : resolveDateRange(dateRange)
@@ -754,11 +879,13 @@ export async function resolveWidgetData(
     )) as unknown as Array<{ dim: unknown; dim2: unknown; value: number | string }>
     const capped = rows.slice(0, 400)
     const aLab = await labelizeDimension(
+      user,
       collection,
       dimA,
       capped.map((r) => ({ dim: r.dim, value: 0, k: r }))
     )
     const bLab = await labelizeDimension(
+      user,
       collection,
       dimB,
       capped.map((r) => ({ dim: r.dim2, value: 0, k: r }))
@@ -807,6 +934,7 @@ export async function resolveWidgetData(
     const rLab = rd.bucket
       ? rowsRaw.map((r) => ({ dim: r.rdim == null ? '(none)' : String(r.rdim) }))
       : await labelizeDimension(
+          user,
           collection,
           rd.field,
           rowsRaw.map((r) => ({ dim: r.rdim, value: 0 }))
@@ -814,6 +942,7 @@ export async function resolveWidgetData(
     const cLab = cd.bucket
       ? rowsRaw.map((r) => ({ dim: r.cdim == null ? '(none)' : String(r.cdim) }))
       : await labelizeDimension(
+          user,
           collection,
           cd.field,
           rowsRaw.map((r) => ({ dim: r.cdim, value: 0 }))
@@ -923,21 +1052,37 @@ export async function resolveWidgetData(
     return { waterfall: { start, end, steps }, row_count: steps.length }
   }
 
+  // Table rows read through the items service as the viewer (#1675 security pass): row
+  // filters, User Scopes, the role's field list and the system-column strip all apply — a
+  // table lists exactly what the collection browser would show this person.
   if (widget.type === 'table') {
     const columns = (cfg.columns ?? [])
       .map((c) => (typeof c === 'string' ? c : ((c as { field?: string })?.field ?? '')))
       .filter((c) => valid.has(c))
-    const select = columns.length > 0 ? ['id', ...columns] : ['*']
-    const q = base().select(select as string[])
+    const and = [
+      ...widgetFiltersToItems(cfg.filters, valid),
+      ...widgetFiltersToItems(entityAsFilters, valid)
+    ]
+    const range = resolveDateRange(dateRange)
+    if (range && cfg.date_field && valid.has(cfg.date_field)) {
+      // Local wall-clock strings, the shape the browser's date filters send.
+      const at = (d: Date) => d.toISOString().slice(0, 19)
+      and.push({ [cfg.date_field]: { _gte: at(range.start) } })
+      and.push({ [cfg.date_field]: { _lte: at(range.end) } })
+    }
     const sortRaw = cfg.sort ?? ''
     const desc = sortRaw.startsWith('-')
     const sortField = desc ? sortRaw.slice(1) : sortRaw
-    if (sortField && valid.has(sortField)) q.orderBy(sortField, desc ? 'desc' : 'asc')
-    else q.orderBy('id', 'desc')
-    const rows = (await q.limit(Math.min(500, Math.max(1, cfg.limit ?? 10)))) as Array<
-      Record<string, unknown>
-    >
-    // Resolve FK columns to display labels so tables read like the source app
+    const { readItems } = await import('./items.js')
+    const res = await readItems(user, collection, {
+      fields: columns.length > 0 ? ['id', ...columns] : ['*'],
+      filter: and.length ? { _and: and } : {},
+      sort: [sortField && valid.has(sortField) ? `${desc ? '-' : ''}${sortField}` : '-id'],
+      limit: Math.min(500, Math.max(1, cfg.limit ?? 10))
+    })
+    const rows = (res.data ?? []) as Array<Record<string, unknown>>
+    // Resolve FK columns to display labels so tables read like the source app — only for
+    // related records the viewer can read; the rest keep their key.
     const shown = columns.length > 0 ? columns : Object.keys(rows[0] ?? {})
     const rels = (await db('nivaro_relations')
       .where({ many_collection: collection })
@@ -947,23 +1092,10 @@ export async function resolveWidgetData(
       if (!rel.one_collection || rel.one_collection.startsWith('nivaro_')) continue
       const ids = [...new Set(rows.map((r) => r[rel.many_field]).filter((v) => v != null))]
       if (ids.length === 0) continue
-      try {
-        const related = (await db(rel.one_collection).whereIn(
-          'id',
-          ids as Array<string | number>
-        )) as Array<Record<string, unknown>>
-        const label = new Map(
-          related.map((r) => [
-            String(r.id),
-            String(r.title ?? r.name ?? r.label ?? r.subject ?? r.id).slice(0, 60)
-          ])
-        )
-        for (const r of rows) {
-          const v = r[rel.many_field]
-          if (v != null) r[rel.many_field] = label.get(String(v)) ?? v
-        }
-      } catch {
-        /* label resolution is best-effort */
+      const label = await readableLabels(user, rel.one_collection, ids as Array<string | number>)
+      for (const r of rows) {
+        const v = r[rel.many_field]
+        if (v != null && typeof v !== 'object') r[rel.many_field] = label.get(String(v)) ?? v
       }
     }
     return { rows, row_count: rows.length }
@@ -1329,7 +1461,7 @@ export async function resolveWidgetData(
     raw?: unknown
     value2?: number
     other?: boolean
-  }> = await labelizeDimension(collection, dim.field, raw)
+  }> = await labelizeDimension(user, collection, dim.field, raw)
   if (tail.length > 0) {
     series.push({
       dim: `Other (${tail.length})`,

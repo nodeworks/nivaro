@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
-import { runCustomQueryBySlug } from './custom-query-exec.js'
+import type { User } from '../types.js'
+import { runCustomQueryAsUser, runCustomQueryBySlug } from './custom-query-exec.js'
 import { sendMail } from './mail.js'
 import { notifyUser } from './notification-channels.js'
 
@@ -76,9 +77,19 @@ const COLLECTION_NAME_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
 export async function resolveMetricValue(
   source: MetricSource,
-  filters: Record<string, unknown> | null
+  filters: Record<string, unknown> | null,
+  /**
+   * Resolve AS a person (a report widget a viewer opens) instead of as the trusted alert
+   * engine: an SLO metric is for administrators, a custom query passes its access gate and
+   * scope params for them, and a collection count reads through the items service (row
+   * filters, User Scopes, field limits). Anything they may not see resolves to null.
+   */
+  asUser?: { user: User; isAdmin: boolean }
 ): Promise<number | null> {
   try {
+    if (asUser && source.type === 'external_api_slo' && !asUser.isAdmin) return null
+    if (asUser && source.type === 'collection')
+      return await countAsUser(source, filters, asUser.user)
     if (source.type === 'external_api_slo') {
       const f = filters ?? {}
       const first = (v: unknown) => (Array.isArray(v) ? v[0] : v)
@@ -100,7 +111,9 @@ export async function resolveMetricValue(
         const arr = Array.isArray(raw) ? raw : raw != null ? [raw] : []
         if (arr.length) params[paramName] = arr.join(',')
       }
-      const rows = await runCustomQueryBySlug(source.slug, params)
+      const rows = asUser
+        ? await runCustomQueryAsUser(source.slug, params, asUser.user, asUser.isAdmin)
+        : await runCustomQueryBySlug(source.slug, params)
       if (!rows.length) return null
       const first = rows[0]
       if (source.value_field && source.value_field in first) {
@@ -136,6 +149,37 @@ export async function resolveMetricValue(
     console.warn('[metric-alerts] metric resolution failed:', (err as Error).message)
     return null
   }
+}
+
+/** A collection-count metric read as `user` (readItems: every read gate applies). */
+async function countAsUser(
+  source: Extract<MetricSource, { type: 'collection' }>,
+  filters: Record<string, unknown> | null,
+  user: User
+): Promise<number | null> {
+  if (!COLLECTION_NAME_RE.test(source.collection) || /^nivaro_/i.test(source.collection)) {
+    return null
+  }
+  const { getAllowedFields } = await import('./permissions.js')
+  const allowed = await getAllowedFields(user, 'read', source.collection)
+  const and: Array<Record<string, unknown>> = []
+  for (const [col, raw] of Object.entries({ ...(source.filter ?? {}), ...(filters ?? {}) })) {
+    if (!COLLECTION_NAME_RE.test(col)) continue
+    // A filter on a field the person cannot read would tell them its values.
+    if (allowed != null && !allowed.includes('*') && col !== 'id' && !allowed.includes(col))
+      return null
+    if (Array.isArray(raw)) {
+      if (raw.length) and.push({ [col]: { _in: raw } })
+    } else if (raw === null) and.push({ [col]: { _null: true } })
+    else and.push({ [col]: { _eq: raw } })
+  }
+  const { readItems } = await import('./items.js')
+  const res = await readItems(user, source.collection, {
+    fields: ['id'],
+    filter: and.length ? { _and: and } : {},
+    limit: 1
+  })
+  return Number(res.total ?? 0)
 }
 
 // ─── Rule checks ──────────────────────────────────────────────────────────────

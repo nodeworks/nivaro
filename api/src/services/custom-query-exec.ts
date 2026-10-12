@@ -386,3 +386,43 @@ function sqlParam(v: unknown): { type: string; literal: string } {
     literal: `N'${str.replace(/'/g, "''")}'`
   }
 }
+
+/**
+ * Server-side execution AS A PERSON (report 'query' widgets, metric-catalog widgets): the
+ * /custom-queries/:slug/execute gate — access `admin` needs an administrator, `authenticated`
+ * and `public` any signed-in person, anything else nobody — then the query's scope params for
+ * that person (User Scopes on raw SQL), exactly as the route applies them.
+ */
+export async function runCustomQueryAsUser(
+  slug: string,
+  incoming: Record<string, unknown>,
+  user: { id: string; role?: string | null },
+  isAdmin: boolean
+): Promise<Array<Record<string, unknown>>> {
+  const query = (await db('nivaro_custom_queries').where({ slug }).first()) as
+    | (CustomQueryRowRec & { scope_params?: string | null })
+    | undefined
+  if (!query || !query.enabled) {
+    throw Object.assign(new Error(`Custom query not found: ${slug}`), { statusCode: 404 })
+  }
+  const access = String(query.access)
+  if (!['admin', 'authenticated', 'public'].includes(access) || (access === 'admin' && !isAdmin)) {
+    throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
+  }
+  let defs: ParamDef[] = []
+  try {
+    defs = query.params ? (JSON.parse(query.params) as ParamDef[]) : []
+  } catch {
+    defs = []
+  }
+  const finalParams = buildFinalParams(defs, incoming)
+  const { applyScopeParams } = await import('./custom-query-scope.js')
+  await applyScopeParams(query.scope_params ?? null, finalParams, user.id, isAdmin)
+  try {
+    return await execCustomQuerySql(query.sql_text, finalParams)
+  } catch (err) {
+    const { recordQueryError } = await import('./query-cache-stats.js')
+    recordQueryError(slug, err instanceof Error ? err.message : String(err))
+    throw err
+  }
+}
