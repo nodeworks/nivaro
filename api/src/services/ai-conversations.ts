@@ -344,9 +344,14 @@ export async function messagesForViewer(
     const proposals = own && visible ? parseJsonArray<Record<string, unknown>>(r.proposals) : []
     for (const p of proposals)
       if (typeof p.proposal_id === 'string') proposalIds.push(p.proposal_id)
-    // Plans (#1807) ride meta and, like proposals, belong to their asker.
+    // Plans (#1807) ride meta and, like proposals, belong to their asker —
+    // so do memory offers (#1845) and a kept "remember that" note (#1804).
     const meta = visible ? parseJsonObject(r.meta) : {}
-    if (!own) delete meta.plans
+    if (!own) {
+      delete meta.plans
+      delete meta.memory_suggestions
+      delete meta.remembered
+    }
     out.push({
       id: String(r.id),
       role: r.role,

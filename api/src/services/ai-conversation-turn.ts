@@ -122,7 +122,8 @@ export async function openConversationTurn(
         'remembered',
         'plans',
         'choices',
-        'followups'
+        'followups',
+        'memory_suggestions'
       ]) {
         const v = payload[k]
         if (v != null && v !== false && !(Array.isArray(v) && v.length === 0)) meta[k] = v

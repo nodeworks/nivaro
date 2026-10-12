@@ -12,6 +12,10 @@ export {
   parseAiMarkdown
 } from './components/ai/AiMarkdown'
 export {
+  type AiMemorySuggestion,
+  AiMemorySuggestions
+} from './components/ai/AiMemorySuggestions'
+export {
   type AiPlan,
   AiPlanCard,
   type AiPlanImpact,
