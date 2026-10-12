@@ -231,6 +231,12 @@ export { QuickPicker, useQuickPickerStepDefs } from './components/item-edit/Quic
 export type { QuickPickerDialogProps } from './components/item-edit/QuickPickerDialog'
 export { QuickPickerDialog, useQuickPickerSteps } from './components/item-edit/QuickPickerDialog'
 export { RecordChatActions } from './components/item-edit/RecordChatActions'
+export {
+  RecordOutboxBanner,
+  RecordOutboxHost,
+  useRecordOutbox,
+  useRecordOutboxEntry
+} from './components/item-edit/RecordOutbox'
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
@@ -564,7 +570,23 @@ export {
   useOptionalRealtime,
   useRealtimeStatus
 } from './lib/realtime'
-export { useRecordTabs } from './lib/record-tabs'
+export {
+  bindRecordOutbox,
+  clearRecordOutbox,
+  discardRecordOutbox,
+  isOfflineSaveError,
+  midairCollisionOf,
+  type RecordOutboxEntry,
+  retryRecordOutbox
+} from './lib/record-outbox'
+export {
+  focusPopoutOpener,
+  isRecordPopout,
+  openRecordPopout,
+  POPOUT_PARAM,
+  recordPopoutHref
+} from './lib/record-popout'
+export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
 export {
   captureReplayClip,
   clipEndOffset,
