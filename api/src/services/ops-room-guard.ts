@@ -124,3 +124,18 @@ export async function opsOnlyHider(
   if (viewerIsAdmin || !(await hasColumn('chat_messages', 'ops_only'))) return (qb) => qb
   return (qb, col = 'ops_only') => qb.where((w) => w.whereNull(col).orWhere(col, false))
 }
+
+/**
+ * One message by id, as the viewer may see it — the same rule as the lists:
+ * an ops post does not exist for a viewer who is not an administrator (copy
+ * to notes, attach to record, reactions, edit, delete, pin, save, thread
+ * and quote targets all load through here).
+ */
+export async function loadVisibleMessage(
+  id: number,
+  viewerIsAdmin: boolean
+): Promise<Record<string, any> | undefined> {
+  if (!Number.isFinite(id)) return undefined
+  const hide = await opsOnlyHider(viewerIsAdmin)
+  return hide(db('chat_messages').where('id', id)).first()
+}

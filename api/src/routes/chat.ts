@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -24,7 +25,6 @@ import { clearRoomTypeCache, roomForRecord, roomRecordFacts } from '../services/
 import {
   ChatSendError,
   chatColumns,
-  loadMessage,
   parseJsonList,
   postChatMessage,
   redeemReplyToken,
@@ -33,6 +33,7 @@ import {
 } from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
 import {
+  loadVisibleMessage,
   nonAdminsFor,
   OPS_ONLY_CODE,
   OPS_ONLY_MESSAGE,
@@ -166,14 +167,15 @@ export async function chatRoutes(app: FastifyInstance) {
       rows = older.slice(0, limit).reverse()
     }
 
-    const data = await decorateMessages(rows, cols)
+    const data = await decorateMessages(rows, cols, hideOps)
     return { data, meta: { has_older: hasOlder, has_newer: hasNewer, anchor: anchorId } }
   })
 
   /** Reactions, masquerade names, quotes and thread summaries for a window. */
   async function decorateMessages(
     rows: Array<Record<string, unknown>>,
-    cols: Set<string>
+    cols: Set<string>,
+    hideOps: (qb: Knex.QueryBuilder) => Knex.QueryBuilder = (qb) => qb
   ): Promise<Array<Record<string, unknown>>> {
     const masqAdmins = [
       ...new Set(
@@ -218,7 +220,7 @@ export async function chatRoutes(app: FastifyInstance) {
       : []
     const quotes = new Map<number, Record<string, unknown>>()
     if (quoteIds.length) {
-      const qrows = (await db('chat_messages')
+      const qrows = (await hideOps(db('chat_messages'))
         .whereIn('id', quoteIds)
         .select('id', 'sender_name', 'message', 'deleted_at', 'attachments')) as Array<
         Record<string, unknown>
@@ -439,7 +441,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** Toggle a reaction. Same fixed palette client and server. */
   app.post<{ Params: { id: string } }>('/messages/:id/reactions', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg) return reply.code(404).send({ error: 'Not found' })
     if (!(await canSeeRoom(req.user!, String(msg.room)))) return reply.code(403).send(forbidden)
     const emoji = String((req.body as { emoji?: string })?.emoji ?? '')
@@ -463,7 +465,7 @@ export async function chatRoutes(app: FastifyInstance) {
    *  edit fixes words, it doesn't re-page people. */
   const EDIT_WINDOW_MS = 15 * 60_000
   app.patch<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg) return reply.code(404).send({ error: 'Not found' })
     if (String(msg.sender ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()) {
       return reply.code(403).send({ error: 'You can only edit your own messages' })
@@ -507,7 +509,7 @@ export async function chatRoutes(app: FastifyInstance) {
   /** Soft delete — own message, or admin. The row survives as a tombstone so
    *  the conversation's shape (and reply context) stays honest. */
   app.delete<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg) return reply.code(404).send({ error: 'Not found' })
     const own = String(msg.sender ?? '').toUpperCase() === String(req.user!.id).toUpperCase()
     if (!own && !req.isAdmin) {
@@ -710,7 +712,7 @@ export async function chatRoutes(app: FastifyInstance) {
   /** Toggle a pin. Any room member may pin/unpin — a pin is shared context,
    *  not a moderation act. */
   app.post<{ Params: { id: string } }>('/messages/:id/pin', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
     if (!(await canSeeRoom(req.user!, String(msg.room)))) return reply.code(403).send(forbidden)
     const existing = await db('nivaro_chat_pins')
@@ -750,7 +752,7 @@ export async function chatRoutes(app: FastifyInstance) {
   // Saved messages (#148): personal cross-room bookmarks.
   app.post<{ Params: { id: string } }>('/messages/:id/save', async (req, reply) => {
     const mid = Number(req.params.id)
-    const msg = (await db('chat_messages').where({ id: mid }).first('id', 'room')) as
+    const msg = (await loadVisibleMessage(mid, !!req.isAdmin)) as
       | { id: number; room: string }
       | undefined
     if (!msg) return reply.code(404).send({ error: 'Message not found' })
@@ -1642,7 +1644,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** Copy a message into the record's Notes thread, credited to its author (#946). */
   app.post<{ Params: { id: string } }>('/messages/:id/to-notes', async (req, reply) => {
-    const msg = await loadMessage(Number(req.params.id))
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
     const room = String(msg.room)
     const { resolveRoomRecord } = await import('../services/chat-records.js')
@@ -1707,7 +1709,7 @@ export async function chatRoutes(app: FastifyInstance) {
   })
 
   app.post<{ Params: { id: string } }>('/messages/:id/attach-to-record', async (req, reply) => {
-    const msg = await loadMessage(Number(req.params.id))
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
     const b = req.body as { file_id?: string; field?: string }
     const fileId = String(b.file_id ?? '')
