@@ -6,7 +6,9 @@ import { logActivity } from '../services/activity.js'
 import {
   computeWidgetData,
   normalizeWidgetFilters,
-  registeredFieldSet
+  registeredFieldSet,
+  SYSTEM_COLLECTION,
+  widgetSourceRefusal
 } from '../services/dashboard-widgets.js'
 import { readItems } from '../services/items.js'
 import { getLabels } from '../services/queues.js'
@@ -130,8 +132,10 @@ function formatDashboard(d: DashboardRow, widgets: WidgetRow[] = []) {
   }
 }
 
-/** Verify a collection name is registered in nivaro_collections (prevents SQL injection). */
+/** Verify a collection name is registered in nivaro_collections (prevents SQL injection).
+ *  System collections are never a widget source. */
 async function resolveCollection(name: string): Promise<boolean> {
+  if (SYSTEM_COLLECTION.test(name)) return false
   const row = await db('nivaro_collections').where('collection', name).first()
   return !!row
 }
@@ -302,10 +306,16 @@ export async function dashboardsRoutes(app: FastifyInstance) {
     if (!aiClient) return reply.code(503).send({ error: 'AI is not configured' })
     const { model } = await getAiModelSettings()
 
-    const collections = (await db('nivaro_collections')
+    // Only collections the caller can read: the catalog names them to the model, and every
+    // widget built here reads as its viewer anyway.
+    const { can } = await import('../services/permissions.js')
+    const candidates = (await db('nivaro_collections')
       .whereNot('collection', 'like', 'nivaro_%')
       .select('collection')
       .limit(80)) as Array<{ collection: string }>
+    const collections: Array<{ collection: string }> = []
+    for (const c of candidates)
+      if (await can(req.user!, 'read', c.collection).catch(() => false)) collections.push(c)
     const fields = (await db('nivaro_fields')
       .whereIn(
         'collection',
@@ -450,6 +460,14 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         const validField = await resolveField(collection, field)
         if (!validField) return reply.code(400).send({ error: 'Unknown field' })
       }
+      // A widget is built only over data its author can read (collection, field, filters).
+      const refusal = await widgetSourceRefusal(req.user!, {
+        type,
+        collection: collection ?? null,
+        field: field ?? null,
+        filters
+      })
+      if (refusal) return reply.code(403).send({ error: refusal })
 
       const id = randomUUID()
       await db('nivaro_dashboard_widgets').insert({
@@ -541,6 +559,14 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           if (!validField) return reply.code(400).send({ error: 'Unknown field' })
         }
         if (field !== undefined) updates.field = field ?? null
+        // The widget as it will be after this update: its author must be able to read it.
+        const refusal = await widgetSourceRefusal(req.user!, {
+          type: effType,
+          collection: collForField ?? null,
+          field: effField ?? null,
+          filters: filters !== undefined ? filters : widget.filters
+        })
+        if (refusal) return reply.code(403).send({ error: refusal })
       }
       if (filters !== undefined) updates.filters = toJsonStr(filters)
       if (col !== undefined) updates.col = col
@@ -645,12 +671,25 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       return reply.code(403).send({ error: 'Forbidden' })
     }
     if (!widget.collection) return reply.code(400).send({ error: 'Widget has no collection' })
+    if (SYSTEM_COLLECTION.test(widget.collection))
+      return reply.code(400).send({ error: 'Unknown collection' })
 
     const fieldSet = await registeredFieldSet(widget.collection)
+    // Readable fields only: the widget's own filter on a field the viewer cannot read refuses;
+    // a dashboard filter-bar one does not bind; the clicked segment must be readable.
+    const { getAllowedFields } = await import('../services/permissions.js')
+    const allowed = await getAllowedFields(req.user!, 'read', widget.collection)
+    const readable = (f: string) =>
+      f === 'id' || allowed == null || allowed.includes('*') || allowed.includes(f)
+    const ownConds = normalizeWidgetFilters(widget.filters).filter((f) => fieldSet.has(f.field))
+    if (ownConds.some((f) => !readable(f.field)))
+      return reply.code(403).send({ error: 'Forbidden' })
     const conds = [
-      ...normalizeWidgetFilters(widget.filters),
-      ...normalizeWidgetFilters(req.body?.extra_filters)
-    ].filter((f) => fieldSet.has(f.field))
+      ...ownConds,
+      ...normalizeWidgetFilters(req.body?.extra_filters).filter(
+        (f) => fieldSet.has(f.field) && readable(f.field)
+      )
+    ]
 
     const OP_MAP: Record<string, string> = {
       eq: '_eq',
@@ -678,7 +717,7 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           and.push({ created_at: { _gte: day } })
           and.push({ created_at: { _lt: next.toISOString().slice(0, 10) } })
         }
-      } else if (fieldSet.has(seg.field)) {
+      } else if (fieldSet.has(seg.field) && readable(seg.field)) {
         and.push({ [seg.field]: { _eq: seg.value } })
       } else {
         return reply.code(400).send({ error: 'Unknown segment field' })
