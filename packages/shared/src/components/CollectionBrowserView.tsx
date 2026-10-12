@@ -39,6 +39,12 @@ import {
 } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { useElapsedLoading } from '../hooks/useElapsedLoading'
+import {
+  endBulkProgress,
+  newBulkProgressId,
+  startBulkProgress,
+  useBulkProgressFeed
+} from '../lib/bulk-progress'
 import { del, get, patch, post } from '../lib/commands'
 import {
   DATE_FILTER_OPS,
@@ -87,6 +93,7 @@ import {
   useAvailableBulkActions,
   useBuiltinGate
 } from './bulk/BulkActionButtons'
+import { BulkRowMark } from './bulk/BulkRowMark'
 import { type RowPushOp, runRowPush, useRowPushActions } from './bulk/RowPushActions'
 import { CellCopyLayer } from './CellCopyLayer'
 import { CopyAsButton } from './CopyAsButton'
@@ -3506,9 +3513,9 @@ function BulkBar({
   const runRecipe = (r: Recipe) => {
     if (r.action_type === 'update' && r.config?.field) {
       const cfg = r.config
-      void run(async () => {
+      void run(async (pid) => {
         const res = await client.request<{ updated: number; skipped?: number }>(
-          post(`/items/${collection}/bulk-update`, {
+          post(`/items/${collection}/bulk-update?progress=${pid}`, {
             ids: selectedIds,
             data: { [String(cfg.field)]: cfg.value ?? '' }
           })
@@ -3521,9 +3528,12 @@ function BulkBar({
         setNote(`"${r.config.transition_label}" is not an available transition here`)
         return
       }
-      void run(async () => {
+      void run(async (pid) => {
         const res = await client.request<{ succeeded: number; failed: number }>(
-          post(`/items/${collection}/bulk-transition`, { ids: selectedIds, transition_id: t.id })
+          post(`/items/${collection}/bulk-transition?progress=${pid}`, {
+            ids: selectedIds,
+            transition_id: t.id
+          })
         )
         return res.failed > 0
           ? `${r.name}: ${res.succeeded} done, ${res.failed} failed`
@@ -3538,11 +3548,15 @@ function BulkBar({
   const [busy, setBusy] = useState(false)
   const [note, setNote] = useState<string | null>(null)
 
-  const run = async (fn: () => Promise<string>) => {
+  // Each row of the selection shows its own spinner → tick/reason as the server reaches it
+  // (#1827): the run is named by an id the server echoes on `bulk:rows` events.
+  const run = async (fn: (progress: string) => Promise<string>) => {
     setBusy(true)
     setNote(null)
+    const progress = newBulkProgressId()
+    startBulkProgress(progress, selectedIds)
     try {
-      const msg = await fn()
+      const msg = await fn(progress)
       setNote(msg)
       onSuccess()
       onClear()
@@ -3550,6 +3564,7 @@ function BulkBar({
     } catch (e) {
       setNote(e instanceof Error ? e.message : 'Bulk action failed')
     } finally {
+      endBulkProgress(progress)
       setBusy(false)
     }
   }
@@ -3741,9 +3756,9 @@ function BulkBar({
           onSubmit={(e) => {
             e.preventDefault()
             if (!field.trim()) return
-            void run(async () => {
+            void run(async (pid) => {
               const res = await client.request<{ updated: number; skipped?: number }>(
-                post(`/items/${collection}/bulk-update`, {
+                post(`/items/${collection}/bulk-update?progress=${pid}`, {
                   ids: selectedIds,
                   data: { [field.trim()]: value }
                 })
@@ -3799,9 +3814,9 @@ function BulkBar({
           onSubmit={(e) => {
             e.preventDefault()
             if (!transitionId) return
-            void run(async () => {
+            void run(async (pid) => {
               const res = await client.request<{ succeeded: number; failed: number }>(
-                post(`/items/${collection}/bulk-transition`, {
+                post(`/items/${collection}/bulk-transition?progress=${pid}`, {
                   ids: selectedIds,
                   transition_id: transitionId
                 })
@@ -3897,9 +3912,9 @@ function BulkBar({
             type='button'
             disabled={busy}
             onClick={() =>
-              void run(async () => {
+              void run(async (pid) => {
                 const res = await client.request<{ deleted: number }>(
-                  post(`/items/${collection}/bulk-delete`, { ids: selectedIds })
+                  post(`/items/${collection}/bulk-delete?progress=${pid}`, { ids: selectedIds })
                 )
                 return `Deleted ${res.deleted} items`
               })
@@ -4109,6 +4124,7 @@ export function CollectionBrowserView({
     }
   }, [cellMenu])
   const [selectedIds, setSelectedIds] = useState<Array<string | number>>([])
+  useBulkProgressFeed()
   const [activeViewId, setActiveViewId] = useState<number | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [saveName, setSaveName] = useState('')
@@ -5666,6 +5682,22 @@ export function CollectionBrowserView({
     if (sort) params.set('sort', sort)
     window.open(`/api/export-presets/${id}/run?${params.toString()}`, '_blank')
   }
+  // #2122 — a big export runs as a background job: progress and a download chip appear in the
+  // Jobs tray (and stay there when the person leaves the page).
+  const runExportPresetInBackground = (id: number, name: string) => {
+    void client
+      .request(
+        post(`/export-presets/${id}/run-async`, {
+          ...(appliedSearch ? { search: appliedSearch } : {}),
+          ...(conditionsParam ? { conditions: conditionsParam } : {}),
+          ...(sort ? { sort } : {})
+        })
+      )
+      .then(() => toast.info(`Exporting “${name}” in the background — follow it in the Jobs tray`))
+      .catch((e: unknown) =>
+        toast.error(e instanceof Error ? e.message : 'Could not start the export')
+      )
+  }
 
   const saveView = useMutation({
     mutationFn: () =>
@@ -7154,20 +7186,33 @@ export function CollectionBrowserView({
                 </p>
               )}
               {exportPresets.map((pr) => (
-                <button
-                  key={pr.id}
-                  type='button'
-                  onClick={() => {
-                    setExportMenuOpen(false)
-                    runExportPreset(pr.id)
-                  }}
-                  className='block w-full rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
-                >
-                  {pr.name}
-                  <span className='ml-1.5 text-[10px] uppercase text-slate-400'>
-                    {pr.config?.format ?? 'xlsx'}
-                  </span>
-                </button>
+                <div key={pr.id} className='flex items-center'>
+                  <button
+                    type='button'
+                    onClick={() => {
+                      setExportMenuOpen(false)
+                      runExportPreset(pr.id)
+                    }}
+                    className='block min-w-0 flex-1 rounded-md px-2.5 py-1.5 text-left text-[12.5px] text-slate-700 hover:bg-muted dark:text-slate-200'
+                  >
+                    {pr.name}
+                    <span className='ml-1.5 text-[10px] uppercase text-slate-400'>
+                      {pr.config?.format ?? 'xlsx'}
+                    </span>
+                  </button>
+                  <button
+                    type='button'
+                    data-export-background={pr.id}
+                    data-tip='Run in the background — a download appears in the Jobs tray'
+                    onClick={() => {
+                      setExportMenuOpen(false)
+                      runExportPresetInBackground(pr.id, pr.name)
+                    }}
+                    className='mr-1 shrink-0 rounded px-1.5 py-1 text-[10.5px] font-medium text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-100'
+                  >
+                    Background
+                  </button>
+                </div>
               ))}
               <div className='mt-0.5 flex items-center gap-1 border-t border-slate-100 px-1.5 pb-1 pt-1.5 dark:border-border/60'>
                 <input
@@ -8203,6 +8248,7 @@ export function CollectionBrowserView({
                                 ) : (
                                   <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />
                                 )}
+                                <BulkRowMark rowId={id} />
                                 <input
                                   type='checkbox'
                                   checked={isSelected}

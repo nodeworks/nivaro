@@ -13,6 +13,7 @@ import {
 import { isUuid, type VideoRow, viewerMaySee } from '../services/help-videos.js'
 import { sendRawMail } from '../services/mail.js'
 import { notifyUser } from '../services/notification-channels.js'
+import { announceToTenant } from '../services/record-events.js'
 import { sendSms } from '../services/sms.js'
 
 /**
@@ -471,6 +472,8 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
       is_active: channels.includes('banner') || channels.includes('login'),
       updated_at: new Date()
     })
+  // #1744 — a banner that just went live reaches open tabs now, not on the next poll.
+  if (channels.includes('banner') || channels.includes('login')) announceBannersChanged()
   return delivered
 }
 
@@ -575,6 +578,16 @@ export async function deliverScheduledAnnouncements(app: FastifyInstance): Promi
     }).catch(() => {})
   }
   return total
+}
+
+/**
+ * #1744 — banners and broadcasts changed (went live, edited, ended, deleted): a payload-free
+ * `announcements:changed` to the tenant's sockets. Each open tab re-reads GET /announcements/active,
+ * where the viewer's audience rules still apply server-side — the notice carries nothing about who
+ * the banner is for.
+ */
+function announceBannersChanged(): void {
+  announceToTenant('announcements:changed')
 }
 
 export async function announcementRoutes(app: FastifyInstance): Promise<void> {
@@ -1349,6 +1362,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         Object.assign(patch, videoRef)
       }
       await db('nivaro_announcements').where('id', row.id).update(patch)
+      announceBannersChanged()
       await logActivity({
         action: 'announcement-update',
         user: req.user?.id,
@@ -1367,6 +1381,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       const row = await db('nivaro_announcements').where('id', req.params.id).first('id')
       if (!row) return reply.code(404).send({ error: 'Not found' })
       await db('nivaro_announcements').where('id', row.id).del()
+      announceBannersChanged()
       await logActivity({
         action: 'announcement-delete',
         user: req.user?.id,

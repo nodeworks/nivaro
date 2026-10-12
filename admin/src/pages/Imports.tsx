@@ -10,33 +10,32 @@ import {
 import { FileUp } from 'lucide-react'
 import { useMemo } from 'react'
 import { useNavigate, useParams, useSearchParams } from 'react-router'
-import { io } from 'socket.io-client'
 import { useAuth } from '@/lib/auth'
-import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
-
-const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
+import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 
 /**
  * Import console host.
  *
- * The page itself is the shared `ImportConsole` (staged imports, collection
- * imports and the definition registry), so the admin and headless frontends
- * run the same surface. Only the socket adapter and routing are admin-side.
+ * The page itself is the shared `ImportConsole` (staged imports, collection imports and the
+ * definition registry), so the admin and headless frontends run the same surface. Only the
+ * socket adapter and routing are admin-side.
  *
- * `import:progress` is the STAGED worker's event. The collection importer emits
- * per-job `import:progress:<id>` events instead and the console polls for those
- * — the two must not be crossed.
+ * `import:progress` is the STAGED worker's event: the run starter hears it on their own user
+ * room, administrators also on the tenant's `imports` watch room — both over the app's shared,
+ * signed-in socket (never a socket of this page's own). The collection importer emits per-job
+ * `import:progress:<id>` events instead and the console polls for those — the two must not be
+ * crossed.
  */
-function createImportRealtime(staticToken: string | null): ImportRealtimeAdapter {
+function createImportRealtime(): ImportRealtimeAdapter {
   return {
     subscribe(onProgress) {
-      const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
-      socket.on('connect', () => {
-        if (staticToken) socket.emit('auth', { token: staticToken })
-      })
-      socket.on('import:progress', (payload: ImportProgressEvent) => onProgress(payload))
+      const leave = joinWatchRoom('imports')
+      const off = adminRealtime.on('import:progress', (payload: ImportProgressEvent) =>
+        onProgress(payload)
+      )
       return () => {
-        socket.disconnect()
+        off()
+        leave()
       }
     }
   }
@@ -50,10 +49,7 @@ export function ImportsPage() {
   const { user } = useAuth()
 
   const client = useMemo(() => createNivaro(window.location.origin), [])
-  const realtime = useMemo(
-    () => createImportRealtime(user?.static_token ?? null),
-    [user?.static_token]
-  )
+  const realtime = useMemo(() => createImportRealtime(), [])
   const isAdmin = !!user?.is_admin
 
   return (

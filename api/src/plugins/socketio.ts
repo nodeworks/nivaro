@@ -330,7 +330,8 @@ const WATCH_ROOMS = new Set([
   'firehose',
   'flows',
   'traffic-map',
-  'conformance'
+  'conformance',
+  'imports'
 ])
 
 /**

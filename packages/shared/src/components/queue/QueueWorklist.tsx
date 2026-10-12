@@ -52,6 +52,7 @@ import {
 } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { useElapsedLoading } from '../../hooks/useElapsedLoading'
+import { useBulkProgressFeed } from '../../lib/bulk-progress'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
 import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
@@ -76,6 +77,7 @@ import {
 } from '../../lib/utils'
 import { useAskRecordDrag, usePublishAskContext } from '../ai/ask-context'
 import { BulkActionButtons, useBuiltinGate } from '../bulk/BulkActionButtons'
+import { BulkRowMark } from '../bulk/BulkRowMark'
 import { RowActionsMenu } from '../CollectionBrowserView'
 import { type Column, DataTable, type FilterDef } from '../DataTable'
 import { EmptyState } from '../EmptyState'
@@ -2268,6 +2270,7 @@ export function QueueWorklist({
 
   // ── Bulk actions ──
   const [selectedIds, setSelectedIds] = useState<string[]>([])
+  useBulkProgressFeed()
   selectedCountRef.current = selectedIds.length
   const [bulkBusy, setBulkBusy] = useState(false)
 
@@ -2805,7 +2808,17 @@ export function QueueWorklist({
     )
   }
 
-  const labelColumn = baseColumns.find((c) => c.key === 'label') as Column<QueueItemRow>
+  const baseLabelColumn = baseColumns.find((c) => c.key === 'label') as Column<QueueItemRow>
+  // #1827 — while a bulk action runs, each selected row shows its own spinner → tick/reason.
+  const labelColumn: Column<QueueItemRow> = {
+    ...baseLabelColumn,
+    render: (row, ...rest) => (
+      <span className='inline-flex min-w-0 items-center gap-1.5'>
+        <BulkRowMark rowId={row.item_id} />
+        {(baseLabelColumn.render as (...a: unknown[]) => React.ReactNode)(row, ...rest)}
+      </span>
+    )
+  }
   // Formula columns (#133): display-only computed columns over base + extra
   // fields — {{aging_hours}}, {{extra.amount}} etc. Null on parse/type miss.
   const formulaColumns: Column<QueueItemRow>[] = (displayConfig?.formula_columns ?? []).map(
