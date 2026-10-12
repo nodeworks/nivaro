@@ -5,6 +5,7 @@ import type { DocSection } from './types.js'
 export * from './sections/access-insights.js'
 export * from './sections/admin-ux.js'
 export * from './sections/ai-design.js'
+export * from './sections/ai-explain.js'
 export * from './sections/ai-knowledge.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
@@ -29,7 +30,6 @@ export * from './sections/integrations-console.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-records.js'
 export * from './sections/low-code.js'
-export * from './sections/ai-explain.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
 export * from './sections/ops-observability.js'
@@ -65,6 +65,7 @@ import {
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
 import { aiDesignDocs } from './sections/ai-design.js'
+import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
 import {
   adminI18nDocs,
@@ -238,7 +239,7 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
-import { collabLiveRecords } from './sections/live-records.js'
+import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -264,7 +265,6 @@ import {
   submissionFormsApiDoc,
   submissionFormsGuide
 } from './sections/monitoring.js'
-import { aiExplainGuide } from './sections/ai-explain.js'
 import {
   obsApiAnalytics,
   obsDataQuality,
@@ -792,6 +792,7 @@ export const navSections: NavGroup[] = [
       collabChat,
       collabItemLocking,
       collabLiveRecords,
+      collabLiveOps,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,
