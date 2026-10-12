@@ -40,6 +40,7 @@ import { toast } from 'sonner'
 import { DevStaleBanner } from '@/components/dev-stale-banner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
 import { FloatingReplaySlot } from '@/components/replay-player/FloatingReplaySlot'
+import { SystemBusy } from '@/components/system-busy'
 import { getRecorderState, subscribeRecorder } from '@/lib/e2e-recorder'
 import { adminRealtime } from '@/lib/socket'
 import { applyThemeSettings } from '@/lib/theme-settings'
@@ -843,6 +844,7 @@ export function AppLayout() {
         <CommandPalette />
         <KeyboardShortcuts />
         <ForceRefreshBanner />
+        <SystemBusy />
         <AutofillChips />
       </TooltipProvider>
     </RealtimeContext.Provider>

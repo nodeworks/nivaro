@@ -8,6 +8,7 @@ import {
   type ReviewFamily,
   type ReviewFinding
 } from './pure.js'
+import { loadCleanupDefaults } from './settings.js'
 
 /**
  * Config review (#1913), cleanup suggestions (#2020) and the label check
@@ -37,9 +38,11 @@ export interface RunOutcome {
 }
 
 export async function collectFindings(opts: RunOptions = {}): Promise<ReviewFinding[]> {
+  // Run-now values win where valid; the saved defaults fill the rest.
+  const saved = await loadCleanupDefaults()
   const [review, cleanup, labels] = await Promise.all([
     reviewFindings(),
-    cleanupFindings(opts),
+    cleanupFindings(opts, saved),
     labelFindings()
   ])
   return [...review, ...cleanup, ...labels]

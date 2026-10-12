@@ -2,6 +2,7 @@ import {
   Ban,
   Check,
   CircleDashed,
+  Clock,
   Filter,
   ListChecks,
   Loader2,
@@ -14,6 +15,7 @@ import { useOptionalNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Button } from '../ui/button'
+import { AiPlanChanges } from './AiPlanChanges'
 
 /**
  * An Ask AI multi-step plan (#1807) — the numbered steps the model proposed,
@@ -26,10 +28,16 @@ import { Button } from '../ui/button'
  * and remaining steps as the person now, the card shows what changed, and
  * the person runs it again from where it stopped. Steps with a condition
  * (#1953) say so, and a skipped step names why.
+ *
+ * Wave 2: the impact line (#1900) under the title, "What changes" — the
+ * per-record change report with an Excel download (#2002), and "Run later"
+ * (#1903): approving for a set time; a scheduled plan whose records changed
+ * comes back here held, with the reason.
  */
 
 export type AiPlanStatus =
   | 'proposed'
+  | 'scheduled'
   | 'running'
   | 'paused'
   | 'executed'
@@ -67,6 +75,11 @@ export interface AiPlanStep {
   preview_changed?: boolean
 }
 
+export interface AiPlanImpact {
+  records: number
+  summary: string
+}
+
 export interface AiPlan {
   plan_id: string
   title: string
@@ -74,6 +87,15 @@ export interface AiPlan {
   steps: AiPlanStep[]
   records_changed: number
   rechecked_at?: string | null
+  impact?: AiPlanImpact | null
+  schedule?: { run_at: string; by: string; at: string } | null
+  held?: { at: string; reason: string } | null
+  approved_by?: string | null
+  approved_at?: string | null
+  template?: { key: string; label: string } | null
+  source?: { kind: string; label: string } | null
+  flow_id?: string | null
+  made_steps?: string[]
 }
 
 export type AiPlanSubscribe = (
@@ -99,6 +121,27 @@ function StepIcon({ status }: { status: AiPlanStepState['status'] }) {
   return <CircleDashed className={cn(cls, 'text-muted-foreground')} />
 }
 
+function whenText(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime())
+    ? iso
+    : d.toLocaleString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      })
+}
+
+/** A datetime-local value an hour from now, on the next quarter hour. */
+function defaultLater(): string {
+  const d = new Date(Date.now() + 60 * 60_000)
+  d.setMinutes(Math.ceil(d.getMinutes() / 15) * 15, 0, 0)
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
+
 function fmt(v: unknown): string {
   if (v == null || v === '') return '—'
   if (typeof v === 'object') return JSON.stringify(v)
@@ -120,6 +163,8 @@ export function AiPlanCard({
   const [plan, setPlan] = useState<AiPlan>(initial)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [later, setLater] = useState<string | null>(null)
+  const [showChanges, setShowChanges] = useState(false)
   const id = initial.plan_id
   const lastRead = useRef(0)
 
@@ -160,7 +205,10 @@ export function AiPlanCard({
     return () => clearInterval(t)
   }, [plan.status, refresh])
 
-  const act = async (action: 'run' | 'retry' | 'cancel', body?: Record<string, unknown>) => {
+  const act = async (
+    action: 'run' | 'retry' | 'cancel' | 'schedule' | 'unschedule',
+    body?: Record<string, unknown>
+  ) => {
     if (!client || busy) return
     setBusy(action)
     setError(null)
@@ -171,6 +219,7 @@ export function AiPlanCard({
       if (res?.data) {
         lastRead.current = Date.now()
         setPlan(res.data)
+        if (action === 'schedule') setLater(null)
       }
     } catch (err) {
       setError(errorText(err))
@@ -200,6 +249,14 @@ export function AiPlanCard({
             {plan.status === 'proposed' ? 'Proposed plan: ' : 'Plan: '}
             {plan.title}
           </p>
+          {plan.impact?.summary && (
+            <p
+              className='text-[11.5px] text-amber-900/90 dark:text-amber-200/90'
+              data-ai-plan-impact
+            >
+              {plan.impact.summary}
+            </p>
+          )}
           <p className='text-[11px] text-amber-800/80 dark:text-amber-300/80' data-ai-plan-progress>
             {plan.steps.length} step{plan.steps.length === 1 ? '' : 's'}
             {done + skipped > 0 ? ` · ${done} done` : ''}
@@ -210,6 +267,16 @@ export function AiPlanCard({
           </p>
         </div>
       </div>
+
+      {plan.held && (plan.status === 'proposed' || plan.status === 'paused') && (
+        <p
+          className='mt-2 rounded-md border border-amber-300 bg-white/70 px-2.5 py-1.5 text-[11.5px] text-amber-900 dark:border-amber-700 dark:bg-card dark:text-amber-200'
+          data-ai-plan-held
+        >
+          Did not run at its scheduled time — {plan.held.reason}. The steps below are re-checked;
+          approve again to run.
+        </p>
+      )}
 
       <ol className='mt-2 space-y-1.5'>
         {plan.steps.map((s) => {
@@ -304,7 +371,37 @@ export function AiPlanCard({
         })}
       </ol>
 
+      {showChanges && <AiPlanChanges planId={id} title={plan.title} />}
+
       {error && <p className='mt-2 text-[11.5px] text-rose-700 dark:text-rose-400'>{error}</p>}
+
+      {later != null && canRun && (
+        <div className='mt-2 flex flex-wrap items-center gap-2' data-ai-plan-later>
+          <span className='text-[11.5px] text-amber-900 dark:text-amber-200'>Run at</span>
+          <input
+            type='datetime-local'
+            value={later}
+            onChange={(e) => setLater(e.target.value)}
+            className='h-7 rounded-md border border-amber-300 bg-white px-2 text-[12px] text-foreground dark:border-amber-700 dark:bg-card'
+          />
+          <Button
+            size='sm'
+            className='h-7 bg-nvr-cyan text-white hover:bg-nvr-cyan/90'
+            disabled={!!busy || !later}
+            onClick={() => act('schedule', { run_at: new Date(later).toISOString() })}
+          >
+            {busy === 'schedule' ? <Loader2 className='h-3 w-3 animate-spin' /> : null}
+            Approve for then
+          </Button>
+          <Button size='sm' variant='ghost' className='h-7' onClick={() => setLater(null)}>
+            Cancel
+          </Button>
+          <span className='w-full text-[11px] text-muted-foreground'>
+            Each step is re-checked first; if the records changed, it waits for you to approve
+            again.
+          </span>
+        </div>
+      )}
 
       <div className='mt-2 flex flex-wrap items-center gap-2'>
         {canRun && client && (
@@ -331,6 +428,19 @@ export function AiPlanCard({
                 Run next step
               </Button>
             )}
+            {later == null && (
+              <Button
+                size='sm'
+                variant='outline'
+                className='h-7'
+                disabled={!!busy}
+                onClick={() => setLater(defaultLater())}
+                data-ai-plan-run='later'
+              >
+                <Clock className='h-3 w-3' />
+                Run later…
+              </Button>
+            )}
             <Button
               size='sm'
               variant='ghost'
@@ -340,6 +450,28 @@ export function AiPlanCard({
             >
               Discard
             </Button>
+          </>
+        )}
+        {plan.status === 'scheduled' && (
+          <>
+            <span
+              className='flex items-center gap-1.5 text-[12px] text-amber-800 dark:text-amber-300'
+              data-ai-plan-scheduled
+            >
+              <Clock className='h-3 w-3' />
+              Approved to run {plan.schedule ? whenText(plan.schedule.run_at) : 'later'}
+            </span>
+            {client && (
+              <Button
+                size='sm'
+                variant='ghost'
+                className='h-7'
+                disabled={!!busy}
+                onClick={() => act('unschedule')}
+              >
+                Cancel schedule
+              </Button>
+            )}
           </>
         )}
         {plan.status === 'running' && (
@@ -405,6 +537,16 @@ export function AiPlanCard({
         )}
         {plan.status === 'expired' && (
           <span className='text-[12px] text-muted-foreground'>Expired — ask again.</span>
+        )}
+        {client && plan.impact !== undefined && (
+          <button
+            type='button'
+            className='ml-auto text-[11.5px] font-medium text-amber-800 underline-offset-2 hover:underline dark:text-amber-300'
+            onClick={() => setShowChanges((v) => !v)}
+            data-ai-plan-changes-toggle
+          >
+            {showChanges ? 'Hide changes' : 'What changes'}
+          </button>
         )}
       </div>
     </div>

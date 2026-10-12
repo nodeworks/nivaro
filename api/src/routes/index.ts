@@ -20,6 +20,7 @@ import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
 import { aiExplainRoutes } from './ai-explain.js'
 import { aiKnowledgeRoutes } from './ai-knowledge.js'
+import { aiMemoryAdminRoutes, aiMemoryRoutes } from './ai-memory.js'
 import { aiPlanRoutes } from './ai-plans.js'
 import { aiSettingsRoutes } from './ai-settings.js'
 import { aiWatchRoutes } from './ai-watches.js'
@@ -364,6 +365,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiWatchRoutes, { prefix: '/ai/watches' })
   await app.register(aiPlanRoutes, { prefix: '/ai' })
   await app.register(aiAskContextRoutes, { prefix: '/ai/ask' })
+  await app.register(aiMemoryRoutes, { prefix: '/ai' })
   await app.register(aiDesignRoutes, { prefix: '/ai-design' })
   await app.register(activityRoutes, { prefix: '/activity' })
   await app.register(cronRoutes, { prefix: '/cron' })
@@ -427,6 +429,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(settingsRoutes, { prefix: '/settings' })
   await app.register(usersRoutes, { prefix: '/users' })
   await app.register(teamUserRoutes, { prefix: '/users' })
+  await app.register(aiMemoryAdminRoutes, { prefix: '/users' })
   await app.register(directoryRoutes, { prefix: '/directory' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
   await app.register(rolesRoutes, { prefix: '/roles' })

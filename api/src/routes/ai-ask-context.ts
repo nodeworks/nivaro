@@ -1,9 +1,15 @@
 import type { FastifyInstance } from 'fastify'
 import { authenticate } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { saveAskAttachment } from '../services/ai-ask-attachments.js'
+import {
+  saveAskAttachment,
+  takeUploadSlot,
+  UPLOAD_WINDOW_SECONDS,
+  UPLOADS_PER_WINDOW
+} from '../services/ai-ask-attachments.js'
 import { listRecordFiles } from '../services/ai-ask-context.js'
-import { ACCEPTED_EXTENSIONS, extractDocumentText } from '../services/document-extract.js'
+import { AskExtractError, extractForAsk } from '../services/ai-ask-extract.js'
+import { ACCEPTED_EXTENSIONS, type ExtractedDocument } from '../services/document-extract.js'
 
 /**
  * Ask AI from anywhere (#1835): the pieces of page context that need a
@@ -22,6 +28,11 @@ export async function aiAskContextRoutes(app: FastifyInstance) {
   // The text is kept for a day under an id only the caller can use; the file
   // itself is not stored anywhere.
   app.post('/attachments', async (req, reply) => {
+    if (!(await takeUploadSlot(app, String(req.user!.id)))) {
+      return reply.code(429).send({
+        error: `At most ${UPLOADS_PER_WINDOW} files every ${UPLOAD_WINDOW_SECONDS / 60} minutes — try again shortly.`
+      })
+    }
     let file: { buffer: Buffer; filename: string; mimetype: string | null } | null = null
     try {
       for await (const part of req.parts()) {
@@ -41,10 +52,12 @@ export async function aiAskContextRoutes(app: FastifyInstance) {
         .code(400)
         .send({ error: `Unsupported file type. Accepted: ${ACCEPTED_EXTENSIONS.join(', ')}` })
     }
-    let doc: Awaited<ReturnType<typeof extractDocumentText>>
+    let doc: ExtractedDocument
     try {
-      doc = await extractDocumentText(file.buffer, file.filename, file.mimetype)
-    } catch {
+      doc = await extractForAsk(file.buffer, file.filename, file.mimetype)
+    } catch (err) {
+      if (err instanceof AskExtractError)
+        return reply.code(err.statusCode).send({ error: err.message })
       return reply.code(422).send({ error: 'This file could not be read' })
     }
     if (doc.text.trim().length < 40) {

@@ -209,8 +209,13 @@ function AskPanelBody({
       recordFiles
     })
     const target = conversationRef.current
+    // No stored conversation (history turned off, or the first question): the
+    // earlier turns ride along so a follow-up still has its thread.
+    const earlier = target
+      ? []
+      : turns.slice(-18).map((t) => ({ role: t.role, content: t.content.slice(0, 4000) }))
     void send.start({
-      messages: [{ role: 'user', content }],
+      messages: [...earlier, { role: 'user', content }],
       ...(target ? { conversation_id: target } : { save: true }),
       ...(opts.fresh ? { fresh: true } : {}),
       ...(context ? { context } : {})

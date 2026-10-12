@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { Bot, Copy, EyeOff, Trash2, UploadCloud } from 'lucide-react'
+import { ArrowLeft, Bot, Copy, EyeOff, Trash2, UploadCloud } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -42,6 +42,79 @@ interface InstanceHead {
     user_email?: string | null
     timestamp?: string
   }>
+}
+
+/**
+ * Query heads that hold one record's data (`[head, collection, id, …]`).
+ * Losing access to a record drops every one of them (#1925 / F7): the page
+ * must not keep showing — or later re-render from cache — what the person
+ * can no longer read.
+ */
+export const RECORD_QUERY_HEADS = [
+  'item',
+  'rrv-record',
+  'revisions',
+  'field-touch',
+  'last-touch',
+  'comments',
+  'comments-related',
+  'tasks',
+  'addendums',
+  'pipeline-instance',
+  'pipeline-all-owners',
+  'pipeline-instance-owners',
+  'pipeline-owners-resolved',
+  'approval-brief',
+  'erp-submissions',
+  'record-integrations',
+  'record-integrity'
+] as const
+
+/** Remove every cached query about one record (any id spelling). */
+export function purgeRecordQueries(
+  qc: {
+    removeQueries: (f: { predicate: (q: { queryKey: readonly unknown[] }) => boolean }) => void
+  },
+  collection: string,
+  itemId: string | number
+): void {
+  const heads = new Set<unknown>(RECORD_QUERY_HEADS)
+  const id = String(itemId)
+  qc.removeQueries({
+    predicate: (q) =>
+      heads.has(q.queryKey[0]) && q.queryKey[1] === collection && String(q.queryKey[2]) === id
+  })
+}
+
+/**
+ * What a page shows instead of the record once its viewer lost access: the
+ * reason and a way back — no fields, no cached values, no unsaved edits.
+ */
+export function RecordAccessLostPanel({ onBack }: { onBack: () => void }) {
+  return (
+    <div className='p-6'>
+      <div
+        data-record-gone='access'
+        role='alert'
+        className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+      >
+        <EyeOff className='h-4 w-4 shrink-0 text-amber-500' />
+        <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
+          <span className='font-semibold'>You no longer have access to this record.</span> A role,
+          scope or filter change hid it while you had it open.
+        </p>
+        <button
+          type='button'
+          onClick={onBack}
+          data-record-gone-back
+          className='inline-flex h-7 shrink-0 items-center gap-1 rounded-md border border-amber-300 bg-white px-2.5 text-[11.5px] font-medium text-amber-800 hover:bg-amber-100 dark:border-amber-500/40 dark:bg-transparent dark:text-amber-300 dark:hover:bg-amber-500/10'
+        >
+          <ArrowLeft className='h-3.5 w-3.5' />
+          Back
+        </button>
+      </div>
+    </div>
+  )
 }
 
 const httpStatus = (err: unknown): number | undefined =>
@@ -93,6 +166,9 @@ export function RecordLiveSync({
     goneRef.current = next
     setGoneState(next)
     onGoneRef.current?.(next)
+    // Lost access: drop the record's cached data once the host has swapped
+    // the form out (it disables the record read, so nothing refetches).
+    if (next?.kind === 'access') setTimeout(() => purgeRecordQueries(qc, collection, itemId), 0)
   }
 
   // A new record on the same mount starts clean.
@@ -412,19 +488,10 @@ export function RecordLiveSync({
           )}
         </div>
       )}
-      {gone?.kind === 'access' && (
-        <div
-          data-record-gone='access'
-          role='alert'
-          className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
-        >
-          <EyeOff className='h-4 w-4 shrink-0 text-amber-500' />
-          <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
-            <span className='font-semibold'>You no longer have access to this record.</span> A role,
-            scope or filter change hid it while you had it open, so saving is turned off. Copy
-            anything you still need before leaving.
-          </p>
-        </div>
+      {/* Lost access: the host replaces the whole form with
+          RecordAccessLostPanel; without a host handler, show it here. */}
+      {gone?.kind === 'access' && !onGoneChange && (
+        <RecordAccessLostPanel onBack={() => window.history.back()} />
       )}
       {showTabs && (
         <div

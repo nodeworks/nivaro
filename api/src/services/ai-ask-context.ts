@@ -425,7 +425,7 @@ export async function resolveAskContext(
     if (a) docs.push({ name: a.name, text: a.text, truncated: a.truncated, pages: a.pages })
   }
   if (ctx.record && recordReadable && ctx.record_files.length) {
-    for (const d of await readRecordFiles(ctx.record, ctx.record_files)) docs.push(d)
+    for (const d of await readRecordFiles(user, ctx.record, ctx.record_files)) docs.push(d)
   }
   if (docs.length) {
     used.documents = docs.map((d) => d.name)
@@ -449,53 +449,226 @@ export async function resolveAskContext(
   }
 }
 
-/** Text of files attached to a record the caller may read (checked by the caller). */
-async function readRecordFiles(
+// ── Record files (#1993) ─────────────────────────────────────────────────────
+
+/**
+ * Seams for readableRecordFileIds — the defaults read as the asker; tests
+ * hand in fakes.
+ */
+export interface RecordFileDeps {
+  /** The record as the asker reads it (readOne: hidden fields absent), or null. */
+  readRecord: (collection: string, id: string) => Promise<Record<string, unknown> | null>
+  /** Every (table, column) with a FOREIGN KEY into nivaro_files. */
+  fileColumns: () => Promise<Array<{ table: string; column: string }>>
+  /** Every (table, column) with a FOREIGN KEY into `collection`. */
+  childLinks: (collection: string) => Promise<Array<{ table: string; column: string }>>
+  /** The relation behind a child link: its alias on the parent and, for a junction, the far leg. */
+  relationFor: (
+    table: string,
+    column: string,
+    collection: string
+  ) => Promise<{ one_field: string | null; junction_field: string | null } | null>
+  /** The asker's readable fields on a collection (null = all). */
+  allowedFields: (collection: string) => Promise<string[] | null>
+  canRead: (collection: string) => Promise<boolean>
+  /** Child rows as the asker reads them (RLS + User Scopes applied). */
+  readChildren: (
+    table: string,
+    fk: string,
+    id: string,
+    fields: string[]
+  ) => Promise<Array<Record<string, unknown>>>
+  /** The far-leg file ids of a pure M2M junction, for one parent. */
+  junctionFileIds: (table: string, fk: string, fileCol: string, id: string) => Promise<unknown[]>
+  /** Attachment ids of the record's addendums. */
+  addendumFileIds: (collection: string, id: string) => Promise<unknown[]>
+}
+
+const fileIdOf = (v: unknown): string | null => {
+  const raw = v && typeof v === 'object' ? (v as { id?: unknown }).id : v
+  const s = raw == null ? '' : String(raw).trim().toLowerCase()
+  return UUID_RE.test(s) ? s : null
+}
+
+const fieldReadable = (allowed: string[] | null, field: string) =>
+  allowed == null || allowed.includes('*') || allowed.includes(field)
+
+/**
+ * The files on a record that the asker can actually see, or null when the
+ * record itself is unreadable. Built only from reads made AS the asker:
+ *  - the record's own file fields, from its readOne row and the role's
+ *    readable fields (a hidden file field contributes nothing);
+ *  - child records with a file column, through readItems as the asker
+ *    (RLS + User Scopes), and only file fields the role may read there;
+ *  - a pure M2M file junction only when its alias on the record is readable;
+ *  - addendum attachments under the addendum list route's own rule (read
+ *    on the parent collection), on a record the asker can open.
+ * Listing and reading both go through this one function.
+ */
+export async function readableRecordFileIds(
   record: AskContextRef,
-  fileIds: string[]
+  deps: RecordFileDeps
+): Promise<Set<string> | null> {
+  const row = await deps.readRecord(record.collection, record.id)
+  if (!row) return null
+  const out = new Set<string>()
+  const add = (v: unknown) => {
+    const id = fileIdOf(v)
+    if (id) out.add(id)
+  }
+  const refs = await deps.fileColumns()
+  const parentAllowed = await deps.allowedFields(record.collection)
+  for (const r of refs.filter((x) => x.table === record.collection)) {
+    if (r.column in row && fieldReadable(parentAllowed, r.column)) add(row[r.column])
+  }
+  for (const link of await deps.childLinks(record.collection)) {
+    const fileCols = refs.filter((r) => r.table === link.table).map((r) => r.column)
+    if (fileCols.length === 0) continue
+    const rel = await deps.relationFor(link.table, link.column, record.collection)
+    if (rel?.junction_field && fileCols.includes(rel.junction_field)) {
+      // A pure M2M file link: what the record's alias field shows.
+      if (!rel.one_field || !fieldReadable(parentAllowed, rel.one_field)) continue
+      for (const v of await deps.junctionFileIds(
+        link.table,
+        link.column,
+        rel.junction_field,
+        record.id
+      ))
+        add(v)
+      continue
+    }
+    // Child records: read as the asker, only the file fields they may read.
+    if (!(await deps.canRead(link.table))) continue
+    const allowed = await deps.allowedFields(link.table)
+    const readable = fileCols.filter((c) => fieldReadable(allowed, c))
+    if (readable.length === 0) continue
+    const rows = await deps.readChildren(link.table, link.column, record.id, readable)
+    for (const child of rows) for (const c of readable) add(child[c])
+  }
+  if (await deps.canRead(record.collection)) {
+    for (const v of await deps.addendumFileIds(record.collection, record.id)) add(v)
+  }
+  return out
+}
+
+function recordFileDepsFor(user: User): RecordFileDeps {
+  const reader = readerFor(user)
+  return {
+    readRecord: reader.one,
+    fileColumns: async () => {
+      const { getFileRefColumns } = await import('./file-usage.js')
+      return getFileRefColumns()
+    },
+    childLinks: async (collection) =>
+      (
+        (await db
+          .raw(
+            `SELECT OBJECT_NAME(fk.parent_object_id) AS tbl, c.name AS col
+             FROM sys.foreign_keys fk
+             JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
+             JOIN sys.columns c ON c.object_id = fkc.parent_object_id AND c.column_id = fkc.parent_column_id
+             WHERE OBJECT_NAME(fk.referenced_object_id) = ?`,
+            [collection]
+          )
+          .catch(() => [])) as Array<{ tbl: string; col: string }>
+      ).map((r) => ({ table: r.tbl, column: r.col })),
+    relationFor: async (table, column, collection) =>
+      ((await db('nivaro_relations')
+        .where({ many_collection: table, many_field: column, one_collection: collection })
+        .first('one_field', 'junction_field')
+        .catch(() => undefined)) as { one_field: string | null; junction_field: string | null }) ??
+      null,
+    allowedFields: async (collection) => {
+      const { getAllowedFields } = await import('./permissions.js')
+      return getAllowedFields(user, 'read', collection).catch(() => [])
+    },
+    canRead: (collection) => can(user, 'read', collection).catch(() => false),
+    readChildren: async (table, fk, id, fields) => {
+      try {
+        const { readItems } = await import('./items.js')
+        const res = (await readItems(user, table, {
+          filter: { [fk]: { _eq: id } },
+          fields: ['id', ...fields],
+          limit: 200
+        })) as { data?: Array<Record<string, unknown>> }
+        return res.data ?? []
+      } catch {
+        return []
+      }
+    },
+    junctionFileIds: async (table, fk, fileCol, id) => {
+      if (![table, fk, fileCol].every((n) => NAME_RE.test(n))) return []
+      const rows = (await db(table)
+        .where(fk, id)
+        .limit(200)
+        .select(fileCol)
+        .catch(() => [])) as Array<Record<string, unknown>>
+      return rows.map((r) => r[fileCol])
+    },
+    addendumFileIds: async (collection, id) => {
+      const rows = (await db('nivaro_addendums')
+        .where({ parent_collection: collection, parent_id: id })
+        .select('attachments')
+        .catch(() => [])) as Array<{ attachments: unknown }>
+      const out: unknown[] = []
+      for (const a of rows) {
+        try {
+          const list = typeof a.attachments === 'string' ? JSON.parse(a.attachments) : a.attachments
+          if (Array.isArray(list)) out.push(...list)
+        } catch {
+          // unreadable JSON contributes nothing
+        }
+      }
+      return out
+    }
+  }
+}
+
+/** Text of the chosen record files — only ids in the asker's readable set. */
+async function readRecordFiles(
+  user: User,
+  record: AskContextRef,
+  fileIds: string[],
+  deps: RecordFileDeps = recordFileDepsFor(user)
 ): Promise<Array<{ name: string; text: string; truncated: boolean; pages: number | null }>> {
-  const { fileIdsAttachedTo } = await import('./file-usage.js')
-  const attached = await fileIdsAttachedTo(record.collection, record.id).catch(
-    () => new Set<string>()
-  )
+  const allowed = await readableRecordFileIds(record, deps).catch(() => null)
+  if (!allowed) return []
   const out: Array<{ name: string; text: string; truncated: boolean; pages: number | null }> = []
   const { getFile, readFileBuffer } = await import('./files.js')
   const { isHelpVideoFile } = await import('./help-video-files.js')
-  const { extractDocumentText } = await import('./document-extract.js')
+  const { extractForAsk } = await import('./ai-ask-extract.js')
   for (const id of fileIds) {
-    if (!attached.has(id.toLowerCase())) continue
+    if (!allowed.has(id.toLowerCase())) continue
     if (await isHelpVideoFile(id)) continue
     const row = await getFile(id).catch(() => undefined)
     if (!row) continue
     const name = String(row.filename_download || row.title || 'document')
     try {
-      const doc = await extractDocumentText(await readFileBuffer(row), name, row.type ?? null)
+      const doc = await extractForAsk(await readFileBuffer(row), name, row.type ?? null)
       if (doc.text.trim().length < 40) continue
       out.push({ name, text: doc.text, truncated: doc.truncated, pages: doc.pages })
     } catch {
-      // unreadable or missing object — left out
+      // unreadable, too large or missing — left out
     }
   }
   return out
 }
 
-/** The files on a record the asker may offer to Ask AI: readable record, attached, not a help video. */
+/** The record files the asker may offer to Ask AI (null = record unreadable). */
 export async function listRecordFiles(
   user: User,
   record: AskContextRef,
-  reader: Reader = readerFor(user)
+  deps: RecordFileDeps = recordFileDepsFor(user)
 ): Promise<Array<{ id: string; name: string; type: string | null; size: number | null }> | null> {
-  if (!(await reader.one(record.collection, record.id))) return null
-  const { fileIdsAttachedTo } = await import('./file-usage.js')
+  const allowedSet = await readableRecordFileIds(record, deps)
+  if (!allowedSet) return null
   const { ACCEPTED_EXTENSIONS } = await import('./document-extract.js')
   const { helpVideoFileIds } = await import('./help-video-files.js')
-  const attached = [...(await fileIdsAttachedTo(record.collection, record.id))]
-    .filter((id) => UUID_RE.test(id))
-    .slice(0, 50)
-  if (attached.length === 0) return []
-  const hidden = await helpVideoFileIds(attached)
+  const allowed = [...allowedSet].slice(0, 50)
+  if (allowed.length === 0) return []
+  const hidden = await helpVideoFileIds(allowed)
   const rows = (await db('nivaro_files')
-    .whereIn('id', attached)
+    .whereIn('id', allowed)
     .select('id', 'filename_download', 'title', 'type', 'filesize')) as Array<{
     id: string
     filename_download: string | null

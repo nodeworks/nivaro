@@ -1,6 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ClipboardCheck } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
@@ -85,6 +85,19 @@ interface ReviewResponse {
   } | null
 }
 
+interface CleanupSettings {
+  cleanup: { draftMonths: number; taskMonths: number; viewDays: number }
+  defaults: { draftMonths: number; taskMonths: number; viewDays: number }
+  bounds: Record<'draftMonths' | 'taskMonths' | 'viewDays', [number, number]>
+}
+
+/** Mirrors CLEANUP_BOUNDS on the server until /settings answers. */
+const FALLBACK_BOUNDS: CleanupSettings['bounds'] = {
+  draftMonths: [1, 24],
+  taskMonths: [1, 24],
+  viewDays: [30, 365]
+}
+
 const FAMILIES: Array<{ value: Family; label: string; hint: string }> = [
   { value: 'review', label: 'Review', hint: 'Configuration problems' },
   { value: 'cleanup', label: 'Cleanup', hint: 'Things to tidy' },
@@ -123,6 +136,47 @@ export default function ConfigReview() {
   const [openFix, setOpenFix] = useState<number | null>(null)
   const [ai, setAi] = useState(true)
   const [cut, setCut] = useState({ draft_months: 3, task_months: 3, view_days: 90 })
+  // The saved cleanup defaults seed the controls once; the monthly run uses them too.
+  const settings = useQuery({
+    queryKey: ['config-review-settings'],
+    queryFn: () =>
+      api.get<{ data: CleanupSettings }>('/config-review/settings').then((r) => r.data.data)
+  })
+  const seeded = useRef(false)
+  useEffect(() => {
+    const c = settings.data?.cleanup
+    if (!c || seeded.current) return
+    seeded.current = true
+    setCut({ draft_months: c.draftMonths, task_months: c.taskMonths, view_days: c.viewDays })
+  }, [settings.data])
+  const bounds = settings.data?.bounds ?? FALLBACK_BOUNDS
+  const inRange = (v: number, [min, max]: [number, number]) =>
+    Number.isInteger(v) && v >= min && v <= max
+  const cutValid =
+    inRange(cut.draft_months, bounds.draftMonths) &&
+    inRange(cut.task_months, bounds.taskMonths) &&
+    inRange(cut.view_days, bounds.viewDays)
+  const saved = settings.data?.cleanup
+  const cutDirty =
+    !!saved &&
+    (saved.draftMonths !== cut.draft_months ||
+      saved.taskMonths !== cut.task_months ||
+      saved.viewDays !== cut.view_days)
+  const saveDefaults = useMutation({
+    mutationFn: () =>
+      api.put('/config-review/settings', {
+        cleanup: {
+          draftMonths: cut.draft_months,
+          taskMonths: cut.task_months,
+          viewDays: cut.view_days
+        }
+      }),
+    onSuccess: () => {
+      toast.success('Saved — the monthly review uses these thresholds')
+      void qc.invalidateQueries({ queryKey: ['config-review-settings'] })
+    },
+    onError: (e) => toast.error(errText(e, 'Could not save the thresholds'))
+  })
 
   const { data, isLoading } = useQuery({
     queryKey: ['config-review', family, status],
@@ -192,7 +246,7 @@ export default function ConfigReview() {
             </label>
             <button
               type='button'
-              disabled={run.isPending || running}
+              disabled={run.isPending || running || !cutValid}
               onClick={() => run.mutate()}
               data-cr-run={running ? 'running' : 'idle'}
               className='h-8 rounded-md bg-nvr-cyan px-4 text-[12.5px] font-medium text-white disabled:opacity-50'
@@ -211,19 +265,33 @@ export default function ConfigReview() {
             Drafts older than
             <NumberBox
               value={cut.draft_months}
+              range={bounds.draftMonths}
               onChange={(v) => setCut((c) => ({ ...c, draft_months: v }))}
             />
             months · tasks idle
             <NumberBox
               value={cut.task_months}
+              range={bounds.taskMonths}
               onChange={(v) => setCut((c) => ({ ...c, task_months: v }))}
             />
             months · views unopened
             <NumberBox
               value={cut.view_days}
+              range={bounds.viewDays}
               onChange={(v) => setCut((c) => ({ ...c, view_days: v }))}
             />
             days
+            {cutDirty && (
+              <button
+                type='button'
+                disabled={!cutValid || saveDefaults.isPending}
+                onClick={() => saveDefaults.mutate()}
+                data-cr-save-defaults
+                className='ml-1.5 rounded px-1.5 py-0.5 text-[11.5px] font-medium text-[#007a99] underline decoration-dotted underline-offset-2 hover:text-nvr-cyan disabled:opacity-50 dark:text-nvr-cyan'
+              >
+                {saveDefaults.isPending ? 'Saving…' : 'Save as defaults'}
+              </button>
+            )}
           </span>
         </div>
       </header>
@@ -331,14 +399,30 @@ export default function ConfigReview() {
   )
 }
 
-function NumberBox({ value, onChange }: { value: number; onChange: (v: number) => void }) {
+function NumberBox({
+  value,
+  range: [min, max],
+  onChange
+}: {
+  value: number
+  range: [number, number]
+  onChange: (v: number) => void
+}) {
+  // Not clamped while typing ("4" on the way to "45" days); out of range shows red.
+  const bad = !Number.isInteger(value) || value < min || value > max
   return (
     <input
       type='number'
-      min={1}
-      value={value}
-      onChange={(e) => onChange(Math.max(1, Number(e.target.value) || 1))}
-      className='h-6 w-14 rounded border border-slate-200 bg-white px-1.5 text-[11.5px] text-slate-700 dark:border-border dark:bg-background dark:text-foreground'
+      min={min}
+      max={max}
+      value={Number.isFinite(value) ? value : ''}
+      onChange={(e) => onChange(Number(e.target.value))}
+      aria-invalid={bad}
+      data-tip={`${min}–${max}`}
+      className={cn(
+        'h-6 w-14 rounded border bg-white px-1.5 text-[11.5px] text-slate-700 dark:bg-background dark:text-foreground',
+        bad ? 'border-red-400 dark:border-red-500/60' : 'border-slate-200 dark:border-border'
+      )}
     />
   )
 }

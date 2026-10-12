@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useMemo, useState } from 'react'
+import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -386,6 +386,10 @@ const CHART_COLORS = [
 /** A chart the answer attached — bar/line/pie over {label, value} points,
  *  recharts, sized to the bubble. Theme-neutral inks so it reads in both modes. */
 function ChartBlock({ spec }: { spec: ChartSpec }) {
+  const onPoint = useContext(ChartPointContext)
+  const point = onPoint
+    ? (label: unknown) => label != null && onPoint(String(label), spec)
+    : undefined
   const [width, setWidth] = useState(0)
   const ref = useCallback((el: HTMLDivElement | null) => {
     if (!el) return
@@ -413,7 +417,12 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
     labelStyle: { color: '#cbd5e1' }
   }
   return (
-    <div ref={ref} data-ai-chart={spec.type} className='my-2 w-full'>
+    <div
+      ref={ref}
+      data-ai-chart={spec.type}
+      data-ai-chart-drill={onPoint ? '' : undefined}
+      className={cn('my-2 w-full', onPoint && '[&_.recharts-wrapper]:cursor-pointer')}
+    >
       {spec.title && (
         <div className='mb-1 text-[0.9em] font-medium text-muted-foreground'>{spec.title}</div>
       )}
@@ -428,6 +437,7 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
             outerRadius={80}
             label={({ name, percent }) => `${name} ${Math.round((percent ?? 0) * 100)}%`}
             labelLine={false}
+            onClick={point ? (d: any) => point(d?.label ?? d?.name) : undefined}
           >
             {spec.data.map((d, i) => (
               <Cell key={d.label} fill={CHART_COLORS[i % CHART_COLORS.length]} />
@@ -436,7 +446,13 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
           <Tooltip {...tip} formatter={(v) => fmt(Number(v))} />
         </PieChart>
       ) : spec.type === 'line' ? (
-        <LineChart width={w} height={height} data={spec.data} margin={{ left: 4, right: 12 }}>
+        <LineChart
+          width={w}
+          height={height}
+          data={spec.data}
+          margin={{ left: 4, right: 12 }}
+          onClick={point ? (st: any) => point(st?.activeLabel) : undefined}
+        >
           <CartesianGrid strokeDasharray='3 3' stroke='currentColor' opacity={0.12} />
           <XAxis dataKey='label' tick={{ fontSize: 11 }} interval='preserveStartEnd' />
           <YAxis tick={{ fontSize: 11 }} tickFormatter={fmt} width={44} />
@@ -450,7 +466,13 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
           />
         </LineChart>
       ) : (
-        <BarChart width={w} height={height} data={spec.data} margin={{ left: 4, right: 12 }}>
+        <BarChart
+          width={w}
+          height={height}
+          data={spec.data}
+          margin={{ left: 4, right: 12 }}
+          onClick={point ? (st: any) => point(st?.activeLabel) : undefined}
+        >
           <CartesianGrid strokeDasharray='3 3' stroke='currentColor' opacity={0.12} />
           <XAxis
             dataKey='label'
@@ -556,11 +578,16 @@ function SwitchableBlock({ b, link, gl }: { b: Block; link: boolean; gl?: Inline
   )
 }
 
+/** Click on a chart point (#1943): the host opens the rows behind it. */
+export type ChartPointHandler = (label: string, spec: ChartSpec) => void
+const ChartPointContext = createContext<ChartPointHandler | undefined>(undefined)
+
 export function AiMarkdown({
   content,
   className,
   autolink,
-  switchable
+  switchable,
+  onChartPoint
 }: {
   content: string
   className?: string
@@ -568,6 +595,8 @@ export function AiMarkdown({
   autolink?: boolean
   /** Offer Table · Chart · List on blocks that hold rows (#1885). */
   switchable?: boolean
+  /** Make chart points clickable (drill into the rows behind a bar, point or slice). */
+  onChartPoint?: ChartPointHandler
 }) {
   const blocks = useMemo(() => parseAiMarkdown(content), [content])
   const client = useOptionalNivaroClient()
@@ -577,16 +606,18 @@ export function AiMarkdown({
   // A fresh "once" set per render: each term is marked at its first use.
   const gl: InlineGlossary | undefined = terms.length ? { terms, once: new Set(), href } : undefined
   return (
-    <div data-ai-markdown className={cn('space-y-1.5 [&_strong]:font-semibold', className)}>
-      {blocks.map((b, i) => {
-        const key = `${b.kind}-${i}`
-        return switchable && SWITCHABLE_KINDS.has(b.kind) ? (
-          <SwitchableBlock key={key} b={b} link={link} gl={gl} />
-        ) : (
-          <BlockView key={key} b={b} link={link} gl={gl} />
-        )
-      })}
-    </div>
+    <ChartPointContext.Provider value={onChartPoint}>
+      <div data-ai-markdown className={cn('space-y-1.5 [&_strong]:font-semibold', className)}>
+        {blocks.map((b, i) => {
+          const key = `${b.kind}-${i}`
+          return switchable && SWITCHABLE_KINDS.has(b.kind) ? (
+            <SwitchableBlock key={key} b={b} link={link} gl={gl} />
+          ) : (
+            <BlockView key={key} b={b} link={link} gl={gl} />
+          )
+        })}
+      </div>
+    </ChartPointContext.Provider>
   )
 }
 
