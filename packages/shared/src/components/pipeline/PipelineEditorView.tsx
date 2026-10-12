@@ -46,6 +46,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { createPortal } from 'react-dom'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import { ExplainCard } from '../ai/ExplainButton'
 import { del, get, patch, post } from '../../lib/commands'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { Badge } from '../ui/badge'
@@ -3362,6 +3363,12 @@ export function PipelineEditorView({
           </div>
         </div>
 
+        <ExplainCard
+          kind='config'
+          params={{ type: 'pipeline', id: templateId }}
+          label='Describe this pipeline in plain English'
+        />
+
         {/* States + Transitions — two columns on large screens */}
         {(!hiddenSet.has('states') || !hiddenSet.has('transitions')) && (
           <div className='grid gap-6 lg:grid-cols-[5fr_7fr]'>
@@ -5064,6 +5071,8 @@ interface OwnerGapCluster {
     matched_filters: string[]
     mismatched_filters: string[]
   } | null
+  /** Why no group matches, in words (#2012); absent on older servers. */
+  reason?: string
 }
 
 interface HygieneFinding {
@@ -5877,6 +5886,11 @@ export function OwnerGapsCard({
                             Assign owners…
                           </Button>
                         </div>
+                        {g.reason && (
+                          <p className='mt-1 pl-8 text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
+                            {g.reason}
+                          </p>
+                        )}
                         <p className='mt-1 pl-8 text-[11.5px] leading-relaxed'>
                           {g.suggestion ? (
                             <>

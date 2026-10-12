@@ -40,6 +40,7 @@ import { toast } from 'sonner'
 import { DevStaleBanner } from '@/components/dev-stale-banner'
 import { InstanceSwitcher } from '@/components/InstanceSwitcher'
 import { FloatingReplaySlot } from '@/components/replay-player/FloatingReplaySlot'
+import { SystemBusy } from '@/components/system-busy'
 import { getRecorderState, subscribeRecorder } from '@/lib/e2e-recorder'
 import { adminRealtime } from '@/lib/socket'
 import { applyThemeSettings } from '@/lib/theme-settings'
@@ -68,7 +69,8 @@ import {
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
-  RealtimeContext
+  RealtimeContext,
+  RealtimeStatusBanner
 } from '@nivaro/shared'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
@@ -522,6 +524,7 @@ export function AppLayout() {
           <FloatingReplaySlot />
           <SessionExpiryWatcher />
           <OfflineBanner />
+          <RealtimeStatusBanner />
           <DbOutageBanner />
           <NivaroProvider client={announcementsClient}>
             <AnnouncementBanner />
@@ -842,6 +845,7 @@ export function AppLayout() {
         <CommandPalette />
         <KeyboardShortcuts />
         <ForceRefreshBanner />
+        <SystemBusy />
         <AutofillChips />
       </TooltipProvider>
     </RealtimeContext.Provider>
@@ -918,7 +922,12 @@ function ForceRefreshBanner() {
   useEffect(() => {
     const onCatchupFull = () => void qc.invalidateQueries()
     window.addEventListener('nvr:catchup-full', onCatchupFull)
-    return () => window.removeEventListener('nvr:catchup-full', onCatchupFull)
+    // #1720 — a permission change took live rooms away: re-read what is on screen.
+    window.addEventListener('nvr:access-changed', onCatchupFull)
+    return () => {
+      window.removeEventListener('nvr:catchup-full', onCatchupFull)
+      window.removeEventListener('nvr:access-changed', onCatchupFull)
+    }
   }, [qc])
   return <ForceReloadBanner />
 }

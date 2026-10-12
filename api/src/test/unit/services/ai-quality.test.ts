@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { READ_ONLY_REFUSED } from '../../../services/ai-chat-loop.js'
+import { readOnlyAllows } from '../../../services/ai-chat-loop.js'
 import { gradeProbe } from '../../../services/ai-health.js'
 import {
   type BudgetCap,
@@ -13,7 +13,7 @@ import {
   parseQualityConfig,
   type QualityConfig
 } from '../../../services/ai-quality.js'
-import { watchRoomId } from '../../../services/watch-rooms.js'
+import { tenantScopedRoom } from '../../../services/tenant-rooms.js'
 
 const cap = (o: Partial<BudgetCap> = {}): BudgetCap => ({
   id: 'c1',
@@ -108,15 +108,12 @@ describe('triage (#1862)', () => {
 })
 
 describe('tenant isolation of live calls and replays', () => {
-  it('scopes the ai-calls watch room per tenant in cloud mode', () => {
-    expect(watchRoomId('ai-calls', 't:a', true)).toBe('watch:ai-calls:t:a')
-    expect(watchRoomId('ai-calls', 't:b', true)).not.toBe(watchRoomId('ai-calls', 't:a', true))
-    expect(watchRoomId('ai-calls', null, true)).toBeNull()
-    expect(watchRoomId('traffic-map', 't:a', true)).toBe('watch:traffic-map:t:a')
-  })
-  it('keeps the global room self-hosted and for unscoped rooms', () => {
-    expect(watchRoomId('ai-calls', null, false)).toBe('watch:ai-calls')
-    expect(watchRoomId('jobs', 't:a', true)).toBe('watch:jobs')
+  it('scopes the ai-calls watch room per tenant', () => {
+    expect(tenantScopedRoom('watch:ai-calls', 'a')).toBe('t:a:watch:ai-calls')
+    expect(tenantScopedRoom('watch:ai-calls', 'b')).not.toBe(
+      tenantScopedRoom('watch:ai-calls', 'a')
+    )
+    expect(tenantScopedRoom('watch:ai-calls', '')).toBe('watch:ai-calls')
   })
   it('shows a replay only to its starter in its tenant', () => {
     const run = { user: 'A', store: 't:1' }
@@ -124,9 +121,17 @@ describe('tenant isolation of live calls and replays', () => {
     expect(canSeeReplay(run, 'B', 't:1')).toBe(false)
     expect(canSeeReplay(run, 'A', 't:2')).toBe(false)
   })
-  it('refuses write-capable tools in a read-only run', () => {
-    expect(READ_ONLY_REFUSED.has('run_custom_query')).toBe(true)
-    expect(READ_ONLY_REFUSED.has('propose_action')).toBe(true)
-    expect(READ_ONLY_REFUSED.has('query_items')).toBe(false)
+  it('lets a read-only run call only the replayable read tools', () => {
+    expect(readOnlyAllows('query_items')).toBe(true)
+    for (const t of [
+      'propose_action',
+      'propose_plan',
+      'suggest_memory',
+      'search_docs',
+      'ask_choice',
+      'run_custom_query',
+      'no_such_tool'
+    ])
+      expect(readOnlyAllows(t)).toBe(false)
   })
 })

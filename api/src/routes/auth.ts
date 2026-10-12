@@ -21,6 +21,11 @@ import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api
 import { logActivity } from '../services/activity.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import { recordLogin } from '../services/security.js'
+import {
+  bindFromRequest,
+  encodeBoundToken,
+  endMasqueradeSockets
+} from '../services/socket-access.js'
 import { canSignIn, findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
 
@@ -707,9 +712,18 @@ export async function authRoutes(app: FastifyInstance) {
   // hits the API directly under wildcard CORS), so the client fetches this
   // one-time token same-origin and passes it in the socket `auth` payload.
   // 2-minute TTL, deleted on first use by the socket auth handler.
+  // #1719 — the token remembers what signed this request in (the session id, or the
+  // masquerade token), so the socket it opens closes when that session or masquerade ends.
   app.get('/ws-token', { preHandler: requireAuth }, async (req, reply) => {
+    // The session, View-as token, static token or named API key behind this request — the
+    // socket closes when it ends. A sign-in with nothing to bind to gets no live connection.
+    const bind = bindFromRequest(req)
+    if (!bind)
+      return reply
+        .code(403)
+        .send({ error: 'This sign-in cannot open a live connection', code: 'WS_UNBINDABLE' })
     const token = randomUUID()
-    await app.redis.setex(`ws:token:${token}`, 120, req.user!.id)
+    await app.redis.setex(`ws:token:${token}`, 120, encodeBoundToken(String(req.user!.id), bind))
     return reply.send({ token })
   })
 
@@ -848,6 +862,8 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Not a masquerade session' })
     }
     await app.redis.del(`masq:${token}`)
+    // #1719 — the View-as tab's sockets end with the masquerade, on every replica.
+    endMasqueradeSockets(token)
     await logActivity({
       action: 'masquerade-stop',
       user: req.masqueradeAdminId,

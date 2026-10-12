@@ -1,3 +1,4 @@
+import { relayLiveEvent } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
@@ -5,6 +6,7 @@ import { api } from '@/lib/api'
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 import { useAuth } from '@/lib/auth'
+import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 /**
  * Record presence v2 — who's viewing this record and which field they're
@@ -36,7 +38,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
     if (!collection || !item || item === 'new') return
 
     const socket = io(API_URL, {
-      transports: ['websocket'],
+      ...SOCKET_TRANSPORT_OPTIONS,
       withCredentials: true,
       reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
       reconnectionDelayMax: 15_000,
@@ -63,6 +65,11 @@ export function useRecordPresence(collection: string | undefined, item: string |
     socket.on('auth:ok', () => {
       socket.emit('record:join', { collection, item })
     })
+
+    // This socket is the one inside the record room (and the user room): hand
+    // the live-record notices to the shared hooks (lib/live.ts useLiveEvent).
+    const relayed = ['record:integrity', 'record:automation', 'owners:changed', 'access:changed']
+    for (const ev of relayed) socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
 
     socket.on(
       'record:viewers',

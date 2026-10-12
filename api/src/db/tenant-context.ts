@@ -49,3 +49,9 @@ export function getTenantSlug(): string | undefined {
 export function getTenantId(): string | undefined {
   return store.getStore()?.tenantId || store.getStore()?.slug // fallback to slug for backwards compat
 }
+
+/** Run `fn` outside any tenant context — work flushed from a timer an earlier
+ *  tenant's request armed must not inherit that tenant (#1875). */
+export function runWithoutTenant<T>(fn: () => T): T {
+  return store.exit(fn)
+}

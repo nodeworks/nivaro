@@ -487,6 +487,16 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&category=workflow`
       type: 'p',
       text: 'A chat mention offers Reply — an inline box that posts straight back into the room. A mention in a record note offers Reply onto the record\'s thread. A workflow-transition notification offers "Comment on this", which adds a note to the record (the row stays unread; commenting is not acknowledging). Reply actions are server-declared like every inline action (`actions[].input` names the field the box fills) so hosts stay domain-blind; the normal permissions apply — posting on a record needs create rights on its collection.'
     },
+    { type: 'h3', text: 'Notices that need acknowledgement' },
+    {
+      type: 'p',
+      text: 'A flow "Send notification" step (Needs acknowledgement), or an extension passing `ack_required: true` to `notifyUser`, marks a notice as needing an explicit Acknowledge. It shows an Acknowledge button in the bell and the notification center, stays pinned above the lists until acknowledged (reading it does not count), reminds by push after 4 hours and tells the recipient\'s manager after 24 hours. The sender sees who has and has not acknowledged in the Sent view.'
+    },
+    { type: 'h3', text: 'Keeping the inbox tidy' },
+    {
+      type: 'p',
+      text: 'In the notification center: select rows (or everything matching a filter) to mark read, snooze, archive or open their records in tabs; "Archive everything read and older than N days" in one action, or turn on automatic clean-up. Archived notifications stay searchable under the Archived filter. In Profile > Notification rules: pick a sound per category (or none) on top of the global sound; a card suggests muting categories you mostly never open, with undo; and every rule change shows what last week would have looked like (in-app, push and email counts) replayed through the same delivery decision the sender uses.'
+    },
     { type: 'h3', text: 'Channel fallback chain (if it stays unread)' },
     {
       type: 'p',
@@ -809,7 +819,7 @@ GET   /api/tasks/requested               // tasks I asked others to do`
     { type: 'h3', id: 'support-report-problem', text: 'Report a problem' },
     {
       type: 'p',
-      text: 'A portal can mount `ReportProblemButton` (from `@nivaro/react`): `<ReportProblemButton app=\'portal\' />` for a corner button, or `floating={false}` to place it inline. The person writes one sentence. Before the dialog opens the browser takes a screenshot with every typed value masked (needs `html2canvas` installed in the host app; without it the report goes without a picture) and keeps the moment for the replay. With Include what I was doing ticked, the report also carries the replay, the last console warnings and errors, the last requests and the page. The server files an issue (source client, raised by the person) and a support request linked to it, which the person follows under My requests; the desk sees Issue #N on the ticket.'
+      text: "A portal can mount `ReportProblemButton` (from `@nivaro/react`): `<ReportProblemButton app='portal' />` for a corner button, or `floating={false}` to place it inline. The person writes one sentence. Before the dialog opens the browser takes a screenshot with every typed value masked (needs `html2canvas` installed in the host app; without it the report goes without a picture) and keeps the moment for the replay. With Include what I was doing ticked, the report also carries the replay, the last console warnings and errors, the last requests and the page. The server files an issue (source client, raised by the person) and a support request linked to it, which the person follows under My requests; the desk sees Issue #N on the ticket."
     },
     {
       type: 'pre',

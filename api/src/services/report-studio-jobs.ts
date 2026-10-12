@@ -17,6 +17,7 @@ import {
   type WidgetQueryConfig,
   type WidgetRow
 } from './report-studio.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * Report Studio background jobs.
@@ -462,7 +463,7 @@ async function deliverReportToRoom(
     comment: `report digest \u2192 ${room}`
   })
   try {
-    app.io?.to(`chat:${room}`).emit('chat:message', { room })
+    app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', { room })
   } catch {
     /* realtime nudge is best-effort */
   }

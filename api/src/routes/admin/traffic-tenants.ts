@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { getMetaDb } from '../../middleware/tenant.js'
 import { INSTANCE_ID } from '../../services/instance-roster.js'
+import { tenantRealtimeRanking } from '../../services/socket-transport.js'
 import { currentTrafficSec } from '../../services/traffic-map.js'
 import { tenantLoadRanking } from '../../services/traffic-taps/tenant-load.js'
 
@@ -65,4 +66,38 @@ export async function adminTrafficTenantRoutes(app: FastifyInstance): Promise<vo
       }
     }
   )
+
+  // #1732 — realtime per tenant: open sockets, events and bytes written to them (all time on
+  // this process and the last whole minute), noisiest tenant first — so one tenant's import
+  // flooding live updates is named. Same operator secret; per process like the route above.
+  app.get<{ Querystring: { limit?: string } }>('/admin/realtime-tenants', async (req, reply) => {
+    if (!secretMatches(req.headers['x-provision-secret']))
+      return reply.code(401).send({ error: 'Unauthorized' })
+    const limit = Math.min(200, Math.max(1, Number(req.query.limit ?? 50) || 50))
+    const rows = tenantRealtimeRanking().slice(0, limit)
+    const names = new Map<string, { slug: string | null; name: string | null }>()
+    if (rows.length && process.env.CLOUD_META_DB_URL) {
+      try {
+        const found = (await getMetaDb()('cloud_tenants')
+          .whereIn(
+            'id',
+            rows.map((r) => r.tenant)
+          )
+          .select('id', 'slug', 'name')) as Array<{ id: string; slug: string; name: string }>
+        for (const t of found)
+          names.set(String(t.id).toLowerCase(), { slug: t.slug ?? null, name: t.name ?? null })
+      } catch {
+        /* ids only */
+      }
+    }
+    return {
+      data: {
+        instance: INSTANCE_ID,
+        tenants: rows.map((r) => {
+          const n = names.get(r.tenant.toLowerCase())
+          return { ...r, slug: n?.slug ?? r.label, name: n?.name ?? null }
+        })
+      }
+    }
+  })
 }

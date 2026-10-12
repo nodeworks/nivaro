@@ -27,6 +27,7 @@
     "www:release": "./api/node_modules/.bin/tsx scripts/sync-docs.ts && node scripts/release-www.mjs",
     "sync-docs": "./api/node_modules/.bin/tsx scripts/sync-docs.ts",
     "docs:api": "node scripts/generate-api-docs.mjs",
+    "docs:ai-index": "./api/node_modules/.bin/tsx scripts/build-docs-index.ts",
     "migrate": "pnpm --filter @nivaro/api migrate",
     "migrate:rollback": "pnpm --filter @nivaro/api migrate:rollback",
     "seed:directus": "pnpm --filter @nivaro/api seed:directus",

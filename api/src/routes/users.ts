@@ -134,6 +134,12 @@ export async function usersRoutes(app: FastifyInstance) {
     const userId = id === 'me' ? req.user!.id : id
     const user = await getUser(userId)
     if (!user) return reply.code(404).send({ error: 'Not found' })
+    // #1804 — Ask AI memory is the person's own; an admin reading another
+    // account never gets it.
+    if (String(userId).toUpperCase() !== String(req.user!.id).toUpperCase()) {
+      const { stripAiMemory } = await import('../services/ai-memory.js')
+      return reply.send({ data: stripAiMemory(user) })
+    }
     return reply.send({ data: user })
   })
 
@@ -218,6 +224,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
     }
     const previousUser = await getUser(id)
+    const isSelf = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
+    if ('preferences' in filtered) {
+      // #1804 — nobody writes notes into someone else's Ask AI prompt.
+      const { guardPreferencesWrite } = await import('../services/ai-memory.js')
+      const g = guardPreferencesWrite(filtered.preferences, previousUser?.preferences, isSelf)
+      if ('error' in g) return reply.code(400).send({ error: g.error })
+      filtered.preferences = g.value
+    }
     const user = await updateUser(id, filtered)
     const activityId = await logActivity({
       action: 'update',
@@ -227,8 +241,13 @@ export async function usersRoutes(app: FastifyInstance) {
       req
     })
     if (activityId && user) {
-      const userData = user as unknown as Record<string, unknown>
-      const prevData = previousUser as unknown as Record<string, unknown> | null
+      // Revisions are read by admins — they never carry Ask AI memory (#1804).
+      const { stripAiMemory } = await import('../services/ai-memory.js')
+      const userData = stripAiMemory(user) as unknown as Record<string, unknown>
+      const prevData = (previousUser ? stripAiMemory(previousUser) : null) as Record<
+        string,
+        unknown
+      > | null
       const delta = prevData
         ? Object.fromEntries(
             Object.entries(userData).filter(
@@ -243,6 +262,10 @@ export async function usersRoutes(app: FastifyInstance) {
         data: userData,
         delta
       })
+    }
+    if (!isSelf) {
+      const { stripAiMemory } = await import('../services/ai-memory.js')
+      return reply.send({ data: stripAiMemory(user) })
     }
     return reply.send({ data: user })
   })
@@ -754,6 +777,35 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.notification_sound = value
     }
+    if ('notification_sounds' in body) {
+      // #2385 — per-category sound on top of the global one: {category:
+      // 'off'|'subtle'|'chime'}. A category with no entry follows the global.
+      const raw = body.notification_sounds
+      if (raw === null) patch.notification_sounds = null
+      else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const out: Record<string, string> = {}
+        for (const cat of NOTIFY_CATEGORIES) {
+          const v = (raw as Record<string, unknown>)[cat]
+          if (v === undefined || v === null) continue
+          if (typeof v !== 'string' || !['off', 'subtle', 'chime'].includes(v))
+            return reply
+              .code(400)
+              .send({ error: "notification_sounds values must be 'off', 'subtle' or 'chime'" })
+          out[cat] = v
+        }
+        patch.notification_sounds = out
+      } else {
+        return reply.code(400).send({ error: 'notification_sounds must be an object or null' })
+      }
+    }
+    if ('notification_cleanup_days' in body) {
+      // #2406 — archive read notifications older than N days automatically.
+      const n = body.notification_cleanup_days
+      if (n === null) patch.notification_cleanup_days = null
+      else if (Number.isInteger(n) && (n as number) >= 7 && (n as number) <= 365)
+        patch.notification_cleanup_days = n
+      else return reply.code(400).send({ error: 'notification_cleanup_days must be 7–365 or null' })
+    }
     if ('notification_prefs' in body) {
       // Quiet hours + per-category channel matrix (see notification-channels).
       const raw = body.notification_prefs
@@ -1022,6 +1074,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.traffic_digest = v === true ? true : null
     }
+    if ('ai_weekly_summary' in body) {
+      // #1868/#1908 — the Monday AI-written summaries in the daily summary (administrators; opt-in).
+      const v = body.ai_weekly_summary
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'ai_weekly_summary must be true, false or null' })
+      }
+      patch.ai_weekly_summary = v === true ? true : null
+    }
     if ('traffic_pins' in body) {
       // #1125 — the Traffic Map watch list: entity keys (`<lane>/<entity>`), at most 40.
       const v = body.traffic_pins
@@ -1038,6 +1098,22 @@ export async function usersRoutes(app: FastifyInstance) {
           .send({ error: 'traffic_pins must hold at most 40 entity keys like items/workflows' })
       }
       patch.traffic_pins = keys.length ? keys : null
+    }
+    if ('ai_history_off' in body) {
+      // #1833 — "Don't save my questions": Ask AI stores no conversations.
+      const v = body.ai_history_off
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'ai_history_off must be true, false or null' })
+      }
+      patch.ai_history_off = v === true ? true : null
+    }
+    if ('ai_memory' in body) {
+      // #1804 — the person's own Ask AI notes (Profile → Ask AI memory). The
+      // card sends the whole list; null clears it.
+      const { normalizeAiMemory } = await import('../services/ai-memory.js')
+      const r = normalizeAiMemory(body.ai_memory)
+      if ('error' in r) return reply.code(400).send({ error: r.error })
+      patch.ai_memory = r.value
     }
     if ('team_alerts' in body) {
       // #1037 — the lines a manager wants to hear about when their team crosses them.

@@ -1,15 +1,16 @@
 import { createNivaro } from '@nivaro/sdk'
-import { EventPathSheet, NivaroProvider } from '@nivaro/shared'
+import { EventPathSheet, NivaroProvider, useLiveEvent, useLiveWatchRoom } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, GitBranch, Pencil, Play, RotateCw } from 'lucide-react'
+import { Activity, ChevronRight, GitBranch, Pencil, Play, RotateCw } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { ExplainButton } from '@/components/explain-button'
 import { HelpVideoRenderQueue } from '@/components/help-video-render-queue'
+import { JobRunLog } from '@/components/job-run-log'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { describeCron } from '@/lib/cron-text'
-import { adminRealtime, joinWatchRoom } from '@/lib/socket'
 import { cn } from '@/lib/utils'
 
 /**
@@ -124,10 +125,28 @@ export default function BackgroundJobs() {
   const [pathRun, setPathRun] = useState<{ chainId: string; label: string } | null>(null)
   const navigate = useNavigate()
 
+  // #2025 / #1974 — the jobs watch room is live: the polls below are the safety net.
+  const live = useLiveWatchRoom('jobs')
+  /** Run ids whose log is open. */
+  const [openLogs, setOpenLogs] = useState<Set<number>>(new Set())
+  const toggleLog = (id: number) =>
+    setOpenLogs((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  // Countdowns ("in 5m", "started 2m ago") move without a refetch.
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setTick((n) => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
+
   const registry = useQuery({
     queryKey: ['job-registry'],
     queryFn: () => api.get('/job-runs/registry').then((r) => r.data.data),
-    refetchInterval: 10_000
+    refetchInterval: live ? 60_000 : 10_000
   })
   const runs = useQuery({
     queryKey: ['job-runs', kind, status, search, page],
@@ -142,22 +161,38 @@ export default function BackgroundJobs() {
           }
         })
         .then((r) => r.data),
-    refetchInterval: 15_000
+    refetchInterval: live ? 60_000 : 15_000
   })
 
   // Live job progress (#271): while this page is open, join the jobs watch
-  // room — every run start/progress/finish refreshes the lists immediately.
-  useEffect(() => {
-    const leave = joinWatchRoom('jobs')
-    const off = adminRealtime.on('job:update', () => {
-      void qc.invalidateQueries({ queryKey: ['job-runs'] })
-      void qc.invalidateQueries({ queryKey: ['job-registry'] })
-    })
-    return () => {
-      off()
-      leave()
-    }
-  }, [qc])
+  // room. A start or finish refreshes the lists (coalesced: a busy job reports
+  // many times a second); a progress report only moves the "Running now" line.
+  const [liveProgress, setLiveProgress] = useState<Record<number, Record<string, unknown>>>({})
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current)
+    },
+    []
+  )
+  useLiveEvent(
+    'job:update',
+    (p: { id?: number; status?: string; progress?: Record<string, unknown> }) => {
+      if (p.progress && p.id != null) {
+        const progress = p.progress
+        const id = p.id
+        setLiveProgress((prev) => ({ ...prev, [id]: progress }))
+        return
+      }
+      if (refreshTimer.current) return
+      refreshTimer.current = setTimeout(() => {
+        refreshTimer.current = null
+        void qc.invalidateQueries({ queryKey: ['job-runs'] })
+        void qc.invalidateQueries({ queryKey: ['job-registry'] })
+      }, 400)
+    },
+    { includeOwn: true }
+  )
 
   const crons: CronEntry[] = registry.data?.crons ?? []
   const activeRuns: JobRun[] = (registry.data?.running ?? []).filter(
@@ -740,19 +775,43 @@ export default function BackgroundJobs() {
               Running now
             </p>
             {activeRuns.map((r) => {
-              const prog = r.progress ? (JSON.parse(r.progress) as Record<string, unknown>) : null
+              const prog =
+                liveProgress[r.id] ??
+                (r.progress ? (JSON.parse(r.progress) as Record<string, unknown>) : null)
               return (
-                <p
-                  key={r.id}
-                  className='mt-1 text-[12px] text-slate-600 dark:text-muted-foreground'
-                >
-                  <span className='font-mono text-[11.5px]'>{r.job_id}</span>
-                  {r.label && ` · ${r.label}`} · started {rel(r.started_at)}
-                  {prog &&
-                    ` · ${Object.entries(prog)
-                      .map(([k, v]) => `${k} ${v}`)
-                      .join(', ')}`}
-                </p>
+                <div key={r.id} className='mt-1'>
+                  <p className='flex items-center gap-1 text-[12px] text-slate-600 dark:text-muted-foreground'>
+                    <button
+                      type='button'
+                      onClick={() => toggleLog(r.id)}
+                      aria-expanded={openLogs.has(r.id)}
+                      aria-label={`${openLogs.has(r.id) ? 'Hide' : 'Show'} the log of ${r.job_id}`}
+                      className='shrink-0 rounded p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-foreground'
+                    >
+                      <ChevronRight
+                        className={cn(
+                          'h-3 w-3 transition-transform',
+                          openLogs.has(r.id) && 'rotate-90'
+                        )}
+                        aria-hidden
+                      />
+                    </button>
+                    <span>
+                      <span className='font-mono text-[11.5px]'>{r.job_id}</span>
+                      {r.label && ` · ${r.label}`} · started {rel(r.started_at)}
+                      {prog &&
+                        ` · ${Object.entries(prog)
+                          .filter(([, v]) => typeof v !== 'object')
+                          .map(([k, v]) => `${k} ${v}`)
+                          .join(', ')}`}
+                    </span>
+                  </p>
+                  {openLogs.has(r.id) && (
+                    <div className='ml-4 mt-1'>
+                      <JobRunLog runId={r.id} running />
+                    </div>
+                  )}
+                </div>
               )
             })}
           </div>
@@ -865,7 +924,27 @@ export default function BackgroundJobs() {
                       className='border-t border-slate-100 align-top dark:border-border'
                     >
                       <td className='py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
+                        <button
+                          type='button'
+                          onClick={() => toggleLog(r.id)}
+                          aria-expanded={openLogs.has(r.id)}
+                          aria-label={`${openLogs.has(r.id) ? 'Hide' : 'Show'} the log of run ${r.id}`}
+                          className='mr-1 inline-flex align-middle rounded p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-foreground'
+                        >
+                          <ChevronRight
+                            className={cn(
+                              'h-3 w-3 transition-transform',
+                              openLogs.has(r.id) && 'rotate-90'
+                            )}
+                            aria-hidden
+                          />
+                        </button>
                         {r.job_id}
+                        {openLogs.has(r.id) && (
+                          <div className='mt-1.5 w-[min(640px,90vw)] font-sans'>
+                            <JobRunLog runId={r.id} running={r.status === 'running'} />
+                          </div>
+                        )}
                       </td>
                       <td className='py-1.5 pr-3 text-slate-500 dark:text-muted-foreground'>
                         {r.kind}
@@ -899,6 +978,11 @@ export default function BackgroundJobs() {
                           <span className='break-words text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                             {r.outcome ?? '—'}
                           </span>
+                        )}
+                        {r.error && (
+                          <div className='mt-1'>
+                            <ExplainButton kind='job-run' params={{ id: r.id }} />
+                          </div>
                         )}
                         {r.chain_id && r.status !== 'running' && (
                           <button

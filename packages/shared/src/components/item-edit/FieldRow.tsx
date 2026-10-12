@@ -17,6 +17,7 @@ import { toast } from 'sonner'
 import { useNivaroClient, useParentDraft } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { cn, titleCase } from '../../lib/utils'
+import { GlossaryLabel } from '../ai/GlossaryText'
 import { Label } from '../ui/label'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
 import { useAddendumFields } from './AddendumFieldContext'
@@ -872,7 +873,7 @@ export function FieldRow({
         <div className='flex flex-wrap items-center gap-1.5 min-h-[1.5rem]'>
           {label !== '' && (
             <Label data-field-label className='text-sm font-medium'>
-              {label}
+              <GlossaryLabel text={label} collection={collection} />
               {field.required && <span className='ml-0.5 text-destructive'>*</span>}
             </Label>
           )}

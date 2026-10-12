@@ -25,6 +25,7 @@ import {
   Users
 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { navSections } from '@/docs/index'
 import { DocRenderer } from '@/docs/renderer'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
@@ -88,6 +89,17 @@ export function DocsPage() {
     }
     return () => observer.disconnect()
   }, [])
+
+  // ?section=<id> — Ask AI's docs citations (#1803) open the page there.
+  const [params] = useSearchParams()
+  const linked = params.get('section')
+  useEffect(() => {
+    if (!linked || !/^[\w-]+$/.test(linked)) return
+    const el = contentRef.current?.querySelector(`[id="${linked}"]`)
+    if (!el) return
+    el.scrollIntoView({ block: 'start' })
+    setActiveId(linked)
+  }, [linked])
 
   function scrollTo(id: string) {
     const el = contentRef.current?.querySelector(`#${id}`)

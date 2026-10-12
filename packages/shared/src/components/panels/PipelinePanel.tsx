@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
+import { serverNow } from '../../lib/server-clock'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
@@ -33,6 +34,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/tooltip'
+import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
 import { SlaClockLine } from './SlaClock'
 import {
@@ -194,7 +196,7 @@ const ERROR_CLASS_TEXT: Record<string, string> = {
 
 /** "in 25 min" / "in 2h" / "on the next check" for a ladder retry time. */
 function retryWhen(iso: string): string {
-  const mins = Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000)
+  const mins = Math.ceil((new Date(iso).getTime() - serverNow()) / 60_000)
   if (!Number.isFinite(mins) || mins <= 0) return 'on the next check'
   if (mins < 60) return `in ${mins} min`
   return `in ${Math.round(mins / 60)}h`
@@ -995,16 +997,19 @@ function OwnersSection({
             <span className='text-slate-300'>({groupOwners.length + (owners?.length ?? 0)})</span>
           )}
         </span>
-        {!adding && (
-          <button
-            type='button'
-            onClick={() => setAdding(true)}
-            className='flex items-center gap-1 text-[11px] text-slate-400 transition-colors hover:text-nvr-cyan'
-          >
-            <UserPlus className='h-3 w-3' />
-            Add
-          </button>
-        )}
+        <span className='flex items-center gap-3'>
+          {currentStateId && <WhyOwnersButton collection={collection} itemId={String(item)} />}
+          {!adding && (
+            <button
+              type='button'
+              onClick={() => setAdding(true)}
+              className='flex items-center gap-1 text-[11px] text-slate-400 transition-colors hover:text-nvr-cyan'
+            >
+              <UserPlus className='h-3 w-3' />
+              Add
+            </button>
+          )}
+        </span>
       </div>
       {ownersLoading || groupOwnersLoading ? (
         <div className='flex items-center gap-2 py-1.5 text-[12px] text-slate-400'>
@@ -1737,7 +1742,19 @@ function PipelinePanelInner({
         err as { response?: { status?: number; error?: string; data?: { error?: string } } }
       )?.response
       toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
-        duration: 12000
+        duration: 12000,
+        // #1867: a refusal carries "Why?" — the role, owner or access rule
+        // that stopped it, and who can change it.
+        ...(isAccessRefusal(err)
+          ? {
+              action: deniedToastAction(client, {
+                collection,
+                itemId: String(item),
+                action: 'transition',
+                transitionId: variables.transition_id
+              })
+            }
+          : {})
       })
       // A blocked transition (e.g. an ERP push failure) lands here as a plain 422:
       // the dialog's line values already saved — close it and refresh the
@@ -2323,7 +2340,19 @@ function PipelineTransitionButtonsInner({
         err as { response?: { status?: number; error?: string; data?: { error?: string } } }
       )?.response
       toast.error(resp?.error ?? resp?.data?.error ?? 'Failed to execute transition', {
-        duration: 12000
+        duration: 12000,
+        // #1867: a refusal carries "Why?" — the role, owner or access rule
+        // that stopped it, and who can change it.
+        ...(isAccessRefusal(err)
+          ? {
+              action: deniedToastAction(client, {
+                collection,
+                itemId: String(item),
+                action: 'transition',
+                transitionId: variables.transition_id
+              })
+            }
+          : {})
       })
       // A blocked transition (e.g. an ERP push failure) lands here as a plain 422:
       // the dialog's line values already saved — close it and refresh the

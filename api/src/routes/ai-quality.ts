@@ -13,6 +13,7 @@ import {
   settingsRow
 } from '../services/ai-client.js'
 import { lastAiHealth, probeAiProvider, registerAiHealthReadiness } from '../services/ai-health.js'
+import { registerCorrectionSource } from '../services/ai-knowledge-suggest.js'
 import { costOf, priceFor } from '../services/ai-log.js'
 import { bustPlaybookCache } from '../services/ai-playbooks.js'
 import {
@@ -108,8 +109,50 @@ interface ReplayRun {
 }
 const replayRuns = new Map<string, ReplayRun>()
 
+/** #1898 — thumbs-down answers with their triaged cause, for the guide drafter. */
+async function thumbsDownSignals(since: Date) {
+  const fb = (await db('nivaro_ai_feedback')
+    .where('rating', -1)
+    .where('created_at', '>=', since)
+    .orderBy('created_at', 'desc')
+    .limit(100)
+    .select('request_id', 'comment')) as Array<{ request_id: string; comment: string | null }>
+  const ids = [...new Set(fb.map((f) => f.request_id))]
+  if (ids.length === 0) return []
+  const calls = (await db('nivaro_ai_calls')
+    .whereIn('request_id', ids)
+    .orderBy('id', 'asc')
+    .select('request_id', 'request', 'response')) as Array<{
+    request_id: string
+    request: string | null
+    response: string | null
+  }>
+  const by = new Map<string, typeof calls>()
+  for (const c of calls) by.set(c.request_id, [...(by.get(c.request_id) ?? []), c])
+  const out = []
+  for (const f of fb) {
+    const ev = evidenceFromCalls(by.get(f.request_id) ?? [])
+    if (!ev.question) continue
+    const cause = classifyCause({
+      question: ev.question,
+      answer: ev.answer,
+      comment: f.comment,
+      tools: ev.tools,
+      toolErrors: ev.toolErrors
+    })
+    out.push({
+      source: 'ai-quality',
+      question: ev.question,
+      answer: ev.answer,
+      note: `${CAUSE_LABELS[cause]}${f.comment ? `: ${f.comment}` : ''}`
+    })
+  }
+  return out
+}
+
 export async function aiQualityRoutes(app: FastifyInstance) {
   registerAiHealthReadiness()
+  registerCorrectionSource('ai-quality', thumbsDownSignals)
   // ─── config ───────────────────────────────────────────────────────────────
   app.get('/quality/config', { preHandler: requireAdmin }, async () => {
     const { cfg } = await readQuality()

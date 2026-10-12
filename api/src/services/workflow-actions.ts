@@ -19,6 +19,7 @@ import {
   resolveObligation,
   skipReason
 } from './integration-obligations.js'
+import { announceRecordAspect } from './record-events.js'
 import { type ConditionRule, evalConditionRule } from './workflow-conditions.js'
 
 // ─── Transition actions ──────────────────────────────────────────────────────
@@ -1515,6 +1516,8 @@ export async function recordSubmission(
         updated_at: now
       })
       .returning('id')) as Array<number | { id: number }>
+    // #1825: the record's Integrations chip refreshes the moment a push lands.
+    announceRecordAspect(collection, item, '$integrations')
     await logActivity({
       action: 'create',
       collection: 'nivaro_erp_submissions',

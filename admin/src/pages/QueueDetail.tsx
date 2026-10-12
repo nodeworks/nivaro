@@ -14,6 +14,7 @@ import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
 import { useAuth } from '@/lib/auth'
+import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
@@ -24,7 +25,7 @@ const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http:/
 function createSocketRealtime(staticToken: string | null): QueueRealtimeAdapter {
   return {
     subscribe(collections, onUpdate) {
-      const socket = io(API_URL, { transports: ['websocket'], withCredentials: true })
+      const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
       socket.on('connect', () => {
         if (staticToken) socket.emit('auth', { token: staticToken })
       })
