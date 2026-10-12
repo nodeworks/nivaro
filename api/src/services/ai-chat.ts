@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivityThrottled } from './activity.js'
 import { settingsRow } from './ai-client.js'
+import { describePlanStepKinds, type ProposePlanInput, proposePlan } from './ai-plans.js'
 import { embedText, searchEmbeddings } from './embeddings.js'
 import type { PathNode } from './event-path/types.js'
 import { getApp } from './io-holder.js'
@@ -169,6 +170,33 @@ export const CHAT_TOOLS: Anthropic.Tool[] = [
         }
       },
       required: ['action_type']
+    }
+  },
+  {
+    name: 'propose_plan',
+    // A getter: step kinds an extension registers later still reach the model.
+    get description() {
+      return `PROPOSE a multi-step plan for the user to approve — several changes that belong together ("close out the lines on these 12 POs and tell their owners"). Nothing runs until the user approves; they run all steps or one at a time, in order, as the user. A refused step stops the plan; a step whose condition fails is skipped. Use propose_action for a single change. Step kinds (each step = {kind, title?, condition?, ...its fields}):\n${describePlanStepKinds()}\nOptional condition on any step, checked when it runs: {label ("only if still in Finance Review"), where? (query_items filter the records must still match, e.g. {"$state": {"_eq": "finance_review"}}), unchanged? (field names that must still hold today's value), collection? + id/ids (check other records than the step's own)}. After calling this, tell the user to review the plan card; do NOT claim anything ran.`
+    },
+    input_schema: {
+      type: 'object' as const,
+      properties: {
+        title: { type: 'string', description: 'One line naming what the plan does.' },
+        steps: {
+          type: 'array',
+          description: 'In run order, at most 20.',
+          items: {
+            type: 'object',
+            properties: {
+              kind: { type: 'string', description: 'A step kind listed above.' },
+              title: { type: 'string', description: 'What this step does, in plain words.' },
+              condition: { type: 'object' }
+            },
+            required: ['kind']
+          }
+        }
+      },
+      required: ['title', 'steps']
     }
   },
   {
@@ -1062,6 +1090,14 @@ export async function executeChatTool(
       }
     }
 
+    case 'propose_plan': {
+      const plan = await proposePlan(user, input as ProposePlanInput)
+      return {
+        result: plan,
+        summary: `proposed a ${plan.steps.length}-step plan: ${plan.title}`
+      }
+    }
+
     case 'my_tasks': {
       let personId = user.id
       let personName = 'you'
@@ -1468,6 +1504,7 @@ Rules:
 - Keep answers concise: lead with the answer. No filler openers ("Great!", "Certainly"). Mention human ids so the user can open records. When several records match, list them and ask one precise question at most.
 - Answers render on phones too. List records as a bulleted list, one per line: "- **HQ25-68952** — <name> · <vendor>". Use a markdown table only for numbers or short values in at most 3 columns, never for long names, and always put each table row on its own line.
 - You cannot change data directly. To change something, call propose_action — the user then approves or rejects the proposal card in the UI. Never claim a change happened; say the proposal is awaiting their approval.
+- When a request needs several changes or actions together (update records AND tell people, create tasks for each, post a summary), call propose_plan ONCE with every step in order instead of several propose_action calls. Look the records up first so each step's filter is exact. Add a condition to a step when it should only run if the record is still in the same state or unchanged.
 - All access is permission-checked as the requesting user; if something is forbidden, tell the user their role lacks access.`
 
 /**
@@ -1571,3 +1608,21 @@ export const WRAP_UP_MESSAGE =
   'You have used every tool call available for this question. Do not call any more tools. Answer now from the results you already have, and state plainly anything you could not determine.'
 
 export { MAX_ROUNDS }
+
+/**
+ * Compile a query_items-shaped filter for one collection (dotted paths,
+ * `$state`) — Ask AI plan conditions (services/ai-plan-steps.ts) speak the
+ * same filter language the model already writes, through the same compiler.
+ */
+export async function compileChatFilterFor(
+  collection: string,
+  raw: unknown
+): Promise<FilterCondition[]> {
+  const name = assertBusinessCollection(collection)
+  return compileChatFilter(name, raw, await fieldSet(name))
+}
+
+/** The fields a plan condition may name on a collection (registered + physical). */
+export async function chatFieldSet(collection: string): Promise<Set<string>> {
+  return fieldSet(assertBusinessCollection(collection))
+}

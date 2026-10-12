@@ -61,6 +61,7 @@ import {
 import {
   adminI18nDocs,
   aiChatDocs,
+  aiPlansDocs,
   fieldImpactDocs,
   formsV2Docs,
   pipelineHealthDocs,
@@ -599,6 +600,7 @@ export const navSections: NavGroup[] = [
     items: [
       aiChatDocs,
       aiActionsDocs,
+      aiPlansDocs,
       aiOverview,
       aiGenerate,
       aiSummarize,

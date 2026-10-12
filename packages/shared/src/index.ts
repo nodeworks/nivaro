@@ -4,6 +4,15 @@ export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  type AiPlan,
+  AiPlanCard,
+  type AiPlanStatus,
+  type AiPlanStep,
+  type AiPlanStepState,
+  type AiPlanSubscribe
+} from './components/ai/AiPlanCard'
+export { AiStepList } from './components/ai/AiStepList'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
   AlertRuleDrawer,
@@ -386,6 +395,7 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
   getApiUpdate,

@@ -1578,12 +1578,20 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             ? (text, round) => delivery.emit('ai:delta', { text, round })
             : undefined,
           onStatus: delivery
-            ? (st) => delivery.emit('ai:status', { text: st.text, round: st.round, tool: st.tool })
+            ? (st) =>
+                delivery.emit('ai:status', {
+                  text: st.text,
+                  round: st.round,
+                  tool: st.tool,
+                  ...(st.step != null ? { step: st.step } : {}),
+                  ...(st.done ? { done: true, result: st.result ?? '' } : {}),
+                  ...(st.failed ? { failed: true } : {})
+                })
             : undefined,
           shouldStop: stopper ? () => stopper.stopped() : undefined,
           warn: (err, msg) => req.log.warn({ err }, msg)
         })
-        const { trace, proposals } = result
+        const { trace, proposals, plans } = result
         await logActivity({
           action: 'ai-chat',
           user: user.id,
@@ -1601,6 +1609,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
               `I used all ${MAX_ROUNDS} tool calls without reaching an answer — try a narrower question, or name the collection and fields you mean.`,
             trace,
             proposals,
+            plans,
             truncated: true,
             stopped: result.stopped || undefined,
             request_id: requestId,
@@ -1626,13 +1635,14 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           reply: text,
           trace,
           proposals,
+          plans,
           request_id: requestId,
           playbooks_used: playbooksUsed
         }
         if (result.stopped) payload.stopped = true
         // An answer that proposes an ACTION is never cached — a proposal
         // is single-use and expires; only plain answers repeat.
-        if (cacheKey && proposals.length === 0 && text && !result.stopped) {
+        if (cacheKey && proposals.length === 0 && plans.length === 0 && text && !result.stopped) {
           void redis!
             .set(
               cacheKey,
