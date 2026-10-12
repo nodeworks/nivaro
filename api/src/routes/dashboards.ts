@@ -467,7 +467,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
         field: field ?? null,
         filters
       })
-      if (refusal) return reply.code(403).send({ error: refusal })
+      if (refusal)
+        return reply.code(refusal === 'Unknown collection' ? 400 : 403).send({ error: refusal })
 
       const id = randomUUID()
       await db('nivaro_dashboard_widgets').insert({
@@ -566,7 +567,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           field: effField ?? null,
           filters: filters !== undefined ? filters : widget.filters
         })
-        if (refusal) return reply.code(403).send({ error: refusal })
+        if (refusal)
+          return reply.code(refusal === 'Unknown collection' ? 400 : 403).send({ error: refusal })
       }
       if (filters !== undefined) updates.filters = toJsonStr(filters)
       if (col !== undefined) updates.col = col

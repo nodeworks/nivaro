@@ -111,6 +111,9 @@ export async function widgetSourceRefusal(
     collection = view?.collection ?? null
   }
   if (!collection) return null
+  // System tables (settings with SMTP/AI secrets, API keys, webhooks, users with tokens) are
+  // never a widget source, whatever a role's `*` policy says.
+  if (SYSTEM_COLLECTION.test(collection)) return 'Unknown collection'
   if (!(await can(user, 'read', collection).catch(() => false)))
     return `No read access to ${collection}`
   const readable = await readableTest(user, collection)
@@ -154,6 +157,7 @@ export async function computeWidgetData(
       | undefined
     if (!view) return { error: 'Saved view not found', status: 404 }
     const collection = String(view.collection)
+    if (SYSTEM_COLLECTION.test(collection)) return { error: 'Unknown collection', status: 400 }
     if (!(await resolveCollection(collection))) return { error: 'Unknown collection', status: 400 }
     let viewFilters: unknown = view.filters
     if (typeof viewFilters === 'string') {
@@ -268,9 +272,10 @@ export async function computeWidgetData(
     }
 
     if (widget.type === 'bar_chart' || widget.type === 'line_chart') {
-      if (!readable('created_at')) return { error: 'Forbidden', status: 403 }
       // Daily buckets need SQL the items service does not offer, so readItems' row gates are
-      // applied by hand: the role's row filter and User Scopes (fields were checked above).
+      // applied by hand: the role's row filter and User Scopes (filter fields were checked
+      // above). The day bucket is allowed even when the role's field list omits created_at:
+      // the chart is a count per day, and no field value leaves the server.
       const { applyRowFilter, getRowFilter } = await import('./permissions.js')
       const { applyUserScopesToQuery } = await import('./user-scopes.js')
       const q = db(col)
