@@ -17,6 +17,7 @@ import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import { TENANT_SCOPED_WATCH_ROOMS, watchRoomId } from '../services/watch-rooms.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -460,20 +461,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
     const watchGate = createWatchRoomGate()
     // Cloud: the Traffic Map room is per tenant (#1132); every other room keeps its name.
+    const isScoped = (room: string) =>
+      !!process.env.CLOUD_META_DB_URL && TENANT_SCOPED_WATCH_ROOMS.has(room)
     const watchRoomName = async (room: string): Promise<string | null> => {
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) return `watch:${room}`
-      const store = await socketTrafficStore(socket)
-      return store ? `watch:traffic-map:${store}` : null
+      if (!isScoped(room)) return `watch:${room}`
+      return watchRoomId(room, await socketTrafficStore(socket), true)
     }
     const onAdminJoin = async (payload: { room?: string }) => {
       const room = payload?.room
       const user = authenticatedUser
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
       // Self-hosted: no await before the gate, so a quick join + leave keeps its order.
-      const name =
-        room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL
-          ? `watch:${room}`
-          : await watchRoomName(room)
+      const name = isScoped(room) ? await watchRoomName(room) : `watch:${room}`
       if (!name) return
       await watchGate.join(
         room,
@@ -488,7 +487,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('admin:leave', (payload: { room?: string }) => {
       const room = payload?.room
       if (typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) {
+      if (!isScoped(room)) {
         watchGate.leave(room, () => socket.leave(`watch:${room}`))
         return
       }

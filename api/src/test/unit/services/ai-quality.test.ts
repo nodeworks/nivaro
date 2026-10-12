@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest'
+import { READ_ONLY_REFUSED } from '../../../services/ai-chat-loop.js'
 import { gradeProbe } from '../../../services/ai-health.js'
 import {
   type BudgetCap,
   budgetDay,
+  canSeeReplay,
   capApplies,
   classifyCause,
   evaluateBudgets,
@@ -11,6 +13,7 @@ import {
   parseQualityConfig,
   type QualityConfig
 } from '../../../services/ai-quality.js'
+import { watchRoomId } from '../../../services/watch-rooms.js'
 
 const cap = (o: Partial<BudgetCap> = {}): BudgetCap => ({
   id: 'c1',
@@ -101,5 +104,29 @@ describe('triage (#1862)', () => {
     expect(classifyCause({ ...base, answer: 'There are no records.' })).toBe('missing_data')
     expect(classifyCause({ ...base, tools: [] })).toBe('misunderstood')
     expect(classifyCause(base)).toBe('unclassified')
+  })
+})
+
+describe('tenant isolation of live calls and replays', () => {
+  it('scopes the ai-calls watch room per tenant in cloud mode', () => {
+    expect(watchRoomId('ai-calls', 't:a', true)).toBe('watch:ai-calls:t:a')
+    expect(watchRoomId('ai-calls', 't:b', true)).not.toBe(watchRoomId('ai-calls', 't:a', true))
+    expect(watchRoomId('ai-calls', null, true)).toBeNull()
+    expect(watchRoomId('traffic-map', 't:a', true)).toBe('watch:traffic-map:t:a')
+  })
+  it('keeps the global room self-hosted and for unscoped rooms', () => {
+    expect(watchRoomId('ai-calls', null, false)).toBe('watch:ai-calls')
+    expect(watchRoomId('jobs', 't:a', true)).toBe('watch:jobs')
+  })
+  it('shows a replay only to its starter in its tenant', () => {
+    const run = { user: 'A', store: 't:1' }
+    expect(canSeeReplay(run, 'A', 't:1')).toBe(true)
+    expect(canSeeReplay(run, 'B', 't:1')).toBe(false)
+    expect(canSeeReplay(run, 'A', 't:2')).toBe(false)
+  })
+  it('refuses write-capable tools in a read-only run', () => {
+    expect(READ_ONLY_REFUSED.has('run_custom_query')).toBe(true)
+    expect(READ_ONLY_REFUSED.has('propose_action')).toBe(true)
+    expect(READ_ONLY_REFUSED.has('query_items')).toBe(false)
   })
 })

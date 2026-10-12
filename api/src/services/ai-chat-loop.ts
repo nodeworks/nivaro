@@ -40,6 +40,9 @@ export interface ChatLoopResult {
   stopped: boolean
 }
 
+/** Tools a read-only (replay) run refuses: proposals, and saved SQL that may write. */
+export const READ_ONLY_REFUSED = new Set(['propose_action', 'run_custom_query'])
+
 export interface ChatLoopOptions extends ChatLoopCallbacks {
   client: Anthropic
   model: string
@@ -48,7 +51,7 @@ export interface ChatLoopOptions extends ChatLoopCallbacks {
   /** The conversation; the loop APPENDS to it. */
   convo: Anthropic.MessageParam[]
   maxTokens?: number
-  /** Replay runs (#1916): propose_action is refused so a re-run never stores a proposal. */
+  /** Replay runs (#1916): READ_ONLY_REFUSED tools are refused so a re-run never writes. */
   readOnly?: boolean
   warn?: (err: unknown, msg: string) => void
 }
@@ -181,8 +184,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       const input = (block.input ?? {}) as Record<string, unknown>
       onStatus?.({ round, tool: block.name, text: describeToolCall(block.name, input) })
       try {
-        if (opts.readOnly && block.name === 'propose_action')
-          throw new Error('Proposals are disabled in a replay run')
+        if (opts.readOnly && READ_ONLY_REFUSED.has(block.name))
+          throw new Error('That tool is disabled in a replay run (it could change data)')
         const { result, summary } = await executeChatTool(user, block.name, input)
         trace.push({ tool: block.name, input, summary })
         if (block.name === 'propose_action' && result && typeof result === 'object') {

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ShieldCheck } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { SimpleSelect } from '@/components/ui/simple-select'
@@ -704,6 +704,7 @@ function ReplayTab() {
 // ─── live calls ─────────────────────────────────────────────────────────────
 
 interface LiveCall {
+  seq?: number
   at: string
   feature: string
   model: string
@@ -716,10 +717,11 @@ interface LiveCall {
 
 function LiveTab() {
   const [rows, setRows] = useState<LiveCall[]>([])
+  const seq = useRef(0)
   useEffect(() => {
     const leave = joinWatchRoom('ai-calls')
     const off = adminRealtime.on('ai:call', (p: LiveCall) =>
-      setRows((prev) => [p, ...prev].slice(0, 200))
+      setRows((prev) => [{ ...p, seq: seq.current++ }, ...prev].slice(0, 200))
     )
     return () => {
       off()
@@ -744,8 +746,8 @@ function LiveTab() {
           </tr>
         </thead>
         <tbody>
-          {rows.map((r, i) => (
-            <tr key={`${r.at}-${i}`} className='border-t border-slate-200 dark:border-border'>
+          {rows.map((r) => (
+            <tr key={r.seq} className='border-t border-slate-200 dark:border-border'>
               <td className='py-1'>{new Date(r.at).toLocaleTimeString()}</td>
               <td>{r.feature}</td>
               <td>{r.model}</td>

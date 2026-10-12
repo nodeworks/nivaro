@@ -24,6 +24,7 @@ import {
   CAUSES,
   type Cause,
   type CostEstimate,
+  canSeeReplay,
   classifyCause,
   estimateRun,
   estimateTokens,
@@ -35,6 +36,7 @@ import {
   type QualityConfig
 } from '../services/ai-quality.js'
 import { currentTraceMeta, runInTrace } from '../services/request-trace.js'
+import { currentStoreId } from '../services/traffic-taps.js'
 import type { User } from '../types.js'
 
 /**
@@ -93,6 +95,8 @@ interface ReplayItem {
 interface ReplayRun {
   id: string
   user: string
+  /** Tenant store id (cloud); '' self-hosted. */
+  store: string
   model: string
   status: 'running' | 'done' | 'error'
   started_at: string
@@ -652,13 +656,15 @@ export async function aiQualityRoutes(app: FastifyInstance) {
     if (!Number.isFinite(confirmed) || (total != null && confirmed + 1e-9 < total)) {
       return reply.code(409).send({ error: 'Confirm the cost estimate first', estimate: p.est })
     }
-    if ([...replayRuns.values()].some((r) => r.status === 'running')) {
+    const store = currentStoreId()
+    if ([...replayRuns.values()].some((r) => r.status === 'running' && r.store === store)) {
       return reply.code(409).send({ error: 'A replay is already running' })
     }
     const admin = req.user!
     const run: ReplayRun = {
       id: randomUUID(),
       user: String(admin.id),
+      store,
       model: p.model,
       status: 'running',
       started_at: new Date().toISOString(),
@@ -773,7 +779,9 @@ export async function aiQualityRoutes(app: FastifyInstance) {
     '/replay/:id',
     { preHandler: requireAdmin },
     async (req, reply) => {
-      const run = replayRuns.get(req.params.id)
+      const found = replayRuns.get(req.params.id)
+      const run =
+        found && canSeeReplay(found, String(req.user!.id), currentStoreId()) ? found : undefined
       if (!run)
         return reply
           .code(404)

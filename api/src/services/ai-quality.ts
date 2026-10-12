@@ -3,6 +3,8 @@ import type { AiSettingsRow } from './ai-client.js'
 import { costOf, featureFromRoute } from './ai-log.js'
 import { getIo } from './io-holder.js'
 import { currentTraceMeta } from './request-trace.js'
+import { currentStoreId } from './traffic-taps.js'
+import { watchRoomId } from './watch-rooms.js'
 
 /**
  * AI quality and cost controls — budgets (#1817), the provider failure
@@ -572,11 +574,15 @@ async function nameOf(userId: string): Promise<string> {
 export function emitAiCallLive(call: LiveAiCall): void {
   const io = getIo()
   if (!io) return
-  const watchers = io.sockets?.adapter?.rooms?.get('watch:ai-calls')?.size ?? 0
+  const cloud = !!process.env.CLOUD_META_DB_URL
+  // Cloud: the room is per tenant; outside a tenant request there is nowhere safe to send.
+  const room = watchRoomId('ai-calls', cloud ? currentStoreId() || null : null, cloud)
+  if (!room) return
+  const watchers = io.sockets?.adapter?.rooms?.get(room)?.size ?? 0
   if (!watchers) return
   void (async () => {
     const user_name = call.user ? await nameOf(call.user) : null
-    io.to('watch:ai-calls').emit('ai:call', { ...call, user_name })
+    io.to(room).emit('ai:call', { ...call, user_name })
   })().catch(() => undefined)
 }
 
@@ -615,4 +621,13 @@ export function extractQuestion(requestJson: string | null): string | null {
   } catch {
     return m[1].slice(0, 2000)
   }
+}
+
+/** A replay run is visible only to the admin who started it, inside the tenant that started it. */
+export function canSeeReplay(
+  run: { user: string; store: string },
+  userId: string,
+  store: string
+): boolean {
+  return run.user === userId && run.store === store
 }
