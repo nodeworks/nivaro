@@ -26,15 +26,24 @@ export const collabOfflinePopout: DocSection = {
           'The record form is still open',
           'It sends the whole save again — lines and links included — when the connection returns.'
         ],
+        ['You sign out', 'Every pending offline save on the browser is cleared.'],
         [
-          'You sign out',
-          'Every pending offline save on the browser is cleared. Another person signing in on the same browser never sees or sends yours.'
+          'Someone else signs in on the same browser',
+          'Every pending offline save that is not theirs is deleted at once — a shared device never keeps your values for the next person, and nobody else ever sees or sends them.'
+        ],
+        [
+          'A save waits more than a week',
+          'It is dropped, and you get a one-time note: "an unsaved change from <date> was discarded".'
+        ],
+        [
+          'You are in a "View as" tab',
+          'Nothing is queued: a save that cannot reach the server shows the normal error. Leaving View as also clears anything stored under the person being viewed.'
         ]
       ]
     },
     {
       type: 'note',
-      text: 'New records are not queued: if the answer to a create was lost the record may already exist, and sending it again would create a second one. Pending saves older than a week are dropped.'
+      text: 'New records are not queued: if the answer to a create was lost the record may already exist, and sending it again would create a second one.'
     },
     { type: 'h3', id: 'popout-records', text: 'Pop out a record' },
     {

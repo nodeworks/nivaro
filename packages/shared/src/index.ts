@@ -277,13 +277,13 @@ export {
   lookBackHours,
   toRequestLogFilters
 } from './components/monitoring/AskTheLogs'
+export { CallerChangesSection } from './components/monitoring/CallerChanges'
+export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
 export {
   IncidentBanner,
   type IncidentNow,
   incidentThreadPath
 } from './components/monitoring/IncidentBanner'
-export { CallerChangesSection } from './components/monitoring/CallerChanges'
-export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
 export { PartnerDependenciesPanel } from './components/monitoring/PartnerDependencies'
 export {
   type MiniMapSummary,
@@ -601,9 +601,12 @@ export {
 export {
   bindRecordOutbox,
   clearRecordOutbox,
+  clearRecordOutboxFor,
+  disableRecordOutbox,
   discardRecordOutbox,
   isOfflineSaveError,
   midairCollisionOf,
+  RECORD_OUTBOX_TTL_MS,
   type RecordOutboxEntry,
   retryRecordOutbox
 } from './lib/record-outbox'

@@ -11,7 +11,7 @@ import {
   subscribeRecordOutbox
 } from '../../lib/record-outbox'
 import { announceRecordTabs } from '../../lib/record-tabs'
-import { formatRelative } from '../../lib/utils'
+import { formatDate, formatRelative } from '../../lib/utils'
 
 /** Every pending offline save of the signed-in person. */
 export function useRecordOutbox(): RecordOutboxEntry[] {
@@ -54,6 +54,14 @@ export function RecordOutboxHost({
         if (e.type === 'replayed') {
           announceRecordTabs(userId, 'saved', collection, item)
           toast.success('Your offline change was saved')
+          return
+        }
+        if (e.type === 'expired') {
+          // Values never ride the note — only when it was made.
+          toast.info(
+            `An unsaved change from ${formatDate(e.entry.created_at)} was discarded — it waited more than a week to be sent`,
+            { duration: 20_000 }
+          )
           return
         }
         const open = onOpenRecord

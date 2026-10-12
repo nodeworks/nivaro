@@ -10,8 +10,14 @@
  * The owner is `<host>|<user id>`: only the signed-in person's entries are
  * ever loaded or replayed, and a replay first checks the session still is
  * that person (another tab may have signed someone else in). Sign-out clears
- * the store (`clearRecordOutbox`). Without IndexedDB the outbox lives in
+ * the store (`clearRecordOutbox`); signing in as anyone else drops every
+ * entry that is not theirs (a shared device keeps nobody's field values for
+ * the next person), and an entry is dropped a week after it was queued —
+ * its owner gets a one-time note. Without IndexedDB the outbox lives in
  * memory for the page's lifetime.
+ *
+ * A "View as" tab never queues (`disableRecordOutbox`): its saves show the
+ * normal error, and nothing is stored under the person being viewed.
  *
  * Who replays: a record form that pressed Save holds the entry's Web Lock
  * and replays through its own save (lines, links, the merge dialog). Every
@@ -27,8 +33,8 @@ import { get, patch } from './commands'
 const DB_NAME = 'nivaro-record-outbox'
 const STORE = 'entries'
 const VERSION = 1
-/** Entries older than this are dropped on load — a week-old Save is not a pending change. */
-const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+/** Entries are dropped this long after they were queued — a week-old Save is not a pending change. */
+export const RECORD_OUTBOX_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const RETRY_MS = 8000
 
 export interface RecordConflict {
@@ -66,7 +72,8 @@ interface OutboxQueryClient {
 }
 
 export interface RecordOutboxEvent {
-  type: 'replayed' | 'conflict' | 'failed'
+  /** `expired`: dropped after RECORD_OUTBOX_TTL_MS without being sent. */
+  type: 'replayed' | 'conflict' | 'failed' | 'expired'
   entry: RecordOutboxEntry
 }
 
@@ -164,6 +171,7 @@ function plain<T>(v: T): T {
 // ── State + listeners ────────────────────────────────────────────────────────
 
 let boundOwner: string | null = null
+let disabled = false
 let boundClient: OutboxClient | null = null
 let boundQc: OutboxQueryClient | null = null
 let entries: RecordOutboxEntry[] = []
@@ -197,22 +205,75 @@ function announce() {
   }
 }
 
+function expired(e: RecordOutboxEntry, now: number): boolean {
+  const at = new Date(e.created_at).getTime()
+  return !Number.isFinite(at) || now - at > RECORD_OUTBOX_TTL_MS
+}
+
+/** Exclusive across tabs when Web Locks exist, so a sweep happens (and its note shows) once. */
+async function withSweepLock(fn: () => Promise<void>): Promise<void> {
+  const locks = lockManager()
+  if (!locks) return fn()
+  await locks.request('nvr-record-outbox:sweep', {}, fn).catch(() => {})
+}
+
+/**
+ * Drop the bound person's entries past their week. Each one dropped HERE
+ * (still in the store when this tab looked again) tells its owner once.
+ * Exported for tests.
+ */
+export async function sweepExpiredRecordOutbox(): Promise<void> {
+  const owner = boundOwner
+  if (!owner) return
+  await withSweepLock(async () => {
+    const now = Date.now()
+    for (const e of await readAll()) {
+      if (!e || e.owner !== owner || !expired(e, now)) continue
+      const still = await readEntry(e.id)
+      if (!still) continue
+      await deleteEntry(e.id)
+      entries = entries.filter((x) => x.id !== e.id)
+      emit()
+      announce()
+      if (boundOwner === owner) emitEvent({ type: 'expired', entry: still })
+    }
+  })
+}
+
+/** Signing in: every entry on this browser that is not this person's goes. */
+async function purgeOtherOwners(owner: string): Promise<void> {
+  for (const e of await readAll()) if (e && e.owner !== owner) await deleteEntry(e.id)
+}
+
 async function reload() {
   if (!boundOwner) return
   const owner = boundOwner
   const all = await readAll()
   const now = Date.now()
   const mine: RecordOutboxEntry[] = []
+  let stale = false
   for (const e of all) {
     if (!e || e.owner !== owner) continue
-    if (now - new Date(e.updated_at).getTime() > MAX_AGE_MS) {
-      void deleteEntry(e.id)
+    if (expired(e, now)) {
+      stale = true
       continue
     }
     mine.push(e.status === 'sending' ? { ...e, status: 'queued' } : e)
   }
   if (boundOwner !== owner) return
   entries = mine
+  emit()
+  if (stale) await sweepExpiredRecordOutbox()
+}
+
+/**
+ * Turn the outbox off for this page — a "View as" tab, where a save must
+ * fail as it normally would instead of waiting under someone else's name.
+ */
+export function disableRecordOutbox(): void {
+  disabled = true
+  boundOwner = null
+  entries = []
   emit()
 }
 
@@ -226,6 +287,7 @@ export function bindRecordOutbox(
   userId: string | null | undefined,
   qc?: OutboxQueryClient | null
 ): void {
+  if (disabled) return
   boundClient = client
   if (qc) boundQc = qc
   const owner = outboxOwner(userId)
@@ -245,9 +307,14 @@ export function bindRecordOutbox(
     onlineWired = true
     window.addEventListener('online', () => scheduleReplay(0))
   }
-  void reload().then(() => {
-    if (entries.some((e) => e.status === 'queued')) scheduleReplay(1000)
-  })
+  void purgeOtherOwners(owner)
+    .then(() => {
+      announce()
+      return reload()
+    })
+    .then(() => {
+      if (entries.some((e) => e.status === 'queued')) scheduleReplay(1000)
+    })
 }
 
 export function getRecordOutbox(): RecordOutboxEntry[] {
@@ -336,7 +403,7 @@ export async function enqueueRecordSave(input: {
   changeReason?: string | null
 }): Promise<RecordOutboxEntry | null> {
   const owner = boundOwner
-  if (!owner) return null
+  if (!owner || disabled) return null
   const fields: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(input.payload)) if (!k.startsWith('_')) fields[k] = v
   if (Object.keys(fields).length === 0) return null
@@ -435,6 +502,20 @@ export async function clearRecordOutbox(): Promise<void> {
   announce()
 }
 
+/**
+ * Leaving "View as": drop anything stored under the person who was being
+ * viewed (`userId`), whatever tab stored it. Works with the outbox disabled.
+ */
+export async function clearRecordOutboxFor(userId: string): Promise<void> {
+  const uid = userId.toLowerCase()
+  if (!uid) return
+  for (const e of await readAll())
+    if (e && ownerUser(e.owner).toLowerCase() === uid) await deleteEntry(e.id)
+  entries = entries.filter((e) => ownerUser(e.owner).toLowerCase() !== uid)
+  emit()
+  announce()
+}
+
 async function updateEntry(id: string, patchFields: Partial<RecordOutboxEntry>) {
   const cur = entries.find((x) => x.id === id) ?? (await readEntry(id))
   if (!cur) return null
@@ -527,6 +608,7 @@ async function sessionIsOwner(client: OutboxClient, owner: string): Promise<bool
  */
 export async function replayRecordOutbox(): Promise<void> {
   if (replaying || !boundClient || !boundOwner) return
+  await sweepExpiredRecordOutbox()
   if (!entries.some((e) => e.status === 'queued')) return
   replaying = true
   const client = boundClient
@@ -671,13 +753,16 @@ export async function retryRecordOutbox(collection: string, item: string | numbe
 }
 
 /** Test seam: forget everything bound in this module. */
-export function __resetRecordOutboxForTests(opts: { memory?: boolean } = {}): void {
+export function __resetRecordOutboxForTests(
+  opts: { memory?: boolean; keepStore?: boolean } = {}
+): void {
   memoryOnly = opts.memory ?? true
+  disabled = false
   boundOwner = null
   boundClient = null
   boundQc = null
   entries = []
-  memoryStore.clear()
+  if (!opts.keepStore) memoryStore.clear()
   localClaims.clear()
   listeners.clear()
   eventListeners.clear()
