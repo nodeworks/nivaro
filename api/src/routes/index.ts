@@ -306,7 +306,11 @@ export async function registerRoutes(app: FastifyInstance) {
       // Tenant-scoped, and named by collection when the request names one (#1740).
       try {
         const surface = req.url.split('/')[2]?.split('?')[0] ?? 'config'
-        announceConfigChanged(surface, collectionHint(req))
+        announceConfigChanged(
+          surface,
+          collectionHint(req),
+          (req as unknown as { nvrTenantId?: string }).nvrTenantId
+        )
       } catch {
         /* broadcast is best-effort */
       }

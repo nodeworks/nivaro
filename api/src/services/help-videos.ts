@@ -25,6 +25,7 @@ import {
 } from './help-video-edits.js'
 import { extrasMigrated, parsePeaks, parseSprite, type SpriteSheet } from './help-video-extras.js'
 import { applyHouseStyleToNew, currentHouseStyle } from './help-video-house-style.js'
+import { announceHelpVideoChanged } from './help-video-live.js'
 import { assertMusicBelongs, takeVideoMusicFiles } from './help-video-music.js'
 import { queueRender } from './help-video-render.js'
 import { normalizeScript, withScriptChapters } from './help-video-script.js'
@@ -1003,6 +1004,7 @@ export async function replaceRequirements(
     }
     await trx('nivaro_help_videos').where({ id: videoId }).update(touch(user))
   })
+  announceHelpVideoChanged(videoId, 'required')
   return { added: known.filter((r: string) => !before.includes(r)) }
 }
 
@@ -1150,6 +1152,7 @@ export async function publishVideo(
       ...touch(user)
     })
   await queueRender(String(draft.id))
+  announceHelpVideoChanged(String(video.id), 'published')
   if (firstPublish || opts.watch_again) {
     void (async () => {
       try {
@@ -1192,6 +1195,7 @@ async function askToWatchAgain(video: VideoRow, user: User, note: string | null)
   await db('nivaro_help_videos')
     .where({ id: video.id })
     .update({ required_since: new Date(), ...touch(user) })
+  announceHelpVideoChanged(String(video.id), 'required')
   void (async () => {
     try {
       const rows = await db('nivaro_help_video_requirements')
@@ -1459,6 +1463,7 @@ export async function archiveVideo(video: VideoRow, user: User): Promise<void> {
   await db('nivaro_help_videos')
     .where({ id: video.id })
     .update({ status: 'archived', ...touch(user) })
+  announceHelpVideoChanged(String(video.id), 'archived')
   await logActivity({
     action: 'help-video-archive',
     user: user.id,

@@ -141,6 +141,10 @@ const RELAYED_EVENTS = new Set([
   'collection:update',
   'job:update',
   'import:progress',
+  'job:log',
+  'conformance:progress',
+  'help-video:changed',
+  'help-video:question',
   'monitor:status',
   'traffic:request',
   'traffic-map:frame',
@@ -258,6 +262,9 @@ export const adminRealtime: RealtimeAdapter = {
       return
     }
     handle.emit(event, payload)
+  },
+  joinWatch(room) {
+    return joinWatchRoom(room)
   }
 }
 

@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Brain, Check, Pencil, Plus, Trash2, X } from 'lucide-react'
+import { Brain, Check, History, Pencil, Plus, Trash2, X } from 'lucide-react'
 import { useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, patch } from '../../lib/commands'
+import { AiHistorySwitch } from '../ai/AiHistorySwitch'
 import { SectionCard } from './primitives'
 
 /**
@@ -171,6 +172,23 @@ export function AiMemoryCard() {
         </p>
       )}
       {error && <p className='mt-2 text-[11.5px] text-red-600'>{error}</p>}
+    </SectionCard>
+  )
+}
+
+/** Ask AI history opt-out (#1833) — "Don't save my questions". */
+export function AiHistoryCard() {
+  const qc = useQueryClient()
+  return (
+    <SectionCard
+      icon={<History className='h-4 w-4' />}
+      title='Ask AI history'
+      hint='Whether Ask AI keeps your conversations.'
+      testId='ai-history'
+    >
+      <AiHistorySwitch
+        onDeleted={() => void qc.invalidateQueries({ queryKey: ['ask-conversations'] })}
+      />
     </SectionCard>
   )
 }

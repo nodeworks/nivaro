@@ -47,10 +47,16 @@ const send = keyedThrottle(THROTTLE_MS, MIN_GAP_MS, (key) => {
 let lastRouteAt = 0
 
 /** A write route changed configuration. `collection` narrows who has to react. */
-export function announceConfigChanged(surface: string, collection?: string | null): void {
+export function announceConfigChanged(
+  surface: string,
+  collection?: string | null,
+  /** The request's tenant (`req.nvrTenantId`): an onResponse hook may run outside the tenant's
+   *  async context, where currentTenantKey() is empty and a cloud notice would be dropped. */
+  tenant?: string | null
+): void {
   lastRouteAt = Date.now()
   const c = collection && /^[A-Za-z_][A-Za-z0-9_]{0,254}$/.test(collection) ? collection : ''
-  send(`${currentTenantKey()}|${surface}|${c}`)
+  send(`${tenant ?? currentTenantKey()}|${surface}|${c}`)
 }
 
 /**

@@ -27,6 +27,12 @@ export interface RealtimeAdapter {
   on(event: string, cb: (payload: any) => void): () => void
   /** Emit an event to the server (record:uploading, record:join…). */
   emit(event: string, payload?: any): void
+  /**
+   * Join an admin-only server room (`jobs`, `conformance`…) so its events reach `on`.
+   * Returns leave. Optional: a host without it simply never receives those events,
+   * and the component keeps polling.
+   */
+  joinWatch?(room: string): () => void
 }
 
 export const RealtimeContext = createContext<RealtimeAdapter | null>(null)

@@ -32,6 +32,7 @@ export * from './sections/integrations-console.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
+export * from './sections/live-lists.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
@@ -244,8 +245,9 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
+import { collabLiveLists } from './sections/live-lists.js'
 import { collabLiveProgress } from './sections/live-progress.js'
-import { collabLiveRecords } from './sections/live-records.js'
+import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -800,6 +802,8 @@ export const navSections: NavGroup[] = [
       collabItemLocking,
       collabLiveRecords,
       collabLiveProgress,
+      collabLiveLists,
+      collabLiveOps,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,

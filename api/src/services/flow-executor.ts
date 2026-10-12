@@ -1133,7 +1133,8 @@ async function runRefreshPages(op: FlowOperation, data: FlowData, ctx: Execution
   })
   const collection = t('collection')
   if (!/^[A-Za-z_][A-Za-z0-9_]{0,254}$/.test(collection)) return reject('a collection is required')
-  if (/^nivaro_/i.test(collection)) return reject('system collections cannot be announced')
+  if (/^(nivaro|directus)_/i.test(collection))
+    return reject('system collections cannot be announced')
   const rawItems = t('items')
   let ids: string[] = []
   if (rawItems) {
