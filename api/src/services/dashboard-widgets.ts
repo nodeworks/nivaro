@@ -1,3 +1,4 @@
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 
@@ -68,6 +69,61 @@ export async function registeredFieldSet(collection: string): Promise<Set<string
   return new Set(rows.map((r) => String(r.field)))
 }
 
+/** A widget filter as an items-service filter member (null-safe eq / neq). */
+function toItemsFilter(f: WidgetFilter): Record<string, unknown> {
+  const op = f.op ?? 'eq'
+  const v = f.value
+  if (op === 'eq') return { [f.field]: v === null ? { _null: true } : { _eq: v } }
+  if (op === 'neq') return { [f.field]: v === null ? { _nnull: true } : { _neq: v } }
+  if (op === 'contains') return { [f.field]: { _contains: String(v ?? '') } }
+  if (op === 'in') {
+    const list = Array.isArray(v) ? v : String(v ?? '').split(',')
+    return { [f.field]: { _in: list } }
+  }
+  return { [f.field]: { [`_${op}`]: v } }
+}
+
+/** The role's readable-field test for `collection` (null list = every field). */
+async function readableTest(user: User, collection: string): Promise<(f: string) => boolean> {
+  const { getAllowedFields } = await import('./permissions.js')
+  const allowed = await getAllowedFields(user, 'read', collection)
+  if (allowed == null || allowed.includes('*')) return () => true
+  return (f) => f === 'id' || allowed.includes(f)
+}
+
+/**
+ * May `user` build this widget? Used by the widget create/update routes: a widget can only
+ * be built over a collection its author can read, with a field and filters they can read.
+ * Null = yes; otherwise the refusal.
+ */
+export async function widgetSourceRefusal(
+  user: User,
+  widget: { type: string; collection: string | null; field: string | null; filters?: unknown }
+): Promise<string | null> {
+  const { can } = await import('./permissions.js')
+  let collection = widget.collection
+  if (widget.type === 'saved_view') {
+    if (!widget.field) return null
+    const view = (await db('nivaro_saved_views')
+      .where('id', Number(widget.field))
+      .first('collection')
+      .catch(() => null)) as { collection: string } | null | undefined
+    collection = view?.collection ?? null
+  }
+  if (!collection) return null
+  if (!(await can(user, 'read', collection).catch(() => false)))
+    return `No read access to ${collection}`
+  const readable = await readableTest(user, collection)
+  const named = [
+    ...(widget.type !== 'saved_view' && widget.field ? [widget.field] : []),
+    ...(widget.type !== 'saved_view'
+      ? normalizeWidgetFilters(widget.filters).map((f) => f.field)
+      : [])
+  ]
+  const hidden = named.find((f) => !readable(f))
+  return hidden ? `You do not have access to the field "${hidden}"` : null
+}
+
 async function resolveCollection(name: string): Promise<boolean> {
   const row = await db('nivaro_collections').where({ collection: name }).first()
   return !!row
@@ -118,12 +174,8 @@ export async function computeWidgetData(
         if (fieldSet.has(candidate.trim())) sumField = candidate.trim()
       }
       // A sum over a field the viewer cannot read would show it in aggregate.
-      if (sumField) {
-        const { getAllowedFields } = await import('./permissions.js')
-        const allowed = await getAllowedFields(ctx.user, 'read', collection)
-        if (allowed != null && !allowed.includes('*') && !allowed.includes(sumField))
-          return { error: 'Forbidden', status: 403 }
-      }
+      if (sumField && !(await readableTest(ctx.user, collection))(sumField))
+        return { error: 'Forbidden', status: 403 }
     } catch {
       sumField = null
     }
@@ -161,83 +213,50 @@ export async function computeWidgetData(
   if (!(await resolveCollection(widget.collection))) {
     return { error: 'Unknown collection', status: 400 }
   }
-  // Every other type reads AS THE VIEWER (#1675 security pass): count / sum / average and the
-  // 30-day charts go through the report engine's resolver (read access, the role's row filter,
-  // User Scopes, readable fields only), `latest` through the items service. A widget with no
-  // viewer — a public link without a creator to read as — shows nothing.
+  // Every type reads AS THE VIEWER: read permission on the collection, the role's row
+  // filter, User Scopes and the role's field list — the same gates as the collection
+  // browser. A widget is never computed without a viewer (a public link reads as its creator).
   if (!ctx.user) return { error: 'Forbidden', status: 403 }
   const user = ctx.user
   const col = widget.collection
+  const { can } = await import('./permissions.js')
+  if (!(await can(user, 'read', col).catch(() => false))) return { error: 'Forbidden', status: 403 }
 
   // A filter (widget-level or dashboard-level) applies only when the field is
   // actually registered on this collection — report-studio entity-filter
   // semantics, and the guard that keeps field names out of raw SQL.
   const fieldSet = await registeredFieldSet(col)
-  const { readableColumns, resolveWidgetData, widgetFiltersToItems } = await import(
-    './report-studio.js'
-  )
-  const { readable } = await readableColumns(user, col)
-  const asReportFilter = (f: WidgetFilter) => ({
-    field: f.field,
-    op: (f.value === null && (f.op ?? 'eq') === 'eq'
-      ? 'null'
-      : f.value === null && f.op === 'neq'
-        ? 'nnull'
-        : (f.op ?? 'eq')) as 'eq',
-    value: f.value
-  })
-  const own = normalizeWidgetFilters(widget.filters)
-    .filter((f) => fieldSet.has(f.field))
-    .map(asReportFilter)
-  // The dashboard's filter bar binds only where the viewer can read the field; the widget's
-  // own filters must all be readable (the resolver refuses one that is not).
-  const extra = extraFilters
-    .filter((f) => fieldSet.has(f.field) && readable.has(f.field))
-    .map(asReportFilter)
-  const filters = [...own, ...extra]
-
-  const fail = (err: unknown) => {
-    const status = (err as { statusCode?: number }).statusCode ?? 500
-    return {
-      error:
-        status === 403
-          ? 'Forbidden'
-          : status === 400
-            ? 'Invalid widget'
-            : 'Failed to compute widget data',
-      status
-    }
-  }
+  const readable = await readableTest(user, col)
+  const own = normalizeWidgetFilters(widget.filters).filter((f) => fieldSet.has(f.field))
+  // A filter on a field the viewer cannot read would answer questions about it (a count
+  // becomes an oracle): the widget's own refuses, a dashboard filter-bar one does not bind.
+  if (own.some((f) => !readable(f.field))) return { error: 'Forbidden', status: 403 }
+  const conds = [...own, ...extraFilters.filter((f) => fieldSet.has(f.field) && readable(f.field))]
+  const filter = conds.length ? { _and: conds.map(toItemsFilter) } : {}
 
   try {
+    const items = await import('./items.js')
     if (widget.type === 'count' || widget.type === 'sum' || widget.type === 'avg') {
-      if (widget.type !== 'count' && !widget.field) return { data: { value: null } }
-      const d = await resolveWidgetData(
-        user,
-        {
-          type: 'kpi',
-          collection: col,
-          config: {
-            metric:
-              widget.type === 'count'
-                ? { aggregate: 'count' }
-                : { aggregate: widget.type, field: widget.field as string },
-            filters
-          }
-        },
-        null
-      )
-      return { data: { value: d.value ?? null } }
+      if (widget.type !== 'count') {
+        if (!widget.field) return { data: { value: null } }
+        if (!readable(widget.field)) return { error: 'Forbidden', status: 403 }
+      }
+      const fn = widget.type
+      const res = await items.aggregateItems(user, col, {
+        filter,
+        aggregate: fn === 'count' ? { countAll: true } : { [fn]: [widget.field as string] }
+      })
+      const row = (res.data ?? [])[0] as unknown as Record<string, unknown> | undefined
+      if (fn === 'count') return { data: { value: Number(row?.countAll ?? 0) } }
+      const v = (row?.[fn] as Record<string, unknown> | undefined)?.[widget.field as string]
+      return { data: { value: v == null ? null : Number(v) } }
     }
 
     if (widget.type === 'latest') {
-      const { readItems } = await import('./items.js')
-      if (col.startsWith('nivaro_') || col.startsWith('directus_'))
-        return { error: 'Unknown collection', status: 400 }
-      const and = widgetFiltersToItems(filters, readable)
-      const res = await readItems(user, col, {
+      // readItems narrows the columns to the role's field list and strips system secrets.
+      const res = await items.readItems(user, col, {
         fields: ['*'],
-        filter: and.length ? { _and: and } : {},
+        filter,
         sort: ['-created_at'],
         limit: 10
       })
@@ -245,29 +264,55 @@ export async function computeWidgetData(
     }
 
     if (widget.type === 'bar_chart' || widget.type === 'line_chart') {
-      const d = await resolveWidgetData(
-        user,
-        {
-          type: 'line',
-          collection: col,
-          config: {
-            metric: { aggregate: 'count' },
-            dimension: { field: 'created_at', bucket: 'day' },
-            date_field: 'created_at',
-            filters
-          }
-        },
-        { preset: 'last_30_days' }
-      )
+      if (!readable('created_at')) return { error: 'Forbidden', status: 403 }
+      // Daily buckets need SQL the items service does not offer, so readItems' row gates are
+      // applied by hand: the role's row filter and User Scopes (fields were checked above).
+      const { applyRowFilter, getRowFilter } = await import('./permissions.js')
+      const { applyUserScopesToQuery } = await import('./user-scopes.js')
+      const q = db(col)
+        .select(db.raw('CAST(created_at AS DATE) as date'))
+        .count('* as count')
+        .whereRaw('created_at >= DATEADD(day, -30, GETDATE())')
+        .groupByRaw('CAST(created_at AS DATE)')
+        .orderBy('date', 'asc')
+      const rowFilter = await getRowFilter(user, 'read', col)
+      if (rowFilter) applyRowFilter(q, rowFilter, user)
+      await applyUserScopesToQuery(q, col, user)
+      for (const f of conds) applyCondition(q, f)
+      const rows = await q
       return {
-        data: {
-          rows: (d.series ?? []).map((p) => ({ date: String(p.dim), count: Number(p.value) }))
-        }
+        data: { rows: rows.map((r) => ({ date: String(r.date), count: Number(r.count) })) }
       }
     }
 
     return { error: 'Unsupported widget type', status: 400 }
   } catch (err) {
-    return fail(err)
+    const status = (err as { statusCode?: number }).statusCode
+    if (status === 403) return { error: 'Forbidden', status: 403 }
+    return { error: 'Failed to compute widget data', status: status === 400 ? 400 : 500 }
+  }
+}
+
+function escapeLike(v: string): string {
+  return v.replace(/[[%_]/g, (c) => `[${c}]`)
+}
+
+/** One readable, registered widget filter on a raw query (the chart path only). */
+function applyCondition(query: Knex.QueryBuilder, f: WidgetFilter) {
+  const op = f.op ?? 'eq'
+  if (op === 'eq') {
+    if (f.value === null) query.whereNull(f.field)
+    else query.where(f.field, f.value as string)
+  } else if (op === 'neq') {
+    if (f.value === null) query.whereNotNull(f.field)
+    else query.whereNot(f.field, f.value as string)
+  } else if (op === 'gt') query.where(f.field, '>', f.value as string)
+  else if (op === 'gte') query.where(f.field, '>=', f.value as string)
+  else if (op === 'lt') query.where(f.field, '<', f.value as string)
+  else if (op === 'lte') query.where(f.field, '<=', f.value as string)
+  else if (op === 'contains') query.where(f.field, 'like', `%${escapeLike(String(f.value))}%`)
+  else if (op === 'in') {
+    const list = Array.isArray(f.value) ? f.value : String(f.value ?? '').split(',')
+    query.whereIn(f.field, list as string[])
   }
 }
