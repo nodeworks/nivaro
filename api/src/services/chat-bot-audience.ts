@@ -16,10 +16,14 @@ import type { RoomRecord } from './chat-records.js'
  *           EACH OF THEM and must come back with the asker's exact result
  *           fingerprint (the shared-conversation rule, #1809).
  *   open    the audience is everyone, or everyone who can read a record — too
- *           many to replay. Only a read of the room's OWN record passes, and
- *           only when it replays identically for one member of every role that
- *           can read the collection (field access is per role; the row itself
- *           is the record every room reader can see by definition).
+ *           many to replay. Only a read of the room's OWN row passes — a
+ *           query_items pinned to it with link labels off (a label is ANOTHER
+ *           record, under its own row rules), or its integration_status /
+ *           record_integrity — and only when it replays identically for one
+ *           member of every role that can read the collection (field access
+ *           is per role; the row itself is the record every room reader can
+ *           see by definition). Nothing about other records (record_event_path
+ *           walks events, writes and partner calls) is sound to sample.
  *
  * Anything else — a call outside REPLAYABLE_TOOLS, an error, a mismatch, a
  * blown budget — sends the answer to the asker alone. The prompt context the
@@ -31,6 +35,8 @@ import type { RoomRecord } from './chat-records.js'
 export const AUDIENCE_CAP = 20
 /** Tool replays one answer may spend deciding its audience. */
 export const REPLAY_BUDGET = 48
+/** What an open room may be told: reads of the room's own row only. */
+const OPEN_ROOM_TOOLS = new Set(['query_items', 'integration_status', 'record_integrity'])
 /** Members of one role tried before a role counts as unverifiable. */
 const REPS_PER_ROLE = 5
 
@@ -347,7 +353,9 @@ export async function verifyCall(
     return (await sameForEveryone(call, users, ctx, deps)) ? 'room' : 'private'
   }
 
-  if (!isRecordScopedCall(call, ctx.record) || !ctx.record) return 'private'
+  if (!ctx.record || !OPEN_ROOM_TOOLS.has(call.tool)) return 'private'
+  if (!isRecordScopedCall(call, ctx.record)) return 'private'
+  if (call.tool === 'query_items' && call.input.link_labels !== false) return 'private'
   const roles = await deps.rolesReading(ctx.record.collection)
   if (roles.length > ctx.budget.left) return 'private'
   for (const roleId of roles) {

@@ -513,8 +513,11 @@ async function answerQuestion(
   const { describeToolCall } = await import('./ai-chat-loop.js')
   const { consumeText, isAbortError, streamMessage } = await import('./ai-stream.js')
   const { hashToolResult, toolResultText } = await import('./ai-result-hash.js')
-  const { scopeToRecord, verifyCall } = await import('./chat-bot-audience.js')
-  const systemPrompt = `${await buildChatSystemPrompt(asker)}${opsOn ? `\n\n${ops.OPS_PROMPT}` : ''}`
+  const { isRecordScopedCall, scopeToRecord, verifyCall } = await import('./chat-bot-audience.js')
+  // In a room others read, none of the asker's own catalogues: round
+  // one streams before any tool, and the room check only covers tool calls.
+  const alone = opts.verify.audience.kind === 'people' && opts.verify.audience.ids.length === 0
+  const systemPrompt = `${await buildChatSystemPrompt(asker, { catalogues: alone })}${opsOn ? `\n\n${ops.OPS_PROMPT}` : ''}`
   const { userTimeZone, formatForPerson } = await import('./user-time.js')
   const zone = await userTimeZone(asker)
 
@@ -575,11 +578,17 @@ async function answerQuestion(
     for (const block of response.content) {
       if (block.type !== 'tool_use') continue
       // #1852 — in a record's room the record is the default subject.
-      const input = scopeToRecord(
-        block.name,
-        (block.input ?? {}) as Record<string, unknown>,
-        record
-      )
+      let input = scopeToRecord(block.name, (block.input ?? {}) as Record<string, unknown>, record)
+      // In a room too big to replay for, a read of the room's own record can
+      // still reach the room — but only bare: a link label is another record.
+      if (
+        opts.verify.audience.kind === 'open' &&
+        !stream.isPrivate &&
+        block.name === 'query_items' &&
+        isRecordScopedCall({ tool: block.name, input, hash: '', failed: false }, record)
+      ) {
+        input = { ...input, link_labels: false }
+      }
       stream.status(
         opts.quietStatus && !stream.isPrivate
           ? 'Looking that up…'
