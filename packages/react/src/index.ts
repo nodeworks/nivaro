@@ -302,6 +302,7 @@ export {
   installReplayTail,
   isChatPanelPinned,
   isCleanRecording,
+  JobsTray,
   JsonMapEditor,
   LearningPathCard,
   listFieldInterfaces,
