@@ -125,6 +125,17 @@ export const peoplePageGuide: DocSection = {
         '"Open in queue" lists the queues that read those collections (`GET /api/queues` now carries `source_collections`) and opens one at `/queues/:id?owner=<user id>`. The queue applies that owner filter once, drops the parameter from the address bar, and shows an "Owner: <name> ✕" chip.'
       ]
     },
+    { type: 'h2', id: 'people-this-week', text: 'This week: what a person did' },
+    {
+      type: 'p',
+      text: 'Administrators and the person’s own manager see a "This week" card on the Overview: records created, moved on, finished and sent back, approvals and rejections, comments and imports over the last 7 days, the collections the work went to, and up to ten records (finished and approved first). It is built from the activity log, workflow history, approval decisions, comments and import jobs, and narrowed to what the VIEWER may open — a record you cannot read is not counted, listed or named, and comment text and field values are never read. Records show by their display label only where you may read every field of the collection; otherwise as `#id`. "Summarise" adds two to four plain lines written by AI from that same narrowed payload (the person’s name is not sent).'
+    },
+    {
+      type: 'pre',
+      code: `GET /api/users/:id/activity-summary?days=7[&ai=1]   (admin, or the person's manager)
+→ 200 { "data": { "figures": { "created", "updated", "moved", "completed", "sent_back", "approved", "rejected", "comments", "imports", … }, "by_collection": [...], "highlights": [...], "summary": "- …" | null } }
+→ 403 NOT_THEIR_MANAGER`
+    },
     { type: 'h2', id: 'people-compare', text: 'Compare and copy access' },
     {
       type: 'p',

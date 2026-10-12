@@ -750,6 +750,9 @@ export async function autoJoinDefaultChannels(user: User): Promise<void> {
       continue // already recorded by a concurrent request
     }
     const existing = await db('nivaro_chat_memberships').where({ user: user.id, room }).first()
+    // A channel holding the assistant's ops posts only gains administrators (#1967).
+    const { nonAdminsFor } = await import('./ops-room-guard.js')
+    if (!existing && (await nonAdminsFor(room, [String(user.id)])).length) continue
     if (!existing) {
       await db('nivaro_chat_memberships')
         .insert({ user: user.id, room, joined_at: new Date(), last_read_at: new Date() })

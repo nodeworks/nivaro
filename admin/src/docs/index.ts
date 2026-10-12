@@ -290,6 +290,7 @@ import {
   deploysVersionsDocs,
   instanceOverridesDocs,
   mailHarnessDocs,
+  opsAssistantDocs,
   opsConsoleDocs
 } from './sections/ops-observability.js'
 import {
@@ -860,6 +861,7 @@ export const navSections: NavGroup[] = [
       dbTuning,
       configReviewDocs,
       opsConsoleDocs,
+      opsAssistantDocs,
       deploysVersionsDocs,
       instanceOverridesDocs,
       mailHarnessDocs,
