@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { parseRefusal } from '../lib/parse-refusal.js'
@@ -6,6 +7,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { instanceScope } from '../services/api-log-instances.js'
 import { recordReplayRoot } from '../services/chain-roots.js'
+import { applyRequestFilters, cleanLogFilter, type LogGroup } from '../services/log-filters.js'
 import { queryIsReplayable } from '../services/secret-mask.js'
 
 // The parser lives in lib/ now (the Traffic Map's caller panel shares it); kept here for callers.
@@ -21,6 +23,94 @@ function parseHours(raw: string | undefined): number {
 
 function since(hours: number): Date {
   return new Date(Date.now() - hours * 60 * 60 * 1000)
+}
+
+/** Top 20 callers or paths under a request-list filter. */
+async function rankRequests(base: Knex.QueryBuilder, group: LogGroup) {
+  const errors = db.raw('SUM(CASE WHEN l.status >= 400 THEN 1 ELSE 0 END) as errors')
+  if (group === 'path') {
+    const rows = (await base
+      .clone()
+      .select('l.method', 'l.path')
+      .count('* as calls')
+      .select(errors)
+      .groupBy('l.method', 'l.path')
+      .orderBy('calls', 'desc')
+      .limit(20)) as Array<Record<string, unknown>>
+    return rows.map((r) => ({
+      key: `${r.method} ${r.path}`,
+      label: `${r.method} ${r.path}`,
+      calls: Number(r.calls) || 0,
+      errors: Number(r.errors) || 0
+    }))
+  }
+  const rows = (await base
+    .clone()
+    .select('l.auth', 'l.user', 'l.api_key_id')
+    .count('* as calls')
+    .select(errors)
+    .groupBy('l.auth', 'l.user', 'l.api_key_id')
+    .orderBy('calls', 'desc')
+    .limit(20)) as Array<Record<string, unknown>>
+  const userIds = [
+    ...new Set(
+      rows
+        .map((r) => r.user)
+        .filter(Boolean)
+        .map(String)
+    )
+  ]
+  const keyIds = [
+    ...new Set(
+      rows
+        .map((r) => r.api_key_id)
+        .filter((v) => v != null)
+        .map(Number)
+    )
+  ]
+  const [users, keys] = await Promise.all([
+    userIds.length
+      ? (db('nivaro_users')
+          .whereIn('id', userIds)
+          .select('id', 'first_name', 'last_name', 'email') as Promise<
+          Array<Record<string, unknown>>
+        >)
+      : Promise.resolve([] as Array<Record<string, unknown>>),
+    keyIds.length
+      ? (db('nivaro_api_keys').whereIn('id', keyIds).select('id', 'name') as Promise<
+          Array<Record<string, unknown>>
+        >)
+      : Promise.resolve([] as Array<Record<string, unknown>>)
+  ])
+  const userName = new Map(
+    users.map((u) => [
+      String(u.id).toUpperCase(),
+      `${u.first_name ?? ''} ${u.last_name ?? ''}`.trim() || String(u.email ?? '')
+    ])
+  )
+  const keyName = new Map(keys.map((k) => [Number(k.id), String(k.name ?? '')]))
+  return rows.map((r) => {
+    const key =
+      r.api_key_id != null
+        ? `key:${r.api_key_id}`
+        : r.user
+          ? `user:${String(r.user).toUpperCase()}`
+          : `anon:${r.auth ?? 'none'}`
+    const label =
+      r.api_key_id != null
+        ? keyName.get(Number(r.api_key_id)) || `API key #${r.api_key_id}`
+        : r.user
+          ? userName.get(String(r.user).toUpperCase()) || `#${String(r.user).slice(0, 8)}`
+          : 'Anonymous'
+    return {
+      key,
+      label,
+      user: r.user ? String(r.user) : null,
+      api_key_id: r.api_key_id != null ? Number(r.api_key_id) : null,
+      calls: Number(r.calls) || 0,
+      errors: Number(r.errors) || 0
+    }
+  })
 }
 
 function percentile(sorted: number[], pct: number): number {
@@ -438,50 +528,24 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
   // Filters: hours, path (contains), method, status (exact or '4xx'/'5xx'),
   // user (id), api_key (id), auth (comma list of session|token|api_key|
   // masquerade|none), inbound=1 (= auth in token,api_key — every caller that
-  // is not a person's browser session), page/limit (cap 200).
+  // is not a person's browser session), from/to, page/limit (cap 200), and
+  // group=caller|path (#1914: the top 20 instead of the rows).
   app.get('/requests', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as Record<string, string | undefined>
     const hours = parseHours(q.hours)
     const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
     const page = Math.max(1, Number(q.page) || 1)
     const sc = await instanceScope(q)
-    const base = sc.apply(
-      db('nivaro_api_logs as l').where('l.created_at', '>=', since(hours)),
-      'l.instance'
-    )
-    if (q.path) {
-      const esc = q.path.replace(/[%_[]/g, (m) => `[${m}]`)
-      void base.where('l.path', 'like', `%${esc}%`)
+    // One compile for the list, its ranking and the alert rules saved from a
+    // question (#1914, #1960): services/log-filters.ts.
+    const filter = cleanLogFilter({ ...q, target: 'requests', hours })
+    const base = applyRequestFilters(sc.apply(db('nivaro_api_logs as l'), 'l.instance'), filter)
+
+    // #1914 — rank instead of list: who called most, or which paths.
+    if (filter.group) {
+      const top = await rankRequests(base, filter.group)
+      return reply.send({ data: [], groups: top, total: top.reduce((n, g) => n + g.calls, 0) })
     }
-    if (q.method) void base.where('l.method', q.method.toUpperCase())
-    if (q.status) {
-      const m = /^([1-5])xx$/i.exec(q.status)
-      if (m) {
-        const lo = Number(m[1]) * 100
-        void base.where('l.status', '>=', lo).andWhere('l.status', '<', lo + 100)
-      } else if (/^\d{3}$/.test(q.status)) void base.where('l.status', Number(q.status))
-    }
-    if (q.user) void base.where('l.user', q.user)
-    if (q.api_key) void base.where('l.api_key_id', Number(q.api_key))
-    if (q.inbound === '1' || q.inbound === 'true') {
-      void base.whereIn('l.auth', ['token', 'api_key'])
-    } else if (q.auth) {
-      const kinds = q.auth
-        .split(',')
-        .map((v) => v.trim())
-        .filter((v) => ['session', 'token', 'api_key', 'masquerade', 'none'].includes(v))
-      if (kinds.length) void base.whereIn('l.auth', kinds)
-    }
-    if (q.errors === '1') void base.where('l.status', '>=', 400)
-    // #1090 — a time window around one request (the Traffic Map links a ticker error here).
-    const at = (v: string | undefined) => {
-      const d = v ? new Date(v) : null
-      return d && !Number.isNaN(d.getTime()) ? d : null
-    }
-    const from = at(q.from)
-    const to = at(q.to)
-    if (from) void base.where('l.created_at', '>=', from)
-    if (to) void base.where('l.created_at', '<=', to)
 
     const totalRow = (await base.clone().count('* as c').first()) as { c: number } | undefined
     const withQuery = await hasColumn('nivaro_api_logs', 'query')

@@ -178,7 +178,7 @@ export const opsConsoleDocs: DocSection = {
       items: [
         'Log tail — the last 2,000 log lines from this replica, held in memory (nothing is persisted), auto-refreshing every 10 seconds with level filters and a plain-text search. It captures structured logger output; anything printed with bare console.log goes to stdout only and will not appear here.',
         'Search the tail with a regular expression (the .* toggle, case-insensitive; an invalid pattern falls back to a plain substring match) and bound it with since / until — an ISO datetime, epoch milliseconds, or the relative forms now-15m, now-2h, now-1d (#82).',
-        'Log alert rules — a rule is a name plus a regular expression (optionally with a minimum level). When a log line matches, an issue is raised in the Issue Log; a 5-minute per-rule cooldown keeps a noisy line from raising the same issue every second. Rules apply as lines arrive, on every replica.',
+        'Log alert rules — a rule is a name plus a regular expression (optionally with a minimum level). When a log line matches, an issue is raised in the Issue Log; a 5-minute per-rule cooldown keeps a noisy line from raising the same issue every second. Rules apply as lines arrive, on every replica. A rule may also carry a threshold ("10 matches in 15 minutes") and its own cooldown, and a rule saved from Ask the logs can watch the request log instead — see Ops assistant.',
         'Keep patterns simple: patterns longer than 200 characters, or ones using nested quantifiers (the shapes that can hang a regex engine), are accepted but quietly never match — if a rule seems inert, shorten and simplify its pattern.',
         'Silent failures — a counter panel for deliberate catch-and-continue sites in the code, showing how often each has fired since this process started. A site firing 50 times in an hour raises an issue on its own.'
       ]
@@ -226,6 +226,66 @@ export const opsConsoleDocs: DocSection = {
         'Restart — the Restart button requires a typed reason (audit-logged) and is refused while work is mid-run: running background jobs, staged imports, or processing collection imports each block it, and the refusal names what is running. The process exits cleanly and relies on the host’s restart policy to come back.',
         'Follow a user — pick a person and their next 50 requests are traced in full detail (per-phase waterfalls), regardless of how fast they are. Traces appear on the API Analytics page; a follow expires after an hour on its own.',
         'Heap snapshot — captures a V8 heap snapshot of this replica and downloads it for analysis in Chrome DevTools. The file lives in the process’s temp directory, so download it right away — a restart discards it.'
+      ]
+    }
+  ]
+}
+
+export const opsAssistantDocs: DocSection = {
+  id: 'ops-assistant',
+  label: 'Ops assistant',
+  content: [
+    { type: 'h1', id: 'ops-assistant', text: 'Ops assistant' },
+    {
+      type: 'p',
+      text: 'Administrator tools that use AI to read operations data — never to change it on its own. Ask the logs turns a question into the request list’s own filters; log alerts can be saved from a question or accepted from suggestions; in an admin-only chat channel the assistant answers from live operations data and proposes actions as approval cards; incident mode keeps a running thread in the ops channel.'
+    },
+    { type: 'h2', id: 'ops-ask-logs', text: 'Ask the logs' },
+    {
+      type: 'p',
+      text: 'On API Analytics and the Ops Console: type "errors for Beth yesterday afternoon" or "who called /items/orders most today". The question becomes the same filter object the request list uses (path, method, status class, caller, auth kind, errors, a time window, or "rank by caller / path"; or level + text over the server log). The filter shows as chips before anything runs — take any chip away. Run reads the normal admin routes (`GET /api/api-analytics/requests`, which now takes `group=caller|path` for a top-20 ranking, or `GET /api/ops-logs/tail`); "Open in the request list" fills the full list below. A person named in the question is matched to accounts on the server; when several match, pick one.'
+    },
+    {
+      type: 'note',
+      text: 'What reaches the AI provider: the question (scrubbed of tokens and secrets), the filter’s field names and allowed values, and the current time and your time zone. Never a log line, a path list or a list of people.'
+    },
+    {
+      type: 'pre',
+      code: `POST /api/ops-logs/ask { "question": "errors for Beth yesterday afternoon" }   (admin)
+→ 200 { "data": { "filter": { "target": "requests", "errors": true, "user": "<id>", "user_label": "Beth Ng", "from": "…", "to": "…" },
+                  "chips": [...], "summary": "…", "person_query": null, "people": [] } }`
+    },
+    { type: 'h2', id: 'ops-log-alerts', text: 'Alerts from a question, and suggested alerts' },
+    {
+      type: 'ul',
+      items: [
+        '"Save as alert" stores the question’s filter as a log alert rule with a threshold, a window and a cooldown ("10 matches in 15 minutes, then quiet for 60"). A request-log rule is checked every 5 minutes (`log-alert-requests` job) across every server, against its own window — the question’s time words do not carry over; development instances never count. A server-log rule keeps working on each server as lines arrive.',
+        'Suggested log alerts (Ops Console) lists errors that keep coming back with no rule watching them: failing requests over the last 24 hours that happened in at least two different hours, and error lines in this server’s log seen in at least two different minutes. Each comes with the filter or pattern, a threshold (about twice the busiest quarter-hour) and a cooldown; Accept saves it as shown (origin "suggested"), Dismiss hides it in your browser. No AI is involved.',
+        'Rules: `POST /api/ops-logs/rules { name, pattern?, level?, filters?, threshold?, window_minutes?, cooldown_minutes?, origin? }`, `PATCH /api/ops-logs/rules/:id { is_active?, threshold?, window_minutes?, cooldown_minutes? }`, `GET /api/ops-logs/rule-suggestions`. Filters, thresholds and cooldowns need migration 442 (409 MIGRATION_PENDING before it).'
+      ]
+    },
+    { type: 'h2', id: 'ops-chat-tools', text: 'The assistant in an ops channel' },
+    {
+      type: 'p',
+      text: 'In an admin-only channel — a private or admin-role channel whose every member is an active administrator, checked against the database each time a question is asked — an administrator can mention the assistant: "anything failing right now?", "why is the queue slow?". It reads request volume and errors, slow paths, circuit breakers, open issues, running / failed / paused background jobs, recent imports, failed partner pushes and readiness. In any other room, or for anyone who is not an administrator, the tools are not offered and a call is refused.'
+    },
+    {
+      type: 'p',
+      text: 'It may propose one action as an approval card: pause a background job, refuse or rate-limit a noisy caller or entity for some minutes (a circuit breaker), retry a failed partner push, or turn incident mode on or off. Nothing runs until an administrator presses Approve. Approval re-checks the approver and runs the action through the same admin route a person would use (`/api/cron/:id/pause`, `/api/traffic-map/breakers`, `/api/erp-submissions/:id/retry`, `/api/ops-assistant/incident`), as the approver; one decision per card; every proposal, approval and dismissal is logged as activity, and the outcome is posted under the card. People who are not administrators see only a link.'
+    },
+    {
+      type: 'note',
+      text: 'What reaches the AI provider from an ops channel: counts, method + path patterns (ids replaced by *), job ids and labels, issue titles, collection names and submission ids, scrubbed of tokens. Never request bodies, record values or people’s names.'
+    },
+    { type: 'h2', id: 'ops-incident-threads', text: 'Incident mode and incident threads' },
+    {
+      type: 'ul',
+      items: [
+        'Pick the ops channel on the Ops Console (it must be admin-only; `PUT /api/ops-assistant/channel { room }`). If it later stops being admin-only, threads go quiet.',
+        'The ops channel, and any channel already holding assistant ops posts, only ever gains active administrators: joining, adding, bulk-adding and default-role auto-join refuse anyone else (403 `OPS_CHANNEL_ADMINS_ONLY`), and the channel cannot be opened to everyone or to a non-admin role. Every assistant ops post is flagged, and message lists, search, mentions, pins, saved messages and room summaries leave flagged posts out for anyone who is not an administrator.',
+        'Start incident mode from the Ops Console or an approved card (`POST /api/ops-assistant/incident { on: true, title }`). The assistant opens a thread in the ops channel and, every 2 minutes (`ops-incident-updates` job), posts what changed: new issues, server errors starting, rising, falling, recovering — plus every approved action. Ending it posts a summary: duration, the 5-minute error peak, issues seen and actions taken.',
+        'A critical alert (a new critical issue, or a critical integration signal with new rows) opens its own alert thread when no incident is on, feeds the incident thread when one is, and an alert thread closes with a summary after 30 quiet minutes.',
+        'Threads live in `nivaro_ops_incidents` (migration 442); `GET /api/ops-assistant/incident` returns the current one and the last ten.'
       ]
     }
   ]

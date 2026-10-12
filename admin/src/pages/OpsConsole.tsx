@@ -4,6 +4,11 @@ import { useState } from 'react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ChatHealthCard } from '@/components/chat-health-card'
+import {
+  AskTheLogsPanel,
+  IncidentModeCard,
+  LogRuleSuggestionsCard
+} from '@/components/ops-assistant-panels'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -14,8 +19,8 @@ import {
   CommandList
 } from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
-import { SimpleSelect } from '@/components/ui/simple-select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 
 /**
@@ -140,6 +145,12 @@ export function OpsConsolePage() {
             pattern: string
             is_active: boolean
             last_matched_at: string | null
+            // #1960 (migration 442) — a saved "Ask the logs" filter + limits.
+            filters?: { target?: string; [k: string]: unknown } | null
+            threshold?: number | null
+            window_minutes?: number | null
+            cooldown_minutes?: number | null
+            origin?: string | null
           }>
         }>('/ops-logs/rules')
         .then((r) => r.data.data)
@@ -303,6 +314,7 @@ export function OpsConsolePage() {
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-8 dark:bg-background'>
         <div className='space-y-5'>
+          <AskTheLogsPanel />
           <Card
             title='Log tail'
             sub='This replica, pino lines only (console.* goes to stdout). Auto-refreshes.'
@@ -381,7 +393,27 @@ export function OpsConsolePage() {
                   <div key={r.id} className='flex items-center gap-2 text-[12px]'>
                     <span className='min-w-0 flex-1'>
                       <b>{r.name}</b>{' '}
-                      <code className='font-mono text-[11px] text-slate-500'>/{r.pattern}/i</code>
+                      {r.filters && r.filters.target !== 'log' ? (
+                        <code className='font-mono text-[11px] text-slate-500'>
+                          requests{' '}
+                          {Object.entries(r.filters)
+                            .filter(([k, v]) => k !== 'target' && k !== 'user_label' && v)
+                            .map(([k, v]) => `${k}=${String(v)}`)
+                            .join(' ')}
+                        </code>
+                      ) : (
+                        <code className='font-mono text-[11px] text-slate-500'>/{r.pattern}/i</code>
+                      )}
+                      {r.threshold && r.threshold > 1 ? (
+                        <span className='ml-1.5 text-[11px] text-slate-400'>
+                          ≥{r.threshold} in {r.window_minutes ?? 15} min
+                        </span>
+                      ) : null}
+                      {r.origin && r.origin !== 'manual' && (
+                        <span className='ml-1.5 rounded bg-slate-100 px-1 text-[10px] text-slate-500 dark:bg-muted'>
+                          {r.origin === 'ask' ? 'from a question' : 'suggested'}
+                        </span>
+                      )}
                       {r.last_matched_at && (
                         <span className='ml-1.5 text-[11px] text-amber-600'>
                           last match {new Date(r.last_matched_at).toLocaleString()}
@@ -458,6 +490,11 @@ export function OpsConsolePage() {
                 </div>
               )}
             </Card>
+          </div>
+
+          <div className='grid gap-5 xl:grid-cols-2'>
+            <LogRuleSuggestionsCard />
+            <IncidentModeCard />
           </div>
 
           <Card

@@ -20,6 +20,7 @@ import { CompareAccessCard } from './PersonCompare'
 import { TeamLoadCard, WhyCard, WorkingOnCard } from './PersonExtras'
 import { PersonHeader } from './PersonHeader'
 import { AboutCard, AvailabilityCard, PeopleCard, ResponsibilitiesCard } from './PersonOverview'
+import { PersonWeekCard } from './PersonWeek'
 import { useInvalidatePerson, usePersonProfile } from './types'
 
 export type PersonProfileTab = 'overview' | 'access' | 'activity' | 'tools'
@@ -68,6 +69,11 @@ export function PersonProfile({
     )
   }
 
+  // #1968 — "This week": administrators and the person's own manager.
+  const isTheirManager =
+    !!auth?.userId &&
+    !!profile.manager?.id &&
+    String(profile.manager.id).toUpperCase() === String(auth.userId).toUpperCase()
   const overview = (
     <div className='grid gap-4 lg:grid-cols-2'>
       <div className='space-y-4'>
@@ -106,6 +112,7 @@ export function PersonProfile({
           <AvailabilityCard profile={profile} />
         )}
         <ResponsibilitiesCard profile={profile} isAdmin={isAdmin} />
+        {(isAdmin || isTheirManager) && <PersonWeekCard profile={profile} />}
       </div>
     </div>
   )
