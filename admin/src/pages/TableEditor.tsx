@@ -2,6 +2,7 @@ import type { Modifier } from '@dnd-kit/core'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
 import { LayoutReviewSection } from '@/components/ai-layout-review'
+import { ExplainButton } from '@/components/explain-button'
 import {
   closestCenter,
   DndContext,
@@ -84,7 +85,7 @@ import {
   useRef,
   useState
 } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
@@ -19873,6 +19874,12 @@ function LayoutsTab({
                       />
                       <LayoutVersionsSection layoutId={selected.id} />
                       <LayoutReviewSection layoutId={selected.id} />
+                      <ExplainButton
+                        key={selected.id}
+                        kind='config'
+                        params={{ type: 'layout', id: selected.id }}
+                        label='Describe this layout'
+                      />
                       <PreviewAsRoleSection
                         tableName={tableName}
                         roles={roles}
@@ -25904,6 +25911,24 @@ export function TableEditorPage() {
   const goBack = useGoBack('/data-model')
   const qc = useQueryClient()
   const [tab, setTab] = usePersistedTab<Tab>(`nvr_tab_tableeditor_${table ?? ''}`, 'fields')
+  // Deep links (config review findings) open a named tab: ?tab=rules.
+  const [searchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  useEffect(() => {
+    const known: Tab[] = [
+      'fields',
+      'relations',
+      'attributes',
+      'groups',
+      'behavior',
+      'rules',
+      'imports',
+      'tree',
+      'content',
+      'settings'
+    ]
+    if (tabParam && known.includes(tabParam as Tab)) setTab(tabParam as Tab)
+  }, [tabParam, setTab])
   const { user } = useAuth()
   const isAdmin = (user as { is_admin?: boolean } | null)?.is_admin ?? false
   const [showDrop, setShowDrop] = useState(false)

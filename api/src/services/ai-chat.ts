@@ -1471,7 +1471,7 @@ async function runChatTool(
         }
       }
       const { summarizePersonAccess } = await import('./person-access.js')
-      const r = await summarizePersonAccess(targetId, { selfView: !askerAdmin })
+      const r = await summarizePersonAccess(targetId, { viewerIsAdmin: askerAdmin })
       if (!r) throw new Error('User not found')
       return {
         result: {

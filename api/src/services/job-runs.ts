@@ -5,7 +5,7 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { getApp, getIo } from './io-holder.js'
-import { currentTenantKey } from './tenant-rooms.js'
+import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * The one funnel for background-execution history. Wrap any cron/backfill/
@@ -103,13 +103,18 @@ const LOG_LINE_MAX = 500
 /** run id → its recent lines on THIS node (the Redis list is the cross-node copy). */
 const logMemory = new Map<string, { at: number; seq: number; lines: JobLogLine[] }>()
 
-const logKey = (id: number) => `${currentTenantKey() || '-'}:${id}`
+const logKey = (id: number, tenant: string = currentTenantKey()) => `${tenant || '-'}:${id}`
 
 /** Append a line to a run's log and tell the Background Jobs room. Best-effort. */
-function appendJobLog(id: number | null, line: string, level: JobLogLevel = 'info'): void {
+function appendJobLog(
+  id: number | null,
+  line: string,
+  level: JobLogLevel = 'info',
+  tenant: string = currentTenantKey()
+): void {
   if (id == null) return
   try {
-    const key = logKey(id)
+    const key = logKey(id, tenant)
     let slot = logMemory.get(key)
     if (!slot) {
       slot = { at: Date.now(), seq: 0, lines: [] }
@@ -139,7 +144,7 @@ function appendJobLog(id: number | null, line: string, level: JobLogLevel = 'inf
         .exec()
         .catch(() => {})
     }
-    emitJobEvent({ id, kind: 'log', log: entry }, 'job:log')
+    emitJobEvent({ id, kind: 'log', log: entry }, 'job:log', tenant)
   } catch {
     /* decoration */
   }
@@ -170,9 +175,13 @@ function progressLine(blob: Record<string, unknown>): string {
     .join(', ')
 }
 
-function emitJobEvent(payload: Record<string, unknown>, event = 'job:update'): void {
+function emitJobEvent(
+  payload: Record<string, unknown>,
+  event = 'job:update',
+  tenant: string = currentTenantKey()
+): void {
   try {
-    getIo()?.to('watch:jobs').emit(event, payload)
+    getIo()?.to(tenantScopedRoom('watch:jobs', tenant)).emit(event, payload)
   } catch {
     /* decoration */
   }
@@ -196,6 +205,9 @@ export async function startJobRun(
   }
 ): Promise<JobRunHandle> {
   const startedAt = new Date()
+  // The run's own tenant: later log lines (cron callbacks, timers) key by it, not by whoever is current.
+  const tenant = currentTenantKey()
+  const emitRun = (payload: Record<string, unknown>) => emitJobEvent(payload, 'job:update', tenant)
   let id: number | null = null
   try {
     const origin = await originFields(jobId, opts?.trigger, opts?.leaseHolder)
@@ -220,8 +232,8 @@ export async function startJobRun(
   } catch {
     // degraded bookkeeping — the job itself proceeds
   }
-  emitJobEvent({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
-  appendJobLog(id, `Started${opts?.label ? `: ${opts.label}` : ''}`)
+  emitRun({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
+  appendJobLog(id, `Started${opts?.label ? `: ${opts.label}` : ''}`, 'info', tenant)
 
   const finish = async (patch: Record<string, unknown>) => {
     if (id == null) return
@@ -248,23 +260,23 @@ export async function startJobRun(
         .where('id', id)
         .update({ progress: JSON.stringify(blob).slice(0, 4000) })
         .catch(() => {})
-      emitJobEvent({ id, kind, job_id: jobId, status: 'running', progress: blob })
+      emitRun({ id, kind, job_id: jobId, status: 'running', progress: blob })
       if (Date.now() - lastProgressLine >= 2000) {
         lastProgressLine = Date.now()
         const text = progressLine(blob)
-        if (text) appendJobLog(id, `Progress: ${text}`)
+        if (text) appendJobLog(id, `Progress: ${text}`, 'info', tenant)
       }
     },
     log(line, level = 'info') {
-      appendJobLog(id, line, level)
+      appendJobLog(id, line, level, tenant)
     },
     complete: async (outcome) => {
       await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null })
-      appendJobLog(id, `Completed${outcome ? `: ${outcome}` : ''}`)
-      emitJobEvent({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
+      appendJobLog(id, `Completed${outcome ? `: ${outcome}` : ''}`, 'info', tenant)
+      emitRun({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
     },
     fail: async (err) => {
-      appendJobLog(id, `Failed: ${errorText(err, 300)}`, 'error')
+      appendJobLog(id, `Failed: ${errorText(err, 300)}`, 'error', tenant)
       await finish({
         status: 'error',
         error:
@@ -273,7 +285,7 @@ export async function startJobRun(
             4000
           )
       })
-      emitJobEvent({
+      emitRun({
         id,
         kind,
         job_id: jobId,

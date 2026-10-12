@@ -129,6 +129,39 @@ useLiveRecordEvent('record:integrity', 'orders', id, () => refetchIntegrity())`
         'Without a host realtime adapter the collection hooks do nothing and the panel behaves as before. Hosts whose record room rides a separate socket forward its events with `relayLiveEvent(event, payload)`.',
         'Never trust a payload value — re-read through your own permission-checked query.'
       ]
+    },
+    { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
+    {
+      type: 'p',
+      text: 'Readiness, the Issue log, the Support desk, Team pages and the person page team-load card, My Work, the Delegation console and Broadcast receipts refresh on their own when what they show changes. The server sends one small `ops:changed {topic}` event to a topic room; the page re-reads through its normal permission-checked route. A poke never names a row, a person or a value, and a burst of writes is one poke.'
+    },
+    {
+      type: 'table',
+      head: ['Topic', 'Who may join', 'What moves it'],
+      rows: [
+        ['`readiness`', 'Administrators', 'A finished run of the checks (the report rides the event, so other open pages show it without re-running) and a fix finishing'],
+        ['`issues`', 'Signed-in users', 'Any write to the issue log: new issues appear at the top, occurrence counts tick'],
+        ['`issue:<id>`', 'Administrators', 'Each new occurrence of that issue: the person (id), route and build, streamed into the open issue'],
+        ['`support`', 'Signed-in users', 'Tickets, claims, replies and status moves'],
+        ['`team`', 'Signed-in users', 'Owner changes, tasks, SLA acknowledgements and escalations'],
+        ['`my-work`', 'Signed-in users', 'Owner changes, tasks, approvals; new notifications arrive on your own room. New rows highlight briefly'],
+        ['`delegation`', 'Signed-in users', 'Out-of-office, delegate and owner-seat changes'],
+        ['`broadcasts`', 'Administrators', 'Deliveries, acknowledgements and notifications being read']
+      ]
+    },
+    {
+      type: 'pre',
+      code: `import { useLiveOps, useFreshIds } from '@nivaro/shared'
+
+// Refetch when the topic pokes (inert without a host realtime adapter):
+useLiveOps('support', () => queryClient.invalidateQueries({ queryKey: ['support-tickets'] }))
+
+// A short highlight for rows that arrived after the first load:
+const fresh = useFreshIds(rows.map((r) => r.id))`
+    },
+    {
+      type: 'note',
+      text: 'Writes are noticed at the database driver (the same seam that signals "who owns what changed"), so raw SQL, procedures and imports poke the pages too. Pages keep a slow safety poll in case an event is missed.'
     }
   ]
 }
