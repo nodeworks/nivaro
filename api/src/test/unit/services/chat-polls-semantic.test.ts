@@ -69,6 +69,20 @@ describe('embedding scope', () => {
   })
 })
 
+describe('embedding scope override', () => {
+  it('never embeds a DM, even with CHAT_MEANING_ROOMS=all', async () => {
+    process.env.CHAT_MEANING_ROOMS = 'all'
+    try {
+      expect(await roomMayBeEmbedded('dm:A:B')).toBe(false)
+      expect(await roomMayBeEmbedded('global')).toBe(true)
+      process.env.CHAT_MEANING_ROOMS = 'off'
+      expect(await roomMayBeEmbedded('global')).toBe(false)
+    } finally {
+      delete process.env.CHAT_MEANING_ROOMS
+    }
+  })
+})
+
 describe('chat command registry', () => {
   beforeEach(() => {
     _resetChatCommands()

@@ -626,6 +626,8 @@ export async function tasksRoutes(app: FastifyInstance) {
     await logTaskEvent(id, me, `Picked up by ${names.get(me.toUpperCase()) ?? 'someone'}`, req)
     const updated = (await db('nivaro_tasks').where({ id }).first()) as TaskRow
     emitTaskEvent(app, 'task-reassigned', updated, { actor: me, previous_assignee: null })
+    // #1924: the record's Tasks section shows who picked it up.
+    announceRecordAspect(updated.collection, updated.item, '$tasks')
     return reply.send({ data: updated })
   })
 

@@ -323,7 +323,9 @@ export async function commentsRoutes(app: FastifyInstance) {
       if (!REACTION_EMOJI.has(emoji)) return reply.code(400).send({ error: 'Unknown reaction' })
       const comment = (await db('nivaro_comments')
         .where('id', req.params.id)
-        .first('id', 'collection')) as { id: string; collection: string } | undefined
+        .first('id', 'collection', 'item')) as
+        | { id: string; collection: string; item?: string | number | null }
+        | undefined
       if (!comment) return reply.code(404).send({ error: 'Comment not found' })
       if (!req.isAdmin && !(await can(req.user!, 'read', comment.collection))) {
         return reply.code(403).send({ error: 'Forbidden' })
@@ -333,11 +335,13 @@ export async function commentsRoutes(app: FastifyInstance) {
         .first('id')
       if (existing) {
         await db('nivaro_comment_reactions').where('id', existing.id).del()
+        announceRecordAspect(comment.collection, comment.item, '$comments')
         return { data: { reacted: false } }
       }
       await db('nivaro_comment_reactions')
         .insert({ comment: comment.id, user: req.user!.id, emoji, created_at: new Date() })
         .catch(() => {}) // unique race — a double-click is one reaction
+      announceRecordAspect(comment.collection, comment.item, '$comments')
       return { data: { reacted: true } }
     }
   )
@@ -362,6 +366,7 @@ export async function commentsRoutes(app: FastifyInstance) {
         .first('id')
       if (existing) {
         await db('nivaro_entry_reactions').where('id', existing.id).del()
+        announceRecordAspect(collection, item, '$comments')
         return { data: { reacted: false } }
       }
       await db('nivaro_entry_reactions')
@@ -374,6 +379,7 @@ export async function commentsRoutes(app: FastifyInstance) {
           created_at: new Date()
         })
         .catch(() => {})
+      announceRecordAspect(collection, item, '$comments')
       return { data: { reacted: true } }
     }
   )

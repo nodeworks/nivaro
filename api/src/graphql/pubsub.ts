@@ -7,11 +7,20 @@ class PubSub {
   private em = new EventEmitter()
 
   constructor() {
-    this.em.setMaxListeners(500)
+    // Live queries (#2126) hold one listener per collection they read, up to their process cap.
+    this.em.setMaxListeners(2000)
   }
 
   publish<T>(topic: string, payload: T): void {
     this.em.emit(topic, payload)
+  }
+
+  /** Listen to a topic with a plain callback (live queries change topics as they re-run). */
+  on<T>(topic: string, handler: Handler<T>): () => void {
+    this.em.on(topic, handler)
+    return () => {
+      this.em.removeListener(topic, handler)
+    }
   }
 
   asyncIterator<T>(topic: string): AsyncIterableIterator<T> {

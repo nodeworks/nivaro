@@ -870,6 +870,99 @@ export const sdkReactLayout: DocSection = {
   ]
 }
 
+export const sdkReactLive: DocSection = {
+  id: 'sdk-react-live',
+  label: 'React — Live Data',
+  content: [
+    { type: 'h1', id: 'sdk-react-live', text: 'SDK — React Live Data (@nivaro/react)' },
+    {
+      type: 'p',
+      text: '`useLiveRecord` and `useLiveList` are react-query reads that stay current. When the host mounts a realtime adapter, other people\'s writes are patched into the cached data in place; without one (or while the socket reconnects) the read polls instead. Nothing to wire by hand: no socket events, no invalidation.'
+    },
+    { type: 'h2', id: 'sdk-react-live-adapter', text: 'Connect the socket once' },
+    {
+      type: 'p',
+      text: '`createSocketRealtime` turns the Socket.io connection your app already holds into the adapter every live surface reads (`RealtimeContext`). Your app keeps owning the socket: it connects, sends `auth {token}` and its `client:hello`. The adapter joins and leaves collection rooms, admin watch rooms and live operations topics (reference counted), joins them again after every reconnect, replays missed events, and raises the same window events the admin app does (`nvr:catchup-full`, `nvr:access-changed`, `nvr:config-update`, `nvr:force-refresh`).'
+    },
+    {
+      type: 'pre',
+      code: `import { io } from 'socket.io-client'
+import { createSocketRealtime, RealtimeContext } from '@nivaro/react'
+
+const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+socket.on('connect', async () => socket.emit('auth', { token: await wsToken() }))
+
+// Once, at module level — the adapter is shared by every component.
+const realtime = createSocketRealtime({ socket })
+
+<NivaroProvider client={client}>
+  <RealtimeContext.Provider value={realtime}>
+    <App />
+  </RealtimeContext.Provider>
+</NivaroProvider>`
+    },
+    {
+      type: 'note',
+      text: 'Shared components (My Work, Notes, tasks, record pages, collection lists, queues) read the same context, so mounting the adapter makes them live too. Set `windowEvents: { forceRefresh: false }` (or another key) when your app already raises that window event itself.'
+    },
+    { type: 'h2', id: 'sdk-react-live-record', text: 'useLiveRecord' },
+    {
+      type: 'pre',
+      code: `const { data: order, deleted, live, isLoading } = useLiveRecord('orders', id, {
+  fields: ['title', 'status', 'customer.name']
+})
+if (deleted) return <p>This order was deleted.</p>`
+    },
+    {
+      type: 'p',
+      text: 'With an explicit `fields` list a change re-reads only the requested fields it touched (`customer` changed → `customer.name` is read again) and merges them into the cached record; a change to a field you did not ask for costs no request. Without `fields` the whole record is re-read, because a virtual computed field may depend on any column. `data` is null when the record does not exist or the viewer cannot read it.'
+    },
+    { type: 'h2', id: 'sdk-react-live-list', text: 'useLiveList' },
+    {
+      type: 'pre',
+      code: `const { data: page, live } = useLiveList('orders', {
+  filter: { status: { _eq: 'open' } },
+  sort: ['-created_at'],
+  fields: ['title', 'status'],
+  limit: 25
+})`
+    },
+    {
+      type: 'table',
+      head: ['Someone else…', 'What the list does'],
+      rows: [
+        ['changes a row on the page', 'Re-reads that row as the viewer under the list\'s own filter and search, and patches it in place.'],
+        ['changes a row so it no longer matches', 'The re-read returns nothing, so the row leaves (a paged list refetches to fill the gap).'],
+        ['creates or changes a record so it now matches', 'Refetches the page quietly; where it belongs in the sort order is the server\'s to decide.'],
+        ['changes a sort field of a row on the page', 'Refetches the page (the order may have moved).'],
+        ['deletes a row on the page', 'Drops it from the cached page.'],
+        ['runs a bulk or raw write', 'Refetches the page quietly.'],
+        ['changes a record the filter cannot see', 'Nothing: an update that touches no field the filter reads cannot bring a record in.'],
+      ]
+    },
+    {
+      type: 'table',
+      head: ['Option', 'Default', 'Meaning'],
+      rows: [
+        ['enabled', 'true', 'Pause the read and the live feed.'],
+        ['pollMs', '30000', 'Poll interval while there is no live socket (0 = never).'],
+        ['safetyPollMs', 'none', 'A slow poll while the socket is live.'],
+        ['debounceMs', '250', 'Events inside this window are handled as one patch.'],
+        ['includeOwn', 'false', 'Also react to this tab\'s own writes (a save never echoes back by default).'],
+        ['fields (useLiveRecord)', 'all', 'Fields to read; enables the partial re-read.'],
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The socket only says THAT a record changed (its id, the action and the changed field names). Values always come from a fresh read through the viewer\'s own permission-checked `/items` route, so row filters, User Scopes and field policies apply exactly as on the first load. A list read always carries `id` (it is added to an explicit `fields` list) so rows can be matched to events. Changes to a related record (a filter on `customer.region`) do not reach a list of orders; pass `safetyPollMs` when that matters.'
+    },
+    {
+      type: 'p',
+      text: 'Query keys are `liveRecordKey(collection, id, fields)` and `liveListKey(collection, query)` — invalidate them yourself after a write if you set `includeOwn: false` and want the list re-sorted at once.'
+    }
+  ]
+}
+
 export const sdkNotifications: DocSection = {
   id: 'sdk-notifications',
   label: 'Notifications & Inbox',
