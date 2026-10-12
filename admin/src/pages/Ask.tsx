@@ -2,6 +2,10 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   AiFeedbackButtons,
   AiMarkdown,
+  type AiPlan,
+  AiPlanCard,
+  type AiPlanSubscribe,
+  AiStepList,
   type AiStreamSubscribe,
   NavigationContext,
   NivaroProvider,
@@ -39,6 +43,8 @@ interface ChatTurn {
   content: string
   trace?: TraceEntry[]
   proposals?: Proposal[]
+  /** Multi-step plans (#1807) — the card re-reads each from the server. */
+  plans?: AiPlan[]
   requestId?: string | null
   playbooksUsed?: number
   /** Served from the answer cache (#723) — when it was first answered. */
@@ -51,6 +57,7 @@ interface ChatBody {
   reply: string
   trace: TraceEntry[]
   proposals?: Proposal[]
+  plans?: AiPlan[]
   request_id?: string | null
   playbooks_used?: number
   cached?: boolean
@@ -62,6 +69,15 @@ interface ChatBody {
 // ai:delta / ai:status / ai:done / ai:error to the user's own room, so every
 // tab of theirs hears it and this one pairs the events to its stream id.
 const subscribeAi: AiStreamSubscribe = (event, handler) => {
+  const s = getSocket()
+  s.on(event, handler)
+  return () => {
+    s.off(event, handler)
+  }
+}
+
+// Plan progress (#2007) rides the same socket: `ai:plan` to the user's room.
+const subscribePlan: AiPlanSubscribe = (event, handler) => {
   const s = getSocket()
   s.on(event, handler)
   return () => {
@@ -269,6 +285,7 @@ function AskPageInner() {
           content: data.reply,
           trace: data.trace,
           proposals: data.proposals,
+          plans: data.plans,
           requestId: data.request_id ?? null,
           playbooksUsed: data.playbooks_used ?? 0,
           cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null,
@@ -444,6 +461,9 @@ function AskPageInner() {
                     {t.proposals?.map((p) => (
                       <ProposalCard key={p.proposal_id} proposal={p} />
                     ))}
+                    {t.plans?.map((p) => (
+                      <AiPlanCard key={p.plan_id} plan={p} subscribe={subscribePlan} />
+                    ))}
                     {t.trace && t.trace.length > 0 && (
                       <div className='mt-2 flex flex-wrap gap-1 border-t border-slate-100 pt-2 dark:border-border'>
                         {t.trace.map((tr, ti) => (
@@ -486,6 +506,7 @@ function AskPageInner() {
           {send.active && (
             <div className='flex justify-start' data-ask-streaming>
               <div className='max-w-[85%] rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13.5px] text-slate-800 dark:border-border dark:bg-card dark:text-slate-200'>
+                <AiStepList steps={send.steps} folded={!!send.text} />
                 {send.narration && (
                   <p
                     className='mb-1 text-[12px] italic text-slate-500 dark:text-slate-400'
@@ -496,13 +517,15 @@ function AskPageInner() {
                 )}
                 {send.text ? (
                   <AiMarkdown content={send.text} />
-                ) : (
+                ) : send.steps.some((st) => st.state === 'running') ? null : (
                   <div className='flex items-center gap-2 text-[13px] text-slate-400'>
                     <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                    {send.status ?? 'Querying your data…'}
+                    {send.steps.length > 0
+                      ? 'Putting the answer together…'
+                      : (send.status ?? 'Querying your data…')}
                   </div>
                 )}
-                {send.text && send.status && (
+                {send.text && send.status && send.steps.some((st) => st.state === 'running') && (
                   <div
                     className='mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400'
                     data-ask-status

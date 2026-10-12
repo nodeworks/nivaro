@@ -5,6 +5,15 @@ export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
 export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  type AiPlan,
+  AiPlanCard,
+  type AiPlanStatus,
+  type AiPlanStep,
+  type AiPlanStepState,
+  type AiPlanSubscribe
+} from './components/ai/AiPlanCard'
+export { AiStepList } from './components/ai/AiStepList'
 export { DataGuideCard } from './components/ai/DataGuideCard'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
@@ -389,6 +398,7 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
   getApiUpdate,

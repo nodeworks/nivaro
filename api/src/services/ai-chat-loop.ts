@@ -23,16 +23,31 @@ export interface ChatLoopCallbacks {
   /** A text delta; `round` tells a client which round it belongs to (a
    *  tool round's text is narration, the final round's text is the answer). */
   onDelta?: (text: string, round: number) => void
-  /** A tool is about to run in `round`. */
-  onStatus?: (status: { round: number; tool: string; text: string }) => void
+  /** A tool is about to run in `round` — then, once it returns, the same
+   *  step again with `done: true` and a short `result` ("42 found") or
+   *  `failed: true` (#1839: the steps list above the answer). */
+  onStatus?: (status: ChatStepStatus) => void
   /** Polled between deltas — true stops the loop at once. */
   shouldStop?: () => boolean
+}
+
+export interface ChatStepStatus {
+  round: number
+  tool: string
+  text: string
+  /** Which tool call of the round (0-based) — pairs a step's start and end. */
+  step?: number
+  done?: boolean
+  failed?: boolean
+  result?: string
 }
 
 export interface ChatLoopResult {
   text: string
   trace: ChatTraceEntry[]
   proposals: Array<Record<string, unknown>>
+  /** Multi-step plans the model proposed (services/ai-plans.ts). */
+  plans: Array<Record<string, unknown>>
   rounds: number
   /** The round cap was hit and the wrap-up call answered instead. */
   truncated: boolean
@@ -78,9 +93,33 @@ export function describeToolCall(tool: string, input: Record<string, unknown>): 
     case 'record_integrity':
     case 'explain_access':
       return `Checking ${name(str('collection')) || 'the record'}…`
+    case 'propose_plan':
+      return 'Drafting a plan for you to approve…'
     default:
       return `Using ${name(tool)}…`
   }
+}
+
+/** The few words after a finished step ("42 found", "3 groups") — read off
+ *  the tool's own summary, so any tool gets one; '' when nothing reads well. */
+export function describeToolResult(tool: string, summary: string): string {
+  const s = summary.trim()
+  if (!s) return ''
+  let m = /^(\d+) of (\d+) row\(s\)/.exec(s)
+  if (m) return `${Number(m[2]).toLocaleString('en-US')} found`
+  m = /^(\d+) row\(s\)/.exec(s.replace(/^[^:]+:\s*/, ''))
+  if (m) return `${Number(m[1]).toLocaleString('en-US')} found`
+  m = /: (\d+) group\(s\)$/.exec(s)
+  if (m) return `${m[1]} group${m[1] === '1' ? '' : 's'}`
+  m = /\) = (.+)$/.exec(s)
+  if (m) {
+    const n = Number(m[1])
+    return Number.isFinite(n) ? n.toLocaleString('en-US', { maximumFractionDigits: 2 }) : m[1]
+  }
+  if (tool === 'propose_action' || tool === 'propose_plan') return 'ready for you to review'
+  m = /^(\d+) (semantic hit|open task|help video|integrity finding)/.exec(s)
+  if (m) return `${m[1]} found`
+  return s.length <= 60 ? s : ''
 }
 
 function textOf(message: Anthropic.Message): string {
@@ -95,6 +134,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const maxTokens = opts.maxTokens ?? 1500
   const trace: ChatTraceEntry[] = []
   const proposals: Array<Record<string, unknown>> = []
+  const plans: Array<Record<string, unknown>> = []
 
   /** One streamed call; text deltas go out as they arrive, `stopped` when
    *  the caller halted it mid-stream (the partial message comes back). */
@@ -153,19 +193,28 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (shouldStop?.())
-      return { text: '', trace, proposals, rounds: round, truncated: false, stopped: true }
+      return { text: '', trace, proposals, plans, rounds: round, truncated: false, stopped: true }
     const { message, stopped, partial } = await call(
       { model, max_tokens: maxTokens, system, tools: CHAT_TOOLS, messages: convo },
       round
     )
     if (stopped)
-      return { text: partial, trace, proposals, rounds: round + 1, truncated: false, stopped: true }
+      return {
+        text: partial,
+        trace,
+        proposals,
+        plans,
+        rounds: round + 1,
+        truncated: false,
+        stopped: true
+      }
 
     if (message.stop_reason !== 'tool_use') {
       return {
         text: textOf(message),
         trace,
         proposals,
+        plans,
         rounds: round + 1,
         truncated: false,
         stopped: false
@@ -174,15 +223,29 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
     convo.push({ role: 'assistant', content: message.content })
     const results: Anthropic.ToolResultBlockParam[] = []
+    let step = -1
     for (const block of message.content) {
       if (block.type !== 'tool_use') continue
+      step++
       const input = (block.input ?? {}) as Record<string, unknown>
-      onStatus?.({ round, tool: block.name, text: describeToolCall(block.name, input) })
+      const text = describeToolCall(block.name, input)
+      onStatus?.({ round, tool: block.name, text, step })
       try {
         const { result, summary } = await executeChatTool(user, block.name, input)
         trace.push({ tool: block.name, input, summary })
+        onStatus?.({
+          round,
+          tool: block.name,
+          text,
+          step,
+          done: true,
+          result: describeToolResult(block.name, summary)
+        })
         if (block.name === 'propose_action' && result && typeof result === 'object') {
           proposals.push(result as Record<string, unknown>)
+        }
+        if (block.name === 'propose_plan' && result && typeof result === 'object') {
+          plans.push(result as Record<string, unknown>)
         }
         results.push({
           type: 'tool_result',
@@ -192,6 +255,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Tool failed'
         trace.push({ tool: block.name, input, summary: `error: ${msg}` })
+        onStatus?.({ round, tool: block.name, text, step, done: true, failed: true })
         results.push({
           type: 'tool_result',
           tool_use_id: block.id,
@@ -200,7 +264,15 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         })
       }
       if (shouldStop?.()) {
-        return { text: '', trace, proposals, rounds: round + 1, truncated: false, stopped: true }
+        return {
+          text: '',
+          trace,
+          proposals,
+          plans,
+          rounds: round + 1,
+          truncated: false,
+          stopped: true
+        }
       }
     }
     convo.push({ role: 'user', content: results })
@@ -223,7 +295,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   } catch (err) {
     opts.warn?.(err, 'AI chat wrap-up call failed')
   }
-  return { text, trace, proposals, rounds: MAX_ROUNDS, truncated: true, stopped }
+  return { text, trace, proposals, plans, rounds: MAX_ROUNDS, truncated: true, stopped }
 }
 
 export { MAX_ROUNDS }

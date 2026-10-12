@@ -36,6 +36,44 @@ export const aiChatDocs: DocSection = {
   ]
 }
 
+export const aiPlansDocs: DocSection = {
+  id: 'ai-plans',
+  label: 'Multi-step Plans',
+  content: [
+    { type: 'h1', id: 'ai-plans', text: 'Multi-step Plans' },
+    {
+      type: 'p',
+      text: 'A request that needs several changes together — "close out the lines on these 12 POs and tell their owners" — comes back from Ask AI as one numbered plan instead of separate proposals. Each step carries its own preview, built as you when the plan is proposed; nothing runs until you approve.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Approve & run all runs every step in order; Run next step runs one and pauses, so you can approve step by step. Every step runs as you through the normal services — permissions, row security, validation, hooks and activity all apply.',
+        'Step kinds: update records (bulk_update), create a record, create a task, create a dashboard, send a message (an in-app notification to named people and/or the current owners of records — owners are resolved again when the step runs), post to a chat room you can see, and run an active manual flow (administrators only).',
+        'A refused step stops the plan with the reason; the steps after it stay pending. A bulk step where some records refuse reports how many and which.',
+        'Conditions: a step can say "only if still in Finance Review" (a filter the records must still match) or "only if the amount is unchanged" (fields that must still hold the value they had when the plan was made). A step whose condition fails is skipped and named in the result; on a bulk update only the records that fail are left out and the rest run.',
+        'While a plan runs, the card shows each step start, finish, fail or skip as it happens, with a running count of records changed.',
+        'Retry: after fixing the cause, Re-check and retry rebuilds the failed step and the ones after it as you now — a bulk step re-reads its filter and, after a partial run, keeps only the records that refused — shows which steps changed, then runs from where the plan stopped.',
+        'While an answer is being built, each tool step is listed as a plain line ("Reading workflows… 42 found") above the answer and folds away once the answer starts.',
+        'A plan nobody started expires after an hour, like a single proposal.'
+      ]
+    },
+    { type: 'h2', id: 'ai-plans-api', text: 'API' },
+    {
+      type: 'pre',
+      code: `GET  /api/ai/plans/step-kinds     the step kinds the model may use
+GET  /api/ai/plans/:id            the plan with each step's state (owner or administrator)
+POST /api/ai/plans/:id/run        {mode: "all" | "next"} → 202; steps run in the background
+POST /api/ai/plans/:id/retry      re-check the failed + remaining steps → status paused
+POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its next step`
+    },
+    {
+      type: 'p',
+      text: 'The chat answer carries proposed plans in `plans` next to `proposals`. Progress is pushed to your Socket.io user room as `ai:plan` ({plan_id, status, records_changed, step, plan}); `ai:status` events of a streamed answer now also arrive with `done: true` and a short `result` when each tool returns. Plans are stored in nivaro_ai_proposals with action_type `plan`.'
+    }
+  ]
+}
+
 export const pipelineSimulatorDocs: DocSection = {
   id: 'pipeline-simulator',
   label: 'Pipeline Simulator',

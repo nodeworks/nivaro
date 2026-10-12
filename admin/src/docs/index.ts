@@ -64,6 +64,7 @@ import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
 import {
   adminI18nDocs,
   aiChatDocs,
+  aiPlansDocs,
   fieldImpactDocs,
   formsV2Docs,
   pipelineHealthDocs,
@@ -605,6 +606,7 @@ export const navSections: NavGroup[] = [
       aiChatDocs,
       aiKnowledgeDocs,
       aiActionsDocs,
+      aiPlansDocs,
       aiOverview,
       aiGenerate,
       aiSummarize,
