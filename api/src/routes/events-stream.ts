@@ -1,18 +1,14 @@
-import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
-import {
-  bindFromRequest,
-  checkBind,
-  encodeBoundToken,
-  parseWsTokenValue,
-  type SocketBind,
-  userWithApiKey
-} from '../services/socket-access.js'
+import { bindFromRequest, checkBind, type SocketBind } from '../services/socket-access.js'
 import { type SseEvent, sseEventForTenant, subscribeSse } from '../services/sse-hub.js'
+import {
+  loadStreamIdentity,
+  mintStreamTicket,
+  redeemStreamTicket
+} from '../services/stream-ticket.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
-import type { User } from '../types.js'
 
 // ─── SSE event stream (#602) ─────────────────────────────────────────────────
 // GET /events/stream — server-sent events of collection changes, fed by the
@@ -36,11 +32,10 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
   app.get('/ticket', { preHandler: [authenticate, requireAuth] }, async (req) => {
     // The ticket remembers what signed this request in (#1719, H1): the stream it opens ends
     // with that session, View-as, token or API key, and acts as the key when it is one.
-    const bind = bindFromRequest(req)
-    if (!bind)
+    // The same ticket opens /events/stream, /graphql/stream and a graphql-ws connection (#1749).
+    const ticket = await mintStreamTicket(app.redis, req)
+    if (!ticket)
       throw Object.assign(new Error('This sign-in cannot open a stream'), { statusCode: 403 })
-    const ticket = randomUUID()
-    await app.redis.setex(`sse:ticket:${ticket}`, 60, encodeBoundToken(String(req.user!.id), bind))
     return { data: { ticket, expires_in: 60 } }
   })
 
@@ -51,27 +46,13 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
     // makes replay impossible, the 60s TTL bounds exposure, and the resolved
     // identity is the ticket minter's own.
     let bind: SocketBind | null = null
-    if (q.ticket && /^[a-f0-9-]{36}$/i.test(q.ticket) && !req.headers.authorization) {
-      const raw = (await app.redis.getdel(`sse:ticket:${q.ticket}`).catch(() => null)) as
-        | string
-        | null
-      const minted = raw ? parseWsTokenValue(raw) : null
-      // A ticket with no bind (an older API's bare user id) opens nothing.
-      if (
-        minted?.userId &&
-        minted.bind &&
-        !(await checkBind(app.redis, minted.userId, minted.bind))
-      ) {
-        const { db } = await import('../db/index.js')
-        let row = (await db('nivaro_users').where({ id: minted.userId }).first()) as
-          | User
-          | undefined
-        if (row && minted.bind.kind === 'apikey')
-          row = (await userWithApiKey(row, minted.bind.id)) ?? undefined
-        if (row) {
-          req.user = row as never
-          bind = minted.bind
-        }
+    if (q.ticket && !req.headers.authorization) {
+      // A ticket with no bind (an older API's bare user id) or from another tenant opens nothing.
+      const minted = await redeemStreamTicket(app.redis, q.ticket)
+      const identity = minted ? await loadStreamIdentity(minted.userId, minted.bind) : null
+      if (minted && identity) {
+        req.user = identity.user as never
+        bind = minted.bind
       }
     }
     if (!req.user) {
