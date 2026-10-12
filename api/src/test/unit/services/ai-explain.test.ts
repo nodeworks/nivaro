@@ -12,6 +12,7 @@ import {
   clearExplainCacheForTests,
   ExplainError,
   explainFacts,
+  firstLineScrubbed,
   parseModelAnswer,
   redactForModel,
   scrubText,
@@ -150,5 +151,33 @@ describe('helpers', () => {
   it('knows Mondays', () => {
     expect(isMonday(new Date('2026-10-12T12:00:00'))).toBe(true)
     expect(isMonday(new Date('2026-10-13T12:00:00'))).toBe(false)
+  })
+})
+
+describe('free text reaching the model', () => {
+  beforeEach(() => clearExplainCacheForTests())
+
+  it('reduces a receiver response or last error to one scrubbed, capped line', () => {
+    const out = firstLineScrubbed(`400 Bad request token=abc12345678\ncustomer: Jane Doe, ssn 123`)
+    expect(out).toContain('400 Bad request')
+    expect(out).not.toMatch(/abc12345678|Jane|ssn/)
+    expect(firstLineScrubbed('x'.repeat(900)).length).toBe(200)
+    expect(firstLineScrubbed(null)).toBe('')
+  })
+
+  it('scrubs the subject line before it is sent', async () => {
+    const { client, create } = stub('{"summary":"S","steps":[]}')
+    await explainFacts(
+      'issue',
+      { ...facts(), title: 'Import failed Bearer abcdefghijklmnop' },
+      { client }
+    )
+    const sent = JSON.stringify((create.mock.calls[0] as unknown[])[0])
+    expect(sent).not.toMatch(/abcdefghijklmnop/)
+  })
+
+  it('scrubs log text and issue details', () => {
+    expect(scrubText('log: password=hunter22 ok')).not.toMatch(/hunter22/)
+    expect(scrubText('stack\nat x (https://h.example/a?token=zzz&id=1)')).not.toMatch(/zzz/)
   })
 })

@@ -78,6 +78,15 @@ export function scrubText(input: string): string {
  * request/response bodies and file contents replaced by their shape, strings scrubbed and cut,
  * arrays capped. Pure; the cap on the whole result is enforced by `capFacts`.
  */
+/** First line of free text, scrubbed and cut: enough to name an error class, nothing more. */
+export function firstLineScrubbed(input: unknown, max = 200): string {
+  const line =
+    String(input ?? '')
+      .split(/\r?\n/)
+      .find((l) => l.trim()) ?? ''
+  return scrubText(line.trim()).slice(0, max)
+}
+
 export function redactForModel(value: unknown, depth = 0): unknown {
   if (value == null) return value
   if (typeof value === 'string') {
@@ -272,7 +281,7 @@ export async function explainFacts(
   if (!client) throw new ExplainError(503, 'AI is not configured on this instance')
   const settings = await getAiModelSettings()
   const model = settings.summarizeModel ?? settings.model
-  const prompt = `${gathered.instructions}\n\nSubject: ${gathered.title}\n\nFACTS:\n${factText}`
+  const prompt = `${gathered.instructions}\n\nSubject: ${scrubText(gathered.title)}\n\nFACTS:\n${factText}`
   let text: string
   try {
     const res = await client.messages.create({
@@ -401,7 +410,7 @@ const gatherIssue: Gatherer = async (params) => {
       route,
       first_seen: iso(row.created_at),
       last_seen: iso(row.last_seen_at),
-      stack_and_context: details.slice(0, 5000),
+      stack_and_context: scrubText(details).slice(0, 5000),
       just_before_first_occurrence: {
         migrations_applied: migrations,
         configuration_changes: configChanges
@@ -557,15 +566,13 @@ const gatherImportRun: Gatherer = async (params) => {
       definition: def
         ? { ...def, service_config: undefined, has_service_config: !!def.service_config }
         : null,
-      log_tail: logs.slice(-5000),
+      log_tail: scrubText(logs.slice(-5000)),
       report: rep
         ? {
             counts: rep.counts,
             skipped_reasons: rep.skipped,
             phases: rep.phases,
-            unmatched: (rep.unmatched ?? [])
-              .slice(0, 8)
-              .map((u) => ({ ...u, values: (u.values ?? []).slice(0, 4) })),
+            unmatched: (rep.unmatched ?? []).slice(0, 8).map(({ values: _values, ...u }) => u),
             notes: (rep.notes ?? []).slice(0, 8)
           }
         : null,
@@ -720,7 +727,9 @@ const gatherSignalRow: Gatherer = async (params) => {
         last_seen: iso(row.last_seen)
       },
       partner: api ? { name: api.name, host, ack_grace_minutes: api.ack_grace_minutes } : null,
-      latest_failed_push: latest,
+      latest_failed_push: latest
+        ? { ...latest, last_error: firstLineScrubbed(latest.last_error) }
+        : latest,
       error_class_meanings: {
         transient: 'a retry is usually safe',
         rate_limited: 'a retry is safe after waiting',
@@ -770,7 +779,7 @@ const gatherWebhookDelivery: Gatherer = async (params) => {
         latency_ms: d.latency_ms,
         attempt: d.attempt,
         at: iso(d.created_at),
-        receiver_response: String(d.response_body ?? '').slice(0, 1500)
+        receiver_response: firstLineScrubbed(d.response_body)
       },
       webhook: hook
         ? { name: hook.name, receiver_host: host, method: hook.method, events: hook.events }
