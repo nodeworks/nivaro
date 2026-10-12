@@ -12,6 +12,7 @@ import {
   resetTenantRealtime,
   resetTransportStats,
   roomKind,
+  scopeRealtimeStats,
   tenantRealtimeRanking,
   transportStats
 } from '../../../services/socket-transport.js'
@@ -174,5 +175,35 @@ describe('createCoalescer (#1681)', () => {
     vi.advanceTimersByTime(COALESCE_WINDOW_MS * 2)
     c.push({ collection: 'a', item: 3 })
     expect(sent).toHaveLength(1)
+  })
+})
+
+describe('scopeRealtimeStats (H2)', () => {
+  const stats = {
+    sockets: [
+      { id: 'a1', tenant: 'A', rooms: ['user:ANA', 'session:sidA', 't:A:record:orders:7'] },
+      { id: 'b1', tenant: 'B', rooms: ['user:BOB', 'masq:abc', 't:B:record:orders:7'] }
+    ],
+    rooms: [
+      { room: 't:A:record:orders:7', size: 1 },
+      { room: 't:B:record:orders:7', size: 1 },
+      { room: 'session:sidA', size: 1 }
+    ]
+  }
+
+  it("shows a tenant only its own sockets and rooms, without another tenant's names", () => {
+    const a = scopeRealtimeStats(stats, 'A')
+    expect(a.sockets.map((s) => s.id)).toEqual(['a1'])
+    expect(a.sockets[0].rooms).toEqual(['user:ANA', 'record:orders:7'])
+    expect(a.rooms.map((r) => r.room).sort()).toEqual(['record:orders:7', 'user:ANA'])
+    expect(JSON.stringify(a)).not.toContain('BOB')
+  })
+
+  it('never lists sign-in rooms, self-hosted included', () => {
+    const all = scopeRealtimeStats(stats, null)
+    expect(all.sockets).toHaveLength(2)
+    const names = JSON.stringify(all)
+    expect(names).not.toContain('session:')
+    expect(names).not.toContain('masq:')
   })
 })

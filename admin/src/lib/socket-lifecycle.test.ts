@@ -19,11 +19,12 @@ const fire = (ev: string, ...a: unknown[]) => {
 }
 vi.mock('socket.io-client', () => ({ io: vi.fn(() => fakeSocket) }))
 vi.mock('@/lib/api', () => ({ api: { get: vi.fn(async () => ({ data: { token: 'ws1' } })) } }))
-const { stopMasquerade, setServerClockOffset } = vi.hoisted(() => ({
+const { stopMasquerade, setServerClockOffset, readMasquerade } = vi.hoisted(() => ({
   stopMasquerade: vi.fn(async () => {}),
-  setServerClockOffset: vi.fn()
+  setServerClockOffset: vi.fn(),
+  readMasquerade: vi.fn((): { user_id: string } | null => null)
 }))
-vi.mock('@/lib/masquerade', () => ({ readMasquerade: () => null, stopMasquerade }))
+vi.mock('@/lib/masquerade', () => ({ readMasquerade, stopMasquerade }))
 vi.mock('@/lib/page-context', () => ({ clientVersion: () => ({}) }))
 vi.mock('@nivaro/shared', () => ({
   createLeaderSocket: (
@@ -113,6 +114,19 @@ describe('admin socket lifecycle', () => {
     const stream = FakeEventSource.last
     fire('connect')
     expect(stream?.closed).toBe(true)
+  })
+
+  it('a View-as tab never falls back to the SSE stream (H9)', async () => {
+    vi.stubGlobal('EventSource', FakeEventSource)
+    const fetchSpy = vi.fn(async () => ({ ok: true }))
+    vi.stubGlobal('fetch', fetchSpy)
+    readMasquerade.mockReturnValue({ user_id: 'BOB' })
+    FakeEventSource.last = null
+    fire('connect_error', new Error('websocket error'))
+    fire('connect_error', new Error('xhr poll error'))
+    await new Promise((r) => setTimeout(r, 20))
+    expect(FakeEventSource.last).toBeNull()
+    readMasquerade.mockReturnValue(null)
   })
 
   it('reconnects instead of signing out when the browser already holds a newer sign-in (#1719)', async () => {

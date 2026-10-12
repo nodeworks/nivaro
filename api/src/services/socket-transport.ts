@@ -61,6 +61,48 @@ export function splitTenantRoom(room: string): { tenant: string; room: string } 
   return m ? { tenant: m[1], room: m[2] } : { tenant: '', room }
 }
 
+/** Rooms that name a sign-in (session ids, masquerade hashes) — never listed anywhere (H2). */
+export function isCredentialRoom(room: string): boolean {
+  const r = splitTenantRoom(room).room
+  return r.startsWith('session:') || r.startsWith('masq:')
+}
+
+/**
+ * The Realtime console's socket and room lists as a caller may see them (H2). In cloud mode
+ * one process holds several tenants' sockets, so `tenant` keeps only that tenant's sockets and
+ * the rooms counted from them, tenant prefix taken off. Self-hosted (`tenant` null): all.
+ * Sign-in rooms are dropped either way.
+ */
+export function scopeRealtimeStats<
+  S extends { tenant?: string | null; rooms: string[] },
+  R extends { room: string; size: number }
+>(
+  stats: { sockets: S[]; rooms: R[] },
+  tenant: string | null
+): { sockets: S[]; rooms: Array<{ room: string; size: number }> } {
+  if (tenant == null)
+    return {
+      sockets: stats.sockets.map((s) => ({
+        ...s,
+        rooms: s.rooms.filter((r) => !isCredentialRoom(r))
+      })),
+      rooms: stats.rooms.filter((r) => !isCredentialRoom(r.room))
+    }
+  const sockets = stats.sockets
+    .filter((s) => s.tenant === tenant)
+    .map((s) => ({
+      ...s,
+      rooms: s.rooms.filter((r) => !isCredentialRoom(r)).map((r) => splitTenantRoom(r).room)
+    }))
+  const counts = new Map<string, number>()
+  for (const s of sockets) for (const r of s.rooms) counts.set(r, (counts.get(r) ?? 0) + 1)
+  const rooms = [...counts.entries()]
+    .map(([room, size]) => ({ room, size }))
+    .sort((a, b) => b.size - a.size)
+    .slice(0, 100)
+  return { sockets, rooms }
+}
+
 /** A room's kind: ids folded away so the table stays small and readable. */
 export function roomKind(room: string | null | undefined): string {
   if (!room) return 'direct'

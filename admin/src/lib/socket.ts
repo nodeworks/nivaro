@@ -176,6 +176,9 @@ function syncSse() {
 async function considerSseFallback() {
   socketFailures++
   if (sseMode || socketFailures < 2) return
+  // A View-as tab never falls back (H9): EventSource cannot send the View-as token, so the
+  // stream would open on the administrator's own cookie and show their events in this tab.
+  if (readMasquerade()) return
   const reachable = await fetch('/api/version', { cache: 'no-store', credentials: 'include' })
     .then((r) => r.ok)
     .catch(() => false)

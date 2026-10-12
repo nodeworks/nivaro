@@ -21,6 +21,11 @@ import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api
 import { logActivity } from '../services/activity.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
 import { recordLogin } from '../services/security.js'
+import {
+  bindFromRequest,
+  encodeBoundToken,
+  endMasqueradeSockets
+} from '../services/socket-access.js'
 import { canSignIn, findOrCreateFromOIDC, updateLastPage } from '../services/users.js'
 import type { User } from '../types.js'
 
@@ -710,17 +715,15 @@ export async function authRoutes(app: FastifyInstance) {
   // #1719 — the token remembers what signed this request in (the session id, or the
   // masquerade token), so the socket it opens closes when that session or masquerade ends.
   app.get('/ws-token', { preHandler: requireAuth }, async (req, reply) => {
+    // The session, View-as token, static token or named API key behind this request — the
+    // socket closes when it ends. A sign-in with nothing to bind to gets no live connection.
+    const bind = bindFromRequest(req)
+    if (!bind)
+      return reply
+        .code(403)
+        .send({ error: 'This sign-in cannot open a live connection', code: 'WS_UNBINDABLE' })
     const token = randomUUID()
-    const bind: { u: string; s?: string; m?: string } = { u: String(req.user!.id) }
-    if (req.authMethod === 'session') {
-      const sid = (req.session as unknown as { sessionId?: string })?.sessionId
-      if (sid) bind.s = sid
-    } else if (req.authMethod === 'masquerade') {
-      const h = req.headers.authorization
-      const bearer = h?.startsWith('Bearer ') ? h.slice(7).trim() : ''
-      if (bearer.startsWith('nvm_')) bind.m = bearer
-    }
-    await app.redis.setex(`ws:token:${token}`, 120, JSON.stringify(bind))
+    await app.redis.setex(`ws:token:${token}`, 120, encodeBoundToken(String(req.user!.id), bind))
     return reply.send({ token })
   })
 
@@ -860,7 +863,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
     await app.redis.del(`masq:${token}`)
     // #1719 — the View-as tab's sockets end with the masquerade, on every replica.
-    void import('../services/socket-access.js').then((m) => m.endMasqueradeSockets(token))
+    endMasqueradeSockets(token)
     await logActivity({
       action: 'masquerade-stop',
       user: req.masqueradeAdminId,

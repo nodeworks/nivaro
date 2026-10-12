@@ -22,7 +22,11 @@ import { getIo } from '../../../services/io-holder.js'
 import { can } from '../../../services/permissions.js'
 import { visibleIds } from '../../../services/record-access.js'
 import {
+  bindFromRequest,
+  bindVerdict,
   canSeeRecordRoom,
+  checkBind,
+  encodeBoundToken,
   endRoomSockets,
   masqRoom,
   parseWsTokenValue,
@@ -30,7 +34,9 @@ import {
   recheckSocketRooms,
   requestAccessRecheck,
   roomStillAllowed,
+  runLocalRecheck,
   type SocketAccessHooks,
+  type SocketBind,
   sessionRoom,
   sha,
   sweepSockets
@@ -39,14 +45,22 @@ import type { User } from '../../../types.js'
 
 const ANA = { id: 'ANA', role: 'R-EDITOR', status: 'active' } as unknown as User
 
-/** db(table) → admin_access lookups and fresh user rows. */
-function mockDb(opts: { admin?: boolean; users?: Array<Record<string, unknown>> } = {}) {
+/** db(table) → admin_access lookups, fresh user rows and API key rows. */
+function mockDb(
+  opts: {
+    admin?: boolean
+    users?: Array<Record<string, unknown>>
+    keys?: Array<Record<string, unknown>>
+  } = {}
+) {
   vi.mocked(db).mockImplementation(((table: string) => {
     const b: Record<string, unknown> = {}
     b.where = vi.fn(() => b)
     b.whereIn = vi.fn(() => b)
     b.first = vi.fn(async () => (table === 'nivaro_roles' ? { admin_access: !!opts.admin } : null))
-    b.select = vi.fn(async () => opts.users ?? [])
+    b.select = vi.fn(async () =>
+      table === 'nivaro_api_keys' ? (opts.keys ?? []) : (opts.users ?? [])
+    )
     return b
   }) as never)
 }
@@ -85,13 +99,44 @@ function fakeIo(sockets: unknown[]) {
 beforeEach(() => mockDb())
 afterEach(() => vi.clearAllMocks())
 
-describe('ws-token binding (#1719)', () => {
-  it('reads the session or masquerade a token was minted from', () => {
-    expect(parseWsTokenValue('{"u":"ANA","s":"sid1"}')).toEqual({ userId: 'ANA', sid: 'sid1' })
-    expect(parseWsTokenValue('{"u":"ANA","m":"nvm_x"}')).toEqual({ userId: 'ANA', masq: 'nvm_x' })
+describe('ws-token binding (#1719, H1)', () => {
+  it('round-trips every bind kind', () => {
+    for (const bind of [
+      { kind: 'session', sid: 'sid1' },
+      { kind: 'masq', token: 'nvm_x' },
+      { kind: 'token', tokenHash: sha('t') },
+      { kind: 'apikey', id: 7 },
+      { kind: 'apikey', id: 7, sim: 'nvq_1' }
+    ] as SocketBind[])
+      expect(parseWsTokenValue(encodeBoundToken('ANA', bind))).toEqual({ userId: 'ANA', bind })
   })
-  it('accepts a bare user id from an older API', () => {
-    expect(parseWsTokenValue('ANA')).toEqual({ userId: 'ANA' })
+  it('a bare user id (older API) or a bind with nothing in it signs nothing in', () => {
+    expect(parseWsTokenValue('ANA').bind).toBeNull()
+    expect(parseWsTokenValue('{"u":"ANA"}').bind).toBeNull()
+    expect(parseWsTokenValue('{"u":"ANA","b":{"kind":"token","tokenHash":""}}').bind).toBeNull()
+  })
+  it('reads the bind from how the request signed in', () => {
+    const bearer = (t: string) => ({ authorization: `Bearer ${t}` })
+    expect(bindFromRequest({ authMethod: 'session', session: { sessionId: 's1' } })).toEqual({
+      kind: 'session',
+      sid: 's1'
+    })
+    expect(bindFromRequest({ authMethod: 'masquerade', headers: bearer('nvm_a') })).toEqual({
+      kind: 'masq',
+      token: 'nvm_a'
+    })
+    expect(
+      bindFromRequest({ authMethod: 'api_key', apiKeyId: 12, headers: bearer('nvk_x') })
+    ).toEqual({ kind: 'apikey', id: 12 })
+    expect(
+      bindFromRequest({ authMethod: 'key_sim', apiKeySimulatedId: 12, headers: bearer('nvq_y') })
+    ).toEqual({ kind: 'apikey', id: 12, sim: 'nvq_y' })
+    expect(bindFromRequest({ authMethod: 'token', headers: bearer('static') })).toEqual({
+      kind: 'token',
+      tokenHash: sha('static')
+    })
+    expect(bindFromRequest({ authMethod: 'api_key' })).toBeNull()
+    expect(bindFromRequest({})).toBeNull()
   })
   it('names rooms without putting a masquerade token in them', () => {
     expect(sessionRoom('sid1')).toBe('session:sid1')
@@ -131,8 +176,32 @@ describe('room gates (#1720)', () => {
     vi.mocked(can).mockResolvedValueOnce(false)
     expect(await roomStillAllowed(ANA, 't:A:collection:orders', notAdmin)).toBe(false)
   })
-  it('leaves rooms it does not know alone', async () => {
+  it('keeps page presence for any signed-in person', async () => {
     expect(await roomStillAllowed(ANA, 'presence:some-page', notAdmin)).toBe(true)
+  })
+  it('denies a room kind it does not know, unless the socket is an administrator (H3)', async () => {
+    expect(await roomStillAllowed(ANA, 'mystery:42', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 't:A:mystery:42', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 'mystery:42', async () => true)).toBe(true)
+  })
+  it('gates item rooms like record rooms (H3)', async () => {
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    expect(await roomStillAllowed(ANA, 't:A:item:orders:7', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 'item:orders:7', notAdmin)).toBe(true)
+  })
+  it("keeps only the socket's own sign-in rooms", async () => {
+    const bind: SocketBind = { kind: 'session', sid: 's1' }
+    expect(await roomStillAllowed(ANA, sessionRoom('s1'), notAdmin, { bind })).toBe(true)
+    expect(await roomStillAllowed(ANA, sessionRoom('s2'), notAdmin, { bind })).toBe(false)
+    expect(await roomStillAllowed(ANA, masqRoom('nvm_x'), notAdmin, { bind })).toBe(false)
+  })
+  it("keeps a tenant room only for the socket's own tenant in cloud mode", async () => {
+    vi.stubEnv('CLOUD_META_DB_URL', 'postgres://meta')
+    const ctx = { tenantNames: ['T-A', 'acme'] }
+    expect(await roomStillAllowed(ANA, 'tenant:acme', notAdmin, ctx)).toBe(true)
+    expect(await roomStillAllowed(ANA, 'tenant:T-B', notAdmin, ctx)).toBe(false)
+    vi.unstubAllEnvs()
+    expect(await roomStillAllowed(ANA, 'tenant:T-B', notAdmin, ctx)).toBe(true)
   })
   it('lets an administrator into any record room without a row check', async () => {
     expect(await canSeeRecordRoom(ANA, 'orders', '7', true)).toBe(true)
@@ -224,6 +293,48 @@ describe('sweepSockets (#1719)', () => {
     vi.mocked(can).mockImplementation(async () => true)
   })
 
+  it('closes an API-key socket when its key is revoked, expired or re-owned (H1)', async () => {
+    mockDb({
+      users: [{ id: 'ANA', role: 'R', status: 'active' }],
+      keys: [
+        { id: 1, user: 'ANA', is_active: true, expires_at: null },
+        { id: 2, user: 'ANA', is_active: false, expires_at: null },
+        { id: 3, user: 'ANA', is_active: 1, expires_at: '2020-01-01T00:00:00Z' },
+        { id: 4, user: 'BOB', is_active: true, expires_at: null }
+      ]
+    })
+    const sockets = [1, 2, 3, 4, 5].map((id) =>
+      fakeSocket(ANA, [], { nvrBind: { kind: 'apikey', id } })
+    )
+    const io = fakeIo(sockets.map((s) => s.socket))
+    const closed = await sweepSockets(io as never, { redis: redisWith({}) as never })
+    expect(closed).toBe(4)
+    expect(sockets[0].emitted).toEqual([])
+    for (const s of sockets.slice(1))
+      expect(s.emitted).toContainEqual(['session:ended', { reason: 'key_revoked' }])
+  })
+
+  it('closes a run-as-key socket when the run-as session ends', async () => {
+    mockDb({
+      users: [{ id: 'ANA', role: 'R', status: 'active' }],
+      keys: [{ id: 1, user: 'ANA', is_active: true, expires_at: null }]
+    })
+    const live = fakeSocket(ANA, [], { nvrBind: { kind: 'apikey', id: 1, sim: 'nvq_live' } })
+    const gone = fakeSocket(ANA, [], { nvrBind: { kind: 'apikey', id: 1, sim: 'nvq_gone' } })
+    const io = fakeIo([live.socket, gone.socket])
+    await sweepSockets(io as never, { redis: redisWith({ 'keysim:nvq_live': '{}' }) as never })
+    expect(live.emitted).toEqual([])
+    expect(gone.emitted).toContainEqual(['session:ended', { reason: 'signed_out' }])
+  })
+
+  it('never treats a missing or empty bind as "the account alone" (H1)', async () => {
+    mockDb({ users: [{ id: 'ANA', role: 'R', status: 'active', static_token: 'tok' }] })
+    const unbound = fakeSocket(ANA, [])
+    const empty = fakeSocket(ANA, [], { nvrBind: { kind: 'token', tokenHash: '' } })
+    const io = fakeIo([unbound.socket, empty.socket])
+    expect(await sweepSockets(io as never, { redis: redisWith({}) as never })).toBe(2)
+  })
+
   it('judges nothing when Redis cannot be read', async () => {
     mockDb({ users: [{ id: 'ANA', role: 'R-EDITOR', status: 'active' }] })
     const s = fakeSocket(ANA, [], { nvrBind: { kind: 'session', sid: 'a' } })
@@ -237,6 +348,49 @@ describe('sweepSockets (#1719)', () => {
     const anon = { id: 'x', rooms: new Set(['x']), data: {}, emit: vi.fn() }
     const io = fakeIo([anon])
     expect(await sweepSockets(io as never, { redis: redisWith({}) as never })).toBe(0)
+  })
+})
+
+describe('runLocalRecheck with room prefixes (H4)', () => {
+  it('re-gates only matching rooms of sockets that hold one', async () => {
+    mockDb({ users: [{ id: 'ANA', role: 'R-EDITOR', status: 'active' }] })
+    vi.mocked(canSeeRoom).mockResolvedValue(false)
+    vi.mocked(can).mockResolvedValue(false)
+    const inChannel = fakeSocket(ANA, ['chat:ch:ops', 'collection:orders'])
+    const elsewhere = fakeSocket(ANA, ['collection:orders'])
+    const io = fakeIo([inChannel.socket, elsewhere.socket])
+    await runLocalRecheck(io as never, { roomPrefixes: ['chat:ch:'] })
+    expect(inChannel.left).toEqual(['chat:ch:ops'])
+    expect(elsewhere.left).toEqual([])
+    vi.mocked(canSeeRoom).mockResolvedValue(true)
+    vi.mocked(can).mockResolvedValue(true)
+  })
+})
+
+describe('checkBind — the SSE stream heartbeat (H1)', () => {
+  const redis = (values: Record<string, string>) => ({
+    mget: vi.fn(async (...keys: string[]) => keys.map((k) => values[k] ?? null))
+  })
+  it('ends an API-key stream when the key is revoked', async () => {
+    mockDb({
+      users: [{ id: 'ANA', status: 'active' }],
+      keys: [{ id: 9, user: 'ANA', is_active: false, expires_at: null }]
+    })
+    expect(await checkBind(redis({}) as never, 'ANA', { kind: 'apikey', id: 9 })).toBe(
+      'key_revoked'
+    )
+  })
+  it('keeps a stream whose session still stands, ends it when the session goes', async () => {
+    mockDb({ users: [{ id: 'ANA', status: 'active' }] })
+    const bind: SocketBind = { kind: 'session', sid: 's1' }
+    expect(await checkBind(redis({ 'sess:s1': '{}' }) as never, 'ANA', bind)).toBeNull()
+    expect(await checkBind(redis({}) as never, 'ANA', bind)).toBe('signed_out')
+    expect(await checkBind(redis({}) as never, 'ANA', null)).toBe('signed_out')
+  })
+  it('bindVerdict puts an inactive account first', () => {
+    expect(
+      bindVerdict({ kind: 'session', sid: 's' }, { status: 'suspended' }, new Map(), new Map())
+    ).toBe('account_inactive')
   })
 })
 
@@ -267,6 +421,19 @@ describe('ending and rechecking across replicas', () => {
     expect(io.serverSideEmit).toHaveBeenCalledWith(RECHECK_EVENT, {
       all: false,
       userIds: ['ANA', 'BOB']
+    })
+  })
+
+  it('a channel change re-checks channel rooms only, merged with named people', () => {
+    const io = fakeIo([])
+    vi.mocked(getIo).mockReturnValue(io as never)
+    requestAccessRecheck({ roomPrefixes: ['chat:ch:'] })
+    requestAccessRecheck({ userIds: ['ana'] })
+    vi.advanceTimersByTime(1500)
+    expect(io.serverSideEmit).toHaveBeenCalledWith(RECHECK_EVENT, {
+      all: false,
+      userIds: ['ANA'],
+      roomPrefixes: ['chat:ch:']
     })
   })
 

@@ -12,7 +12,11 @@ import {
 } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
-import { resetTransportStats, transportStats } from '../services/socket-transport.js'
+import {
+  resetTransportStats,
+  scopeRealtimeStats,
+  transportStats
+} from '../services/socket-transport.js'
 import { sseListenerCount } from '../services/sse-hub.js'
 import { NIVARO_VERSION } from '../version.js'
 
@@ -54,7 +58,7 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     process.env.CLOUD_META_DB_URL ? (getTenantId() ?? getTenantSlug() ?? '-') : null
 
   app.get('/stats', async () => {
-    const stats = getRealtimeStats()
+    const stats = scopeRealtimeStats(getRealtimeStats(), tenantScope())
     // #1672 — which transport each client is on; the SSE fallback streams are counted apart.
     const transports: Record<string, number> = {}
     for (const s of stats.sockets) {

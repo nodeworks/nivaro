@@ -27,7 +27,8 @@ import {
   type SocketBind,
   sessionRoom,
   sha,
-  sweepSockets
+  sweepSockets,
+  userWithApiKey
 } from '../services/socket-access.js'
 import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
 import {
@@ -36,6 +37,7 @@ import {
   createCoalescer,
   encodeEvent,
   eventNameOf,
+  isCredentialRoom,
   noteCoalesced,
   noteTenantSocket,
   recordOutbound,
@@ -136,11 +138,14 @@ export function emitForceRefresh(
   const current = older ? currentBuilds(socketMeta.values()) : new Map<string, string>()
   const local = !!app || older
   const wanted = new Set(userIds)
+  // Cloud: an administrator refreshes their own tenant's tabs only (the caller's context).
+  const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
   let sockets = 0
   const users = new Set<string>()
   for (const [id, sock] of io.sockets.sockets) {
     const meta = socketMeta.get(id)
     if (!meta?.user) continue
+    if (tenant != null && sock.data?.nvrTenantKey !== tenant) continue
     if (wanted.size && !wanted.has(meta.user.id.toUpperCase())) continue
     if (app && meta.app !== app) continue
     if (older && !olderReason(meta.app, meta.version, current)) continue
@@ -153,17 +158,23 @@ export function emitForceRefresh(
   if (!local) {
     if (wanted.size)
       for (const u of userIds) io.to(`user:${u}`).emit('client:force-refresh', payload)
+    else if (tenant != null) io.to(tenantSocketsRoom(tenant)).emit('client:force-refresh', payload)
     else io.emit('client:force-refresh', payload)
   }
   return { sockets, users: users.size }
 }
 
+/** Cloud: every socket of a tenant sits in this room, on every replica (force refresh). */
+function tenantSocketsRoom(tenant: string): string {
+  return tenantScopedRoom('sockets', tenant)
+}
+
 export function getRealtimeStats(): {
-  sockets: Array<SocketMeta & { id: string; rooms: string[] }>
+  sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }>
   rooms: Array<{ room: string; size: number }>
 } {
   const io = _ioRef
-  const sockets: Array<SocketMeta & { id: string; rooms: string[] }> = []
+  const sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }> = []
   if (io) {
     for (const [id, sock] of io.sockets.sockets) {
       const meta = socketMeta.get(id) ?? {
@@ -176,13 +187,19 @@ export function getRealtimeStats(): {
         transport: null,
         coalesce: false
       }
-      sockets.push({ id, ...meta, rooms: [...sock.rooms].filter((r) => r !== id) })
+      sockets.push({
+        id,
+        ...meta,
+        tenant: (sock.data?.nvrTenantKey as string | undefined) ?? null,
+        rooms: [...sock.rooms].filter((r) => r !== id && !isCredentialRoom(r))
+      })
     }
   }
   const rooms: Array<{ room: string; size: number }> = []
   if (io) {
     for (const [room, set] of io.sockets.adapter.rooms) {
-      if (!io.sockets.sockets.has(room)) rooms.push({ room, size: set.size })
+      if (!io.sockets.sockets.has(room) && !isCredentialRoom(room))
+        rooms.push({ room, size: set.size })
     }
     rooms.sort((a, b) => b.size - a.size)
   }
@@ -489,6 +506,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!t || !socket.connected) return
         tenantKey = String(t.tenantId || t.slug)
         socket.data.nvrTenantKey = tenantKey
+        socket.data.nvrTenantNames = [t.tenantId, t.slug].filter(Boolean).map(String)
+        socket.join(tenantSocketsRoom(tenantKey))
         noteTenantSocket(tenantKey, 1, t.slug)
       })
     }
@@ -742,18 +761,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const wsValue = await app.redis.get(`ws:token:${token}`)
         if (wsValue) {
           await app.redis.del(`ws:token:${token}`) // one-time use
+          // Bound to what signed in the request that minted it: the session, the View-as, the
+          // static token or the named API key. A token with no bind (an older API's bare user
+          // id) signs nothing in — the client asks for a new one on its next connect.
           const minted = parseWsTokenValue(wsValue)
-          const user = await db<User>('nivaro_users')
+          if (!minted.userId || !minted.bind) return
+          const bind = minted.bind
+          let user = (await db<User>('nivaro_users')
             .where({ id: minted.userId, status: 'active' })
-            .first()
+            .first()) as User | undefined
+          // An API-key socket carries the key's scopes and row restrictions, like its requests.
+          if (user && bind.kind === 'apikey')
+            user = (await userWithApiKey(user, bind.id)) ?? undefined
           if (user) {
-            // Bound to the session (or masquerade) the token was minted from; a token from an
-            // older API carries neither and is bound to the account alone.
-            const bind: SocketBind = minted.sid
-              ? { kind: 'session', sid: minted.sid }
-              : minted.masq
-                ? { kind: 'masq', token: minted.masq }
-                : { kind: 'token', tokenHash: user.static_token ? sha(user.static_token) : '' }
             signIn(user, bind)
             void markOnline(user.id, socket.id)
           }
@@ -788,11 +808,16 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Cloud: auth runs in the socket's tenant context (#1132); self-hosted: unchanged.
     socket.on('auth', inSocketTenant(socket, onAuth))
 
-    socket.on('tenant:join', (tenantId: string) => {
-      if (typeof tenantId === 'string' && tenantId.length > 0) {
-        socket.join(`tenant:${tenantId}`)
-        socket.emit('tenant:joined', { tenantId })
+    // Cloud: only the tenant this socket's host resolved to (any other tenant's room would
+    // hand this socket that tenant's broadcasts); self-hosted there are no tenants to cross.
+    socket.on('tenant:join', async (tenantId: string) => {
+      if (typeof tenantId !== 'string' || tenantId.length === 0) return
+      if (process.env.CLOUD_META_DB_URL) {
+        const t = await socketTenant(socket)
+        if (!t || ![t.tenantId, t.slug].map(String).includes(tenantId)) return
       }
+      socket.join(`tenant:${tenantId}`)
+      socket.emit('tenant:joined', { tenantId })
     })
 
     /**

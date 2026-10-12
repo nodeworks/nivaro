@@ -1,10 +1,18 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
-import { REVOKED_PREFIX } from '../auth/session.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
+import {
+  bindFromRequest,
+  checkBind,
+  encodeBoundToken,
+  parseWsTokenValue,
+  type SocketBind,
+  userWithApiKey
+} from '../services/socket-access.js'
 import { type SseEvent, sseEventForTenant, subscribeSse } from '../services/sse-hub.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import type { User } from '../types.js'
 
 // ─── SSE event stream (#602) ─────────────────────────────────────────────────
 // GET /events/stream — server-sent events of collection changes, fed by the
@@ -26,8 +34,13 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
   /** Mint a one-shot connect ticket (ws-token precedent) — the ONLY way a
    *  credential-less EventSource may authenticate; 60s TTL, single use. */
   app.get('/ticket', { preHandler: [authenticate, requireAuth] }, async (req) => {
+    // The ticket remembers what signed this request in (#1719, H1): the stream it opens ends
+    // with that session, View-as, token or API key, and acts as the key when it is one.
+    const bind = bindFromRequest(req)
+    if (!bind)
+      throw Object.assign(new Error('This sign-in cannot open a stream'), { statusCode: 403 })
     const ticket = randomUUID()
-    await app.redis.setex(`sse:ticket:${ticket}`, 60, String(req.user!.id))
+    await app.redis.setex(`sse:ticket:${ticket}`, 60, encodeBoundToken(String(req.user!.id), bind))
     return { data: { ticket, expires_in: 60 } }
   })
 
@@ -37,28 +50,40 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
     // One-shot ticket exchange for header-less EventSource consumers: GETDEL
     // makes replay impossible, the 60s TTL bounds exposure, and the resolved
     // identity is the ticket minter's own.
+    let bind: SocketBind | null = null
     if (q.ticket && /^[a-f0-9-]{36}$/i.test(q.ticket) && !req.headers.authorization) {
-      const userId = (await app.redis.getdel(`sse:ticket:${q.ticket}`).catch(() => null)) as
+      const raw = (await app.redis.getdel(`sse:ticket:${q.ticket}`).catch(() => null)) as
         | string
         | null
-      if (userId) {
+      const minted = raw ? parseWsTokenValue(raw) : null
+      // A ticket with no bind (an older API's bare user id) opens nothing.
+      if (
+        minted?.userId &&
+        minted.bind &&
+        !(await checkBind(app.redis, minted.userId, minted.bind))
+      ) {
         const { db } = await import('../db/index.js')
-        const row = await db('nivaro_users').where({ id: userId }).first()
-        if (row && row.status !== 'suspended') req.user = row as never
+        let row = (await db('nivaro_users').where({ id: minted.userId }).first()) as
+          | User
+          | undefined
+        if (row && minted.bind.kind === 'apikey')
+          row = (await userWithApiKey(row, minted.bind.id)) ?? undefined
+        if (row) {
+          req.user = row as never
+          bind = minted.bind
+        }
       }
     }
     if (!req.user) {
       await authenticate(req, reply)
+      bind = bindFromRequest(req)
     }
     const user = req.user
-    if (!user) return reply.code(401).send({ error: 'Unauthorized' })
     // #1719 — the stream is the read-only fallback for a blocked websocket, so it ends with the
-    // sign-in like a socket does: a cookie session that is gone or revoked, or an account no
-    // longer active, closes it at the next heartbeat (`event: session.ended` first).
-    const sid =
-      req.authMethod === 'session'
-        ? ((req.session as unknown as { sessionId?: string } | undefined)?.sessionId ?? null)
-        : null
+    // sign-in like a socket does (session gone or revoked, View-as ended, token rotated, API key
+    // revoked or expired, account no longer active) at the next heartbeat. A sign-in with
+    // nothing to bind to opens no stream.
+    if (!user || !bind) return reply.code(401).send({ error: 'Unauthorized' })
 
     // Per-connection collection filter. Unauthorized collections are dropped
     // SILENTLY (a 403 here would let a caller probe which collections exist).
@@ -123,15 +148,10 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
       void deliver(ev)
     })
 
+    const streamBind = bind
     const stillSignedIn = async (): Promise<boolean> => {
       try {
-        if (sid) {
-          const [sess, revoked] = await app.redis.mget(`sess:${sid}`, `${REVOKED_PREFIX}${sid}`)
-          if (!sess || revoked) return false
-        }
-        const { db } = await import('../db/index.js')
-        const row = await db('nivaro_users').where({ id: user.id }).first('status')
-        return !!row && row.status !== 'suspended' // the gate this stream opened with
+        return !(await checkBind(app.redis, String(user.id), streamBind))
       } catch {
         return true // a failed check never ends a stream; the next heartbeat asks again
       }
