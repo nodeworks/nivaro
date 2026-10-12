@@ -1,4 +1,4 @@
-import { type ReactNode, useCallback, useMemo, useState } from 'react'
+import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from 'react'
 import {
   Bar,
   BarChart,
@@ -13,8 +13,11 @@ import {
   YAxis
 } from 'recharts'
 import { useNavigation, useOptionalNivaroClient } from '../../context'
+import { type GlossaryTerm, glossarySegments, useGlossary } from '../../lib/glossary'
 import { cn } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
+import { type AnswerFormat, chartOf, formatsFor, listOf, rowsOfBlock } from './answer-formats'
+import { GlossaryMark, useGlossaryHref } from './GlossaryText'
 
 /**
  * Renders an assistant reply's markdown: headings, paragraphs, bullet and
@@ -29,7 +32,7 @@ import { AutolinkedText } from '../AutolinkedText'
  * x | y |") — the pipe-separated rows are split back apart before parsing.
  */
 
-type Block =
+export type AiMarkdownBlock =
   | { kind: 'p'; text: string }
   | { kind: 'h'; level: number; text: string }
   | { kind: 'ul'; items: string[] }
@@ -37,6 +40,7 @@ type Block =
   | { kind: 'code'; text: string }
   | { kind: 'table'; header: string[]; rows: string[][] }
   | { kind: 'chart'; spec: ChartSpec }
+type Block = AiMarkdownBlock
 
 /** A chart the model attached (#724): a fenced ```chart block holding JSON. */
 export type ChartSpec = {
@@ -174,12 +178,40 @@ const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g
  * friendly id the host's entity-room registry knows becomes a link to the
  * record in THIS app (NavigationContext decides the URL).
  */
-export function renderInline(text: string, autolink = false): ReactNode[] {
+/**
+ * Glossary terms to mark in an answer (#1997): each term once, at its first
+ * occurrence (`once` is shared across the answer's blocks).
+ */
+export type InlineGlossary = {
+  terms: GlossaryTerm[]
+  once: Set<number>
+  href?: (t: GlossaryTerm) => string | null
+}
+
+export function renderInline(
+  text: string,
+  autolink = false,
+  glossary?: InlineGlossary
+): ReactNode[] {
   const out: ReactNode[] = []
   let last = 0
   let k = 0
-  const plain = (t: string): ReactNode =>
+  const linked = (t: string): ReactNode =>
     autolink ? <AutolinkedText key={k++} text={t} plain /> : t
+  const plain = (t: string): ReactNode => {
+    if (!glossary?.terms.length) return linked(t)
+    const segs = glossarySegments(t, glossary.terms, { once: glossary.once })
+    if (segs.length === 1 && !segs[0].term) return linked(t)
+    return segs.map((s) =>
+      s.term ? (
+        <GlossaryMark key={k++} term={s.term} href={glossary.href?.(s.term)}>
+          {s.text}
+        </GlossaryMark>
+      ) : (
+        linked(s.text)
+      )
+    )
+  }
   for (const m of text.matchAll(INLINE)) {
     const idx = m.index ?? 0
     if (idx > last) out.push(plain(text.slice(last, idx)))
@@ -354,6 +386,10 @@ const CHART_COLORS = [
 /** A chart the answer attached — bar/line/pie over {label, value} points,
  *  recharts, sized to the bubble. Theme-neutral inks so it reads in both modes. */
 function ChartBlock({ spec }: { spec: ChartSpec }) {
+  const onPoint = useContext(ChartPointContext)
+  const point = onPoint
+    ? (label: unknown) => label != null && onPoint(String(label), spec)
+    : undefined
   const [width, setWidth] = useState(0)
   const ref = useCallback((el: HTMLDivElement | null) => {
     if (!el) return
@@ -381,7 +417,12 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
     labelStyle: { color: '#cbd5e1' }
   }
   return (
-    <div ref={ref} data-ai-chart={spec.type} className='my-2 w-full'>
+    <div
+      ref={ref}
+      data-ai-chart={spec.type}
+      data-ai-chart-drill={onPoint ? '' : undefined}
+      className={cn('my-2 w-full', onPoint && '[&_.recharts-wrapper]:cursor-pointer')}
+    >
       {spec.title && (
         <div className='mb-1 text-[0.9em] font-medium text-muted-foreground'>{spec.title}</div>
       )}
@@ -396,6 +437,7 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
             outerRadius={80}
             label={({ name, percent }) => `${name} ${Math.round((percent ?? 0) * 100)}%`}
             labelLine={false}
+            onClick={point ? (d: any) => point(d?.label ?? d?.name) : undefined}
           >
             {spec.data.map((d, i) => (
               <Cell key={d.label} fill={CHART_COLORS[i % CHART_COLORS.length]} />
@@ -404,7 +446,13 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
           <Tooltip {...tip} formatter={(v) => fmt(Number(v))} />
         </PieChart>
       ) : spec.type === 'line' ? (
-        <LineChart width={w} height={height} data={spec.data} margin={{ left: 4, right: 12 }}>
+        <LineChart
+          width={w}
+          height={height}
+          data={spec.data}
+          margin={{ left: 4, right: 12 }}
+          onClick={point ? (st: any) => point(st?.activeLabel) : undefined}
+        >
           <CartesianGrid strokeDasharray='3 3' stroke='currentColor' opacity={0.12} />
           <XAxis dataKey='label' tick={{ fontSize: 11 }} interval='preserveStartEnd' />
           <YAxis tick={{ fontSize: 11 }} tickFormatter={fmt} width={44} />
@@ -418,7 +466,13 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
           />
         </LineChart>
       ) : (
-        <BarChart width={w} height={height} data={spec.data} margin={{ left: 4, right: 12 }}>
+        <BarChart
+          width={w}
+          height={height}
+          data={spec.data}
+          margin={{ left: 4, right: 12 }}
+          onClick={point ? (st: any) => point(st?.activeLabel) : undefined}
+        >
           <CartesianGrid strokeDasharray='3 3' stroke='currentColor' opacity={0.12} />
           <XAxis
             dataKey='label'
@@ -437,65 +491,134 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
   )
 }
 
+function BlockView({ b, link, gl }: { b: Block; link: boolean; gl?: InlineGlossary }) {
+  switch (b.kind) {
+    case 'h':
+      return (
+        <p className={cn('font-semibold', b.level <= 2 ? 'text-[1.05em]' : '')}>
+          {renderInline(b.text, link, gl)}
+        </p>
+      )
+    case 'ul':
+      return (
+        <ul className='list-disc space-y-0.5 pl-5'>
+          {b.items.map((it, j) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static content
+            <li key={j}>{renderInline(it, link, gl)}</li>
+          ))}
+        </ul>
+      )
+    case 'ol':
+      return (
+        <ol className='list-decimal space-y-0.5 pl-5'>
+          {b.items.map((it, j) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static content
+            <li key={j}>{renderInline(it, link, gl)}</li>
+          ))}
+        </ol>
+      )
+    case 'code':
+      return (
+        <pre className='overflow-x-auto rounded-md bg-black/[0.05] p-2 font-mono text-[0.9em] dark:bg-white/10'>
+          {b.text}
+        </pre>
+      )
+    case 'table':
+      return <TableBlock header={b.header} rows={b.rows} autolink={link} />
+    case 'chart':
+      return <ChartBlock spec={b.spec} />
+    default:
+      return <p>{renderInline(b.text, link, gl)}</p>
+  }
+}
+
+const FORMAT_LABEL: Record<AnswerFormat, string> = { table: 'Table', chart: 'Chart', list: 'List' }
+
+/**
+ * A table, chart or data list with a Table · Chart · List switch (#1885).
+ * The other formats are drawn from the rows already in the answer — no new
+ * question and no model call.
+ */
+function SwitchableBlock({ b, link, gl }: { b: Block; link: boolean; gl?: InlineGlossary }) {
+  const formats = useMemo(() => formatsFor(b), [b])
+  const [format, setFormat] = useState<AnswerFormat>(formats[0])
+  const shown = useMemo((): Block => {
+    if (format === formats[0]) return b
+    const rows = rowsOfBlock(b)
+    if (!rows) return b
+    if (format === 'table') return { kind: 'table', header: rows.header, rows: rows.rows }
+    if (format === 'list') return { kind: 'ul', items: listOf(rows) }
+    const spec = chartOf(rows)
+    return spec ? { kind: 'chart', spec } : b
+  }, [b, format, formats])
+  if (formats.length < 2) return <BlockView b={b} link={link} gl={gl} />
+  return (
+    <div data-ai-switchable={format}>
+      <fieldset className='mb-0.5 flex min-w-0 justify-end gap-0.5' aria-label='Show as'>
+        {formats.map((f) => (
+          <button
+            key={f}
+            type='button'
+            onClick={() => setFormat(f)}
+            aria-pressed={f === format}
+            data-ai-format={f}
+            className={cn(
+              'rounded px-1.5 py-px text-[10.5px] font-medium transition-colors',
+              f === format
+                ? 'bg-accent text-foreground'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            )}
+          >
+            {FORMAT_LABEL[f]}
+          </button>
+        ))}
+      </fieldset>
+      <BlockView b={shown} link={link} gl={gl} />
+    </div>
+  )
+}
+
+/** Click on a chart point (#1943): the host opens the rows behind it. */
+export type ChartPointHandler = (label: string, spec: ChartSpec) => void
+const ChartPointContext = createContext<ChartPointHandler | undefined>(undefined)
+
 export function AiMarkdown({
   content,
   className,
-  autolink
+  autolink,
+  switchable,
+  onChartPoint
 }: {
   content: string
   className?: string
   /** Turn friendly ids into record links. Default: on whenever a NivaroProvider is present. */
   autolink?: boolean
+  /** Offer Table · Chart · List on blocks that hold rows (#1885). */
+  switchable?: boolean
+  /** Make chart points clickable (drill into the rows behind a bar, point or slice). */
+  onChartPoint?: ChartPointHandler
 }) {
   const blocks = useMemo(() => parseAiMarkdown(content), [content])
   const client = useOptionalNivaroClient()
   const link = autolink ?? client != null
+  const terms = useGlossary()
+  const href = useGlossaryHref()
+  // A fresh "once" set per render: each term is marked at its first use.
+  const gl: InlineGlossary | undefined = terms.length ? { terms, once: new Set(), href } : undefined
   return (
-    <div data-ai-markdown className={cn('space-y-1.5 [&_strong]:font-semibold', className)}>
-      {blocks.map((b, i) => {
-        const key = `${b.kind}-${i}`
-        switch (b.kind) {
-          case 'h':
-            return (
-              <p key={key} className={cn('font-semibold', b.level <= 2 ? 'text-[1.05em]' : '')}>
-                {renderInline(b.text, link)}
-              </p>
-            )
-          case 'ul':
-            return (
-              <ul key={key} className='list-disc space-y-0.5 pl-5'>
-                {b.items.map((it, j) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: static content
-                  <li key={j}>{renderInline(it, link)}</li>
-                ))}
-              </ul>
-            )
-          case 'ol':
-            return (
-              <ol key={key} className='list-decimal space-y-0.5 pl-5'>
-                {b.items.map((it, j) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: static content
-                  <li key={j}>{renderInline(it, link)}</li>
-                ))}
-              </ol>
-            )
-          case 'code':
-            return (
-              <pre
-                key={key}
-                className='overflow-x-auto rounded-md bg-black/[0.05] p-2 font-mono text-[0.9em] dark:bg-white/10'
-              >
-                {b.text}
-              </pre>
-            )
-          case 'table':
-            return <TableBlock key={key} header={b.header} rows={b.rows} autolink={link} />
-          case 'chart':
-            return <ChartBlock key={key} spec={b.spec} />
-          default:
-            return <p key={key}>{renderInline(b.text, link)}</p>
-        }
-      })}
-    </div>
+    <ChartPointContext.Provider value={onChartPoint}>
+      <div data-ai-markdown className={cn('space-y-1.5 [&_strong]:font-semibold', className)}>
+        {blocks.map((b, i) => {
+          const key = `${b.kind}-${i}`
+          return switchable && SWITCHABLE_KINDS.has(b.kind) ? (
+            <SwitchableBlock key={key} b={b} link={link} gl={gl} />
+          ) : (
+            <BlockView key={key} b={b} link={link} gl={gl} />
+          )
+        })}
+      </div>
+    </ChartPointContext.Provider>
   )
 }
+
+const SWITCHABLE_KINDS = new Set<Block['kind']>(['table', 'chart', 'ul', 'ol'])

@@ -6,7 +6,7 @@
  * handshake host (the same headers the hook reads) and run a handler inside that tenant's
  * AsyncLocalStorage context. Self-hosted: a straight pass-through.
  */
-import { runWithTenantDb } from '../db/tenant-context.js'
+import { getTenantId, runWithTenantDb } from '../db/tenant-context.js'
 import { tenantStoreId } from './traffic-taps.js'
 
 interface SocketLike {
@@ -88,4 +88,16 @@ export function inSocketTenant<A extends unknown[]>(
       )
     })
   }
+}
+
+/**
+ * The tenant key of a finished request ('' self-hosted): the tenant the tenant hook stamped on
+ * it — an onResponse hook may run outside the request's context — else the current context.
+ * Matches tenant-rooms.ts currentTenantKey() (tenant id, slug as the fallback).
+ */
+export function requestTenantKey(req: unknown): string {
+  if (!inCloud()) return ''
+  const stamped = (req as { nvrTenantId?: unknown } | null | undefined)?.nvrTenantId
+  if (typeof stamped === 'string' && stamped) return stamped
+  return getTenantId() ?? ''
 }

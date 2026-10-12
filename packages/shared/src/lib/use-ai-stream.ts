@@ -1,5 +1,6 @@
 import type { NivaroClient } from '@nivaro/sdk'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { type AiStreamStep, applyStepStatus } from './ai-steps'
 import { post } from './commands'
 
 /**
@@ -23,7 +24,13 @@ export type AiStreamSubscribe = (
 
 export interface AiStreamHandlers<TDone = Record<string, unknown>> {
   onDelta?: (text: string, round: number) => void
-  onStatus?: (status: { text: string; round: number; tool?: string }) => void
+  onStatus?: (status: {
+    text: string
+    round: number
+    tool?: string
+    done?: boolean
+    result?: string
+  }) => void
   /** The finished body — the same `data` object a plain reply carries. */
   onDone?: (body: TDone) => void
   onError?: (message: string) => void
@@ -44,6 +51,9 @@ export interface AiStreamState {
   status: string | null
   /** A tool round's own words, kept muted above the status. */
   narration: string
+  /** Every tool step so far, in order, with its short result (#1839).
+   *  Hosts list them above the answer and fold them once `text` arrives. */
+  steps: AiStreamStep[]
 }
 
 export interface AiStreamHandle<TDone> extends AiStreamState {
@@ -67,7 +77,8 @@ const EMPTY: AiStreamState = {
   streamId: null,
   text: '',
   status: null,
-  narration: ''
+  narration: '',
+  steps: []
 }
 
 export function useAiStream<TDone = Record<string, unknown>>(
@@ -81,13 +92,25 @@ export function useAiStream<TDone = Record<string, unknown>>(
   const idRef = useRef<string | null>(null)
   const pendingRef = useRef(false)
   const buffer = useRef<Buffered[]>([])
-  const draft = useRef({ text: '', round: -1, narration: '', status: null as string | null })
+  const draft = useRef({
+    text: '',
+    round: -1,
+    narration: '',
+    status: null as string | null,
+    steps: [] as AiStreamStep[]
+  })
   const frame = useRef<number | null>(null)
 
   const flush = useCallback(() => {
     frame.current = null
     const d = draft.current
-    setState((s) => ({ ...s, text: d.text, narration: d.narration, status: d.status }))
+    setState((s) => ({
+      ...s,
+      text: d.text,
+      narration: d.narration,
+      status: d.status,
+      steps: d.steps
+    }))
   }, [])
   const schedule = useCallback(() => {
     if (frame.current != null) return
@@ -101,7 +124,7 @@ export function useAiStream<TDone = Record<string, unknown>>(
     if (frame.current != null && typeof cancelAnimationFrame === 'function')
       cancelAnimationFrame(frame.current)
     frame.current = null
-    draft.current = { text: '', round: -1, narration: '', status: null }
+    draft.current = { text: '', round: -1, narration: '', status: null, steps: [] }
     setState({ ...EMPTY })
     if (error) handlers.current.onError?.(error)
     else if (body) {
@@ -128,13 +151,21 @@ export function useAiStream<TDone = Record<string, unknown>>(
       } else if (event === 'ai:status') {
         const text = String(payload.text ?? '')
         const round = Number(payload.round ?? 0)
-        if (d.text.trim()) d.narration = d.text.trim()
-        d.text = ''
-        d.status = text
+        const done = payload.done === true || payload.failed === true
+        d.steps = applyStepStatus(d.steps, payload)
+        if (!done) {
+          // a step starting: what the round said so far was narration
+          if (d.text.trim()) d.narration = d.text.trim()
+          d.text = ''
+          d.status = text
+        }
         handlers.current.onStatus?.({
           text,
           round,
-          tool: typeof payload.tool === 'string' ? payload.tool : undefined
+          tool: typeof payload.tool === 'string' ? payload.tool : undefined,
+          ...(done
+            ? { done: true, result: typeof payload.result === 'string' ? payload.result : '' }
+            : {})
         })
         schedule()
       } else if (event === 'ai:done') {
@@ -178,7 +209,7 @@ export function useAiStream<TDone = Record<string, unknown>>(
       const connected = handlers.current.connected?.() ?? true
       pendingRef.current = connected
       buffer.current = []
-      draft.current = { text: '', round: -1, narration: '', status: null }
+      draft.current = { text: '', round: -1, narration: '', status: null, steps: [] }
       setState({ ...EMPTY, active: true })
       let res: Record<string, unknown>
       try {

@@ -20,6 +20,16 @@ export type AppCard =
   | { kind: 'report'; id: string; name: string; widgets: number }
   | { kind: 'dashboard'; id: string; name: string; widgets: number }
   | { kind: 'view'; id: string; name: string; collection: string; total: number | null }
+  | {
+      kind: 'ask'
+      id: string
+      name: string
+      question: string
+      answer: string | null
+      answer_hidden: boolean
+      turns: number
+      owner_name: string
+    }
 
 function titleCase(s: string): string {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -45,6 +55,14 @@ export async function appCardFor(
     return null
   }
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent)
+
+  // /ask?conversation=<id> — an Ask AI conversation posted to chat (#1851).
+  // Built for the reader: no access → no card; the answer line only when the
+  // sharing rule lets THIS reader read it.
+  if (parts[0] === 'ask' && url.searchParams.get('conversation')) {
+    const { askConversationCard } = await import('./ai-conversation-card.js')
+    return askConversationCard(user, url.searchParams.get('conversation') as string)
+  }
 
   // /collections/:c/:id  |  /records/:c/:id
   if ((parts[0] === 'collections' || parts[0] === 'records') && parts.length >= 3) {

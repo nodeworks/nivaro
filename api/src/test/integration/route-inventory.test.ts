@@ -198,7 +198,14 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
   { method: 'DELETE', path: '/api/import-templates/:id' },
   { method: 'POST', path: '/api/import-templates/:id/parse' },
   { method: 'POST', path: '/api/import-templates/:id/execute' },
-  { method: 'POST', path: '/api/import-templates/test' }
+  { method: 'POST', path: '/api/import-templates/test' },
+
+  // Access insights — "Why?" on refusals, owners, role changes, a person's access
+  { method: 'GET', path: '/api/access-insights/denied/:collection/:id' },
+  { method: 'GET', path: '/api/access-insights/owners/:collection/:id' },
+  { method: 'GET', path: '/api/access-insights/act-now/:collection/:id' },
+  { method: 'POST', path: '/api/access-insights/roles/:id/explain-change' },
+  { method: 'GET', path: '/api/access-insights/people/:id' }
 ]
 
 /**

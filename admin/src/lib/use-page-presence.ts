@@ -3,6 +3,7 @@ import { useLocation } from 'react-router'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 /**
  * Reports which admin page the current user is on (presence map feed).
@@ -21,7 +22,7 @@ export function usePagePresence() {
 
   useEffect(() => {
     if (!user) return
-    const socket = io(API_URL, { transports: ['websocket'], withCredentials: true })
+    const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
     socketRef.current = socket
 
     socket.on('connect', async () => {

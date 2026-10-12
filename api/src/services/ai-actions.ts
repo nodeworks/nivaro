@@ -46,33 +46,54 @@ function rowLabel(row: Record<string, unknown>): string {
   return String(row.title ?? row.name ?? row.label ?? row.subject ?? `#${String(row.id)}`)
 }
 
-export async function proposeAction(
-  user: User,
-  input: {
-    action_type?: string
-    collection?: string
-    filter?: unknown
-    changes?: Record<string, unknown>
-    data?: Record<string, unknown>
-    dashboard?: {
-      name?: string
-      widgets?: Array<{
-        type?: string
-        title?: string
-        collection?: string
-        field?: string
-        filters?: unknown
-      }>
-    }
-    task?: TaskProposalInput
+export interface ProposeActionInput {
+  action_type?: string
+  collection?: string
+  filter?: unknown
+  changes?: Record<string, unknown>
+  data?: Record<string, unknown>
+  dashboard?: {
+    name?: string
+    widgets?: Array<{
+      type?: string
+      title?: string
+      collection?: string
+      field?: string
+      filters?: unknown
+    }>
   }
-): Promise<ProposalPreview> {
+  task?: TaskProposalInput
+}
+
+/**
+ * A validated, previewed action that has NOT been stored — what a proposal
+ * row holds, and what one step of an AI plan (services/ai-plans.ts) holds.
+ * Built AS THE PERSON: reads go through readItems, so the preview only ever
+ * names records they can see.
+ */
+export interface BuiltAction {
+  action_type: ProposalPreview['action_type']
+  collection: string
+  payload: Record<string, unknown>
+  /** The preview the client renders (no proposal id yet). */
+  preview: Omit<ProposalPreview, 'proposal_id' | 'expires_note'>
+  /** What the proposals row stores in `preview` (kept as before). */
+  storedPreview: Record<string, unknown>
+  expiresNote: string
+  /** The records the action acts on, when it acts on existing ones. */
+  targets?: { collection: string; ids: string[] }
+}
+
+const DEFAULT_EXPIRES_NOTE =
+  'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
+
+export async function buildAction(user: User, input: ProposeActionInput): Promise<BuiltAction> {
   // Dashboards validate per-widget collections instead of a single one
   if (input.action_type === 'create_dashboard') {
-    return proposeDashboard(user, input.dashboard ?? {})
+    return buildDashboard(user, input.dashboard ?? {})
   }
   if (input.action_type === 'create_task') {
-    return proposeTask(user, input.task ?? {})
+    return buildTask(user, input.task ?? {})
   }
   const collection = String(input.collection ?? '')
   if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_')) {
@@ -91,71 +112,83 @@ export async function proposeAction(
     ).map((r) => r.field)
   )
 
-  let payload: Record<string, unknown>
-  let preview: Omit<ProposalPreview, 'proposal_id' | 'expires_note'>
-
   if (actionType === 'create_record') {
     const data = Object.fromEntries(
       Object.entries(input.data ?? {}).filter(([k]) => validFields.has(k) && k !== 'id')
     )
     if (Object.keys(data).length === 0) throw new Error('data must set at least one valid field')
-    payload = { data }
-    preview = {
-      action_type: 'create_record',
+    const preview = {
+      action_type: 'create_record' as const,
       collection,
       count: 1,
       changes: data,
       sample: []
     }
-  } else {
-    const changes = Object.fromEntries(
-      Object.entries(input.changes ?? {}).filter(([k]) => validFields.has(k) && k !== 'id')
-    )
-    if (Object.keys(changes).length === 0) {
-      throw new Error('changes must set at least one valid field')
-    }
-    // Resolve affected ids through the permission-checked read path (RLS applies)
-    const res = await readItems(user, collection, {
-      filter: (input.filter as Record<string, unknown>) ?? {},
-      limit: MAX_AFFECTED + 1
-    })
-    const rows = ((res as { data?: Array<Record<string, unknown>> }).data ?? []) as Array<
-      Record<string, unknown>
-    >
-    if (rows.length === 0) throw new Error('The filter matches no records you can read')
-    if (rows.length > MAX_AFFECTED) {
-      throw new Error(
-        `The filter matches more than ${MAX_AFFECTED} records — narrow it before proposing`
-      )
-    }
-    payload = { ids: rows.map((r) => String(r.id)), changes }
-    preview = {
-      action_type: 'bulk_update',
+    return {
+      action_type: 'create_record',
       collection,
-      count: rows.length,
-      changes,
-      sample: rows.slice(0, 8).map((r) => ({ id: String(r.id), label: rowLabel(r) }))
+      payload: { data },
+      preview,
+      storedPreview: preview,
+      expiresNote: DEFAULT_EXPIRES_NOTE
     }
   }
+  const changes = Object.fromEntries(
+    Object.entries(input.changes ?? {}).filter(([k]) => validFields.has(k) && k !== 'id')
+  )
+  if (Object.keys(changes).length === 0) {
+    throw new Error('changes must set at least one valid field')
+  }
+  // Resolve affected ids through the permission-checked read path (RLS applies)
+  const res = await readItems(user, collection, {
+    filter: (input.filter as Record<string, unknown>) ?? {},
+    limit: MAX_AFFECTED + 1
+  })
+  const rows = ((res as { data?: Array<Record<string, unknown>> }).data ?? []) as Array<
+    Record<string, unknown>
+  >
+  if (rows.length === 0) throw new Error('The filter matches no records you can read')
+  if (rows.length > MAX_AFFECTED) {
+    throw new Error(
+      `The filter matches more than ${MAX_AFFECTED} records — narrow it before proposing`
+    )
+  }
+  const ids = rows.map((r) => String(r.id))
+  const preview = {
+    action_type: 'bulk_update' as const,
+    collection,
+    count: rows.length,
+    changes,
+    sample: rows.slice(0, 8).map((r) => ({ id: String(r.id), label: rowLabel(r) }))
+  }
+  return {
+    action_type: 'bulk_update',
+    collection,
+    payload: { ids, changes },
+    preview,
+    storedPreview: preview,
+    expiresNote: DEFAULT_EXPIRES_NOTE,
+    targets: { collection, ids }
+  }
+}
 
+export async function proposeAction(
+  user: User,
+  input: ProposeActionInput
+): Promise<ProposalPreview> {
+  const built = await buildAction(user, input)
   const id = randomUUID()
   await db('nivaro_ai_proposals').insert({
     id,
     user: user.id,
-    action_type: actionType,
-    collection,
-    payload: JSON.stringify(payload),
-    preview: JSON.stringify(preview),
+    action_type: built.action_type,
+    collection: built.collection,
+    payload: JSON.stringify(built.payload),
+    preview: JSON.stringify(built.storedPreview),
     status: 'proposed',
     created_at: new Date()
   })
-
-  return {
-    proposal_id: id,
-    ...preview,
-    expires_note:
-      'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
-  }
+  return { proposal_id: id, ...built.preview, expires_note: built.expiresNote }
 }
 
 interface TaskProposalInput {
@@ -170,7 +203,7 @@ interface TaskProposalInput {
 }
 
 /** A person by id, email, or an unambiguous full name among active people. */
-async function findPerson(ref: string): Promise<{ id: string; name: string }> {
+export async function findPerson(ref: string): Promise<{ id: string; name: string }> {
   const v = ref.trim()
   const people = (await db('nivaro_users')
     .where('status', 'active')
@@ -206,7 +239,7 @@ async function findPerson(ref: string): Promise<{ id: string; name: string }> {
   return { id: pick[0].id, name: name(pick[0]) }
 }
 
-async function proposeTask(user: User, t: TaskProposalInput): Promise<ProposalPreview> {
+async function buildTask(user: User, t: TaskProposalInput): Promise<BuiltAction> {
   const collection = String(t.collection ?? '')
   if (!/^[a-zA-Z0-9_]+$/.test(collection) || collection.startsWith('nivaro_'))
     throw new Error('Invalid collection')
@@ -245,30 +278,25 @@ async function proposeTask(user: User, t: TaskProposalInput): Promise<ProposalPr
     ...(priority !== 'normal' ? { Priority: priority } : {}),
     On: label
   }
-  const id = randomUUID()
-  await db('nivaro_ai_proposals').insert({
-    id,
-    user: user.id,
-    action_type: 'create_task',
-    collection,
-    payload: JSON.stringify(payload),
-    preview: JSON.stringify({ action_type: 'create_task', count: 1, changes }),
-    status: 'proposed',
-    created_at: new Date()
-  })
   return {
-    proposal_id: id,
     action_type: 'create_task',
     collection,
-    count: 1,
-    changes,
-    sample: [{ id: item, label }],
-    expires_note:
-      'The user must approve this proposal in the UI within 1 hour; the task is NOT created until then.'
+    payload,
+    preview: {
+      action_type: 'create_task',
+      collection,
+      count: 1,
+      changes,
+      sample: [{ id: item, label }]
+    },
+    storedPreview: { action_type: 'create_task', count: 1, changes },
+    expiresNote:
+      'The user must approve this proposal in the UI within 1 hour; the task is NOT created until then.',
+    targets: { collection, ids: [item] }
   }
 }
 
-async function proposeDashboard(
+async function buildDashboard(
   user: User,
   dashboard: {
     name?: string
@@ -280,7 +308,7 @@ async function proposeDashboard(
       filters?: unknown
     }>
   }
-): Promise<ProposalPreview> {
+): Promise<BuiltAction> {
   const name = String(dashboard.name ?? '').trim()
   if (!name) throw new Error('dashboard.name is required')
   const rawWidgets = Array.isArray(dashboard.widgets) ? dashboard.widgets.slice(0, 12) : []
@@ -325,33 +353,25 @@ async function proposeDashboard(
     })
   }
 
-  const id = randomUUID()
-  await db('nivaro_ai_proposals').insert({
-    id,
-    user: user.id,
-    action_type: 'create_dashboard',
-    collection: '__dashboard__',
-    payload: JSON.stringify({ name, widgets }),
-    preview: JSON.stringify({ action_type: 'create_dashboard', count: widgets.length }),
-    status: 'proposed',
-    created_at: new Date()
-  })
-
   return {
-    proposal_id: id,
     action_type: 'create_dashboard',
     collection: '__dashboard__',
-    count: widgets.length,
-    changes: { name },
-    sample: [],
-    widgets: widgets.map((w) => ({
-      type: w.type,
-      title: w.title,
-      collection: w.collection,
-      field: w.field
-    })),
-    expires_note:
-      'The user must approve this proposal in the UI within 1 hour; it does NOT execute automatically.'
+    payload: { name, widgets },
+    preview: {
+      action_type: 'create_dashboard',
+      collection: '__dashboard__',
+      count: widgets.length,
+      changes: { name },
+      sample: [],
+      widgets: widgets.map((w) => ({
+        type: w.type,
+        title: w.title,
+        collection: w.collection,
+        field: w.field
+      }))
+    },
+    storedPreview: { action_type: 'create_dashboard', count: widgets.length },
+    expiresNote: DEFAULT_EXPIRES_NOTE
   }
 }
 
@@ -364,6 +384,12 @@ export async function executeProposal(
   if (row.user !== user.id) {
     throw Object.assign(new Error('Only the proposer can approve this'), { statusCode: 403 })
   }
+  if (row.action_type === 'plan') {
+    // A plan runs step by step through its own routes (services/ai-plans.ts).
+    throw Object.assign(new Error('This is a plan — run it from its plan card'), {
+      statusCode: 400
+    })
+  }
   if (row.status !== 'proposed') {
     throw Object.assign(new Error(`Proposal is already ${String(row.status)}`), { statusCode: 409 })
   }
@@ -373,17 +399,39 @@ export async function executeProposal(
   }
 
   const payload = parseJson<Record<string, unknown>>(row.payload) ?? {}
-  const collection = String(row.collection)
-  let result: Record<string, unknown> = {}
+  const result = await runAction(user, String(row.action_type), String(row.collection), payload)
 
-  if (row.action_type === 'create_task') {
+  await db('nivaro_ai_proposals')
+    .where({ id: proposalId })
+    .update({
+      status: 'executed',
+      result: JSON.stringify(result),
+      executed_at: new Date()
+    })
+  return { status: 'executed', result }
+}
+
+/**
+ * Apply one built action AS THE PERSON — every write goes through the items
+ * service (hooks, validation, row security, activity per record). Shared by
+ * single proposals and AI plan steps. A bulk update reports its failures
+ * rather than throwing; `failed_ids` names every record that refused.
+ */
+export async function runAction(
+  user: User,
+  actionType: string,
+  collection: string,
+  payload: Record<string, unknown>
+): Promise<Record<string, unknown>> {
+  let result: Record<string, unknown> = {}
+  if (actionType === 'create_task') {
     const { createTask } = await import('./tasks.js')
     const { getApp } = await import('./io-holder.js')
     const { task } = await createTask(getApp() ?? null, user.id, payload as never, {
       via: 'Ask AI'
     })
     result = { task_id: task.id, collection: task.collection, item: task.item }
-  } else if (row.action_type === 'create_dashboard') {
+  } else if (actionType === 'create_dashboard') {
     const name = String((payload.name as string) ?? 'AI Dashboard')
     const widgets = (payload.widgets as Array<Record<string, unknown>>) ?? []
     const dashId = randomUUID()
@@ -423,7 +471,7 @@ export async function executeProposal(
       col += width
     }
     result = { dashboard_id: dashId, widgets: widgets.length }
-  } else if (row.action_type === 'create_record') {
+  } else if (actionType === 'create_record') {
     const created = (await createOne(
       user,
       collection,
@@ -435,27 +483,21 @@ export async function executeProposal(
     const changes = (payload.changes as Record<string, unknown>) ?? {}
     let updated = 0
     const errors: string[] = []
+    const failedIds: string[] = []
     for (const id of ids) {
       try {
         await updateOne(user, collection, id, { ...changes })
         updated++
       } catch (err) {
+        failedIds.push(id)
         if (errors.length < 10) {
           errors.push(`${id}: ${err instanceof Error ? err.message.slice(0, 120) : 'failed'}`)
         }
       }
     }
-    result = { updated, failed: ids.length - updated, errors }
+    result = { updated, failed: ids.length - updated, errors, failed_ids: failedIds }
   }
-
-  await db('nivaro_ai_proposals')
-    .where({ id: proposalId })
-    .update({
-      status: 'executed',
-      result: JSON.stringify(result),
-      executed_at: new Date()
-    })
-  return { status: 'executed', result }
+  return result
 }
 
 export async function rejectProposal(user: User, proposalId: string): Promise<void> {

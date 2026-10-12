@@ -583,7 +583,11 @@ export function FilesPage() {
       setConfirmPurge(false)
       queryClient.invalidateQueries({ queryKey: ['files'] })
     },
-    onError: () => toast.error('Purge failed')
+    onError: (err: unknown) =>
+      toast.error(
+        (err as { response?: { data?: { error?: string } } })?.response?.data?.error ??
+          'Purge failed'
+      )
   })
   const deleteFile = useMutation({
     mutationFn: (id: string) => api.delete(`/files/${id}`),

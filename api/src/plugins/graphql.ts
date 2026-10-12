@@ -16,6 +16,7 @@ import { authenticate } from '../middleware/authenticate.js'
 import { markBootPhase } from '../services/boot-phases.js'
 import { beginIdempotency, isGraphQLMutation } from '../services/idempotency.js'
 import { buildGraphQLSchema } from '../services/schema-builder.js'
+import { inSocketTenant, socketTenant } from '../services/socket-tenant.js'
 
 const GRAPHIQL_HTML = /* html */ `<!DOCTYPE html>
 <html lang="en">
@@ -164,16 +165,43 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
       if (!authHeader) return { user: undefined, isAdmin: false }
       const token = authHeader.replace(/^bearer /i, '').trim()
       if (!token) return { user: undefined, isAdmin: false }
-      try {
+      // Cloud: the upgrade never passed the tenant hook — resolve the tenant from its host (as a
+      // socket does), sign in against THAT tenant's database, and hand the tenant key to the
+      // subscription resolvers, whose topics are per tenant. No resolvable tenant = no user.
+      const cloud = !!process.env.CLOUD_META_DB_URL
+      let tenantKey = ''
+      let withTenant: (<T>(fn: () => Promise<T>) => Promise<T>) | undefined
+      const lookup = async () => {
         const { db } = await import('../db/index.js')
-        const user = await db('nivaro_users as u')
+        return db('nivaro_users as u')
           .join('nivaro_roles as r', 'u.role', 'r.id')
           .where('u.static_token', token)
           .where('u.status', 'active')
           .select('u.*', 'r.admin_access', 'r.app_access')
           .first()
+      }
+      try {
+        let user: Record<string, unknown> | undefined
+        if (cloud) {
+          const socketLike = { handshake: { headers: extra.request?.headers ?? {} }, data: {} }
+          const t = await socketTenant(socketLike)
+          if (!t) return { user: undefined, isAdmin: false }
+          tenantKey = t.tenantId || t.slug
+          // Resolvers run outside the tenant context too: they re-enter it through this.
+          withTenant = <T>(fn: () => Promise<T>) =>
+            new Promise<T>((resolve, reject) => {
+              void inSocketTenant(socketLike, async () => {
+                try {
+                  resolve(await fn())
+                } catch (err) {
+                  reject(err)
+                }
+              })()
+            })
+          user = await withTenant(lookup)
+        } else user = await lookup()
         if (!user) return { user: undefined, isAdmin: false }
-        return { user, isAdmin: Boolean(user.admin_access) }
+        return { user, isAdmin: Boolean(user.admin_access), tenantKey, withTenant }
       } catch {
         return { user: undefined, isAdmin: false }
       }

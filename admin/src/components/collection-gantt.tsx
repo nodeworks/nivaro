@@ -1,3 +1,4 @@
+import { useLiveQueryRefresh } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router'
@@ -53,6 +54,8 @@ export function CollectionGantt({
         .then((r) => r.data.data ?? []),
     enabled: !!startField && !!endField && startField !== endField
   })
+  // Records others add, move or reschedule appear in place (#2124).
+  useLiveQueryRefresh(collection, [['gantt', collection]])
 
   const { rows, windowStart, windowEnd } = useMemo(() => {
     const now = Date.now()

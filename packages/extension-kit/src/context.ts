@@ -143,6 +143,15 @@ export interface ExtensionContext {
    *  batch is sent as text, so only interpolate values you built yourself. */
   sql: {
     runLong<T = Record<string, unknown>>(sql: string, opts?: { timeoutMs?: number }): Promise<T[]>
+    /** Tell open pages that a raw write (a procedure, a set-based UPDATE) changed
+     *  records: ids + field NAMES, never values. No ids = "records in this
+     *  collection changed"; more than 100 ids collapse into one such event.
+     *  Optional — an older API does not provide it. Never throws. */
+    announceWrites?(
+      collection: string,
+      ids?: Array<string | number> | null,
+      opts?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
+    ): Promise<void>
   }
   /** Write an audit entry to nivaro_activity for a mutation that bypasses
    *  the items service. The action is namespaced `<extId>:<action>`. Never

@@ -13,10 +13,40 @@ import {
   olderReason
 } from '../services/client-version.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
+import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
+import { emitToTenant } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
-import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import {
+  canSeeRecordRoom,
+  isKnownCollection,
+  masqRoom,
+  parseWsTokenValue,
+  RECHECK_EVENT,
+  type RecheckTarget,
+  runLocalRecheck,
+  type SocketAccessHooks,
+  type SocketBind,
+  sessionRoom,
+  sha,
+  sweepSockets,
+  userWithApiKey
+} from '../services/socket-access.js'
+import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import {
+  type Coalescer,
+  collectionUpdateOf,
+  createCoalescer,
+  encodeEvent,
+  eventNameOf,
+  isCredentialRoom,
+  noteCoalesced,
+  noteTenantSocket,
+  recordOutbound,
+  splitTenantRoom
+} from '../services/socket-transport.js'
+import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -60,14 +90,15 @@ const recordViewers = new Map<string, Map<string, { id: string; name: string }>>
 /** Presence-aware suppression (#269): is the user actively viewing the record
  *  RIGHT NOW (joined its record room on this node)? */
 export function isUserViewing(collection: string, item: string, userId: string): boolean {
-  const map = recordViewers.get(`record:${collection}:${item}`)
+  // Cloud: record rooms are per tenant — the caller's tenant (its request context).
+  const map = recordViewers.get(tenantScopedRoom(`record:${collection}:${item}`))
   if (!map) return false
   for (const v of map.values()) if (v.id === userId) return true
   return false
 }
 
 /** Per-socket connection metadata for the realtime diagnostics page (#270). */
-interface SocketMeta {
+export interface SocketMeta {
   user: { id: string; name: string } | null
   connectedAt: number
   rtt: number | null
@@ -75,6 +106,10 @@ interface SocketMeta {
   app: string | null
   /** #1048 — the build this tab runs (from client:hello); null = not reported. */
   version: ClientVersion | null
+  /** #1672 — the engine transport right now: 'websocket' or 'polling' (the fallback). */
+  transport: string | null
+  /** #1681 — the client said it understands coalesced collection:update messages. */
+  coalesce: boolean
 }
 const socketMeta = new Map<string, SocketMeta>()
 let _ioRef: SocketIOServer | null = null
@@ -106,11 +141,14 @@ export function emitForceRefresh(
   const current = older ? currentBuilds(socketMeta.values()) : new Map<string, string>()
   const local = !!app || older
   const wanted = new Set(userIds)
+  // Cloud: an administrator refreshes their own tenant's tabs only (the caller's context).
+  const tenant = process.env.CLOUD_META_DB_URL ? currentTenantKey() || '-' : null
   let sockets = 0
   const users = new Set<string>()
   for (const [id, sock] of io.sockets.sockets) {
     const meta = socketMeta.get(id)
     if (!meta?.user) continue
+    if (tenant != null && sock.data?.nvrTenantKey !== tenant) continue
     if (wanted.size && !wanted.has(meta.user.id.toUpperCase())) continue
     if (app && meta.app !== app) continue
     if (older && !olderReason(meta.app, meta.version, current)) continue
@@ -123,17 +161,24 @@ export function emitForceRefresh(
   if (!local) {
     if (wanted.size)
       for (const u of userIds) io.to(`user:${u}`).emit('client:force-refresh', payload)
+    else if (tenant != null) io.to(tenantSocketsRoom(tenant)).emit('client:force-refresh', payload)
     else io.emit('client:force-refresh', payload)
   }
   return { sockets, users: users.size }
 }
 
+/** Cloud: every signed-in socket of a tenant sits in this room (record-events.ts
+ *  TENANT_ALL_ROOM, joined at sign-in), on every replica — force refresh rides it. */
+function tenantSocketsRoom(tenant: string): string {
+  return tenantScopedRoom('all', tenant)
+}
+
 export function getRealtimeStats(): {
-  sockets: Array<SocketMeta & { id: string; rooms: string[] }>
+  sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }>
   rooms: Array<{ room: string; size: number }>
 } {
   const io = _ioRef
-  const sockets: Array<SocketMeta & { id: string; rooms: string[] }> = []
+  const sockets: Array<SocketMeta & { id: string; tenant: string | null; rooms: string[] }> = []
   if (io) {
     for (const [id, sock] of io.sockets.sockets) {
       const meta = socketMeta.get(id) ?? {
@@ -142,15 +187,23 @@ export function getRealtimeStats(): {
         rtt: null,
         reconnects: 0,
         app: null,
-        version: null
+        version: null,
+        transport: null,
+        coalesce: false
       }
-      sockets.push({ id, ...meta, rooms: [...sock.rooms].filter((r) => r !== id) })
+      sockets.push({
+        id,
+        ...meta,
+        tenant: (sock.data?.nvrTenantKey as string | undefined) ?? null,
+        rooms: [...sock.rooms].filter((r) => r !== id && !isCredentialRoom(r))
+      })
     }
   }
   const rooms: Array<{ room: string; size: number }> = []
   if (io) {
     for (const [room, set] of io.sockets.adapter.rooms) {
-      if (!io.sockets.sockets.has(room)) rooms.push({ room, size: set.size })
+      if (!io.sockets.sockets.has(room) && !isCredentialRoom(room))
+        rooms.push({ room, size: set.size })
     }
     rooms.sort((a, b) => b.size - a.size)
   }
@@ -162,7 +215,14 @@ export function getRealtimeStats(): {
  * sockets and people, whether it is the current build, and whether a "reload old tabs" would
  * reach it. Sockets that never said which build (an older client) group under build null.
  */
-export function getClientVersionGroups(): Array<{
+export function getClientVersionGroups(
+  tenant: string | null = null,
+  // Test seam: the node's socket metadata and how a socket id maps to its tenant.
+  deps: {
+    metas: Map<string, SocketMeta>
+    tenantOf: (socketId: string) => string | null
+  } = { metas: socketMeta, tenantOf: socketTenantKey }
+): Array<{
   app: string | null
   build: string | null
   api: string | null
@@ -172,7 +232,12 @@ export function getClientVersionGroups(): Array<{
   older: 'build' | 'api' | null
   newest_load: string | null
 }> {
-  const current = currentBuilds(socketMeta.values())
+  // Cloud: only the caller's tenant's tabs (the versions list on /realtime/stats). The
+  // "current build" is judged from those tabs too.
+  const metas = [...deps.metas.entries()]
+    .filter(([id]) => tenant == null || deps.tenantOf(id) === tenant)
+    .map(([, m]) => m)
+  const current = currentBuilds(metas)
   const groups = new Map<
     string,
     {
@@ -185,7 +250,7 @@ export function getClientVersionGroups(): Array<{
       loaded: number | null
     }
   >()
-  for (const meta of socketMeta.values()) {
+  for (const meta of metas) {
     if (!meta.user) continue
     const v = meta.version
     const older = olderReason(meta.app, v, current)
@@ -221,6 +286,12 @@ export function getClientVersionGroups(): Array<{
     .sort((a, b) => (a.app ?? '').localeCompare(b.app ?? '') || b.sockets - a.sockets)
 }
 
+/** The tenant key a socket on this node resolved to (cloud), or null. */
+function socketTenantKey(socketId: string): string | null {
+  const key = _ioRef?.sockets.sockets.get(socketId)?.data?.nvrTenantKey
+  return typeof key === 'string' ? key : null
+}
+
 /** Local concurrency snapshot for the sampling cron (#275). */
 export function getLocalConcurrency(): { sockets: number; users: number } {
   const users = new Set<string>()
@@ -239,7 +310,11 @@ export function getRecordViewerSnapshot(): Array<{
     item: string
     viewers: Array<{ id: string; name: string }>
   }> = []
-  for (const [room, map] of recordViewers) {
+  // Cloud: only the caller's tenant's record rooms (viewer names must not cross tenants).
+  const tenant = currentTenantKey()
+  for (const [scoped, map] of recordViewers) {
+    const { tenant: roomTenant, room } = splitTenantRoom(scoped)
+    if (roomTenant !== tenant) continue
     const m = room.match(/^record:([^:]+):(.+)$/)
     if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
   }
@@ -248,7 +323,15 @@ export function getRecordViewerSnapshot(): Array<{
 
 // Watch rooms admins may join via admin:join (traffic feed, job progress,
 // monitor flips). Allowlisted — a socket can't invent a privileged room name.
-const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors', 'firehose', 'flows', 'traffic-map'])
+const WATCH_ROOMS = new Set([
+  'traffic',
+  'jobs',
+  'monitors',
+  'firehose',
+  'flows',
+  'traffic-map',
+  'conformance'
+])
 
 /**
  * Per-socket join/leave ordering for watch rooms. `admin:join` awaits a role lookup while
@@ -286,10 +369,34 @@ export function createWatchRoomGate(): {
   }
 }
 
+/**
+ * #1672 — whether clients may fall back to HTTP long-polling when the websocket upgrade is
+ * blocked. Polling needs sticky sessions behind a load balancer (each poll must reach the
+ * process holding the session); `SOCKET_POLLING=off` turns it off where the balancer is not
+ * sticky, and clients then fall back to the read-only SSE stream instead.
+ */
+export function socketPollingAllowed(): boolean {
+  return (process.env.SOCKET_POLLING ?? 'on').toLowerCase() !== 'off'
+}
+
+/** #1730 — per-message deflate for frames over 1 KB; `SOCKET_COMPRESSION=off` disables it. */
+export function socketCompressionOn(): boolean {
+  return (process.env.SOCKET_COMPRESSION ?? 'on').toLowerCase() !== 'off'
+}
+
+/** The room a broadcast is being written for (set around adapter.apply; null = direct emit). */
+let broadcastRoom: string | null = null
+
+function roomsLabel(rooms: unknown): string | null {
+  if (!(rooms instanceof Set) || rooms.size === 0) return 'all'
+  return String([...rooms][0])
+}
+
 export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const io = new SocketIOServer(app.server, {
     cors: { origin: '*', credentials: true },
-    transports: ['websocket', 'polling']
+    transports: socketPollingAllowed() ? ['websocket', 'polling'] : ['websocket'],
+    perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false
   })
   _ioRef = io
 
@@ -304,21 +411,56 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`
     })
   )
+  // #1730 — byte accounting per room: every broadcast (local or relayed from another replica)
+  // writes to its sockets inside adapter.apply, so the room in flight is known there.
+  {
+    const adapter = io.of('/').adapter as unknown as {
+      apply(opts: { rooms?: unknown }, cb: (s: unknown) => void): unknown
+    }
+    const origApply = adapter.apply.bind(adapter)
+    adapter.apply = (opts, cb) => {
+      const prev = broadcastRoom
+      broadcastRoom = roomsLabel(opts?.rooms)
+      try {
+        return origApply(opts, cb)
+      } finally {
+        broadcastRoom = prev
+      }
+    }
+  }
   // socketId → where in the admin that user is right now (presence map;
   // per-node like recordViewers — same accepted Redis-adapter limitation)
+  // Cloud: each entry carries its socket's tenant ('' self-hosted); every reader and every
+  // presence-map broadcast sees one tenant's people only.
   const pagePresence = new Map<
     string,
-    { user: { id: string; name: string }; path: string; since: number; app?: string | null }
+    {
+      user: { id: string; name: string }
+      path: string
+      since: number
+      app?: string | null
+      tenant: string
+    }
   >()
 
-  function presenceSnapshot() {
+  function presenceSnapshot(tenant: string) {
     return [...pagePresence.values()]
+      .filter((p) => p.tenant === tenant)
+      .map(({ tenant: _tenant, ...p }) => p)
   }
-  // #42 — who else is on this admin page right now (per replica).
+  /** The tenant's presence-map room, with that tenant's snapshot. */
+  function broadcastPresenceMap(tenant: string) {
+    io.to(tenantScopedRoom('presence-map', tenant)).emit(
+      'presence-map:update',
+      presenceSnapshot(tenant)
+    )
+  }
+  // #42 — who else is on this admin page right now (per replica; the caller's tenant).
   pagePresenceReader = (path: string) => {
+    const tenant = currentTenantKey()
     const seen = new Map<string, { id: string; name: string; since: number }>()
     for (const p of pagePresence.values()) {
-      if (p.path !== path) continue
+      if (p.path !== path || p.tenant !== tenant) continue
       const cur = seen.get(p.user.id)
       if (!cur || p.since < cur.since) seen.set(p.user.id, { ...p.user, since: p.since })
     }
@@ -326,8 +468,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   }
 
   pagePrefixReader = (prefixes: string[]) => {
+    const tenant = currentTenantKey()
     const ids = new Set<string>()
     for (const p of pagePresence.values()) {
+      if (p.tenant !== tenant) continue
       if (
         prefixes.some(
           (x) => p.path === x || p.path.startsWith(`${x}/`) || p.path.startsWith(`${x}?`)
@@ -396,8 +540,93 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       rtt: null,
       reconnects: 0,
       app: null,
-      version: null
+      version: null,
+      transport: socket.conn?.transport?.name ?? null,
+      coalesce: false
     })
+    socket.conn?.on?.('upgrade', (t: { name?: string }) => {
+      const meta = socketMeta.get(socket.id)
+      if (meta) meta.transport = t?.name ?? meta.transport
+    })
+
+    // #1732 — which tenant this socket belongs to (cloud), for per-tenant counters.
+    let tenantKey: string | null = null
+    if (process.env.CLOUD_META_DB_URL) {
+      void socketTenant(socket).then((t) => {
+        if (!t || !socket.connected) return
+        tenantKey = String(t.tenantId || t.slug)
+        socket.data.nvrTenantKey = tenantKey
+        socket.data.nvrTenantNames = [t.tenantId, t.slug].filter(Boolean).map(String)
+        noteTenantSocket(tenantKey, 1, t.slug)
+      })
+    }
+
+    // Cloud: shared room names (chat, pulse, presence, watch) are per tenant (tenant-rooms.ts,
+    // `t:<tenant>:`). `scopedRoom` resolves the socket's tenant first (null = none: join
+    // nothing); `scopedRoomNow` is for leaves and broadcasts after a join resolved it.
+    const cloud = !!process.env.CLOUD_META_DB_URL
+    const scopedRoom = async (room: string): Promise<string | null> => {
+      if (!cloud) return room
+      const t = await socketTenant(socket)
+      return t ? tenantScopedRoom(room, String(t.tenantId || t.slug)) : null
+    }
+    // Before the tenant resolves (cloud) these are null: nothing was joined under a tenant yet,
+    // so there is nothing to leave or broadcast — never a shared placeholder room (N6).
+    const tenantNow = (): string | null => {
+      if (!cloud) return ''
+      const key = socket.data.nvrTenantKey
+      return typeof key === 'string' && key ? key : null
+    }
+    const scopedRoomNow = (room: string): string | null => {
+      const tenant = tenantNow()
+      return tenant == null ? null : tenantScopedRoom(room, tenant)
+    }
+    const leaveScoped = (room: string) => {
+      const name = scopedRoomNow(room)
+      if (name) socket.leave(name)
+    }
+
+    // #1730 byte accounting + #1681 burst coalescing, at the one place every packet to this
+    // socket passes: the client's writeToEngine (broadcasts and direct emits alike).
+    const client = socket.client as unknown as {
+      writeToEngine(encoded: unknown, opts: Record<string, unknown>): void
+    }
+    const origWrite = client.writeToEngine.bind(client)
+    const sizeOf = (p: unknown) =>
+      typeof p === 'string'
+        ? Buffer.byteLength(p)
+        : p instanceof Uint8Array || p instanceof ArrayBuffer
+          ? p.byteLength
+          : 0
+    let coalescer: Coalescer | null = null
+    const sendCoalesced = (payload: Record<string, unknown>) => {
+      const encoded = encodeEvent('collection:update', payload)
+      recordOutbound(
+        'collection:update',
+        `collection:${String(payload.collection ?? '')}`,
+        sizeOf(encoded),
+        tenantKey
+      )
+      origWrite(encoded, {})
+    }
+    client.writeToEngine = (encoded, opts) => {
+      const list = Array.isArray(encoded) ? encoded : [encoded]
+      const room = broadcastRoom
+      for (const p of list) {
+        if (typeof p === 'string') {
+          if (coalescer && !opts?.volatile) {
+            const payload = collectionUpdateOf(p)
+            if (payload) {
+              coalescer.push(payload)
+              continue
+            }
+          }
+          recordOutbound(eventNameOf(p) ?? `packet:${p[0] ?? '?'}`, room, sizeOf(p), tenantKey)
+        } else recordOutbound('binary', room, sizeOf(p), tenantKey)
+        origWrite(p, opts)
+      }
+    }
+
     // Zombie socket reaper (#310): a connection that never authenticates is
     // holding a slot for nothing — drop it after 45s. Legit clients auth
     // within the first second of connecting.
@@ -422,50 +651,83 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
     // Client self-report: reconnect count + which app (admin/headless host).
     // #1048 — and which build the tab runs (build / api / tab / loaded, see client-version).
-    socket.on('client:hello', (payload: { reconnects?: number; app?: string }) => {
-      const meta = socketMeta.get(socket.id)
-      if (!meta) return
-      if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
-      if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
-      const version = clientVersionFromHello(payload)
-      if (version.build || version.api || version.tab) meta.version = version
-    })
+    socket.on(
+      'client:hello',
+      (payload: { reconnects?: number; app?: string; features?: unknown; transport?: string }) => {
+        const meta = socketMeta.get(socket.id)
+        if (!meta) return
+        if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
+        if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
+        // #1681 — opt-in: only a client that understands merged messages gets them, so an older
+        // client (a portal on a pinned package) keeps one message per change.
+        if (
+          Array.isArray(payload?.features) &&
+          payload.features.includes('coalesce') &&
+          !coalescer
+        ) {
+          meta.coalesce = true
+          coalescer = createCoalescer({
+            send: sendCoalesced,
+            onCollapse: (n) => noteCoalesced(n, tenantKey)
+          })
+        }
+        const version = clientVersionFromHello(payload)
+        if (version.build || version.api || version.tab) meta.version = version
+      }
+    )
+
+    // #2132 — clock sync: the client stamps its send time, the server answers with its own
+    // clock, and the client takes the offset from the midpoint of the round trip.
+    socket.on(
+      'time:sync',
+      (payload: { c?: number }, ack?: (r: { s: number; c: number | null }) => void) => {
+        if (typeof ack !== 'function') return
+        ack({ s: Date.now(), c: typeof payload?.c === 'number' ? payload.c : null })
+      }
+    )
 
     // Missed-event catch-up (#266): client sends its last-seen sequence after
     // (re)joining its rooms; we replay what it missed, or tell it honestly
     // that the window is gone and it should refetch.
-    socket.on('catchup', async (payload: { cursor?: number }) => {
-      const cursor = Number(payload?.cursor)
-      if (!Number.isFinite(cursor) || cursor < 0) return
-      try {
-        const { replaySince } = await import('../services/event-journal.js')
-        const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
-        const result = await replaySince(cursor, rooms)
-        if (result.full) socket.emit('catchup:full', {})
-        else socket.emit('catchup:events', { events: result.events })
-      } catch (err) {
-        app.log.debug({ err }, 'catchup failed')
-        socket.emit('catchup:full', {})
-      }
-    })
+    // Cloud: replay runs in the socket's tenant (its journal table), and the
+    // socket's rooms are tenant-prefixed, so only its tenant's events return.
+    socket.on(
+      'catchup',
+      inSocketTenant(socket, async (payload: { cursor?: number }) => {
+        const cursor = Number(payload?.cursor)
+        if (!Number.isFinite(cursor) || cursor < 0) return
+        try {
+          const { replaySince } = await import('../services/event-journal.js')
+          const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
+          const result = await replaySince(cursor, rooms)
+          if (result.full) socket.emit('catchup:full', {})
+          else socket.emit('catchup:events', { events: result.events })
+        } catch (err) {
+          app.log.debug({ err }, 'catchup failed')
+          socket.emit('catchup:full', {})
+        }
+      })
+    )
 
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
     const watchGate = createWatchRoomGate()
-    // Cloud: the Traffic Map room is per tenant (#1132); every other room keeps its name.
+    // Cloud: every watch room is per tenant. The Traffic Map keeps its store-keyed name
+    // (#1132, `watch:traffic-map:<store>`); the others are `t:<tenant>:watch:<room>`
+    // (tenant-rooms.ts), the name their emitters use from the tenant's context.
     const watchRoomName = async (room: string): Promise<string | null> => {
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) return `watch:${room}`
-      const store = await socketTrafficStore(socket)
-      return store ? `watch:traffic-map:${store}` : null
+      if (!cloud) return `watch:${room}`
+      if (room === 'traffic-map') {
+        const store = await socketTrafficStore(socket)
+        return store ? `watch:traffic-map:${store}` : null
+      }
+      return scopedRoom(`watch:${room}`)
     }
     const onAdminJoin = async (payload: { room?: string }) => {
       const room = payload?.room
       const user = authenticatedUser
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
       // Self-hosted: no await before the gate, so a quick join + leave keeps its order.
-      const name =
-        room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL
-          ? `watch:${room}`
-          : await watchRoomName(room)
+      const name = !cloud ? `watch:${room}` : await watchRoomName(room)
       if (!name) return
       await watchGate.join(
         room,
@@ -477,21 +739,49 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       )
     }
     socket.on('admin:join', inSocketTenant(socket, onAdminJoin))
-    socket.on('admin:leave', (payload: { room?: string }) => {
+    const onAdminLeave = (payload: { room?: string }) => {
       const room = payload?.room
       if (typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) {
+      if (!cloud) {
         watchGate.leave(room, () => socket.leave(`watch:${room}`))
         return
       }
       void watchRoomName(room).then((name) => {
         if (name) watchGate.leave(room, () => socket.leave(name))
       })
-    })
+    }
+    // In the socket's tenant: a tenant-prefixed watch room is named from the tenant context.
+    socket.on('admin:leave', inSocketTenant(socket, onAdminLeave))
 
     // Set once `auth` succeeds below; gates authenticated-only handlers
     // (e.g. collection:join) for the lifetime of this socket connection.
     let authenticatedUser: User | null = null
+    /** Cloud: an authenticated socket joins its tenant's `all` room, where
+     *  tenant-wide notices (owners:changed, access:changed — record-events.ts)
+     *  go instead of io.emit (TENANT_ALL_ROOM there). Self-hosted: nothing to join. */
+    const joinTenantAllRoom = async () => {
+      if (!process.env.CLOUD_META_DB_URL) return
+      const t = await socketTenant(socket).catch(() => null)
+      if (t) socket.join(tenantScopedRoom('all', t.tenantId || t.slug))
+    }
+
+    /** Sign the socket in as `user`, bound to what signed it in (#1719). */
+    const signIn = (user: User, bind: SocketBind) => {
+      authenticatedUser = user
+      socket.data.nvrBind = bind
+      const meta = socketMeta.get(socket.id)
+      if (meta)
+        meta.user = {
+          id: user.id,
+          name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
+        }
+      socket.join(`user:${user.id}`)
+      // A revoke publishes to these rooms, which reach the socket on every replica.
+      if (bind.kind === 'session') socket.join(sessionRoom(bind.sid))
+      else if (bind.kind === 'masq') socket.join(masqRoom(bind.token))
+      void joinTenantAllRoom()
+      socket.emit('auth:ok', { userId: user.id })
+    }
 
     // Authenticate the socket via the user's static token, or a short-lived
     // one-time WS token minted by GET /api/auth/ws-token (session-cookie users
@@ -525,7 +815,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
         // Tell every viewer rather than making them poll. This is the whole
         // reason the list can feel instant instead of up to a minute stale.
-        io.emit('presence:changed', { user_id: userId })
+        // Cloud: the socket's own tenant only (its `all` room); self-hosted: everyone.
+        const tenant = tenantNow()
+        if (tenant != null) emitToTenant(tenant, 'presence:changed', { user_id: userId })
       } catch (err) {
         app.log.debug({ err, userId }, 'presence write failed')
       }
@@ -560,22 +852,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const token = payload?.token?.trim()
       if (!token) return
       try {
-        const wsUserId = await app.redis.get(`ws:token:${token}`)
-        if (wsUserId) {
+        const wsValue = await app.redis.get(`ws:token:${token}`)
+        if (wsValue) {
           await app.redis.del(`ws:token:${token}`) // one-time use
-          const user = await db<User>('nivaro_users')
-            .where({ id: wsUserId, status: 'active' })
-            .first()
+          // Bound to what signed in the request that minted it: the session, the View-as, the
+          // static token or the named API key. A token with no bind (an older API's bare user
+          // id) signs nothing in — the client asks for a new one on its next connect.
+          const minted = parseWsTokenValue(wsValue)
+          if (!minted.userId || !minted.bind) return
+          const bind = minted.bind
+          let user = (await db<User>('nivaro_users')
+            .where({ id: minted.userId, status: 'active' })
+            .first()) as User | undefined
+          // An API-key socket carries the key's scopes and row restrictions, like its requests.
+          if (user && bind.kind === 'apikey')
+            user = (await userWithApiKey(user, bind.id)) ?? undefined
           if (user) {
-            authenticatedUser = user
-            const meta = socketMeta.get(socket.id)
-            if (meta)
-              meta.user = {
-                id: user.id,
-                name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
-              }
-            socket.join(`user:${user.id}`)
-            socket.emit('auth:ok', { userId: user.id })
+            signIn(user, bind)
             void markOnline(user.id, socket.id)
           }
           return
@@ -591,16 +884,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             .where({ id: payloadIds.user_id, status: 'active' })
             .first()
           if (user) {
-            authenticatedUser = user
             touchMasqueradeMarker(app.redis, String(user.id), payloadIds.admin_id)
-            const meta = socketMeta.get(socket.id)
-            if (meta)
-              meta.user = {
-                id: user.id,
-                name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
-              }
-            socket.join(`user:${user.id}`)
-            socket.emit('auth:ok', { userId: user.id })
+            signIn(user, { kind: 'masq', token })
             void markOnline(user.id, socket.id)
           }
           return
@@ -609,17 +894,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const user = await db<User>('nivaro_users')
           .where({ static_token: token, status: 'active' })
           .first()
-        if (user) {
-          authenticatedUser = user
-          const meta = socketMeta.get(socket.id)
-          if (meta)
-            meta.user = {
-              id: user.id,
-              name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
-            }
-          socket.join(`user:${user.id}`)
-          socket.emit('auth:ok', { userId: user.id })
-        }
+        if (user) signIn(user, { kind: 'token', tokenHash: sha(token) })
       } catch (err) {
         app.log.warn({ err }, 'Socket auth failed')
       }
@@ -627,11 +902,16 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Cloud: auth runs in the socket's tenant context (#1132); self-hosted: unchanged.
     socket.on('auth', inSocketTenant(socket, onAuth))
 
-    socket.on('tenant:join', (tenantId: string) => {
-      if (typeof tenantId === 'string' && tenantId.length > 0) {
-        socket.join(`tenant:${tenantId}`)
-        socket.emit('tenant:joined', { tenantId })
+    // Cloud: only the tenant this socket's host resolved to (any other tenant's room would
+    // hand this socket that tenant's broadcasts); self-hosted there are no tenants to cross.
+    socket.on('tenant:join', async (tenantId: string) => {
+      if (typeof tenantId !== 'string' || tenantId.length === 0) return
+      if (process.env.CLOUD_META_DB_URL) {
+        const t = await socketTenant(socket)
+        if (!t || ![t.tenantId, t.slug].map(String).includes(tenantId)) return
       }
+      socket.join(`tenant:${tenantId}`)
+      socket.emit('tenant:joined', { tenantId })
     })
 
     /**
@@ -653,11 +933,28 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       })
     })
 
-    socket.on('presence:join', (roomId: string) => {
-      socket.join(`presence:${roomId}`)
-    })
+    // Signed-in sockets only: an anonymous connection must not sit in any room.
+    // `presence:admin` carries every session row (IP, device) — administrators only.
+    socket.on(
+      'presence:join',
+      inSocketTenant(socket, async (roomId: string) => {
+        const user = authenticatedUser
+        if (!user || typeof roomId !== 'string' || !roomId) return
+        if (roomId === 'admin') {
+          const role = user.role
+            ? await db('nivaro_roles')
+                .where({ id: user.role })
+                .first('admin_access')
+                .catch(() => null)
+            : null
+          if (!role?.admin_access || authenticatedUser !== user) return
+        }
+        const name = await scopedRoom(`presence:${roomId.slice(0, 200)}`)
+        if (name) socket.join(name)
+      })
+    )
     socket.on('presence:leave', (roomId: string) => {
-      socket.leave(`presence:${roomId}`)
+      if (typeof roomId === 'string') leaveScoped(`presence:${roomId}`)
     })
     // Requires an authenticated socket (via `auth` above) AND read access to
     // the specific collection — mirrors the `can(user, 'read', collection)`
@@ -667,45 +964,112 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Chat rooms are joined individually and gated by the SAME canSeeRoom the
     // REST routes use — a socket must not become a way to observe a room you
     // cannot read. Rejects silently, matching collection:join's posture.
-    socket.on('chat:join', async (payload: { room?: string }) => {
-      const room = payload?.room
-      if (typeof room !== 'string' || room.length === 0) return
-      const user = authenticatedUser
-      if (!user) return
-      try {
-        if (await canSeeRoom(user, room)) socket.join(`chat:${room}`)
-      } catch (err) {
-        app.log.warn({ err, room }, 'chat:join visibility check failed')
-      }
-    })
+    // Cloud: in the socket's tenant (its chat tables), into the tenant's room name.
+    socket.on(
+      'chat:join',
+      inSocketTenant(socket, async (payload: { room?: string }) => {
+        const room = payload?.room
+        if (typeof room !== 'string' || room.length === 0) return
+        const user = authenticatedUser
+        if (!user) return
+        try {
+          if (!(await canSeeRoom(user, room))) return
+          const name = await scopedRoom(`chat:${room}`)
+          if (name) socket.join(name)
+        } catch (err) {
+          app.log.warn({ err, room }, 'chat:join visibility check failed')
+        }
+      })
+    )
 
     socket.on('chat:leave', (payload: { room?: string }) => {
       const room = payload?.room
-      if (typeof room === 'string' && room) socket.leave(`chat:${room}`)
+      if (typeof room === 'string' && room) leaveScoped(`chat:${room}`)
     })
 
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)
 
-    socket.on('collection:join', async (payload: { collection?: string }) => {
+    /** Cloud: collection rooms are per tenant (tenant-rooms.ts) — journaled
+     *  events from a tenant's context go to `t:<tenant>:collection:<c>`. A cloud
+     *  socket with no resolvable tenant joins nothing. Self-hosted: unchanged. */
+    const collectionRoom = async (collection: string): Promise<string | null> => {
+      if (!process.env.CLOUD_META_DB_URL) return `collection:${collection}`
+      const t = await socketTenant(socket)
+      return t ? tenantScopedRoom(`collection:${collection}`, t.tenantId || t.slug) : null
+    }
+    socket.on(
+      'collection:join',
+      inSocketTenant(socket, async (payload: { collection?: string }) => {
+        const collection = payload?.collection
+        if (typeof collection !== 'string' || collection.length === 0) return
+        const user = authenticatedUser
+        if (!user) return
+        // A real collection name only: `orders:5` would name another room kind.
+        if (!(await isKnownCollection(collection))) return
+        try {
+          const allowed = await can(user, 'read', collection)
+          const room = allowed ? await collectionRoom(collection) : null
+          if (room) socket.join(room)
+        } catch (err) {
+          app.log.warn({ err, collection }, 'collection:join permission check failed')
+        }
+      })
+    )
+    socket.on('collection:leave', async (payload: { collection?: string }) => {
       const collection = payload?.collection
       if (typeof collection !== 'string' || collection.length === 0) return
-      const user = authenticatedUser
-      if (!user) return
-      try {
-        const allowed = await can(user, 'read', collection)
-        if (allowed) {
-          socket.join(`collection:${collection}`)
-        }
-      } catch (err) {
-        app.log.warn({ err, collection }, 'collection:join permission check failed')
+      // Self-hosted: leave at once (no await), as before.
+      if (!process.env.CLOUD_META_DB_URL) socket.leave(`collection:${collection}`)
+      else {
+        const room = await collectionRoom(collection)
+        if (room) socket.leave(room)
       }
     })
-    socket.on('collection:leave', (payload: { collection?: string }) => {
-      const collection = payload?.collection
-      if (typeof collection === 'string' && collection.length > 0) {
-        socket.leave(`collection:${collection}`)
+    // ── Live operations pages (services/ops-live.ts) ────────────────────────
+    // `ops:join {topic}` — an allowlisted topic, gated like the route that serves the
+    // same page (admin topics check the role at join, through the same ordered gate the
+    // watch rooms use so a quick join + leave cannot leave a socket behind).
+    const opsRoomOf = async (topic: string): Promise<string | null> => {
+      if (!process.env.CLOUD_META_DB_URL) return opsRoom(topic, '')
+      const t = await socketTenant(socket)
+      return t ? opsRoom(topic, t.tenantId || t.slug) : null
+    }
+    socket.on(
+      'ops:join',
+      inSocketTenant(socket, async (payload: { topic?: string }) => {
+        const spec = opsTopicGate(payload?.topic)
+        const user = authenticatedUser
+        if (!spec || !user) return
+        try {
+          const room = await opsRoomOf(spec.topic)
+          if (!room) return
+          await watchGate.join(
+            `ops:${spec.topic}`,
+            async () => {
+              if (spec.gate === 'auth') return true
+              if (!user.role) return false
+              const role = await db('nivaro_roles').where({ id: user.role }).first()
+              return !!role?.admin_access
+            },
+            () => socket.join(room)
+          )
+        } catch (err) {
+          app.log.warn({ err, topic: spec.topic }, 'ops:join check failed')
+        }
+      })
+    )
+    socket.on('ops:leave', (payload: { topic?: string }) => {
+      const spec = opsTopicGate(payload?.topic)
+      if (!spec) return
+      if (!process.env.CLOUD_META_DB_URL) {
+        // Self-hosted: no await, so a quick join + leave keeps its order.
+        watchGate.leave(`ops:${spec.topic}`, () => socket.leave(opsRoom(spec.topic, '')))
+        return
       }
+      void opsRoomOf(spec.topic).then((room) => {
+        if (room) watchGate.leave(`ops:${spec.topic}`, () => socket.leave(room))
+      })
     })
     // ── Record presence v2 — viewer avatars + field editing indicators ──────
     // Room per record; viewer lists live in a module-level map (single-node
@@ -718,13 +1082,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // set, and events that name their record route to that room.
     let joinedRecordRoom: string | null = null
     const joinedRecordRooms = new Set<string>()
+    // Cloud: record rooms are `t:<tenant>:record:<c>:<id>` (tenant-rooms.ts) — record ids
+    // repeat across tenants' databases. Set by the first record:join (its tenant resolved);
+    // '' self-hosted, where room names are unchanged.
+    let recordTenant = ''
+    const recordRoom = (collection: string, item: unknown) =>
+      tenantScopedRoom(`record:${collection}:${String(item)}`, recordTenant)
     const displayName = (u: User) =>
       [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
     /** The room an event targets: the named record when the socket is in it,
      *  else the last joined room. Null = not in any record room. */
     const roomFor = (payload?: { collection?: string; item?: unknown }): string | null => {
       if (payload && typeof payload.collection === 'string' && payload.item != null) {
-        const named = `record:${payload.collection}:${String(payload.item)}`
+        const named = recordRoom(payload.collection, payload.item)
         if (joinedRecordRooms.has(named)) return named
       }
       return joinedRecordRoom
@@ -737,7 +1107,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // they actually had open (2026-09-14).
     const broadcastViewers = (room: string) => {
       const viewers = [...(recordViewers.get(room)?.values() ?? [])]
-      const m = /^record:(.+):([^:]+)$/.exec(room)
+      const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
       io.to(room).emit('record:viewers', {
         collection: m?.[1] ?? null,
         item: m?.[2] ?? null,
@@ -760,7 +1130,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      *  tabs still open. */
     const leaveRecordRoom = (payload?: { collection?: string; item?: unknown }) => {
       if (payload && typeof payload.collection === 'string' && payload.item != null) {
-        const named = `record:${payload.collection}:${String(payload.item)}`
+        const named = recordRoom(payload.collection, payload.item)
         if (joinedRecordRooms.has(named)) leaveOneRoom(named)
         return
       }
@@ -773,24 +1143,30 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       'comment:typing',
       (payload: { collection?: string; item?: string; user_name?: string }) => {
         const { collection, item, user_name } = payload ?? {}
-        if (!collection || !item) return
-        socket.to(`record:${collection}:${String(item)}`).emit('record:comment-typing', {
+        if (!collection || !item || !authenticatedUser) return
+        // Only a co-viewer may say they are typing: the sender must sit in the record's room.
+        const room = recordRoom(collection, item)
+        if (!joinedRecordRooms.has(room)) return
+        socket.to(room).emit('record:comment-typing', {
           collection,
           item,
           user_name: String(user_name ?? '').slice(0, 80)
         })
       }
     )
-    socket.on('record:join', async (payload: { collection?: string; item?: string }) => {
+    const onRecordJoin = async (payload: { collection?: string; item?: string }) => {
       const { collection, item } = payload ?? {}
       const user = authenticatedUser
       if (!user || typeof collection !== 'string' || !collection || item == null) return
-      try {
-        if (!(await can(user, 'read', collection))) return
-      } catch {
-        return
+      // The record read gate (role, row filter, user scopes) — the same answer GET /items gives:
+      // a record the person cannot open is not a room they may sit in (#1720).
+      if (!(await canSeeRecordRoom(user, collection, String(item)))) return
+      if (process.env.CLOUD_META_DB_URL) {
+        const t = await socketTenant(socket)
+        if (!t) return
+        recordTenant = t.tenantId || t.slug
       }
-      const room = `record:${collection}:${String(item)}`
+      const room = recordRoom(collection, item)
       joinedRecordRoom = room
       joinedRecordRooms.add(room)
       socket.join(room)
@@ -801,29 +1177,39 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
       map.set(socket.id, { id: user.id, name: displayName(user) })
       broadcastViewers(room)
-    })
+    }
+    // Cloud: in the socket's tenant, so the gate reads that tenant's database.
+    socket.on('record:join', inSocketTenant(socket, onRecordJoin))
     socket.on('record:leave', (payload?: { collection?: string; item?: unknown }) =>
       leaveRecordRoom(payload)
     )
 
     // Mission-control pulse — admin-only live activity stream
-    socket.on('pulse:join', async () => {
-      const user = authenticatedUser
-      if (!user?.role) return
-      try {
-        const role = await db('nivaro_roles').where({ id: user.role }).first()
-        if (role?.admin_access) socket.join('pulse')
-      } catch {
-        /* silent, same style as other joins */
-      }
-    })
-    socket.on('pulse:leave', () => socket.leave('pulse'))
+    socket.on(
+      'pulse:join',
+      inSocketTenant(socket, async () => {
+        const user = authenticatedUser
+        if (!user?.role) return
+        try {
+          const role = await db('nivaro_roles').where({ id: user.role }).first()
+          if (!role?.admin_access) return
+          const name = await scopedRoom('pulse')
+          if (name) socket.join(name)
+        } catch {
+          /* silent, same style as other joins */
+        }
+      })
+    )
+    socket.on('pulse:leave', () => leaveScoped('pulse'))
 
     // ── Presence map — who's on which admin page right now ──────────────────
     // #1391 — the portal (@nivaro/react usePageAt) pings too, labelled with its app.
-    socket.on('page:at', (payload: { path?: string; app?: string }) => {
+    // Cloud: in the socket's tenant (journey rows are its tables); a ping before the tenant
+    // resolves is ignored — the client pings again on its next page.
+    const onPageAt = (payload: { path?: string; app?: string }) => {
       const user = authenticatedUser
-      if (!user) return
+      const tenant = tenantNow()
+      if (!user || tenant == null) return
       const ping = parsePageAt(payload, socketMeta.get(socket.id)?.app)
       if (!ping) return
       const { path, app: pageApp } = ping
@@ -833,29 +1219,35 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         user: { id: user.id, name: displayName(user) },
         path,
         since: changed ? Date.now() : existing.since,
-        app: pageApp
+        app: pageApp,
+        tenant
       })
       if (changed) {
         void closeJourneyRow(socket.id).then(() =>
           openJourneyRow(socket.id, user.id, path, pageApp)
         )
       }
-      io.to('presence-map').emit('presence-map:update', presenceSnapshot())
-    })
-    socket.on('presence-map:join', async () => {
-      const user = authenticatedUser
-      if (!user?.role) return
-      try {
-        const role = await db('nivaro_roles').where({ id: user.role }).first()
-        if (role?.admin_access) {
-          socket.join('presence-map')
-          socket.emit('presence-map:update', presenceSnapshot())
+      broadcastPresenceMap(tenant)
+    }
+    socket.on('page:at', inSocketTenant(socket, onPageAt))
+    socket.on(
+      'presence-map:join',
+      inSocketTenant(socket, async () => {
+        const user = authenticatedUser
+        if (!user?.role) return
+        try {
+          const role = await db('nivaro_roles').where({ id: user.role }).first()
+          if (!role?.admin_access) return
+          const name = await scopedRoom('presence-map')
+          if (!name) return
+          socket.join(name)
+          socket.emit('presence-map:update', presenceSnapshot(tenantNow() ?? ''))
+        } catch {
+          /* silent */
         }
-      } catch {
-        /* silent */
-      }
-    })
-    socket.on('presence-map:leave', () => socket.leave('presence-map'))
+      })
+    )
+    socket.on('presence-map:leave', () => leaveScoped('presence-map'))
 
     // Field editing indicator — fan out inside the record room only.
     socket.on('field:focus', (payload: { field?: string; collection?: string; item?: unknown }) => {
@@ -899,7 +1291,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const user = authenticatedUser
       if (!user || !joinedRecordRoom) return
       const state = payload?.state === 'done' ? 'done' : 'start'
-      const [, roomCollection, ...roomItem] = joinedRecordRoom.split(':')
+      const [, roomCollection, ...roomItem] = splitTenantRoom(joinedRecordRoom).room.split(':')
       socket.to(joinedRecordRoom).emit('record:uploading', {
         collection: roomCollection,
         item: roomItem.join(':'),
@@ -910,22 +1302,61 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       })
     })
 
+    // #1720 — what socket-access needs from this closure: the signed-in user, a way to swap
+    // in a fresh row (role changed), and a room leave that keeps the record viewer list right.
+    const accessHooks: SocketAccessHooks = {
+      user: () => authenticatedUser,
+      applyUser: (u) => {
+        authenticatedUser = u
+      },
+      leaveRoom: (room) => {
+        if (joinedRecordRooms.has(room)) leaveOneRoom(room)
+        else socket.leave(room)
+      }
+    }
+    socket.data.nvrAccess = accessHooks
+
     socket.on('disconnect', () => {
       noteSocket('disconnect')
+      coalescer?.dispose()
+      if (tenantKey) noteTenantSocket(tenantKey, -1)
       clearInterval(rttTimer)
       socketMeta.delete(socket.id)
       if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
       leaveRecordRoom()
       void closeJourneyRow(socket.id)
-      if (pagePresence.delete(socket.id)) {
-        io.to('presence-map').emit('presence-map:update', presenceSnapshot())
-      }
+      const gone = pagePresence.get(socket.id)
+      if (gone && pagePresence.delete(socket.id)) broadcastPresenceMap(gone.tenant)
       app.log.debug({ socketId: socket.id }, 'Socket disconnected')
     })
   })
 
+  // #1720 — another replica asked for a room re-check; run this node's share.
+  io.on(RECHECK_EVENT, (target: RecheckTarget) => {
+    void runLocalRecheck(io, target ?? { all: true })
+  })
+
+  // #1719 — sweep this node's signed-in sockets: an ended session, masquerade or token, or an
+  // account no longer active, closes the socket even when nothing announced it.
+  const sweepMs = Math.max(5_000, Number(process.env.SOCKET_SWEEP_MS) || 30_000)
+  const sweepTimer = setInterval(() => {
+    void sweepSockets(io, {
+      redis: app.redis,
+      judge: async (role, stamps) => {
+        const { getSessionPolicy, limitsFor, judgeSession } = await import(
+          '../services/session-policy.js'
+        )
+        const policy = await getSessionPolicy()
+        if (!policy) return 'ok'
+        return judgeSession(limitsFor(policy, role), stamps, Date.now()).ok ? 'ok' : 'expired'
+      }
+    }).catch((err) => app.log.debug({ err }, 'socket sweep failed'))
+  }, sweepMs)
+  sweepTimer.unref?.()
+
   app.decorate('io', io)
   app.addHook('onClose', async () => {
+    clearInterval(sweepTimer)
     io.close()
   })
 })

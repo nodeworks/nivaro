@@ -48,7 +48,9 @@ export function createRealtime(): NivaroRealtime {
         path: '/socket.io',
         auth: token ? { token } : undefined,
         withCredentials: true,
-        transports: ['websocket']
+        // Websocket first; when a proxy blocks the upgrade, long-polling on the same attempt.
+        transports: ['websocket', 'polling'],
+        tryAllTransports: true
       })
 
       socket.on('connect', () => {

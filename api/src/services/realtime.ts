@@ -19,7 +19,14 @@ export function broadcastCollectionUpdate(
   io: SocketIOServer | undefined,
   collection: string,
   item: string | number,
-  extra?: { action?: 'create' | 'update' | 'delete'; changed_fields?: string[] }
+  extra?: {
+    action?: 'create' | 'update' | 'delete'
+    changed_fields?: string[]
+    /** #1875 — 'raw' when a procedure, import or script made the write. */
+    source?: 'raw'
+    /** #1875 — with item '*': how many records the raw write touched. */
+    bulk?: number
+  }
 ): void {
   void io // kept for signature compat — journaledEmit resolves io globally
   if (extra?.action) {
@@ -51,6 +58,8 @@ export function broadcastCollectionUpdate(
     collection,
     item,
     ...(extra?.action ? { action: extra.action } : {}),
-    ...(extra?.changed_fields?.length ? { changed_fields: extra.changed_fields.slice(0, 50) } : {})
+    ...(extra?.changed_fields?.length ? { changed_fields: extra.changed_fields.slice(0, 50) } : {}),
+    ...(extra?.source ? { source: extra.source } : {}),
+    ...(extra?.bulk != null ? { bulk: extra.bulk } : {})
   })
 }

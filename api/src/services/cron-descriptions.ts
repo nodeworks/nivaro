@@ -54,6 +54,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly — for every manager who set team alert lines on their dashboard: past-SLA per person, out with nobody covering, stuck records, quiet reports. One notice per report and rule per day.',
   'task-done-when-sweep':
     'Closes open tasks whose “done when” condition the record now meets (catches writes the after-save check never sees).',
+  'ai-watch-checks':
+    'Hourly — re-reads each number someone is watching from Ask AI (as that person), alerts on a crossed threshold or an unusual move, and keeps the series the daily summary reports.',
   'line-sla-sweep':
     'Daily — records with grid lines still missing a required id past their line-SLA window; notifies current owners once per day and feeds the digest.',
   'queue-entry-notify':
@@ -62,6 +64,10 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every minute — delivers announcements whose scheduled send time has arrived (banner, inbox, email, SMS per channel config).',
   'broadcast-ack-chasers':
     'Hourly — reminds users who have not acknowledged a must-acknowledge broadcast, and tells its author how many are outstanding.',
+  'raw-write-announcements':
+    'Every 5 seconds — broadcasts record changes that stored procedures and scripts reported in nivaro_raw_writes, so open pages refresh. Records only failed ticks.',
+  'event-journal-prune':
+    'Hourly — deletes durable realtime journal rows older than 24 hours (nivaro_event_journal).',
   'chat-reminders':
     'Every 20 seconds — delivers due reminders ("remind me Friday 9am") as a notification and, when set from chat, a message from the assistant in that chat. Records only failed ticks.',
   'chat-scheduled-send':
@@ -109,6 +115,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Nightly — re-runs Data Integrity sweeps for collections with a schedule and notifies whoever scheduled it when violations grow.',
   'config-health-sweep':
     'Nightly — usage hygiene + schema lint findings (unopened queues, orphan relations, missing display templates…) into the Config Health page.',
+  'config-review-monthly':
+    'Monthly (1st, 04:20) — config review: contradicting field rules, unused fields, unreachable layouts, duplicate views, owner groups with only inactive members, cleanup suggestions and label inconsistencies into the Config Review page; notifies administrators.',
   'subscription-integrity':
     'Weekly (Sunday) — deactivates notification subscriptions whose collection, field, or queue no longer exists.',
   'integration-reconcile':

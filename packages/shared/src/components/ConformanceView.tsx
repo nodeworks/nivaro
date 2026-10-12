@@ -1,7 +1,8 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../context'
 import { get, post, put } from '../lib/commands'
+import { useLiveEvent, useLiveWatchRoom } from '../lib/live'
 import { cn } from '../lib/utils'
 import { PickList } from './imports/ServiceConfigBuilder'
 import { TipLayer } from './TipLayer'
@@ -39,6 +40,48 @@ interface Run {
   started_at: string | null
   finished_at: string | null
   triggered_by_name?: string | null
+}
+
+/** A sweep's live progress (`conformance:progress`): counts only. */
+interface SweepProgress {
+  run: number
+  collection: string
+  status: 'running' | 'completed' | 'error'
+  checked: number
+  violations: number
+  total: number | null
+}
+
+function SweepBar({ p }: { p: SweepProgress }) {
+  const pct = p.total ? Math.min(100, Math.round((p.checked / p.total) * 100)) : null
+  return (
+    <div className='flex items-center gap-3 text-[11.5px]' data-conformance-sweep={p.run}>
+      <span className='w-[180px] shrink-0 truncate font-medium text-slate-700 dark:text-foreground'>
+        {p.collection}
+      </span>
+      <span
+        role='progressbar'
+        aria-label={`${p.collection} sweep`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={pct ?? undefined}
+        className='relative h-1.5 w-[220px] overflow-hidden rounded-full bg-slate-100 dark:bg-white/10'
+      >
+        <span
+          className={cn(
+            'absolute inset-y-0 left-0 rounded-full bg-nvr-cyan transition-[width] duration-300 motion-reduce:transition-none',
+            pct === null && 'w-1/3 animate-pulse'
+          )}
+          style={pct === null ? undefined : { width: `${pct}%` }}
+        />
+      </span>
+      <span className='tabular-nums text-slate-500 dark:text-muted-foreground'>
+        {p.checked.toLocaleString()}
+        {p.total ? ` of ${p.total.toLocaleString()}` : ''} checked · {p.violations.toLocaleString()}{' '}
+        issue{p.violations === 1 ? '' : 's'} so far
+      </span>
+    </div>
+  )
 }
 
 function relTime(iso: string | null): string {
@@ -215,6 +258,45 @@ export function ConformanceView({ className }: { className?: string }) {
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState<string | null>(null)
   const [sampleSize, setSampleSize] = useState('5000')
+  // Live sweeps: `conformance:progress` carries counts; findings and run rows are
+  // re-read through the run routes (throttled), and a slow poll stays as the safety net.
+  const liveRoom = useLiveWatchRoom('conformance')
+  const [sweeps, setSweeps] = useState<Record<number, SweepProgress>>({})
+  const refreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(
+    () => () => {
+      if (refreshTimer.current) clearTimeout(refreshTimer.current)
+    },
+    []
+  )
+  useLiveEvent(
+    'conformance:progress',
+    (p: SweepProgress) => {
+      setSweeps((prev) => {
+        const next = { ...prev }
+        if (p.status === 'running') next[p.run] = p
+        else delete next[p.run]
+        return next
+      })
+      const refresh = () => {
+        void qc.invalidateQueries({ queryKey: ['conformance-runs'] })
+        void qc.invalidateQueries({ queryKey: ['conformance-run', p.run] })
+        if (p.status !== 'running')
+          void qc.invalidateQueries({ queryKey: ['conformance-collections'] })
+      }
+      if (p.status !== 'running') {
+        if (refreshTimer.current) clearTimeout(refreshTimer.current)
+        refreshTimer.current = null
+        refresh()
+      } else if (!refreshTimer.current) {
+        refreshTimer.current = setTimeout(() => {
+          refreshTimer.current = null
+          refresh()
+        }, 1500)
+      }
+    },
+    { includeOwn: true }
+  )
 
   const { data: collections = [], isLoading: loadingCollections } = useQuery<CheckableCollection[]>(
     {
@@ -235,7 +317,13 @@ export function ConformanceView({ className }: { className?: string }) {
           get(`/config-conformance/runs${collection ? `?collection=${collection}` : ''}`)
         )
         .then((r) => r.data ?? []),
-    refetchInterval: (q) => (q.state.data?.some((r) => r.status === 'running') ? 3_000 : false)
+    refetchInterval: (q) =>
+      q.state.data?.some((r) => r.status === 'running') ? (liveRoom ? 20_000 : 3_000) : false
+  })
+  // A sweep the list already knows is over is not "in progress" (a lost final event).
+  const activeSweeps = Object.values(sweeps).filter((p) => {
+    const known = runs.find((r) => r.id === p.run)
+    return !known || known.status === 'running'
   })
 
   // A just-started run isn't in the list until the next poll — fall back to
@@ -330,6 +418,20 @@ export function ConformanceView({ className }: { className?: string }) {
         )}
       </div>
 
+      {activeSweeps.length > 0 && (
+        <div
+          className='flex flex-col gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-border dark:bg-card'
+          data-conformance-sweeps
+        >
+          <p className='text-[10.5px] font-semibold uppercase tracking-wide text-slate-400'>
+            Sweeps in progress
+          </p>
+          {activeSweeps.map((p) => (
+            <SweepBar key={p.run} p={p} />
+          ))}
+        </div>
+      )}
+
       {runs.length > 0 && (
         <RunHistory runs={runs} activeId={shownRun?.id ?? null} onSelect={setActiveRunId} />
       )}
@@ -337,6 +439,8 @@ export function ConformanceView({ className }: { className?: string }) {
       {shownRun && (
         <RunDetail
           run={shownRun}
+          liveProgress={sweeps[shownRun.id] ?? null}
+          live={liveRoom}
           onOpenItem={(id, focus) => {
             if (focus) {
               const url = nav.urlFor({ collection: shownRun.collection, itemId: id })
@@ -556,10 +660,14 @@ interface FindingGroup {
 
 function RunDetail({
   run,
-  onOpenItem
+  onOpenItem,
+  liveProgress,
+  live
 }: {
   run: Run
   onOpenItem: (id: string, focus?: string) => void
+  liveProgress: SweepProgress | null
+  live: boolean
 }) {
   const client = useNivaroClient()
   const [page, setPage] = useState(1)
@@ -589,7 +697,7 @@ function RunDetail({
           )
         )
         .then((r) => r.data),
-    refetchInterval: run.status === 'running' ? 3_000 : false
+    refetchInterval: run.status === 'running' ? (live ? 20_000 : 3_000) : false
   })
 
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / 50))
@@ -610,7 +718,8 @@ function RunDetail({
         {run.status === 'running' && (
           <span className='flex items-center gap-1.5 text-[11.5px] text-nvr-cyan-dark dark:text-nvr-cyan'>
             <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-            running — {run.checked_records.toLocaleString()} checked so far
+            running — {Math.max(run.checked_records, liveProgress?.checked ?? 0).toLocaleString()}
+            {liveProgress?.total ? ` of ${liveProgress.total.toLocaleString()}` : ''} checked so far
           </span>
         )}
         {run.status === 'completed' && (
@@ -859,10 +968,24 @@ function RemediateBar({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const navCtx = useNavigation()
   const [confirming, setConfirming] = useState<null | 'clear' | 'rederive' | 'apply-high'>(null)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
+  const [planning, setPlanning] = useState(false)
   if (total === 0 && !result) return null
+  // #2006 — the same confident fix, as an Ask AI plan: previewed record by
+  // record (its change report) and run only once approved.
+  const asPlan = () => {
+    setPlanning(true)
+    void client
+      .request<{ data: { plan_id: string } }>(
+        post(`/config-conformance/runs/${run.id}/plan`, { field, rule })
+      )
+      .then((r) => navCtx.navigate(`/ai-plans?plan=${encodeURIComponent(r.data.plan_id)}`))
+      .catch((err: Error) => setResult(err.message))
+      .finally(() => setPlanning(false))
+  }
   const blunt: null | 'clear' | 'rederive' =
     rule === 'row-rule'
       ? 'rederive'
@@ -951,6 +1074,15 @@ function RemediateBar({
             className='h-6 rounded-md border border-emerald-300 px-2.5 text-[11.5px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
           >
             Apply confident fixes…
+          </button>
+          <button
+            type='button'
+            disabled={planning}
+            onClick={asPlan}
+            data-tip='Build the same confident fixes as a plan: review every record’s old → new value, then approve, schedule or discard it.'
+            className='h-6 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 hover:border-nvr-cyan hover:text-nvr-cyan disabled:opacity-50 dark:border-border dark:text-muted-foreground'
+          >
+            {planning ? 'Building plan…' : 'Fix as a plan…'}
           </button>
           {blunt && (
             <button
