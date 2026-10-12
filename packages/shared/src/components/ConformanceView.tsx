@@ -968,10 +968,24 @@ function RemediateBar({
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
+  const navCtx = useNavigation()
   const [confirming, setConfirming] = useState<null | 'clear' | 'rederive' | 'apply-high'>(null)
   const [busy, setBusy] = useState(false)
   const [result, setResult] = useState<string | null>(null)
+  const [planning, setPlanning] = useState(false)
   if (total === 0 && !result) return null
+  // #2006 — the same confident fix, as an Ask AI plan: previewed record by
+  // record (its change report) and run only once approved.
+  const asPlan = () => {
+    setPlanning(true)
+    void client
+      .request<{ data: { plan_id: string } }>(
+        post(`/config-conformance/runs/${run.id}/plan`, { field, rule })
+      )
+      .then((r) => navCtx.navigate(`/ai-plans?plan=${encodeURIComponent(r.data.plan_id)}`))
+      .catch((err: Error) => setResult(err.message))
+      .finally(() => setPlanning(false))
+  }
   const blunt: null | 'clear' | 'rederive' =
     rule === 'row-rule'
       ? 'rederive'
@@ -1060,6 +1074,15 @@ function RemediateBar({
             className='h-6 rounded-md border border-emerald-300 px-2.5 text-[11.5px] font-medium text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/40 dark:text-emerald-400 dark:hover:bg-emerald-500/10'
           >
             Apply confident fixes…
+          </button>
+          <button
+            type='button'
+            disabled={planning}
+            onClick={asPlan}
+            data-tip='Build the same confident fixes as a plan: review every record’s old → new value, then approve, schedule or discard it.'
+            className='h-6 rounded-md border border-slate-200 px-2.5 text-[11.5px] font-medium text-slate-600 hover:border-nvr-cyan hover:text-nvr-cyan disabled:opacity-50 dark:border-border dark:text-muted-foreground'
+          >
+            {planning ? 'Building plan…' : 'Fix as a plan…'}
           </button>
           {blunt && (
             <button

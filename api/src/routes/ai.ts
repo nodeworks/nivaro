@@ -1763,7 +1763,8 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       if (turn) Object.assign(body, await turn.record(body))
       return reply.send({ data: body })
     }
-    const memoryBlock = memoryPromptBlock(await readMemory(String(req.user!.id)).catch(() => []))
+    const memoryNotes = await readMemory(String(req.user!.id)).catch(() => [])
+    const memoryBlock = memoryPromptBlock(memoryNotes)
 
     const { buildChatSystemPrompt } = await import('../services/ai-chat.js')
     // Playbooks: similar past questions + the tool plans that answered them,
@@ -1857,10 +1858,17 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
                 })
             : undefined,
           shouldStop: stopper ? () => stopper.stopped() : undefined,
-          warn: (err, msg) => req.log.warn({ err }, msg)
+          warn: (err, msg) => req.log.warn({ err }, msg),
+          // #1845 — the model may offer "Remember this?"; nothing is saved
+          // until the asker clicks it (POST /ai/memory).
+          memorySuggestions: { existing: memoryNotes }
         })
         const { trace, proposals, plans, choices } = result
         const panel = await import('../services/ai-panel.js')
+        const offers =
+          result.memorySuggestions.length && !result.stopped
+            ? { memory_suggestions: result.memorySuggestions }
+            : {}
         await logActivity({
           action: 'ai-chat',
           user: user.id,
@@ -1882,7 +1890,8 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             truncated: true,
             stopped: result.stopped || undefined,
             request_id: requestId,
-            playbooks_used: playbooksUsed
+            playbooks_used: playbooksUsed,
+            ...offers
           }
         }
         // #1834 — the follow-up questions ride the answer; split them off.
@@ -1922,7 +1931,8 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         if (followups.length > 0) payload.followups = followups
         if (result.stopped) payload.stopped = true
         // An answer that proposes an ACTION is never cached — a proposal
-        // is single-use and expires; only plain answers repeat.
+        // is single-use and expires; only plain answers repeat. Memory
+        // offers are added after the cache copy: a repeat never re-offers.
         if (
           cacheKey &&
           proposals.length === 0 &&
@@ -1940,7 +1950,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             )
             .catch(() => {})
         }
-        return payload
+        return Object.assign(payload, offers)
       } finally {
         stopper?.dispose()
       }
