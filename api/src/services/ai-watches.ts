@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { FieldAccessError } from './ai-aggregate-guard.js'
 import { judgeAgainstHistory } from './anomaly.js'
 import { type DigestSection, registerDigestSection } from './daily-digest.js'
 import { evaluateOperator } from './metric-alerts.js'
@@ -426,9 +427,13 @@ export async function checkWatch(
     const value = await evaluator(user, current)
     outcome = applyCheck(current, value, now)
   } catch (err) {
+    // A field the owner can no longer read fails closed: no value, no alert,
+    // and the watch pauses with the reason instead of retrying every hour.
+    const denied = err instanceof FieldAccessError
     outcome = {
       watch: {
         ...current,
+        ...(denied ? { active: false } : {}),
         last_checked_at: now.toISOString(),
         last_error: ((err as Error).message || 'Could not be read').slice(0, 300)
       },
