@@ -353,6 +353,22 @@ export function useLiveRecordEvent(
   })
 }
 
+/**
+ * Join an admin-only watch room while mounted (`jobs`, `conformance`). The
+ * server checks admin access when the socket joins; for anyone else, and for
+ * hosts whose adapter has no `joinWatch`, nothing arrives and the component's
+ * own polling carries on. Returns whether live events can arrive (false = poll normally).
+ */
+export function useLiveWatchRoom(room: string, enabled = true): boolean {
+  const realtime = useOptionalRealtime()
+  const can = !!realtime?.joinWatch
+  useEffect(() => {
+    if (!enabled || !realtime?.joinWatch) return
+    return realtime.joinWatch(room)
+  }, [realtime, room, enabled])
+  return can && enabled
+}
+
 /** Whether the host wired a realtime adapter (collection feeds are live). */
 export function useLiveAvailable(): boolean {
   return useOptionalRealtime() != null

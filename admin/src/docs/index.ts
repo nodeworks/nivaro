@@ -243,7 +243,7 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
-import { collabLiveRecords } from './sections/live-records.js'
+import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -797,6 +797,7 @@ export const navSections: NavGroup[] = [
       collabChat,
       collabItemLocking,
       collabLiveRecords,
+      collabLiveOps,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,

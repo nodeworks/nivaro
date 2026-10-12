@@ -131,7 +131,11 @@ export function announceAutomation(
  */
 export const TENANT_ALL_ROOM = 'all'
 
-function emitToTenant(tenant: string, event: string, payload: Record<string, unknown>): void {
+export function emitToTenant(
+  tenant: string,
+  event: string,
+  payload: Record<string, unknown>
+): void {
   try {
     const io = getIo()
     if (!io) return
