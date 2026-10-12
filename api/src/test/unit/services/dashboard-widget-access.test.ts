@@ -153,6 +153,15 @@ describe('dashboard widget data reads as the viewer', () => {
     ).toEqual({ data: { value: 3 } })
   })
 
+  it('a widget over a system collection is refused (nivaro_users carries tokens)', async () => {
+    for (const collection of ['nivaro_users', 'NIVARO_api_keys', 'directus_users']) {
+      expect(
+        await computeWidgetData({ ...latest, collection }, [], { user: user('ZONE1') })
+      ).toEqual({ error: 'Unknown collection', status: 400 })
+    }
+    expect(items.readItems).not.toHaveBeenCalled()
+  })
+
   it('no viewer (a public link without a creator) gets nothing', async () => {
     expect(await computeWidgetData(latest)).toEqual({ error: 'Forbidden', status: 403 })
   })
@@ -171,6 +180,20 @@ describe('building a widget', () => {
       })
     ).toMatch(/"amount"/)
     expect(await widgetSourceRefusal(user('ZONE1'), count)).toBeNull()
+  })
+
+  it('POST /:id/widgets on a system collection is 400', async () => {
+    tables.nivaro_dashboards = { id: 'd1', user: 'NOREAD', is_shared: false }
+    const app = Fastify({ logger: false })
+    app.register(dashboardsRoutes, { prefix: '/dashboards' })
+    await app.ready()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/dashboards/d1/widgets',
+      payload: { type: 'latest', title: 'Users', collection: 'nivaro_users' }
+    })
+    expect(res.statusCode).toBe(400)
+    expect(JSON.parse(res.body).error).toBe('Unknown collection')
   })
 
   it('POST /:id/widgets on an unreadable collection is 403', async () => {

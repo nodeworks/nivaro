@@ -124,6 +124,9 @@ export async function widgetSourceRefusal(
   return hidden ? `You do not have access to the field "${hidden}"` : null
 }
 
+/** System collections: never a source for count / sum / avg / latest / chart widgets. */
+export const SYSTEM_COLLECTION = /^(nivaro|directus)_/i
+
 async function resolveCollection(name: string): Promise<boolean> {
   const row = await db('nivaro_collections').where({ collection: name }).first()
   return !!row
@@ -210,7 +213,8 @@ export async function computeWidgetData(
     }
   }
   if (!widget.collection) return { data: null }
-  if (!(await resolveCollection(widget.collection))) {
+  // System tables are never widget sources (nivaro_users carries tokens and secrets).
+  if (SYSTEM_COLLECTION.test(widget.collection) || !(await resolveCollection(widget.collection))) {
     return { error: 'Unknown collection', status: 400 }
   }
   // Every type reads AS THE VIEWER: read permission on the collection, the role's row
