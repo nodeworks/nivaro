@@ -594,6 +594,16 @@ export async function listConversations(
   return items.sort((a, b) => Number(b.pinned) - Number(a.pinned))
 }
 
+/**
+ * "Also delete my saved conversations" (history opt-out): every conversation
+ * the caller OWNS — branches included — with its messages and its shares to
+ * other people (FK cascade). Conversations other people shared with the
+ * caller are theirs and stay.
+ */
+export async function deleteOwnConversations(userId: string): Promise<number> {
+  return (await db('nivaro_ai_conversations').where({ owner: userId }).del()) as number
+}
+
 // ── Retention ────────────────────────────────────────────────────────────────
 
 /**

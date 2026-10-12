@@ -3,6 +3,7 @@ export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
+export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
 export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
 export {
@@ -24,6 +25,7 @@ export {
   rowsOfBlock
 } from './components/ai/answer-formats'
 export { DataGuideCard } from './components/ai/DataGuideCard'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
@@ -128,7 +130,6 @@ export {
   startDocumentExtraction,
   useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
-export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'

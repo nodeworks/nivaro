@@ -1519,10 +1519,14 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     // as THIS asker may read it (never what the client sent), and both turns
     // are kept. Without conversation_id / save the route is unchanged.
     const { openConversationTurn } = await import('../services/ai-conversation-turn.js')
+    // #1833 opt-out — read once: it also keeps the question out of playbooks.
+    const { aiHistoryOff } = await import('../services/ai-memory.js')
+    const historyOff = await aiHistoryOff(String(req.user!.id))
     const turnOpen = await openConversationTurn(app, req.user!, {
       conversationId: conversation_id,
       save,
-      question: history[history.length - 1].content
+      question: history[history.length - 1].content,
+      historyOff
     })
     if (turnOpen && 'error' in turnOpen) {
       return reply.code(turnOpen.status).send({ error: turnOpen.error })
@@ -1671,7 +1675,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         // becomes a playbook. Follow-ups ("and for 2025?") are skipped —
         // they mean nothing without the conversation. A stopped answer is
         // not one either: it was never finished.
-        if (standalone && trace.length > 0 && !result.stopped) {
+        // Someone who turned Ask AI history off keeps their question text out
+        // of the shared playbook store too.
+        if (standalone && trace.length > 0 && !result.stopped && !historyOff) {
           void recordPlaybook({
             userId: user.id,
             requestId,

@@ -1,6 +1,7 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
   AiFeedbackButtons,
+  AiHistorySwitch,
   AiMarkdown,
   type AiPlan,
   AiPlanCard,
@@ -9,6 +10,7 @@ import {
   type AiStreamSubscribe,
   NavigationContext,
   NivaroProvider,
+  useAiHistoryOff,
   useAiStream
 } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -382,6 +384,9 @@ function AskPageInner() {
   const conversationId = searchParams.get('conversation')
   const [historyOpen, setHistoryOpen] = useState(false)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  // "Don't save my questions" (#1833): no stored conversation — the page
+  // keeps the thread locally and sends it whole, like before history existed.
+  const historyOff = useAiHistoryOff()
 
   const { data: detail, error: detailError } = useQuery({
     queryKey: detailKey(conversationId),
@@ -543,8 +548,20 @@ function AskPageInner() {
     const content = (text ?? input).trim()
     if (!content || send.active) return
     const target = opts.conversationId !== undefined ? opts.conversationId : conversationId
+    if (historyOff && target) return
+    const local = pending
     setPending((prev) => [...prev, { role: 'user', content, author: null, visible: true }])
     setInput('')
+    if (historyOff) {
+      void send.start({
+        messages: [...local, { role: 'user' as const, content }].map((t) => ({
+          role: t.role,
+          content: t.content
+        })),
+        fresh: freshRef.current
+      })
+      return
+    }
     // A stored thread sends only the new question — the server rebuilds the
     // history from the turns THIS person may read (#1809).
     void send.start(
@@ -679,6 +696,7 @@ function AskPageInner() {
             )}
             {detail?.conversation.access === 'owner' && (
               <ShareMenu
+                disabled={historyOff}
                 conversationId={detail.conversation.id}
                 shares={detail.shares}
                 detailKey={detailKey(detail.conversation.id)}
@@ -686,6 +704,7 @@ function AskPageInner() {
             )}
             {detail?.conversation.access === 'owner' && (
               <PostToChatMenu
+                disabled={historyOff}
                 conversationId={detail.conversation.id}
                 detailKey={detailKey(detail.conversation.id)}
               />
@@ -706,6 +725,15 @@ function AskPageInner() {
             historyOpen ? 'flex' : 'hidden md:flex'
           )}
         >
+          <div className='shrink-0 border-b border-slate-200 p-3 dark:border-border'>
+            <AiHistorySwitch
+              compact
+              onDeleted={() => {
+                void qc.invalidateQueries({ queryKey: ASK_LIST_KEY })
+                if (detail?.conversation.access === 'owner') openConversation(null)
+              }}
+            />
+          </div>
           <AskHistory
             activeId={conversationId}
             onOpen={(id) => openConversation(id)}
@@ -968,17 +996,21 @@ function AskPageInner() {
                             <span className='whitespace-pre-wrap'>{t.content}</span>
                           )}
                         </div>
-                        {t.role === 'user' && t.id && conversationId && !send.active && (
-                          <button
-                            type='button'
-                            onClick={() => setEditing({ id: t.id as string, text: t.content })}
-                            className='invisible mt-2 rounded p-1 text-slate-400 hover:text-slate-700 group-hover:visible dark:hover:text-slate-200'
-                            data-tip='Edit and continue as a branch'
-                            data-ask-branch
-                          >
-                            <Pencil className='h-3 w-3' />
-                          </button>
-                        )}
+                        {t.role === 'user' &&
+                          t.id &&
+                          conversationId &&
+                          !send.active &&
+                          !historyOff && (
+                            <button
+                              type='button'
+                              onClick={() => setEditing({ id: t.id as string, text: t.content })}
+                              className='invisible mt-2 rounded p-1 text-slate-400 hover:text-slate-700 group-hover:visible dark:hover:text-slate-200'
+                              data-tip='Edit and continue as a branch'
+                              data-ask-branch
+                            >
+                              <Pencil className='h-3 w-3' />
+                            </button>
+                          )}
                       </div>
                     )}
                   </div>
@@ -1035,11 +1067,13 @@ function AskPageInner() {
                   }
                 }}
                 rows={1}
-                disabled={notFound}
+                disabled={notFound || (historyOff && !!conversationId)}
                 placeholder={
-                  othersInThread
-                    ? 'Ask a follow-up — it runs with your access'
-                    : 'e.g. How many workflows are waiting on manager approval?'
+                  historyOff && conversationId
+                    ? 'Your history is off — questions can’t be added to a saved conversation. Start a new chat.'
+                    : othersInThread
+                      ? 'Ask a follow-up — it runs with your access'
+                      : 'e.g. How many workflows are waiting on manager approval?'
                 }
                 className='max-h-32 flex-1 resize-none rounded-lg border border-slate-200 px-3 py-2 text-[13px] focus:outline-none focus:ring-1 focus:ring-[#00ceff] dark:border-border dark:bg-background'
               />
@@ -1082,7 +1116,9 @@ function AskPageInner() {
               ) : (
                 <Button
                   size='sm'
-                  disabled={!input.trim() || send.active || notFound}
+                  disabled={
+                    !input.trim() || send.active || notFound || (historyOff && !!conversationId)
+                  }
                   onClick={() => submit()}
                 >
                   <Send className='h-3.5 w-3.5' />
