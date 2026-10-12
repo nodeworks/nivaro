@@ -1,10 +1,580 @@
 {
-  "generated_at": "2026-10-11T23:24:32.380Z",
+  "generated_at": "2026-10-12T20:54:58.290Z",
   "releases": [
+    {
+      "version": "0.2.40",
+      "tag": "v0.2.40",
+      "date": "2026-10-12T16:54:45-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "format the offline saves table",
+              "hash": "4f40f283"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "@nivaro/react: export RecordOutboxHost and clearRecordOutbox for hosts",
+              "hash": "61644e78"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Items API: the system-path check resolves hops like the compilers",
+              "hash": "93154661"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Items API: a dotted filter key is checked as a path",
+              "hash": "830d32a4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Items API: a narrowed projection always reads the id",
+              "hash": "5274d7a0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Items API: system-table row filters fail closed; filters can't probe them",
+              "hash": "401cd6bb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Items API: a projection never falls back to every column",
+              "hash": "cfc3b729"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Items API: system tables never answer to a wildcard policy (security hotfix)",
+              "hash": "b3d318da"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Record-slot widgets: no system tables, scoped raw SQL (F1, F2)",
+              "hash": "dd5c71dd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Public dashboard links render as the dashboard owner (H2)",
+              "hash": "9b37fb49"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Related records and latest columns read as the viewer (AA2, AA3)",
+              "hash": "5dd4409e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Record-slot widgets read as the caller (security hotfix)",
+              "hash": "4fb06746"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Dashboard widgets read as the viewer (security hotfix)",
+              "hash": "4955e97f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime load test script and docs section",
+              "hash": "926baa57"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Dashboard widgets read as the viewer (security hotfix)",
+              "hash": "0321496e"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Saved-view stream: the event stream's ticket model, prune stale members",
+              "hash": "6bac300c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Dashboard widgets read as the viewer (security hotfix)",
+              "hash": "4e8eabf5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Widget data reads as the viewer everywhere (#1675 security pass)",
+              "hash": "a0bb3549"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Format presence labels change",
+              "hash": "cd211905"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI link labels as the asker; open rooms only hear the room's own row",
+              "hash": "4589d53b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Presence, do not disturb and cross-tab sync (#1721 #1722 #1882 #1982 #2026 #2114 #2117 #2383 #2434 #2435)",
+              "hash": "165ad5c0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "draft from bullets (#2379)",
+              "hash": "c169be91"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Record outbox: shared devices and View-as tabs (#1678 follow-up)",
+              "hash": "26b7c878"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Pushed dashboard/report widgets and a saved-view change stream (#1675 #1680)",
+              "hash": "ac59e88b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chat assistant: streamed replies, record-room scoping, channel context (#1810 #1852 #1854)",
+              "hash": "41438d32"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "?thread= opens a thread beside ?room=",
+              "hash": "73ee89ba"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "@nivaro/react: export JobsTray for hosts like efp-new",
+              "hash": "23852b4b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "GraphQL live queries and subscriptions over SSE (#2126 #1749)",
+              "hash": "62ea35b5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Offline outbox for record saves and pop-out records (#1678 #2131)",
+              "hash": "c2a96925"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI memory: a full memory refuses on both paths",
+              "hash": "739c87a1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Incident mode banner for administrators",
+              "hash": "594075c3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live surfaces: socket inspector, live chips, notes reactions/machine entries, task claim, queue sheet",
+              "hash": "4dee253d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live data hooks in @nivaro/react and a shared socket realtime adapter (#1751 #2027)",
+              "hash": "a4366bb9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "DMs and private channels are never embedded",
+              "hash": "d1fa4829"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ops assistant: ops posts are not found through single-message routes",
+              "hash": "6faee356"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI quality: tenant-scope the ai-calls room, lock replays down",
+              "hash": "f53f676c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "honour the extension kill switch for slash commands; keep DMs out of embeddings",
+              "hash": "1a1231a4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Shared Ask AI threads: hide follow-ups and choice pickers from other readers",
+              "hash": "dceca68a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ops assistant: keep ops posts with admins, forward host on approval",
+              "hash": "858f8c9a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI from any page: context chips, dropped records and files, report/config/team tools",
+              "hash": "9af0503c"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "item-write never runs as the flow author; scheduled plans need an active owner",
+              "hash": "7bd00edd"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI sharing: close the branch + delete bypass",
+              "hash": "0194f725"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fix the migration 445 test import after the move",
+              "hash": "30bd0639"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI memory: \"Remember this?\" offers and admin view/clear (#1845 #1897)",
+              "hash": "77e0fd63"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Staged import progress: scope import:progress to the starter and the tenant admin watch room",
+              "hash": "e9a937bb"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI: \"Don't save my questions\" history opt-out",
+              "hash": "fa0851fa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live records: clear the form when its viewer loses access",
+              "hash": "9638f2c0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI panel: starters, follow-ups, slash commands, choices, saved views, compare, chart drill, live answers",
+              "hash": "37196b41"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Config review: saveable cleanup thresholds",
+              "hash": "23f1cb2d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime stats: count version tabs per tenant",
+              "hash": "740be4b2"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live progress: Jobs tray, import queue position, bulk rows, live notices",
+              "hash": "f6027ead"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ops assistant: ask the logs, log alerts, ops chat tools, incident threads, a person's week",
+              "hash": "4cbac283"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Move the migration 445 test out of the migrations folder",
+              "hash": "a7c4ee12"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live ops screens: sweep progress, job logs, busy pill, jobs roster, help video signals",
+              "hash": "8d1fbb4d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI plans wave 2: impact, change report, run later, templates, history + undo, finish notice, integrity fix and draft flow (#1900 #2002 #1903 #1952 #1954 #2004 #2006 #1849)",
+              "hash": "fa1f4dc0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "per-subscriber state events, tenant-scoped shared rooms",
+              "hash": "b3e39c44"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live lists: row flash, slide-in/out as the viewer, row locks, live stat tiles, view counts, focus mode",
+              "hash": "978edb19"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Issue occurrences: store the last 50 hits per issue for 30 days (migration 445)",
+              "hash": "0754c0c9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live operations pages: readiness, issues, support desk, team load, My Work, delegation, broadcast receipts",
+              "hash": "4eb1910f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime security fixes: API-key binds, scoped stats, room gates",
+              "hash": "15b53bb9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "unused list and purge use the full reference check",
+              "hash": "3c4a9afa"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "ai-access: hide fallback owner fields, gate related-record labels, admin-only access totals",
+              "hash": "718dddf3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI Explain screens: imports, integrations, slow pages, configs, grouped issues",
+              "hash": "6f1d99f7"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live hooks: inherit the realtime event's source type",
+              "hash": "1a44a515"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Config review: report-only file cleanup, fixes bound to their preview",
+              "hash": "7072f4b6"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime feeds stay inside their tenant in cloud mode",
+              "hash": "48dcdd11"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI sharing: close the answer-visibility leaks",
+              "hash": "cfec2177"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live records: tenant-scoped, throttled notices; private trash lookup",
+              "hash": "e9266abf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Access insights: close disclosure gaps from the security review",
+              "hash": "338e3611"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI design: name unapplied role scopes; keep filter values from the model",
+              "hash": "9715c0a5"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Config review: monthly report, one-click fixes, cleanup, label check",
+              "hash": "09be0f27"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime socket transport and access (#1672 #1730 #1681 #1719 #1720 #1732 #1725 #2132)",
+              "hash": "cef5e587"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI plans: close condition and run-time access gaps",
+              "hash": "dab08010"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI explains access and ownership (#1867 #1956 #1958 #1959 #1907 #2012 #1889)",
+              "hash": "dd1e221d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime pipeline: tenant-safe durable flush and item-lock room",
+              "hash": "70300191"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Live records: shared live hooks + record page updates in place",
+              "hash": "e910f892"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI: conversation history, memory, sharing, branches, export",
+              "hash": "3184a029"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI design helpers: layout review, help text, role designer, role views",
+              "hash": "85855a86"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime pipeline: keep record-change events inside their tenant",
+              "hash": "f4bc93b4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI knowledge: docs search, glossary, data guides, docs gaps",
+              "hash": "9b4d96c3"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI explain: keep free text out of the prompt",
+              "hash": "3e4133e4"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI aggregate: refuse filter hops into scope-limited collections",
+              "hash": "06cb94ed"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI: multi-step plans with live progress, retry and conditions",
+              "hash": "71814fc1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "harden LIKE patterns, server-owned flags, permission-checked escalation subject",
+              "hash": "b7ec718f"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI aggregate: enforce field access and User Scopes",
+              "hash": "6a6b8553"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Realtime event pipeline: durable journal, Redis stream, raw-write announcements, delivery probe",
+              "hash": "92506658"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI quality: review queue, budgets, provider health, compare, replay, live calls",
+              "hash": "76828660"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI explain for operations events",
+              "hash": "679d874b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "polls, slash commands, meaning search, shared files/links search, online-first mentions",
+              "hash": "4e4b9382"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Ask AI: watched numbers, trend watches, past_state tool",
+              "hash": "c20c64c0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Notification center: acknowledgement, bulk actions, clean-up, sounds, noise cards, rule preview",
+              "hash": "f27bc76a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Session replay settings: share the cost panel's cache shape",
+              "hash": "3d7827a9"
+            }
+          ]
+        }
+      ],
+      "count": 92
+    },
     {
       "version": "0.2.39",
       "tag": "v0.2.39",
-      "date": "2026-10-11T19:24:18-04:00",
+      "date": "2026-10-11T19:24:32-04:00",
       "sections": [
         {
           "label": "Other",
