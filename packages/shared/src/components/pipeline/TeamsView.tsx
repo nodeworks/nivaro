@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { useLiveOps } from '../../lib/live-ops'
 import { cn, formatRelative } from '../../lib/utils'
 import { Button } from '../ui/button'
 import { Input } from '../ui/input'
@@ -485,6 +486,18 @@ function TeamDetail({
         .then((r) => r.data),
     staleTime: 60_000
   })
+
+  // Live: records changing hands, completing or breaching move these counts. The workload read
+  // resolves owners through the real engine, so a burst waits out a longer window first.
+  useLiveOps(
+    'team',
+    () => {
+      void qc.invalidateQueries({ queryKey: ['team-overview', team.id] })
+      void qc.invalidateQueries({ queryKey: ['team-workload', team.id] })
+      void qc.invalidateQueries({ queryKey: ['team-members', team.id] })
+    },
+    { debounceMs: 2000 }
+  )
 
   const { data: members = [] } = useQuery<TeamMember[]>({
     queryKey: ['team-members', team.id],

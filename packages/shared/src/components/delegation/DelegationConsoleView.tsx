@@ -4,6 +4,7 @@ import { AlertTriangle, CalendarClock, Check, UserRound, Users } from 'lucide-re
 import { useState } from 'react'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useLiveOps } from '../../lib/live-ops'
 import { cn } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { DelegationCard } from '../ProfileView'
@@ -324,6 +325,17 @@ export function DelegationConsoleView({ className, onNotice }: DelegationConsole
     void qc.invalidateQueries({ queryKey: ['coverage-gaps'] })
     onNotice?.('Saved')
   }
+  // Live: someone changing their out-of-office or delegate (or an owner seat moving) refreshes who
+  // is out, who covers whom, expiring delegations and uncovered approvals. The refetch is the
+  // same permission-checked read; the poke names no one.
+  useLiveOps(
+    'delegation',
+    () => {
+      void qc.invalidateQueries({ queryKey: ['delegation-overview'] })
+      void qc.invalidateQueries({ queryKey: ['coverage-gaps'] })
+    },
+    { debounceMs: 1000 }
+  )
   const gapsPath = nav.consoleUrl ? nav.consoleUrl('/coverage-gaps') : '/coverage-gaps'
 
   return (
