@@ -1039,6 +1039,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.traffic_pins = keys.length ? keys : null
     }
+    if ('ai_memory' in body) {
+      // #1804 — the person's own Ask AI notes (Profile → Ask AI memory). The
+      // card sends the whole list; null clears it.
+      const { normalizeAiMemory } = await import('../services/ai-memory.js')
+      const r = normalizeAiMemory(body.ai_memory)
+      if ('error' in r) return reply.code(400).send({ error: r.error })
+      patch.ai_memory = r.value
+    }
     if ('team_alerts' in body) {
       // #1037 — the lines a manager wants to hear about when their team crosses them.
       const { normalizeTeamAlerts } = await import('../services/team.js')

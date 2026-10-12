@@ -3,7 +3,16 @@ export { ApiUpdateBanner } from './components/ApiUpdateBanner'
 export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
-export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  type AnswerFormat,
+  type AnswerRows,
+  cellNumber,
+  chartOf,
+  formatsFor,
+  listOf,
+  rowsOfBlock
+} from './components/ai/answer-formats'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
   AlertRuleDrawer,

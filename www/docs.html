@@ -286,6 +286,7 @@
         </button>
         <div class="docs-nav-items" id="group-ai">
           <a class="docs-nav-item" data-section="ai-chat" href="#ai-chat">Ask Your Data</a>
+          <a class="docs-nav-item" data-section="ai-conversations" href="#ai-conversations">Ask AI history &amp; sharing</a>
           <a class="docs-nav-item" data-section="ai-actions" href="#ai-actions">AI Actions &amp; Dashboards</a>
           <a class="docs-nav-item" data-section="ai-overview" href="#ai-overview">Overview</a>
           <a class="docs-nav-item" data-section="ai-generate" href="#ai-generate">Generate with AI</a>
@@ -8053,6 +8054,13 @@ ctx.storage.setActive('s3');</code></pre>
             <li>Answers stream as they are written: send <code class="doc-code">stream: true</code> and the route answers <code class="doc-code">202 {data: {stream_id}}</code> at once, then emits <code class="doc-code">ai:delta</code> (text, with its round), <code class="doc-code">ai:status</code> (the tool running), <code class="doc-code">ai:done</code> (the full normal body — proposals, trace, request_id) and <code class="doc-code">ai:error</code> to your Socket.io user room; add <code class="doc-code">Accept: text/event-stream</code> to get the same events as SSE instead (widgets, hosts without the socket). A caller with neither gets the plain reply. <code class="doc-code">POST /api/ai/chat/:stream_id/stop</code> halts a running answer. /summarize and /generate take the same <code class="doc-code">stream</code> option with text deltas only. The /ask page streams by default, shows what the model is doing while tools run, and has a Stop button.</li>
           </ul>
           <!-- /SYNC:ai-chat -->
+        </div>
+
+        <div class="doc-section" id="s-ai-conversations" data-toc='[{"id":"ai-conversations","label":"Ask AI history &amp; sharing"},{"id":"ai-conversations-history","label":"History, pins and retention"},{"id":"ai-conversations-memory","label":"Ask AI memory"},{"id":"ai-conversations-sharing","label":"Sharing a conversation"},{"id":"ai-conversations-branch","label":"Branching"},{"id":"ai-conversations-chat","label":"Posting to chat"},{"id":"ai-conversations-export","label":"Export and formats"},{"id":"ai-conversations-api","label":"API"}]'>
+          <!-- SYNC:ai-conversations -->
+          <h1 class="doc-h1" id="ai-conversations">Ask AI history &amp; sharing</h1>
+          <p class="doc-p">Every Ask AI conversation is kept for the person who started it — questions, answers, the tool calls behind them and proposal outcomes — listed newest first with search and pins, resumable, shareable with colleagues (each person's questions run with their own access, and an answer is shown to someone else only when it re-runs to the same result with theirs), branchable from an edited question, postable to chat as a card, and exportable as CSV or Excel re-run as the reader. Run <code class="doc-code">pnpm sync-docs</code> to fill this section from the admin docs.</p>
+          <!-- /SYNC:ai-conversations -->
         </div>
 
         <div class="doc-section" id="s-ai-actions" data-toc='[{"id":"ai-actions","label":"AI Actions &amp; Dashboards"},{"id":"ai-actions-types","label":"Action types"}]'>

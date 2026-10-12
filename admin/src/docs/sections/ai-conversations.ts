@@ -1,0 +1,108 @@
+import type { DocSection } from '../types.js'
+
+export const aiConversationsDocs: DocSection = {
+  id: 'ai-conversations',
+  label: 'Ask AI history & sharing',
+  content: [
+    { type: 'h1', id: 'ai-conversations', text: 'Ask AI history & sharing' },
+    {
+      type: 'p',
+      text: 'Every Ask AI conversation is kept for the person who started it: each question, the answer, the tool calls behind it and any action it proposed (with that proposal’s outcome, read live). The History list beside the chat shows them newest first, pinned ones on top, and searches titles and text. Opening one resumes it — the next question goes to the model with the whole thread. The AI call log stays the administrator’s record; this history is the person’s own, and administrators get no view into it.'
+    },
+    { type: 'h2', id: 'ai-conversations-history', text: 'History, pins and retention' },
+    {
+      type: 'ul',
+      items: [
+        'Pin a conversation from the list or the page header; pins sort first and are never pruned.',
+        'Delete removes the conversation and everything in it. Someone it was shared with can remove it from their own list instead.',
+        'Settings → AI Features → Ask AI conversation history: how many days an untouched conversation is kept (blank = 180, 0 = forever). The nightly retention job prunes the rest.'
+      ]
+    },
+    { type: 'h2', id: 'ai-conversations-memory', text: 'Ask AI memory' },
+    {
+      type: 'p',
+      text: 'Say “remember that amounts are in thousands” (or “remember: I work Zone 3 inventory requests”) and Ask AI keeps the note instead of answering. Notes ride every later question as context about you. Profile → Ask AI memory lists them for editing or deleting. At most 20 notes of 300 characters; when the list is full, a new note replaces the oldest. Notes are stored in your preferences, never shown to anyone else, and never grant access to anything.'
+    },
+    { type: 'h2', id: 'ai-conversations-sharing', text: 'Sharing a conversation' },
+    {
+      type: 'p',
+      text: 'The owner shares a conversation with colleagues (Share in the header). They are notified, see it in their History, can read it and can ask follow-ups in the same thread; a new question or answer appears for everyone who has it open. Each person’s questions run with their own permissions.'
+    },
+    {
+      type: 'p',
+      text: 'An answer is shown to someone other than the person it was asked for only when it is safe to: every data call the answer made is re-run with the reader’s access, and it must return exactly what the model saw. If any call returns something different (the reader’s access is narrower, or the data has since changed) or cannot be re-run (an action proposal, a plan, another person’s tasks), the answer is withheld from that reader with an “Ask it with my access” button. A follow-up asked by the reader is built only from the turns they may read.'
+    },
+    {
+      type: 'note',
+      text: 'Answers do not stream token by token to other participants: until the answer is checked against their access, nobody else sees its text. They see the question arrive and the answer appear once it is finished and checked.'
+    },
+    { type: 'h2', id: 'ai-conversations-branch', text: 'Branching' },
+    {
+      type: 'p',
+      text: 'Hover an earlier question and choose Edit to ask a different version of it. The answer continues in a new conversation (a branch) that holds everything before the edited question; the original thread stays as it was. History nests branches under their source, and the conversation page links between them.'
+    },
+    { type: 'h2', id: 'ai-conversations-chat', text: 'Posting to chat' },
+    {
+      type: 'p',
+      text: 'Post to chat sends the conversation to a channel, direct message or record room as a card: the question, a short answer and an Open link. The card is built for each reader — the short answer appears only when the sharing rule above admits them; otherwise it says the answer was given with the poster’s access. Anyone who can read the room can open the conversation and ask follow-ups with their own access.'
+    },
+    { type: 'h2', id: 'ai-conversations-export', text: 'Export and formats' },
+    {
+      type: 'ul',
+      items: [
+        'An answer built from a query offers CSV and Excel. The download re-runs the query with your access today — it never copies the answer’s text — and is named after the question and the time.',
+        'A table, chart or “label: value” list in an answer has a Table · Chart · List switch. The other formats are drawn from the same rows, with no new question and no model call. A chart needs a column of numbers.'
+      ]
+    },
+    { type: 'h2', id: 'ai-conversations-api', text: 'API' },
+    {
+      type: 'table',
+      head: ['Route', 'What it does'],
+      rows: [
+        [
+          'POST /api/ai/chat { messages, save: true }',
+          'Ask and start a stored conversation. The answer carries `conversation_id`.'
+        ],
+        [
+          'POST /api/ai/chat { messages, conversation_id }',
+          'Ask inside a conversation. The server builds the history from the turns the caller may read; only the newest question in `messages` is used.'
+        ],
+        ['GET /api/ai/conversations?q=&pinned=1', 'Mine and shared with me, newest first.'],
+        [
+          'GET /api/ai/conversations/:id',
+          'The thread as the caller may read it (`visible: false` = withheld), shares (owner only), branches, parent.'
+        ],
+        [
+          'PATCH /api/ai/conversations/:id { title?, pinned? }',
+          'Rename (owner) or pin (each person their own).'
+        ],
+        ['DELETE /api/ai/conversations/:id', 'Owner: delete. Shared: remove from my list.'],
+        [
+          'POST /api/ai/conversations/:id/shares { user_ids }',
+          'Owner shares with people (notifies them).'
+        ],
+        ['DELETE /api/ai/conversations/:id/shares/:shareId', 'Owner stops sharing.'],
+        [
+          'POST /api/ai/conversations/:id/branch { message_id, question }',
+          'New conversation holding the turns before that question; ask `question` in it next.'
+        ],
+        [
+          'POST /api/ai/conversations/:id/post { room, note? }',
+          'Post to a chat room the caller can see.'
+        ],
+        [
+          'GET /api/ai/conversations/:id/messages/:mid/export?format=csv|xlsx&step=',
+          'The rows behind an answer, re-run as the caller.'
+        ],
+        [
+          'DELETE /api/ai/conversations/:id/messages/:mid',
+          'Remove one message (owner, or your own).'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Live updates: participants receive `ai:conversation` `{conversation_id, by, message_id, state: asking|answered|failed}` on their user room — ids only; the client refetches and the server filters the answer per reader.'
+    }
+  ]
+}

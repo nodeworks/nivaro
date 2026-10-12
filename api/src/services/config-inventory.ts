@@ -292,6 +292,9 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_ai_calls',
   'nivaro_ai_feedback',
   'nivaro_ai_autofill_events',
+  'nivaro_ai_conversations', // #1833 per-person Ask AI history (migration 433)
+  'nivaro_ai_conversation_messages',
+  'nivaro_ai_conversation_shares',
   'nivaro_concurrency_samples',
   'nivaro_outbox',
   'nivaro_action_journal',
