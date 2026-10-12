@@ -31,6 +31,7 @@ export * from './sections/import-templates.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
+export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-progress.js'
@@ -243,6 +244,7 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
+import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
@@ -814,6 +816,7 @@ export const navSections: NavGroup[] = [
       collabChat,
       collabItemLocking,
       collabLiveRecords,
+      liveWidgetsDocs,
       collabLiveProgress,
       collabOfflinePopout,
       collabLiveLists,
@@ -862,6 +865,7 @@ export const navSections: NavGroup[] = [
       obsTrafficMapLenses,
       obsTrafficMapPlatform,
       realtimeTransport,
+      viewStreamDocs,
       commandCenterDocs,
       wallboardPulseDocs,
       recordGraphDocs,

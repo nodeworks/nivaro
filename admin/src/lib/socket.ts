@@ -362,7 +362,12 @@ const RELAYED_EVENTS = new Set([
   'notification:new',
   'presence:changed',
   'read:changed',
-  'prefs:changed'
+  'prefs:changed',
+  // #1675 — pushed widgets: the figure computed as this sign-in, for this tab's own watch key.
+  'widget:watching',
+  'widget:data',
+  'widget:stale',
+  'widget:unwatched'
 ])
 
 let leaderHandle: ReturnType<typeof createLeaderSocket> | null = null

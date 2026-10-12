@@ -150,6 +150,7 @@ const catAxisProps = (count: number) => ({
 
 import { type DrilldownTarget, useDrilldown, useNivaroClient, useOverlayState } from '../context'
 import { del, get, post, put } from '../lib/commands'
+import { liveWidgetInterval, useLiveWidget } from '../lib/live-widgets'
 import { buildReportTree, type ReportTreeNode } from '../lib/report-tree'
 import {
   effectiveScopeSeedIds,
@@ -1973,6 +1974,26 @@ const WidgetCard = memo(function WidgetCard({
     }
     setAiBusy(false)
   }
+  // Pushed widgets (#1675): the server recomputes this widget as the viewer when a collection
+  // it reads changes and pushes the figure; the poll below drops to a safety net meanwhile.
+  // Query widgets (raw SQL) and the other server-refused types keep their poll.
+  const liveParams = useMemo(
+    () => ({ date_range: dateRange ?? null, entity_filters: entityFilters }),
+    [dateRange, entityFilters]
+  )
+  const widgetLive = useLiveWidget({
+    kind: 'report',
+    widget: widget.id,
+    report: reportId,
+    params: liveParams,
+    enabled: widget.type !== 'divider' && widget.type !== 'query',
+    onData: (d) =>
+      queryCache.setQueryData(
+        ['nivaro-report-widget', reportId, widget.id, dateRange, entityFilters],
+        d as ReportWidgetData
+      ),
+    onStale: () => void refetch()
+  })
   const {
     data: baseData,
     isLoading,
@@ -1996,10 +2017,12 @@ const WidgetCard = memo(function WidgetCard({
     enabled: widget.type !== 'divider' && (widget.type !== 'query' || !!snapshot),
     staleTime: 60_000,
     // Per-widget auto-refresh (#168) overrides the report-level interval.
-    refetchInterval:
+    refetchInterval: liveWidgetInterval(
+      widgetLive,
       Number((widget.config as { refresh_secs?: number })?.refresh_secs) >= 10
         ? Number((widget.config as { refresh_secs?: number }).refresh_secs) * 1000
-        : refetchInterval,
+        : refetchInterval
+    ),
     retry: false
   })
   // Drill hierarchies (#418): drill state re-fetches with the next level's

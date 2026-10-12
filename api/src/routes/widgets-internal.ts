@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { applyScopeParams } from '../services/custom-query-scope.js'
 import { cachedDefinition } from '../services/definition-cache.js'
 import { can } from '../services/permissions.js'
 import { recordCacheOutcome } from '../services/query-cache-stats.js'
@@ -14,6 +15,9 @@ import {
   type WidgetQueryConfig
 } from '../services/report-studio.js'
 import {
+  type ColumnSpec,
+  type LookupSpec,
+  type RelatedVisibility,
   type RelRow,
   type ReviewListConfig,
   resolveReviewListRows,
@@ -21,6 +25,13 @@ import {
 } from '../services/review-list.js'
 import { type RollupConfig, resolveRollupRows, validateRollupConfig } from '../services/rollup.js'
 import { markCacheHit } from '../services/traffic-map.js'
+import {
+  assertHostReadable,
+  assertLookupReadable,
+  assertWidgetFieldsReadable,
+  readableIds,
+  readOneAs
+} from '../services/widget-access.js'
 import type { User } from '../types.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -116,6 +127,92 @@ function validateRedirectUrl(url: string): string | null {
   return trimmed
 }
 
+// ── as-the-viewer helpers (#1675 security pass) ──────────────────────────────
+
+/** System tables (users with tokens, settings with secrets, API keys) are never a widget source. */
+const SYSTEM_COLLECTION = /^(nivaro|directus)_/i
+
+function assertNotSystem(...collections: Array<string | null | undefined>): void {
+  for (const c of collections) {
+    if (c && SYSTEM_COLLECTION.test(c))
+      throw Object.assign(new Error('Unknown collection'), { statusCode: 400 })
+  }
+}
+
+/** `{col: {_eq: v}}` widget filters as items-service `_and` members. */
+function eqFilters(raw: Record<string, unknown>): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = []
+  for (const [col, cond] of Object.entries(raw)) {
+    if (cond && typeof cond === 'object' && '_eq' in (cond as object))
+      out.push({ [col]: { _eq: (cond as Record<string, unknown>)._eq } })
+  }
+  return out
+}
+
+type SpecList = Array<string | ColumnSpec> | null | undefined
+
+function specFields(...lists: SpecList[]): string[] {
+  const out: string[] = []
+  for (const list of lists)
+    for (const s of list ?? []) {
+      if (typeof s === 'string') out.push(s)
+      else if (s && 'field' in s && typeof s.field === 'string') out.push(s.field)
+    }
+  return out
+}
+
+function lookupsOf(...lists: SpecList[]): LookupSpec[] {
+  const out: LookupSpec[] = []
+  for (const list of lists)
+    for (const s of list ?? []) if (s && typeof s === 'object' && 'lookup' in s) out.push(s.lookup)
+  return out
+}
+
+function reviewListFields(cfg: ReviewListConfig): string[] {
+  return [
+    cfg.group_by,
+    cfg.aggregate_sum ?? '',
+    cfg.sibling_field ?? '',
+    cfg.status.field,
+    cfg.status.stamp_user_field ?? '',
+    cfg.status.stamp_date_field ?? '',
+    ...(cfg.static_filter ?? []).map((f) => f.field),
+    ...specFields(cfg.group_meta, cfg.line_columns)
+  ].filter(Boolean)
+}
+
+function rollupFields(cfg: RollupConfig): string[] {
+  return [
+    ...cfg.levels.map((l) => l.field),
+    ...cfg.measures.flatMap((m) => [m.sum, ...(m.filter ?? []).map((f) => f.field)]),
+    ...(cfg.static_filter ?? []).map((f) => f.field),
+    ...(cfg.merge_leaf_by ?? []),
+    ...specFields(cfg.leaf_columns)
+  ].filter(Boolean)
+}
+
+/** Related records (dot columns, lookups, rollup levels and labels) as the viewer reads them. */
+function relatedAs(user: User): RelatedVisibility {
+  return async (collection, ids) =>
+    new Set((await readableIds(user, collection, ids)).map((id) => String(id)))
+}
+
+/** A record-slot walk: the host record readable, every configured field readable. */
+async function gateWalk(
+  user: User,
+  cfg: { host_collection: string; collection: string },
+  recordId: string | null,
+  fields: string[],
+  lookups: LookupSpec[]
+): Promise<void> {
+  if (recordId != null) await assertHostReadable(user, cfg.host_collection, recordId)
+  await assertWidgetFieldsReadable(user, cfg.collection, fields)
+  for (const l of lookups) {
+    assertNotSystem(l.collection)
+    await assertLookupReadable(user, l)
+  }
+}
+
 // ── render engine ─────────────────────────────────────────────────────────────
 
 async function renderWidget(
@@ -129,59 +226,66 @@ async function renderWidget(
   const config = (parseJson(widget.config) ?? {}) as Record<string, unknown>
   const type = widget.widget_type as string
 
+  // stat / list read AS THE VIEWER through the items service (#1675 security pass): row
+  // filters, User Scopes and the role's field list apply, and a widget whose own field or
+  // filter names a column the viewer cannot read refuses instead of showing it.
   if (type === 'stat') {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     const collection = config.collection as string
     const field = config.field as string
     const aggregation = (config.aggregation as string) ?? 'none'
 
-    // Permission check — caller must be able to read this collection
-    if (user && !(await can(user, 'read', collection))) {
+    assertNotSystem(collection)
+    if (!(await can(user, 'read', collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
     const rawFilters = substituteFilters(config.filters ?? {}, inputs) as Record<string, unknown>
-
-    let query = db(collection)
-    for (const [col, cond] of Object.entries(rawFilters)) {
-      if (cond && typeof cond === 'object' && '_eq' in (cond as object)) {
-        query = query.where(col, (cond as Record<string, unknown>)._eq as string)
-      }
-    }
+    const and = eqFilters(rawFilters)
+    await assertWidgetFieldsReadable(user, collection, [
+      ...(field ? [field] : []),
+      ...and.flatMap((c) => Object.keys(c))
+    ])
+    const filter = and.length ? { _and: and } : {}
 
     if (aggregation === 'none') {
       const idInput = config.id_input as string | undefined
       const idVal = idInput ? inputs[idInput] : inputs[field]
       if (idInput && (idVal == null || idVal === ''))
         return { value: null, display: config.display ?? {}, awaiting: [idInput] }
-      const row = idVal
-        ? await db(collection).where('id', idVal).select(field).first()
-        : await query.select(field).first()
+      let row: Record<string, unknown> | null
+      if (idVal) row = await readOneAs(user, collection, idVal, [field])
+      else {
+        const { readItems } = await import('../services/items.js')
+        const res = await readItems(user, collection, { fields: [field], filter, limit: 1 })
+        row = ((res.data ?? [])[0] as Record<string, unknown> | undefined) ?? null
+      }
       return { value: row?.[field] ?? null, display: config.display ?? {} }
     }
 
-    const aggFns: Record<string, string> = {
-      sum: 'sum',
-      count: 'count',
-      avg: 'avg',
-      min: 'min',
-      max: 'max'
-    }
-    const fn = aggFns[aggregation] ?? 'count'
-    const result = await (
-      query as unknown as Record<
-        string,
-        (col: string, alias: string) => Promise<Record<string, unknown>[]>
-      >
-    )[fn](field, 'value')
-    const value = result[0]?.value ?? 0
+    const fn =
+      (['sum', 'count', 'avg', 'min', 'max'] as const).find((f) => f === aggregation) ?? 'count'
+    const { aggregateItems } = await import('../services/items.js')
+    const res = await aggregateItems(user, collection, {
+      filter,
+      aggregate:
+        fn === 'count' ? (field ? { count: [field] } : { countAll: true }) : { [fn]: [field] }
+    })
+    const agg = (res.data ?? [])[0] as unknown as Record<string, unknown> | undefined
+    const value =
+      fn === 'count' && !field
+        ? (agg?.countAll ?? 0)
+        : ((agg?.[fn] as Record<string, unknown> | undefined)?.[field] ?? 0)
     return { value, display: config.display ?? {} }
   }
 
   if (type === 'list') {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     const collection = config.collection as string
     const fields = (config.fields as string[]) ?? []
 
-    if (user && !(await can(user, 'read', collection))) {
+    assertNotSystem(collection)
+    if (!(await can(user, 'read', collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
@@ -189,25 +293,29 @@ async function renderWidget(
     const limit = Math.min((config.limit as number) ?? 50, 500)
     const orderField = config.order_field as string | undefined
     const orderDir = (config.order_dir as 'asc' | 'desc') ?? 'asc'
-
-    let query = db(collection)
-      .select(fields.length ? fields : ['*'])
-      .limit(limit)
-    for (const [col, cond] of Object.entries(rawFilters)) {
-      if (cond && typeof cond === 'object' && '_eq' in (cond as object)) {
-        query = query.where(col, (cond as Record<string, unknown>)._eq as string)
-      }
-    }
-    if (orderField) query = query.orderBy(orderField, orderDir)
-    const rows = await query
-    return { rows, fields, display: config.display ?? {} }
+    const and = eqFilters(rawFilters)
+    await assertWidgetFieldsReadable(user, collection, [
+      ...fields,
+      ...and.flatMap((c) => Object.keys(c)),
+      ...(orderField ? [orderField] : [])
+    ])
+    const { readItems } = await import('../services/items.js')
+    const res = await readItems(user, collection, {
+      fields: fields.length ? fields : ['*'],
+      filter: and.length ? { _and: and } : {},
+      sort: orderField ? [`${orderDir === 'desc' ? '-' : ''}${orderField}`] : [],
+      limit
+    })
+    return { rows: res.data ?? [], fields, display: config.display ?? {} }
   }
 
   if (type === 'review_list') {
     const cfg = config as unknown as ReviewListConfig
 
     // Permission check — caller must be able to read the target collection
-    if (user && !(await can(user, 'read', cfg.collection))) {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    assertNotSystem(cfg.collection, cfg.host_collection)
+    if (!(await can(user, 'read', cfg.collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
@@ -216,14 +324,30 @@ async function renderWidget(
       throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
     }
 
-    return await resolveReviewListRows(db, cfg, String(recordId))
+    await gateWalk(
+      user,
+      cfg,
+      String(recordId),
+      reviewListFields(cfg),
+      lookupsOf(cfg.group_meta, cfg.line_columns)
+    )
+    return await resolveReviewListRows(
+      db,
+      cfg,
+      String(recordId),
+      undefined,
+      (ids) => readableIds(user as User, cfg.collection, ids),
+      relatedAs(user)
+    )
   }
 
   if (type === 'rollup') {
     const cfg = config as unknown as RollupConfig
 
     // Permission check — caller must be able to read the target collection
-    if (user && !(await can(user, 'read', cfg.collection))) {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    assertNotSystem(cfg.collection, cfg.host_collection)
+    if (!(await can(user, 'read', cfg.collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
@@ -248,9 +372,19 @@ async function renderWidget(
       if (!staged?.created?.length) {
         throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
       }
-      return await resolveRollupRows(db, cfg, null, undefined, staged)
+      await gateWalk(user, cfg, null, rollupFields(cfg), lookupsOf(cfg.leaf_columns))
+      return await resolveRollupRows(db, cfg, null, undefined, staged, undefined, relatedAs(user))
     }
-    return await resolveRollupRows(db, cfg, String(recordId), undefined, staged)
+    await gateWalk(user, cfg, String(recordId), rollupFields(cfg), lookupsOf(cfg.leaf_columns))
+    return await resolveRollupRows(
+      db,
+      cfg,
+      String(recordId),
+      undefined,
+      staged,
+      (ids) => readableIds(user, cfg.collection, ids),
+      relatedAs(user)
+    )
   }
 
   if (type === 'report_widget') {
@@ -443,6 +577,14 @@ async function renderWidget(
     // Scope injection is what keeps sharing-by-accident safe regardless: the
     // route mixes a restricted caller's scope values INTO the params before
     // keying, so a scoped result can never land under an unscoped key.
+    // User Scopes on raw SQL: the query's scope params for this caller, as the execute route
+    // applies them — and before the cache key, so scoped and unscoped results never share one.
+    await applyScopeParams(
+      (cq as { scope_params?: string | null }).scope_params ?? null,
+      params,
+      user?.id,
+      isAdmin
+    )
     const cacheKey = `cq:${cq.slug}:${JSON.stringify(params)}`
     const cacheTtl = Number(cq.cache_ttl ?? 0)
     let cachedRows: unknown[] | null = null
@@ -638,14 +780,14 @@ async function renderWidget(
           resolved.toggle_on_value = tOnValue
           resolved.action_config = acConf
           // resolve current state from DB so display doesn't depend on inputs (reliable for bit fields)
-          if (tCollection && tField) {
+          if (tCollection && tField && !SYSTEM_COLLECTION.test(tCollection)) {
             const itemId = inputs[tIdInput]
             if (itemId) {
               try {
-                const row = (await db(tCollection).where('id', itemId).select(tField).first()) as
-                  | Record<string, unknown>
-                  | undefined
-                if (row) resolved.is_on = normBitR(row[tField]) === normBitR(tOnValue)
+                // As the viewer: a record or field they cannot read reports no state.
+                const row = user ? await readOneAs(user, tCollection, itemId, [tField]) : null
+                if (row && tField in row)
+                  resolved.is_on = normBitR(row[tField]) === normBitR(tOnValue)
               } catch {
                 /* non-blocking — falls back to client-side inputs check */
               }
@@ -800,6 +942,8 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
   })
 
   app.post('/:id/render', async (req, reply) => {
+    // Every widget reads as the person rendering it — no sign-in, no data (#1675 security pass).
+    if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
     const { id } = req.params as { id: string }
     const body = req.body as Record<string, unknown>
     const widget = await cachedDefinition(`widget:${Number(id)}`, () =>
@@ -819,6 +963,8 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     const draft = body.draft as Record<string, unknown> | undefined
     const itemCollection = body.item_collection as string | undefined
     if (bindings && draft && itemCollection) {
+      if (SYSTEM_COLLECTION.test(itemCollection))
+        return reply.code(400).send({ error: 'Unknown collection' })
       // Guard: caller must be able to read the source collection
       if (req.user && !(await can(req.user, 'read', itemCollection))) {
         return reply.code(403).send({ error: 'Forbidden' })
@@ -839,7 +985,8 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
           .whereNull('junction_field')
           .whereNotNull('one_collection')
           .first()
-        if (!rel?.one_collection) {
+        // A system table (users with tokens, settings with secrets) never binds a value.
+        if (!rel?.one_collection || SYSTEM_COLLECTION.test(rel.one_collection)) {
           inputs[b.key] = null
           continue
         }
@@ -857,10 +1004,13 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
           inputs[b.key] = null
           continue
         }
-        const relatedRow = await db(rel.one_collection)
-          .where('id', fkValue)
-          .select(safeFields)
-          .first()
+        // As the caller: a related record or field they cannot read binds nothing.
+        const relatedRow = await readOneAs(
+          req.user as User,
+          rel.one_collection,
+          fkValue,
+          safeFields
+        ).catch(() => null)
         // Walk safe fields into the fetched row
         let val: unknown = relatedRow
         for (const p of safeFields) {
