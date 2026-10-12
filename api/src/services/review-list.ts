@@ -796,7 +796,9 @@ export async function resolveReviewListRows(
   database: Knex,
   config: ReviewListConfig,
   recordId: string,
-  logger: Logger = consoleLogger
+  logger: Logger = consoleLogger,
+  /** Narrow the walked ids to what the viewer can read (widgets-internal passes it). */
+  visible?: (ids: Array<string | number>) => Promise<Array<string | number>>
 ): Promise<ReviewListResult> {
   const relations = (await database('nivaro_relations').select(
     'many_collection',
@@ -836,6 +838,7 @@ export async function resolveReviewListRows(
     idSet = walk.idSet
     truncated = walk.truncated
   }
+  if (visible && idSet.length > 0) idSet = await visible(idSet)
 
   const groupMetaSpecs = normalizeColumnSpecs(config.group_meta)
   const lineColumnSpecs = normalizeColumnSpecs(config.line_columns)

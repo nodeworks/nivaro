@@ -14,11 +14,11 @@ export const liveWidgetsDocs: DocSection = {
       head: ['Widget', 'How it refreshes'],
       rows: [
         [
-          'Report: KPI, charts, tables, pivots, heatmaps, movers, KPI groups, …; dashboard: count, sum, average, charts, saved view',
+          'Report: KPI, charts, tables, pivots, heatmaps, movers, KPI groups, …; dashboard: count, sum, average, latest rows, charts, saved view',
           'Pushed when its data changes. Its own refresh interval drops to a 5-minute safety net.'
         ],
         [
-          'Query widgets (raw SQL), AI insight, narrative, calc formulas, metric catalog, queue stats, the dashboard "latest rows" list',
+          'Query widgets (raw SQL), AI insight, narrative, calc formulas, metric catalog, queue stats',
           'Unchanged: the widget keeps its refresh interval.'
         ]
       ]
@@ -27,6 +27,7 @@ export const liveWidgetsDocs: DocSection = {
       type: 'ul',
       items: [
         'You must still be able to open the dashboard or report AND read every collection the widget reads; when that stops being true the push ends and the widget goes back to its normal refresh.',
+        'Every widget — pushed or polled, on a dashboard, a report, a public dashboard link or a record page — reads as the person viewing it: their read permission on each collection, their row filters and User Scopes, and only fields their role can read. A widget built on a field you cannot read shows "Forbidden" instead of a figure; a public dashboard link shows what its creator can see.',
         'After a lost connection the widget refreshes once when it is back, then pushing resumes.',
         'Recomputes are capped per server (`WIDGET_LIVE_MAX_PER_MIN`, default 300 a minute); a widget over the cap catches up in the next minute.'
       ]

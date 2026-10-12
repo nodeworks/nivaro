@@ -26,8 +26,7 @@ import { currentTenantKey } from './tenant-rooms.js'
  * stops passing is dropped with `widget:unwatched` and the client goes back to polling.
  *
  * Not watched (they keep their poll): raw-SQL query widgets, AI insight and narrative text,
- * calc formulas over sibling widgets, metric-catalog widgets, queue stats, and the classic
- * "latest rows" list. Recomputes are capped per process (WIDGET_LIVE_MAX_PER_MIN, default 300
+ * calc formulas over sibling widgets, metric-catalog widgets and queue stats. Recomputes are capped per process (WIDGET_LIVE_MAX_PER_MIN, default 300
  * a minute, three at a time); a widget over the budget waits for the next minute.
  *
  * Watches live in this process with the socket. The client re-sends its watch list every
@@ -57,8 +56,16 @@ const CONCURRENCY = 3
 const KEY_RE = /^[A-Za-z0-9_-]{4,64}$/
 const ID_RE = /^[0-9A-Za-z_-]{1,64}$/
 
-/** Dashboard widget types computed live; `latest` (raw rows) keeps polling. */
-const DASHBOARD_LIVE = new Set(['count', 'sum', 'avg', 'bar_chart', 'line_chart', 'saved_view'])
+/** Dashboard widget types computed live (all of them read as the viewer). */
+const DASHBOARD_LIVE = new Set([
+  'count',
+  'sum',
+  'avg',
+  'latest',
+  'bar_chart',
+  'line_chart',
+  'saved_view'
+])
 /** Report widget types that keep polling: raw SQL, AI text, sibling formulas, catalogs, queues. */
 const REPORT_NOT_LIVE = new Set([
   'divider',

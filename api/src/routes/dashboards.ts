@@ -647,10 +647,19 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
     if (!widget.collection) return reply.code(400).send({ error: 'Widget has no collection' })
 
     const fieldSet = await registeredFieldSet(widget.collection)
+    // Readable fields only (#1675 security pass): the widget's own filter on a field the viewer
+    // cannot read refuses; a dashboard filter-bar one does not bind; the segment must be readable.
+    const { readableColumns } = await import('../services/report-studio.js')
+    const { readable } = await readableColumns(req.user!, widget.collection)
+    const ownConds = normalizeWidgetFilters(widget.filters).filter((f) => fieldSet.has(f.field))
+    if (ownConds.some((f) => !readable.has(f.field)))
+      return reply.code(403).send({ error: 'Forbidden' })
     const conds = [
-      ...normalizeWidgetFilters(widget.filters),
-      ...normalizeWidgetFilters(req.body?.extra_filters)
-    ].filter((f) => fieldSet.has(f.field))
+      ...ownConds,
+      ...normalizeWidgetFilters(req.body?.extra_filters).filter(
+        (f) => fieldSet.has(f.field) && readable.has(f.field)
+      )
+    ]
 
     const OP_MAP: Record<string, string> = {
       eq: '_eq',
@@ -678,7 +687,7 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
           and.push({ created_at: { _gte: day } })
           and.push({ created_at: { _lt: next.toISOString().slice(0, 10) } })
         }
-      } else if (fieldSet.has(seg.field)) {
+      } else if (fieldSet.has(seg.field) && readable.has(seg.field)) {
         and.push({ [seg.field]: { _eq: seg.value } })
       } else {
         return reply.code(400).send({ error: 'Unknown segment field' })
