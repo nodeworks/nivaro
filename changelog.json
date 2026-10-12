@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-12T20:54:58.290Z",
+  "generated_at": "2026-10-12T22:29:11.339Z",
   "releases": [
+    {
+      "version": "0.2.41",
+      "tag": "v0.2.41",
+      "date": "2026-10-12T18:28:57-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "apply proposed lines on approval; show before/after lines",
+              "hash": "bd6b28c0"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "be9906cf"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.40",
       "tag": "v0.2.40",
-      "date": "2026-10-12T16:54:45-04:00",
+      "date": "2026-10-12T16:54:58-04:00",
       "sections": [
         {
           "label": "Documentation",
