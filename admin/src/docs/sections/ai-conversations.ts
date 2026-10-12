@@ -14,7 +14,7 @@ export const aiConversationsDocs: DocSection = {
       type: 'ul',
       items: [
         'Pin a conversation from the list or the page header; pins sort first and are never pruned.',
-        'Delete removes the conversation and everything in it. Someone it was shared with can remove it from their own list instead.',
+        'Delete removes the conversation and everything in it. Someone it was shared with can remove it from their own list instead. Deleting a single message deletes your own; the owner removing someone else’s message only empties it — it stays a withheld turn, so later answers that may repeat it stay withheld too.',
         'Settings → AI Features → Ask AI conversation history: how many days an untouched conversation is kept (blank = 180, 0 = forever). The nightly retention job prunes the rest, except conversations any participant has pinned.'
       ]
     },
@@ -74,7 +74,7 @@ export const aiConversationsDocs: DocSection = {
     { type: 'h2', id: 'ai-conversations-branch', text: 'Branching' },
     {
       type: 'p',
-      text: 'Hover an earlier question and choose Edit to ask a different version of it. The answer continues in a new conversation (a branch) that holds everything before the edited question; the original thread stays as it was. History nests branches under their source, and the conversation page links between them.'
+      text: 'Hover an earlier question and choose Edit to ask a different version of it. The answer continues in a new conversation (a branch) that holds everything before the edited question as you could read it — an answer withheld from you is copied as an empty placeholder that still counts as withheld; the original thread stays as it was. History nests branches under their source, and the conversation page links between them.'
     },
     { type: 'h2', id: 'ai-conversations-chat', text: 'Posting to chat' },
     {
