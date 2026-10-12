@@ -4,7 +4,7 @@ export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
-export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
+export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
 export {
   type AiPlan,
   AiPlanCard,
@@ -14,6 +14,15 @@ export {
   type AiPlanSubscribe
 } from './components/ai/AiPlanCard'
 export { AiStepList } from './components/ai/AiStepList'
+export {
+  type AnswerFormat,
+  type AnswerRows,
+  cellNumber,
+  chartOf,
+  formatsFor,
+  listOf,
+  rowsOfBlock
+} from './components/ai/answer-formats'
 export { DataGuideCard } from './components/ai/DataGuideCard'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
