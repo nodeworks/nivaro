@@ -26,10 +26,7 @@ export const collabOfflinePopout: DocSection = {
           'The record form is still open',
           'It sends the whole save again — lines and links included — when the connection returns.'
         ],
-        [
-          'You sign out',
-          'Every pending offline save on the browser is cleared.'
-        ],
+        ['You sign out', 'Every pending offline save on the browser is cleared.'],
         [
           'Someone else signs in on the same browser',
           'Every pending offline save that is not theirs is deleted at once — a shared device never keeps your values for the next person, and nobody else ever sees or sends them.'
