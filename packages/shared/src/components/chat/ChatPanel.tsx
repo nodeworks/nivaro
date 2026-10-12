@@ -54,6 +54,7 @@ import { UserChip } from '../item-edit/GroupSection'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { BotStreamBubble, useBotStream } from './BotStream'
 import { BulkInvitePanel, ChannelAuditLog, ChannelExtrasEditor } from './ChannelExtras'
 import { ChannelLookPicker, ChannelTile } from './ChannelLook'
 import {
@@ -1198,6 +1199,8 @@ export function ChatRoomView({
   /** Set when MY message mentioned the bot — "…is thinking" until its reply
    *  arrives (or a timeout says it won't). */
   const [botAskedAt, setBotAskedAt] = useState<number | null>(null)
+  // #1810 — the assistant's answer as it is written (needs the host's socket).
+  const botStream = useBotStream(room, me?.id ?? null)
   const composerRef = useRef<ComposerHandle>(null)
   const dividerRef = useRef<HTMLDivElement>(null)
   // Frozen at mount — markRead fires immediately, so the live rooms query
@@ -2426,6 +2429,16 @@ export function ChatRoomView({
             })
           )}
           {!searching && !hasNewer && <OutboxBubbles items={outbox} th={th} />}
+          {!searching && !hasNewer && botStream.live && botName && (
+            <BotStreamBubble
+              live={botStream.live}
+              botName={botName}
+              bubbleClass={th.bubbleOther}
+              accentClass={th.accentText}
+              onStop={botStream.stop}
+              onDismiss={botStream.dismiss}
+            />
+          )}
         </div>
       </div>
       {(unseen || hasNewer) && (
@@ -2455,7 +2468,7 @@ export function ChatRoomView({
         </div>
       )}
       <div className='min-h-[18px] shrink-0 px-3.5'>
-        {botAskedAt && botName ? (
+        {botAskedAt && botName && !botStream.live ? (
           <p
             className='flex items-center gap-1.5 text-[11px] italic text-slate-500'
             data-chat-bot-thinking
