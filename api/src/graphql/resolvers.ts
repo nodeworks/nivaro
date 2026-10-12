@@ -1138,6 +1138,30 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
 
 // ─── Subscription fields ──────────────────────────────────────────────────────
 
+/**
+ * The `fields` / `actions` narrowing of an itemMutated subscription, or null when it hears
+ * every event. An event passes when its action is asked for and, for updates, when it touched
+ * one of the named fields. Shared with the SSE transport's Last-Event-ID replay (#1749).
+ */
+export function itemMutatedFilter(args: {
+  fields?: unknown
+  actions?: unknown
+}): ((ev: { action: string; changed_fields: string[] }) => boolean) | null {
+  const fields = Array.isArray(args.fields) ? new Set((args.fields as unknown[]).map(String)) : null
+  const actions = Array.isArray(args.actions)
+    ? new Set((args.actions as unknown[]).map(String))
+    : null
+  if ((!fields || fields.size === 0) && (!actions || actions.size === 0)) return null
+  return (ev) => {
+    if (actions && actions.size > 0 && !actions.has(ev.action)) return false
+    if (fields && fields.size > 0) {
+      if (ev.action !== 'update') return false
+      return ev.changed_fields.some((f) => fields.has(f))
+    }
+    return true
+  }
+}
+
 export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext> = {
   workflowStateChanged: {
     type: WorkflowStateChangedEventType,
@@ -1223,23 +1247,8 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
       const source = pubsub.asyncIterator<{
         itemMutated: { action: string; changed_fields: string[] }
       }>(topic)
-      const fields = Array.isArray(args.fields)
-        ? new Set((args.fields as unknown[]).map(String))
-        : null
-      const actions = Array.isArray(args.actions)
-        ? new Set((args.actions as unknown[]).map(String))
-        : null
-      if ((!fields || fields.size === 0) && (!actions || actions.size === 0)) return source
-      // Narrowed: an event passes when its action is asked for and, for
-      // updates, when it touched one of the named fields.
-      const passes = (ev: { action: string; changed_fields: string[] }): boolean => {
-        if (actions && actions.size > 0 && !actions.has(ev.action)) return false
-        if (fields && fields.size > 0) {
-          if (ev.action !== 'update') return false
-          return ev.changed_fields.some((f) => fields.has(f))
-        }
-        return true
-      }
+      const passes = itemMutatedFilter(args)
+      if (!passes) return source
       const filtered: AsyncIterableIterator<unknown> = {
         async next() {
           for (;;) {
