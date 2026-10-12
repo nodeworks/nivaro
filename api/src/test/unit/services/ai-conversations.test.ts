@@ -1,11 +1,14 @@
+import knex from 'knex'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { shortAnswer } from '../../../services/ai-conversation-card.js'
 import {
   answerVisibleTo,
+  applyConversationSearch,
   clearVisibilityCache,
   exportFileName,
   flattenRow,
   historyFromView,
+  messagesForViewer,
   rowsFromToolResult,
   titleFromQuestion,
   toCsv
@@ -73,11 +76,44 @@ describe('answerVisibleTo — the sharing rule (#1809)', () => {
     expect(await answerVisibleTo(bob, answer(trace, 5), boom)).toBe(false)
   })
 
-  it('skips calls that errored (they carried no data) and an answer with no calls is readable', async () => {
+  it('D1: an answer with no tool calls is never shown to anyone but its author', async () => {
     const replay = vi.fn()
-    const trace = [{ tool: 'query_items', input: {}, summary: 'error: no such collection' }]
-    expect(await answerVisibleTo(bob, answer(trace, 6), replay)).toBe(true)
+    expect(await answerVisibleTo(bob, answer([], 6), replay)).toBe(false)
+    expect(await answerVisibleTo(bob, { id: 66, author: 'x', trace: null }, replay)).toBe(false)
     expect(replay).not.toHaveBeenCalled()
+  })
+
+  it('D6: a call that errored makes the answer private (error text may carry SQL)', async () => {
+    const replay = vi.fn(async () => ({ result: rowsA }))
+    const trace = [
+      { tool: 'aggregate', input: {}, summary: 'x', result_hash: hashToolResult(rowsA) },
+      { tool: 'query_items', input: {}, summary: 'error: Invalid column name salary' }
+    ]
+    expect(await answerVisibleTo(bob, answer(trace, 61), replay)).toBe(false)
+    expect(replay).not.toHaveBeenCalled()
+  })
+
+  it('D7: saved SQL and proposals are never replayed — the answer stays private', async () => {
+    const replay = vi.fn(async () => ({ result: rowsA }))
+    for (const tool of ['run_custom_query', 'propose_action']) {
+      const trace = [{ tool, input: { id: 1 }, summary: 'x', result_hash: hashToolResult(rowsA) }]
+      expect(await answerVisibleTo(bob, answer(trace, tool.length), replay)).toBe(false)
+    }
+    expect(replay).not.toHaveBeenCalled()
+  })
+
+  it('D7: a request spends at most its replay budget; the rest is withheld, not cached', async () => {
+    const replay = vi.fn(async () => ({ result: rowsA }))
+    const trace = [
+      { tool: 'aggregate', input: {}, summary: 'x', result_hash: hashToolResult(rowsA) },
+      { tool: 'aggregate', input: {}, summary: 'y', result_hash: hashToolResult(rowsA) }
+    ]
+    const budget = { left: 3 }
+    expect(await answerVisibleTo(bob, answer(trace, 71), replay, budget)).toBe(true)
+    expect(await answerVisibleTo(bob, answer(trace, 72), replay, budget)).toBe(false)
+    expect(replay).toHaveBeenCalledTimes(2)
+    // A fresh request with budget left decides it properly.
+    expect(await answerVisibleTo(bob, answer(trace, 72), replay, { left: 10 })).toBe(true)
   })
 
   it('caches the verdict per message and viewer', async () => {
@@ -88,6 +124,86 @@ describe('answerVisibleTo — the sharing rule (#1809)', () => {
     await answerVisibleTo(bob, answer(trace, 7), replay)
     await answerVisibleTo(bob, answer(trace, 7), replay)
     expect(replay).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe('messagesForViewer — earlier answers gate later ones (D2)', () => {
+  beforeEach(() => clearVisibilityCache())
+  const A = 'aaaaaaaa-0000-0000-0000-000000000001'
+  const B = 'bbbbbbbb-0000-0000-0000-000000000002'
+  const clean = [
+    { tool: 'aggregate', input: { n: 1 }, summary: 'x', result_hash: hashToolResult(rowsA) }
+  ]
+  const leaky = [
+    { tool: 'query_items', input: { n: 2 }, summary: 'x', result_hash: hashToolResult(rowsA) }
+  ]
+  const msg = (id: number, role: 'user' | 'assistant', author: string, trace?: unknown[]) => ({
+    id,
+    conversation_id: 'c',
+    role,
+    author,
+    content: `m${id}`,
+    trace: trace ? JSON.stringify(trace) : null,
+    proposals: null,
+    meta: null,
+    created_at: new Date(0)
+  })
+  // Bob's replay: the `n: 2` query returns fewer rows for him (hidden); `n: 1` is clean.
+  const replay = async (_u: unknown, _t: string, input: Record<string, unknown>) => ({
+    result: input.n === 2 ? rowsB : rowsA
+  })
+
+  it('a clean answer after a hidden one stays hidden; the viewer’s own answers stay readable', async () => {
+    const view = await messagesForViewer(
+      bob,
+      [
+        msg(1, 'user', A),
+        msg(2, 'assistant', A, leaky), // salaries — hidden from Bob
+        msg(3, 'user', A),
+        msg(4, 'assistant', A, clean), // "put that in a list" with a clean call — still hidden
+        msg(5, 'user', B),
+        msg(6, 'assistant', B, clean) // Bob's own
+      ],
+      replay
+    )
+    expect(view.map((m) => [m.id, m.visible])).toEqual([
+      ['1', true],
+      ['2', false],
+      ['3', true],
+      ['4', false],
+      ['5', true],
+      ['6', true]
+    ])
+    expect(view[3].content).toBe('')
+  })
+
+  it('every answer clean → every answer readable', async () => {
+    const view = await messagesForViewer(
+      bob,
+      [
+        msg(11, 'user', A),
+        msg(12, 'assistant', A, clean),
+        msg(13, 'user', A),
+        msg(14, 'assistant', A, clean)
+      ],
+      replay
+    )
+    expect(view.every((m) => m.visible)).toBe(true)
+  })
+})
+
+describe('applyConversationSearch (D3)', () => {
+  it('matches questions and the viewer’s own answers only', () => {
+    const k = knex({ client: 'mssql' })
+    const q = applyConversationSearch(
+      k,
+      k('nivaro_ai_conversations as c').select('c.*'),
+      'salary',
+      'VIEWER-1'
+    ).toSQL()
+    expect(q.sql).toContain('[m].[role] = ?')
+    expect(q.sql).toContain('or [m].[author] = ?')
+    expect(q.bindings).toEqual(expect.arrayContaining(['%salary%', 'user', 'VIEWER-1']))
   })
 })
 

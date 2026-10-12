@@ -9,6 +9,7 @@ import {
   type ConversationRow,
   conversationAccess,
   deleteMessage,
+  EXPORTABLE_TOOLS,
   exportFileName,
   getConversation,
   listConversations,
@@ -16,7 +17,6 @@ import {
   messagesForViewer,
   namesFor,
   parseJsonArray,
-  REPLAYABLE_TOOLS,
   rowsFromToolResult,
   sameUserId,
   toCsv
@@ -277,6 +277,8 @@ export async function aiConversationRoutes(app: FastifyInstance) {
   app.post<{ Params: { id: string } }>('/:id/post', async (req, reply) => {
     const found = await load(req.user!, req.params.id)
     if (!found) return reply.code(404).send(notFound)
+    // Only the owner puts their conversation in front of a room's readers.
+    if (found.access !== 'owner') return reply.code(403).send({ error: 'Only the owner posts it' })
     const body = (req.body ?? {}) as { room?: unknown; note?: unknown }
     const room = String(body.room ?? '').trim()
     if (!room || room.length > 200) return reply.code(400).send({ error: 'room is required' })
@@ -349,10 +351,7 @@ export async function aiConversationRoutes(app: FastifyInstance) {
         .map((t, i) => ({ t, i }))
         .filter(
           ({ t }) =>
-            t &&
-            REPLAYABLE_TOOLS.has(t.tool) &&
-            t.tool !== 'list_collections' &&
-            !String(t.summary ?? '').startsWith('error:')
+            t && EXPORTABLE_TOOLS.has(t.tool) && !String(t.summary ?? '').startsWith('error:')
         )
       const step =
         q.step != null && q.step !== ''

@@ -132,3 +132,50 @@ export async function addMemoryNote(
     .update({ preferences: JSON.stringify({ ...prefs, ai_memory: next }) })
   return { note, dropped, duplicate: false }
 }
+
+/**
+ * A user row with `preferences.ai_memory` removed — for every read of
+ * someone else's account (admin GET /users/:id, user lists). The notes are
+ * the person's own and ride their AI prompt; nobody else reads them.
+ */
+export function stripAiMemory<T>(user: T): T {
+  const prefs = (user as { preferences?: unknown } | null | undefined)?.preferences
+  if (!prefs || typeof prefs !== 'object' || !('ai_memory' in prefs)) return user
+  const { ai_memory: _drop, ...rest } = prefs as Record<string, unknown>
+  return { ...(user as object), preferences: rest } as T
+}
+
+/**
+ * A whole-preferences write (PATCH /users/:id) must not plant notes in
+ * someone else's prompt: another person's write keeps the account's
+ * existing ai_memory whatever the body says; the person's own write goes
+ * through the same caps as PATCH /users/me/preferences.
+ */
+export function guardPreferencesWrite(
+  next: unknown,
+  previous: unknown,
+  isSelf: boolean
+): { value: unknown } | { error: string } {
+  let obj = next
+  if (typeof obj === 'string') {
+    try {
+      obj = JSON.parse(obj)
+    } catch {
+      return { value: next }
+    }
+  }
+  if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return { value: next }
+  const out = { ...(obj as Record<string, unknown>) }
+  if (isSelf) {
+    if ('ai_memory' in out) {
+      const r = normalizeAiMemory(out.ai_memory)
+      if ('error' in r) return r
+      out.ai_memory = r.value
+    }
+    return { value: out }
+  }
+  delete out.ai_memory
+  const kept = memoryFromPreferences(previous)
+  if (kept.length) out.ai_memory = kept
+  return { value: out }
+}

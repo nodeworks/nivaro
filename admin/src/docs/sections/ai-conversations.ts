@@ -15,13 +15,13 @@ export const aiConversationsDocs: DocSection = {
       items: [
         'Pin a conversation from the list or the page header; pins sort first and are never pruned.',
         'Delete removes the conversation and everything in it. Someone it was shared with can remove it from their own list instead.',
-        'Settings → AI Features → Ask AI conversation history: how many days an untouched conversation is kept (blank = 180, 0 = forever). The nightly retention job prunes the rest.'
+        'Settings → AI Features → Ask AI conversation history: how many days an untouched conversation is kept (blank = 180, 0 = forever). The nightly retention job prunes the rest, except conversations any participant has pinned.'
       ]
     },
     { type: 'h2', id: 'ai-conversations-memory', text: 'Ask AI memory' },
     {
       type: 'p',
-      text: 'Say “remember that amounts are in thousands” (or “remember: I work Zone 3 inventory requests”) and Ask AI keeps the note instead of answering. Notes ride every later question as context about you. Profile → Ask AI memory lists them for editing or deleting. At most 20 notes of 300 characters; when the list is full, a new note replaces the oldest. Notes are stored in your preferences, never shown to anyone else, and never grant access to anything.'
+      text: 'Say “remember that amounts are in thousands” (or “remember: I work Zone 3 inventory requests”) and Ask AI keeps the note instead of answering. Notes ride every later question as context about you. Profile → Ask AI memory lists them for editing or deleting. At most 20 notes of 300 characters; when the list is full, a new note replaces the oldest. Notes are stored in your preferences and never grant access to anything. Nobody else reads or writes them — administrators included: they are left out of user reads, lists and revisions, and an administrator’s edit of your preferences keeps your notes as they were.'
     },
     { type: 'h2', id: 'ai-conversations-sharing', text: 'Sharing a conversation' },
     {
@@ -30,7 +30,7 @@ export const aiConversationsDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'An answer is shown to someone other than the person it was asked for only when it is safe to: every data call the answer made is re-run with the reader’s access, and it must return exactly what the model saw. If any call returns something different (the reader’s access is narrower, or the data has since changed) or cannot be re-run (an action proposal, a plan, another person’s tasks), the answer is withheld from that reader with an “Ask it with my access” button. A follow-up asked by the reader is built only from the turns they may read.'
+      text: 'An answer is shown to someone other than the person it was asked for only when it is safe to: it made at least one data call, every call is a plain read (not saved SQL, not an action proposal) that did not error, re-running each one with the reader’s access returns exactly what the model saw, and every earlier answer in the thread is readable by the reader too (the model saw those answers and may repeat them). Otherwise — including an answer with no data calls, or data that has changed since — the answer is withheld from that reader with an “Ask it with my access” button. Opening a thread re-checks at most 10 calls; anything past that is withheld until asked again. A follow-up asked by the reader is built only from the turns they may read.'
     },
     {
       type: 'note',
@@ -44,7 +44,7 @@ export const aiConversationsDocs: DocSection = {
     { type: 'h2', id: 'ai-conversations-chat', text: 'Posting to chat' },
     {
       type: 'p',
-      text: 'Post to chat sends the conversation to a channel, direct message or record room as a card: the question, a short answer and an Open link. The card is built for each reader — the short answer appears only when the sharing rule above admits them; otherwise it says the answer was given with the poster’s access. Anyone who can read the room can open the conversation and ask follow-ups with their own access.'
+      text: 'The owner can Post to chat: it sends the conversation to a channel, direct message or record room as a card: the question, a short answer and an Open link. The card is built for each reader — the short answer appears only when the sharing rule above admits them; otherwise it says the answer was given with the poster’s access. Anyone who can read the room can open the conversation and ask follow-ups with their own access.'
     },
     { type: 'h2', id: 'ai-conversations-export', text: 'Export and formats' },
     {
@@ -88,7 +88,7 @@ export const aiConversationsDocs: DocSection = {
         ],
         [
           'POST /api/ai/conversations/:id/post { room, note? }',
-          'Post to a chat room the caller can see.'
+          'Owner only: post to a chat room they can see.'
         ],
         [
           'GET /api/ai/conversations/:id/messages/:mid/export?format=csv|xlsx&step=',

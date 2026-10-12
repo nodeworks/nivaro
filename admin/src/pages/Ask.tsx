@@ -665,7 +665,7 @@ function AskPageInner() {
                 detailKey={detailKey(detail.conversation.id)}
               />
             )}
-            {detail && (
+            {detail?.conversation.access === 'owner' && (
               <PostToChatMenu
                 conversationId={detail.conversation.id}
                 detailKey={detailKey(detail.conversation.id)}

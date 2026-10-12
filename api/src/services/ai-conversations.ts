@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { csvCell } from '../lib/csv-cell.js'
 import type { User } from '../types.js'
@@ -14,10 +15,13 @@ import { hashToolResult } from './ai-result-hash.js'
  * QUESTION in it is readable by all of them. An ANSWER is readable by the
  * person whose access produced it (`author`) — and by anyone else only when
  * re-running every tool call the answer made, AS THAT VIEWER, gives back
- * exactly what the model saw (same fingerprint, see ai-result-hash.ts). A
- * tool the replay does not know (proposals, plans, the person's own tasks,
- * anything added later) makes the answer private to its author. Admins get
- * no bypass: a conversation is the person's own, like a direct message.
+ * exactly what the model saw (same fingerprint, see ai-result-hash.ts) AND
+ * every earlier answer in the thread is readable by that viewer too (the
+ * model saw those, so a clean answer can still quote a hidden one). An
+ * answer with no replayable call, a call that errored, or a tool the replay
+ * does not know (proposals, plans, custom SQL, the person's own tasks,
+ * anything added later) is private to its author. Admins get no bypass: a
+ * conversation is the person's own, like a direct message.
  *
  * A follow-up asked by a viewer is built from the turns THAT viewer may read
  * — a hidden answer goes to the model as a placeholder — and runs with the
@@ -50,19 +54,28 @@ export interface MessageRow {
 
 export type ConversationAccess = 'owner' | 'shared' | 'room'
 
-/** The tools whose calls only READ, and so may be replayed as a viewer. */
+/**
+ * The tools whose calls only READ, and so may be replayed as a viewer to
+ * decide visibility. Never run_custom_query (arbitrary saved SQL re-run on
+ * every view) or propose_action — an answer that used either stays private.
+ */
 export const REPLAYABLE_TOOLS = new Set([
   'list_collections',
   'query_items',
   'aggregate',
   'semantic_search',
-  'run_custom_query',
   'record_event_path',
   'record_integrity',
   'queue_summary',
   'search_help_videos',
   'integration_status'
 ])
+
+/** Tools whose rows an answer can export (#1841) — re-run as the CALLER, so
+ *  saved SQL is fine here even though it never decides visibility. */
+export const EXPORTABLE_TOOLS = new Set(
+  [...REPLAYABLE_TOOLS, 'run_custom_query'].filter((t) => t !== 'list_collections')
+)
 
 const CONTENT_CAP = 60_000
 const TRACE_CAP = 32_000
@@ -149,7 +162,14 @@ export type ReplayFn = (
 ) => Promise<{ result: unknown }>
 
 const verdicts = new Map<string, { visible: boolean; at: number }>()
-const VERDICT_TTL_MS = 10 * 60_000
+// Short: a verdict must not outlive a change to the viewer's access by long.
+const VERDICT_TTL_MS = 60_000
+
+/** Tool replays one request may spend on visibility checks (#1809 D7). */
+export const REPLAY_BUDGET_PER_REQUEST = 10
+export interface ReplayBudget {
+  left: number
+}
 
 /** Test seam: forget cached verdicts. */
 export function clearVisibilityCache(): void {
@@ -157,35 +177,53 @@ export function clearVisibilityCache(): void {
 }
 
 /**
- * May `viewer` read this answer? Its author always may. Anyone else only when
- * every data-reading tool call replays, as them, to the same fingerprint.
- * Errored calls carried no data and are skipped; a call with no fingerprint,
- * or a tool outside REPLAYABLE_TOOLS, keeps the answer private.
+ * Can this answer be shown to anyone but its author at all, judged from the
+ * trace alone? Needs at least one call, every call a replayable read with a
+ * fingerprint, and none that errored (error text can carry SQL or field
+ * names). An answer with no calls (a restatement of earlier turns) never is.
+ */
+export function shareableTrace(trace: ChatTraceEntry[]): boolean {
+  if (trace.length === 0) return false
+  return trace.every(
+    (e) =>
+      !!e &&
+      typeof e.tool === 'string' &&
+      REPLAYABLE_TOOLS.has(e.tool) &&
+      typeof e.result_hash === 'string' &&
+      !(typeof e.summary === 'string' && e.summary.startsWith('error:'))
+  )
+}
+
+/**
+ * May `viewer` read this answer (its own trace only — messagesForViewer also
+ * requires every earlier answer to be readable)? Its author always may.
+ * Anyone else only when the trace is shareable and every call replays, as
+ * them, to the same fingerprint. `budget` caps the replays one request may
+ * run; an answer it cannot afford is withheld this time (not cached).
  */
 export async function answerVisibleTo(
   viewer: User,
   msg: Pick<MessageRow, 'id' | 'author' | 'trace'>,
-  replay?: ReplayFn
+  replay?: ReplayFn,
+  budget?: ReplayBudget
 ): Promise<boolean> {
   if (sameId(msg.author, viewer.id)) return true
   const key = `${msg.id}:${String(viewer.id).toUpperCase()}`
   const hit = verdicts.get(key)
   if (hit && Date.now() - hit.at < VERDICT_TTL_MS) return hit.visible
   const trace = parseJsonArray<ChatTraceEntry>(msg.trace)
-  let visible = true
+  let visible = shareableTrace(trace)
+  if (visible && budget) {
+    if (budget.left < trace.length) return false
+    budget.left -= trace.length
+  }
   const run: ReplayFn =
     replay ??
     (async (u, tool, input) => {
       const { executeChatTool } = await import('./ai-chat.js')
       return executeChatTool(u, tool, input)
     })
-  for (const entry of trace) {
-    if (!entry || typeof entry.tool !== 'string') continue
-    if (typeof entry.summary === 'string' && entry.summary.startsWith('error:')) continue
-    if (!REPLAYABLE_TOOLS.has(entry.tool) || typeof entry.result_hash !== 'string') {
-      visible = false
-      break
-    }
+  for (const entry of visible ? trace : []) {
     try {
       const { result } = await run(viewer, entry.tool, entry.input ?? {})
       if (hashToolResult(result) !== entry.result_hash) {
@@ -256,18 +294,29 @@ async function proposalOutcomes(ids: string[]): Promise<Map<string, string>> {
   return out
 }
 
-/** The thread as `viewer` may see it. */
+/**
+ * The thread as `viewer` may see it. Another person's answer shows only when
+ * its own calls replay clean AND every earlier answer is readable by this
+ * viewer — the model saw those earlier answers and may repeat them. Once one
+ * answer is hidden, no later answer by someone else is replayed at all.
+ */
 export async function messagesForViewer(
   viewer: User,
   rows: MessageRow[],
-  replay?: ReplayFn
+  replay?: ReplayFn,
+  budget: ReplayBudget = { left: REPLAY_BUDGET_PER_REQUEST }
 ): Promise<ViewMessage[]> {
   const names = await namesFor(rows.map((r) => r.author ?? ''))
   const proposalIds: string[] = []
   const out: ViewMessage[] = []
+  let earlierAllVisible = true
   for (const r of rows) {
     const own = sameId(r.author, viewer.id)
-    const visible = r.role === 'user' || (await answerVisibleTo(viewer, r, replay))
+    const visible =
+      r.role === 'user' ||
+      own ||
+      (earlierAllVisible && (await answerVisibleTo(viewer, r, replay, budget)))
+    if (r.role === 'assistant' && !visible) earlierAllVisible = false
     // Proposals are single-use and only their proposer may act on them.
     const proposals = own && visible ? parseJsonArray<Record<string, unknown>>(r.proposals) : []
     for (const p of proposals)
@@ -456,6 +505,29 @@ export interface ConversationListItem {
 
 const escapeLike = (s: string) => s.replace(/[\\%_[]/g, (c) => `\\${c}`)
 
+/**
+ * Search titles and message text — but only text the viewer could read
+ * anyway: every question, and answers given with the viewer's own access.
+ * Another person's answer is never matched (it may be withheld from them).
+ */
+export function applyConversationSearch(
+  k: Knex,
+  q: Knex.QueryBuilder,
+  term: string,
+  viewerId: string
+): Knex.QueryBuilder {
+  const like = `%${escapeLike(term.slice(0, 120))}%`
+  return q.where((w) => {
+    w.whereRaw("c.title LIKE ? ESCAPE '\\'", [like]).orWhereExists(
+      k('nivaro_ai_conversation_messages as m')
+        .whereRaw('m.conversation_id = c.id')
+        .whereRaw("m.content LIKE ? ESCAPE '\\'", [like])
+        .where((r) => r.where('m.role', 'user').orWhere('m.author', viewerId))
+        .select(k.raw('1'))
+    )
+  })
+}
+
 export async function listConversations(
   user: User,
   opts: { q?: string; pinned?: boolean; limit?: number } = {}
@@ -474,17 +546,7 @@ export async function listConversations(
       )
   })
   const term = opts.q?.trim()
-  if (term) {
-    const like = `%${escapeLike(term.slice(0, 120))}%`
-    q.where((w) => {
-      w.whereRaw("c.title LIKE ? ESCAPE '\\'", [like]).orWhereExists(
-        db('nivaro_ai_conversation_messages as m')
-          .whereRaw('m.conversation_id = c.id')
-          .whereRaw("m.content LIKE ? ESCAPE '\\'", [like])
-          .select(db.raw('1'))
-      )
-    })
-  }
+  if (term) applyConversationSearch(db, q, term, String(user.id))
   const rows = (await q
     .orderBy('c.updated_at', 'desc')
     .limit(limit)
@@ -540,9 +602,16 @@ export async function pruneConversations(): Promise<number> {
   const days = raw == null ? 180 : Number(raw)
   if (!Number.isFinite(days) || days <= 0) return 0
   const cutoff = new Date(Date.now() - days * 86_400_000)
+  // Kept when ANY participant pinned it — the owner (pinned) or a person it
+  // was shared with (their own share row's pinned).
+  // (No alias on a DELETE — mssql; conversation_id is NOT NULL, so NOT IN is safe.)
   return (await db('nivaro_ai_conversations')
     .where('updated_at', '<', cutoff)
     .where('pinned', false)
+    .whereNotIn(
+      'id',
+      db('nivaro_ai_conversation_shares').where('pinned', true).select('conversation_id')
+    )
     .del()) as number
 }
 
