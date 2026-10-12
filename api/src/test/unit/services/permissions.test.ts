@@ -249,7 +249,9 @@ describe('system tables', () => {
     expect(await getAllowedFields(makeRegularUser(), 'update', 'nivaro_users')).toEqual([])
   })
 
-  it('getRowFilter never falls back to the wildcard on a system table', async () => {
+  // can() admits the read through the wildcard, so its row filter must bind
+  // too: skipping it would read the table unfiltered.
+  it('getRowFilter keeps the wildcard row filter on a readable system table', async () => {
     const chains: Array<{ orWhere: ReturnType<typeof vi.fn> }> = []
     let n = 0
     vi.mocked(db as unknown as (t: string) => unknown).mockImplementation(() => {
@@ -267,6 +269,6 @@ describe('system tables', () => {
       return chain as unknown as ReturnType<typeof db>
     })
     await getRowFilter(makeRegularUser(), 'read', 'nivaro_users')
-    expect(chains[1].orWhere).not.toHaveBeenCalled()
+    expect(chains[1].orWhere).toHaveBeenCalledWith({ collection: '*' })
   })
 })

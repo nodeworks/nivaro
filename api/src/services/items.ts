@@ -265,6 +265,41 @@ async function systemProjection(
 }
 
 /**
+ * The last word on a projection, after every fallback and just before the
+ * SELECT: a field-limited caller's `*` becomes the columns their policy lists
+ * (the table's own columns only — never an alias or a virtual name), and a
+ * system table's credentials never reach the query. Without it a request for
+ * only hidden fields (`fields=static_token`) narrowed to nothing and then fell
+ * back to `*`, returning every column.
+ */
+async function finalProjection(
+  collection: string,
+  cols: string[],
+  allowedFields: string[] | null
+): Promise<string[]> {
+  let out = cols
+  if (allowedFields !== null && out.includes('*')) {
+    const have = await tableColumns(collection)
+    const listed = allowedFields.filter((f) => have.has(f.toLowerCase()))
+    out = [...new Set([...out.filter((c) => c !== '*'), ...listed])]
+    if (out.length === 0) out = ['id']
+  }
+  return systemProjection(collection, out, allowedFields)
+}
+
+const tableColumnsCache = new Map<string, { at: number; cols: Set<string> }>()
+
+/** A table's physical column names (lower-cased), cached a minute per table. */
+async function tableColumns(collection: string): Promise<Set<string>> {
+  const hit = tableColumnsCache.get(collection)
+  if (hit && Date.now() - hit.at < 60_000) return hit.cols
+  const info = await db(collection).columnInfo()
+  const cols = new Set(Object.keys(info ?? {}).map((c) => c.toLowerCase()))
+  tableColumnsCache.set(collection, { at: Date.now(), cols })
+  return cols
+}
+
+/**
  * A credential named anywhere in a filter, sort or condition path is refused
  * (a relation path reaches nivaro_users from any record); on the system table
  * itself, every sensitive column is. Admins included: a filter is an oracle.
@@ -3236,7 +3271,7 @@ export async function readItems(
       selectFields = selectFields.filter((f) => !o2mVirtual.has(f))
       for (const k of Object.keys(nestedFieldMap)) if (o2mVirtual.has(k)) delete nestedFieldMap[k]
     }
-    if (selectFields.length === 0) selectFields = ['*']
+    if (selectFields.length === 0) selectFields = ['id']
   }
 
   // Virtual computed fields named in the projection: out of the SELECT, their
@@ -3244,6 +3279,7 @@ export async function readItems(
   const virtualSplit = await splitVirtualFields(collection, selectFields as string[])
   selectFields = virtualSplit.select
   if (selectFields.length === 0) selectFields = ['id']
+  selectFields = await finalProjection(collection, selectFields as string[], allowedFields)
   await assertKnownFields(collection, selectFields as string[])
 
   // The cursor of the next page is made from the last row's sort values.
@@ -3840,13 +3876,14 @@ export async function readOne(
     )
     aliasNames.delete('id')
     if (aliasNames.size > 0) selectCols = selectCols.filter((f) => !aliasNames.has(f))
-    if (selectCols.length === 0) selectCols = ['*']
+    if (selectCols.length === 0) selectCols = ['id']
   }
 
   // Virtual computed fields — see splitVirtualFields.
   const virtualSplit = await splitVirtualFields(collection, selectCols as string[])
   selectCols = virtualSplit.select
   if (selectCols.length === 0) selectCols = ['id']
+  selectCols = await finalProjection(collection, selectCols as string[], allowedFields)
   await assertKnownFields(collection, selectCols as string[])
 
   // An alias segment ("REQ-1234") is not a key. Resolve it first, and never

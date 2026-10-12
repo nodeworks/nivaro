@@ -39,7 +39,11 @@ vi.mock('../../../db/index.js', () => {
             Promise.resolve(rec.rows[table] ?? []).then(res, rej)
         if (prop === 'columnInfo')
           return async () =>
-            table === 'nivaro_users' ? Object.fromEntries(USER_COLS.map((c) => [c, {}])) : {}
+            table === 'nivaro_users'
+              ? Object.fromEntries(USER_COLS.map((c) => [c, {}]))
+              : table === 'workflows'
+                ? Object.fromEntries(['id', 'name', 'zone', 'salary'].map((c) => [c, {}]))
+                : {}
         if (prop === 'first') return () => Promise.resolve((rec.rows[table] ?? [])[0])
         if (prop === 'select')
           return (...cols: unknown[]) => {
@@ -65,7 +69,7 @@ vi.mock('../../../db/index.js', () => {
   return { db, dbRead: db, isMssql: () => true }
 })
 
-const perm = vi.hoisted(() => ({ admin: false }))
+const perm = vi.hoisted(() => ({ admin: false, limited: null as string[] | null }))
 vi.mock('../../../services/permissions.js', async (orig) => {
   const real = await orig<typeof import('../../../services/permissions.js')>()
   const { systemReadableColumns, isSystemCollection } = await import(
@@ -81,9 +85,11 @@ vi.mock('../../../services/permissions.js', async (orig) => {
     ),
     // The listed columns the table has (permissions.ts learns them the same way).
     getAllowedFields: vi.fn(async (_u: unknown, _a: string, c: string) =>
-      perm.admin || !isSystemCollection(c)
+      perm.admin
         ? null
-        : (systemReadableColumns(c) ?? []).filter((f) => USER_COLS.includes(f))
+        : !isSystemCollection(c)
+          ? perm.limited
+          : (systemReadableColumns(c) ?? []).filter((f) => USER_COLS.includes(f))
     ),
     getRowFilter: vi.fn(async () => null)
   }
@@ -117,6 +123,7 @@ const usersSelect = () =>
 
 beforeEach(() => {
   perm.admin = false
+  perm.limited = null
   rec.selects = []
   rec.rows = {}
 })
@@ -244,5 +251,46 @@ describe('aggregates', () => {
     await expect(
       planAggregate('nivaro_users', { groupBy: ['title'] }, guards)
     ).resolves.toMatchObject({ groupBy: ['title'] })
+  })
+})
+
+// A request naming only fields the caller may not read narrowed to nothing
+// and then fell back to `*` — every column, credentials included.
+describe('a projection that narrows to nothing never becomes *', () => {
+  it('readItems fields=static_token as a * role: no credential, no *', async () => {
+    await readItems(someone, 'nivaro_users', { fields: ['static_token'] }).catch(() => undefined)
+    const cols = usersSelect()
+    expect(cols).not.toContain('*')
+    for (const s of SECRETS) expect(cols).not.toContain(s)
+  })
+
+  it('readOne fields=static_token as a * role: no credential, no *', async () => {
+    await readOne(someone, 'nivaro_users', ADMIN_ID, undefined, ['static_token']).catch(
+      () => undefined
+    )
+    const cols = usersSelect()
+    expect(cols).not.toContain('*')
+    for (const s of SECRETS) expect(cols).not.toContain(s)
+  })
+
+  it('an admin asking fields=static_token still gets no credential', async () => {
+    perm.admin = true
+    await readItems(someone, 'nivaro_users', { fields: ['static_token'] }).catch(() => undefined)
+    await readOne(someone, 'nivaro_users', ADMIN_ID, undefined, ['static_token']).catch(
+      () => undefined
+    )
+    for (const s of SECRETS) expect(usersSelect()).not.toContain(s)
+  })
+
+  it('a field-limited role reading a business collection with * gets its listed columns only', async () => {
+    perm.limited = ['id', 'name', 'zone']
+    await readItems(someone, 'workflows', {}).catch(() => undefined)
+    await readItems(someone, 'workflows', { fields: ['salary'] }).catch(() => undefined)
+    const cols = rec.selects
+      .filter((x) => x.table === 'workflows')
+      .flatMap((x) => x.cols.map(String))
+    expect(cols.length).toBeGreaterThan(0)
+    expect(cols).not.toContain('*')
+    expect(cols).not.toContain('salary')
   })
 })

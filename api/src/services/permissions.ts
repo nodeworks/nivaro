@@ -64,13 +64,13 @@ export async function getRowFilter(
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (!role || role.admin_access) return null
 
-  // A system table answers only to a policy naming it, never the wildcard.
-  const system = isSystemCollection(collection)
+  // The wildcard's row filter still binds a system table it can read
+  // (nivaro_users): can() admits the read through the same policy, so
+  // skipping it here would read that table unfiltered.
   const policy = (await db('nivaro_policies')
     .where({ role: user.role, action })
     .where((qb) => {
-      qb.where({ collection })
-      if (!system) qb.orWhere({ collection: '*' })
+      qb.where({ collection }).orWhere({ collection: '*' })
     })
     // Prefer an exact-collection policy over the wildcard when both exist
     .orderByRaw(`CASE WHEN collection = '*' THEN 1 ELSE 0 END`)
