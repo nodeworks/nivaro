@@ -270,6 +270,15 @@ export function RecordLiveSync({
         ['comments', collection, itemId],
         ['comments-related', collection, itemId]
       ])
+    // #1970: Notes also lists machine entries — transition comments, partner events, import
+    // runs, change reasons. Anything that moves those surfaces refreshes the thread too.
+    else if (
+      touched(LIVE_ASPECTS.state) ||
+      touched(LIVE_ASPECTS.integrations) ||
+      touched(LIVE_ASPECTS.addendums) ||
+      !batch.aspectsOnly
+    )
+      invalidate([['comments-related', collection, itemId]])
     if (touched(LIVE_ASPECTS.tasks)) invalidate([['tasks', collection, itemId]])
     if (touched(LIVE_ASPECTS.integrations))
       invalidate([
