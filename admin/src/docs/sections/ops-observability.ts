@@ -554,6 +554,11 @@ DELETE /api/notification-templates/:key       # revert`
       type: 'p',
       text: 'Broadcasts → history → "who saw this?" now opens with a per-audience roll-up: by role and by every scope dimension (zone, region…), delivered / opened (the inbox row was read — known for the in-app message channel) / acknowledged (banner dismissed) / still unread, with the unread names. "Nudge N unread" re-sends a "Reminder: …" inbox row (+ push through the normal rules) to exactly those people and records it as a `nudge` delivery; a second click skips anyone already nudged unless `again` is set. The in-app delivery of a broadcast keeps the inbox row id it produced (`notification_id` on the delivery receipt), which is what makes "opened" knowable.'
     },
+    { type: 'h2', id: 'broadcast-draft', text: 'Draft a broadcast from bullets' },
+    {
+      type: 'p',
+      text: 'Broadcasts → Message → "Draft from bullets": write a few points, one per line, and AI drafts the message for the chosen audience, severity and channels — a short banner line (≤200 characters), a fuller email with a subject (also used for the in-app message), and an SMS of at most 160 characters (always cut to fit, whatever the model returns). "Use" copies a draft into the composer; you edit and send as usual — nothing is sent or saved by drafting. Anyone who may send a broadcast may draft one (`POST /api/announcements/draft { bullets, audience, channels, severity }`, admin). The AI provider receives your points (with secret-looking values masked) and an audience description of role names, scope-dimension labels and counts — never a recipient’s name, email or phone, nor which zone values were picked. It runs on the per-feature "generate" model; each draft is logged as `broadcast-draft` activity.'
+    },
     { type: 'h2', id: 'mail-delivery-board', text: 'Delivery board' },
     {
       type: 'p',
