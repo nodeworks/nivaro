@@ -3,6 +3,8 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { getIo } from './io-holder.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * Incident threads (#2016). When an administrator turns incident mode on, or
@@ -163,6 +165,19 @@ async function postInThread(
   if (!(await opsRoomVerdict(row.room)).ok) return false
   const id = await postAsAssistant(app, row.room, text, row.root_message_id)
   return id != null
+}
+
+/**
+ * Incident mode changed: a payload-free notice to the tenant's admin watch
+ * room (`watch:ops`, joined only by administrators). Admin tabs re-read
+ * GET /ops-assistant/incident (admin-only) for the banner.
+ */
+export function announceIncidentChange(): void {
+  try {
+    getIo()?.to(tenantScopedRoom('watch:ops')).emit('ops:incident', { at: Date.now() })
+  } catch {
+    /* best-effort: the banner also polls */
+  }
 }
 
 // ── Reads ───────────────────────────────────────────────────────────────────
@@ -366,6 +381,7 @@ export async function startIncident(
       })
   }
   await logActivity({ action: 'ops-incident-start', user: user.id, comment: t })
+  announceIncidentChange()
   return row
 }
 
@@ -383,6 +399,7 @@ export async function endIncident(
     .where({ id: row.id })
     .update({ status: 'closed', ended_by: user.id, ended_at: new Date(), summary })
   await logActivity({ action: 'ops-incident-end', user: user.id, comment: row.title })
+  announceIncidentChange()
   return { ...row, status: 'closed', summary }
 }
 

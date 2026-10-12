@@ -271,6 +271,11 @@ export {
   lookBackHours,
   toRequestLogFilters
 } from './components/monitoring/AskTheLogs'
+export {
+  IncidentBanner,
+  type IncidentNow,
+  incidentThreadPath
+} from './components/monitoring/IncidentBanner'
 export { CallerChangesSection } from './components/monitoring/CallerChanges'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
 export { PartnerDependenciesPanel } from './components/monitoring/PartnerDependencies'
