@@ -31,6 +31,9 @@ const items = vi.hoisted(() => ({
 vi.mock('../../../services/items.js', () => items)
 
 const widgets = vi.hoisted(() => new Map<number, Record<string, unknown>>())
+const fixture = vi.hoisted(() => ({ relatedCollection: 'projects' }))
+const scope = vi.hoisted(() => ({ applyScopeParams: vi.fn(async () => {}) }))
+vi.mock('../../../services/custom-query-scope.js', () => scope)
 vi.mock('../../../db/index.js', () => ({
   db: vi.fn((table: string) => {
     const c: Record<string, unknown> = {}
@@ -45,8 +48,17 @@ vi.mock('../../../db/index.js', () => ({
       table === 'nivaro_widgets'
         ? widgets.get(id)
         : table === 'nivaro_relations'
-          ? { one_collection: 'projects' }
-          : undefined
+          ? { one_collection: fixture.relatedCollection }
+          : table === 'nivaro_custom_queries'
+            ? {
+                id: 9,
+                slug: 'spend',
+                access: 'authenticated',
+                sql_text: 'SELECT 1',
+                scope_params: '{"zone":{"dimension":"zone"}}',
+                cache_ttl: 0
+              }
+            : undefined
     )
     c.pluck = vi.fn(async () => ['name'])
     return c
@@ -72,6 +84,7 @@ async function render(id: number, body: Record<string, unknown> = {}) {
 afterEach(() => {
   vi.clearAllMocks()
   auth.signedIn = true
+  fixture.relatedCollection = 'projects'
 })
 
 describe('POST /widgets-internal/:id/render reads as the caller', () => {
@@ -154,6 +167,74 @@ describe('POST /widgets-internal/:id/render reads as the caller', () => {
       'projects',
       5,
       ['name']
+    )
+  })
+})
+
+describe('system tables and raw SQL scope (F1, F2)', () => {
+  it('a widget over a system table is refused', async () => {
+    for (const [type, config] of [
+      ['stat', { collection: 'nivaro_settings', field: 'smtp_pass' }],
+      ['list', { collection: 'nivaro_users', fields: ['static_token'] }],
+      [
+        'review_list',
+        { collection: 'nivaro_api_keys', host_collection: 'orders', path: [], group_by: 'id' }
+      ],
+      ['rollup', { collection: 'orders', host_collection: 'directus_users', path: [] }]
+    ] as const) {
+      const res = await render(widget(type, config), { inputs: { record_id: '1' } })
+      expect(res.statusCode).toBe(400)
+      expect(JSON.parse(res.body).error).toBe('Unknown collection')
+    }
+    expect(items.readItems).not.toHaveBeenCalled()
+    expect(items.aggregateItems).not.toHaveBeenCalled()
+  })
+
+  it('item_field bindings refuse a system item collection and never bind a system record', async () => {
+    const id = widget('stat', { collection: 'orders', field: 'amount', aggregation: 'sum' })
+    const bad = await render(id, {
+      item_collection: 'nivaro_users',
+      draft: { owner: 'u1' },
+      bindings: [{ key: 'x', binding_type: 'item_field', binding_value: 'owner.static_token' }]
+    })
+    expect(bad.statusCode).toBe(400)
+    fixture.relatedCollection = 'nivaro_users'
+    await render(id, {
+      item_collection: 'orders',
+      draft: { owner: 'u1' },
+      bindings: [{ key: 'x', binding_type: 'item_field', binding_value: 'owner.static_token' }]
+    })
+    expect(access.readOneAs).not.toHaveBeenCalled()
+  })
+
+  it('a toggle over a system table reports no state', async () => {
+    const id = widget('button-group', {
+      buttons: [
+        {
+          id: 'b',
+          action: 'toggle',
+          action_config: { collection: 'nivaro_users', field: 'is_active', id_input: 'id' }
+        }
+      ]
+    })
+    const res = await render(id, { inputs: { id: 'u1' } })
+    expect(res.statusCode).toBe(200)
+    expect(JSON.parse(res.body).data.buttons[0].is_on).toBeUndefined()
+    expect(access.readOneAs).not.toHaveBeenCalled()
+  })
+
+  it('a custom-query widget applies the query scope params for the caller before running', async () => {
+    scope.applyScopeParams.mockRejectedValueOnce(new Error('stop before SQL'))
+    const id = widget('custom-query', {
+      query_id: 9,
+      param_bindings: [{ param: 'year', input_key: 'year' }]
+    })
+    await render(id, { inputs: { year: 2026 } })
+    expect(scope.applyScopeParams).toHaveBeenCalledWith(
+      '{"zone":{"dimension":"zone"}}',
+      { year: 2026 },
+      'caller',
+      false
     )
   })
 })
