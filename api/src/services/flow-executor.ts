@@ -1069,10 +1069,14 @@ const ITEM_WRITE_MAX = 200
  * item-write (#1849): update or create records THROUGH THE ITEMS SERVICE —
  * RBAC, validation, hooks, revisions and activity all apply. It runs as
  * whoever triggered the flow (the tester runs it as the administrator
- * testing), else the flow's author; nobody to run as = refused. Update
- * targets are `ids` (a list, or a templated comma list like `{{keys}}`) or
- * a `filter` resolved as that person (at most 200 records). A dry run only
- * counts and previews.
+ * testing). A trigger with no person behind it (a public webhook, a
+ * schedule, a system event, a replay) runs it only as the `run_as` user the
+ * administrator named in the operation — NEVER as the flow's author, whose
+ * rights an anonymous payload must not borrow. Either person must be able to
+ * sign in (active, not redacted) when it runs. The collection is a literal
+ * business collection, never templated from the payload. Update targets are
+ * `ids` (a list, or a templated comma list like `{{keys}}`) or a `filter`
+ * resolved as that person (at most 200 records). A dry run only previews.
  */
 export async function runItemWrite(
   op: FlowOperation,
@@ -1081,22 +1085,27 @@ export async function runItemWrite(
 ): Promise<{ status: 'resolve' | 'reject'; output: FlowData }> {
   const opts = parseOpts(op)
   const mode = opts.mode === 'create' ? 'create' : 'update'
-  const collection = resolveTemplate(String(opts.collection ?? ''), data).trim()
+  const collection = String(opts.collection ?? '').trim()
   const resultKey = (opts.result_key as string) || 'write'
   const reject = (why: string) => ({
     status: 'reject' as const,
     output: { ...data, $error: `item-write: ${why}` }
   })
+  if (collection.includes('{{')) return reject('the collection must be named, not templated')
   if (!collection || !COLLECTION_RE.test(collection) || /^(nivaro|directus)_/i.test(collection))
     return reject('invalid collection')
   const values = resolveDeep(opts.data ?? {}, data) as Record<string, unknown>
   if (!values || typeof values !== 'object' || Object.keys(values).length === 0)
     return reject('no fields to write')
-  const userId = ctx.userId ?? (await resolveFlowCreator(ctx.flowId))
-  if (!userId) return reject('no one to run as (no triggering user and no flow author)')
-  const { getUser } = await import('./users.js')
+  const runAs = String(opts.run_as ?? '').trim()
+  const userId = ctx.userId ?? runAs
+  if (!userId) {
+    return reject('nobody triggered this run — name a "Run as" user on the operation')
+  }
+  const { canSignIn, getUser } = await import('./users.js')
   const user = await getUser(userId)
   if (!user) return reject('the person it runs as no longer exists')
+  if (!canSignIn(user)) return reject('the person it runs as is not active')
   const items = await import('./items.js')
 
   if (mode === 'create') {

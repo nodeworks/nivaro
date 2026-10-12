@@ -130,7 +130,8 @@ vi.mock('../../../services/queues.js', () => ({
 }))
 const users: Record<string, Row> = {}
 vi.mock('../../../services/users.js', () => ({
-  getUser: async (id: string) => users[id]
+  getUser: async (id: string) => users[id],
+  canSignIn: (u: Row) => u.status === 'active' && !u.is_redacted
 }))
 vi.mock('../../../services/ai-actions.js', () => ({
   findPerson: async (ref: string) => {
@@ -414,14 +415,28 @@ describe('run later (#1903)', () => {
     expect(plans.isExpired({ created_at: new Date(Date.now() - 5 * 3_600_000) }, doc)).toBe(false)
   })
 
-  it('a suspended owner never has a plan run in their name', async () => {
-    const view = await plans.proposePlan(owner, { steps: [{ kind: 'probe_step' }] })
-    await schedule.schedulePlan(owner, view.plan_id, new Date(Date.now() + 3_600_000).toISOString())
-    users.U1 = { id: 'U1', status: 'suspended' }
-    expect(await schedule.runDuePlans(new Date(Date.now() + 2 * 3_600_000))).toEqual({
-      ran: 0,
-      held: 1
-    })
+  it('only an owner who could sign in now has a plan run in their name (M4)', async () => {
+    for (const state of [
+      { status: 'suspended' },
+      { status: 'invited' },
+      { status: null },
+      { status: 'active', is_redacted: true }
+    ]) {
+      tables.nivaro_ai_proposals = []
+      users.U1 = { id: 'U1', status: 'active' }
+      const view = await plans.proposePlan(owner, { steps: [{ kind: 'probe_step' }] })
+      await schedule.schedulePlan(
+        owner,
+        view.plan_id,
+        new Date(Date.now() + 3_600_000).toISOString()
+      )
+      users.U1 = { id: 'U1', ...state }
+      expect(await schedule.runDuePlans(new Date(Date.now() + 2 * 3_600_000))).toEqual({
+        ran: 0,
+        held: 1
+      })
+      expect(tables.nivaro_ai_proposals[0].status).toBe('proposed')
+    }
   })
 })
 
@@ -612,6 +627,11 @@ describe('plan → draft flow (#1849)', () => {
       collections: ['orders']
     })
     expect(ev.operations[0].options).toMatchObject({ ids: '{{keys}}' })
+    // run_as only when the admin names one (security review M1e).
+    expect(ev.operations[0].options).not.toHaveProperty('run_as')
+    expect(
+      flow.planToFlowDraft('Close', planSteps, 'trigger', 'BOT').operations[0].options
+    ).toMatchObject({ run_as: 'BOT' })
   })
 
   it('creates the flow switched off, administrators only, from a plan that ran', async () => {
@@ -627,6 +647,10 @@ describe('plan → draft flow (#1849)', () => {
       flow.planToFlow(admin, '00000000-0000-0000-0000-000000000005', 'same')
     ).rejects.toThrow(/ran to the end/)
     tables.nivaro_ai_proposals[0].status = 'executed'
+    users.GONE = { id: 'GONE', status: 'suspended' }
+    await expect(
+      flow.planToFlow(admin, '00000000-0000-0000-0000-000000000005', 'same', 'GONE')
+    ).rejects.toThrow(/active person/)
     const out = await flow.planToFlow(admin, '00000000-0000-0000-0000-000000000005', 'same')
     expect(tables.nivaro_flows[0]).toMatchObject({ status: 'inactive', trigger: 'manual' })
     const ops = tables.nivaro_flow_operations

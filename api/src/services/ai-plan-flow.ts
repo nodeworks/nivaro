@@ -54,8 +54,12 @@ function placeholder(step: PlanStepDef, why: string): DraftFlowOp {
 export function planToFlowDraft(
   title: string,
   steps: PlanStepDef[],
-  records: FlowRecords
+  records: FlowRecords,
+  runAs: string | null = null
 ): DraftFlow {
+  // Only an administrator's explicit choice — never the plan's owner or the
+  // admin by default: a run with nobody behind it is refused instead.
+  const asWho = runAs ? { run_as: runAs } : {}
   const ordered = [...steps].sort((a, b) => a.n - b.n)
   const notes: string[] = []
   const operations: DraftFlowOp[] = []
@@ -86,7 +90,7 @@ export function planToFlowDraft(
           key,
           name,
           type: 'item-write',
-          options: { mode: 'update', collection, ...target, data: p.changes ?? {} }
+          options: { mode: 'update', collection, ...target, data: p.changes ?? {}, ...asWho }
         })
         break
       }
@@ -95,7 +99,12 @@ export function planToFlowDraft(
           key,
           name,
           type: 'item-write',
-          options: { mode: 'create', collection: str(p.collection), data: p.data ?? {} }
+          options: {
+            mode: 'create',
+            collection: str(p.collection),
+            data: p.data ?? {},
+            ...asWho
+          }
         })
         break
       case 'create_task':
@@ -173,7 +182,8 @@ export function planToFlowDraft(
 export async function planToFlow(
   admin: User,
   id: string,
-  records: FlowRecords
+  records: FlowRecords,
+  runAs: string | null = null
 ): Promise<{ flow_id: string; name: string; operations: number; notes: string[] }> {
   if (!(await isAdmin(admin))) throw httpError('Only administrators can make flows', 403)
   if (!['same', 'filter', 'trigger'].includes(records))
@@ -182,7 +192,12 @@ export async function planToFlow(
   if (String(row.status) !== 'executed') {
     throw httpError('Only a plan that ran to the end can become a flow', 409)
   }
-  const draft = planToFlowDraft(doc.title, doc.steps, records)
+  if (runAs) {
+    const { canSignIn, getUser } = await import('./users.js')
+    const who = await getUser(runAs)
+    if (!who || !canSignIn(who)) throw httpError('“Run as” must be an active person', 400)
+  }
+  const draft = planToFlowDraft(doc.title, doc.steps, records, runAs)
   const flowId = randomUUID()
   const now = new Date()
   const who =
