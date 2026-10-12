@@ -1,5 +1,6 @@
 import type { User } from '../types.js'
 import { can, getAllowedFields, getRowFilter } from './permissions.js'
+import { getUserScopeEnforcement } from './user-scopes.js'
 
 /**
  * Field-level access for the Ask AI `aggregate` tool (and so for watched
@@ -63,6 +64,14 @@ export async function assertFilterReadable(
       if (await getRowFilter(user, 'read', link.collection)) {
         throw new FieldAccessError(
           `Your access to ${link.collection} is row-filtered — it cannot be used in an aggregate filter.`
+        )
+      }
+      // The base query is scoped, a joined collection is not: refuse one the
+      // caller is scoped on, or an out-of-scope value could be probed.
+      const scope = await getUserScopeEnforcement(user, link.collection)
+      if (scope.deny || scope.filters.length > 0) {
+        throw new FieldAccessError(
+          `Your access to ${link.collection} is limited by your scopes — it cannot be used in an aggregate filter.`
         )
       }
       const allowed = await getAllowedFields(user, 'read', link.collection)

@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const perms = {
+  scoped: {} as Record<string, boolean>,
   fields: {} as Record<string, string[] | null>,
   rowFilter: {} as Record<string, unknown>,
   read: {} as Record<string, boolean>
@@ -9,6 +10,13 @@ vi.mock('../../../services/permissions.js', () => ({
   getAllowedFields: async (_u: unknown, _a: string, c: string) => perms.fields[c] ?? null,
   getRowFilter: async (_u: unknown, _a: string, c: string) => perms.rowFilter[c] ?? null,
   can: async (_u: unknown, _a: string, c: string) => perms.read[c] !== false
+}))
+
+vi.mock('../../../services/user-scopes.js', () => ({
+  getUserScopeEnforcement: async (_u: unknown, c: string) =>
+    perms.scoped[c]
+      ? { filters: [{ hops: [], ids: [1] }], deny: false }
+      : { filters: [], deny: false }
 }))
 
 const { readableFieldSet, assertFilterReadable, FieldAccessError } = await import(
@@ -26,6 +34,7 @@ describe('aggregate field guard', () => {
     perms.fields = {}
     perms.rowFilter = {}
     perms.read = {}
+    perms.scoped = {}
   })
 
   it('narrows the field set to the role policy (null and * = all)', async () => {
@@ -70,5 +79,12 @@ describe('aggregate field guard', () => {
     await expect(
       assertFilterReadable(user, 'employees', [['manager', 'name']], new Set(), links)
     ).rejects.toThrow(/row-filtered/)
+  })
+
+  it('refuses a hop into a collection the caller is scoped on', async () => {
+    perms.scoped.people = true
+    await expect(
+      assertFilterReadable(user, 'employees', [['manager', 'name']], new Set(), links)
+    ).rejects.toThrow(/scopes/)
   })
 })
