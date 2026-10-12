@@ -667,6 +667,7 @@ export {
   serverNow,
   setServerClockOffset
 } from './lib/server-clock'
+export * from './lib/socket-realtime'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export {
