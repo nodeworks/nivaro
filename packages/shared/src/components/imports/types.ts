@@ -167,7 +167,8 @@ export interface ImportProgressEvent {
   stage: 'row_count' | 'preparing' | 'importing' | 'completed' | 'error'
   row_count?: number
   duration?: number
-  error?: string
+  /** `true` on a failure — the message itself stays behind the authenticated run routes. */
+  error?: string | boolean
 }
 
 /**

@@ -16,6 +16,7 @@ import {
   LifeBuoy,
   Loader2,
   PencilLine,
+  PictureInPicture2,
   Save,
   Trash2,
   Wand2,
@@ -73,6 +74,21 @@ import {
 } from '../lib/header-strip'
 import { extSlotKey } from '../lib/layout-slots'
 import { useRecordReader } from '../lib/record-loader'
+import {
+  bindRecordOutbox,
+  checkUnknownBase,
+  claimRecordOutbox,
+  discardRecordOutbox,
+  enqueueRecordSave,
+  isOfflineSaveError,
+  midairCollisionOf,
+  onRecordOutboxEvent,
+  onRecordOutboxRetry,
+  retryRecordOutbox,
+  settleRecordOutbox
+} from '../lib/record-outbox'
+import { isRecordPopout, openRecordPopout } from '../lib/record-popout'
+import { announceRecordTabs } from '../lib/record-tabs'
 import { invalidateRecordTasks } from '../lib/record-tasks'
 import {
   normalizeSummaryModeRules,
@@ -168,6 +184,7 @@ import {
   RecordInsightsButton
 } from './item-edit/RecordInsights'
 import { RecordAccessLostPanel, type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
+import { RecordOutboxBanner, useRecordOutboxEntry } from './item-edit/RecordOutbox'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
@@ -1440,6 +1457,27 @@ export function ItemEditForm({
     mine: Record<string, unknown>
   } | null>(null)
   const baseRevisionOverrideRef = useRef<number | null>(null)
+  // Offline outbox (#1678): a Save that failed on the network waits in the
+  // per-person outbox. While this form holds the entry (it pressed Save, or
+  // the person opened Review) it replays through its own save — lines,
+  // links and the merge dialog included; otherwise any tab replays it.
+  const outboxEntry = useRecordOutboxEntry(collection, isNew ? null : itemId)
+  const outboxReleaseRef = useRef<(() => void) | null>(null)
+  // Queued fields this form took over (pressed Save / Review): a save that
+  // lands settles them even when a merge kept "theirs" and sent nothing.
+  const outboxFieldsRef = useRef<Set<string>>(new Set())
+  const lastSavePayloadRef = useRef<Record<string, unknown>>({})
+  const releaseOutboxClaim = useCallback(() => {
+    outboxReleaseRef.current?.()
+    outboxReleaseRef.current = null
+    outboxFieldsRef.current = new Set()
+  }, [])
+  useEffect(() => {
+    if (authUserId) bindRecordOutbox(client, authUserId, qc)
+  }, [client, authUserId, qc])
+  // Another record on this mount (or unmount): hand the entry back to the replayers.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: release on identity only
+  useEffect(() => releaseOutboxClaim, [collection, itemId])
   const [isDirty, setIsDirty] = useState(false)
   const [inspectorOpen, setInspectorOpen] = useState(false)
   // Remote-change ghosts (#2): field → what it was before someone else's
@@ -1497,21 +1535,23 @@ export function ItemEditForm({
     window.addEventListener('nvr:set-field', onSet)
     return () => window.removeEventListener('nvr:set-field', onSet)
   })
-  // Config hot-push (#268): a schema/layout edit anywhere re-resolves this
-  // form's definition in place and shows an "updated" chip — no stale form
-  // until reload, no forced reload either (the draft is untouched).
+  // Config hot-push (#268, #1740): a schema/layout/rule/pipeline edit re-resolves this form's
+  // definition in place AND says so — "This form was changed, reload to see the new version".
+  // An event naming another collection is not about this form. What the person typed is kept:
+  // the draft store writes it ~1s after the last keystroke and offers it back after the reload.
   const [configUpdated, setConfigUpdated] = useState(false)
   useEffect(() => {
-    const onConfig = () => {
+    const onConfig = (e: Event) => {
+      const changed = (e as CustomEvent<{ collection?: string }>).detail?.collection
+      if (changed && changed !== collection) return
       void qc.invalidateQueries({ queryKey: ['field-config'] })
       void qc.invalidateQueries({ queryKey: ['active-layout'] })
       void qc.invalidateQueries({ queryKey: ['collection-meta'] })
       setConfigUpdated(true)
-      setTimeout(() => setConfigUpdated(false), 8000)
     }
     window.addEventListener('nvr:config-update', onConfig)
     return () => window.removeEventListener('nvr:config-update', onConfig)
-  }, [qc])
+  }, [qc, collection])
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)
@@ -6328,6 +6368,7 @@ export function ItemEditForm({
         const base = baseRevisionOverrideRef.current ?? baseRevisionData?.latest ?? null
         if (base != null) payload._base_revision = base
       }
+      lastSavePayloadRef.current = payload
       let savedId: string
       try {
         if (isNew) {
@@ -6353,27 +6394,47 @@ export function ItemEditForm({
           setCrChallenge(challenge)
           throw err
         }
-        const collResp = (
-          err as {
-            response?: {
-              data?: {
-                code?: string
-                conflicts?: Array<{ field: string; current_value: unknown }>
-                latest_revision?: number
-              }
-            }
-          }
-        )?.response?.data
-        if (collResp?.code === 'MIDAIR_COLLISION' && Array.isArray(collResp.conflicts)) {
+        // Either client error shape: the SDK puts the parsed body on
+        // `err.response`, an axios-backed client under `err.response.data`.
+        const coll = midairCollisionOf(err)
+        if (coll) {
           updateStep('main', { status: 'error', error: 'Someone else changed this record' })
           const mine: Record<string, unknown> = {}
-          for (const c of collResp.conflicts) mine[c.field] = payload[c.field]
-          setCollision({
-            conflicts: collResp.conflicts,
-            latest: Number(collResp.latest_revision) || 0,
-            mine
-          })
+          for (const c of coll.conflicts) mine[c.field] = payload[c.field]
+          setCollision({ conflicts: coll.conflicts, latest: coll.latest, mine })
           throw err
+        }
+        // No connection (#1678): keep the pressed Save in the outbox and send
+        // it when the API answers again. Creates are never queued — a lost
+        // answer may mean the record exists already.
+        if (
+          !isNew &&
+          isOfflineSaveError(err) &&
+          Object.keys(payload).some((k) => !k.startsWith('_'))
+        ) {
+          const before: Record<string, unknown> = {}
+          for (const k of Object.keys(payload)) before[k] = initial[k] ?? null
+          const entry = await enqueueRecordSave({
+            collection,
+            item: itemId,
+            payload,
+            before,
+            baseRevision:
+              typeof payload._base_revision === 'number' ? payload._base_revision : null,
+            changeReason: changeReasonRef.current
+          })
+          if (entry) {
+            const first = !outboxReleaseRef.current
+            if (first) outboxReleaseRef.current = claimRecordOutbox(collection, itemId)
+            for (const k of Object.keys(entry.payload)) outboxFieldsRef.current.add(k)
+            updateStep('main', {
+              status: 'error',
+              error: 'No connection — will save when you are back online'
+            })
+            setSaveDialogOpen(false)
+            if (first) toast.info('Will save when you are back online')
+            throw err
+          }
         }
         const msg = errMsg(err)
         updateStep('main', { status: 'error', error: msg, denied: isAccessRefusal(err) })
@@ -6921,6 +6982,18 @@ export function ItemEditForm({
       }
       changeReasonRef.current = null
       baseRevisionOverrideRef.current = null
+      if (!isNew) {
+        // The offline outbox: what this save carried (or the form had taken
+        // over) is no longer pending.
+        const settled = new Set(outboxFieldsRef.current)
+        for (const k of Object.keys(lastSavePayloadRef.current))
+          if (!k.startsWith('_')) settled.add(k)
+        void settleRecordOutbox(collection, id, settled)
+        releaseOutboxClaim()
+        // A popped-out window (or another tab) showing this record refreshes:
+        // the socket skips writes by the viewer themselves (#2131).
+        announceRecordTabs(authUserId, 'saved', collection, id)
+      }
       void qc.invalidateQueries({ queryKey: ['collision-base', collection] })
       setIsDirty(false)
       // The persisted recovery draft is spent — remove it now rather than on
@@ -6988,6 +7061,97 @@ export function ItemEditForm({
       // Dialog stays open showing error steps; user dismisses manually
     }
   })
+
+  // ── Offline outbox (#1678) ────────────────────────────────────────────────
+  // Back online with the entry held here: replay through the form's own save,
+  // so a conflicting change opens the merge dialog below.
+  // The save goes against the revision the queued change was made on — never
+  // a base re-read after reconnecting, which would hide someone else's change.
+  const outboxReplayRef = useRef<() => void>(() => {})
+  outboxReplayRef.current = () => {
+    if (!outboxReleaseRef.current || !isDirty || saveMut.isPending || collision || crChallenge)
+      return
+    const e = outboxEntry
+    if (!e || e.base_revision != null) {
+      if (e?.base_revision != null) baseRevisionOverrideRef.current = e.base_revision
+      saveMut.mutate()
+      return
+    }
+    // Made before the base was known: compare the fields themselves first.
+    void checkUnknownBase(client, e)
+      .then((check) => {
+        if (check.conflicts.length > 0) {
+          const mine: Record<string, unknown> = {}
+          for (const c of check.conflicts) mine[c.field] = draftRef.current[c.field]
+          setCollision({ conflicts: check.conflicts, latest: check.latest ?? 0, mine })
+          return
+        }
+        if (check.latest != null) baseRevisionOverrideRef.current = check.latest
+        saveMut.mutate()
+      })
+      .catch(() => {
+        /* still unreachable — the outbox asks again */
+      })
+  }
+  useEffect(() => onRecordOutboxRetry(() => outboxReplayRef.current()), [])
+  // Replayed by the outbox while this form shows the record: the refresh
+  // that follows is this person's own write, not "someone else changed it".
+  useEffect(
+    () =>
+      onRecordOutboxEvent((e) => {
+        if (
+          e.type === 'replayed' &&
+          e.entry.collection === collection &&
+          e.entry.item === String(itemId)
+        )
+          ownSaveAtRef.current = Date.now()
+      }),
+    [collection, itemId]
+  )
+  /** Take the queued change into the form; a conflict opens the merge dialog. */
+  const reviewOutbox = useCallback(() => {
+    const e = outboxEntry
+    if (!e) return
+    if (!outboxReleaseRef.current) outboxReleaseRef.current = claimRecordOutbox(collection, itemId)
+    for (const k of Object.keys(e.payload)) outboxFieldsRef.current.add(k)
+    const next = { ...draftRef.current, ...e.payload }
+    draftRef.current = next
+    setDraft(next)
+    for (const k of Object.keys(e.payload)) {
+      userTouchedRef.current.add(k)
+      fieldEditSeqRef.current.set(k, ++ruleSeqRef.current)
+    }
+    setIsDirty(true)
+    if (e.change_reason) changeReasonRef.current = e.change_reason
+    if (e.status === 'conflict' && e.conflicts?.length) {
+      const mine: Record<string, unknown> = {}
+      for (const c of e.conflicts) mine[c.field] = e.payload[c.field]
+      setCollision({ conflicts: e.conflicts, latest: e.latest_revision ?? 0, mine })
+    } else if (e.base_revision != null) baseRevisionOverrideRef.current = e.base_revision
+  }, [outboxEntry, collection, itemId])
+  // A conflict found while this record was closed opens the merge dialog the
+  // first time the record is shown (once per conflict) — never mid-load,
+  // or the first record read would replace the draft it fills.
+  const outboxReviewedRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (outboxEntry?.status !== 'conflict' || !itemData) return
+    if (outboxReleaseRef.current || collision) return
+    const mark = `${outboxEntry.id}@${outboxEntry.updated_at}`
+    if (outboxReviewedRef.current === mark) return
+    outboxReviewedRef.current = mark
+    reviewOutbox()
+  }, [outboxEntry, itemData, collision, reviewOutbox])
+  // ── Pop out (#2131) ───────────────────────────────────────────────────────
+  const inPopout = useMemo(() => isRecordPopout(), [])
+  const popOutRecord = () => {
+    const href = itemNav.urlFor({ collection, itemId: String(itemId), layoutSlug: layoutSlugProp })
+    if (!openRecordPopout(href, collection, String(itemId)))
+      toast.error('Your browser blocked the window — allow pop-ups for this site and try again')
+  }
+  const discardOutbox = useCallback(() => {
+    void discardRecordOutbox(collection, itemId)
+    releaseOutboxClaim()
+  }, [collection, itemId, releaseOutboxClaim])
 
   // Every transition button on this form — the header buttons, the pipeline
   // panel in section/tab/steps mode and the __pipeline__ slot — runs this
@@ -9264,6 +9428,18 @@ export function ItemEditForm({
                                             >
                                               <Waypoints className='h-4 w-4' />
                                             </button>
+                                            {!inPopout && (
+                                              <button
+                                                type='button'
+                                                data-tip='Pop out — open this record in its own window (stays live and in step with this tab)'
+                                                onClick={popOutRecord}
+                                                aria-label='Pop out'
+                                                data-record-popout
+                                                className='inline-flex h-8 w-8 items-center justify-center transition-colors hover:bg-accent hover:text-accent-foreground'
+                                              >
+                                                <PictureInPicture2 className='h-4 w-4' />
+                                              </button>
+                                            )}
                                             {isAdmin &&
                                               colMeta?.browser_config?.copy_as !== false && (
                                                 <CopyAsButton
@@ -10675,10 +10851,28 @@ export function ItemEditForm({
                                       />
                                     )}
                                     {configUpdated && (
-                                      <div className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
-                                        <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-                                        Form definition updated — fields refreshed in place. Your
-                                        unsaved edits are untouched.
+                                      <div
+                                        data-form-config-changed
+                                        role='status'
+                                        className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'
+                                      >
+                                        <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-nvr-cyan' />
+                                        <span className='min-w-0 flex-1'>
+                                          This form was changed. Reload to see the new version
+                                          {isDirty ? ' — what you typed is kept.' : '.'}
+                                        </span>
+                                        <button
+                                          type='button'
+                                          onClick={() =>
+                                            window.setTimeout(
+                                              () => window.location.reload(),
+                                              isDirty ? 1200 : 0
+                                            )
+                                          }
+                                          className='h-6 shrink-0 rounded-md border border-nvr-cyan/40 bg-white px-2 text-[11.5px] font-medium hover:bg-nvr-cyan/10 dark:bg-transparent'
+                                        >
+                                          Reload
+                                        </button>
                                       </div>
                                     )}
 
@@ -10693,6 +10887,20 @@ export function ItemEditForm({
                                         preview={viewAs.preview}
                                         loading={viewAs.loading}
                                       />
+                                    )}
+                                    {!isNew && outboxEntry && (
+                                      <div className='nvr-expand-in'>
+                                        <RecordOutboxBanner
+                                          entry={outboxEntry}
+                                          labelFor={(f) =>
+                                            (fieldConfig ?? []).find((x) => x.field === f)?.label ??
+                                            ''
+                                          }
+                                          onReview={reviewOutbox}
+                                          onRetry={() => void retryRecordOutbox(collection, itemId)}
+                                          onDiscard={discardOutbox}
+                                        />
+                                      </div>
                                     )}
                                     {recovery.state === 'offer' && (
                                       <div className='nvr-expand-in'>

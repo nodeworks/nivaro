@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Brain, Check, History, Pencil, Plus, Trash2, X } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get, patch } from '../../lib/commands'
 import { AiHistorySwitch } from '../ai/AiHistorySwitch'
@@ -33,6 +33,15 @@ export function AiMemoryCard() {
         .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
         .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>)
   })
+  // "Memory is full" answers link here (/profile#ai-memory): bring the card
+  // into view once the notes have loaded, so the person can pick one to remove.
+  const loaded = prefs !== undefined
+  useEffect(() => {
+    if (!loaded || typeof window === 'undefined' || window.location.hash !== '#ai-memory') return
+    document
+      .querySelector('[data-profile-card="ai-memory"]')
+      ?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+  }, [loaded])
   const notes: Note[] = Array.isArray(prefs?.ai_memory)
     ? (prefs.ai_memory as Note[]).filter((n) => n && typeof n.text === 'string')
     : []

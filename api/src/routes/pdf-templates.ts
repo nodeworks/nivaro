@@ -12,8 +12,10 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { readItems, readOne } from '../services/items.js'
 import { generatePdf } from '../services/pdf.js'
 import { can } from '../services/permissions.js'
+import type { User } from '../types.js'
 
 interface PdfTemplate {
   id: string
@@ -23,6 +25,81 @@ interface PdfTemplate {
   created_by: string | null
   created_at: Date
   updated_at: Date | null
+}
+
+type RenderOutcome =
+  | { error: string; code: number }
+  | { pdf: Buffer; tpl: PdfTemplate; collection: string }
+
+/**
+ * Render a template against one record, reading the record AND its child rows as the caller
+ * (RLS, User Scopes and field permissions) — never straight from the table.
+ */
+async function renderTemplate(
+  user: User,
+  id: string,
+  body: { collection?: string; item_id?: string | number }
+): Promise<RenderOutcome> {
+  const tpl = await db<PdfTemplate>('nivaro_pdf_templates').where({ id }).first()
+  if (!tpl) return { error: 'Template not found', code: 404 }
+
+  const collection = tpl.collection ?? body.collection
+  if (!collection || body.item_id === undefined || body.item_id === null || body.item_id === '') {
+    return { error: 'collection and item_id are required', code: 400 }
+  }
+  if (/^(nivaro|directus)_/i.test(collection)) {
+    return { error: 'System collections cannot be rendered', code: 400 }
+  }
+  if (tpl.collection && body.collection && body.collection !== tpl.collection) {
+    return { error: `Template is bound to collection "${tpl.collection}"`, code: 400 }
+  }
+
+  const allowed = await can(user, 'read', collection)
+  if (!allowed) return { error: 'Forbidden', code: 403 }
+
+  const item = (await readOne(user, collection, String(body.item_id)).catch(() => null)) as
+    | Record<string, unknown>
+    | null
+    | undefined
+  if (!item) return { error: 'Item not found', code: 404 }
+
+  // Designer table blocks loop `children.<alias>` — fetch child rows only
+  // when the template actually references them.
+  const children: Record<string, Array<Record<string, unknown>>> = {}
+  if (String(tpl.template).includes('children.')) {
+    try {
+      const rels = (await db('nivaro_relations')
+        .where({ one_collection: collection })
+        .whereNull('junction_field')
+        .whereNotNull('many_collection')
+        .select('one_field', 'many_collection', 'many_field')) as Array<{
+        one_field: string | null
+        many_collection: string
+        many_field: string
+      }>
+      for (const rel of rels) {
+        const alias = rel.one_field ?? rel.many_collection
+        if (!alias || !String(tpl.template).includes(`children.${alias}`)) continue
+        children[alias] = ((
+          await readItems(user, rel.many_collection, {
+            filter: { [rel.many_field]: { _eq: body.item_id } },
+            limit: 200
+          }).catch(() => ({ data: [] }))
+        ).data ?? []) as Array<Record<string, unknown>>
+      }
+    } catch {
+      /* a broken relation renders an empty table, never a 500 */
+    }
+  }
+
+  const pdf = await generatePdf(tpl.template, {
+    ...item,
+    item,
+    children,
+    collection,
+    generated_at: new Date().toISOString()
+  })
+  return { pdf, tpl, collection }
 }
 
 export async function pdfTemplatesRoutes(app: FastifyInstance) {
@@ -123,65 +200,9 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
     if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
     const { id } = req.params as { id: string }
     const body = (req.body ?? {}) as { collection?: string; item_id?: string | number }
-
-    const tpl = await db<PdfTemplate>('nivaro_pdf_templates').where({ id }).first()
-    if (!tpl) return reply.code(404).send({ error: 'Template not found' })
-
-    const collection = tpl.collection ?? body.collection
-    if (!collection || body.item_id === undefined || body.item_id === null || body.item_id === '') {
-      return reply.code(400).send({ error: 'collection and item_id are required' })
-    }
-    if (collection.startsWith('nivaro_')) {
-      return reply.code(400).send({ error: 'System collections cannot be rendered' })
-    }
-    if (tpl.collection && body.collection && body.collection !== tpl.collection) {
-      return reply.code(400).send({ error: `Template is bound to collection "${tpl.collection}"` })
-    }
-
-    const allowed = await can(req.user, 'read', collection)
-    if (!allowed) return reply.code(403).send({ error: 'Forbidden' })
-
-    const item = (await db(collection)
-      .where({ id: body.item_id })
-      .first()
-      .catch(() => undefined)) as Record<string, unknown> | undefined
-    if (!item) return reply.code(404).send({ error: 'Item not found' })
-
-    // Designer table blocks loop `children.<alias>` — fetch child rows only
-    // when the template actually references them.
-    const children: Record<string, Array<Record<string, unknown>>> = {}
-    if (String(tpl.template).includes('children.')) {
-      try {
-        const rels = (await db('nivaro_relations')
-          .where({ one_collection: collection })
-          .whereNull('junction_field')
-          .whereNotNull('many_collection')
-          .select('one_field', 'many_collection', 'many_field')) as Array<{
-          one_field: string | null
-          many_collection: string
-          many_field: string
-        }>
-        for (const rel of rels) {
-          const alias = rel.one_field ?? rel.many_collection
-          if (!alias || !String(tpl.template).includes(`children.${alias}`)) continue
-          children[alias] = (await db(rel.many_collection)
-            .where(rel.many_field, body.item_id)
-            .limit(200)
-            .select('*')
-            .catch(() => [])) as Array<Record<string, unknown>>
-        }
-      } catch {
-        /* a broken relation renders an empty table, never a 500 */
-      }
-    }
-
-    const pdf = await generatePdf(tpl.template, {
-      ...item,
-      item,
-      children,
-      collection,
-      generated_at: new Date().toISOString()
-    })
+    const out = await renderTemplate(req.user, id, body)
+    if ('error' in out) return reply.code(out.code).send({ error: out.error })
+    const { pdf, tpl, collection } = out
 
     // Document generation is a data egress event — same audit class as the
     // backup/content exports.
@@ -202,5 +223,56 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
         `attachment; filename="${safeName}-${String(body.item_id)}.pdf"`
       )
       .send(pdf)
+  })
+  // #2123 — the same render as a background job: it shows in the Jobs tray with its
+  // phases, and the finished PDF lands in the file library (download chip) instead of
+  // holding the request open. Reads the record as the caller.
+  app.post('/:id/render-async', async (req, reply) => {
+    if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
+    const user = req.user
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as { collection?: string; item_id?: string | number }
+    const tpl = await db<PdfTemplate>('nivaro_pdf_templates').where({ id }).first('id', 'name')
+    if (!tpl) return reply.code(404).send({ error: 'Template not found' })
+    const { startJobRun } = await import('../services/job-runs.js')
+    const run = await startJobRun('render', `pdf:${tpl.name}`.slice(0, 200), {
+      label: `PDF: ${tpl.name}`,
+      triggeredBy: user.id
+    })
+    void (async () => {
+      try {
+        run.progress({ phase: 'Rendering the document' })
+        const out = await renderTemplate(user, id, body)
+        if ('error' in out) {
+          await run.fail(out.error)
+          return
+        }
+        run.progress({ phase: 'Saving the file' })
+        const safeName = tpl.name.replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase() || 'document'
+        const filename = `${safeName}-${String(body.item_id)}.pdf`
+        const { uploadFileBuffer } = await import('../services/files.js')
+        const stored = await uploadFileBuffer(
+          user,
+          out.pdf,
+          filename,
+          'application/pdf',
+          undefined,
+          {
+            private: true
+          }
+        )
+        await logActivity({
+          action: 'pdf-render',
+          collection: out.collection,
+          item: String(body.item_id),
+          user: user.id,
+          comment: `${tpl.name} (background)`
+        })
+        await run.complete(`${filename} → file ${stored.id}`, { file_id: String(stored.id) })
+      } catch (err) {
+        await run.fail(err)
+      }
+    })()
+    return reply.code(202).send({ data: { run_id: run.id } })
   })
 }

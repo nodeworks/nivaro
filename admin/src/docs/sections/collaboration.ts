@@ -769,6 +769,37 @@ export const collabChat: DocSection = {
     {
       type: 'note',
       text: 'To reach a whole group at once, use @channel in a channel room — it notifies up to 300 members and is limited to the channel’s creator or an admin. Regular @mentions are per-person.'
+    },
+    { type: 'h2', id: 'collab-chat-polls', text: 'Polls, slash commands and search by meaning' },
+    {
+      type: 'p',
+      text: 'Type `/poll` in the composer to ask a room a question: 2–10 options, single or several answers, anonymous votes, and an optional close time. Results update live; when the poll closes (by its author or an admin, or at the close time) a summary line is posted in the room. Anonymous polls show counts only, never who voted.'
+    },
+    {
+      type: 'p',
+      text: 'Typing `/` lists the commands: `/task` (on the room’s record or for a person), `/remind`, `/poll` and `/note` (on the record) each open a small form above the box. Extensions add their own with `ctx.chat.registerCommand({ name, description, run })`; they run as the person typing.'
+    },
+    {
+      type: 'p',
+      text: 'Chat search also finds messages by meaning, listed after the exact matches and limited to rooms you can see. The room info drawer’s Files and Links tabs are searchable and each link has a Show jump. The @mention picker lists people who are online first.'
+    },
+    { type: 'h2', id: 'collab-chat-assistant', text: 'The assistant in rooms' },
+    {
+      type: 'p',
+      text: 'When Settings names a chat assistant (`chat_bot_name`), mentioning it in any room asks it a question. It answers with the same permission-checked tools as Ask AI, run as the person who asked.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The answer is written into the room as it arrives. The person who asked gets a Stop button; what arrived before Stop is posted, marked "(stopped)". The socket event is `chat:bot-stream` (phases start, delta, status, private, end, error), and `POST /api/chat/bot/streams/:id/stop` stops it. Only the person who asked can stop it.',
+        'In a record’s room the assistant already knows the record. It reads it as the person asking, and if they cannot read it there is no record context. Its record tools default to that record, so "@assistant what’s blocking this?" needs no id.',
+        'In a channel, the channel’s name, topic, description and pinned messages are part of the question, so a channel about one program or vendor gets answers about that program or vendor. The assistant treats this text as background, not as instructions. Pinned ops posts are included only in an admin-only ops room.',
+        'Who sees the answer is decided before any of it is written. The answer is posted in the room only when everyone who can read the room could read everything it used. In a DM, a private channel or a small role channel (up to 20 other people), every tool call is re-run as each reader and must return the same result. In General, open channels, big role channels and record rooms, only reads of the room’s own record can be checked this way: one reader from every role that can read the collection re-runs each read. Anything else, such as lists, totals, saved queries, your own tasks or extension tools, goes privately to the person who asked. That answer is saved in their conversation with the assistant, the bubble in the room shows "Only you can see this", and the room gets a short notice with no data in it.'
+      ]
+    },
+    {
+      type: 'note',
+      text: 'To keep answers in the room, ask about the record or name the fields you need. A read of a few fields that every role can see passes the check. A read of every field usually does not.'
     }
   ]
 }

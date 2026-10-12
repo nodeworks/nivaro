@@ -154,6 +154,11 @@ export function emitToTenant(
   }
 }
 
+/** A payload-free notice to every socket of the CURRENT tenant (announcements, flags, config). */
+export function announceToTenant(event: string, payload: Record<string, unknown> = {}): void {
+  emitToTenant(currentTenantKey(), event, { at: Date.now(), ...payload })
+}
+
 /**
  * Per-key throttle: the first signal fires after `delayMs` (coalescing the
  * burst), and never sooner than `minGapMs` after the key's previous fire —

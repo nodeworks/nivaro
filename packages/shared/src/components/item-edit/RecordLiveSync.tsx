@@ -1,8 +1,8 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Bot, Copy, EyeOff, Trash2, UploadCloud } from 'lucide-react'
+import { ArrowLeft, Bot, Copy, EyeOff, FileUp, Trash2, UploadCloud } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { useNivaroClient } from '../../context'
+import { useItemEditAuth, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import {
   batchTouches,
@@ -13,7 +13,7 @@ import {
   useLiveRecordEvent
 } from '../../lib/live'
 import { useOptionalRealtime } from '../../lib/realtime'
-import { useRecordTabs } from '../../lib/record-tabs'
+import { useRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { formatRelative } from '../../lib/utils'
 
 /** Why an open record can no longer be saved (#1871 deleted, #1925 access). */
@@ -43,6 +43,9 @@ interface InstanceHead {
     timestamp?: string
   }>
 }
+
+/** The import notice lapses this long after the last import write to the record. */
+const IMPORT_QUIET_MS = 8_000
 
 /**
  * Query heads that hold one record's data (`[head, collection, id, …]`).
@@ -155,6 +158,10 @@ export function RecordLiveSync({
   const [gone, setGoneState] = useState<RecordGone | null>(null)
   const [automation, setAutomation] = useState<Record<string, string>>({})
   const [restoring, setRestoring] = useState(false)
+  // #1826 — a staged import run is writing this record (the events say `source: 'import'`).
+  // Each import write renews the notice; it lapses a few seconds after the run goes quiet.
+  const [importing, setImporting] = useState(false)
+  const importTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const openedAt = useRef(Date.now())
   const lastMoveToast = useRef<number | null>(null)
@@ -240,6 +247,11 @@ export function RecordLiveSync({
       return
     }
     if (goneRef.current) return
+    if (batch.events.some((e) => e.source === 'import' && !e.own)) {
+      setImporting(true)
+      if (importTimer.current) clearTimeout(importTimer.current)
+      importTimer.current = setTimeout(() => setImporting(false), IMPORT_QUIET_MS)
+    }
     // A batch that names no fields may have moved anything — refresh it all.
     const touched = (aspect: string) => batchTouches(batch, aspect)
     if (touched(LIVE_ASPECTS.state)) {
@@ -258,6 +270,15 @@ export function RecordLiveSync({
         ['comments', collection, itemId],
         ['comments-related', collection, itemId]
       ])
+    // #1970: Notes also lists machine entries — transition comments, partner events, import
+    // runs, change reasons. Anything that moves those surfaces refreshes the thread too.
+    else if (
+      touched(LIVE_ASPECTS.state) ||
+      touched(LIVE_ASPECTS.integrations) ||
+      touched(LIVE_ASPECTS.addendums) ||
+      !batch.aspectsOnly
+    )
+      invalidate([['comments-related', collection, itemId]])
     if (touched(LIVE_ASPECTS.tasks)) invalidate([['tasks', collection, itemId]])
     if (touched(LIVE_ASPECTS.integrations))
       invalidate([
@@ -275,6 +296,9 @@ export function RecordLiveSync({
       ])
       return
     }
+    refreshRecord()
+  }
+  const refreshRecord = () => {
     invalidate([
       ['item', collection, itemId],
       // Summary mode reads its own copy (#1869) — it diffs + highlights.
@@ -289,9 +313,25 @@ export function RecordLiveSync({
     flashTimer.current = setTimeout(() => setFlash(false), 4000)
   }
   useLiveRecord(collection, itemId, onBatch)
+  // #2131: this person saved the record in another window (a popped-out
+  // record, another tab). Their own writes never come back over the socket.
+  const { userId } = useItemEditAuth()
+  useRecordTabsSignal(userId, 'saved', collection, itemId, () => {
+    if (goneRef.current) return
+    refreshRecord()
+    invalidate([
+      ['pipeline-instance', collection, itemId],
+      ['comments', collection, itemId],
+      ['tasks', collection, itemId],
+      // Lines and links saved with it (the keys are per relation, not per record).
+      ['o2m-rows'],
+      ['m2m-items']
+    ])
+  })
   useEffect(
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current)
+      if (importTimer.current) clearTimeout(importTimer.current)
     },
     []
   )
@@ -380,7 +420,7 @@ export function RecordLiveSync({
   }, [loadDenied])
 
   // #1745: another tab of this browser has unsaved edits to this record.
-  const tabs = useRecordTabs(collection, itemId, dirty)
+  const tabs = useRecordTabs(collection, itemId, dirty, userId)
   const [tabsDismissed, setTabsDismissed] = useState(false)
   useEffect(() => {
     if (!tabs.otherDirty) setTabsDismissed(false)
@@ -410,23 +450,13 @@ export function RecordLiveSync({
       })
     }
     const unsub = realtime.on('record:uploading', applyRemote)
-    // Live comments (#280) + typing (#263): comment broadcasts refresh the
-    // thread instantly; typing pings surface via a window event CommentPanel
-    // listens for. Outbound typing rides the same record-room socket.
+    // Live comments (#280): comment broadcasts refresh the thread instantly. Typing and the
+    // other record signals (lib/presence-signals.ts) ride the record-room socket on their own.
     const unsubComment = realtime.on('record:comment', (p: any) => {
       if (p?.collection !== collection || String(p?.item) !== String(itemId)) return
       void qc.invalidateQueries({ queryKey: ['comments', collection, itemId] })
       void qc.invalidateQueries({ queryKey: ['comments-related', collection, itemId] })
     })
-    const unsubTyping = realtime.on('record:comment-typing', (p: any) => {
-      if (p?.collection !== collection || String(p?.item) !== String(itemId)) return
-      window.dispatchEvent(new CustomEvent('nvr:comment-typing', { detail: p }))
-    })
-    const onTypingOut = (e: Event) => {
-      const d = (e as CustomEvent).detail as { user_name?: string }
-      realtime.emit('comment:typing', { collection, item: String(itemId), user_name: d?.user_name })
-    }
-    window.addEventListener('nvr:comment-typing-out', onTypingOut)
     // Hosts whose record-room socket is separate from the feed socket (admin
     // presence v2) relay inbound announcements as this window event instead.
     const onRelayed = (e: Event) => applyRemote((e as CustomEvent).detail)
@@ -436,8 +466,6 @@ export function RecordLiveSync({
       window.removeEventListener('nvr:record-uploading', onRelayed)
       unsub()
       unsubComment()
-      unsubTyping()
-      window.removeEventListener('nvr:comment-typing-out', onTypingOut)
     }
   }, [realtime, collection, itemId, qc])
 
@@ -459,7 +487,13 @@ export function RecordLiveSync({
 
   const flows = Object.values(automation)
   const showTabs = tabs.otherDirty && !tabsDismissed && !dirty && !gone
-  if (!gone && flows.length === 0 && !showTabs && (!realtime || (!flash && uploads.length === 0)))
+  if (
+    !gone &&
+    flows.length === 0 &&
+    !showTabs &&
+    !importing &&
+    (!realtime || (!flash && uploads.length === 0))
+  )
     return null
   return (
     <div className='space-y-2'>
@@ -517,6 +551,20 @@ export function RecordLiveSync({
           >
             Dismiss
           </button>
+        </div>
+      )}
+      {importing && !gone && (
+        <div
+          data-record-importing
+          role='status'
+          className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+        >
+          <FileUp className='h-4 w-4 shrink-0 animate-pulse text-amber-500' />
+          <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
+            <span className='font-semibold'>An import is updating this record</span> — the changed
+            fields refresh here as it goes.
+            {dirty ? ' Your unsaved edits may be out of date; check them before saving.' : ''}
+          </p>
         </div>
       )}
       {flows.length > 0 && !gone && (

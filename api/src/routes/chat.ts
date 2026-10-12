@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
@@ -24,15 +25,31 @@ import { clearRoomTypeCache, roomForRecord, roomRecordFacts } from '../services/
 import {
   ChatSendError,
   chatColumns,
-  loadMessage,
   parseJsonList,
   postChatMessage,
   redeemReplyToken,
   touchWatermark,
   upsertMembership
 } from '../services/chat-send.js'
+import {
+  castVote,
+  closeDuePolls,
+  closePoll,
+  createPoll,
+  loadPolls
+} from '../services/chat-polls.js'
+import { dropEmbedding, indexChatMessage, searchByMeaning } from '../services/chat-semantic.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import {
+  loadVisibleMessage,
+  nonAdminsFor,
+  OPS_ONLY_CODE,
+  OPS_ONLY_MESSAGE,
+  opsOnlyHider,
+  patchOpensOpsRoom
+} from '../services/ops-room-guard.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { announceChatRead } from '../services/user-sync.js'
 
 /**
  * Chat (`/api/chat`).
@@ -83,9 +100,11 @@ export async function chatRoutes(app: FastifyInstance) {
     const cols = await chatColumns()
     const limit = Math.min(Number(q.limit ?? 200) || 200, 500)
     const thread = q.thread ? Number(q.thread) : null
+    // #1967 — the assistant's ops posts are for administrators only.
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
 
     const base = () => {
-      const qb = db('chat_messages').where({ room })
+      const qb = hideOps(db('chat_messages').where({ room }))
       if (cols.has('parent_id')) {
         if (thread) qb.andWhere((w) => w.where('parent_id', thread).orWhere('id', thread))
         else qb.whereNull('parent_id')
@@ -158,14 +177,16 @@ export async function chatRoutes(app: FastifyInstance) {
       rows = older.slice(0, limit).reverse()
     }
 
-    const data = await decorateMessages(rows, cols)
+    const data = await decorateMessages(rows, cols, hideOps, String(req.user!.id))
     return { data, meta: { has_older: hasOlder, has_newer: hasNewer, anchor: anchorId } }
   })
 
   /** Reactions, masquerade names, quotes and thread summaries for a window. */
   async function decorateMessages(
     rows: Array<Record<string, unknown>>,
-    cols: Set<string>
+    cols: Set<string>,
+    hideOps: (qb: Knex.QueryBuilder) => Knex.QueryBuilder = (qb) => qb,
+    viewerId?: string
   ): Promise<Array<Record<string, unknown>>> {
     const masqAdmins = [
       ...new Set(
@@ -210,7 +231,7 @@ export async function chatRoutes(app: FastifyInstance) {
       : []
     const quotes = new Map<number, Record<string, unknown>>()
     if (quoteIds.length) {
-      const qrows = (await db('chat_messages')
+      const qrows = (await hideOps(db('chat_messages'))
         .whereIn('id', quoteIds)
         .select('id', 'sender_name', 'message', 'deleted_at', 'attachments')) as Array<
         Record<string, unknown>
@@ -261,8 +282,13 @@ export async function chatRoutes(app: FastifyInstance) {
       }
     }
 
+    // Polls (#2337), one batched read; due polls close lazily here too.
+    const polls = await loadPolls(ids, String(viewerId ?? ''))
+    if ([...polls.values()].some((p) => !p.closed_at && p.closed)) void closeDuePolls(app)
+
     return rows.map((r) => ({
       ...r,
+      poll: polls.get(Number(r.id)) ?? null,
       message: r.deleted_at ? '' : r.message,
       attachments: r.deleted_at ? [] : parseAttachments(r.attachments),
       reactions: reactionsByMsg.get(Number(r.id)) ?? [],
@@ -334,6 +360,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
     await touchWatermark(String(req.user!.id), room)
+    announceChatRead(String(req.user!.id), room)
     return { data: { room, read: true } }
   })
 
@@ -342,6 +369,9 @@ export async function chatRoutes(app: FastifyInstance) {
   app.post<{ Params: { room: string } }>('/rooms/:room/join', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    // #1967 — the ops channel (or any channel holding assistant ops posts) only admits admins.
+    if ((await nonAdminsFor(room, [String(req.user!.id)])).length)
+      return reply.code(403).send({ error: OPS_ONLY_MESSAGE, code: OPS_ONLY_CODE })
     // Joining starts the read watermark NOW — a room's whole history is not
     // something the newcomer has to catch up on (General holds years of it).
     await upsertMembership(String(req.user!.id), room, { last_read_at: new Date() })
@@ -428,7 +458,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** Toggle a reaction. Same fixed palette client and server. */
   app.post<{ Params: { id: string } }>('/messages/:id/reactions', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg) return reply.code(404).send({ error: 'Not found' })
     if (!(await canSeeRoom(req.user!, String(msg.room)))) return reply.code(403).send(forbidden)
     const emoji = String((req.body as { emoji?: string })?.emoji ?? '')
@@ -452,7 +482,7 @@ export async function chatRoutes(app: FastifyInstance) {
    *  edit fixes words, it doesn't re-page people. */
   const EDIT_WINDOW_MS = 15 * 60_000
   app.patch<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg) return reply.code(404).send({ error: 'Not found' })
     if (String(msg.sender ?? '').toUpperCase() !== String(req.user!.id).toUpperCase()) {
       return reply.code(403).send({ error: 'You can only edit your own messages' })
@@ -480,6 +510,9 @@ export async function chatRoutes(app: FastifyInstance) {
       editPatch.time_refs = refs.length ? JSON.stringify(refs) : null
     }
     await db('chat_messages').where('id', msg.id).update(editPatch)
+    void dropEmbedding(Number(msg.id)).then(() =>
+      indexChatMessage(Number(msg.id), String(msg.room), text)
+    )
     // The send is an accountability record (accountability='activity' on
     // chat_messages) — a rewrite of that record must be too.
     void logActivity({
@@ -496,7 +529,7 @@ export async function chatRoutes(app: FastifyInstance) {
   /** Soft delete — own message, or admin. The row survives as a tombstone so
    *  the conversation's shape (and reply context) stays honest. */
   app.delete<{ Params: { id: string } }>('/messages/:id', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg) return reply.code(404).send({ error: 'Not found' })
     const own = String(msg.sender ?? '').toUpperCase() === String(req.user!.id).toUpperCase()
     if (!own && !req.isAdmin) {
@@ -506,6 +539,7 @@ export async function chatRoutes(app: FastifyInstance) {
       .where('id', msg.id)
       .update({ message: '', attachments: null, deleted_at: new Date() })
     await db('nivaro_chat_reactions').where({ message_id: msg.id }).del()
+    void dropEmbedding(Number(msg.id))
     // Admins may delete OTHER people's messages — the log records who did.
     void logActivity({
       action: 'chat-message-delete',
@@ -532,6 +566,7 @@ export async function chatRoutes(app: FastifyInstance) {
       to?: string
       has_attachment?: string
       mentions_me?: string
+      meaning?: string
     }
     const term = String(q.q ?? '').trim()
     const filtered =
@@ -542,7 +577,8 @@ export async function chatRoutes(app: FastifyInstance) {
     if (rooms.length === 0) return { data: [] }
     const cols = await chatColumns()
     const me = String(req.user!.id).toUpperCase()
-    const rows = await db('chat_messages')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = await hideOps(db('chat_messages'))
       .whereIn('room', rooms.slice(0, 200))
       .whereNull('deleted_at')
       .modify((qb) => {
@@ -579,7 +615,164 @@ export async function chatRoutes(app: FastifyInstance) {
         'date_created',
         ...(cols.has('parent_id') ? ['parent_id'] : [])
       )
-    return reply.send({ data: rows })
+    const exact: Array<Record<string, unknown>> = (rows as Array<Record<string, unknown>>).map(
+      (r) => ({ ...r, match: 'exact' })
+    )
+
+    // By meaning (#2354): after the exact matches, messages that say the same
+    // thing in other words. `rooms` is already the asker's own visible set.
+    // Only for a plain text query — a sender/date/attachment filter narrows by
+    // fact, and meaning hits would not honour it.
+    const plain = !q.sender && !q.from && !q.to && !q.has_attachment && !q.mentions_me
+    if (term.length >= 3 && plain && q.meaning !== '0') {
+      try {
+        const hits = await searchByMeaning(term, rooms, {
+          limit: 20,
+          exclude: new Set(exact.map((r) => Number(r.id)))
+        })
+        if (hits.length) {
+          const ids = hits.map((h) => h.id)
+          const found = (await db('chat_messages')
+            .whereIn('id', ids)
+            .whereIn('room', rooms.slice(0, 200))
+            .whereNull('deleted_at')
+            .select(
+              'id',
+              'room',
+              'sender',
+              'sender_name',
+              'message',
+              'date_created',
+              ...(cols.has('parent_id') ? ['parent_id'] : [])
+            )) as Array<Record<string, unknown>>
+          const byId = new Map(found.map((r) => [Number(r.id), r]))
+          for (const h of hits) {
+            const r = byId.get(h.id)
+            if (r) exact.push({ ...r, match: 'meaning', score: Math.round(h.score * 100) / 100 })
+          }
+        }
+      } catch (err) {
+        app.log.warn({ err }, 'chat meaning search failed')
+      }
+    }
+    return reply.send({ data: exact })
+  })
+
+  // ── Slash commands (#2338) ────────────────────────────────────────────────
+
+  /** Extension-registered commands for the composer's `/` list. */
+  app.get('/commands', async () => {
+    const { listChatCommands } = await import('../services/chat-commands.js')
+    return { data: await listChatCommands() }
+  })
+
+  /** Run an extension command AS the caller, in a room they can see. */
+  app.post<{ Params: { name: string } }>('/commands/:name/run', async (req, reply) => {
+    const b = req.body as { room?: string; args?: string }
+    const room = String(b.room ?? '')
+    if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    const { runChatCommand } = await import('../services/chat-commands.js')
+    let out: Awaited<ReturnType<typeof runChatCommand>>
+    try {
+      out = await runChatCommand(req.params.name, String(b.args ?? ''), {
+        userId: String(req.user!.id),
+        room
+      })
+    } catch (err) {
+      app.log.warn({ err, command: req.params.name }, 'chat command failed')
+      return reply.code(502).send({ error: 'That command failed' })
+    }
+    if (!out) return reply.code(404).send({ error: 'Unknown command' })
+    let posted: number | null = null
+    if (out.post) {
+      try {
+        const row = await postChatMessage(
+          app,
+          {
+            user: req.user!,
+            isAdmin: !!req.isAdmin,
+            masqueradeAdminId: req.masqueradeAdminId ?? null
+          },
+          { room, message: out.post }
+        )
+        posted = row.id
+      } catch (err) {
+        if (err instanceof ChatSendError)
+          return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+        throw err
+      }
+    }
+    return { data: { posted_message_id: posted, reply: out.reply ?? null } }
+  })
+
+  // ── Polls (#2337) ─────────────────────────────────────────────────────────
+
+  /** Post a poll into a room. The question is the message; options + votes
+   *  live in nivaro_chat_polls / nivaro_chat_poll_votes. */
+  app.post('/polls', async (req, reply) => {
+    const b = req.body as {
+      room?: string
+      question?: string
+      options?: unknown
+      multiple?: boolean
+      anonymous?: boolean
+      closes_at?: string | null
+      parent_id?: number | null
+    }
+    try {
+      const out = await createPoll(
+        app,
+        {
+          user: req.user!,
+          isAdmin: !!req.isAdmin,
+          masqueradeAdminId: req.masqueradeAdminId ?? null
+        },
+        {
+          room: String(b.room ?? ''),
+          question: String(b.question ?? ''),
+          options: b.options,
+          multiple: !!b.multiple,
+          anonymous: !!b.anonymous,
+          closesAt: b.closes_at ?? null,
+          parentId: b.parent_id ?? null
+        }
+      )
+      return reply.code(201).send({ data: out })
+    } catch (err) {
+      if (err instanceof ChatSendError)
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      throw err
+    }
+  })
+
+  /** Vote (or change a vote). `options` = the chosen option indexes; an empty
+   *  list withdraws the vote. */
+  app.post<{ Params: { id: string } }>('/polls/:id/vote', async (req, reply) => {
+    const out = await castVote(
+      app,
+      req.user!,
+      Number(req.params.id),
+      (req.body as { options?: unknown })?.options
+    )
+    if (!out.ok) return reply.code(out.status).send({ error: out.error })
+    return { data: { voted: true } }
+  })
+
+  /** Close a poll now — its author, or an administrator. */
+  app.post<{ Params: { id: string } }>('/polls/:id/close', async (req, reply) => {
+    const p = await db('nivaro_chat_polls')
+      .where('id', Number(req.params.id))
+      .first()
+      .catch(() => null)
+    if (!p) return reply.code(404).send({ error: 'Not found' })
+    if (!(await canSeeRoom(req.user!, String(p.room)))) return reply.code(403).send(forbidden)
+    const own = String(p.created_by ?? '').toUpperCase() === String(req.user!.id).toUpperCase()
+    if (!own && !req.isAdmin)
+      return reply
+        .code(403)
+        .send({ error: 'Only the poll author or an administrator can close it' })
+    const closed = await closePoll(app, Number(p.id))
+    return { data: { closed } }
   })
 
   /**
@@ -591,7 +784,8 @@ export async function chatRoutes(app: FastifyInstance) {
     if (rooms.length === 0) return { data: [] }
     const cols = await chatColumns()
     const me = String(req.user!.id).toUpperCase()
-    const rows = (await db('chat_messages')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = (await hideOps(db('chat_messages'))
       .whereIn('room', rooms.map((r) => r.room).slice(0, 300))
       .whereNull('deleted_at')
       .whereRaw('(sender IS NULL OR UPPER(CAST(sender AS NVARCHAR(36))) <> ?)', [me])
@@ -697,7 +891,7 @@ export async function chatRoutes(app: FastifyInstance) {
   /** Toggle a pin. Any room member may pin/unpin — a pin is shared context,
    *  not a moderation act. */
   app.post<{ Params: { id: string } }>('/messages/:id/pin', async (req, reply) => {
-    const msg = await db('chat_messages').where('id', Number(req.params.id)).first()
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
     if (!(await canSeeRoom(req.user!, String(msg.room)))) return reply.code(403).send(forbidden)
     const existing = await db('nivaro_chat_pins')
@@ -717,8 +911,11 @@ export async function chatRoutes(app: FastifyInstance) {
   app.get<{ Params: { room: string } }>('/rooms/:room/pins', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
-    const rows = await db('nivaro_chat_pins as p')
-      .join('chat_messages as m', 'm.id', 'p.message_id')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = await hideOps(
+      db('nivaro_chat_pins as p').join('chat_messages as m', 'm.id', 'p.message_id'),
+      'm.ops_only'
+    )
       .where('p.room', room)
       .whereNull('m.deleted_at')
       .orderBy('p.id', 'desc')
@@ -734,7 +931,7 @@ export async function chatRoutes(app: FastifyInstance) {
   // Saved messages (#148): personal cross-room bookmarks.
   app.post<{ Params: { id: string } }>('/messages/:id/save', async (req, reply) => {
     const mid = Number(req.params.id)
-    const msg = (await db('chat_messages').where({ id: mid }).first('id', 'room')) as
+    const msg = (await loadVisibleMessage(mid, !!req.isAdmin)) as
       | { id: number; room: string }
       | undefined
     if (!msg) return reply.code(404).send({ error: 'Message not found' })
@@ -752,8 +949,11 @@ export async function chatRoutes(app: FastifyInstance) {
     return reply.send({ data: { saved: true } })
   })
   app.get('/saved', async (req, reply) => {
-    const rows = (await db('nivaro_chat_saved as s')
-      .join('chat_messages as m', 's.message_id', 'm.id')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = (await hideOps(
+      db('nivaro_chat_saved as s').join('chat_messages as m', 's.message_id', 'm.id'),
+      'm.ops_only'
+    )
       .where('s.user', req.user!.id)
       .orderBy('s.id', 'desc')
       .limit(100)
@@ -866,8 +1066,8 @@ export async function chatRoutes(app: FastifyInstance) {
       }
       const until = req.body?.until ? new Date(req.body.until) : null
       const hasThreads = await hasColumn('chat_messages', 'parent_id')
-      const msgs = (await db('chat_messages')
-        .where({ room })
+      const hideOps = await opsOnlyHider(!!req.isAdmin)
+      const msgs = (await hideOps(db('chat_messages').where({ room }))
         .where('date_created', '>', since)
         .modify((qb) => {
           if (until && !Number.isNaN(until.getTime())) qb.where('date_created', '<=', until)
@@ -965,6 +1165,16 @@ export async function chatRoutes(app: FastifyInstance) {
         bot_user_id: name ? await botUserId().catch(() => null) : null
       }
     }
+  })
+
+  /** Stop the assistant's streaming answer (#1810) — only the person who asked. */
+  app.post<{ Params: { id: string } }>('/bot/streams/:id/stop', async (req, reply) => {
+    const { stopBotStream } = await import('../services/chat-bot-stream.js')
+    const r = await stopBotStream(app, req.params.id, String(req.user!.id))
+    if (r === 'forbidden')
+      return reply.code(403).send({ error: 'Only the person who asked can stop this answer' })
+    if (r === 'gone') return reply.code(404).send({ error: 'That answer is no longer running' })
+    return { data: { status: r } }
   })
 
   // ── Channels ──────────────────────────────────────────────────────────────
@@ -1076,6 +1286,17 @@ export async function chatRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'A role-scoped channel needs a role' })
     }
     if (patch.visibility && patch.visibility !== 'role') patch.role = null
+    if (
+      await patchOpensOpsRoom(`ch:${row.key}`, {
+        visibility: patch.visibility,
+        role: patch.visibility === 'role' || patch.role ? (patch.role ?? row.role) : undefined
+      })
+    )
+      return reply.code(403).send({
+        error:
+          'This channel holds the assistant’s operations posts — it can only be open to administrators.',
+        code: OPS_ONLY_CODE
+      })
     if (Object.keys(patch).length > 0) {
       await db('nivaro_chat_channels').where('id', row.id).update(patch)
       clearChatCaches()
@@ -1116,6 +1337,8 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const b = req.body as { user_id?: string }
     if (!b.user_id) return reply.code(400).send({ error: 'user_id is required' })
+    if ((await nonAdminsFor(row.room, [String(b.user_id)])).length)
+      return reply.code(403).send({ error: OPS_ONLY_MESSAGE, code: OPS_ONLY_CODE })
     await upsertMembership(String(b.user_id), row.room, {})
     void logActivity({
       action: 'chat-channel-member-add',
@@ -1278,6 +1501,12 @@ export async function chatRoutes(app: FastifyInstance) {
     )
     const toAdd = [...active].filter((u) => !already.has(u))
     const skipped = candidates.length - toAdd.length
+    const refused = await nonAdminsFor(room, toAdd)
+    if (refused.length)
+      return reply.code(403).send({
+        error: `${OPS_ONLY_MESSAGE} ${refused.length} of the people in ${source} are not administrators.`,
+        code: OPS_ONLY_CODE
+      })
     if (b.dry_run) return { data: { would_add: toAdd.length, skipped, source } }
     for (const u of toAdd) await upsertMembership(u, room, { last_read_at: new Date() })
     void logActivity({
@@ -1604,7 +1833,7 @@ export async function chatRoutes(app: FastifyInstance) {
 
   /** Copy a message into the record's Notes thread, credited to its author (#946). */
   app.post<{ Params: { id: string } }>('/messages/:id/to-notes', async (req, reply) => {
-    const msg = await loadMessage(Number(req.params.id))
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
     const room = String(msg.room)
     const { resolveRoomRecord } = await import('../services/chat-records.js')
@@ -1669,7 +1898,7 @@ export async function chatRoutes(app: FastifyInstance) {
   })
 
   app.post<{ Params: { id: string } }>('/messages/:id/attach-to-record', async (req, reply) => {
-    const msg = await loadMessage(Number(req.params.id))
+    const msg = await loadVisibleMessage(Number(req.params.id), !!req.isAdmin)
     if (!msg || msg.deleted_at) return reply.code(404).send({ error: 'Not found' })
     const b = req.body as { file_id?: string; field?: string }
     const fileId = String(b.file_id ?? '')

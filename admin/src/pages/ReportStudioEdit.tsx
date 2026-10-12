@@ -1,5 +1,5 @@
 import { createNivaro } from '@nivaro/sdk'
-import { NivaroProvider, QueryWidgetBody } from '@nivaro/shared'
+import { NivaroProvider, QueryWidgetBody, usePublishAskContext } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Activity,
@@ -3461,6 +3461,21 @@ export function ReportStudioEditPage() {
   const gf: GlobalFilters = report?.global_filters ?? {}
   const dateRange = gf.date_range ?? null
   const filterBar = gf.filter_bar ?? []
+
+  // #1837 — Ask AI on this page means this report, under the date range and
+  // filters on screen; the server re-runs its widgets as the asker.
+  usePublishAskContext(
+    id
+      ? {
+          report: {
+            id,
+            label: report?.name,
+            date_range: dateRange,
+            entity_filters: entityFilters
+          }
+        }
+      : null
+  )
 
   // User Scopes: the viewer's DEFAULTS pre-select the preview filter chips
   // (view state only — never written into the saved report config). Widget

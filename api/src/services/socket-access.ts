@@ -321,6 +321,30 @@ export async function canSeeRecordRoom(
   }
 }
 
+/**
+ * The `ticket:<id>` live topic (who is on a support ticket, who is replying): only people who
+ * can open that ticket — the requester, the assignee, its team, administrators — the same
+ * answer GET /support/tickets/:id gives.
+ */
+export async function canJoinTicketTopic(
+  user: User,
+  ticketId: number,
+  isAdmin?: boolean
+): Promise<boolean> {
+  try {
+    if (!Number.isInteger(ticketId) || ticketId <= 0) return false
+    const { canSeeTicket } = await import('./support-tickets.js')
+    const row = await db('nivaro_tasks')
+      .where({ id: ticketId, kind: 'support' })
+      .first('id', 'created_by', 'assignee', 'team_id')
+    if (!row) return false
+    const admin = isAdmin ?? (await roleIsAdmin(user.role))
+    return await canSeeTicket({ id: String(user.id).toUpperCase(), isAdmin: admin }, row)
+  } catch {
+    return false
+  }
+}
+
 /** What a room gate knows about the socket besides its person. */
 export interface RoomContext {
   /** What signed the socket in — its own `session:` / `masq:` rooms are allowed. */
@@ -351,6 +375,8 @@ export async function roomStillAllowed(
     if (room.startsWith('ops:')) {
       const spec = opsTopicGate(room.slice(4))
       if (!spec) return await isAdmin()
+      if (spec.gate === 'ticket')
+        return await canJoinTicketTopic(user, Number(spec.topic.split(':')[1]), await isAdmin())
       return spec.gate === 'auth' ? true : await isAdmin()
     }
     if (room.startsWith('user:'))

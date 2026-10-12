@@ -57,6 +57,10 @@ export type {
   RealtimeStatus,
   RenderFieldProps,
   ReportViewProps,
+  SocketLike,
+  SocketRealtime,
+  SocketRealtimeOptions,
+  SocketRealtimeWindowEvent,
   TokenResolver
 } from '@nivaro/shared'
 // ─── Realtime sprint 2026-08-24 ─────────────────────────────────────────────
@@ -75,6 +79,7 @@ export type {
 // field-interface registry, and the utility components/hooks below.
 // Record form & grids batch (2026-09-30): people-only user pickers (#732)
 // and the plan grid host slot (#842).
+// Presence, do not disturb and cross-tab sync (a host mounts useUserSync once in its shell)
 export {
   ACTIVE_USER_OPTION_FILTER,
   AccessDeniedPanel,
@@ -94,6 +99,9 @@ export {
   type ApiRequestLogFilters,
   ApiUpdateBanner,
   AsItWasSheet,
+  AskContextProvider,
+  type AskPageContext,
+  AskPanel,
   AuthorRolesButton,
   type AutofillRun,
   AutofillRunsChip,
@@ -154,8 +162,11 @@ export {
   choiceLabel,
   clipEndOffset,
   conditionsToFilter,
+  configureTabSound,
+  configureUserSync,
   createGatedClient,
   createLeaderSocket,
+  createSocketRealtime,
   DataTable,
   DbTuningView,
   DEMO_USER,
@@ -165,7 +176,9 @@ export {
   type DelegationConsoleViewProps,
   DeliveryChips,
   DisplayPrefsCard,
+  DndMark,
   DocumentAutofillButton,
+  DoNotDisturbRow,
   DrilldownContext,
   DrilldownViewsContext,
   decodePrefill,
@@ -294,6 +307,7 @@ export {
   installReplayTail,
   isChatPanelPinned,
   isCleanRecording,
+  JobsTray,
   JsonMapEditor,
   LearningPathCard,
   listFieldInterfaces,
@@ -338,6 +352,7 @@ export {
   obligationQueryParams,
   onFieldInterfacesChange,
   onIdleChange,
+  openAskPanel,
   openCatalogItem,
   openChatRoom,
   openDmWith,
@@ -464,6 +479,7 @@ export {
   setRecordingSelf,
   setServerClockOffset,
   setTimeDisplay,
+  signalSentence,
   splitMessageTokens,
   startApiVersionWatch,
   startAutofillRun,
@@ -494,6 +510,7 @@ export {
   useAfterIdle,
   useApiFetchConfig,
   useApiUpdate,
+  useAskRecordDrag,
   useAutofillRuns,
   useAvailableBulkActions,
   useChannelAdmin,
@@ -510,6 +527,7 @@ export {
   useCurrentHelpVideoPage,
   useDebounced,
   useDeleteMessage,
+  useDndActive,
   useDrilldown,
   useDrilldownViews,
   useEditMessage,
@@ -544,9 +562,12 @@ export {
   usePeerReadAt,
   usePersonProfile,
   usePlanGridHost,
+  usePublishAskContext,
   useQuickPickerSteps,
   useRealtimeStatus,
   useRecordIntegrationActivity,
+  useRecordSignalPeers,
+  useRecordSignalWhile,
   useRefreshSignals,
   useRequiredVideos,
   useRoomMembership,
@@ -561,9 +582,11 @@ export {
   useSubscriptionMutations,
   useTogglePin,
   useToggleReaction,
+  useTopicPresence,
   useTypingIndicator,
   useUnreadChirp,
   useUserSearch,
+  useUserSync,
   type VideoEdits,
   validateExpression,
   viewAs,
@@ -615,6 +638,18 @@ export {
   useTabState,
   useWatchFields
 } from './hooks/useLayoutHooks'
+// Live data hooks (#1751) — reads that patch themselves from the host's realtime adapter
+export {
+  type LiveHookOptions,
+  type LiveListOptions,
+  type LiveListResult,
+  type LiveRecordOptions,
+  type LiveRecordResult,
+  liveListKey,
+  liveRecordKey,
+  useLiveList,
+  useLiveRecord
+} from './hooks/useLive'
 // Hooks
 export { useNivaroForm } from './hooks/useNivaroForm'
 export type { RelationOption } from './hooks/useRelationOptions'

@@ -155,7 +155,9 @@ export async function bulkActionsRoutes(app: FastifyInstance) {
 
     let result: Awaited<ReturnType<typeof runDefinition>>
     try {
-      result = await runDefinition(def, ids, reason, req)
+      result = await runDefinition(def, ids, reason, req, {
+        progress: (req.query as Record<string, unknown>)?.progress
+      })
     } catch (err) {
       return reply.code(400).send({ error: err instanceof Error ? err.message : String(err) })
     }

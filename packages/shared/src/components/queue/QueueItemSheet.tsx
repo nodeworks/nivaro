@@ -7,16 +7,18 @@ interface ReqDialogState {
   transitionId: string
   revision: number
 }
+
 import { toast } from 'sonner'
 import { useItemNavigation, useNivaroClient } from '../../context'
+import { get, post } from '../../lib/commands'
+import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
+import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
+import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { transitionRequirementsFromError } from '../panels/PipelinePanel'
 import {
   TransitionRequirementsDialog,
   type TransitionRequirementsPayload
 } from '../panels/TransitionRequirementsDialog'
-import { get, post } from '../../lib/commands'
-import { type ColumnFormatConfig, formatMultiValue } from '../../lib/format-value'
-import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { Badge } from '../ui/badge'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { OwnerAvatars } from './OwnerAvatars'
@@ -190,6 +192,16 @@ export function QueueItemSheet({
       qc.invalidateQueries({ queryKey: ['queue-sheet-comments', collection, itemId] })
     },
     onError: () => toast.error('Failed to post comment')
+  })
+
+  // #1877: the sheet follows its record the way the full record page does.
+  useLiveRecord(collection, itemId, (batch) => {
+    if (batchTouches(batch, LIVE_ASPECTS.state)) {
+      void qc.invalidateQueries({ queryKey: ['queue-sheet-instance', collection, itemId] })
+      if (!batch.own) refetchItems()
+    }
+    if (batchTouches(batch, LIVE_ASPECTS.comments))
+      void qc.invalidateQueries({ queryKey: ['queue-sheet-comments', collection, itemId] })
   })
 
   const transitions = instance?.available_transitions ?? []

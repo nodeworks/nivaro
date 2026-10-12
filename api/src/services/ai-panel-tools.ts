@@ -302,7 +302,7 @@ async function savedView(
     fakeReq
   )) as { data?: unknown[]; total?: number }
   const rel = await chatRelationsFor(collection)
-  const rows = await chatLabelForeignKeys(res.data ?? [], rel)
+  const rows = await chatLabelForeignKeys(user, res.data ?? [], rel)
   const total = typeof res.total === 'number' ? res.total : rows.length
   return {
     result: {

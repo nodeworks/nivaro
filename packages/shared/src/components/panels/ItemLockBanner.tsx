@@ -5,6 +5,7 @@ import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { idleState } from '../../lib/idle'
 import { useOptionalRealtime } from '../../lib/realtime'
+import { announceRecordTabs, useRecordTabsSignal } from '../../lib/record-tabs'
 import { Button } from '../ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 
@@ -31,7 +32,7 @@ export function useItemLock(
   enabled: boolean
 ) {
   const client = useNivaroClient()
-  const { isAdmin } = useItemEditAuth()
+  const { isAdmin, userId } = useItemEditAuth()
   const [lockHolder, setLockHolder] = useState<LockHolder | null>(null)
   const [acquired, setAcquired] = useState(false)
   const [takingOver, setTakingOver] = useState(false)
@@ -104,6 +105,12 @@ export function useItemLock(
             const status = e.status ?? e.response?.status
             if (status !== 404 && status !== 409) return
             const body = (e.response?.data ?? e.response) as LockHolder | undefined
+            // Nobody holds it any more — another window of this person let it
+            // go (#2131) or it lapsed: take it back rather than edit unlocked.
+            if (status === 404 && !body?.locked_by) {
+              void acquire()
+              return
+            }
             stopHeartbeat()
             acquiredRef.current = false
             setAcquired(false)
@@ -202,10 +209,19 @@ export function useItemLock(
       stopHeartbeat()
       if (acquiredRef.current) {
         acquiredRef.current = false
-        client.request(del(`/item-locks/${collection}/${item}/lock`)).catch(() => {})
+        client
+          .request(del(`/item-locks/${collection}/${item}/lock`))
+          .then(() => announceRecordTabs(userId, 'lock-released', collection, item))
+          .catch(() => {})
       }
     }
-  }, [enabled, collection, item, acquire, client, stopHeartbeat])
+  }, [enabled, collection, item, acquire, client, stopHeartbeat, userId])
+
+  // #2131: the same person's other window (a popped-out record, another tab)
+  // just released the lock while this one still edits — take it straight back.
+  useRecordTabsSignal(userId, 'lock-released', collection, item, () => {
+    if (enabled && acquiredRef.current) void acquire()
+  })
 
   // ── Lock handoff (#286) ─────────────────────────────────────────────────
   // Holder side: a live 'lock:requested' for THIS record shows a toast with

@@ -4,6 +4,7 @@ import type { DocSection } from './types.js'
 
 export * from './sections/access-insights.js'
 export * from './sections/admin-ux.js'
+export * from './sections/ai-ask-context.js'
 export * from './sections/ai-conversations.js'
 export * from './sections/ai-design.js'
 export * from './sections/ai-explain.js'
@@ -30,12 +31,14 @@ export * from './sections/import-templates.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
-export * from './sections/live-ops.js'
-export * from './sections/live-records.js'
 export * from './sections/live-lists.js'
+export * from './sections/live-ops.js'
+export * from './sections/live-progress.js'
+export * from './sections/live-records.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
+export * from './sections/offline-popout.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
@@ -68,6 +71,7 @@ import {
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
+import { aiAskContextDocs } from './sections/ai-ask-context.js'
 import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
 import { aiExplainGuide } from './sections/ai-explain.js'
@@ -240,6 +244,7 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
+import { collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -247,8 +252,8 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
-import { collabLiveLists } from './sections/live-lists.js'
-import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
+import { collabLiveProgress } from './sections/live-progress.js'
+import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -286,11 +291,13 @@ import {
   obsTrafficMapLenses,
   obsTrafficMapPlatform
 } from './sections/observability.js'
+import { collabOfflinePopout } from './sections/offline-popout.js'
 import {
   dbHealthDocs,
   deploysVersionsDocs,
   instanceOverridesDocs,
   mailHarnessDocs,
+  opsAssistantDocs,
   opsConsoleDocs
 } from './sections/ops-observability.js'
 import {
@@ -371,6 +378,7 @@ import {
   sdkPipeline,
   sdkReact,
   sdkReactLayout,
+  sdkReactLive,
   sdkRealtime,
   sdkRest,
   sdkSetup,
@@ -566,6 +574,7 @@ export const navSections: NavGroup[] = [
       sdkForms,
       sdkReact,
       sdkReactLayout,
+      sdkReactLive,
       sdkNotifications,
       sdkActivity,
       sdkExternalApis,
@@ -621,6 +630,7 @@ export const navSections: NavGroup[] = [
     items: [
       aiChatDocs,
       aiQualityDocs,
+      aiAskContextDocs,
       aiConversationsDocs,
       aiPanelDocs,
       aiKnowledgeDocs,
@@ -805,8 +815,11 @@ export const navSections: NavGroup[] = [
       collabChat,
       collabItemLocking,
       collabLiveRecords,
+      collabLiveProgress,
+      collabOfflinePopout,
       collabLiveLists,
       collabLiveOps,
+      collabPresence,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,
@@ -862,6 +875,7 @@ export const navSections: NavGroup[] = [
       dbTuning,
       configReviewDocs,
       opsConsoleDocs,
+      opsAssistantDocs,
       deploysVersionsDocs,
       instanceOverridesDocs,
       mailHarnessDocs,

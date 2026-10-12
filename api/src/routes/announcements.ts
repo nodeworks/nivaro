@@ -13,6 +13,7 @@ import {
 import { isUuid, type VideoRow, viewerMaySee } from '../services/help-videos.js'
 import { sendRawMail } from '../services/mail.js'
 import { notifyUser } from '../services/notification-channels.js'
+import { announceToTenant } from '../services/record-events.js'
 import { sendSms } from '../services/sms.js'
 
 /**
@@ -471,6 +472,8 @@ export async function deliverAnnouncement(app: FastifyInstance, id: number): Pro
       is_active: channels.includes('banner') || channels.includes('login'),
       updated_at: new Date()
     })
+  // #1744 — a banner that just went live reaches open tabs now, not on the next poll.
+  if (channels.includes('banner') || channels.includes('login')) announceBannersChanged()
   return delivered
 }
 
@@ -575,6 +578,16 @@ export async function deliverScheduledAnnouncements(app: FastifyInstance): Promi
     }).catch(() => {})
   }
   return total
+}
+
+/**
+ * #1744 — banners and broadcasts changed (went live, edited, ended, deleted): a payload-free
+ * `announcements:changed` to the tenant's sockets. Each open tab re-reads GET /announcements/active,
+ * where the viewer's audience rules still apply server-side — the notice carries nothing about who
+ * the banner is for.
+ */
+function announceBannersChanged(): void {
+  announceToTenant('announcements:changed')
 }
 
 export async function announcementRoutes(app: FastifyInstance): Promise<void> {
@@ -1061,6 +1074,98 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
+  // #2379 — Draft a broadcast: bullets → a banner line, a fuller email and an
+  // SMS (≤160), for the sender to edit. Nothing is sent or saved. Same gate as
+  // sending (POST /). The provider gets the scrubbed bullets and an audience
+  // description (role names, dimension labels, counts) — never a recipient.
+  app.post('/draft', { preHandler: requireAdmin }, async (req, reply) => {
+    const b = (req.body ?? {}) as {
+      bullets?: unknown
+      audience?: Audience
+      channels?: unknown
+      severity?: string
+    }
+    const { cleanBullets, cleanDraft, DRAFT_TOOL, draftSystemPrompt, draftUserPrompt } =
+      await import('../services/broadcast-draft.js')
+    const bullets = cleanBullets(b.bullets)
+    if (bullets.length === 0)
+      return reply.code(400).send({ error: 'Write a few points to draft from first' })
+    const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+    const { generateModel } = await getAiModelSettings()
+    const client = await getAiClient({ model: generateModel })
+    if (!client)
+      return reply.code(503).send({
+        error: 'No AI provider is set up. An administrator can add one in Settings → AI Features.',
+        code: 'AI_NOT_CONFIGURED'
+      })
+    const aud: Audience = b.audience ?? {}
+    const groups = normalizeGroups(aud)
+    const roleIds = (Array.isArray(aud.roles) ? aud.roles : []).map(String)
+    const roleNames = roleIds.length
+      ? ((await db('nivaro_roles').whereIn('id', roleIds).pluck('name')) as string[])
+      : []
+    const dimCounts = new Map<string, number>()
+    for (const g of groups)
+      for (const [dim, vals] of Object.entries(g))
+        dimCounts.set(dim, (dimCounts.get(dim) ?? 0) + vals.length)
+    const dimLabels = dimCounts.size
+      ? ((await db('nivaro_scope_dimensions')
+          .whereIn('name', [...dimCounts.keys()])
+          .select('name', 'label')) as Array<{ name: string; label: string | null }>)
+      : []
+    const label = new Map(dimLabels.map((d) => [d.name, d.label || d.name]))
+    const recipients = (await resolveAudienceUsers(aud)).length
+    const channels = (Array.isArray(b.channels) ? b.channels : [])
+      .map(String)
+      .filter((c) => (CHANNELS as readonly string[]).includes(c))
+    const severity = ['info', 'warn', 'critical'].includes(String(b.severity))
+      ? String(b.severity)
+      : 'info'
+    let input: unknown
+    try {
+      const res = await client.messages.create({
+        model: generateModel,
+        max_tokens: 900,
+        system: draftSystemPrompt(),
+        tools: [DRAFT_TOOL as never],
+        tool_choice: { type: 'tool', name: DRAFT_TOOL.name },
+        messages: [
+          {
+            role: 'user',
+            content: draftUserPrompt(
+              bullets,
+              {
+                everyone: roleIds.length === 0 && groups.length === 0 && !aud.user_ids?.length,
+                roles: roleNames,
+                dimensions: [...dimCounts].map(([dim, n]) => ({
+                  label: label.get(dim) ?? dim,
+                  values: n
+                })),
+                explicit_people: aud.user_ids?.length ?? 0,
+                recipients
+              },
+              channels,
+              severity
+            )
+          }
+        ]
+      })
+      input = (res.content.find((c) => c.type === 'tool_use') as { input?: unknown } | undefined)
+        ?.input
+    } catch (err) {
+      req.log.warn({ err }, 'broadcast draft failed')
+      return reply.code(502).send({ error: 'The AI call failed. Try again in a moment.' })
+    }
+    if (!input) return reply.code(502).send({ error: 'The AI did not return a draft. Try again.' })
+    await logActivity({
+      action: 'broadcast-draft',
+      user: req.user?.id,
+      comment: `${bullets.length} point${bullets.length === 1 ? '' : 's'} · ${recipients} recipients`,
+      req
+    })
+    return { data: cleanDraft(input) }
+  })
+
   /** Who saw / received what, and when: banner dismissals (acks) + every
    *  send-channel outcome per user. */
   app.get<{ Params: { id: string } }>(
@@ -1349,6 +1454,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
         Object.assign(patch, videoRef)
       }
       await db('nivaro_announcements').where('id', row.id).update(patch)
+      announceBannersChanged()
       await logActivity({
         action: 'announcement-update',
         user: req.user?.id,
@@ -1367,6 +1473,7 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       const row = await db('nivaro_announcements').where('id', req.params.id).first('id')
       if (!row) return reply.code(404).send({ error: 'Not found' })
       await db('nivaro_announcements').where('id', row.id).del()
+      announceBannersChanged()
       await logActivity({
         action: 'announcement-delete',
         user: req.user?.id,

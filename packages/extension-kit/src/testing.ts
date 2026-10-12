@@ -11,6 +11,7 @@
  */
 import type { Knex } from 'knex'
 import type {
+  ChatCommandDef,
   ExtensionApp,
   ExtensionContext,
   ExtensionCronMeta,
@@ -448,6 +449,7 @@ export interface TestContext extends ExtensionContext {
     flowOps: FlowOpRegistration[]
     flowTriggers: FlowTriggerRegistration[]
     botTools: BotToolDef[]
+    chatCommands: ChatCommandDef[]
   }
   /** Run the registered hooks for a write, as the items service would. */
   runHooks(
@@ -560,7 +562,8 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     mailTypes: [],
     flowOps: [],
     flowTriggers: [],
-    botTools: []
+    botTools: [],
+    chatCommands: []
   }
   let nextObligation = 1
   const logAt =
@@ -683,7 +686,8 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
       post: async (room, text, o) => {
         calls.chat.push({ room, text, opts: o })
         return calls.chat.length
-      }
+      },
+      registerCommand: (def) => registered.chatCommands.push(def)
     },
     hooks: {
       before: (collection, action, fn) =>
