@@ -31,7 +31,8 @@ let sub: Redis | null = null
 
 function deliver(ev: ItemEvent): void {
   const payload = { itemMutated: { ...ev, data: null } }
-  pubsub.publish(topics.itemMutated(ev.collection, ev.item), payload)
+  // A raw bulk write (#1875) arrives as item '*' — publish it once.
+  if (ev.item !== '*') pubsub.publish(topics.itemMutated(ev.collection, ev.item), payload)
   pubsub.publish(topics.itemMutated(ev.collection, '*'), payload)
 }
 

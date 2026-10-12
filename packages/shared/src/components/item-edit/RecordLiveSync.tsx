@@ -22,6 +22,13 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
   useEffect(() => {
     if (!realtime) return
     const unsub = realtime.subscribeCollections([collection], (ev) => {
+      // A raw bulk write (#1875, item '*') may include this record: refetch it
+      // quietly — no flash, since it most likely did not change.
+      if (ev.item === '*') {
+        void qc.invalidateQueries({ queryKey: ['item', collection, itemId] })
+        void qc.invalidateQueries({ queryKey: ['pipeline-instance', collection, itemId] })
+        return
+      }
       if (String(ev.item) !== String(itemId)) return
       for (const key of [
         ['item', collection, itemId],

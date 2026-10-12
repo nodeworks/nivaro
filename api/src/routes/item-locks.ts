@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 /** The help-video editor locks a video under this name (#1523). */
 export const HELP_VIDEO_LOCK_COLLECTION = 'nivaro_help_videos'
@@ -271,7 +272,10 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     // Release all active locks when disabling
     if (!item_locking_enabled) {
       await db('nivaro_item_locks').where({ collection }).delete()
-      app.io?.to(`collection:${collection}`).emit('item-lock-disabled', { collection })
+      // Cloud: the requesting tenant's collection room (tenant-rooms.ts).
+      app.io?.to(tenantScopedRoom(`collection:${collection}`)).emit('item-lock-disabled', {
+        collection
+      })
     }
 
     await logActivity({
