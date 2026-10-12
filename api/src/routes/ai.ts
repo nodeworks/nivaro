@@ -1494,9 +1494,11 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { messages, fresh, conversation_id, save } = req.body as {
+    const { messages, fresh, conversation_id, save, context } = req.body as {
       messages?: Array<{ role: string; content: string }>
       fresh?: boolean
+      /** #1835 — the page asked from: ids and filters only, re-read below as the asker. */
+      context?: unknown
       /** #688 — deliver the answer as it is written (socket or SSE). */
       stream?: boolean
       /** #1833 — continue this stored conversation (history comes from it). */
@@ -1564,11 +1566,18 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     // offered as worked examples. Only the newest user turn is matched.
     const question = history[history.length - 1].content
     const playbooks = await retrievePlaybooks(question)
+    // #1835 #1886 #1842 #1993 #1837 — what the page handed the question,
+    // read again as the asker (unreadable ids are dropped). Last in the
+    // prompt: it changes with every page, the long prefix stays cached.
+    const { normalizeAskContext, resolveAskContext } = await import('../services/ai-ask-context.js')
+    const pageContext = await resolveAskContext(app, req.user!, normalizeAskContext(context))
     const system =
       (await buildChatSystemPrompt(req.user!, {
         playbooks: formatPlaybooksForPrompt(playbooks),
         question
-      })) + memoryBlock
+      })) +
+      memoryBlock +
+      pageContext.block
     const playbooksUsed = playbooks.length
     // `convo` below aliases `history` and grows per round — judge "standalone" now.
     const standalone = history.length === 1
@@ -1577,7 +1586,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
     const cacheKey =
       standalone && answerCacheMinutes > 0 && redis
-        ? `nvr:aichat:${req.user!.id}:${createHash('sha1').update(question.trim().toLowerCase().replace(/\s+/g, ' ')).digest('hex')}`
+        ? `nvr:aichat:${req.user!.id}:${createHash('sha1').update(question.trim().toLowerCase().replace(/\s+/g, ' ')).digest('hex')}${pageContext.fingerprint ? `:${pageContext.fingerprint}` : ''}`
         : null
     const userId = String(req.user!.id)
     const user = req.user!
@@ -1641,15 +1650,18 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           shouldStop: stopper ? () => stopper.stopped() : undefined,
           warn: (err, msg) => req.log.warn({ err }, msg)
         })
-        const { trace, proposals, plans } = result
+        const { proposals, plans } = result
+        // The context rides the trace: it names what the answer read, and a
+        // tool outside REPLAYABLE_TOOLS keeps the answer its author's (#1809).
+        const trace = pageContext.trace ? [pageContext.trace, ...result.trace] : result.trace
         await logActivity({
           action: 'ai-chat',
           user: user.id,
           comment: result.stopped
-            ? `stopped after ${trace.length} tool call(s)`
+            ? `stopped after ${result.trace.length} tool call(s)`
             : result.truncated
-              ? `tool-call limit after ${trace.length} tool call(s)`
-              : `${trace.length} tool call(s)`,
+              ? `tool-call limit after ${result.trace.length} tool call(s)`
+              : `${result.trace.length} tool call(s)`,
           req
         })
         if (result.truncated) {
@@ -1671,12 +1683,12 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         // becomes a playbook. Follow-ups ("and for 2025?") are skipped —
         // they mean nothing without the conversation. A stopped answer is
         // not one either: it was never finished.
-        if (standalone && trace.length > 0 && !result.stopped) {
+        if (standalone && result.trace.length > 0 && !result.stopped && !pageContext.trace) {
           void recordPlaybook({
             userId: user.id,
             requestId,
             question,
-            trace,
+            trace: result.trace,
             answer: text,
             rounds: result.rounds
           }).catch((err) => req.log.warn({ err }, 'AI playbook record failed'))

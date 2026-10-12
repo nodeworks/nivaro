@@ -1,3 +1,4 @@
+import { openAskPanel } from '@nivaro/shared'
 import { useMutation, useQuery } from '@tanstack/react-query'
 import { ArrowRight, CornerDownLeft, FileText, History, Plus, Search, Sparkles } from 'lucide-react'
 import { useEffect, useState } from 'react'
@@ -267,6 +268,7 @@ export function CommandPalette() {
   const showAiRow = q.length >= 10 && q.split(/\s+/).length >= 3
 
   const hasResults =
+    !!q ||
     pageMatches.length > 0 ||
     records.length > 0 ||
     semantic.length > 0 ||
@@ -294,16 +296,32 @@ export function CommandPalette() {
                 <CommandEmpty>{isFetching ? 'Searching…' : 'No results found.'}</CommandEmpty>
               )}
 
-              {showAiRow && (
+              {q && (
                 <CommandGroup heading='Ask AI'>
+                  {/* #1835 — the question opens the Ask AI panel on THIS page,
+                      with the page's record, list or report as context. */}
                   <CommandItem
-                    value={`ai-${q}`}
-                    onSelect={() => aiNavigate.mutate(q)}
+                    value={`ask-${q}`}
+                    data-palette-ask
+                    onSelect={() => {
+                      setOpen(false)
+                      openAskPanel(q)
+                    }}
                     className='text-[13px]'
                   >
                     <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
-                    {aiNavigate.isPending ? 'Thinking…' : <>Find records: “{q}”</>}
+                    Ask… “{q}”<span className='ml-auto text-[11px] text-muted-foreground'>⌘J</span>
                   </CommandItem>
+                  {showAiRow && (
+                    <CommandItem
+                      value={`ai-${q}`}
+                      onSelect={() => aiNavigate.mutate(q)}
+                      className='text-[13px]'
+                    >
+                      <Sparkles className='mr-2 h-4 w-4 text-nvr-cyan' />
+                      {aiNavigate.isPending ? 'Thinking…' : <>Find records: “{q}”</>}
+                    </CommandItem>
+                  )}
                 </CommandGroup>
               )}
 
