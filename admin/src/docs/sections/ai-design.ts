@@ -30,12 +30,12 @@ export const aiDesignDocs: DocSection = {
     },
     {
       type: 'p',
-      text: "Edit the change set (remove grants, field limits or page restrictions, rename), then **Run simulator on the edits**: the simulator shows each collection's create/read/update/delete outcome and how many rows a member would see under the read filter. **Create role** is only possible while the simulation matches the proposal — the server checks the simulation's fingerprint. User Scopes belong to people, so they are listed for you to set on each member after adding them."
+      text: "Edit the change set (remove grants, field limits or page restrictions, rename), then **Run simulator on the edits**: the simulator shows each collection's create/read/update/delete outcome and how many rows a member would see under the read filter. **Create role** is only possible while the simulation matches the proposal — the server checks the simulation's fingerprint. User Scopes belong to people, so creating the role does not apply them: they come back as `scopes_to_set_per_member` for you to set on each member after adding them."
     },
     { type: 'h2', id: 'ai-design-role-views', text: 'Suggested views per role' },
     {
       type: 'p',
-      text: "Roles → a role → **Suggested views** → **Find suggestions**. The API log of the last 14 days shows which filters people applied by hand in collection lists. A filter set counts when two or more members of the role applied it, or one member applied it on three separate days. Filter sets a shared view visible to that role already holds are left out, as are admin roles. Each suggestion shows the filters, the most used sort, and how many members applied it; the AI names it and picks columns from the collection's real fields. **Create view** writes a shared saved view scoped to the role."
+      text: "Roles → a role → **Suggested views** → **Find suggestions**. The API log of the last 14 days shows which filters people applied by hand in collection lists. A filter set counts when two or more members of the role applied it, or one member applied it on three separate days (shown only for roles with three or more members, so one person's filtering is not singled out). Filter sets a shared view visible to that role already holds are left out, as are admin roles. Each suggestion shows the filters, the most used sort, and how many members applied it; the AI names it from field names and operators only (the values people filtered by never leave the instance) and picks columns from the collection's real fields. **Create view** writes a shared saved view scoped to the role."
     },
     { type: 'h3', text: 'API' },
     {
@@ -47,7 +47,7 @@ POST /api/ai-design/help-text/:collection/draft { fields? }     → { drafts[] }
 POST /api/ai-design/help-text/:collection/apply { field, text } → { field, note, previous }
 POST /api/ai-design/roles/design   { description, ui_routes? }  → { proposal, dropped[], simulation[], hash }
 POST /api/ai-design/roles/simulate { proposal, ui_routes? }     → { proposal, dropped[], simulation[], hash }
-POST /api/ai-design/roles/apply    { proposal, hash }           → 201 { id, name, policies, scopes }
+POST /api/ai-design/roles/apply    { proposal, hash }           → 201 { id, name, policies, scopes_to_set_per_member }
 POST /api/ai-design/role-views/suggest { days?, ai? }           → { suggestions[], ai_used, ai_error }
 POST /api/ai-design/role-views/apply { role, collection, name, filters, sort?, columns? } → 201 { id }
 
