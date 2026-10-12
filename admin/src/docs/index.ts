@@ -251,7 +251,7 @@ import {
 } from './sections/live-ops.js'
 import { collabLiveLists } from './sections/live-lists.js'
 import { collabLiveProgress } from './sections/live-progress.js'
-import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
+import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -812,6 +812,7 @@ export const navSections: NavGroup[] = [
       collabLiveProgress,
       collabLiveLists,
       collabLiveOps,
+      collabPresence,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,

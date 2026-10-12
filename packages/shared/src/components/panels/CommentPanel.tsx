@@ -16,6 +16,11 @@ import { toast } from 'sonner'
 import { useDrilldown, useItemEditAuth, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { del, get, patch, post } from '../../lib/commands'
+import {
+  signalSentence,
+  useRecordSignalPeers,
+  useRecordSignalSender
+} from '../../lib/presence-signals'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { formatRelative } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
@@ -35,7 +40,14 @@ interface Comment {
   text: string
   created_at: string
   updated_at: string
-  mentions: Array<{ user: string }>
+  /** People mentioned; `seen_at` (#2117) is when they opened the record or read the mention. */
+  mentions: Array<{
+    id?: string
+    first_name?: string | null
+    last_name?: string | null
+    email?: string | null
+    seen_at?: string | null
+  }>
   reactions?: Array<{ emoji: string; count: number; mine: boolean }>
 }
 
@@ -44,6 +56,36 @@ const REACTION_EMOJI = ['👍', '✅', '👀', '🎉', '❤️', '😂'] as cons
 function initials(u: Comment['user']): string {
   const i = [u.first_name?.[0], u.last_name?.[0]].filter(Boolean).join('').toUpperCase()
   return i || u.email?.[0]?.toUpperCase() || '?'
+}
+
+/** Read receipts under a note: who it mentioned and whether they have seen it yet (#2117). */
+function MentionReceipts({ comment }: { comment: Comment }) {
+  const people = (comment.mentions ?? []).filter(
+    (m) => m.id && String(m.id).toUpperCase() !== String(comment.user?.id ?? '').toUpperCase()
+  )
+  if (people.length === 0) return null
+  return (
+    <p
+      className='mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px]'
+      data-mention-receipts
+    >
+      {people.map((m) => {
+        const name = [m.first_name, m.last_name].filter(Boolean).join(' ') || m.email || 'Someone'
+        return (
+          <span
+            key={m.id}
+            data-mention-seen={m.seen_at ? 'seen' : 'unseen'}
+            title={m.seen_at ? `Seen ${new Date(m.seen_at).toLocaleString()}` : 'Not seen yet'}
+            className={m.seen_at ? 'text-emerald-600 dark:text-emerald-400' : 'text-slate-400'}
+          >
+            {m.seen_at ? '✓ ' : ''}
+            {name}
+            {m.seen_at ? ` saw this ${formatRelative(m.seen_at)}` : ' has not seen this yet'}
+          </span>
+        )
+      })}
+    </p>
+  )
 }
 
 function displayName(u: Comment['user']): string {
@@ -719,31 +761,23 @@ export function CommentPanel({
       setCleaning(false)
     }
   }
-  // Comment typing (#263): show co-viewers' "writing a note…" and emit our
-  // own while the draft changes (throttled; relayed via RecordLiveSync).
-  const [typingUser, setTypingUser] = useState<string | null>(null)
-  const typingClearRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Typing (#263, #1721): co-viewers' "writing a note…" and our own signal while the draft
+  // changes (throttled; the signal lapses on its own a few seconds after the last keystroke).
+  const typingNames = useRecordSignalPeers(collection, item, 'note')
+  const sendNoteSignal = useRecordSignalSender(collection, item, 'note')
   const lastTypedOutRef = useRef(0)
   useEffect(() => {
-    const onTyping = (e: Event) => {
-      const d = (e as CustomEvent).detail as { user_name?: string }
-      setTypingUser(d?.user_name || 'Someone')
-      if (typingClearRef.current) clearTimeout(typingClearRef.current)
-      typingClearRef.current = setTimeout(() => setTypingUser(null), 4000)
+    if (!draft.trim()) {
+      if (lastTypedOutRef.current) sendNoteSignal('stop')
+      lastTypedOutRef.current = 0
+      return
     }
-    window.addEventListener('nvr:comment-typing', onTyping)
-    return () => {
-      window.removeEventListener('nvr:comment-typing', onTyping)
-      if (typingClearRef.current) clearTimeout(typingClearRef.current)
-    }
-  }, [])
-  useEffect(() => {
-    if (!draft.trim()) return
     const now = Date.now()
     if (now - lastTypedOutRef.current < 2500) return
     lastTypedOutRef.current = now
-    window.dispatchEvent(new CustomEvent('nvr:comment-typing-out', { detail: {} }))
-  }, [draft])
+    sendNoteSignal('start')
+  }, [draft, sendNoteSignal])
+  useEffect(() => () => sendNoteSignal('stop'), [sendNoteSignal])
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
 
@@ -1012,10 +1046,13 @@ export function CommentPanel({
                   </span>
                 </div>
               </form>
-              {typingUser && (
-                <p className='flex items-center gap-1.5 text-[11.5px] italic text-slate-400'>
+              {typingNames.length > 0 && (
+                <p
+                  className='flex items-center gap-1.5 text-[11.5px] italic text-slate-400'
+                  data-note-typing
+                >
                   <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-                  {typingUser} is writing a note…
+                  {signalSentence(typingNames, 'writing a note')}…
                 </p>
               )}
               <Separator className='my-4' />
@@ -1197,6 +1234,7 @@ export function CommentPanel({
                               <AutolinkedText text={c.text} />
                             </p>
                           )}
+                          {!isEditing && <MentionReceipts comment={c} />}
                           {/* Reactions: aggregated chips + hover palette */}
                           {!isEditing && (
                             <div className='mt-1 flex flex-wrap items-center gap-1'>

@@ -4,7 +4,9 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, patch as patch2, post } from '../../lib/commands'
+import { isDndActive } from '../../lib/dnd'
 import { playNotificationSound } from '../../lib/notification-sound'
+import { announceLocalPrefs } from '../../lib/user-sync'
 
 /**
  * Nivaro chat — data layer.
@@ -1044,6 +1046,7 @@ export function useSetMyPreferences() {
     onError: (_e, _p, ctx) => {
       if (ctx?.prev) qc.setQueryData(['nvr-profile-prefs'], ctx.prev)
     },
+    onSuccess: (_d, patch) => announceLocalPrefs(Object.keys(patch)),
     onSettled: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
       void qc.invalidateQueries({ queryKey: ['presence-online'] })
@@ -1054,6 +1057,10 @@ export function useSetMyPreferences() {
 export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
   const cfg = useChatConfig()
   const soundPref = useNotificationSoundPreference()
+  // Do not disturb (#2114) holds the chirp and the toast; the unread counts still move.
+  const prefs = useMyPreferences()
+  const prefsRef = useRef(prefs)
+  prefsRef.current = prefs
   useEffect(() => {
     // Without rooms the hook only knows the total — keep the old behaviour.
     // Rooms the person is reading are left out of both the sound and the toast.
@@ -1063,7 +1070,8 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
           .reduce((n, r) => n + r.unread, 0)
       : totalUnread
     const grew = conversationUnread > prevUnread
-    if (cfg.sound && grew) playNotificationSound(soundPref)
+    const held = isDndActive(prefsRef.current)
+    if (cfg.sound && grew && !held) playNotificationSound(soundPref)
 
     if (rooms) {
       // First pass seeds the watermarks; toasting then would announce every
@@ -1074,7 +1082,14 @@ export function useUnreadChirp(totalUnread: number, rooms?: RoomInfo[]) {
       const anyRoomOpen = openRooms.size > 0
       for (const r of rooms) {
         const before = prevByRoom.get(r.room) ?? 0
-        if (seeded && !r.muted && isConversation(r) && r.unread > before && !isReading(r.room)) {
+        if (
+          seeded &&
+          !held &&
+          !r.muted &&
+          isConversation(r) &&
+          r.unread > before &&
+          !isReading(r.room)
+        ) {
           const last = r.lastMessage
           const who = last?.sender_name ? String(last.sender_name).trim() : null
           toast(

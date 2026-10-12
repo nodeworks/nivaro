@@ -239,3 +239,110 @@ useLiveEvent('conformance:progress', (p) => setProgress(p), { includeOwn: true }
     }
   ]
 }
+
+export const collabPresence: DocSection = {
+  id: 'presence-signals',
+  label: 'Presence, Do Not Disturb & Tab Sync',
+  content: [
+    { type: 'h1', id: 'presence-signals', text: 'Presence, Do Not Disturb & Tab Sync' },
+    {
+      type: 'p',
+      text: 'Small live signals tell you who else is on the thing you are working on, and your own state follows you across tabs and devices. They carry names only, never content, and only reach people who could already open the same record, ticket or page.'
+    },
+    { type: 'h3', id: 'presence-signals-who', text: 'Who is doing what' },
+    {
+      type: 'table',
+      head: ['You see', 'Where', 'Who sees it'],
+      rows: [
+        [
+          '"Beth is writing a note"',
+          'Under the Notes thread while someone has an unsent note',
+          'Everyone viewing that record (the record read gate, row filters and User Scopes included)'
+        ],
+        [
+          '"Kim is approving"',
+          'A pill on the pipeline panel while someone has a transition confirm or requirements dialog open',
+          'Everyone viewing that record. The repeat-transition guard still refuses a second move; this warns before it happens.'
+        ],
+        [
+          '"Kim is looking at this"',
+          'A support ticket sheet, and an issue row in the Issue log',
+          'People who can open the ticket (requester, assignee, its team, administrators); anyone signed in for an issue'
+        ],
+        [
+          '"Kim is replying"',
+          'Above a support ticket reply box while someone is typing a reply',
+          'People who can open the ticket'
+        ],
+        [
+          'Online, idle or away, and the page',
+          'A person’s page header and their user card',
+          'The same people the chat Online list shows: a person restricted to other zones or regions does not see presence outside their own scopes, and the page follows the Presence display setting'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'A signal is a heartbeat: the sender repeats it every four seconds while it is true and receivers let it lapse after seven, so a closed tab never leaves a stale "is typing". Typing relays through the record room (`record:signal`), ticket and issue pages through a topic room (`ops:ticket:<id>`, `ops:issue-view:<id>`) whose join is gated like the page and re-checked when access changes.'
+    },
+    {
+      type: 'table',
+      head: ['Event', 'Room', 'Payload'],
+      rows: [
+        [
+          '`record:signal`',
+          '`record:<collection>:<id>` (sender must already be in it)',
+          '`{collection, item, kind: note|transition, state: start|stop, user: {id, name}}`'
+        ],
+        [
+          '`ops:changed` with `viewers`',
+          '`ops:ticket:<id>`, `ops:issue-view:<id>`',
+          '`{topic, viewers: [{id, name}]}`'
+        ],
+        [
+          '`ops:changed` with `signal`',
+          '`ops:ticket:<id>`',
+          '`{topic, signal: {kind: reply, state, user}}`, sent from the client with `ops:signal`'
+        ]
+      ]
+    },
+    { type: 'h3', id: 'presence-signals-dnd', text: 'Do not disturb' },
+    {
+      type: 'p',
+      text: 'Turn it on from the avatar menu or the chat Online tab, for 30 minutes, an hour, four hours, until tomorrow morning, or until you switch it off. While it is on, toasts and sounds are held on every tab and device, and a red mark shows on your avatar (colleagues see it on your people page while you are online). Notifications still land in your inbox and the badge still counts them. Critical notifications (the Critical lane) still break through with their toast and sound. It is stored as `preferences.dnd = {until}` through `PATCH /users/me/preferences` (`null` turns it off) and syncs live, so ending it in one tab ends it everywhere.'
+    },
+    { type: 'h3', id: 'presence-signals-mentions', text: 'Read receipts on mentions' },
+    {
+      type: 'p',
+      text: 'Under a note that mentions someone, a line says whether they have seen it. A mention counts as seen once the person opens the record or reads the mention’s notification after the note was written; both come from watermarks the app already keeps (`nivaro_record_views`, `nivaro_notifications.read_at`), so nothing new is tracked. `GET /api/comments` adds `seen_at` to each mention, only for readers who can open that very record. Open thread views update the moment the person opens the record.'
+    },
+    { type: 'h3', id: 'presence-signals-sync', text: 'Your tabs and devices stay in step' },
+    {
+      type: 'ul',
+      items: [
+        'Reading a notification, or a chat room, clears its unread state on every other tab and device at once (`read:changed` on your `user:<id>` room), instead of on their next poll.',
+        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices. The theme follows across tabs of one browser.',
+        'With several tabs open, a notification or chat sound plays once, from the tab you used last. Tabs that stop answering are ignored, so a frozen tab never takes the sound with it. A "View as" tab keeps its own channels.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `import { useRecordSignalPeers, useRecordSignalWhile, useTopicPresence,
+  signalSentence, useUserSync, isDndActive } from '@nivaro/shared'
+
+// Others signalling on this record, and your own while a dialog is open:
+const approving = useRecordSignalPeers('orders', id, 'transition')
+useRecordSignalWhile('orders', id, 'transition', dialogOpen)
+
+// A ticket or issue page:
+const { viewers, replying, signalReplying } = useTopicPresence(\`ticket:\${ticketId}\`)
+
+// Once in the app shell (cross-tab read state and preferences):
+useUserSync({ onPrefsChanged: refetchMe })`
+    },
+    {
+      type: 'note',
+      text: 'Everything here is best effort and per server node, like the viewer avatars: with several API replicas a viewer list may show only the people connected to the same node.'
+    }
+  ]
+}

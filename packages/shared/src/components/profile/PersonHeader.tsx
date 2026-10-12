@@ -1,7 +1,17 @@
-import { Building2, Clock, Eye, Mail, MapPin, MessageSquare, Phone, Video } from 'lucide-react'
+import {
+  BellOff,
+  Building2,
+  Clock,
+  Eye,
+  Mail,
+  MapPin,
+  MessageSquare,
+  Phone,
+  Video
+} from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { stuckText } from '../../lib/presence-state'
+import { presenceWord, stuckText } from '../../lib/presence-state'
 import { cn, formatRelative } from '../../lib/utils'
 import { canViewAs, viewAs } from '../../lib/view-as'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
@@ -11,6 +21,7 @@ import { MailSuppressedPill } from './MailSuppressedPill'
 import { NotifyButton } from './PersonExtras'
 import { PersonChip, Pill, personInitials } from './primitives'
 import type { PersonProfile } from './types'
+import { usePersonPresence } from './usePersonPresence'
 
 /**
  * The identity band at the top of someone's page: who they are, whether
@@ -26,8 +37,11 @@ export function PersonHeader({
   isAdmin: boolean
 }) {
   const online = p.presence.online
-  const idle = online && (p.presence.idle_minutes ?? 0) >= 5
-  const stuck = online && !idle ? (p.presence.stuck ?? null) : null
+  const word = presenceWord(p.presence)
+  const away = word === 'away'
+  const idle = word === 'idle'
+  const stuck = online && word === 'online' ? (p.presence.stuck ?? null) : null
+  const { page } = usePersonPresence(online ? p.id : null)
   const statusTone =
     p.status === 'active' ? 'green' : p.status === 'suspended' ? 'red' : ('neutral' as const)
   const oooUntil = p.ooo_end
@@ -53,27 +67,42 @@ export function PersonHeader({
             }
           />
           <span
-            data-person-presence={online ? (idle ? 'idle' : stuck ? 'stuck' : 'online') : 'offline'}
+            data-person-presence={
+              online ? (away ? 'away' : idle ? 'idle' : stuck ? 'stuck' : 'online') : 'offline'
+            }
             className={cn(
               'absolute bottom-0.5 right-0.5 h-3.5 w-3.5 rounded-full border-2 border-white dark:border-card',
               online
-                ? idle
-                  ? 'bg-amber-400'
-                  : stuck
-                    ? 'bg-orange-500'
-                    : 'bg-emerald-500'
+                ? away
+                  ? 'border-amber-400 bg-white dark:bg-card'
+                  : idle
+                    ? 'bg-amber-400'
+                    : stuck
+                      ? 'bg-orange-500'
+                      : 'bg-emerald-500'
                 : 'bg-slate-300 dark:bg-slate-600'
             )}
             title={
               online
-                ? idle
-                  ? `Idle · ${p.presence.idle_minutes}m`
-                  : stuck
-                    ? `Online · ${stuckText(stuck)}`
-                    : 'Online now'
+                ? away
+                  ? 'Away'
+                  : idle
+                    ? `Idle · ${p.presence.idle_minutes}m`
+                    : stuck
+                      ? `Online · ${stuckText(stuck)}`
+                      : 'Online now'
                 : 'Offline'
             }
           />
+          {p.presence.dnd && (
+            <span
+              data-person-dnd
+              data-tip='Do not disturb'
+              className='absolute -left-0.5 -top-0.5 flex h-[18px] w-[18px] items-center justify-center rounded-full border-2 border-white bg-red-500 text-white dark:border-card'
+            >
+              <BellOff className='h-2.5 w-2.5' strokeWidth={2.5} />
+            </span>
+          )}
         </div>
 
         <div className='min-w-0 flex-1'>
@@ -171,14 +200,17 @@ export function PersonHeader({
             <span className='inline-flex items-center gap-1.5' data-person-last-seen>
               <Clock className='h-3.5 w-3.5' />
               {online
-                ? idle
-                  ? `Online · idle ${p.presence.idle_minutes}m`
-                  : stuck
-                    ? `Online · ${stuckText(stuck)}`
-                    : 'Online now'
+                ? away
+                  ? 'Away'
+                  : idle
+                    ? `Online · idle ${p.presence.idle_minutes}m`
+                    : stuck
+                      ? `Online · ${stuckText(stuck)}`
+                      : 'Online now'
                 : p.last_access
                   ? `Last active ${formatRelative(p.last_access)}`
                   : 'Never signed in'}
+              {online && page ? <span data-person-page> · on {page}</span> : null}
             </span>
           </div>
 

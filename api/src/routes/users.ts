@@ -20,6 +20,7 @@ import {
   computeOooExposure,
   computeUserStats
 } from '../services/user-profile.js'
+import { announcePrefsChanged } from '../services/user-sync.js'
 import { getUser, listUsers, updateUser } from '../services/users.js'
 
 // Dashboard canvas prefs (#848 follow-up): the scope pickers (zone + year)
@@ -1001,6 +1002,29 @@ export async function usersRoutes(app: FastifyInstance) {
         patch.presence_override = { mode: 'away', until }
       }
     }
+    if ('dnd' in body) {
+      // Do not disturb (#2114): toasts and sounds are held on every tab and device until
+      // `until` (null = until switched off). The inbox still fills, and critical
+      // notifications break through. null = off.
+      const raw = body.dnd
+      if (raw === null) {
+        patch.dnd = null
+      } else if (typeof raw !== 'object' || Array.isArray(raw)) {
+        return reply.code(400).send({ error: 'dnd must be an object or null' })
+      } else {
+        let until: string | null = null
+        const u = (raw as { until?: unknown }).until
+        if (u != null) {
+          const d = new Date(String(u))
+          if (Number.isNaN(d.getTime()))
+            return reply.code(400).send({ error: 'dnd.until must be a timestamp' })
+          if (d.getTime() <= Date.now())
+            return reply.code(400).send({ error: 'dnd.until must be in the future' })
+          until = d.toISOString()
+        }
+        patch.dnd = { until }
+      }
+    }
     if ('chat_sidebar_sort' in body) {
       const v = body.chat_sidebar_sort
       if (v !== null && v !== 'recent' && v !== 'unread' && v !== 'alpha') {
@@ -1166,6 +1190,8 @@ export async function usersRoutes(app: FastifyInstance) {
     await db('nivaro_users')
       .where({ id: req.user!.id })
       .update({ preferences: JSON.stringify(merged) })
+    // The person's other tabs and devices apply the change now (#2434), not on their next poll.
+    announcePrefsChanged(req.user!.id, Object.keys(patch))
     return reply.send({ data: { preferences: merged } })
   })
 

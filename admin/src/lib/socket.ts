@@ -358,7 +358,10 @@ const RELAYED_EVENTS = new Set([
   'lock:queued',
   'record:uploading',
   'ops:changed',
-  'notification:new'
+  'notification:new',
+  'presence:changed',
+  'read:changed',
+  'prefs:changed'
 ])
 
 let leaderHandle: ReturnType<typeof createLeaderSocket> | null = null

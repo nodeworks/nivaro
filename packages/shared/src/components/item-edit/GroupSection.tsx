@@ -28,6 +28,7 @@ import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { MailSuppressedPill } from '../profile/MailSuppressedPill'
+import { useCardPresence } from '../profile/usePersonPresence'
 import { UserAvatar } from '../UserAvatar'
 import {
   DropdownMenu,
@@ -816,6 +817,8 @@ function UserCardPopover({
   open?: boolean
 }) {
   const { isAdmin } = useItemEditAuth()
+  // #1982 — active, idle or away and the page they are on, under the Online list's rules.
+  const live = useCardPresence(userId, open)
   const managerName = user?.manager_name?.trim() || null
   // Local-time chip (#175): "6:12 PM for Jane" — only when their timezone pref
   // is set AND differs from the viewer's, so same-office teams see no noise.
@@ -865,10 +868,18 @@ function UserCardPopover({
         />
         <div className='min-w-0 flex-1'>
           <div className='flex items-center gap-1.5'>
-            {online && (
+            {(online || live.word) && (
               <span
-                className='h-2 w-2 rounded-full bg-emerald-400 shrink-0 ring-2 ring-white dark:ring-card'
-                title='Online'
+                data-card-presence={live.word ?? 'online'}
+                className={cn(
+                  'h-2 w-2 shrink-0 rounded-full ring-2 ring-white dark:ring-card',
+                  live.word === 'away'
+                    ? 'bg-white ring-amber-400 dark:bg-card'
+                    : live.word === 'idle'
+                      ? 'bg-amber-400'
+                      : 'bg-emerald-400'
+                )}
+                title={live.word === 'away' ? 'Away' : live.word === 'idle' ? 'Idle' : 'Online'}
               />
             )}
             <p className='text-[13px] font-semibold text-slate-800 dark:text-slate-100 truncate'>
@@ -887,6 +898,19 @@ function UserCardPopover({
           {(user?.title || user?.department) && (
             <p className='text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5'>
               {[user.title, user.department].filter(Boolean).join(' · ')}
+            </p>
+          )}
+          {live.word && (
+            <p
+              className='mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400'
+              data-card-presence-line
+            >
+              {live.word === 'away'
+                ? 'Away'
+                : live.word === 'idle'
+                  ? `Idle${live.minutes ? ` · ${live.minutes}m` : ''}`
+                  : 'Online now'}
+              {live.page ? ` · on ${live.page}` : ''}
             </p>
           )}
           {localTime && (
