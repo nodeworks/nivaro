@@ -213,6 +213,58 @@ describe('messagesForViewer — earlier answers gate later ones (D2)', () => {
   })
 })
 
+describe('messagesForViewer — memory offers stay with the asker (#1845)', () => {
+  beforeEach(() => clearVisibilityCache())
+  const A = 'aaaaaaaa-0000-0000-0000-000000000001'
+  const clean = [
+    { tool: 'aggregate', input: { n: 1 }, summary: 'x', result_hash: hashToolResult(rowsA) }
+  ]
+  const rows = [
+    {
+      id: 21,
+      conversation_id: 'c',
+      role: 'user' as const,
+      author: A,
+      content: 'how many in my zone?',
+      trace: null,
+      proposals: null,
+      meta: null,
+      created_at: new Date(0)
+    },
+    {
+      id: 22,
+      conversation_id: 'c',
+      role: 'assistant' as const,
+      author: A,
+      content: '4',
+      trace: JSON.stringify(clean),
+      proposals: null,
+      meta: JSON.stringify({
+        request_id: 'r1',
+        memory_suggestions: [{ text: 'By my zone I mean Zone 3' }],
+        remembered: { id: 'n1', text: 'amounts in thousands' },
+        followups: ['Which of these are in Zone 3?'],
+        choices: [{ label: 'Zone 3', value: 'Zone 3' }]
+      }),
+      created_at: new Date(0)
+    }
+  ]
+
+  it('the asker sees the offer; a reader of the shared thread never does', async () => {
+    const replay = async () => ({ result: rowsA })
+    const own = await messagesForViewer(alice, rows as never, replay)
+    expect(own[1].meta.memory_suggestions).toEqual([{ text: 'By my zone I mean Zone 3' }])
+    const shared = await messagesForViewer(bob, rows as never, replay)
+    expect(shared[1].visible).toBe(true)
+    expect(shared[1].meta.request_id).toBe('r1')
+    expect(shared[1].meta).not.toHaveProperty('memory_suggestions')
+    expect(shared[1].meta).not.toHaveProperty('remembered')
+    expect(shared[1].meta).not.toHaveProperty('followups')
+    expect(shared[1].meta).not.toHaveProperty('choices')
+    expect(own[1].meta.followups).toEqual(['Which of these are in Zone 3?'])
+  })
+})
+
 describe('applyConversationSearch (D3)', () => {
   it('matches questions and the viewer’s own answers only', () => {
     const k = knex({ client: 'mssql' })

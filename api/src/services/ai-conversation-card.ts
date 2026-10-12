@@ -3,6 +3,7 @@ import {
   answerVisibleTo,
   conversationAccess,
   getConversation,
+  isWithheld,
   listMessages,
   namesFor,
   REPLAY_BUDGET_PER_REQUEST
@@ -36,7 +37,8 @@ export async function askConversationCard(user: User, id: string) {
   const firstA = rows.find((r) => r.role === 'assistant')
   let answer: string | null = null
   let hidden = false
-  if (firstA) {
+  if (firstA && isWithheld(firstA)) hidden = true
+  else if (firstA) {
     if (await answerVisibleTo(user, firstA, undefined, { left: REPLAY_BUDGET_PER_REQUEST }))
       answer = shortAnswer(firstA.content) || null
     else hidden = true

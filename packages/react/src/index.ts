@@ -82,6 +82,8 @@ export {
   AiAnalyticsView,
   AiFeedbackButtons,
   AiMarkdown,
+  type AiMemorySuggestion,
+  AiMemorySuggestions,
   AiReviewCard,
   AlertManagerView,
   type AlertManagerViewProps,
