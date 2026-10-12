@@ -394,6 +394,10 @@ async function assertReadableSystemPaths(
   }
   if (paths.length === 0) return
 
+  // Administrators read every column; credentials are refused for them by
+  // assertNoSensitivePaths.
+  if (await isAdminRole(user)) return
+
   const fieldsFor = new Map<string, Promise<string[] | null>>()
   const allowedIn = (c: string) => {
     let hit = fieldsFor.get(c)
@@ -403,27 +407,34 @@ async function assertReadableSystemPaths(
     }
     return hit
   }
+  const readable = (allowed: string[] | null, col: string) =>
+    allowed === null ||
+    col.toLowerCase() === 'id' ||
+    allowed.some((f) => f.toLowerCase() === col.toLowerCase())
   const bad = new Set<string>()
   for (const segs of paths) {
     let current = collection
     for (let i = 0; i < segs.length; i++) {
       const seg = segs[i]
+      const last = i === segs.length - 1
+      // The hop the compilers would take from here (case-insensitive like the
+      // database, the `_id`-less FK alias, M2M through the junction).
+      const hop = last ? null : resolveFilterHop(seg, current, await getRelsForCollection(current))
       if (isSystemCollection(current)) {
         const allowed = await allowedIn(current)
-        if (allowed !== null && seg !== 'id' && !allowed.includes(seg)) {
+        if (!readable(allowed, hop?.column ?? seg)) {
           bad.add(segs.slice(0, i + 1).join('.'))
           break
         }
       }
-      if (i === segs.length - 1) break
-      const rels = await getRelsForCollection(current)
-      const m2o = rels.find(
-        (r) => r.many_collection === current && r.many_field === seg && !r.junction_field
-      )
-      const o2m = rels.find((r) => r.one_collection === current && r.one_field === seg)
-      const next = m2o?.one_collection ?? o2m?.many_collection ?? null
-      if (!next) break
-      current = next
+      if (last) break
+      // A middle segment the checker cannot follow is refused: the compiler
+      // either errors on it or joins something this check never saw.
+      if (!hop) {
+        bad.add(segs.slice(0, i + 1).join('.'))
+        break
+      }
+      current = hop.next
     }
   }
   if (bad.size === 0) return
@@ -431,6 +442,45 @@ async function assertReadableSystemPaths(
     new Error(`${[...bad].map((f) => `"${f}"`).join(', ')} cannot be filtered or sorted`),
     { statusCode: 403, code: 'FIELD_NOT_READABLE', fields: [...bad] }
   )
+}
+
+/**
+ * The relation hop a filter, sort or condition compiler takes from `current`
+ * on `seg` — matched case-insensitively (the database is), accepting the FK
+ * name with or without `_id`, and following an M2M alias through its junction
+ * to the target. `column` is the field on `current` the hop reads.
+ */
+function resolveFilterHop(
+  seg: string,
+  current: string,
+  rels: CMSRelation[]
+): { next: string; column: string } | null {
+  const k = seg.toLowerCase()
+  const cur = current.toLowerCase()
+  const eq = (a: string | null | undefined, b: string) => (a ?? '').toLowerCase() === b
+  for (const r of rels) {
+    if (!eq(r.many_collection, cur) || r.junction_field != null || !r.one_collection) continue
+    const fk = r.many_field.toLowerCase()
+    if (fk === k || (fk.endsWith('_id') && fk.slice(0, -3) === k))
+      return { next: r.one_collection, column: r.many_field }
+  }
+  for (const exact of [true, false]) {
+    for (const r of rels) {
+      if (!eq(r.one_collection, cur) || r.junction_field == null) continue
+      if (exact ? !eq(r.one_field, k) : !eq(r.many_collection, k)) continue
+      const other = rels.find(
+        (o) =>
+          eq(o.many_collection, r.many_collection.toLowerCase()) &&
+          eq(o.many_field, (r.junction_field ?? '').toLowerCase())
+      )
+      if (other?.one_collection) return { next: other.one_collection, column: r.one_field ?? seg }
+    }
+  }
+  for (const r of rels) {
+    if (!eq(r.one_collection, cur) || r.junction_field != null) continue
+    if (eq(r.one_field, k)) return { next: r.many_collection, column: r.one_field ?? seg }
+  }
+  return null
 }
 
 // ─── Change-reason requirement ───────────────────────────────────────────────

@@ -102,7 +102,32 @@ vi.mock('../../../services/collections.js', async (orig) => ({
   getFields: vi.fn(async () => []),
   getRelations: vi.fn(async (c: string) =>
     c === 'workflows'
-      ? [{ many_collection: 'workflows', many_field: 'created_by', one_collection: 'nivaro_users' }]
+      ? [
+          {
+            many_collection: 'workflows',
+            many_field: 'created_by',
+            one_collection: 'nivaro_users'
+          },
+          {
+            many_collection: 'workflows',
+            many_field: 'approver_id',
+            one_collection: 'nivaro_users'
+          },
+          // M2M workflows.watchers → workflows_watchers → nivaro_users
+          {
+            many_collection: 'workflows_watchers',
+            many_field: 'workflows_id',
+            one_collection: 'workflows',
+            one_field: 'watchers',
+            junction_field: 'user_id'
+          },
+          {
+            many_collection: 'workflows_watchers',
+            many_field: 'user_id',
+            one_collection: 'nivaro_users',
+            junction_field: 'workflows_id'
+          }
+        ]
       : []
   )
 }))
@@ -344,5 +369,35 @@ describe('filters and sorts that reach a system table', () => {
     }).catch((e) => {
       expect((e as { statusCode?: number }).statusCode).not.toBe(403)
     })
+  })
+})
+
+// The checker follows a path exactly as the compilers would (#parser differential).
+describe('the path check resolves hops the way the compilers do', () => {
+  const refused = (q: object) =>
+    expect(readItems(someone, 'workflows', q)).rejects.toMatchObject({ statusCode: 403 })
+
+  it('case-variant segments', async () => {
+    await refused({ filter: { CREATED_BY: { ROLE: { _eq: 'ADMIN' } } } })
+    await refused({ sort: ['Created_By.Phone'] })
+  })
+
+  it('the FK alias without its _id suffix', async () => {
+    await refused({ filter: { approver: { role: { _eq: 'ADMIN' } } } })
+  })
+
+  it('an M2M alias path into nivaro_users', async () => {
+    await refused({ filter: { watchers: { role: { _eq: 'ADMIN' } } } })
+  })
+
+  it('an unresolvable middle segment', async () => {
+    await refused({ filter: { nonsense: { role: { _eq: 'ADMIN' } } } })
+  })
+
+  it('an admin is not refused by the path check', async () => {
+    perm.admin = true
+    await readItems(someone, 'workflows', {
+      filter: { CREATED_BY: { ROLE: { _eq: 'ADMIN' } } }
+    }).catch((e) => expect((e as { statusCode?: number }).statusCode).not.toBe(403))
   })
 })
