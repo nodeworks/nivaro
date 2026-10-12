@@ -25,18 +25,15 @@ import { parseRoom } from './chat.js'
 export const OPS_REFUSAL =
   'Ops tools are only available to administrators in an admin-only channel (every member an administrator).'
 
-/** Fresh read: an active, unredacted account whose CURRENT role has admin_access. */
+/**
+ * Fresh read: status exactly 'active' (not merely "not suspended" — a
+ * provisional or pending account is not an administrator yet), unredacted,
+ * and the CURRENT role has admin_access.
+ */
 export async function isActiveAdmin(userId: string | null | undefined): Promise<boolean> {
   if (!userId) return false
-  const row = await db('nivaro_users as u')
-    .join('nivaro_roles as r', 'r.id', 'u.role')
-    .where('u.id', userId)
-    .where((w) => w.whereNot('u.status', 'suspended').orWhereNull('u.status'))
-    .where((w) => w.where('u.is_redacted', false).orWhereNull('u.is_redacted'))
-    .where('r.admin_access', true)
-    .first('u.id')
-    .catch(() => undefined)
-  return !!row
+  const { activeAdminIds } = await import('./ops-room-guard.js')
+  return (await activeAdminIds([String(userId)])).has(String(userId).toUpperCase())
 }
 
 /**
@@ -70,8 +67,8 @@ export async function opsRoomVerdict(room: string): Promise<{ ok: boolean; reaso
       .catch(() => [])) as Array<{ user: string }>
   ).map((m) => String(m.user))
   if (members.length === 0) return { ok: false, reason: 'the channel has no members' }
-  const { filterActiveAdminUserIds } = await import('./integration-signal-alerts.js')
-  const admins = await filterActiveAdminUserIds(members)
+  const { activeAdminIds } = await import('./ops-room-guard.js')
+  const admins = await activeAdminIds(members)
   if (members.some((m) => !admins.has(m.toUpperCase())))
     return { ok: false, reason: 'a member is not an administrator' }
   return { ok: true }

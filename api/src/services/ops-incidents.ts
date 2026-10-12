@@ -74,7 +74,9 @@ async function tableReady(): Promise<boolean> {
 
 /**
  * Post as the assistant through the one send path. The bot user when the
- * instance has a bot name, otherwise a platform line. Returns the message id.
+ * instance has a bot name, otherwise a platform line. Every such post is an
+ * ops post (`ops_only`): administrators only, and it keeps the room
+ * admin-only from then on (services/ops-room-guard.ts). Returns the message id.
  */
 export async function postAsAssistant(
   app: FastifyInstance,
@@ -94,6 +96,8 @@ export async function postAsAssistant(
       message: text.slice(0, 4000),
       ...(parentId ? { parentId } : {})
     })
+    const { markOpsOnly } = await import('./ops-room-guard.js')
+    await markOpsOnly(row.id, room)
     return row.id
   } catch (err) {
     app.log.warn({ err, room }, 'ops assistant post failed')
@@ -128,6 +132,8 @@ export async function setOpsChannel(room: string | null): Promise<void> {
   const row = await db('nivaro_settings').orderBy('id', 'asc').first('id')
   if (!row) throw new Error('No settings row')
   await db('nivaro_settings').where({ id: row.id }).update({ ops_channel: room })
+  const { bustOpsGuard } = await import('./ops-room-guard.js')
+  bustOpsGuard()
 }
 
 /** The ops channel, only while it is still admin-only. */

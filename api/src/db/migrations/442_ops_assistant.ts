@@ -12,6 +12,9 @@ import { utcNow } from '../dialect.js'
  *    ('manual' | 'ask' | 'suggested', #2013).
  *  - nivaro_settings.ops_channel: the admin-only chat channel (room key
  *    `ch:<key>`) incident threads open in (#2016).
+ *  - chat_messages.ops_only (LEGACY table, guarded ALTER): an assistant ops
+ *    post — hidden from anyone who is not an administrator, and a channel
+ *    holding one only admits administrators (services/ops-room-guard.ts).
  *  - nivaro_ops_incidents: one row per incident thread — incident mode or a
  *    critical alert — with the room and root message the updates reply
  *    under, what was last reported and the closing summary.
@@ -43,6 +46,14 @@ export async function up(knex: Knex): Promise<void> {
       t.string('ops_channel', 200).nullable()
     })
   }
+  if (
+    (await knex.schema.hasTable('chat_messages')) &&
+    !(await knex.schema.hasColumn('chat_messages', 'ops_only'))
+  ) {
+    await knex.schema.alterTable('chat_messages', (t) => {
+      t.boolean('ops_only').nullable()
+    })
+  }
   if (!(await knex.schema.hasTable('nivaro_ops_incidents'))) {
     await knex.schema.createTable('nivaro_ops_incidents', (t) => {
       t.increments('id').primary()
@@ -70,6 +81,11 @@ export async function up(knex: Knex): Promise<void> {
 export async function down(knex: Knex): Promise<void> {
   if (await knex.schema.hasTable('nivaro_ops_incidents')) {
     await knex.schema.dropTable('nivaro_ops_incidents')
+  }
+  if (await knex.schema.hasColumn('chat_messages', 'ops_only')) {
+    await knex.schema.alterTable('chat_messages', (t) => {
+      t.dropColumn('ops_only')
+    })
   }
   if (await knex.schema.hasColumn('nivaro_settings', 'ops_channel')) {
     await knex.schema.alterTable('nivaro_settings', (t) => {
