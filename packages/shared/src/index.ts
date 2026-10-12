@@ -119,6 +119,7 @@ export {
   startDocumentExtraction,
   useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'
