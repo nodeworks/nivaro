@@ -64,6 +64,23 @@ export async function aiConversationRoutes(app: FastifyInstance) {
     }
   })
 
+  // ── Delete every conversation I own (history opt-out) ─────────────────
+  // Registered before /:id — a static segment wins over the parameter.
+  app.delete('/mine', async (req) => {
+    const { deleteOwnConversations } = await import('../services/ai-conversations.js')
+    const n = await deleteOwnConversations(String(req.user!.id))
+    if (n) {
+      await logActivity({
+        action: 'ai-conversation-delete-all',
+        user: req.user!.id,
+        collection: 'nivaro_ai_conversations',
+        comment: `deleted ${n} own conversation(s)`,
+        req
+      })
+    }
+    return { data: { deleted: n } }
+  })
+
   // ── One conversation as the caller may read it ───────────────────────────
   app.get<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const found = await load(req.user!, req.params.id)
