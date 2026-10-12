@@ -375,7 +375,8 @@ async function assertReadableSystemPaths(
       if (k === '_and' || k === '_or' || k === '_some' || k === '_none') walk(v, prefix)
       else if (k.startsWith('_') || k.startsWith('$')) continue
       else {
-        const path = [...prefix, k]
+        // A dotted key (`{"created_by.role": …}`) is a path too.
+        const path = [...prefix, ...k.split('.')]
         paths.push(path)
         walk(v, path)
       }

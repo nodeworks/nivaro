@@ -320,6 +320,12 @@ describe('filters and sorts that reach a system table', () => {
     ).rejects.toMatchObject({ statusCode: 403 })
   })
 
+  it('a dotted filter key is checked like a nested one', async () => {
+    await expect(
+      readItems(someone, 'workflows', { filter: { 'created_by.role': { _eq: 'ADMIN' } } })
+    ).rejects.toMatchObject({ statusCode: 403 })
+  })
+
   it('external_id is refused through a relation path too', async () => {
     perm.admin = true
     await expect(
