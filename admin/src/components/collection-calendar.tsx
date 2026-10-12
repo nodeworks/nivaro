@@ -1,3 +1,4 @@
+import { useLiveQueryRefresh } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -61,6 +62,8 @@ export function CollectionCalendar({
         .then((r) => r.data.data ?? []),
     enabled: !!field
   })
+  // Records others add, move or reschedule appear in place (#2124).
+  useLiveQueryRefresh(collection, [['calendar', collection]])
 
   const byDay = useMemo(() => {
     const map = new Map<number, Array<Record<string, unknown>>>()

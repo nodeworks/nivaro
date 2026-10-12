@@ -27,6 +27,7 @@ import {
 import {
   applyViewsAnswer,
   buildSuggestions,
+  buildViewsPrompt,
   clusterRoleFilters,
   conditionSignature,
   dropCovered,
@@ -494,5 +495,46 @@ describe('suggested role views (#1965)', () => {
       ctx
     )
     expect(named[0]).toMatchObject({ name: 'My division', columns: ['name', 'status'] })
+  })
+
+  it('never sends logged filter values to the model', () => {
+    const fields = new Map([['vendor', { label: 'Vendor', type: 'string', target: null }]])
+    const ctx: RoleViewContext = {
+      clusters: clusterRoleFilters(
+        [
+          {
+            ...use('u1', 'd1'),
+            conditions: [{ path: ['vendor'], op: '_eq', value: 'ACME Secret' }]
+          },
+          {
+            ...use('u2', 'd2'),
+            conditions: [{ path: ['vendor'], op: '_eq', value: 'ACME Secret' }]
+          }
+        ],
+        roleOf
+      ),
+      roles: new Map([['R-BUYER', { id: 'r-buyer', name: 'Buyer', members: 5 }]]),
+      collections: new Map([['workflows', { label: 'Workflows', fields }]])
+    }
+    const s = buildSuggestions(ctx)
+    expect(s).toHaveLength(1)
+    const prompt = buildViewsPrompt(s, ctx)
+    expect(prompt).toContain('Vendor is')
+    expect(prompt).not.toContain('ACME')
+  })
+
+  it("hides one person's habit in a role with fewer than 3 members", () => {
+    const fields = new Map([['divisions', { label: 'Division', type: 'integer', target: null }]])
+    const clusters = clusterRoleFilters(
+      ['2026-10-01', '2026-10-02', '2026-10-05'].map((d) => use('u3', d)),
+      roleOf
+    )
+    const ctx = (members: number): RoleViewContext => ({
+      clusters,
+      roles: new Map([['R-OTHER', { id: 'r-other', name: 'Other', members }]]),
+      collections: new Map([['workflows', { label: 'Workflows', fields }]])
+    })
+    expect(buildSuggestions(ctx(2))).toHaveLength(0)
+    expect(buildSuggestions(ctx(3))).toHaveLength(1)
   })
 })
