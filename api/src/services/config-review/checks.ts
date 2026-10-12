@@ -1,5 +1,7 @@
 import { db } from '../../db/index.js'
 import {
+  CLEANUP_DEFAULTS,
+  type CleanupThresholds,
   describeRule,
   dropReferenced,
   extractFileIds,
@@ -12,6 +14,7 @@ import {
   groupLabelConcepts,
   type LabelOccurrence,
   leafOf,
+  normalizeCleanup,
   type ReviewFinding,
   type SavedViewRow
 } from './pure.js'
@@ -532,30 +535,19 @@ export async function reviewFindings(): Promise<ReviewFinding[]> {
 
 // ─── #2020 Cleanup suggestions ───────────────────────────────────────────────
 
-export interface CleanupOptions {
-  /** Drafts not saved for this many months. */
-  draftMonths?: number
-  /** Open tasks untouched for this many months. */
-  taskMonths?: number
-  /** Saved views not opened in this many days. */
-  viewDays?: number
-}
+export type CleanupOptions = Partial<CleanupThresholds>
 
-export const CLEANUP_DEFAULTS = { draftMonths: 3, taskMonths: 3, viewDays: 90 }
+export { CLEANUP_DEFAULTS }
 
 /** Files younger than this are never offered — an upload may still be in flight. */
 export const FILE_MIN_AGE_DAYS = 30
 
-export function cleanupCutoffs(opts: CleanupOptions = {}) {
-  const n = (v: unknown, d: number, max: number) => {
-    const x = Number(v)
-    return Number.isFinite(x) && x >= 1 ? Math.min(max, Math.floor(x)) : d
-  }
-  return {
-    draftMonths: n(opts.draftMonths, CLEANUP_DEFAULTS.draftMonths, 60),
-    taskMonths: n(opts.taskMonths, CLEANUP_DEFAULTS.taskMonths, 60),
-    viewDays: n(opts.viewDays, CLEANUP_DEFAULTS.viewDays, 3650)
-  }
+/** The thresholds a run uses: valid values from `opts`, the rest from `base`. */
+export function cleanupCutoffs(
+  opts: CleanupOptions = {},
+  base: CleanupThresholds = CLEANUP_DEFAULTS
+): CleanupThresholds {
+  return normalizeCleanup(opts, base)
 }
 
 /** When saved-view opens started being recorded (null = never). */
@@ -661,8 +653,11 @@ export async function orphanFiles(cutoff: Date): Promise<OrphanFile[]> {
   return dropReferenced(rows, await textReferencedFileIds())
 }
 
-export async function cleanupFindings(opts: CleanupOptions = {}): Promise<ReviewFinding[]> {
-  const cut = cleanupCutoffs(opts)
+export async function cleanupFindings(
+  opts: CleanupOptions = {},
+  base: CleanupThresholds = CLEANUP_DEFAULTS
+): Promise<ReviewFinding[]> {
+  const cut = cleanupCutoffs(opts, base)
   const out: ReviewFinding[] = []
 
   await safe(async () => {

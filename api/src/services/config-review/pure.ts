@@ -779,3 +779,69 @@ export function extractFileIds(value: unknown, into = new Set<string>()): Set<st
 export function dropReferenced<T extends { id: string }>(candidates: T[], named: Set<string>): T[] {
   return candidates.filter((c) => !named.has(String(c.id).toUpperCase()))
 }
+
+// ─── Cleanup thresholds (#2020) ──────────────────────────────────────────────
+
+export interface CleanupThresholds {
+  /** Drafts not saved for this many months. */
+  draftMonths: number
+  /** Open tasks untouched for this many months. */
+  taskMonths: number
+  /** Saved views not opened in this many days. */
+  viewDays: number
+}
+
+export const CLEANUP_DEFAULTS: CleanupThresholds = { draftMonths: 3, taskMonths: 3, viewDays: 90 }
+
+/** Inclusive [min, max] per threshold. */
+export const CLEANUP_BOUNDS: Record<keyof CleanupThresholds, [number, number]> = {
+  draftMonths: [1, 24],
+  taskMonths: [1, 24],
+  viewDays: [30, 365]
+}
+
+const CLEANUP_KEYS = Object.keys(CLEANUP_BOUNDS) as Array<keyof CleanupThresholds>
+
+const inBounds = (key: keyof CleanupThresholds, v: unknown): v is number => {
+  const [min, max] = CLEANUP_BOUNDS[key]
+  return typeof v === 'number' && Number.isInteger(v) && v >= min && v <= max
+}
+
+/**
+ * Thresholds from anything (stored JSON, a run-now body): each value that is
+ * a whole number inside its bounds is kept, every other one falls back —
+ * to CLEANUP_DEFAULTS for stored settings, to the saved values for a run.
+ */
+export function normalizeCleanup(
+  raw: unknown,
+  fallback: CleanupThresholds = CLEANUP_DEFAULTS
+): CleanupThresholds {
+  const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  const out = { ...fallback }
+  for (const k of CLEANUP_KEYS) {
+    const v = typeof o[k] === 'string' && o[k] !== '' ? Number(o[k]) : o[k]
+    if (inBounds(k, v)) out[k] = v
+  }
+  return out
+}
+
+/** Strict check for a save: every value present, whole and in bounds. */
+export function validateCleanup(
+  raw: unknown
+): { ok: true; value: CleanupThresholds } | { ok: false; error: string } {
+  const o = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
+  for (const k of CLEANUP_KEYS) {
+    if (!inBounds(k, o[k])) {
+      const [min, max] = CLEANUP_BOUNDS[k]
+      return { ok: false, error: `${k} must be a whole number from ${min} to ${max}` }
+    }
+  }
+  return {
+    ok: true,
+    value: {
+      draftMonths: o.draftMonths as number,
+      taskMonths: o.taskMonths as number,
+      viewDays: o.viewDays as number
+    }
+  }
+}
