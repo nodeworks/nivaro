@@ -102,9 +102,11 @@ export async function trashRoutes(app: FastifyInstance) {
   })
 
   // #1871: an open record deleted by someone else says who and when, and
-  // offers Restore only to people the restore route would let through. Asks
-  // collection read (the viewer had the record open); the trash id rides only
-  // when the viewer may restore it.
+  // offers Restore only to people the restore route would let through. The
+  // trash snapshot cannot be checked against the viewer's row filter or User
+  // Scopes, so a deletion is only described to an unrestricted administrator
+  // or to the person who made it; everyone else gets `null` — the same
+  // answer as "not deleted", so the route never confirms a hidden id exists.
   app.get<{ Querystring: { collection?: string; item?: string } }>(
     '/record',
     { preHandler: requireAuth },
@@ -113,12 +115,16 @@ export async function trashRoutes(app: FastifyInstance) {
       const item = String(req.query.item ?? '')
       if (!collection || !item)
         return reply.code(400).send({ error: 'collection and item are required' })
-      if (!(await can(req.user!, 'read', collection)))
-        return reply.code(403).send({ error: 'Forbidden' })
-      const row = (await db('nivaro_trash')
+      const user = req.user!
+      if (!(await can(user, 'read', collection))) return reply.send({ data: null })
+      const restricted =
+        (user.api_key_scope_restrictions?.length ?? 0) > 0 || (user.api_key_scopes?.length ?? 0) > 0
+      const fullAdmin = !!req.isAdmin && !restricted
+      const q = db('nivaro_trash')
         .where({ collection, item_id: item })
         .orderBy('deleted_at', 'desc')
-        .first('id', 'deleted_by', 'deleted_at')) as
+      if (!fullAdmin) q.where({ deleted_by: user.id })
+      const row = (await q.first('id', 'deleted_by', 'deleted_at')) as
         | Pick<TrashRow, 'id' | 'deleted_by' | 'deleted_at'>
         | undefined
       if (!row) return reply.send({ data: null })
@@ -129,9 +135,7 @@ export async function trashRoutes(app: FastifyInstance) {
             | { first_name: string | null; last_name: string | null; email: string | null }
             | undefined)
         : undefined
-      const canRestore =
-        (req.isAdmin || row.deleted_by === req.user!.id) &&
-        (await can(req.user!, 'create', collection))
+      const canRestore = await can(user, 'create', collection)
       return reply.send({
         data: {
           deleted_at: row.deleted_at,

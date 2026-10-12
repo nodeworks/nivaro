@@ -16,7 +16,8 @@ import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
-import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -492,6 +493,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Set once `auth` succeeds below; gates authenticated-only handlers
     // (e.g. collection:join) for the lifetime of this socket connection.
     let authenticatedUser: User | null = null
+    /** Cloud: an authenticated socket joins its tenant's `all` room, where
+     *  tenant-wide notices (owners:changed, access:changed — record-events.ts)
+     *  go instead of io.emit (TENANT_ALL_ROOM there). Self-hosted: nothing to join. */
+    const joinTenantAllRoom = async () => {
+      if (!process.env.CLOUD_META_DB_URL) return
+      const t = await socketTenant(socket).catch(() => null)
+      if (t) socket.join(tenantScopedRoom('all', t.tenantId || t.slug))
+    }
 
     // Authenticate the socket via the user's static token, or a short-lived
     // one-time WS token minted by GET /api/auth/ws-token (session-cookie users
@@ -575,6 +584,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
                 name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
               }
             socket.join(`user:${user.id}`)
+            void joinTenantAllRoom()
             socket.emit('auth:ok', { userId: user.id })
             void markOnline(user.id, socket.id)
           }
@@ -600,6 +610,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
                 name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
               }
             socket.join(`user:${user.id}`)
+            void joinTenantAllRoom()
             socket.emit('auth:ok', { userId: user.id })
             void markOnline(user.id, socket.id)
           }
@@ -618,6 +629,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
               name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
             }
           socket.join(`user:${user.id}`)
+          void joinTenantAllRoom()
           socket.emit('auth:ok', { userId: user.id })
         }
       } catch (err) {

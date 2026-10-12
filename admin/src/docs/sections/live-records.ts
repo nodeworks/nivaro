@@ -24,7 +24,7 @@ export const collabLiveRecords: DocSection = {
         ],
         [
           'Someone else deletes the record',
-          'A banner says who deleted it and when; saving is turned off. People who may restore it from the trash (administrators, or whoever deleted it, with create permission) get a Restore button.'
+          'A banner says the record was deleted and saving is turned off. Administrators, and whoever deleted it, also see who and when, and get a Restore button when they have create permission.'
         ],
         [
           'Your access changes (role, policy, row filter, User Scope, subtree grant)',
@@ -81,13 +81,21 @@ export const collabLiveRecords: DocSection = {
           '`record:<collection>:<id>`',
           '`{collection, item, flow_id, flow_name, state: start|end}`'
         ],
-        ['`owners:changed`', 'every socket (coalesced 5 s)', '`{at}`'],
-        ['`access:changed`', 'every socket (coalesced 2 s)', '`{at}`']
+        [
+          '`owners:changed`',
+          'the tenant (cloud: `t:<tenant>:all`; self-hosted: every socket) — coalesced 5 s, at most one per 15 s',
+          '`{at}`'
+        ],
+        [
+          '`access:changed`',
+          'the tenant for an administrator’s access write; only the person’s own sockets for their own scope pick — coalesced',
+          '`{at}`'
+        ]
       ]
     },
     {
       type: 'p',
-      text: '`GET /api/trash/record?collection=&item=` answers the latest deletion of one record (`deleted_at`, `deleted_by_name`, `can_restore`, and `trash_id` only when you may restore it). It needs read permission on the collection.'
+      text: '`GET /api/trash/record?collection=&item=` answers the latest deletion of one record (`deleted_at`, `deleted_by_name`, `can_restore`, and `trash_id` only when you may restore it) — to an unrestricted administrator or to the person who deleted it. Everyone else gets `{ "data": null }`, the same answer as "not deleted": the trash snapshot cannot be checked against your row filter or User Scopes.'
     },
     { type: 'h3', id: 'live-records-hooks', text: 'Building a live panel (shared hooks)' },
     {

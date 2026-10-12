@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const { broadcasts, roomEmits, owners } = vi.hoisted(() => ({
+const { broadcasts, roomEmits, owners, tenant } = vi.hoisted(() => ({
   broadcasts: [] as Array<{ collection: string; item: unknown; extra: unknown }>,
   roomEmits: [] as Array<{ room: string | null; event: string; payload: unknown }>,
-  owners: { listener: null as (() => void) | null }
+  owners: { listener: null as (() => void) | null },
+  tenant: { id: undefined as string | undefined }
 }))
+
+vi.mock('../../../db/tenant-context.js', () => ({ getTenantId: () => tenant.id }))
 
 vi.mock('../../../db/index.js', () => ({
   db: vi.fn((table: string) => ({
@@ -41,13 +44,15 @@ vi.mock('../../../services/io-holder.js', () => ({
 
 import {
   ACCESS_ROUTES,
+  accessAnnouncement,
   announceAccessChanged,
   announceAddendumChange,
   announceAutomation,
   announceRecordAspect,
   announceSubmissionAspect,
   emitRecordEvent,
-  flowRecordOf
+  flowRecordOf,
+  keyedThrottle
 } from '../../../services/record-events.js'
 
 beforeEach(() => {
@@ -147,23 +152,110 @@ describe('flowRecordOf', () => {
   })
 })
 
-describe('coalesced broadcasts', () => {
-  it('owners:changed fires once per window', () => {
+describe('tenant-wide notices (F1/F2)', () => {
+  afterEach(() => {
+    tenant.id = undefined
+    delete process.env.CLOUD_META_DB_URL
+  })
+
+  it('owners:changed coalesces a burst, then waits at least 15s before the next', () => {
     vi.useFakeTimers()
+    tenant.id = undefined
     owners.listener?.()
     owners.listener?.()
     owners.listener?.()
     expect(roomEmits).toHaveLength(0)
     vi.advanceTimersByTime(5000)
     expect(roomEmits.map((e) => [e.room, e.event])).toEqual([[null, 'owners:changed']])
+    owners.listener?.()
+    vi.advanceTimersByTime(5000)
+    expect(roomEmits).toHaveLength(1)
+    vi.advanceTimersByTime(10_000)
+    expect(roomEmits).toHaveLength(2)
   })
 
-  it('access:changed fires once per window', () => {
+  it('cloud: owners:changed reaches only the signalling tenant’s room', () => {
     vi.useFakeTimers()
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    tenant.id = 'tenant-a'
+    owners.listener?.()
+    tenant.id = 'tenant-b'
+    owners.listener?.()
+    vi.advanceTimersByTime(5000)
+    expect(roomEmits.map((e) => e.room).sort()).toEqual(['t:tenant-a:all', 't:tenant-b:all'])
+  })
+
+  it('cloud: a signal with no tenant context goes nowhere', () => {
+    vi.useFakeTimers()
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
+    tenant.id = undefined
+    announceAccessChanged()
+    vi.advanceTimersByTime(10_000)
+    expect(roomEmits).toHaveLength(0)
+  })
+
+  it('access:changed for an admin write goes to the tenant, coalesced', () => {
+    vi.useFakeTimers()
+    tenant.id = 'tenant-c'
+    process.env.CLOUD_META_DB_URL = 'postgres://meta'
     announceAccessChanged()
     announceAccessChanged()
     vi.advanceTimersByTime(2000)
-    expect(roomEmits.map((e) => [e.room, e.event])).toEqual([[null, 'access:changed']])
+    expect(roomEmits.map((e) => [e.room, e.event])).toEqual([['t:tenant-c:all', 'access:changed']])
+  })
+
+  it('access:changed for a person’s own scope pick goes to their sockets only', () => {
+    vi.useFakeTimers()
+    announceAccessChanged({ userId: 'u9' })
+    vi.advanceTimersByTime(2000)
+    expect(roomEmits.map((e) => [e.room, e.event])).toEqual([['user:u9', 'access:changed']])
+  })
+})
+
+describe('keyedThrottle', () => {
+  it('fires once per burst per key and spaces fires by the minimum gap', () => {
+    vi.useFakeTimers()
+    const fired: string[] = []
+    const t = keyedThrottle(100, 1000, (k) => fired.push(k))
+    t('a')
+    t('a')
+    t('b')
+    vi.advanceTimersByTime(100)
+    expect(fired).toEqual(['a', 'b'])
+    t('a')
+    vi.advanceTimersByTime(500)
+    expect(fired).toEqual(['a', 'b'])
+    vi.advanceTimersByTime(500)
+    expect(fired).toEqual(['a', 'b', 'a'])
+  })
+})
+
+describe('accessAnnouncement (F2)', () => {
+  const req = (method: string, url: string, isAdmin = false) => ({
+    method,
+    url,
+    isAdmin,
+    user: { id: 'u1' }
+  })
+
+  it('an administrator’s access write tells the tenant', () => {
+    expect(accessAnnouncement(req('PATCH', '/api/roles/r1/policies', true))).toBe('tenant')
+    expect(accessAnnouncement(req('PATCH', '/api/users/u2', true))).toBe('tenant')
+  })
+
+  it('a non-admin PATCH of their own user row announces nothing', () => {
+    expect(accessAnnouncement(req('PATCH', '/api/users/u1'))).toBeNull()
+    expect(accessAnnouncement(req('POST', '/api/users/bulk'))).toBeNull()
+    expect(accessAnnouncement(req('PATCH', '/api/roles/r1'))).toBeNull()
+  })
+
+  it('a person’s own scope pick tells only them', () => {
+    expect(accessAnnouncement(req('PUT', '/api/users/me/scopes/zone'))).toEqual({ userId: 'u1' })
+  })
+
+  it('reads and unrelated writes announce nothing', () => {
+    expect(accessAnnouncement(req('GET', '/api/roles/r1', true))).toBeNull()
+    expect(accessAnnouncement(req('PATCH', '/api/items/orders/1', true))).toBeNull()
   })
 })
 
