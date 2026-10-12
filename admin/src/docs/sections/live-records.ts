@@ -28,7 +28,7 @@ export const collabLiveRecords: DocSection = {
         ],
         [
           'Your access changes (role, policy, row filter, User Scope, subtree grant)',
-          'The page re-reads the record as you. If you can no longer see it, a banner says so and saving is turned off; the form stays on screen so you can copy what you need.'
+          'The page re-reads the record as you. If you can no longer see it, the form is cleared — its values, history, comments and any unsaved edits leave the screen and the page’s cache — and only "You no longer have access to this record" with a Back button remains.'
         ],
         [
           'An addendum is created, submitted, approved or rejected',
