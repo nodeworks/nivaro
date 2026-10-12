@@ -10,7 +10,7 @@ import type {
 } from './ai-plan-runner.js'
 import { getApp } from './io-holder.js'
 import { readItems } from './items.js'
-import { can, getAllowedFields, getRowFilter } from './permissions.js'
+import { can } from './permissions.js'
 
 /**
  * Ask AI plan STEP KINDS (#1807, #2000) and step conditions (#1953).
@@ -92,12 +92,15 @@ function isBusiness(collection: string): boolean {
   return /^[A-Za-z0-9_]+$/.test(collection) && !/^(nivaro|directus)_/i.test(collection)
 }
 
-async function isAdminUser(user: User): Promise<boolean> {
+export async function isAdminUser(user: User): Promise<boolean> {
   const { isAdminRole } = await import('./user-scopes.js')
   return isAdminRole(user.role)
 }
 
-async function labelsFor(collection: string, ids: string[]): Promise<Record<string, string>> {
+export async function labelsFor(
+  collection: string,
+  ids: string[]
+): Promise<Record<string, string>> {
   if (ids.length === 0) return {}
   try {
     const { getLabels } = await import('./queues.js')
@@ -140,22 +143,58 @@ function actionKind(
     describe,
     propose,
     async execute(user, payload) {
+      const collection = str(payload.collection)
+      const { captureMade, readRaw } = await import('./ai-plan-made.js')
+      // Before-values for the change report and undo (raw — see ai-plan-made.ts).
+      const ids = kind === 'bulk_update' ? ((payload.ids as string[]) ?? []).map(String) : []
+      const changes = (payload.changes as Record<string, unknown>) ?? {}
+      const before =
+        kind === 'bulk_update' ? await readRaw(collection, ids, Object.keys(changes)) : null
       // The extra `collection` key is harmless to every action (a task's own
       // payload carries it anyway).
-      const result = await runAction(user, kind, str(payload.collection), payload)
+      const result = await runAction(user, kind, collection, payload)
       if (kind === 'bulk_update') {
         const updated = Number(result.updated ?? 0)
         const failed = Number(result.failed ?? 0)
+        const refused = new Set(((result.failed_ids as string[]) ?? []).map(String))
+        const made = await captureMade(
+          collection,
+          ids
+            .filter((id) => !refused.has(id))
+            .map((id) => {
+              const row = before?.get(id) ?? {}
+              return {
+                id,
+                before: Object.fromEntries(Object.keys(changes).map((f) => [f, row[f] ?? null])),
+                after: changes
+              }
+            })
+        )
         return {
           ok: failed === 0,
           result,
           records_changed: updated,
           error: failed
             ? `${failed} of ${updated + failed} record(s) refused: ${((result.errors as string[]) ?? []).slice(0, 3).join('; ')}`
-            : undefined
+            : undefined,
+          made
         }
       }
-      return { ok: true, result, records_changed: kind === 'create_dashboard' ? 0 : 1 }
+      const made =
+        kind === 'create_record' && result.id != null
+          ? await captureMade(
+              collection,
+              [
+                {
+                  id: String(result.id),
+                  before: {},
+                  after: (payload.data as Record<string, unknown>) ?? {}
+                }
+              ],
+              { created: true }
+            )
+          : null
+      return { ok: true, result, records_changed: kind === 'create_dashboard' ? 0 : 1, made }
     },
     narrow:
       kind === 'bulk_update'
@@ -290,7 +329,11 @@ async function visibleRecordIds(
 
 /** The subset of `ids` the person can still read — checked again when a
  *  step runs, so access lost since the plan was made is honoured. */
-async function stillVisibleIds(user: User, collection: string, ids: string[]): Promise<string[]> {
+export async function stillVisibleIds(
+  user: User,
+  collection: string,
+  ids: string[]
+): Promise<string[]> {
   if (ids.length === 0 || !isBusiness(collection)) return []
   if (!(await can(user, 'read', collection))) return []
   const res = (await readItems(user, collection, {
@@ -598,56 +641,22 @@ async function readConditionRows(
 /**
  * Refuse a condition that reads a field the person cannot: on the
  * collection itself, and on every collection a dotted path walks into.
- * A hop that cannot be checked (a to-many alias, a row-filtered, scoped or
- * unreadable related collection) is refused rather than trusted. Mirrors the
- * Ask AI aggregate guard.
+ * The Ask AI aggregate guard does the walking (services/ai-aggregate-guard.ts)
+ * — one evaluator, so a condition and an aggregate refuse the same paths.
  */
 export async function assertConditionReadable(
   user: User,
   collection: string,
   paths: string[][]
 ): Promise<void> {
-  const fieldOk = async (coll: string, field: string) => {
-    const allowed = await getAllowedFields(user, 'read', coll)
-    return allowed == null || allowed.includes('*') || allowed.includes(field)
-  }
-  const { chatRelationsFor } = await import('./ai-chat.js')
-  const { getUserScopeEnforcement } = await import('./user-scopes.js')
-  for (const path of paths) {
-    if (!path.length || path[0] === '$state') continue
-    if (!(await fieldOk(collection, path[0]))) {
-      throw new Error(`You do not have access to the field "${path[0]}" on ${collection}`)
-    }
-    let cur = collection
-    for (let i = 0; i < path.length - 1; i++) {
-      const link = (await chatRelationsFor(cur)).m2o.find((l) => l.field === path[i])
-      if (!link) {
-        throw new Error(
-          `A condition cannot go through "${path.slice(0, i + 1).join('.')}" — only links to a single record can be checked for access`
-        )
-      }
-      if (!(await can(user, 'read', link.collection))) {
-        throw new Error(`You do not have access to ${link.collection}`)
-      }
-      if (await getRowFilter(user, 'read', link.collection)) {
-        throw new Error(
-          `Your access to ${link.collection} is row-filtered — a condition cannot go through it`
-        )
-      }
-      const scope = await getUserScopeEnforcement(user, link.collection)
-      if (scope.deny || scope.filters.length > 0) {
-        throw new Error(
-          `Your access to ${link.collection} is limited by your scopes — a condition cannot go through it`
-        )
-      }
-      if (!(await fieldOk(link.collection, path[i + 1]))) {
-        throw new Error(
-          `You do not have access to the field "${path[i + 1]}" on ${link.collection}`
-        )
-      }
-      cur = link.collection
-    }
-  }
+  const { chatFieldSet, chatRelationsFor } = await import('./ai-chat.js')
+  const { assertFilterReadable, readableFieldSet } = await import('./ai-aggregate-guard.js')
+  const all = await chatFieldSet(collection)
+  const readable = await readableFieldSet(user, collection, all)
+  const hidden = new Set([...all].filter((f) => !readable.has(f)))
+  await assertFilterReadable(user, collection, paths, hidden, chatRelationsFor, {
+    subject: 'A condition'
+  })
 }
 
 /** Validate a condition when the plan is proposed, and snapshot the
