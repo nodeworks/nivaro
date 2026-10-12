@@ -3,7 +3,8 @@ import type { FastifyInstance } from 'fastify'
 import { REVOKED_PREFIX } from '../auth/session.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
-import { type SseEvent, subscribeSse } from '../services/sse-hub.js'
+import { type SseEvent, sseEventForTenant, subscribeSse } from '../services/sse-hub.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 
 // ─── SSE event stream (#602) ─────────────────────────────────────────────────
 // GET /events/stream — server-sent events of collection changes, fed by the
@@ -92,8 +93,14 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
     let closed = false
     const lazyCan = new Map<string, Promise<boolean>>()
 
+    // Cloud: the hub is process-global and serves several tenants — this stream takes only the
+    // events of the tenant it was opened under (the request's tenant context, captured here).
+    const tenant = currentTenantKey()
+
     const deliver = async (ev: SseEvent): Promise<void> => {
       if (closed) return
+      const payload = sseEventForTenant(ev, tenant)
+      if (!payload) return
       if (allowed) {
         if (!allowed.has(ev.collection)) return
       } else {
@@ -106,7 +113,7 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
         if (closed) return
       }
       try {
-        raw.write(`event: collection.update\ndata: ${JSON.stringify(ev)}\n\n`)
+        raw.write(`event: collection.update\ndata: ${JSON.stringify(payload)}\n\n`)
       } catch {
         cleanup()
       }

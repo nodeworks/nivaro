@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 /** The help-video editor locks a video under this name (#1523). */
 export const HELP_VIDEO_LOCK_COLLECTION = 'nivaro_help_videos'
@@ -230,7 +231,10 @@ function emitLockEvent(
   user: string,
   locked: boolean
 ) {
-  app.io?.to(`item:${collection}:${item}`).emit('item-lock', { collection, item, user, locked })
+  // Cloud: this tenant's room (tenant-rooms.ts). Nothing in core joins item rooms today.
+  app.io
+    ?.to(tenantScopedRoom(`item:${collection}:${item}`))
+    .emit('item-lock', { collection, item, user, locked })
 }
 
 export async function itemLocksRoutes(app: FastifyInstance) {

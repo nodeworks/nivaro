@@ -52,9 +52,20 @@ function scopeOf(tenant: string | null | undefined): Scope {
   return s
 }
 
+/**
+ * A room name without its cloud tenant prefix (tenant-rooms.ts, `t:<tenant>:<room>`), and the
+ * tenant it named ('' = none — self-hosted rooms carry no prefix).
+ */
+export function splitTenantRoom(room: string): { tenant: string; room: string } {
+  const m = /^t:([^:]+):(.+)$/.exec(room)
+  return m ? { tenant: m[1], room: m[2] } : { tenant: '', room }
+}
+
 /** A room's kind: ids folded away so the table stays small and readable. */
 export function roomKind(room: string | null | undefined): string {
   if (!room) return 'direct'
+  // Counters are already kept per tenant; the prefix would only split one kind into many.
+  room = splitTenantRoom(room).room
   if (room.startsWith('user:')) return 'user:*'
   if (room.startsWith('session:')) return 'session:*'
   if (room.startsWith('masq:')) return 'masq:*'

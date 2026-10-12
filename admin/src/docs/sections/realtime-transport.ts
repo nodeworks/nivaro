@@ -56,6 +56,10 @@ export const realtimeTransport: DocSection = {
     {
       type: 'p',
       text: "In cloud mode sockets, events and bytes are also kept per tenant. A tenant's Realtime console shows only its own event and room figures; the operator reads every tenant, noisiest first (bytes and events in the last whole minute, then open sockets), from `GET /admin/realtime-tenants` with the provisioning secret — per API process, like `/admin/traffic-tenants`."
+    },
+    {
+      type: 'p',
+      text: "One process serves several tenants, so every live feed stays inside its tenant: record and item rooms are named `t:<tenant>:record:<collection>:<id>` (self-hosted names are unchanged), an SSE stream delivers only writes made in the tenant it was opened under, and GraphQL subscriptions (`itemMutated`, `workflowStateChanged`, `pipelineStateChanged`) listen on per-tenant topics — the tenant rides each event across replicas. A graphql-ws connection resolves its tenant from its host like a socket does and signs in against that tenant's database; one with no tenant hears nothing. Workflow and pipeline state subscriptions now also need read access to the collection."
     }
   ]
 }

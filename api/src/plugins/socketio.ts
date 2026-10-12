@@ -38,8 +38,10 @@ import {
   eventNameOf,
   noteCoalesced,
   noteTenantSocket,
-  recordOutbound
+  recordOutbound,
+  splitTenantRoom
 } from '../services/socket-transport.js'
+import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -83,7 +85,8 @@ const recordViewers = new Map<string, Map<string, { id: string; name: string }>>
 /** Presence-aware suppression (#269): is the user actively viewing the record
  *  RIGHT NOW (joined its record room on this node)? */
 export function isUserViewing(collection: string, item: string, userId: string): boolean {
-  const map = recordViewers.get(`record:${collection}:${item}`)
+  // Cloud: record rooms are per tenant — the caller's tenant (its request context).
+  const map = recordViewers.get(tenantScopedRoom(`record:${collection}:${item}`))
   if (!map) return false
   for (const v of map.values()) if (v.id === userId) return true
   return false
@@ -268,7 +271,11 @@ export function getRecordViewerSnapshot(): Array<{
     item: string
     viewers: Array<{ id: string; name: string }>
   }> = []
-  for (const [room, map] of recordViewers) {
+  // Cloud: only the caller's tenant's record rooms (viewer names must not cross tenants).
+  const tenant = currentTenantKey()
+  for (const [scoped, map] of recordViewers) {
+    const { tenant: roomTenant, room } = splitTenantRoom(scoped)
+    if (roomTenant !== tenant) continue
     const m = room.match(/^record:([^:]+):(.+)$/)
     if (m) out.push({ collection: m[1], item: m[2], viewers: [...map.values()] })
   }
@@ -888,13 +895,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // set, and events that name their record route to that room.
     let joinedRecordRoom: string | null = null
     const joinedRecordRooms = new Set<string>()
+    // Cloud: record rooms are `t:<tenant>:record:<c>:<id>` (tenant-rooms.ts) — record ids
+    // repeat across tenants' databases. Set by the first record:join (its tenant resolved);
+    // '' self-hosted, where room names are unchanged.
+    let recordTenant = ''
+    const recordRoom = (collection: string, item: unknown) =>
+      tenantScopedRoom(`record:${collection}:${String(item)}`, recordTenant)
     const displayName = (u: User) =>
       [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
     /** The room an event targets: the named record when the socket is in it,
      *  else the last joined room. Null = not in any record room. */
     const roomFor = (payload?: { collection?: string; item?: unknown }): string | null => {
       if (payload && typeof payload.collection === 'string' && payload.item != null) {
-        const named = `record:${payload.collection}:${String(payload.item)}`
+        const named = recordRoom(payload.collection, payload.item)
         if (joinedRecordRooms.has(named)) return named
       }
       return joinedRecordRoom
@@ -907,7 +920,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // they actually had open (2026-09-14).
     const broadcastViewers = (room: string) => {
       const viewers = [...(recordViewers.get(room)?.values() ?? [])]
-      const m = /^record:(.+):([^:]+)$/.exec(room)
+      const m = /^record:(.+):([^:]+)$/.exec(splitTenantRoom(room).room)
       io.to(room).emit('record:viewers', {
         collection: m?.[1] ?? null,
         item: m?.[2] ?? null,
@@ -930,7 +943,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
      *  tabs still open. */
     const leaveRecordRoom = (payload?: { collection?: string; item?: unknown }) => {
       if (payload && typeof payload.collection === 'string' && payload.item != null) {
-        const named = `record:${payload.collection}:${String(payload.item)}`
+        const named = recordRoom(payload.collection, payload.item)
         if (joinedRecordRooms.has(named)) leaveOneRoom(named)
         return
       }
@@ -943,22 +956,30 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       'comment:typing',
       (payload: { collection?: string; item?: string; user_name?: string }) => {
         const { collection, item, user_name } = payload ?? {}
-        if (!collection || !item) return
-        socket.to(`record:${collection}:${String(item)}`).emit('record:comment-typing', {
+        if (!collection || !item || !authenticatedUser) return
+        // Only a co-viewer may say they are typing: the sender must sit in the record's room.
+        const room = recordRoom(collection, item)
+        if (!joinedRecordRooms.has(room)) return
+        socket.to(room).emit('record:comment-typing', {
           collection,
           item,
           user_name: String(user_name ?? '').slice(0, 80)
         })
       }
     )
-    socket.on('record:join', async (payload: { collection?: string; item?: string }) => {
+    const onRecordJoin = async (payload: { collection?: string; item?: string }) => {
       const { collection, item } = payload ?? {}
       const user = authenticatedUser
       if (!user || typeof collection !== 'string' || !collection || item == null) return
       // The record read gate (role, row filter, user scopes) — the same answer GET /items gives:
       // a record the person cannot open is not a room they may sit in (#1720).
       if (!(await canSeeRecordRoom(user, collection, String(item)))) return
-      const room = `record:${collection}:${String(item)}`
+      if (process.env.CLOUD_META_DB_URL) {
+        const t = await socketTenant(socket)
+        if (!t) return
+        recordTenant = t.tenantId || t.slug
+      }
+      const room = recordRoom(collection, item)
       joinedRecordRoom = room
       joinedRecordRooms.add(room)
       socket.join(room)
@@ -969,7 +990,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       }
       map.set(socket.id, { id: user.id, name: displayName(user) })
       broadcastViewers(room)
-    })
+    }
+    // Cloud: in the socket's tenant, so the gate reads that tenant's database.
+    socket.on('record:join', inSocketTenant(socket, onRecordJoin))
     socket.on('record:leave', (payload?: { collection?: string; item?: unknown }) =>
       leaveRecordRoom(payload)
     )
@@ -1067,7 +1090,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const user = authenticatedUser
       if (!user || !joinedRecordRoom) return
       const state = payload?.state === 'done' ? 'done' : 'start'
-      const [, roomCollection, ...roomItem] = joinedRecordRoom.split(':')
+      const [, roomCollection, ...roomItem] = splitTenantRoom(joinedRecordRoom).room.split(':')
       socket.to(joinedRecordRoom).emit('record:uploading', {
         collection: roomCollection,
         item: roomItem.join(':'),

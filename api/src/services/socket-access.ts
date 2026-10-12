@@ -9,6 +9,7 @@ import { getIo } from './io-holder.js'
 import { can } from './permissions.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
 import { inSocketTenant } from './socket-tenant.js'
+import { splitTenantRoom } from './socket-transport.js'
 
 /**
  * Socket access over a socket's whole life (#1719, #1720).
@@ -112,9 +113,12 @@ export async function canSeeRecordRoom(
  */
 export async function roomStillAllowed(
   user: User,
-  room: string,
+  scopedRoom: string,
   isAdmin: () => Promise<boolean>
 ): Promise<boolean> {
+  // Cloud rooms carry the tenant prefix; the socket only ever joins its own tenant's, so the
+  // gate is the room's own.
+  const room = splitTenantRoom(scopedRoom).room
   try {
     if (room.startsWith('user:'))
       return room.slice(5).toLowerCase() === String(user.id).toLowerCase()

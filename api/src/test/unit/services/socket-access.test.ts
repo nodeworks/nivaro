@@ -125,6 +125,12 @@ describe('room gates (#1720)', () => {
     expect(await roomStillAllowed(ANA, 'presence:admin', notAdmin)).toBe(false)
     expect(await roomStillAllowed(ANA, 'pulse', async () => true)).toBe(true)
   })
+  it('gates a cloud tenant-prefixed room by the room it names (#1720)', async () => {
+    vi.mocked(visibleIds).mockResolvedValueOnce(new Set())
+    expect(await roomStillAllowed(ANA, 't:A:record:orders:7', notAdmin)).toBe(false)
+    vi.mocked(can).mockResolvedValueOnce(false)
+    expect(await roomStillAllowed(ANA, 't:A:collection:orders', notAdmin)).toBe(false)
+  })
   it('leaves rooms it does not know alone', async () => {
     expect(await roomStillAllowed(ANA, 'presence:some-page', notAdmin)).toBe(true)
   })

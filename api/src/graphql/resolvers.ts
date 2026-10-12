@@ -27,6 +27,7 @@ import {
   type WorkflowState,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { User } from '../types.js'
 import { pubsub, topics } from './pubsub.js'
@@ -55,6 +56,32 @@ import {
 interface GQLContext {
   user?: User
   isAdmin?: boolean
+  /** Subscriptions (graphql-ws): the tenant the connection resolved to ('' self-hosted). */
+  tenantKey?: string
+  /** Subscriptions in cloud mode: run a permission read inside the connection's tenant. */
+  withTenant?: <T>(fn: () => Promise<T>) => Promise<T>
+}
+
+/**
+ * The tenant a subscription listens under. A graphql-ws connection runs outside any tenant
+ * context, so it brings its own key; in cloud mode a connection without one hears nothing
+ * rather than another tenant's events.
+ */
+function subscriptionTenant(ctx: GQLContext): string {
+  if (ctx.tenantKey != null) return ctx.tenantKey
+  return process.env.CLOUD_META_DB_URL ? 't:none' : currentTenantKey()
+}
+
+/** May this subscriber hear a collection's events? The collection read gate (admins: all). */
+async function mayReadForSubscription(
+  ctx: GQLContext,
+  user: User,
+  collection: string
+): Promise<boolean> {
+  if (ctx.isAdmin) return true
+  if (/^(nivaro_|directus_)/i.test(collection)) return false
+  const readable = () => can(user, 'read', collection)
+  return ctx.withTenant ? ctx.withTenant(readable) : readable()
 }
 
 // ─── Guards ───────────────────────────────────────────────────────────────────
@@ -1051,9 +1078,16 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
       collection: { type: new GraphQLNonNull(GraphQLString) },
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
-    subscribe: (_src, args, ctx) => {
-      requireUser(ctx)
-      return pubsub.asyncIterator(topics.workflowStateChanged(args.collection, args.item))
+    subscribe: async (_src, args, ctx) => {
+      const user = requireUser(ctx)
+      // A record's state belongs to people who may read its collection.
+      if (!(await mayReadForSubscription(ctx, user, String(args.collection))))
+        throw new GraphQLError('You do not have permission to read this collection', {
+          extensions: { code: 'FORBIDDEN' }
+        })
+      return pubsub.asyncIterator(
+        topics.workflowStateChanged(args.collection, args.item, subscriptionTenant(ctx))
+      )
     },
     resolve: (payload: unknown) => (payload as Record<string, unknown>).workflowStateChanged
   },
@@ -1064,9 +1098,16 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
       collection: { type: new GraphQLNonNull(GraphQLString) },
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
-    subscribe: (_src, args, ctx) => {
-      requireUser(ctx)
-      return pubsub.asyncIterator(topics.pipelineStateChanged(args.collection, args.item))
+    subscribe: async (_src, args, ctx) => {
+      const user = requireUser(ctx)
+      // A record's state belongs to people who may read its collection.
+      if (!(await mayReadForSubscription(ctx, user, String(args.collection))))
+        throw new GraphQLError('You do not have permission to read this collection', {
+          extensions: { code: 'FORBIDDEN' }
+        })
+      return pubsub.asyncIterator(
+        topics.pipelineStateChanged(args.collection, args.item, subscriptionTenant(ctx))
+      )
     },
     resolve: (payload: unknown) => (payload as Record<string, unknown>).pipelineStateChanged
   },
@@ -1088,16 +1129,16 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
         throw new GraphQLError('Unknown collection', { extensions: { code: 'BAD_USER_INPUT' } })
       }
       // The same gate as reading the collection. System tables stay with admins.
-      const system = /^(nivaro_|directus_)/i.test(collection)
-      const allowed = ctx.isAdmin || (!system && (await can(user, 'read', collection)))
+      const allowed = await mayReadForSubscription(ctx, user, collection)
       if (!allowed) {
         throw new GraphQLError('You do not have permission to read this collection', {
           extensions: { code: 'FORBIDDEN' }
         })
       }
+      const tenant = subscriptionTenant(ctx)
       const topic = args.item
-        ? topics.itemMutated(collection, String(args.item))
-        : topics.itemMutated(collection, '*')
+        ? topics.itemMutated(collection, String(args.item), tenant)
+        : topics.itemMutated(collection, '*', tenant)
       const source = pubsub.asyncIterator<{
         itemMutated: { action: string; changed_fields: string[] }
       }>(topic)

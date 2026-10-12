@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events'
+import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 
 type Handler<T> = (v: T) => void
 
@@ -56,10 +57,15 @@ class PubSub {
 export const pubsub = new PubSub()
 
 // ── Topic helpers ──────────────────────────────────────────────────────────────
+// Cloud mode: one process serves several tenants, so every topic carries the tenant
+// (tenant-rooms.ts convention, `t:<tenant>:`). Publishers default to the tenant of the
+// request they run in; subscribers pass the tenant their connection resolved to.
+// Self-hosted (no tenant): topic names are unchanged.
 export const topics = {
-  workflowStateChanged: (collection: string, item: string) =>
-    `workflow:state:${collection}:${item}`,
-  pipelineStateChanged: (collection: string, item: string) =>
-    `pipeline:state:${collection}:${item}`,
-  itemMutated: (collection: string, item: string) => `item:mutated:${collection}:${item}`
+  workflowStateChanged: (collection: string, item: string, tenant = currentTenantKey()) =>
+    tenantScopedRoom(`workflow:state:${collection}:${item}`, tenant),
+  pipelineStateChanged: (collection: string, item: string, tenant = currentTenantKey()) =>
+    tenantScopedRoom(`pipeline:state:${collection}:${item}`, tenant),
+  itemMutated: (collection: string, item: string, tenant = currentTenantKey()) =>
+    tenantScopedRoom(`item:mutated:${collection}:${item}`, tenant)
 }
