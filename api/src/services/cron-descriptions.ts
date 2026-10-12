@@ -62,6 +62,10 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Every minute — delivers announcements whose scheduled send time has arrived (banner, inbox, email, SMS per channel config).',
   'broadcast-ack-chasers':
     'Hourly — reminds users who have not acknowledged a must-acknowledge broadcast, and tells its author how many are outstanding.',
+  'raw-write-announcements':
+    'Every 5 seconds — broadcasts record changes that stored procedures and scripts reported in nivaro_raw_writes, so open pages refresh. Records only failed ticks.',
+  'event-journal-prune':
+    'Hourly — deletes durable realtime journal rows older than 24 hours (nivaro_event_journal).',
   'chat-reminders':
     'Every 20 seconds — delivers due reminders ("remind me Friday 9am") as a notification and, when set from chat, a message from the assistant in that chat. Records only failed ticks.',
   'chat-scheduled-send':

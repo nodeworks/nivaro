@@ -1,6 +1,6 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Pencil, Radio, RefreshCw } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { api } from '@/lib/api'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
@@ -8,11 +8,12 @@ import { cn } from '@/lib/utils'
 
 /**
  * Realtime console (#270 diagnostics, #273 now-editing, #275 concurrency
- * history, #276 live traffic, #285 force refresh). Everything here is
- * per-API-node observability — the stats route says so in its payload.
+ * history, #276 live traffic, #285 force refresh, #1682 event pipeline +
+ * delivery probe). Everything here is per-API-node observability — the stats
+ * route says so in its payload.
  */
 
-type Tab = 'sockets' | 'traffic' | 'editing' | 'concurrency' | 'firehose'
+type Tab = 'sockets' | 'traffic' | 'editing' | 'concurrency' | 'firehose' | 'pipeline'
 
 interface SocketRow {
   id: string
@@ -65,7 +66,8 @@ export default function Realtime() {
               ['traffic', 'Live traffic'],
               ['editing', 'Now editing'],
               ['concurrency', 'Concurrency'],
-              ['firehose', 'Firehose']
+              ['firehose', 'Firehose'],
+              ['pipeline', 'Event pipeline']
             ] as Array<[Tab, string]>
           ).map(([key, label]) => (
             <button
@@ -90,6 +92,7 @@ export default function Realtime() {
         {tab === 'editing' && <EditingTab />}
         {tab === 'concurrency' && <ConcurrencyTab />}
         {tab === 'firehose' && <FirehoseTab />}
+        {tab === 'pipeline' && <PipelineTab />}
       </div>
     </div>
   )
@@ -798,6 +801,224 @@ function FirehoseTab() {
           ))}
         </div>
       )}
+    </div>
+  )
+}
+
+// ─── Event pipeline (#1673 journal, #1737 stream, #1875 raw writes, #1682 probe) ─
+
+interface ProbeResult {
+  at: string
+  ok: boolean
+  arrived: boolean
+  delivery_ms: number | null
+  threshold_ms: number
+  path: 'stream' | 'adapter' | 'none'
+  journaled: boolean
+  durable: boolean | null
+  node: string | null
+  detail: string
+  skipped?: boolean
+}
+
+interface PipelineData {
+  journal_seq: number | null
+  stream: {
+    enabled: boolean
+    active: boolean
+    published: number
+    publishFailed: number
+    delivered: number
+    readErrors: number
+    resumes: number
+    lastResumeBacklog: number
+    lastDeliveryLagMs: number | null
+    lastError: string | null
+    lastErrorAt: string | null
+  }
+  durable: {
+    written: number
+    buffered: number
+    failed: number
+    dropped: number
+    lastError: string | null
+  }
+  raw_writes: {
+    announced: number
+    broadcasts: number
+    drained: number
+    persisted: number
+    queued: number
+    lastDrainAt: string | null
+  }
+  probes: ProbeResult[]
+}
+
+function Stat({ label, value, tone }: { label: string; value: ReactNode; tone?: string }) {
+  return (
+    <div className='bg-white px-3 py-2 dark:bg-card'>
+      <div className='text-[10.5px] uppercase tracking-wide text-slate-400'>{label}</div>
+      <div className={cn('mt-0.5 text-[13px] font-medium tabular-nums', tone)}>{value}</div>
+    </div>
+  )
+}
+
+function StatGrid({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section>
+      <h2 className='mb-2 text-[13px] font-medium'>{title}</h2>
+      <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-4 dark:border-border dark:bg-border'>
+        {children}
+      </div>
+    </section>
+  )
+}
+
+const BAD = 'text-red-600 dark:text-red-400'
+
+function PipelineTab() {
+  const qc = useQueryClient()
+  const { data, isLoading } = useQuery<PipelineData>({
+    queryKey: ['realtime-pipeline'],
+    queryFn: () => api.get('/realtime/pipeline').then((r) => r.data.data),
+    refetchInterval: 10_000
+  })
+  const probe = useMutation({
+    mutationFn: () => api.post('/realtime/probe', {}).then((r) => r.data.data as ProbeResult),
+    onSuccess: (r) => {
+      if (r.ok) toast.success(r.detail)
+      else toast.error(r.detail)
+      void qc.invalidateQueries({ queryKey: ['realtime-pipeline'] })
+    },
+    onError: () => toast.error('The probe could not run')
+  })
+  if (isLoading) return <p className='text-[13px] text-slate-400'>Loading…</p>
+  if (!data) return null
+  const { stream, durable, raw_writes: raw } = data
+  return (
+    <div className='space-y-6'>
+      <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+        Record-change events: journal sequence {data.journal_seq ?? '—'}. Counters are this API
+        process since it started; probe results come from every server.
+      </p>
+      <StatGrid title='Cross-server stream'>
+        <Stat
+          label='State'
+          value={!stream.enabled ? 'Off (pub/sub)' : stream.active ? 'Active' : 'Not connected'}
+          tone={stream.enabled && !stream.active ? BAD : undefined}
+        />
+        <Stat label='Published' value={stream.published} />
+        <Stat label='Delivered from others' value={stream.delivered} />
+        <Stat
+          label='Last delivery lag'
+          value={stream.lastDeliveryLagMs != null ? `${stream.lastDeliveryLagMs}ms` : '—'}
+        />
+        <Stat
+          label='Publish failures'
+          value={stream.publishFailed}
+          tone={stream.publishFailed ? BAD : undefined}
+        />
+        <Stat
+          label='Read errors'
+          value={stream.readErrors}
+          tone={stream.readErrors ? BAD : undefined}
+        />
+        <Stat label='Resumes' value={stream.resumes} />
+        <Stat label='Caught up after last resume' value={stream.lastResumeBacklog} />
+      </StatGrid>
+      <StatGrid title='Durable journal (24 hours)'>
+        <Stat label='Written' value={durable.written} />
+        <Stat label='Waiting to write' value={durable.buffered} />
+        <Stat label='Failed' value={durable.failed} tone={durable.failed ? BAD : undefined} />
+        <Stat label='Dropped' value={durable.dropped} tone={durable.dropped ? BAD : undefined} />
+      </StatGrid>
+      <StatGrid title='Changes from procedures, imports and scripts'>
+        <Stat label='Announced' value={raw.announced} />
+        <Stat label='Broadcasts' value={raw.broadcasts} />
+        <Stat label='Read from the inbox' value={raw.drained} />
+        <Stat
+          label='Last inbox read'
+          value={raw.lastDrainAt ? new Date(raw.lastDrainAt).toLocaleTimeString() : '—'}
+        />
+      </StatGrid>
+      {(stream.lastError || durable.lastError) && (
+        <p className='text-[12px] text-red-600 dark:text-red-400'>
+          Last error: {stream.lastError ?? durable.lastError}
+        </p>
+      )}
+      <section>
+        <div className='mb-2 flex items-center justify-between'>
+          <h2 className='text-[13px] font-medium'>Delivery probe</h2>
+          <button
+            type='button'
+            disabled={probe.isPending}
+            onClick={() => probe.mutate()}
+            className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1 text-[12px] hover:bg-muted disabled:opacity-50 dark:border-border'
+          >
+            <RefreshCw className={cn('h-3.5 w-3.5', probe.isPending && 'animate-spin')} />
+            Run probe now
+          </button>
+        </div>
+        <p className='mb-2 text-[12px] text-slate-500 dark:text-muted-foreground'>
+          A test connection inside the server receives a probe event sent through the normal path.
+          Add a Realtime delivery monitor (Monitors) to run it every 5 minutes and raise an issue
+          when delivery is slow or missing.
+        </p>
+        {data.probes.length === 0 ? (
+          <p className='text-[13px] text-slate-400'>No probe has run yet.</p>
+        ) : (
+          <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
+            <table className='w-full text-[12px] tabular-nums'>
+              <thead>
+                <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/40'>
+                  <th className='px-3 py-2'>When</th>
+                  <th className='px-3 py-2'>Result</th>
+                  <th className='px-3 py-2 text-right'>Delivery</th>
+                  <th className='px-3 py-2'>Path</th>
+                  <th className='px-3 py-2'>Journal</th>
+                  <th className='px-3 py-2'>Server</th>
+                  <th className='px-3 py-2'>Detail</th>
+                </tr>
+              </thead>
+              <tbody className='divide-y divide-slate-100 dark:divide-border/60'>
+                {data.probes.map((p) => (
+                  <tr key={`${p.at}-${p.node}`}>
+                    <td className='px-3 py-1.5 font-mono text-[11px] text-slate-400'>
+                      {new Date(p.at).toLocaleString()}
+                    </td>
+                    <td
+                      className={cn(
+                        'px-3 py-1.5 font-semibold',
+                        p.ok
+                          ? 'text-emerald-600 dark:text-emerald-400'
+                          : p.skipped
+                            ? 'text-slate-400'
+                            : BAD
+                      )}
+                    >
+                      {p.ok ? 'Delivered' : p.skipped ? 'Skipped' : p.arrived ? 'Slow' : 'Missed'}
+                    </td>
+                    <td className='px-3 py-1.5 text-right'>
+                      {p.delivery_ms != null ? `${p.delivery_ms}ms` : '—'}
+                    </td>
+                    <td className='px-3 py-1.5'>
+                      {p.path === 'stream' ? 'Stream' : p.path === 'adapter' ? 'Pub/sub' : '—'}
+                    </td>
+                    <td className='px-3 py-1.5'>
+                      {p.journaled ? 'Yes' : 'No'}
+                      {p.durable === false ? ' · no table row' : ''}
+                    </td>
+                    <td className='px-3 py-1.5 font-mono text-[11px]'>{p.node ?? '—'}</td>
+                    <td className='max-w-[360px] truncate px-3 py-1.5 text-slate-500'>
+                      {p.detail}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
     </div>
   )
 }

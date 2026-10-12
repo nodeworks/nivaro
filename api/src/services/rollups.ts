@@ -812,6 +812,17 @@ export async function recalcRollupsForParent(
       .where({ id: parentId })
       .update({ [entry.rollupField]: total })
     noteDerivedWrite('rollup')
+    // #1875 — a raw write: tell open pages the parent's total moved.
+    void import('./raw-write-announcer.js')
+      .then(({ announceRawWrites }) =>
+        announceRawWrites(entry.parentCollection, [parentId as string | number], {
+          action: 'update',
+          changed_fields: [entry.rollupField],
+          source: 'rollup',
+          apiOnly: true
+        })
+      )
+      .catch(() => {})
     // Cascade: is this parent row itself a contributor to a stored rollup on
     // ITS parent? Only when one of those rollups reads the field we just wrote.
     if (depth < MAX_CASCADE_DEPTH) {

@@ -832,6 +832,14 @@ export async function runStagedImport({
   if (rollupCollections.length > 0) {
     await onProgress?.('importing', { phase: 'rollups' })
     notes.push(describeRollupRecalc(await recalcRollupsFedBy(rollupCollections)))
+    // #1875 — the procedure wrote set-based: tell open pages on those collections.
+    await import('./raw-write-announcer.js')
+      .then(async ({ announceRawWrites }) => {
+        for (const c of rollupCollections) {
+          await announceRawWrites(c, null, { action: 'update', source: `import:${definition.key}` })
+        }
+      })
+      .catch(() => {})
   }
 
   const durationSeconds = Math.round((Date.now() - began) / 1000)

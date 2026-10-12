@@ -559,6 +559,7 @@
           <a class="docs-nav-item" data-section="journey-trail" href="#journey-trail">Journey Trail</a>
           <a class="docs-nav-item" data-section="session-replay" href="#session-replay">Session Replay</a>
           <a class="docs-nav-item" data-section="health-dashboard" href="#health-dashboard">Health Dashboard</a>
+          <a class="docs-nav-item" data-section="realtime-pipeline" href="#realtime-pipeline">Realtime Event Pipeline</a>
           <a class="docs-nav-item" data-section="db-health" href="#db-health">DB &amp; Runtime Health</a>
           <a class="docs-nav-item" data-section="db-tuning" href="#db-tuning">Database Tuning</a>
           <a class="docs-nav-item" data-section="ops-console" href="#ops-console">Ops Console</a>
@@ -16649,6 +16650,21 @@ scrape_configs:
           <p class="doc-p">GET /api/extensions also carries each extension’s <code class="doc-code">build</code>: the export’s own <code class="doc-code">build</code> value, or else the <code class="doc-code">.release-sha</code> file a deploy writes beside the extension. A deploy gate compares it with the release it mounted.</p>
           <div class="doc-note">GET /api/health remains the lightweight unauthenticated liveness check; it reports latency as degraded, so do not use it for routing. The detailed endpoint requires authentication.</div>
           <!-- /SYNC:health-dashboard -->
+        </div>
+
+        <div class="doc-section" id="s-realtime-pipeline" data-toc='[{"id":"realtime-pipeline","label":"Realtime Event Pipeline"},{"id":"realtime-pipeline-journal","label":"Catching up after a long absence"},{"id":"realtime-pipeline-stream","label":"Across servers"},{"id":"realtime-pipeline-raw","label":"Changes made outside the API"},{"id":"realtime-pipeline-probe","label":"Delivery probe"}]'>
+          <!-- SYNC:realtime-pipeline -->
+          <h1 class="doc-h1" id="realtime-pipeline">Realtime Event Pipeline</h1>
+          <p class="doc-p">When a record changes, open pages hear <code class="doc-code">collection:update</code> with the collection, the record id, the action and the NAMES of the fields written (never a value). Admin → Realtime → Event pipeline shows the counters and the delivery probe.</p>
+          <h2 class="doc-h2" id="realtime-pipeline-journal">Catching up after a long absence</h2>
+          <p class="doc-p">The fast journal in Redis keeps 15 minutes (5,000 events); every event is also written to <code class="doc-code">nivaro_event_journal</code> and kept 24 hours, so a laptop back from a night asleep replays the changes instead of reloading every list.</p>
+          <h2 class="doc-h2" id="realtime-pipeline-stream">Across servers</h2>
+          <p class="doc-p">Record-change events travel between API servers on a Redis stream, each server reading from its own position, so a server that loses Redis briefly misses nothing. <code class="doc-code">REALTIME_EVENT_STREAM=off</code> restores the Socket.io adapter.</p>
+          <h2 class="doc-h2" id="realtime-pipeline-raw">Changes made outside the API</h2>
+          <p class="doc-p">Procedures and scripts report changed records with <code class="doc-code">EXEC nivaro_announce_writes</code> or an INSERT into <code class="doc-code">nivaro_raw_writes</code>; the API broadcasts them every 5 seconds.</p>
+          <h2 class="doc-h2" id="realtime-pipeline-probe">Delivery probe</h2>
+          <p class="doc-p">A Realtime delivery monitor sends a probe event through the normal path every 5 minutes and raises an issue when delivery is slow or missing.</p>
+          <!-- /SYNC:realtime-pipeline -->
         </div>
 
         <div class="doc-section" id="s-db-health" data-toc='[{"id":"db-health","label":"DB &amp; Runtime Health"},{"id":"config-since","label":"Environment Config — what drifted since"},{"id":"layout-drift","label":"Layout drift"},{"id":"custom-query-dependents","label":"Custom queries — used by, and procedure shape"},{"id":"dead-columns","label":"Dead columns"},{"id":"proc-transaction-guards","label":"Open transactions on the pool"},{"id":"erp-payload-retention","label":"ERP push payload retention"},{"id":"cache-health","label":"Cache health (custom queries)"}]'>

@@ -187,6 +187,8 @@ export const DERIVED_TABLES: string[] = [
 
 /** Operational / ephemeral. Never meaningful to compare across environments. */
 export const RUNTIME_TABLES: string[] = [
+  'nivaro_event_journal', //           durable realtime journal (migration 427) — 24 hours
+  'nivaro_raw_writes', //              raw-write announcement inbox (migration 427)
   'nivaro_migrations',
   'nivaro_migrations_lock',
   'nivaro_migration_effects',
