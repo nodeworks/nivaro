@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
+import { dashboardLinkRoutes } from '../../../routes/dashboard-links.js'
 import { dashboardsRoutes } from '../../../routes/dashboards.js'
 import { computeWidgetData, widgetSourceRefusal } from '../../../services/dashboard-widgets.js'
 import type { User } from '../../../types.js'
@@ -26,9 +27,15 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 const perms = vi.hoisted(() => ({
   can: vi.fn(async (user: { id: string }) => user.id !== 'NOREAD'),
   getAllowedFields: vi.fn(async (user: { id: string }) =>
-    user.id === 'LIMITED' ? ['id', 'title', 'zone', 'created_at'] : null
+    user.id === 'LIMITED'
+      ? ['id', 'title', 'zone', 'created_at']
+      : user.id === 'NODATE'
+        ? ['id', 'title', 'zone']
+        : null
   ),
-  getRowFilter: vi.fn(async () => null),
+  getRowFilter: vi.fn(async (user: { id: string }) =>
+    user.id === 'NODATE' ? [{ field: 'zone', op: 'eq', value: 1 }] : null
+  ),
   applyRowFilter: vi.fn()
 }))
 vi.mock('../../../services/permissions.js', async (orig) => ({
@@ -45,6 +52,12 @@ function visibleRows(user: { id: string }) {
     Object.fromEntries(Object.entries(r).filter(([k]) => LIMITED_FIELDS.includes(k)))
   )
 }
+const scopes = vi.hoisted(() => ({ applyUserScopesToQuery: vi.fn(async () => {}) }))
+vi.mock('../../../services/user-scopes.js', async (orig) => ({
+  ...(await orig<typeof import('../../../services/user-scopes.js')>()),
+  ...scopes
+}))
+
 const items = vi.hoisted(() => ({
   readItems: vi.fn(),
   aggregateItems: vi.fn()
@@ -154,12 +167,41 @@ describe('dashboard widget data reads as the viewer', () => {
   })
 
   it('a widget over a system collection is refused (nivaro_users carries tokens)', async () => {
-    for (const collection of ['nivaro_users', 'NIVARO_api_keys', 'directus_users']) {
+    for (const collection of [
+      'nivaro_users',
+      'nivaro_settings',
+      'NIVARO_api_keys',
+      'nivaro_webhooks',
+      'directus_users'
+    ]) {
       expect(
         await computeWidgetData({ ...latest, collection }, [], { user: user('ZONE1') })
       ).toEqual({ error: 'Unknown collection', status: 400 })
     }
     expect(items.readItems).not.toHaveBeenCalled()
+  })
+
+  it('a count chart works for a role whose field list omits created_at, row filter applied', async () => {
+    const raw: Record<string, unknown> = {}
+    for (const m of ['select', 'count', 'whereRaw', 'groupByRaw', 'orderBy', 'where'])
+      raw[m] = vi.fn(() => raw)
+    // biome-ignore lint/suspicious/noThenProperty: a knex builder is thenable
+    raw.then = (resolve: (v: unknown[]) => void) => resolve([{ date: '2026-10-01', count: 2 }])
+    vi.mocked(db).mockImplementation(((t: string) => (t === 'orders' ? raw : chain(t))) as never)
+    const chart = { ...count, type: 'bar_chart' }
+    expect(await computeWidgetData(chart, [], { user: user('NODATE') })).toEqual({
+      data: { rows: [{ date: '2026-10-01', count: 2 }] }
+    })
+    expect(perms.applyRowFilter).toHaveBeenCalledWith(
+      raw,
+      [{ field: 'zone', op: 'eq', value: 1 }],
+      expect.objectContaining({ id: 'NODATE' })
+    )
+    expect(scopes.applyUserScopesToQuery).toHaveBeenCalledWith(
+      raw,
+      'orders',
+      expect.objectContaining({ id: 'NODATE' })
+    )
   })
 
   it('no viewer (a public link without a creator) gets nothing', async () => {
@@ -180,6 +222,10 @@ describe('building a widget', () => {
       })
     ).toMatch(/"amount"/)
     expect(await widgetSourceRefusal(user('ZONE1'), count)).toBeNull()
+    // System tables never, whatever a role's `*` policy grants.
+    expect(
+      await widgetSourceRefusal(user('ZONE1'), { ...latest, collection: 'nivaro_settings' })
+    ).toBe('Unknown collection')
   })
 
   it('POST /:id/widgets on a system collection is 400', async () => {
@@ -208,5 +254,54 @@ describe('building a widget', () => {
     })
     expect(res.statusCode).toBe(403)
     expect(JSON.parse(res.body).error).toMatch(/No read access/)
+  })
+})
+
+describe('public dashboard links', () => {
+  function linkDb(creator: { id: string; role: string }, admin: boolean) {
+    return (t: string) => {
+      const c = chain(t === 'orders' ? 'x' : t)
+      if (t === 'nivaro_dashboard_links')
+        c.first = vi.fn(async () => ({
+          id: 1,
+          dashboard: 'd1',
+          token: 'a'.repeat(48),
+          is_active: true,
+          expires_at: null,
+          created_by: creator.id
+        }))
+      if (t === 'nivaro_dashboards')
+        c.first = vi.fn(async () => ({ id: 'd1', name: 'D', user: 'OWNER' }))
+      if (t === 'nivaro_users') c.first = vi.fn(async () => ({ ...creator, status: 'active' }))
+      if (t === 'nivaro_roles') c.first = vi.fn(async () => ({ admin_access: admin }))
+      if (t === 'nivaro_dashboard_widgets') {
+        // biome-ignore lint/suspicious/noThenProperty: a knex builder is thenable
+        c.then = (resolve: (v: unknown[]) => void) => resolve([{ id: 'w', ...latest }])
+      }
+      c.increment = vi.fn(() => ({ catch: () => {} }))
+      return c
+    }
+  }
+
+  async function render() {
+    const app = Fastify({ logger: false })
+    app.register(dashboardLinkRoutes, { prefix: '/dashboard-links' })
+    await app.ready()
+    const res = await app.inject({
+      method: 'GET',
+      url: `/dashboard-links/public/${'a'.repeat(48)}`
+    })
+    return JSON.parse(res.body).data.widgets[0].data
+  }
+
+  it('renders as a creator who is still an administrator', async () => {
+    vi.mocked(db).mockImplementation(linkDb({ id: 'ZONE1', role: 'R' }, true) as never)
+    expect(await render()).toEqual({ rows: [ORDERS[0], ORDERS[2]] })
+  })
+
+  it('shows nothing once the creator neither owns the dashboard nor administers', async () => {
+    vi.mocked(db).mockImplementation(linkDb({ id: 'ZONE1', role: 'R' }, false) as never)
+    expect(await render()).toBeNull()
+    expect(items.readItems).not.toHaveBeenCalled()
   })
 })

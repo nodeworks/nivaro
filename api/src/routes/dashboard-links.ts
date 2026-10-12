@@ -143,7 +143,7 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
     }
 
     const dashboard = (await db('nivaro_dashboards').where({ id: link.dashboard }).first()) as
-      | { id: string; name: string }
+      | { id: string; name: string; user: string | null }
       | undefined
     if (!dashboard) return reply.code(404).send({ error: 'Not found' })
 
@@ -163,12 +163,26 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
     }>
 
     // A public link shows what its creator can see: every widget reads as that person, so a
-    // link never shows more than they could; no active creator, no data.
-    const creator = link.created_by
+    // link never shows more than they could. Only the dashboard's owner or an administrator can
+    // mint one (POST / → ownedDashboard; created_by is always the minting user, and no route
+    // changes it), and the creator must STILL be one of those: no active creator, a creator who
+    // no longer owns the dashboard, or a demoted administrator — no data.
+    let creator = link.created_by
       ? ((await db('nivaro_users').where({ id: link.created_by, status: 'active' }).first()) as
           | User
           | undefined)
       : undefined
+    if (
+      creator &&
+      String(dashboard.user ?? '').toUpperCase() !== String(creator.id).toUpperCase()
+    ) {
+      const role = creator.role
+        ? ((await db('nivaro_roles').where({ id: creator.role }).first('admin_access')) as
+            | { admin_access?: boolean | number }
+            | undefined)
+        : undefined
+      if (!role?.admin_access) creator = undefined
+    }
     const resolved = await Promise.all(
       widgets.map(async (w) => {
         const result = creator
