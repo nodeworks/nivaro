@@ -19,7 +19,8 @@ import {
   parseJsonArray,
   rowsFromToolResult,
   sameUserId,
-  toCsv
+  toCsv,
+  tombstoneMessage
 } from '../services/ai-conversations.js'
 import type { User } from '../types.js'
 
@@ -62,6 +63,23 @@ export async function aiConversationRoutes(app: FastifyInstance) {
         limit: Number(q.limit) || undefined
       })
     }
+  })
+
+  // ── Delete every conversation I own (history opt-out) ─────────────────
+  // Registered before /:id — a static segment wins over the parameter.
+  app.delete('/mine', async (req) => {
+    const { deleteOwnConversations } = await import('../services/ai-conversations.js')
+    const n = await deleteOwnConversations(String(req.user!.id))
+    if (n) {
+      await logActivity({
+        action: 'ai-conversation-delete-all',
+        user: req.user!.id,
+        collection: 'nivaro_ai_conversations',
+        comment: `deleted ${n} own conversation(s)`,
+        req
+      })
+    }
+    return { data: { deleted: n } }
   })
 
   // ── One conversation as the caller may read it ───────────────────────────
@@ -404,10 +422,17 @@ export async function aiConversationRoutes(app: FastifyInstance) {
     const rows = await listMessages(found.conv.id)
     const msg = rows.find((r) => String(r.id) === req.params.mid)
     if (!msg) return reply.code(404).send({ error: 'Message not found' })
-    if (found.access !== 'owner' && !sameUserId(msg.author, req.user!.id)) {
+    // Your own message is deleted. Someone else's — the owner moderating
+    // their thread — only loses its content: the row stays as a hidden turn,
+    // so an answer after it that may quote it stays hidden too.
+    if (sameUserId(msg.author, req.user!.id)) {
+      await deleteMessage(found.conv.id, String(msg.id))
+      return { data: { deleted: true } }
+    }
+    if (found.access !== 'owner') {
       return reply.code(403).send({ error: 'Only your own messages' })
     }
-    await deleteMessage(found.conv.id, String(msg.id))
-    return { data: { deleted: true } }
+    await tombstoneMessage(found.conv.id, String(msg.id))
+    return { data: { deleted: true, withheld: true } }
   })
 }

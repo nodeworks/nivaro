@@ -29,6 +29,12 @@ export type GuardLinks = (
   collection: string
 ) => Promise<{ m2o: Array<{ field: string; collection: string }> }>
 
+/** Who the refusals speak for. Default: the aggregate tool ("an aggregate
+ *  filter"); an Ask AI plan condition passes `{ subject: 'A condition' }`. */
+export interface GuardWording {
+  subject?: string
+}
+
 /**
  * Refuse a filter that touches a field the caller cannot read. `hidden` is the
  * base collection's unreadable columns; dotted paths are walked link by link
@@ -41,8 +47,14 @@ export async function assertFilterReadable(
   collection: string,
   paths: string[][],
   hidden: Set<string>,
-  links: GuardLinks
+  links: GuardLinks,
+  wording: GuardWording = {}
 ): Promise<void> {
+  const subject = wording.subject
+  const cannotUse = (c: string, why: string) =>
+    subject
+      ? `Your access to ${c} is ${why} — ${subject.toLowerCase()} cannot go through it`
+      : `Your access to ${c} is ${why} — it cannot be used in an aggregate filter.`
   for (const path of paths) {
     if (path[0] === '$state') continue
     if (hidden.has(path[0])) {
@@ -54,25 +66,24 @@ export async function assertFilterReadable(
     for (let i = 0; i < path.length - 1; i++) {
       const link = (await links(cur)).m2o.find((l) => l.field === path[i])
       if (!link) {
+        const through = path.slice(0, i + 1).join('.')
         throw new FieldAccessError(
-          `Cannot filter through "${path.slice(0, i + 1).join('.')}" — only links to a single record can be checked for access.`
+          subject
+            ? `${subject} cannot go through "${through}" — only links to a single record can be checked for access`
+            : `Cannot filter through "${through}" — only links to a single record can be checked for access.`
         )
       }
       if (!(await can(user, 'read', link.collection))) {
         throw new FieldAccessError(`You do not have access to ${link.collection}.`)
       }
       if (await getRowFilter(user, 'read', link.collection)) {
-        throw new FieldAccessError(
-          `Your access to ${link.collection} is row-filtered — it cannot be used in an aggregate filter.`
-        )
+        throw new FieldAccessError(cannotUse(link.collection, 'row-filtered'))
       }
       // The base query is scoped, a joined collection is not: refuse one the
       // caller is scoped on, or an out-of-scope value could be probed.
       const scope = await getUserScopeEnforcement(user, link.collection)
       if (scope.deny || scope.filters.length > 0) {
-        throw new FieldAccessError(
-          `Your access to ${link.collection} is limited by your scopes — it cannot be used in an aggregate filter.`
-        )
+        throw new FieldAccessError(cannotUse(link.collection, 'limited by your scopes'))
       }
       const allowed = await getAllowedFields(user, 'read', link.collection)
       const next = path[i + 1]

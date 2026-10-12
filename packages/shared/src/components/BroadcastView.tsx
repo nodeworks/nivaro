@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../context'
 import { del, get, patch, post } from '../lib/commands'
+import { useLiveOps } from '../lib/live-ops'
 import { cn } from '../lib/utils'
 import { useHelpVideoLibrary } from './help-videos/api'
 import { formatDuration } from './help-videos/viewer/format'
@@ -126,6 +127,13 @@ export function BroadcastView({ className }: { className?: string }) {
     queryKey: ['broadcasts'],
     queryFn: () =>
       client.request<{ data: Broadcast[] }>(get('/announcements')).then((r) => r.data ?? [])
+  })
+  // Live: delivered / opened / acknowledged counts tick as people read and acknowledge (admin
+  // room). Opens its own receipts too, so an expanded card's tables move with the list.
+  useLiveOps('broadcasts', () => {
+    void qc.invalidateQueries({ queryKey: ['broadcasts'] })
+    void qc.invalidateQueries({ queryKey: ['broadcast-receipt-summary'] })
+    void qc.invalidateQueries({ queryKey: ['broadcast-receipts'] })
   })
 
   const channels = useMemo(() => {

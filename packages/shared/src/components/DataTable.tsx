@@ -139,6 +139,8 @@ export interface DataTableProps<T = Record<string, unknown>> {
   rowClassName?: (row: T) => string | undefined
   /** Optional per-row drag props — rows dragged into Ask AI (#1886). */
   rowDragProps?: (row: T) => { draggable?: boolean; onDragStart?: (e: React.DragEvent) => void }
+  /** Optional per-row tooltip — e.g. "Changed by Beth just now". */
+  rowTitle?: (row: T) => string | undefined
   /** Grouped rendering: when set, `rows` is ignored for the body; each group renders
    *  a full-width header row followed by its rows (unless collapsed). Pagination hides. */
   rowGroups?: Array<{ key: string; header: React.ReactNode; rows: T[] }>
@@ -841,6 +843,7 @@ export function DataTable<T = Record<string, unknown>>({
   onSelectionChange,
   rowClassName,
   rowDragProps,
+  rowTitle,
   enterKey,
   rowGroups,
   collapsedGroups,
@@ -974,6 +977,8 @@ export function DataTable<T = Record<string, unknown>>({
             (pinFirstColumn || pinsActive ? 'bg-[#f2fdff] dark:bg-[#20303a]' : 'bg-nvr-cyan/5')
         )}
         style={{ animationDelay: `${Math.min(i, 14) * 16}ms` }}
+        data-row-key={rowId}
+        title={rowTitle?.(row)}
         onClick={() => onRowClick?.(row)}
         onContextMenu={onRowContextMenu ? (e) => onRowContextMenu(row, e) : undefined}
       >
