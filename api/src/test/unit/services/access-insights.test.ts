@@ -314,6 +314,6 @@ describe('redactOwnerFacts', () => {
   it('leaves everything for admins and for full-field roles', async () => {
     expect(await redactOwnerFacts(ex, BETH, true)).toBe(ex)
     vi.mocked(getAllowedFields).mockResolvedValue(['*'] as never)
-    expect(await redactOwnerFacts(ex, BETH, false)).toBe(ex)
+    expect((await redactOwnerFacts(ex, BETH, false)).groups).toEqual(ex.groups)
   })
 })

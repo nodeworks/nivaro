@@ -17,7 +17,7 @@ export const accessInsightsDocs: DocSection = {
     { type: 'h3', text: 'Why these owners? Who can act now?' },
     {
       type: 'p',
-      text: 'The Owners section of a record’s pipeline panel has a "Why?" link. For each owner it says how they got there: the owner group that matched (its filters against the record’s own values), the team that sits in the group, a manual add, the binding’s fallback field, or an out-of-office owner they stand in for. It also says who can act right now — available owners after delegation, with who is online. If your role cannot read a field a group filters on, the record’s value for it is shown as "not visible to you". Ask AI answers the same questions with the who_can_act and explain_owners tools.'
+      text: 'The Owners section of a record’s pipeline panel has a "Why?" link. For each owner it says how they got there: the owner group that matched (its filters against the record’s own values), the team that sits in the group, a manual add, the binding’s fallback field, or an out-of-office owner they stand in for. It also says who can act right now — available owners after delegation, with who is online. If your role cannot read a field a group filters on, that filter shows only as "a field you cannot see" (neither its value nor the record’s); a fallback field you cannot read reads "a field on the record names them"; and a related record’s name you may not read shows as its #id. Ask AI answers the same questions with the who_can_act and explain_owners tools.'
     },
     { type: 'h3', text: 'Role changes, before saving' },
     {
@@ -27,7 +27,7 @@ export const accessInsightsDocs: DocSection = {
     { type: 'h3', text: 'A person’s access' },
     {
       type: 'p',
-      text: 'A person’s Access tab has a "What they can see" card: per main collection, how many records they see of the total and why ("Beth sees 4,271 of 88,000 workflows because their Zone filter is Zone 1 and their role reads workflows"), and what they cannot edit. Counts run through the same row rules and scopes their own reads use. Ask AI answers it with explain_person_access (administrators may name another person).'
+      text: 'A person’s Access tab has a "What they can see" card: per main collection, how many records they see of the total and why ("Beth sees 4,271 of 88,000 workflows because their Zone filter is Zone 1 and their role reads workflows"), and what they cannot edit. Counts run through the same row rules and scopes their own reads use. Only administrators get the \u201cof N\u201d total; a person asking about their own access (the route or Ask AI\u2019s explain_person_access) hears \u201cYou see 4,271 workflows, limited by your Zone filter (Zone 1)\u201d — never how many records are hidden from them. Administrators may name another person.'
     },
     { type: 'h3', text: 'Unowned records' },
     {

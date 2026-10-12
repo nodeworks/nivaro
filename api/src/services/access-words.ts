@@ -131,6 +131,10 @@ export interface OwnerSource {
   via_team?: string | null
   /** fallback: the record field that names this person. */
   field_label?: string | null
+  /** fallback: that field's name (dropped when the reader cannot see it). */
+  field?: string | null
+  /** fallback: the reader cannot see that field — name it only as such. */
+  field_hidden?: boolean
   /** delegate: who they stand in for, and until when. */
   for_name?: string | null
   until?: string | null
@@ -177,7 +181,9 @@ export function ownerSourceSentence(name: string, src: OwnerSource): string {
     case 'manual':
       return `${name} was added to this record by hand${src.added_by ? ` by ${src.added_by}` : ''}.`
     case 'fallback':
-      return `${name} owns this record because they are its ${src.field_label ?? 'named person'}.`
+      return src.field_hidden
+        ? `${name} owns this record because a field on the record names them.`
+        : `${name} owns this record because they are its ${src.field_label ?? 'named person'}.`
     case 'delegate':
       return `${name} stands in for ${src.for_name ?? 'an owner'}, who is out of office${
         src.until ? ` until ${src.until}` : ''
@@ -291,26 +297,53 @@ export interface PersonCollectionFact {
   strict?: string | null
 }
 
-export function personCollectionSentence(name: string, f: PersonCollectionFact): string {
-  const reasons: string[] = []
-  for (const s of f.scopes)
-    reasons.push(`their ${s.label} filter is ${listPhrase(s.values, 'or', 5) || '(none)'}`)
-  if (f.row_filter) reasons.push('a row rule on their role narrows it')
-  reasons.push(`their role reads ${f.collection_label}`)
+/**
+ * One collection of a person's access. With a total (an administrator
+ * reading someone's access): "Beth sees 4,271 of 88,000 workflows because …".
+ * Without one (`total: null` — a person reading their OWN access): "You see
+ * 4,271 workflows, limited by your Zone filter (Zone 1)" — never "of N",
+ * which would tell them how much is hidden from them.
+ */
+export function personCollectionSentence(
+  name: string,
+  f: PersonCollectionFact,
+  voice: 'third' | 'self' = 'third'
+): string {
+  const self = voice === 'self'
+  const who = self ? 'You' : name
+  const sees = self ? 'see' : 'sees'
+  const poss = self ? 'your' : 'their'
   const edit = f.can_update ? 'and can edit them' : 'but cannot edit them'
+  const label = f.collection_label
   if (f.strict)
-    return `${name} sees no ${f.collection_label}: their ${f.strict} filter is strict and ${f.collection_label} has no ${f.strict} link.`
-  // No total (a person reading their own access): the visible count alone,
-  // so the size of what is hidden from them is never implied.
-  if (f.visible != null && f.total == null && (f.scopes.length > 0 || f.row_filter))
-    return `${name} sees ${f.visible.toLocaleString('en-US')} ${f.collection_label} because ${listPhrase(reasons)}, ${edit}.`
+    return `${who} ${sees} no ${label}: ${poss} ${f.strict} filter is strict and ${label} has no ${f.strict} link.`
+  const narrowed = f.scopes.length > 0 || f.row_filter
+  if (f.total == null && narrowed) {
+    const limits = [
+      ...f.scopes.map(
+        (s) => `${poss} ${s.label} filter (${listPhrase(s.values, 'or', 5) || 'none'})`
+      ),
+      ...(f.row_filter ? [`a row rule on ${poss} role`] : [])
+    ]
+    const count = f.visible != null ? `${f.visible.toLocaleString('en-US')} ` : ''
+    return `${who} ${sees} ${count}${label}, limited by ${listPhrase(limits)}, ${edit}.`
+  }
+  const reasons: string[] = []
+  for (const sc of f.scopes)
+    reasons.push(`${poss} ${sc.label} filter is ${listPhrase(sc.values, 'or', 5) || '(none)'}`)
+  if (f.row_filter) reasons.push(`a row rule on ${poss} role narrows it`)
+  reasons.push(`${poss} role reads ${label}`)
   if (f.visible != null && f.total != null && f.visible < f.total)
-    return `${name} sees ${f.visible.toLocaleString('en-US')} of ${f.total.toLocaleString('en-US')} ${f.collection_label} because ${listPhrase(reasons)}, ${edit}.`
+    return `${who} ${sees} ${f.visible.toLocaleString('en-US')} of ${f.total.toLocaleString('en-US')} ${label} because ${listPhrase(reasons)}, ${edit}.`
   const all = f.total ?? f.visible
-  return `${name} sees all ${all != null ? `${all.toLocaleString('en-US')} ` : ''}${f.collection_label} ${edit}.`
+  return `${who} ${sees} all ${all != null ? `${all.toLocaleString('en-US')} ` : ''}${label} ${edit}.`
 }
 
-export function personCannotSentence(name: string, labels: string[]): string | null {
+export function personCannotSentence(
+  name: string,
+  labels: string[],
+  voice: 'third' | 'self' = 'third'
+): string | null {
   if (labels.length === 0) return null
-  return `${name} cannot edit ${listPhrase(labels, 'or', 8)}.`
+  return `${voice === 'self' ? 'You' : name} cannot edit ${listPhrase(labels, 'or', 8)}.`
 }
