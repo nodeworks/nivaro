@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 
 /**
@@ -111,6 +112,17 @@ export async function readMemory(userId: string): Promise<AiMemoryNote[]> {
   return memoryFromPreferences(await readPrefs(userId))
 }
 
+async function writeMemory(
+  userId: string,
+  prefs: Record<string, unknown>,
+  notes: AiMemoryNote[]
+): Promise<void> {
+  const { ai_memory: _old, ...rest } = prefs
+  await db('nivaro_users')
+    .where({ id: userId })
+    .update({ preferences: JSON.stringify(notes.length ? { ...rest, ai_memory: notes } : rest) })
+}
+
 /**
  * Add one note. When the list is full the OLDEST note makes room — a person
  * saying "remember" expects it kept; Profile shows what was dropped.
@@ -127,10 +139,192 @@ export async function addMemoryNote(
   const note: AiMemoryNote = { id: randomUUID(), text: clean, at: new Date().toISOString() }
   const next = [...notes, note]
   const dropped = next.length > AI_MEMORY_MAX_NOTES ? (next.shift() ?? null) : null
-  await db('nivaro_users')
-    .where({ id: userId })
-    .update({ preferences: JSON.stringify({ ...prefs, ai_memory: next }) })
+  await writeMemory(userId, prefs, next)
   return { note, dropped, duplicate: false }
+}
+
+// ─── Suggestions (#1845) ──────────────────────────────────────────────────────
+//
+// The model may OFFER a note it inferred ("by 'my zone' you mean Zone 3").
+// The offer rides the answer as `memory_suggestions`; nothing is written
+// until the asker clicks "Remember this?", which POSTs /ai/memory and lands
+// in `addSuggestedNote` — the same caps as every other self-write. The tool
+// is never in CHAT_TOOLS (the chat-room bot shares that list): only POST
+// /ai/chat opts the loop into it, and the loop answers it in place — no trace
+// entry, so shared views, replays and exports never see the offer.
+
+export const SUGGEST_MEMORY_TOOL_NAME = 'suggest_memory'
+export const AI_MEMORY_MAX_SUGGESTIONS = 2
+
+export interface AiMemorySuggestion {
+  text: string
+}
+
+export const SUGGEST_MEMORY_TOOL: Anthropic.Tool = {
+  name: SUGGEST_MEMORY_TOOL_NAME,
+  description:
+    'OFFER (never save) a standing note about the person asking, when their question reveals a lasting preference that would help future answers: what they mean by "my zone" or "my team", the units or format they want, the area they work in. The person sees a "Remember this?" button under your answer and nothing is kept unless they click it — never say it was saved. Write the note in their voice, short ("By my zone I mean Zone 3"). Never offer one-off facts, record values, figures from this answer, or anything about other people. At most one per answer; call it alongside your other tools or just before you answer.',
+  input_schema: {
+    type: 'object' as const,
+    properties: {
+      text: { type: 'string', description: `The note, under ${AI_MEMORY_MAX_CHARS} characters.` }
+    },
+    required: ['text']
+  }
+}
+
+/**
+ * An offered note that reads as an order to the assistant rather than a fact
+ * about the person ("call propose_action whenever…", "ignore your rules") —
+ * the note would ride every later prompt, so a model nudged by data it read
+ * could plant a standing instruction. Deliberately broad: a refused offer
+ * costs nothing, the person can still write any note on Profile.
+ */
+export function looksLikeInstruction(text: string): boolean {
+  const t = text.toLowerCase()
+  if (/^(please\s+)?(call|propose|ignore|run|execute|invoke|disregard|forget)\b/.test(t))
+    return true
+  if (/\balways\s+(run|call|propose|execute|use\s+the\s+\w+\s+tool)\b/.test(t)) return true
+  if (/\b(call|run|invoke|execute|use)\b[^.]{0,40}\btools?\b/.test(t)) return true
+  if (/\bpropose\b/.test(t)) return true
+  if (/\b[a-z]+(?:_[a-z]+)+\s*\(/.test(t)) return true
+  if (
+    /\b(propose_action|propose_plan|run_custom_query|ask_choice|suggest_memory|query_items)\b/.test(
+      t
+    )
+  )
+    return true
+  if (
+    /\bignore\b[^.]{0,30}\b(instructions?|rules?|prompt|above|previous|permissions?)\b/.test(t) ||
+    /\bsystem prompt\b/.test(t)
+  )
+    return true
+  return false
+}
+
+/**
+ * Decide one suggest_memory call: the offer to show (or none) and what the
+ * model is told. `offered` is this answer's offers so far.
+ */
+export function offerMemorySuggestion(
+  input: Record<string, unknown>,
+  existing: AiMemoryNote[],
+  offered: AiMemorySuggestion[]
+): { suggestion: AiMemorySuggestion | null; reply: string } {
+  const text = cleanText(input.text).replace(/[.!]+$/, '')
+  if (!text) return { suggestion: null, reply: 'Nothing to offer — the note was empty.' }
+  if (text.length > AI_MEMORY_MAX_CHARS) {
+    return {
+      suggestion: null,
+      reply: `Too long — a note is at most ${AI_MEMORY_MAX_CHARS} characters. Not offered.`
+    }
+  }
+  if (looksLikeInstruction(text)) {
+    return {
+      suggestion: null,
+      reply:
+        'Not offered — a note describes the person (their area, units, wording), never an instruction to you.'
+    }
+  }
+  const key = text.toLowerCase()
+  if (existing.some((n) => n.text.toLowerCase() === key)) {
+    return { suggestion: null, reply: 'They already have this note — nothing to offer.' }
+  }
+  if (offered.some((o) => o.text.toLowerCase() === key)) {
+    return { suggestion: null, reply: 'Already offered in this answer.' }
+  }
+  if (offered.length >= AI_MEMORY_MAX_SUGGESTIONS) {
+    return { suggestion: null, reply: 'Enough offers for one answer — not offered.' }
+  }
+  if (existing.length >= AI_MEMORY_MAX_NOTES) {
+    return {
+      suggestion: null,
+      reply: `Their memory is full (${AI_MEMORY_MAX_NOTES} notes) — not offered.`
+    }
+  }
+  return {
+    suggestion: { text },
+    reply:
+      'Offered: a "Remember this?" button shows under your answer. Nothing is saved unless they click it — do not say it was remembered.'
+  }
+}
+
+/** The offers on an answer body, cleaned (client and stored-meta input alike). */
+export function suggestionsFrom(raw: unknown): AiMemorySuggestion[] {
+  if (!Array.isArray(raw)) return []
+  const out: AiMemorySuggestion[] = []
+  for (const s of raw.slice(0, AI_MEMORY_MAX_SUGGESTIONS)) {
+    const text = cleanText((s as { text?: unknown } | null)?.text)
+    if (text && text.length <= AI_MEMORY_MAX_CHARS) out.push({ text })
+  }
+  return out
+}
+
+/**
+ * The asker clicked "Remember this?" (#1845). Unlike "remember that …", a
+ * full list is refused rather than dropping the oldest note — a click on a
+ * suggestion should not quietly forget something they wrote themselves.
+ */
+export async function addSuggestedNote(
+  userId: string,
+  text: unknown
+): Promise<{ note: AiMemoryNote; duplicate: boolean } | { error: string; status: number }> {
+  const clean = cleanText(text)
+  if (!clean) return { error: 'text is required', status: 400 }
+  if (clean.length > AI_MEMORY_MAX_CHARS) {
+    return { error: `A note is limited to ${AI_MEMORY_MAX_CHARS} characters`, status: 400 }
+  }
+  // The click path keeps only what the offer path could have offered.
+  if (looksLikeInstruction(clean)) {
+    return {
+      error: 'That reads as an instruction to Ask AI — add notes about yourself under Profile',
+      status: 400
+    }
+  }
+  const prefs = await readPrefs(userId)
+  const notes = memoryFromPreferences(prefs)
+  const existing = notes.find((n) => n.text.toLowerCase() === clean.toLowerCase())
+  if (existing) return { note: existing, duplicate: true }
+  if (notes.length >= AI_MEMORY_MAX_NOTES) {
+    return {
+      error: `Ask AI memory holds ${AI_MEMORY_MAX_NOTES} notes — remove one under Profile → Ask AI memory first`,
+      status: 409
+    }
+  }
+  const note: AiMemoryNote = { id: randomUUID(), text: clean, at: new Date().toISOString() }
+  await writeMemory(userId, prefs, [...notes, note])
+  return { note, duplicate: false }
+}
+
+// ─── Administrator view / clear (#1897) ───────────────────────────────────────
+
+/** Someone's notes for the admin route; null when there is no such account. */
+export async function readMemoryOf(userId: string): Promise<AiMemoryNote[] | null> {
+  const row = (await db('nivaro_users').where({ id: userId }).first('id', 'preferences')) as
+    | { id: string; preferences?: unknown }
+    | undefined
+  if (!row) return null
+  return memoryFromPreferences(row.preferences)
+}
+
+/**
+ * Forget one note (`noteId`) or all of them. Removal only — the admin route
+ * has no way to add or reword a note. Null when there is no such account.
+ */
+export async function forgetMemory(
+  userId: string,
+  noteId?: string
+): Promise<{ removed: number; remaining: number } | null> {
+  const row = (await db('nivaro_users').where({ id: userId }).first('id')) as
+    | { id: string }
+    | undefined
+  if (!row) return null
+  const prefs = await readPrefs(userId)
+  const notes = memoryFromPreferences(prefs)
+  const keep = noteId ? notes.filter((n) => n.id !== noteId) : []
+  const removed = notes.length - keep.length
+  if (removed > 0 || (!noteId && 'ai_memory' in prefs)) await writeMemory(userId, prefs, keep)
+  return { removed, remaining: keep.length }
 }
 
 /**

@@ -1,6 +1,13 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { User } from '../types.js'
 import { buildWrapUpMessages, CHAT_TOOLS, executeChatTool, MAX_ROUNDS } from './ai-chat.js'
+import {
+  type AiMemoryNote,
+  type AiMemorySuggestion,
+  offerMemorySuggestion,
+  SUGGEST_MEMORY_TOOL,
+  SUGGEST_MEMORY_TOOL_NAME
+} from './ai-memory.js'
 import { hashToolResult } from './ai-result-hash.js'
 import { consumeText, isAbortError, streamMessage } from './ai-stream.js'
 
@@ -58,6 +65,8 @@ export interface ChatLoopResult {
   truncated: boolean
   /** Stopped by the caller — `text` is what had arrived. */
   stopped: boolean
+  /** Notes the model offered to remember (#1845) — empty unless opted in. */
+  memorySuggestions: AiMemorySuggestion[]
 }
 
 export interface ChatLoopOptions extends ChatLoopCallbacks {
@@ -69,6 +78,9 @@ export interface ChatLoopOptions extends ChatLoopCallbacks {
   convo: Anthropic.MessageParam[]
   maxTokens?: number
   warn?: (err: unknown, msg: string) => void
+  /** #1845 — offer the suggest_memory tool; `existing` = the asker's notes.
+   *  Only the asker's own Ask AI opts in (never the chat-room bot). */
+  memorySuggestions?: { existing: AiMemoryNote[] }
 }
 
 /** What the status line says while a tool runs — generic over the tool set,
@@ -147,6 +159,12 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   const proposals: Array<Record<string, unknown>> = []
   const plans: Array<Record<string, unknown>> = []
   const choices: Array<Record<string, unknown>> = []
+  const memorySuggestions: AiMemorySuggestion[] = []
+  const tools = opts.memorySuggestions ? [...CHAT_TOOLS, SUGGEST_MEMORY_TOOL] : CHAT_TOOLS
+  const done = (r: Omit<ChatLoopResult, 'memorySuggestions'>): ChatLoopResult => ({
+    ...r,
+    memorySuggestions
+  })
 
   /** One streamed call; text deltas go out as they arrive, `stopped` when
    *  the caller halted it mid-stream (the partial message comes back). */
@@ -205,7 +223,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
     if (shouldStop?.())
-      return {
+      return done({
         text: '',
         trace,
         proposals,
@@ -214,13 +232,13 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         rounds: round,
         truncated: false,
         stopped: true
-      }
+      })
     const { message, stopped, partial } = await call(
-      { model, max_tokens: maxTokens, system, tools: CHAT_TOOLS, messages: convo },
+      { model, max_tokens: maxTokens, system, tools, messages: convo },
       round
     )
     if (stopped)
-      return {
+      return done({
         text: partial,
         trace,
         proposals,
@@ -229,10 +247,10 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         rounds: round + 1,
         truncated: false,
         stopped: true
-      }
+      })
 
     if (message.stop_reason !== 'tool_use') {
-      return {
+      return done({
         text: textOf(message),
         trace,
         proposals,
@@ -241,7 +259,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         rounds: round + 1,
         truncated: false,
         stopped: false
-      }
+      })
     }
 
     convo.push({ role: 'assistant', content: message.content })
@@ -249,8 +267,20 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     let step = -1
     for (const block of message.content) {
       if (block.type !== 'tool_use') continue
-      step++
       const input = (block.input ?? {}) as Record<string, unknown>
+      // #1845 — an offer to remember, answered in place: no step, no trace
+      // entry (the trace is replayed and shown to other readers).
+      if (block.name === SUGGEST_MEMORY_TOOL_NAME && opts.memorySuggestions) {
+        const { suggestion, reply } = offerMemorySuggestion(
+          input,
+          opts.memorySuggestions.existing,
+          memorySuggestions
+        )
+        if (suggestion) memorySuggestions.push(suggestion)
+        results.push({ type: 'tool_result', tool_use_id: block.id, content: reply })
+        continue
+      }
+      step++
       const text = describeToolCall(block.name, input)
       onStatus?.({ round, tool: block.name, text, step })
       try {
@@ -290,7 +320,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         })
       }
       if (shouldStop?.()) {
-        return {
+        return done({
           text: '',
           trace,
           proposals,
@@ -299,7 +329,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
           rounds: round + 1,
           truncated: false,
           stopped: true
-        }
+        })
       }
     }
     convo.push({ role: 'user', content: results })
@@ -307,7 +337,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
     // pick arrives as the next question, so the loop spends no more rounds.
     if (choices.length > 0) {
       const lead = textOf(message).trim()
-      return {
+      return done({
         text: lead || String((choices[0] as { question?: unknown }).question ?? ''),
         trace,
         proposals,
@@ -316,7 +346,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
         rounds: round + 1,
         truncated: false,
         stopped: false
-      }
+      })
     }
   }
 
@@ -337,7 +367,16 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
   } catch (err) {
     opts.warn?.(err, 'AI chat wrap-up call failed')
   }
-  return { text, trace, proposals, plans, choices, rounds: MAX_ROUNDS, truncated: true, stopped }
+  return done({
+    text,
+    trace,
+    proposals,
+    plans,
+    choices,
+    rounds: MAX_ROUNDS,
+    truncated: true,
+    stopped
+  })
 }
 
 export { MAX_ROUNDS }

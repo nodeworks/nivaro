@@ -15,6 +15,7 @@ import {
 import { AccessSummaryCard } from './PersonAccessSummary'
 import { ActivityFeedCard, JourneyCard, SignInsCard, StatsCard } from './PersonActivity'
 import { ForceReloadCard, MergeCard, OffboardingCard } from './PersonAdminTools'
+import { PersonAiMemoryCard } from './PersonAiMemory'
 import { CompareAccessCard } from './PersonCompare'
 import { TeamLoadCard, WhyCard, WorkingOnCard } from './PersonExtras'
 import { PersonHeader } from './PersonHeader'
@@ -212,6 +213,7 @@ export function PersonProfile({
               </div>
               <div className='space-y-4'>
                 <OffboardingCard profile={profile} />
+                <PersonAiMemoryCard profile={profile} />
               </div>
             </div>
           </TabsContent>

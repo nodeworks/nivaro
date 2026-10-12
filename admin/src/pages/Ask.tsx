@@ -3,6 +3,8 @@ import {
   AiFeedbackButtons,
   AiHistorySwitch,
   AiMarkdown,
+  type AiMemorySuggestion,
+  AiMemorySuggestions,
   type AiPlan,
   AiPlanCard,
   type AiPlanSubscribe,
@@ -88,6 +90,8 @@ interface ChatTurn {
   proposals?: Proposal[]
   /** Multi-step plans (#1807) — the card re-reads each from the server. */
   plans?: AiPlan[]
+  /** "Remember this?" offers (#1845) — only ever on the asker's own answers. */
+  memorySuggestions?: AiMemorySuggestion[]
   requestId?: string | null
   playbooksUsed?: number
   /** Served from the answer cache (#723) — when it was first answered. */
@@ -118,6 +122,8 @@ interface ChatBody {
   conversation_id?: string
   /** #1804 — a "remember that …" note was kept instead of asking. */
   remembered?: { id: string; text: string }
+  /** #1845 — notes the model offers to remember; saved only on a click. */
+  memory_suggestions?: AiMemorySuggestion[]
   choices?: AskChoice[]
   followups?: string[]
 }
@@ -199,6 +205,10 @@ function toTurn(m: ServerMessage): ChatTurn {
     trace: m.trace,
     proposals: m.proposals,
     plans: m.own && Array.isArray(m.meta.plans) ? (m.meta.plans as AiPlan[]) : undefined,
+    memorySuggestions:
+      m.own && Array.isArray(m.meta.memory_suggestions)
+        ? (m.meta.memory_suggestions as AiMemorySuggestion[])
+        : undefined,
     choices: m.own && Array.isArray(m.meta.choices) ? (m.meta.choices as AskChoice[]) : undefined,
     followups:
       m.own && Array.isArray(m.meta.followups) ? (m.meta.followups as string[]) : undefined,
@@ -539,6 +549,7 @@ function AskPageInner() {
           trace: data.trace,
           proposals: data.proposals,
           plans: data.plans,
+          memorySuggestions: data.memory_suggestions,
           choices: data.choices,
           followups: data.followups,
           requestId: data.request_id ?? null,
@@ -1096,6 +1107,7 @@ function AskPageInner() {
                                 {liveTurns.has(i) && (
                                   <LiveAnswer sources={liveSourcesFor(t.trace)} />
                                 )}
+                                <AiMemorySuggestions suggestions={t.memorySuggestions} />
                                 {i === turns.length - 1 && !send.active && (
                                   <FollowUps
                                     questions={t.followups ?? []}
