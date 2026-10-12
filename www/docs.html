@@ -567,6 +567,7 @@
           <a class="docs-nav-item" data-section="session-replay" href="#session-replay">Session Replay</a>
           <a class="docs-nav-item" data-section="health-dashboard" href="#health-dashboard">Health Dashboard</a>
           <a class="docs-nav-item" data-section="realtime-pipeline" href="#realtime-pipeline">Realtime Event Pipeline</a>
+          <a class="docs-nav-item" data-section="realtime-load-test" href="#realtime-load-test">Realtime Load Test</a>
           <a class="docs-nav-item" data-section="db-health" href="#db-health">DB &amp; Runtime Health</a>
           <a class="docs-nav-item" data-section="db-tuning" href="#db-tuning">Database Tuning</a>
           <a class="docs-nav-item" data-section="ops-console" href="#ops-console">Ops Console</a>
@@ -16785,6 +16786,50 @@ scrape_configs:
           <h2 class="doc-h2" id="realtime-pipeline-probe">Delivery probe</h2>
           <p class="doc-p">A Realtime delivery monitor sends a probe event through the normal path every 5 minutes and raises an issue when delivery is slow or missing.</p>
           <!-- /SYNC:realtime-pipeline -->
+        </div>
+
+        <div class="doc-section" id="s-realtime-load-test" data-toc='[{"id":"realtime-load-test","label":"Realtime Load Test"},{"id":"realtime-load-test-what","label":"What it does"},{"id":"realtime-load-test-smoke","label":"Smoke run (shared development database)"},{"id":"realtime-load-test-full","label":"Full scale (dedicated environment only)"},{"id":"realtime-load-test-report","label":"Reading the report"}]'>
+          <!-- SYNC:realtime-load-test -->
+          <h1 class="doc-h1" id="realtime-load-test">Realtime Load Test</h1>
+          <p class="doc-p"><code class="doc-code">scripts/realtime-load-test.mts</code> opens N simulated Socket.io clients, writes to a throwaway table at a steady rate and reports how long events took to arrive, what each socket costs the server in memory, how much Redis traffic the run caused and how the event stream behaved. Use it before a release that touches the socket layer, or to size an environment.</p>
+          <h2 class="doc-h2" id="realtime-load-test-what">What it does</h2>
+          <ul class="doc-ul">
+            <li>Creates a throwaway table <code class="doc-code">zz_loadtest_&lt;random&gt;</code> (registered as a hidden collection) and a throwaway active user with an admin role and a static token. Every client signs in with a one-time <code class="doc-code">ws-token</code> minted for that user.</li>
+            <li>Splits the clients across rooms by <code class="doc-code">--mix record/collection/chat</code> (default 20/70/10): collection clients join <code class="doc-code">collection:&lt;table&gt;</code>, record clients sit in one record room, chat clients join a room the user cannot see (it measures the join gate; no chat message is written, because chat tables are real data). Half the clients (<code class="doc-code">--coalesce-share</code>) opt in to merged bursts.</li>
+            <li>Writes alternate creates and updates through <code class="doc-code">/api/items</code>. Delivery latency is the time from sending the request to the <code class="doc-code">collection:update</code> arriving, in two groups (clients that receive every change, and clients that receive merged bursts, whose latency includes the one-second merge window), plus the arrival time relative to the write response. One record client sends a <code class="doc-code">record:signal</code> per second; its latency is reported apart.</li>
+            <li>Memory is the RSS change of the target process (<code class="doc-code">--api-pid</code>) between before the clients connect and after they have joined, divided by the sockets. Redis traffic is the <code class="doc-code">INFO stats</code> delta of commands and bytes over the run. Stream lag is read from <code class="doc-code">/api/realtime/pipeline</code> every two seconds.</li>
+            <li>In <code class="doc-code">finally</code>, and on Ctrl-C, it deletes the rows the API wrote about the table (activity, revisions, journal), the metadata rows, the table, the user and the rows that name the user, then checks and prints that they are gone.</li>
+          </ul>
+          <h2 class="doc-h2" id="realtime-load-test-smoke">Smoke run (shared development database)</h2>
+          <p class="doc-p">The development database is shared with staging, so the default mode refuses anything but <code class="doc-code">127.0.0.1:3132</code> and caps a run at 200 sockets, 5 writes per second and 60 seconds. Start a throwaway API on that port with its own Redis channel prefix, and no migrations or crons:</p>
+          <pre class="doc-pre"><code>cd api
+          SKIP_BOOT_MIGRATIONS=1 CRON_TICKS=off PORT=3132 REDIS_CHANNEL_PREFIX=lt: npx tsx src/index.ts
+          # in another shell (use the pid of the node process that listens on 3132)
+          cd api &amp;&amp; npx tsx ../scripts/realtime-load-test.mts --api-pid &lt;pid&gt; \
+            --sockets 200 --ramp 8 --rate 5 --duration 40 --out /tmp/rt-load.json</code></pre>
+          <h2 class="doc-h2" id="realtime-load-test-full">Full scale (dedicated environment only)</h2>
+          <p class="doc-p">A real capacity test needs thousands of sockets and a sustained write rate, which belongs on an environment with its own database and Redis, never the shared one and never a deployed host. Run the API there with the production settings you want to size, run the script from a separate machine (one Node process holds a few thousand sockets: raise <code class="doc-code">ulimit -n</code>, and run several copies at once if you need more, adding their results), and lift the smoke limits explicitly:</p>
+          <pre class="doc-pre"><code>npx tsx scripts/realtime-load-test.mts --target https://loadtest.internal:3055 \
+            --full-scale --confirm-dedicated loadtest.internal:3055 \
+            --sockets 5000 --ramp 120 --rate 50 --duration 600 --out rt-5000.json</code></pre>
+          <ul class="doc-ul">
+            <li><code class="doc-code">--confirm-dedicated</code> must equal the target host and port; it is the only thing between the script and a database that real people use.</li>
+            <li><code class="doc-code">--api-pid</code> only works against a process on the same machine; against a remote API read the process memory from your monitoring and divide by the connected sockets (<code class="doc-code">server_socket_count</code> in the report).</li>
+            <li>Redis figures are whole-server deltas: run on a Redis nothing else uses. On two or more API nodes, <code class="doc-code">stream.delivery_lag_ms</code> fills in (a single node reads back its own entries and reports <code class="doc-code">own_skipped_delta</code> instead).</li>
+            <li>Watch for: <code class="doc-code">collection_loss_pct</code> above zero (events not delivered), a rising <code class="doc-code">delivery_lag_ms</code> or <code class="doc-code">stream_len_after</code> over the run, connect times growing with the ramp, and RSS that does not level off after the clients disconnect.</li>
+          </ul>
+          <h2 class="doc-h2" id="realtime-load-test-report">Reading the report</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+          <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+          <tbody><tr><td>connections</td><td>Clients that signed in, connect time p50/p95/p99, drops and connect errors</td></tr>
+          <tr><td>writes</td><td>Writes sent and failed, HTTP time of the write itself</td></tr>
+          <tr><td>delivery</td><td>Updates received against expected (clients in the collection room times writes), latency per client group, record-signal latency</td></tr>
+          <tr><td>memory</td><td>RSS before and after connecting, in KB per socket</td></tr>
+          <tr><td>redis</td><td>Commands and bytes during the run, stream length before and after</td></tr>
+          <tr><td>stream</td><td>Entries published and delivered, publish failures, delivery lag samples</td></tr>
+          <tr><td>cleanup</td><td>Whether the throwaway table, metadata rows and user are gone</td></tr></tbody>
+          </table></div>
+          <!-- /SYNC:realtime-load-test -->
         </div>
 
         <div class="doc-section" id="s-db-health" data-toc='[{"id":"db-health","label":"DB &amp; Runtime Health"},{"id":"config-since","label":"Environment Config — what drifted since"},{"id":"layout-drift","label":"Layout drift"},{"id":"custom-query-dependents","label":"Custom queries — used by, and procedure shape"},{"id":"dead-columns","label":"Dead columns"},{"id":"proc-transaction-guards","label":"Open transactions on the pool"},{"id":"erp-payload-retention","label":"ERP push payload retention"},{"id":"cache-health","label":"Cache health (custom queries)"}]'>
