@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import { selectInChunks } from './db-batch.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * File usage tracking.
@@ -117,29 +118,57 @@ export async function fileIdsAttachedTo(
 }
 
 /** Files referenced by nothing — safe-to-delete candidates. */
-export async function findOrphanFiles(opts: { limit?: number; offset?: number } = {}): Promise<{
+/**
+ * Files nothing uses: no foreign key AND no FK-less reference (config
+ * review's orphanFiles — file fields without a relations row, M2M file legs,
+ * config JSON, rich text, `*file*` uuid columns, extension tables) AND older
+ * than FILE_MIN_AGE_DAYS, so a file mid-attach is never listed. Fails CLOSED:
+ * a reference source that cannot be read throws, and nothing is listed.
+ * The scan runs ~30 s on dev, so the id list is cached per tenant for five
+ * minutes; `fresh` forces a rescan (the purge always takes one).
+ */
+const UNUSED_CACHE_MS = 5 * 60_000
+const unusedCache = new Map<string, { at: number; ids: string[] }>()
+
+export async function unusedFileIds(fresh = false): Promise<string[]> {
+  const key = currentTenantKey()
+  const hit = unusedCache.get(key)
+  if (!fresh && hit && Date.now() - hit.at < UNUSED_CACHE_MS) return hit.ids
+  const { orphanFiles, FILE_MIN_AGE_DAYS } = await import('./config-review/checks.js')
+  const rows = await orphanFiles(new Date(Date.now() - FILE_MIN_AGE_DAYS * 86_400_000))
+  // orphanFiles is oldest first; the Unused list has always shown newest first.
+  const ids = rows.map((r) => String(r.id)).reverse()
+  unusedCache.set(key, { at: Date.now(), ids })
+  return ids
+}
+
+export function forgetUnusedFiles(): void {
+  unusedCache.delete(currentTenantKey())
+}
+
+export async function findOrphanFiles(
+  opts: { limit?: number; offset?: number; fresh?: boolean } = {}
+): Promise<{
   data: Array<Record<string, unknown>>
   total: number
 }> {
-  const refs = await getFileRefColumns()
-  const notExists = refs
-    .map((r) => `NOT EXISTS (SELECT 1 FROM [${r.table}] t WHERE t.[${r.column}] = f.id)`)
-    .join(' AND ')
-  const whereClause = refs.length > 0 ? `WHERE ${notExists}` : ''
-  const limit = Math.min(200, Math.max(1, opts.limit ?? 50))
+  const ids = await unusedFileIds(opts.fresh)
+  const limit = Math.min(500, Math.max(1, opts.limit ?? 50))
   const offset = Math.max(0, opts.offset ?? 0)
-
-  const [countRow] = (await db.raw(
-    `SELECT COUNT(*) AS n FROM nivaro_files f ${whereClause}`
-  )) as Array<{ n: number }>
-  const data = (await db.raw(
-    `SELECT f.id, f.filename_download, f.title, f.type, f.filesize, f.uploaded_on
-     FROM nivaro_files f ${whereClause}
-     ORDER BY f.uploaded_on DESC
-     OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`
-  )) as Array<Record<string, unknown>>
-
-  return { data, total: Number(countRow.n) }
+  const page = ids.slice(offset, offset + limit)
+  const rows =
+    page.length > 0
+      ? ((await db('nivaro_files')
+          .whereIn('id', page)
+          .select('id', 'filename_download', 'title', 'type', 'filesize', 'uploaded_on')) as Array<
+          Record<string, unknown>
+        >)
+      : []
+  const byId = new Map(rows.map((r) => [String(r.id).toLowerCase(), r]))
+  const data = page
+    .map((id) => byId.get(id.toLowerCase()))
+    .filter((r): r is Record<string, unknown> => !!r)
+  return { data, total: ids.length }
 }
 
 // ─── Where a file was USED on one record (#1288) ──────────────────────────────
