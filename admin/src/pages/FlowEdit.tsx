@@ -21,6 +21,7 @@ import {
   MessageSquare,
   PlugZap,
   Plus,
+  Radio,
   ScrollText,
   Settings2,
   Trash2,
@@ -144,7 +145,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   'item-read': Database,
   'workflow-auto-sweep': GitBranch,
   'chat-post': MessageSquare,
-  task: ClipboardCheck
+  task: ClipboardCheck,
+  'refresh-pages': Radio
 }
 
 const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string }> = {
@@ -212,6 +214,11 @@ const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string
     cls: 'bg-teal-50 text-teal-700 border-teal-200 dark:bg-teal-900/20 dark:text-teal-400 dark:border-teal-800',
     label: 'Task',
     color: '#0d9488'
+  },
+  'refresh-pages': {
+    cls: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-900/20 dark:text-sky-400 dark:border-sky-800',
+    label: 'Tell open pages',
+    color: '#0284c7'
   }
 }
 
@@ -1503,6 +1510,46 @@ function EditOperationDialog({
                   </div>
                 </>
               )}
+              {op.type === 'refresh-pages' && (
+                <>
+                  <div className='rounded-lg border border-sky-200 bg-sky-50 px-3 py-2 text-[11px] text-sky-800 dark:border-sky-800 dark:bg-sky-900/20 dark:text-sky-300'>
+                    <Radio className='mr-1 inline h-3 w-3' />
+                    Tells every open page that records changed, so forms, lists and queues refresh.
+                    Use it after a step wrote records the normal way does not announce (a stored
+                    procedure, a partner call). Only the collection, the ids and the field names are
+                    sent — never values; each page re-reads through its own access.
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Collection <span className='text-red-500'>*</span>
+                    </Label>
+                    <Input
+                      value={(optsState.collection as string) ?? ''}
+                      onChange={(e) => setOpt('collection', e.target.value)}
+                      placeholder='requisitions'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Record ids</Label>
+                    <Input
+                      value={(optsState.items as string) ?? ''}
+                      onChange={(e) => setOpt('items', e.target.value)}
+                      placeholder='{{id}}  or  12, 13, 14  (blank = some records changed)'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Changed fields</Label>
+                    <Input
+                      value={(optsState.changed_fields as string) ?? ''}
+                      onChange={(e) => setOpt('changed_fields', e.target.value)}
+                      placeholder='status, amount  (blank = anything)'
+                      className='font-mono text-[13px]'
+                    />
+                  </div>
+                </>
+              )}
               {op.type === 'item-read' && (
                 <>
                   <div className='rounded-lg border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/20 px-3 py-2 text-[11px] text-indigo-700 dark:text-indigo-400'>
@@ -2281,6 +2328,9 @@ function AddOperationDialog({
                     </SelectItem>
                     <SelectItem value='task'>
                       Task — ask someone to do something on a record
+                    </SelectItem>
+                    <SelectItem value='refresh-pages'>
+                      Tell open pages — records changed, refresh forms, lists and queues
                     </SelectItem>
                     {(registeredOpsForAdd ?? []).length > 0 && (
                       <>

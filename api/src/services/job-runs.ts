@@ -5,6 +5,7 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { getIo } from './io-holder.js'
+import { emitJobProgress } from './live-progress.js'
 
 /**
  * The one funnel for background-execution history. Wrap any cron/backfill/
@@ -79,7 +80,8 @@ export interface JobRunHandle {
   /** DB row id, null when the insert failed (bookkeeping degraded). */
   id: number | null
   progress(blob: Record<string, unknown>): void
-  complete(outcome?: string): Promise<void>
+  /** `result` rides the starter's Jobs-tray entry only: a details link or the file it made. */
+  complete(outcome?: string, result?: { href?: string; file_id?: string }): Promise<void>
   fail(err: unknown): Promise<void>
 }
 
@@ -137,6 +139,20 @@ export async function startJobRun(
   }
   emitJobEvent({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
 
+  // The Jobs tray (#1724): the person who started a run hears every step on their own
+  // room (never the shared watch room). Scheduled ticks start nobody, so say nothing.
+  const starter = opts?.triggeredBy && opts.trigger !== 'schedule' ? opts.triggeredBy : null
+  const tray = (ev: Omit<Parameters<typeof emitJobProgress>[1], 'key' | 'kind' | 'label'>) => {
+    if (!starter || id == null) return
+    emitJobProgress(starter, {
+      key: `job:${id}`,
+      kind,
+      label: opts?.label ?? jobId,
+      ...ev
+    })
+  }
+  tray({ status: 'running' })
+
   const finish = async (patch: Record<string, unknown>) => {
     if (id == null) return
     try {
@@ -161,10 +177,17 @@ export async function startJobRun(
         .update({ progress: JSON.stringify(blob).slice(0, 4000) })
         .catch(() => {})
       emitJobEvent({ id, kind, job_id: jobId, status: 'running', progress: blob })
+      tray({ status: 'running', progress: blob })
     },
-    complete: async (outcome) => {
+    complete: async (outcome, result) => {
       await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null })
       emitJobEvent({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
+      tray({
+        status: 'completed',
+        outcome: outcome?.slice(0, 300) ?? null,
+        ...(result?.href ? { href: result.href } : {}),
+        ...(result?.file_id ? { file_id: result.file_id } : {})
+      })
     },
     fail: async (err) => {
       await finish({
@@ -182,6 +205,7 @@ export async function startJobRun(
         status: 'error',
         error: errorText(err, 300)
       })
+      tray({ status: 'error', error: errorText(err, 300) })
     }
   }
 }

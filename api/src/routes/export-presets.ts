@@ -331,6 +331,7 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
     if (!preset) return reply.code(404).send({ error: 'Not found' })
     const { startJobRun } = await import('../services/job-runs.js')
     const run = await startJobRun('export', `preset:${preset.name}`.slice(0, 200), {
+      label: `Export: ${preset.name}`,
       triggeredBy: user.id
     })
     const q: Record<string, string> = {}
@@ -340,6 +341,7 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
     const workspaceId = req.workspaceId ?? undefined
     void (async () => {
       try {
+        run.progress({ phase: 'Reading the rows' })
         const result = await buildExport(
           user,
           isAdmin,
@@ -354,6 +356,7 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
           await run.fail(result.error)
           return
         }
+        run.progress({ phase: 'Saving the file' })
         const { uploadFileBuffer } = await import('../services/files.js')
         const stored = await uploadFileBuffer(
           user,
@@ -361,7 +364,10 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
           result.filename,
           result.contentType
         )
-        await run.complete(`${result.filename} → file ${stored.id}`)
+        // The tray (#2122) turns file_id into a download chip that outlives the page.
+        await run.complete(`${result.filename} → file ${stored.id}`, {
+          file_id: String(stored.id)
+        })
         const { notifyUser } = await import('../services/notification-channels.js')
         const { buildExportReadyMail } = await import('../services/mail-builders.js')
         const built = await buildExportReadyMail(String(stored.id)).catch(() => null)

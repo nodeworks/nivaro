@@ -50,3 +50,32 @@ export function useElapsed(startedAt: string | null | undefined, active: boolean
   return seconds >= 0 ? seconds : null
 }
 
+/** 1 → "next up", 3 → "3rd in line". */
+export function ordinalInLine(position: number): string {
+  if (position <= 1) return 'Next up'
+  const mod100 = position % 100
+  const suffix =
+    mod100 >= 11 && mod100 <= 13
+      ? 'th'
+      : (({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[position % 10] ?? 'th')
+  return `${position}${suffix} in line`
+}
+
+/** "about 4 minutes" / "under a minute" from an estimate in seconds. */
+export function waitEstimate(seconds: number | null | undefined): string | null {
+  if (seconds == null) return null
+  if (seconds < 60) return 'under a minute'
+  const m = Math.round(seconds / 60)
+  if (m < 60) return `about ${m} minute${m === 1 ? '' : 's'}`
+  const h = Math.round((seconds / 3600) * 10) / 10
+  return `about ${h} hour${h === 1 ? '' : 's'}`
+}
+
+/** Where a queued run stands: "3rd in line, about 4 minutes" (#1753). */
+export function queueStanding(
+  q: { position: number; eta_seconds: number | null } | undefined
+): string | null {
+  if (!q) return null
+  const wait = waitEstimate(q.eta_seconds)
+  return wait ? `${ordinalInLine(q.position)}, ${wait}` : ordinalInLine(q.position)
+}

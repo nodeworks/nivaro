@@ -3,6 +3,7 @@ import { Loader2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
+import { endBulkProgress, newBulkProgressId, startBulkProgress } from '../../lib/bulk-progress'
 import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -267,11 +268,16 @@ export function BulkActionButtons({
         if (ids.length === 0) continue
         count += ids.length
         const body = { collection: c, ids, reason: reason.trim() || null }
+        // #1827 — each row shows its own spinner → tick/reason while the run reaches it.
+        const progress = a.source === 'db' ? newBulkProgressId() : null
+        if (progress) startBulkProgress(progress, ids)
         const res =
           a.source === 'db'
-            ? await client.request<{ data: BulkRunResult }>(
-                post('/bulk-actions/run', { ...body, key: a.key })
-              )
+            ? await client
+                .request<{ data: BulkRunResult }>(
+                  post(`/bulk-actions/run?progress=${progress}`, { ...body, key: a.key })
+                )
+                .finally(() => endBulkProgress(progress as string))
             : await client.request<{ data: { message?: string } }>(
                 post(`/bulk-actions/${a.key}/execute`, body)
               )

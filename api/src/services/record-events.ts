@@ -131,7 +131,11 @@ export function announceAutomation(
  */
 export const TENANT_ALL_ROOM = 'all'
 
-function emitToTenant(tenant: string, event: string, payload: Record<string, unknown>): void {
+export function emitToTenant(
+  tenant: string,
+  event: string,
+  payload: Record<string, unknown>
+): void {
   try {
     const io = getIo()
     if (!io) return
@@ -141,6 +145,11 @@ function emitToTenant(tenant: string, event: string, payload: Record<string, unk
   } catch {
     /* best-effort */
   }
+}
+
+/** A payload-free notice to every socket of the CURRENT tenant (announcements, flags, config). */
+export function announceToTenant(event: string, payload: Record<string, unknown> = {}): void {
+  emitToTenant(currentTenantKey(), event, { at: Date.now(), ...payload })
 }
 
 /**

@@ -12,8 +12,9 @@ export interface CollectionUpdateEvent {
   item: string | number
   action?: 'create' | 'update' | 'delete'
   changed_fields?: string[]
-  /** 'raw' — a procedure, import or script made the write (#1875). */
-  source?: 'raw'
+  /** 'raw' — a procedure, import or script made the write (#1875); 'import' — a staged import
+   *  run wrote it through the items service (#1826). */
+  source?: 'raw' | 'import'
   /** With item '*': a raw write touched this many records of the collection. */
   bulk?: number
   _seq?: number

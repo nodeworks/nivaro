@@ -16,6 +16,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useItemEditAuth, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { useDebounced } from '../../hooks/useDebounced'
 import { get, post } from '../../lib/commands'
+import { useLiveEvent } from '../../lib/live'
 import { cn, formatDateTime, formatFileSize, formatNumber, formatRelative } from '../../lib/utils'
 import { type Column, DataTable } from '../DataTable'
 import { Button } from '../ui/button'
@@ -31,7 +32,7 @@ import { DefinitionHealthPanel } from './DefinitionHealthPanel'
 import { DefinitionsPanel } from './DefinitionsPanel'
 import { NewImportDialog } from './NewImportDialog'
 import { RunDetailSheet } from './RunDetailSheet'
-import { LIVE_POLL_MS, STATUS_STYLE, StatusPill, useElapsed } from './run-parts'
+import { LIVE_POLL_MS, queueStanding, STATUS_STYLE, StatusPill, useElapsed } from './run-parts'
 import {
   definitionTitle,
   formatDuration,
@@ -155,6 +156,7 @@ function LiveRunBanner({
   run,
   queuedCount,
   stage,
+  standing,
   canManage,
   onOpen,
   onCancel
@@ -162,6 +164,8 @@ function LiveRunBanner({
   run: ImportStats['active'][number]
   queuedCount: number
   stage: string | null
+  /** "3rd in line, about 4 minutes" for a run still waiting. */
+  standing?: string | null
   canManage: boolean
   onOpen: () => void
   onCancel: () => void
@@ -185,6 +189,9 @@ function LiveRunBanner({
       )}
       {stage && (
         <span className='text-[12px] text-slate-600 dark:text-muted-foreground'>{stage}</span>
+      )}
+      {!running && standing && (
+        <span className='text-[12px] text-slate-600 dark:text-muted-foreground'>{standing}</span>
       )}
       {run.row_count != null && (
         <span className='text-[12px] tabular-nums text-slate-500 dark:text-muted-foreground'>
@@ -326,6 +333,34 @@ export function ImportConsole({
   // page would report "1" for an import with a thousand runs behind it.
   const runCounts = stats?.by_key ?? {}
 
+  // Where each queued run stands (#1753) — moves up as the runs ahead finish. The queue
+  // read follows the same events as the table, with the poll as the net.
+  const queuedNow = activeStatuses.some((a) => a.status === 'queued')
+  const standingQuery = useQuery({
+    queryKey: ['staged-import-queue'],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{ id: number; position: number; eta_seconds: number | null }>
+        }>(get('/staged-imports/queue'))
+        .then((r) => r.data ?? []),
+    enabled: queuedNow,
+    refetchInterval: queuedNow ? LIVE_POLL_MS * 2 : false,
+    placeholderData: (prev) => prev
+  })
+  const standingById = useMemo(
+    () => new Map((standingQuery.data ?? []).map((q) => [q.id, q])),
+    [standingQuery.data]
+  )
+  useLiveEvent(
+    'job:progress',
+    () => {
+      void qc.invalidateQueries({ queryKey: ['staged-import-queue'] })
+      void qc.invalidateQueries({ queryKey: ['staged-import-runs'] })
+    },
+    { match: (p) => p?.kind === 'import', debounceMs: 400, includeOwn: true }
+  )
+
   // ── Mutations ────────────────────────────────────────────────────────────
 
   const requeue = useMutation({
@@ -351,8 +386,17 @@ export function ImportConsole({
     {
       key: 'status',
       header: 'Status',
-      className: 'w-[110px]',
-      render: (r) => <StatusPill status={r.status} />
+      className: 'w-[150px]',
+      render: (r) => (
+        <div className='min-w-0'>
+          <StatusPill status={r.status} />
+          {r.status === 'queued' && standingById.has(r.id) && (
+            <p className='mt-0.5 whitespace-normal text-[10.5px] leading-tight text-slate-500 dark:text-muted-foreground'>
+              {queueStanding(standingById.get(r.id))}
+            </p>
+          )}
+        </div>
+      )
     },
     {
       key: 'import',
@@ -569,6 +613,7 @@ export function ImportConsole({
               run={leadRun}
               queuedCount={queuedCount}
               stage={stages[leadRun.id] ?? null}
+              standing={queueStanding(standingById.get(leadRun.id))}
               canManage={isAdmin}
               onOpen={() => setOpenRunId(leadRun.id)}
               onCancel={() => cancel.mutate(leadRun.id)}

@@ -65,6 +65,7 @@ import {
   defaultItemUrl,
   ErrorSurface,
   HelpVideoRecordingProvider,
+  JobsTray,
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
@@ -843,6 +844,7 @@ export function AppLayout() {
         <KeyboardShortcuts />
         <ForceRefreshBanner />
         <AutofillChips />
+        <JobsTrayHost />
       </TooltipProvider>
     </RealtimeContext.Provider>
   )
@@ -1011,6 +1013,20 @@ function HelpVideoHost({ children }: { children: ReactNode }) {
         }}
       >
         <HelpVideoRecordingProvider>{children}</HelpVideoRecordingProvider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
+
+/** The Jobs tray (#1724): long things the person started, on every page. */
+function JobsTrayHost() {
+  const navigate = useNavigate()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider
+        value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+      >
+        <JobsTray />
       </NavigationContext.Provider>
     </NivaroProvider>
   )

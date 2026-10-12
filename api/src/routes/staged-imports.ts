@@ -757,6 +757,24 @@ export async function stagedImportRoutes(app: FastifyInstance) {
    * PERCENTILE_CONT so this stays dialect-neutral; the input is one integer
    * column over a bounded window.
    */
+  /**
+   * Where the queued runs stand (#1753): position among the runs ahead in the same lock
+   * group and a time estimate from each definition's recent run times. Admins see every
+   * run; anyone else only the runs they queued.
+   */
+  app.get('/queue', async (req) => {
+    const { currentStanding } = await import('../services/staged-import-worker.js')
+    const { entries, standing } = await currentStanding()
+    const me = String(req.user?.id ?? '').toUpperCase()
+    const mine = (e: { created_by?: string | null }) =>
+      req.isAdmin || String(e.created_by ?? '').toUpperCase() === me
+    return {
+      data: entries
+        .filter((e) => e.status === 'queued' && mine(e))
+        .map((e) => ({ id: e.id, import_key: e.import_key, ...standing.get(e.id) }))
+    }
+  })
+
   app.get('/stats', async (req) => {
     const days = Math.max(
       0,
@@ -1526,6 +1544,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
       comment: `${key} (${multipart.filename})`,
       req
     })
+    void import('../services/staged-import-worker.js')
+      .then((m) => m.publishStanding())
+      .catch(() => {})
     return reply.code(201).send({ data: { id, import_key: key, status: 'queued' } })
   })
 
@@ -1555,6 +1576,9 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         item: String(row.id),
         req
       })
+      void import('../services/staged-import-worker.js')
+        .then((m) => m.publishStanding())
+        .catch(() => {})
       return { data: { id: row.id, status: 'queued' } }
     }
   )
@@ -1578,6 +1602,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         collection: 'nivaro_import_queue',
         item: String(row.id),
         req
+      })
+      const { emitJobProgress } = await import('../services/live-progress.js')
+      emitJobProgress(row.created_by ? String(row.created_by) : null, {
+        key: `import:${row.id}`,
+        kind: 'import',
+        label: `${row.import_key} import`,
+        status: 'canceled'
       })
       return { data: { id: row.id, status: 'canceled' } }
     }

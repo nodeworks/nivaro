@@ -1,4 +1,4 @@
-import { createLeaderSocket, type RealtimeAdapter } from '@nivaro/shared'
+import { createLeaderSocket, type RealtimeAdapter, relayLiveEvent } from '@nivaro/shared'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
 import { readMasquerade } from '@/lib/masquerade'
@@ -102,9 +102,15 @@ export function getSocket(): Socket {
   })
   // Config hot-push (#268): schema/layout edits broadcast — open forms
   // re-resolve their field-config/layout queries in place.
-  socket.on('config:update', (p: { surface?: string }) => {
+  socket.on('config:update', (p: { surface?: string; collection?: string }) => {
     window.dispatchEvent(new CustomEvent('nvr:config-update', { detail: p ?? {} }))
   })
+  // Notices for the signed-in person or the whole tenant (payload-free or ids only): handed to
+  // the shared live hooks (lib/live.ts useLiveEvent) — jobs tray #1724, bulk rows #1827,
+  // announcements #1744, feature flags #1741.
+  for (const ev of ['job:progress', 'bulk:rows', 'announcements:changed', 'flags:changed']) {
+    socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
+  }
   return socket
 }
 

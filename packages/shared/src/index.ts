@@ -45,6 +45,7 @@ export {
   useAvailableBulkActions,
   useBuiltinGate
 } from './components/bulk/BulkActionButtons'
+export { BulkRowMark } from './components/bulk/BulkRowMark'
 export type { PushItemAction, PushRunOutcome } from './components/bulk/PushBulkButtons'
 export { PushBulkButtons, PushResultList } from './components/bulk/PushBulkButtons'
 export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
@@ -210,6 +211,7 @@ export { RecordChatActions } from './components/item-edit/RecordChatActions'
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
+export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export type { MatrixEditorConfig } from './components/MatrixEditor'
@@ -422,6 +424,7 @@ export {
   startAutofillRun,
   useAutofillRuns
 } from './lib/autofill-runs'
+export * from './lib/bulk-progress'
 export * from './lib/catalog-item-open'
 export {
   buildClientCrashBody,
@@ -471,6 +474,7 @@ export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idl
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
+export * from './lib/jobs-tray'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export * from './lib/live'

@@ -2,6 +2,8 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
+import { loadQueueStanding, publishQueueStanding } from './import-queue-standing.js'
+import { emitJobProgress } from './live-progress.js'
 import { notifyUser } from './notification-channels.js'
 import type { ImportDefinition } from './staged-imports.js'
 import {
@@ -111,6 +113,7 @@ export function registerStagedImportWorker(app: FastifyInstance): void {
     ticking = true
     try {
       await drainOnce(app)
+      await publishStanding().catch(() => {})
     } catch (err) {
       app.log.error({ err }, 'staged-import worker tick failed')
     } finally {
@@ -150,6 +153,29 @@ const UNREADABLE_GRACE_MS = 60 * 60 * 1000
 /** How many runs one process drives at once (#802). Runs in the same lock
  *  group never overlap whatever this says. */
 const MAX_PARALLEL = Math.max(1, Number(process.env.IMPORT_MAX_PARALLEL ?? 3) || 3)
+
+/** Queued + running runs with where each queued one stands (#1753). */
+export async function currentStanding() {
+  const defs = new Map(
+    (await listImportDefinitions(false)).map((d) => [String(d.key).toLowerCase(), d])
+  )
+  const groupOf = (key: string): string => {
+    const d = defs.get(String(key ?? '').toLowerCase())
+    return d ? lockGroupOf(d) : `key:${String(key ?? '').toLowerCase()}`
+  }
+  const loaded = await loadQueueStanding(groupOf)
+  const labelOf = (key: string): string => {
+    const d = defs.get(String(key).toLowerCase())
+    return d?.label ? String(d.label) : label({ import_key: key })
+  }
+  return { ...loaded, labelOf }
+}
+
+/** #1753 — tell each queued run's creator "3rd in line, about 4 minutes" as it moves up. */
+export async function publishStanding(): Promise<void> {
+  const { entries, standing, labelOf } = await currentStanding()
+  publishQueueStanding(entries, standing, labelOf)
+}
 
 /** Run ids this process is driving right now. */
 const driving = new Set<string>()
@@ -254,6 +280,13 @@ async function runOne(
       buffer = await readFileBuffer(stored)
     }
 
+    emitJobProgress(next.created_by ? String(next.created_by) : null, {
+      key: `import:${next.id}`,
+      kind: 'import',
+      label: `${definition.label ?? label(next)} import`,
+      status: 'running',
+      href: `/imports?run=${next.id}`
+    })
     // One integration event chain per run: the load, and the post-run flows
     // it fans out to (PO completion sweep, partner pushes), share it.
     const fileBuffer = buffer
@@ -286,6 +319,17 @@ async function runOne(
                   .update({ row_count: Number(data?.row_count ?? 0) })
               }
               app.io?.emit('import:progress', { id: next.id, stage, ...data })
+              emitJobProgress(next.created_by ? String(next.created_by) : null, {
+                key: `import:${next.id}`,
+                kind: 'import',
+                label: `${definition.label ?? label(next)} import`,
+                status: 'running',
+                progress: {
+                  phase: String(stage),
+                  ...(data?.row_count != null ? { total: Number(data.row_count) } : {})
+                },
+                href: `/imports?run=${next.id}`
+              })
             }
           })
         ),
@@ -311,6 +355,14 @@ async function runOne(
       summary ? summary.split('\n')[0] : `Imported ${rowCount} rows.`
     )
     app.io?.emit('import:progress', { id: next.id, stage: 'completed', row_count: rowCount })
+    emitJobProgress(next.created_by ? String(next.created_by) : null, {
+      key: `import:${next.id}`,
+      kind: 'import',
+      label: `${definition.label ?? label(next)} import`,
+      status: 'completed',
+      outcome: summary ? summary.split('\n')[0].slice(0, 300) : `Imported ${rowCount} rows.`,
+      href: `/imports?run=${next.id}`
+    })
     startChain(
       chainRoot,
       () =>
@@ -348,6 +400,14 @@ async function runOne(
     // is how imports get re-run blindly.
     await notifyCreator(app, next, `${label(next)} import failed`, message.slice(0, 500))
     app.io?.emit('import:progress', { id: next.id, stage: 'error', error: message })
+    emitJobProgress(next.created_by ? String(next.created_by) : null, {
+      key: `import:${next.id}`,
+      kind: 'import',
+      label: `${label(next)} import`,
+      status: 'error',
+      error: message.slice(0, 300),
+      href: `/imports?run=${next.id}`
+    })
     // Log the scrubbed message, not `err`: a serialised exec rejection carries
     // argv and stderr into the log stream.
     app.log.error({ queueId: next.id, error: message }, 'staged import failed')

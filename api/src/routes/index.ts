@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
+import { announceConfigChanged, collectionHint } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
 import { accessAnnouncement, announceAccessChanged } from '../services/record-events.js'
@@ -16,6 +17,7 @@ import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
 import { aiDesignRoutes } from './ai-design.js'
+import { aiExplainRoutes } from './ai-explain.js'
 import { aiKnowledgeRoutes } from './ai-knowledge.js'
 import { aiPlanRoutes } from './ai-plans.js'
 import { aiSettingsRoutes } from './ai-settings.js'
@@ -131,6 +133,7 @@ import { mergeRoutes } from './merge.js'
 import { messageActionsRoutes } from './message-actions.js'
 import { metricAlertsRoutes } from './metric-alerts.js'
 import { monitorRoutes } from './monitors.js'
+import { myJobsRoutes } from './my-jobs.js'
 import { myWorkRoutes } from './my-work.js'
 import { notificationBenchRoutes } from './notification-bench.js'
 import { notificationSubscriptionsRoutes } from './notification-subscriptions.js'
@@ -217,7 +220,6 @@ import { teamMiscRoutes, teamUserRoutes } from './team.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
-import { aiExplainRoutes } from './ai-explain.js'
 import { traceRoutes } from './traces.js'
 import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
@@ -299,9 +301,10 @@ export async function registerRoutes(app: FastifyInstance) {
       // Config hot-push (#268): tell open clients the schema/layout changed —
       // they re-resolve field-config/layout queries in place and show an
       // "updated" chip instead of serving a stale form until reload.
+      // Tenant-scoped, and named by collection when the request names one (#1740).
       try {
-        const surface = req.url.split('/')[2] ?? 'config'
-        app.io?.emit('config:update', { surface, at: Date.now() })
+        const surface = req.url.split('/')[2]?.split('?')[0] ?? 'config'
+        announceConfigChanged(surface, collectionHint(req))
       } catch {
         /* broadcast is best-effort */
       }
@@ -334,6 +337,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
   await app.register(announcementRoutes, { prefix: '/announcements' })
+  await app.register(myJobsRoutes, { prefix: '/my-jobs' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
   await app.register(inactiveUserLinkRoutes, { prefix: '/inactive-user-links' })
