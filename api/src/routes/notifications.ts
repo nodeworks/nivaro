@@ -9,7 +9,21 @@ import { sendRawMail } from '../services/mail.js'
 import { parseJsonSafe } from '../services/metric-alerts.js'
 import { bundleNotifications } from '../services/notification-bundles.js'
 import {
+  archiveReadOlderThan,
+  autoCleanup,
+  emptyTotals,
+  noiseSuggestions,
+  SUGGEST_WINDOW_DAYS,
+  sanitizePrefs,
+  tallyDecision
+} from '../services/notification-center.js'
+import {
+  ACK_DONE_LIKE,
+  ACK_PENDING_LIKE,
   classifyNotification,
+  decideDelivery,
+  detailColumn,
+  getNotifyPrefs,
   laneFromRow,
   NOTIFY_CATEGORIES,
   NOTIFY_CATEGORY_LABELS,
@@ -40,6 +54,12 @@ import { type RecordHeadline, recordHeadlines } from '../services/record-headlin
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),
 // recipient uuid FK→nivaro_users, sender uuid|null,
 // subject varchar(255), message text|null, collection|null, item|null
+
+function ackStateOf(raw: unknown): { ack: 'pending' | 'acked' | null; ack_at: string | null } {
+  const d = parseDetail(raw)
+  if (!d?.ack_required) return { ack: null, ack_at: null }
+  return d.ack_at ? { ack: 'acked', ack_at: d.ack_at } : { ack: 'pending', ack_at: null }
+}
 
 function serialize(row: Record<string, unknown>) {
   // Stored target (written by notifyUser) or derived for legacy rows — the
@@ -86,7 +106,12 @@ function serialize(row: Record<string, unknown>) {
     message: row.message,
     type: 'notification',
     read: row.status !== 'inbox',
+    archived: row.status === 'archived',
     read_at: row.read_at ?? null,
+    // #2365 — explicit acknowledgement requested by the sender.
+    ack: detail?.ack_required
+      ? { required: true, at: detail.ack_at ?? null, by: detail.ack_by ?? null }
+      : null,
     collection: (row.collection as string | null) ?? null,
     item: row.item != null && row.item !== '' ? String(row.item) : null,
     sender: row.sender ?? null,
@@ -155,6 +180,49 @@ async function serializeFor(
   return out
 }
 
+type FilterQuery = {
+  unread?: string
+  status?: string
+  search?: string
+  collection?: string
+  sender?: string
+  snoozed?: string
+  lane?: string
+  category?: string
+}
+
+/** The notification center's row filter — one definition for the list and
+ *  for "select everything matching" bulk actions (#2409). Archived rows
+ *  (#2406) only show under status=archived. */
+function notificationsFilter(userId: string, q: FilterQuery) {
+  let query = db('nivaro_notifications').where({ recipient: userId })
+  query = applyLane(query, q.lane)
+  if (q.category && NOTIFY_CATEGORIES.includes(q.category as NotifyCategory))
+    query = query.andWhere({ category: q.category })
+  if (q.status === 'archived') query = query.andWhere({ status: 'archived' })
+  else {
+    query = query.whereNot('status', 'archived')
+    if (q.status === 'inbox' || q.unread === 'true') query = query.andWhere({ status: 'inbox' })
+    else if (q.status === 'read') query = query.andWhere({ status: 'read' })
+  }
+  // Snoozed rows hide from the normal views until they wake; ?snoozed=true
+  // lists exactly the sleeping ones instead.
+  if (q.snoozed === 'true') {
+    query = query.where('snoozed_until', '>', new Date())
+  } else {
+    query = query.where((qb) =>
+      qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', new Date())
+    )
+  }
+  if (q.collection) query = query.andWhere({ collection: q.collection })
+  if (q.sender) query = query.andWhere({ sender: q.sender })
+  if (q.search) {
+    const like = `%${q.search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
+    query = query.where((qb) => qb.where('subject', 'like', like).orWhere('message', 'like', like))
+  }
+  return query
+}
+
 export async function notificationsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
 
@@ -166,40 +234,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
     const page = Math.max(1, Number(q.page) || 1)
     const limit = Math.min(200, Math.max(1, Number(q.limit) || 50))
 
-    const qf = req.query as {
-      search?: string
-      collection?: string
-      sender?: string
-      snoozed?: string
-      lane?: string
-      category?: string
-    }
-    const filtered = () => {
-      let query = db('nivaro_notifications').where({ recipient: userId })
-      query = applyLane(query, qf.lane)
-      if (qf.category && NOTIFY_CATEGORIES.includes(qf.category as NotifyCategory))
-        query = query.andWhere({ category: qf.category })
-      if (q.status === 'inbox' || q.unread === 'true') query = query.andWhere({ status: 'inbox' })
-      else if (q.status === 'read') query = query.andWhere({ status: 'read' })
-      // Snoozed rows hide from the normal views until they wake; ?snoozed=true
-      // lists exactly the sleeping ones instead.
-      if (qf.snoozed === 'true') {
-        query = query.where('snoozed_until', '>', new Date())
-      } else {
-        query = query.where((qb) =>
-          qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', new Date())
-        )
-      }
-      if (qf.collection) query = query.andWhere({ collection: qf.collection })
-      if (qf.sender) query = query.andWhere({ sender: qf.sender })
-      if (qf.search) {
-        const like = `%${qf.search.replace(/[%_[]/g, (c) => `[${c}]`)}%`
-        query = query.where((qb) =>
-          qb.where('subject', 'like', like).orWhere('message', 'like', like)
-        )
-      }
-      return query
-    }
+    const filtered = () => notificationsFilter(userId, req.query as FilterQuery)
+    void autoCleanup(userId)
 
     const countRow = await filtered().count<{ count: string | number }>({ count: '*' }).first()
     const total = Number(countRow?.count ?? 0)
@@ -286,7 +322,26 @@ export async function notificationsRoutes(app: FastifyInstance) {
       }
       return reply.send({ data: singles, bundles, total, page, limit })
     }
-    return reply.send({ data, total, page, limit })
+    // #2365 — acknowledgement-required rows stay pinned until acknowledged,
+    // whatever page or filter the person is on.
+    const pinned =
+      page === 1 && q.status !== 'archived'
+        ? await Promise.all(
+            (
+              await db('nivaro_notifications')
+                .where({ recipient: userId })
+                .whereNot('status', 'archived')
+                .where('detail', 'like', ACK_PENDING_LIKE)
+                .whereNot('detail', 'like', ACK_DONE_LIKE)
+                .orderBy('timestamp', 'desc')
+                .limit(20)
+                .select('*')
+            ).map((r) =>
+              serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app })
+            )
+          )
+        : []
+    return reply.send({ data, pinned, total, page, limit })
   })
 
   /**
@@ -452,7 +507,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
         'item',
         'recipient',
         'status',
-        'read_at'
+        'read_at',
+        'detail'
       )) as Array<Record<string, unknown>>
     type Group = {
       key: string
@@ -463,7 +519,14 @@ export async function notificationsRoutes(app: FastifyInstance) {
       category: string | null
       collection: string | null
       item: string | null
-      recipients: Array<{ id: string; name: string; read: boolean; read_at: unknown }>
+      recipients: Array<{
+        id: string
+        name: string
+        read: boolean
+        read_at: unknown
+        ack: 'pending' | 'acked' | null
+        ack_at: string | null
+      }>
     }
     const groups = new Map<string, Group>()
     for (const r of rows) {
@@ -489,7 +552,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
         id: String(r.recipient),
         name: '',
         read: r.status !== 'inbox',
-        read_at: r.read_at ?? null
+        read_at: r.read_at ?? null,
+        ...ackStateOf(r.detail)
       })
     }
     const ids = [...new Set([...groups.values()].flatMap((g) => g.recipients.map((x) => x.id)))]
@@ -511,6 +575,8 @@ export async function notificationsRoutes(app: FastifyInstance) {
         .map((x) => ({ ...x, name: names.get(x.id.toUpperCase()) ?? x.id }))
         .sort((a, b) => a.name.localeCompare(b.name)),
       read_count: g.recipients.filter((x) => x.read).length,
+      ack_required: g.recipients.some((x) => x.ack != null),
+      ack_count: g.recipients.filter((x) => x.ack === 'acked').length,
       total: g.recipients.length
     }))
     return reply.send({ data })
@@ -1096,6 +1162,210 @@ export async function notificationsRoutes(app: FastifyInstance) {
           active_users: Number(activeUsers?.count ?? 0),
           top: mutes
         }
+      }
+    })
+  })
+
+  /** #2365 — acknowledge a notification that asked for it. Own rows only;
+   *  stamps who/when in the row's detail and marks it read. */
+  app.post('/:id/acknowledge', async (req, reply) => {
+    const userId = req.user!.id
+    const id = Number((req.params as { id: string }).id)
+    const row = (await db('nivaro_notifications')
+      .where({ id, recipient: userId })
+      .first('id', 'detail')) as { id: number; detail: string | null } | undefined
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    const detail = parseDetail(row.detail)
+    if (!detail?.ack_required)
+      return reply.code(400).send({ error: 'This notification does not ask for acknowledgement' })
+    const at = detail.ack_at ?? new Date().toISOString()
+    if (!detail.ack_at) {
+      await db('nivaro_notifications')
+        .where({ id })
+        .update({
+          detail: detailColumn({ ...detail, ack_at: at, ack_by: String(userId) }),
+          status: 'read',
+          read_at: new Date()
+        })
+      await logActivity({
+        action: 'notification-acknowledge',
+        user: userId,
+        collection: 'nivaro_notifications',
+        item: String(id),
+        req
+      })
+    }
+    return reply.send({ data: { id, ack: { required: true, at, by: String(userId) } } })
+  })
+
+  /** #2409 — one action over several notifications: explicit ids, or
+   *  everything matching a filter. read | archive | snooze. Own rows only. */
+  app.post('/bulk-action', async (req, reply) => {
+    const userId = req.user!.id
+    const b = (req.body ?? {}) as {
+      action?: string
+      ids?: Array<string | number>
+      filter?: FilterQuery
+      until?: string | null
+    }
+    if (!['read', 'archive', 'snooze'].includes(String(b.action)))
+      return reply.code(400).send({ error: 'action must be read, archive or snooze' })
+    let until: Date | null = null
+    if (b.action === 'snooze') {
+      until = b.until ? new Date(String(b.until)) : null
+      if (!until || Number.isNaN(until.getTime()) || until <= new Date())
+        return reply.code(400).send({ error: 'snooze needs a future until' })
+    }
+    const ids = Array.isArray(b.ids) ? b.ids.map(Number).filter(Number.isFinite) : null
+    if (!ids && !b.filter) return reply.code(400).send({ error: 'Give ids or a filter' })
+    let target: number[]
+    if (ids) {
+      target = ids.slice(0, 1000)
+    } else {
+      const rows = (await notificationsFilter(userId, b.filter ?? {})
+        .limit(2000)
+        .select('id')) as Array<{ id: number }>
+      target = rows.map((r) => Number(r.id))
+    }
+    if (target.length === 0) return reply.send({ data: { updated: 0 } })
+    let updated = 0
+    // Chunked: MSSQL caps bound parameters near 2100.
+    for (let i = 0; i < target.length; i += 500) {
+      const chunk = target.slice(i, i + 500)
+      const q = db('nivaro_notifications').where({ recipient: userId }).whereIn('id', chunk)
+      if (b.action === 'read')
+        updated += await q
+          .where({ status: 'inbox' })
+          .update({ status: 'read', read_at: new Date() })
+      else if (b.action === 'archive')
+        updated += await q.whereNot('status', 'archived').update({ status: 'archived' })
+      else
+        updated += await q
+          .whereNot('status', 'archived')
+          .update({ snoozed_until: until, status: 'inbox' })
+    }
+    await logActivity({
+      action: 'update',
+      user: userId,
+      collection: 'nivaro_notifications',
+      comment: `bulk ${b.action} (${updated})`,
+      req
+    })
+    return reply.send({ data: { updated, ids: target } })
+  })
+
+  /** #2406 — archive everything read and older than N days. */
+  app.post('/archive-read', async (req, reply) => {
+    const days = Number((req.body as { days?: unknown } | null)?.days)
+    if (!Number.isInteger(days) || days < 1 || days > 3650)
+      return reply.code(400).send({ error: 'days must be a whole number of days' })
+    const updated = await archiveReadOlderThan(req.user!.id, days)
+    await logActivity({
+      action: 'update',
+      user: req.user!.id,
+      collection: 'nivaro_notifications',
+      comment: `archive read older than ${days} days (${updated})`,
+      req
+    })
+    return reply.send({ data: { updated } })
+  })
+
+  /** #2367 — what is cluttering MY inbox, from my own rows only. */
+  app.get('/noise-suggestions', async (req, reply) => {
+    const userId = req.user!.id
+    const since = new Date(Date.now() - SUGGEST_WINDOW_DAYS * 86_400_000)
+    const rows = (await db('nivaro_notifications')
+      .where({ recipient: userId })
+      .where('timestamp', '>=', since)
+      .whereNotNull('category')
+      .select('category')
+      .count({ total: '*' })
+      .select(
+        db.raw("SUM(CASE WHEN read_at IS NULL AND status <> 'read' THEN 1 ELSE 0 END) as unopened")
+      )
+      .groupBy('category')) as Array<{
+      category: string
+      total: number | string
+      unopened: number | string | null
+    }>
+    const prefs = await getNotifyPrefs(userId)
+    const data = noiseSuggestions(
+      rows.map((r) => ({
+        category: r.category,
+        total: Number(r.total),
+        unopened: Number(r.unopened ?? 0)
+      })),
+      prefs
+    )
+    return reply.send({ data, window_days: SUGGEST_WINDOW_DAYS })
+  })
+
+  /** #2407 — replay the caller's last week of notifications through the SAME
+   *  delivery decision the sender uses, once with the stored rules and once
+   *  with the proposed ones. Read-only: nothing is written, sent or cached,
+   *  and presence is not consulted. */
+  app.post('/rules-preview', async (req, reply) => {
+    const userId = req.user!.id
+    const proposed = sanitizePrefs(
+      (req.body as { notification_prefs?: unknown } | null)?.notification_prefs
+    )
+    const DAYS = 7
+    const CAP = 200
+    const since = new Date(Date.now() - DAYS * 86_400_000)
+    const countRow = await db('nivaro_notifications')
+      .where({ recipient: userId })
+      .where('timestamp', '>=', since)
+      .count<{ count: string | number }>({ count: '*' })
+      .first()
+    const all = Number(countRow?.count ?? 0)
+    const rows = (await db('nivaro_notifications')
+      .where({ recipient: userId })
+      .where('timestamp', '>=', since)
+      .orderBy('timestamp', 'desc')
+      .limit(CAP)
+      .select('subject', 'collection', 'item', 'category', 'timestamp', 'delivery')) as Array<
+      Record<string, unknown>
+    >
+    const current = emptyTotals()
+    const next = emptyTotals()
+    const judge = async (r: Record<string, unknown>) => {
+      const delivery = parseDelivery(r.delivery)
+      const opts = {
+        subject: String(r.subject ?? ''),
+        collection: (r.collection as string | null) ?? undefined,
+        item: r.item != null ? String(r.item) : undefined,
+        category: (r.category as NotifyCategory | null) ?? undefined,
+        channels: {
+          inapp: true,
+          email: !!delivery?.email && delivery.email.status !== 'not_requested',
+          sms: false
+        },
+        replay: true
+      }
+      const at = new Date(String(r.timestamp))
+      const [a, b] = await Promise.all([
+        decideDelivery(userId, opts, at),
+        decideDelivery(userId, { ...opts, prefsOverride: proposed }, at)
+      ])
+      tallyDecision(current, a)
+      tallyDecision(next, b)
+    }
+    for (let i = 0; i < rows.length; i += 10) await Promise.all(rows.slice(i, i + 10).map(judge))
+    const scale = rows.length > 0 && all > rows.length ? all / rows.length : 1
+    const scaled = (t: typeof current) => ({
+      notifications: Math.round(t.notifications * scale),
+      inapp: Math.round(t.inapp * scale),
+      push: Math.round(t.push * scale),
+      email_sent: Math.round(t.email_sent * scale),
+      email_deferred: Math.round(t.email_deferred * scale)
+    })
+    return reply.send({
+      data: {
+        window_days: DAYS,
+        total_notifications: all,
+        sampled: rows.length,
+        current: scaled(current),
+        proposed: scaled(next)
       }
     })
   })

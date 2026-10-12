@@ -754,6 +754,35 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.notification_sound = value
     }
+    if ('notification_sounds' in body) {
+      // #2385 — per-category sound on top of the global one: {category:
+      // 'off'|'subtle'|'chime'}. A category with no entry follows the global.
+      const raw = body.notification_sounds
+      if (raw === null) patch.notification_sounds = null
+      else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const out: Record<string, string> = {}
+        for (const cat of NOTIFY_CATEGORIES) {
+          const v = (raw as Record<string, unknown>)[cat]
+          if (v === undefined || v === null) continue
+          if (typeof v !== 'string' || !['off', 'subtle', 'chime'].includes(v))
+            return reply
+              .code(400)
+              .send({ error: "notification_sounds values must be 'off', 'subtle' or 'chime'" })
+          out[cat] = v
+        }
+        patch.notification_sounds = out
+      } else {
+        return reply.code(400).send({ error: 'notification_sounds must be an object or null' })
+      }
+    }
+    if ('notification_cleanup_days' in body) {
+      // #2406 — archive read notifications older than N days automatically.
+      const n = body.notification_cleanup_days
+      if (n === null) patch.notification_cleanup_days = null
+      else if (Number.isInteger(n) && (n as number) >= 7 && (n as number) <= 365)
+        patch.notification_cleanup_days = n
+      else return reply.code(400).send({ error: 'notification_cleanup_days must be 7–365 or null' })
+    }
     if ('notification_prefs' in body) {
       // Quiet hours + per-category channel matrix (see notification-channels).
       const raw = body.notification_prefs

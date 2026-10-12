@@ -1641,6 +1641,20 @@ function EditOperationDialog({
                       </span>
                     </Label>
                   </div>
+                  <div className='flex items-start gap-2'>
+                    <Switch
+                      id='op-ack-required'
+                      checked={optsState.ack_required === true}
+                      onCheckedChange={(v) => setOpt('ack_required', v)}
+                    />
+                    <Label htmlFor='op-ack-required' className='cursor-pointer'>
+                      Needs acknowledgement
+                      <span className='block text-[11px] font-normal text-slate-400'>
+                        The recipient sees Acknowledge on it; it stays pinned in their bell until
+                        they do, and escalates to their manager after a day.
+                      </span>
+                    </Label>
+                  </div>
                 </>
               )}
               {op.type === 'transform' && (

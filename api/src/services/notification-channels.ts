@@ -121,12 +121,19 @@ export function detailColumn(detail: NotificationDetail | null | undefined): str
       label: detail.why.label != null ? clip(detail.why.label, 160) : null,
       id: detail.why.id ?? null
     }
+  if (detail.ack_required === true) out.ack_required = true
+  if (typeof detail.ack_at === 'string') out.ack_at = clip(detail.ack_at, 40)
+  if (typeof detail.ack_by === 'string') out.ack_by = clip(detail.ack_by, 40)
   try {
     return JSON.stringify(out)
   } catch {
     return null
   }
 }
+
+/** SQL fragment: rows that still need an acknowledgement (#2365). */
+export const ACK_PENDING_LIKE = '%"ack_required":true%'
+export const ACK_DONE_LIKE = '%"ack_at"%'
 
 export function parseDetail(raw: unknown): NotificationDetail | null {
   if (!raw) return null
@@ -344,7 +351,13 @@ export async function decideDelivery(
   opts: Pick<
     NotifyUserOptions,
     'subject' | 'collection' | 'item' | 'category' | 'always_inbox' | 'channels'
-  > & { cadence?: 'sender' },
+  > & {
+    cadence?: 'sender'
+    /** #2407 — judge against PROPOSED rules instead of the stored ones. */
+    prefsOverride?: NotifyPrefs | null
+    /** #2407 — read-only replay of an earlier send: no live presence check. */
+    replay?: boolean
+  },
   now = new Date()
 ): Promise<DeliveryDecision> {
   const channels = { inapp: true, email: false, sms: false, ...(opts.channels ?? {}) }
@@ -417,14 +430,14 @@ export async function decideDelivery(
     }
   }
 
-  const prefs = await getNotifyPrefs(userId)
+  const prefs = opts.prefsOverride !== undefined ? opts.prefsOverride : await getNotifyPrefs(userId)
   const matrixRow = prefs?.matrix?.[category]
   let inapp = channels.inapp
   // Presence-aware suppression (#269): the recipient is LOOKING at the record
   // this notification is about — they watched it happen; the inbox doesn't
   // need to tell them. In-app + push only (email/digest unaffected); critical
   // subjects always land. Per-node presence, same accepted limitation.
-  if (inapp && !critical && !opts.always_inbox && opts.collection && opts.item) {
+  if (inapp && !critical && !opts.always_inbox && !opts.replay && opts.collection && opts.item) {
     try {
       const { isUserViewing } = await import('../plugins/socketio.js')
       if (isUserViewing(opts.collection, String(opts.item), userId)) {
@@ -685,7 +698,14 @@ export interface NotificationDelivery {
   }
   sms?: { status: 'sent' | 'failed' | 'skipped' | 'not_requested'; reason?: string }
   /** Unread-escalation stamps (channel fallback chain). */
-  escalation?: { push_at?: string; email_at?: string; email_log_id?: number | null }
+  escalation?: {
+    push_at?: string
+    email_at?: string
+    email_log_id?: number | null
+    /** #2365 — acknowledgement reminder / manager escalation stamps. */
+    ack_remind_at?: string
+    ack_manager_at?: string
+  }
 }
 
 export function parseDelivery(raw: unknown): NotificationDelivery | null {
@@ -749,7 +769,7 @@ export async function notifyUser(
       subject: opts.subject
     })
 
-  const lane = await computeLane(userId, {
+  const computedLane = await computeLane(userId, {
     subject: opts.subject,
     category: decision.category,
     critical: decision.critical,
@@ -757,6 +777,8 @@ export async function notifyUser(
     collection: opts.collection,
     item: opts.item
   })
+  // An acknowledgement request is never FYI (#2365).
+  const lane = opts.ack_required && computedLane === 'fyi' ? 'needs_you' : computedLane
   const reasonText = (channel: DeliveryReason['channel']) =>
     decision.reasons.find((r) => r.channel === channel || r.channel === 'all')?.text
   // The delivery record starts from the decision (what was planned and why)
@@ -800,7 +822,11 @@ export async function notifyUser(
     label: opts.source?.label ?? null,
     id: opts.source?.id ?? null
   }
-  const detail = detailColumn({ ...(opts.detail ?? {}), why })
+  const detail = detailColumn({
+    ...(opts.detail ?? {}),
+    why,
+    ...(opts.ack_required ? { ack_required: true } : {})
+  })
 
   try {
     if (channels.inapp) {
@@ -922,7 +948,12 @@ export async function notifyUser(
               message: opts.message,
               category,
               ...(card ? { record_card: card } : {}),
-              ...(actionUrl ? { action_url: actionUrl, action_label: 'View item' } : {}),
+              ...(actionUrl
+                ? {
+                    action_url: actionUrl,
+                    action_label: opts.ack_required ? 'Open to acknowledge' : 'View item'
+                  }
+                : {}),
               ...(templateData ?? {})
             }
           })
