@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { can } from '../services/permissions.js'
 import { restoreTrashRow, type TrashRow } from '../services/trash.js'
 
 /**
@@ -9,6 +10,7 @@ import { restoreTrashRow, type TrashRow } from '../services/trash.js'
  *  GET    /trash              — list (admin: everything; others: own deletions); ?collection= filter
  *  POST   /trash/:id/restore  — re-insert with original id (create permission required)
  *  DELETE /trash/:id          — permanent purge (admin, or owner of the deletion)
+ *  GET    /trash/record       — ?collection=&item= the latest deletion of one record
  */
 
 function rowLabel(data: Record<string, unknown>): string {
@@ -98,6 +100,50 @@ export async function trashRoutes(app: FastifyInstance) {
       limit
     })
   })
+
+  // #1871: an open record deleted by someone else says who and when, and
+  // offers Restore only to people the restore route would let through. Asks
+  // collection read (the viewer had the record open); the trash id rides only
+  // when the viewer may restore it.
+  app.get<{ Querystring: { collection?: string; item?: string } }>(
+    '/record',
+    { preHandler: requireAuth },
+    async (req, reply) => {
+      const collection = String(req.query.collection ?? '')
+      const item = String(req.query.item ?? '')
+      if (!collection || !item)
+        return reply.code(400).send({ error: 'collection and item are required' })
+      if (!(await can(req.user!, 'read', collection)))
+        return reply.code(403).send({ error: 'Forbidden' })
+      const row = (await db('nivaro_trash')
+        .where({ collection, item_id: item })
+        .orderBy('deleted_at', 'desc')
+        .first('id', 'deleted_by', 'deleted_at')) as
+        | Pick<TrashRow, 'id' | 'deleted_by' | 'deleted_at'>
+        | undefined
+      if (!row) return reply.send({ data: null })
+      const by = row.deleted_by
+        ? ((await db('nivaro_users')
+            .where({ id: row.deleted_by })
+            .first('first_name', 'last_name', 'email')) as
+            | { first_name: string | null; last_name: string | null; email: string | null }
+            | undefined)
+        : undefined
+      const canRestore =
+        (req.isAdmin || row.deleted_by === req.user!.id) &&
+        (await can(req.user!, 'create', collection))
+      return reply.send({
+        data: {
+          deleted_at: row.deleted_at,
+          deleted_by_name: by
+            ? `${by.first_name ?? ''} ${by.last_name ?? ''}`.trim() || by.email || null
+            : null,
+          can_restore: canRestore,
+          trash_id: canRestore ? row.id : null
+        }
+      })
+    }
+  )
 
   // Bulk restore (#668): up to 100 entries, each through the SAME single-row
   // restore service (permissions, id-occupied 409s, IDENTITY_INSERT all

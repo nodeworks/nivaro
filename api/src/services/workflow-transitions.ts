@@ -29,6 +29,7 @@ import {
 } from './pipeline-subject.js'
 import { syncMaterializedQueueItem } from './queue-materialization.js'
 import { getLabels } from './queues.js'
+import { announceAddendumChange, announceRecordAspect } from './record-events.js'
 import { runTransitionActions, TransitionBlockedError } from './workflow-actions.js'
 import { evaluateConditionRules, fetchRecordForConditions } from './workflow-conditions.js'
 
@@ -1221,6 +1222,11 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
   await syncMaterializedQueueItem(instance.collection, instance.item)
 
   await syncStateField(instance.collection, instance.item, newStateObj)
+  // #1824: open copies of this record (and list rows) refetch the pipeline
+  // instead of keeping the old state until a reload. An addendum instance also
+  // tells its parent record, whose addendum view shows the status (#1873).
+  announceRecordAspect(instance.collection, instance.item, '$state')
+  if (instance.collection === 'nivaro_addendums') void announceAddendumChange(String(instance.item))
   // #647: a state move wakes notifications snoozed until the record changes
   // (an addendum instance wakes its own row; subject resolution is the reader's).
   void import('./notification-snooze.js')
@@ -1364,6 +1370,7 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
             .where({ id: instance.item })
             .whereIn('status', ['draft', 'review'])
             .update({ status: 'rejected', updated_at: new Date() })
+          void announceAddendumChange(String(instance.item))
           return
         }
         const { applyAddendumApproval } = await import('./addendum-approve.js')
@@ -1372,6 +1379,7 @@ async function applyTransitionInner(opts: ApplyTransitionOpts): Promise<ApplyTra
           allowedFromStatuses: ['draft', 'review'],
           app: getApp()
         })
+        void announceAddendumChange(String(instance.item))
       } catch (err) {
         console.warn('[workflow-transitions] addendum outcome sync failed:', err)
       }

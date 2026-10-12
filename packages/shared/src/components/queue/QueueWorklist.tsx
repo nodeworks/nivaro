@@ -55,6 +55,7 @@ import { useElapsedLoading } from '../../hooks/useElapsedLoading'
 import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
+import { LIVE_ASPECTS } from '../../lib/live'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { buildGroups } from '../../lib/queue-grouping'
 import { rowHighlightClass, rowHighlightTextClass } from '../../lib/row-highlight'
@@ -101,8 +102,12 @@ type DrillEntry = DrilldownTarget & { rootLayoutSlug?: string | null }
 // ─── Props ──────────────────────────────────────────────────────────────────
 
 export interface QueueRealtimeAdapter {
-  /** Subscribe to update events for these collections; call onUpdate per event; return unsubscribe. */
-  subscribe: (collections: string[], onUpdate: () => void) => () => void
+  /** Subscribe to update events for these collections; call onUpdate per event (with the
+   *  `collection:update` payload when the host has it); return unsubscribe. */
+  subscribe: (
+    collections: string[],
+    onUpdate: (ev?: { item?: unknown; action?: string; changed_fields?: string[] }) => void
+  ) => () => void
 }
 
 export interface QueueWorklistProps {
@@ -820,8 +825,32 @@ export function QueueWorklist({
       )
     ]
     if (collections.length === 0) return
-    return realtime.subscribe(collections, () => setPendingUpdates((n) => n + 1))
-  }, [realtime, queue?.sources])
+    // Aspect notices (`$tasks`, `$addendums`, `$integrations`, …) move a
+    // row's counts and badges, not its columns (#1874): refresh those reads
+    // in place, coalesced, instead of counting them as pending updates.
+    const aspectKeys = new Set<string>()
+    let aspectTimer: ReturnType<typeof setTimeout> | null = null
+    const unsub = realtime.subscribe(collections, (ev) => {
+      const fields = ev?.changed_fields
+      if (ev && !ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
+        if (fields.includes(LIVE_ASPECTS.tasks)) aspectKeys.add('queue-task-counts')
+        if (fields.includes(LIVE_ASPECTS.integrations)) aspectKeys.add('queue-integrations-summary')
+        if (fields.includes(LIVE_ASPECTS.addendums)) aspectKeys.add('queue-collection-addendums')
+        if (!aspectTimer)
+          aspectTimer = setTimeout(() => {
+            aspectTimer = null
+            for (const k of aspectKeys) void qc.invalidateQueries({ queryKey: [k] })
+            aspectKeys.clear()
+          }, 300)
+        return
+      }
+      setPendingUpdates((n) => n + 1)
+    })
+    return () => {
+      unsub()
+      if (aspectTimer) clearTimeout(aspectTimer)
+    }
+  }, [realtime, queue?.sources, qc])
 
   // Inputs stay bound to filterValues (instant UI); the items query keys off
   // this trailing copy so text filters don't fire a request per keystroke.

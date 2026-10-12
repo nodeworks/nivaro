@@ -4,6 +4,7 @@ import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
+import { ACCESS_ROUTES, announceAccessChanged } from '../services/record-events.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
@@ -299,6 +300,12 @@ export async function registerRoutes(app: FastifyInstance) {
         /* broadcast is best-effort */
       }
     }
+  })
+  // #1925: a write that may change who reads which records tells open record
+  // pages to re-check their own access (payload-free, coalesced).
+  app.addHook('onResponse', async (req, reply) => {
+    if (req.method === 'GET' || reply.statusCode >= 400) return
+    if (ACCESS_ROUTES.test(req.url)) announceAccessChanged()
   })
 
   await app.register(healthRoutes)
