@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
-import { getTenantDb } from '../db/tenant-context.js'
+import { getTenantDb, runWithoutTenant } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { JournalEntry } from './event-journal.js'
 
@@ -158,13 +158,18 @@ export async function flushDurable(): Promise<void> {
       groups.set(p.knex, list)
     }
     for (const [k, rows] of groups) {
-      const conn = k ?? db
-      try {
-        if (!(k ? await k.schema.hasTable(TABLE) : await tableReady())) continue
+      const write = async (): Promise<void> => {
+        const conn = k ?? db
+        if (!(k ? await k.schema.hasTable(TABLE) : await tableReady())) return
         for (let i = 0; i < rows.length; i += INSERT_CHUNK) {
           await conn(TABLE).insert(rows.slice(i, i + INSERT_CHUNK))
         }
         stats.written += rows.length
+      }
+      try {
+        // No-tenant rows go through the `db` proxy OUTSIDE any tenant: a flush
+        // started from a tenant's emit must not land them in that tenant's table.
+        await (k ? write() : runWithoutTenant(write))
       } catch (err) {
         stats.failed += rows.length
         stats.lastError = err instanceof Error ? err.message.slice(0, 300) : String(err)
