@@ -10,7 +10,7 @@ import type {
 } from './ai-plan-runner.js'
 import { getApp } from './io-holder.js'
 import { readItems } from './items.js'
-import { can } from './permissions.js'
+import { can, getAllowedFields, getRowFilter } from './permissions.js'
 
 /**
  * Ask AI plan STEP KINDS (#1807, #2000) and step conditions (#1953).
@@ -288,6 +288,20 @@ async function visibleRecordIds(
   return rows.map((r) => String(r.id))
 }
 
+/** The subset of `ids` the person can still read — checked again when a
+ *  step runs, so access lost since the plan was made is honoured. */
+async function stillVisibleIds(user: User, collection: string, ids: string[]): Promise<string[]> {
+  if (ids.length === 0 || !isBusiness(collection)) return []
+  if (!(await can(user, 'read', collection))) return []
+  const res = (await readItems(user, collection, {
+    filter: { id: { _in: ids } },
+    fields: ['id'],
+    limit: ids.length + 1
+  })) as { data?: Array<Record<string, unknown>> }
+  const seen = new Set((res.data ?? []).map((r) => String(r.id)))
+  return ids.filter((id) => seen.has(String(id)))
+}
+
 const sendMessageKind: PlanStepKind = {
   kind: 'send_message',
   label: 'Send a message',
@@ -333,10 +347,13 @@ const sendMessageKind: PlanStepKind = {
       ids: string[]
       include_creators: boolean
     } | null
+    let visible: string[] = []
     if (ownersOf) {
+      // Owners of records the person can STILL read — never of one they lost.
+      visible = await stillVisibleIds(user, ownersOf.collection, ownersOf.ids)
       for (const id of await recordStakeholders(
         ownersOf.collection,
-        ownersOf.ids,
+        visible,
         ownersOf.include_creators
       ))
         recipients.add(id)
@@ -353,14 +370,20 @@ const sendMessageKind: PlanStepKind = {
         message: str(payload.message),
         sender: user.id,
         collection: ownersOf?.collection ?? null,
-        item: ownersOf && ownersOf.ids.length === 1 ? ownersOf.ids[0] : null,
+        item: ownersOf && visible.length === 1 ? visible[0] : null,
         source: { kind: 'ai-plan', label: 'Ask AI plan' }
       })
       sent++
     }
     return {
       ok: true,
-      result: { sent, recipients: list.slice(0, 50) },
+      result: {
+        sent,
+        recipients: list.slice(0, 50),
+        ...(ownersOf && visible.length < ownersOf.ids.length
+          ? { records_no_longer_visible: ownersOf.ids.length - visible.length }
+          : {})
+      },
       records_changed: 0
     }
   },
@@ -441,10 +464,14 @@ const runFlowKind: PlanStepKind = {
   async execute(user, payload, ctx) {
     if (!(await isAdminUser(user))) throw new Error('Only administrators can run flows')
     const flowId = str(payload.flow_id)
-    const flow = (await db('nivaro_flows').where({ id: flowId }).first('name', 'status')) as
-      | { name: string; status: string }
+    const flow = (await db('nivaro_flows')
+      .where({ id: flowId })
+      .first('name', 'status', 'trigger')) as
+      | { name: string; status: string; trigger: string }
       | undefined
+    // Checked again at run time: the flow may have changed since the plan.
     if (flow?.status !== 'active') throw new Error('The flow is no longer active')
+    if (flow.trigger !== 'manual') throw new Error(`Flow "${flow.name}" is no longer a manual flow`)
     const app = getApp()
     const { executeFlow } = await import('./flow-executor.js')
     const started = new Date(Date.now() - 1000)
@@ -540,16 +567,87 @@ async function readConditionRows(
   collection: string,
   ids: string[],
   cond: PlanStepCondition
-): Promise<Map<string, Record<string, unknown>>> {
+): Promise<{ visible: Map<string, Record<string, unknown>>; passing: Set<string> }> {
   const { compileChatFilterFor } = await import('./ai-chat.js')
   const conditions = await compileChatFilterFor(collection, cond.where ?? null)
-  conditions.push({ path: ['id'], op: '_in', value: ids } as never)
+  // A condition must never test a field the person cannot read — pass/skip
+  // would otherwise answer questions about hidden values.
+  await assertConditionReadable(user, collection, [
+    ...conditions.map((c) => (c as { path: string[] }).path),
+    ...(cond.unchanged ?? []).map((f) => [f])
+  ])
   const fields = ['id', ...(cond.unchanged ?? [])]
-  const fakeReq = { query: { conditions: JSON.stringify(conditions) } } as never
-  const res = (await readItems(user, collection, { fields, limit: ids.length + 1 }, fakeReq)) as {
-    data?: Array<Record<string, unknown>>
+  const read = async (extra: unknown[]) => {
+    const all = [...extra, { path: ['id'], op: '_in', value: ids }]
+    const fakeReq = { query: { conditions: JSON.stringify(all) } } as never
+    const res = (await readItems(user, collection, { fields, limit: ids.length + 1 }, fakeReq)) as {
+      data?: Array<Record<string, unknown>>
+    }
+    return res.data ?? []
   }
-  return new Map((res.data ?? []).map((r) => [String(r.id), r]))
+  const visible = await read([])
+  const passing = conditions.length
+    ? new Set((await read(conditions)).map((r) => String(r.id)))
+    : null
+  return {
+    visible: new Map(visible.map((r) => [String(r.id), r])),
+    passing: passing ?? new Set(visible.map((r) => String(r.id)))
+  }
+}
+
+/**
+ * Refuse a condition that reads a field the person cannot: on the
+ * collection itself, and on every collection a dotted path walks into.
+ * A hop that cannot be checked (a to-many alias, a row-filtered, scoped or
+ * unreadable related collection) is refused rather than trusted. Mirrors the
+ * Ask AI aggregate guard.
+ */
+export async function assertConditionReadable(
+  user: User,
+  collection: string,
+  paths: string[][]
+): Promise<void> {
+  const fieldOk = async (coll: string, field: string) => {
+    const allowed = await getAllowedFields(user, 'read', coll)
+    return allowed == null || allowed.includes('*') || allowed.includes(field)
+  }
+  const { chatRelationsFor } = await import('./ai-chat.js')
+  const { getUserScopeEnforcement } = await import('./user-scopes.js')
+  for (const path of paths) {
+    if (!path.length || path[0] === '$state') continue
+    if (!(await fieldOk(collection, path[0]))) {
+      throw new Error(`You do not have access to the field "${path[0]}" on ${collection}`)
+    }
+    let cur = collection
+    for (let i = 0; i < path.length - 1; i++) {
+      const link = (await chatRelationsFor(cur)).m2o.find((l) => l.field === path[i])
+      if (!link) {
+        throw new Error(
+          `A condition cannot go through "${path.slice(0, i + 1).join('.')}" — only links to a single record can be checked for access`
+        )
+      }
+      if (!(await can(user, 'read', link.collection))) {
+        throw new Error(`You do not have access to ${link.collection}`)
+      }
+      if (await getRowFilter(user, 'read', link.collection)) {
+        throw new Error(
+          `Your access to ${link.collection} is row-filtered — a condition cannot go through it`
+        )
+      }
+      const scope = await getUserScopeEnforcement(user, link.collection)
+      if (scope.deny || scope.filters.length > 0) {
+        throw new Error(
+          `Your access to ${link.collection} is limited by your scopes — a condition cannot go through it`
+        )
+      }
+      if (!(await fieldOk(link.collection, path[i + 1]))) {
+        throw new Error(
+          `You do not have access to the field "${path[i + 1]}" on ${link.collection}`
+        )
+      }
+      cur = link.collection
+    }
+  }
 }
 
 /** Validate a condition when the plan is proposed, and snapshot the
@@ -584,20 +682,36 @@ export async function prepareCondition(
       'condition needs records: give condition.collection + id, or use it on a step that acts on records'
     )
   if (!(await can(user, 'read', t.collection))) throw new Error(`You cannot read ${t.collection}`)
+  if (!t.own) {
+    // Records the condition names itself must be ones the person can read.
+    const seen = await stillVisibleIds(user, t.collection, t.ids)
+    if (seen.length < t.ids.length) {
+      throw new Error(`condition names ${t.collection} records you cannot read`)
+    }
+  }
   if (cond.unchanged?.length) {
     const { chatFieldSet } = await import('./ai-chat.js')
     const valid = await chatFieldSet(t.collection)
     const bad = cond.unchanged.filter((f) => !valid.has(f))
     if (bad.length) throw new Error(`condition.unchanged names unknown field(s): ${bad.join(', ')}`)
-    const rows = await readConditionRows(user, t.collection, t.ids, { unchanged: cond.unchanged })
+    const { visible } = await readConditionRows(user, t.collection, t.ids, {
+      unchanged: cond.unchanged,
+      where: cond.where
+    })
     cond.snapshot = {}
-    for (const [id, row] of rows) {
+    for (const [id, row] of visible) {
       cond.snapshot[id] = Object.fromEntries(cond.unchanged.map((f) => [f, row[f] ?? null]))
     }
   } else {
-    // Compile now so a bad filter is the model's error at propose time.
+    // Compile + access-check now so a bad filter is the model's error at
+    // propose time.
     const { compileChatFilterFor } = await import('./ai-chat.js')
-    await compileChatFilterFor(t.collection, cond.where)
+    const conditions = await compileChatFilterFor(t.collection, cond.where)
+    await assertConditionReadable(
+      user,
+      t.collection,
+      conditions.map((c) => (c as { path: string[] }).path)
+    )
   }
   return cond
 }
@@ -609,19 +723,23 @@ export async function checkStepCondition(user: User, step: PlanStepDef): Promise
   const cond = step.condition
   const t = conditionTargets(step)
   if (!cond || !t) return { pass: true }
-  const rows = await readConditionRows(user, t.collection, t.ids, cond)
-  const labels = await labelsFor(t.collection, t.ids)
+  const { visible, passing: matched } = await readConditionRows(user, t.collection, t.ids, cond)
+  // Labels only for records the person can read now; any other is `#id`.
+  const labels = await labelsFor(
+    t.collection,
+    t.ids.filter((id) => visible.has(id))
+  )
   const failing: PlanSkippedRecord[] = []
   const passing: string[] = []
   const what = cond.label ? `not ${cond.label.replace(/^only if\s+/i, '')}` : 'condition not met'
   for (const id of t.ids) {
-    const row = rows.get(id)
+    const row = visible.get(id)
     if (!row) {
-      failing.push({
-        id,
-        label: labels[id],
-        reason: cond.where ? what : 'no longer visible to you'
-      })
+      failing.push({ id, label: `#${id}`, reason: 'not visible to you' })
+      continue
+    }
+    if (!matched.has(id)) {
+      failing.push({ id, label: labels[id], reason: what })
       continue
     }
     const before = cond.snapshot?.[id]

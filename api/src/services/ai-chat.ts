@@ -1622,6 +1622,11 @@ export async function compileChatFilterFor(
   return compileChatFilter(name, raw, await fieldSet(name))
 }
 
+/** Links out of a collection — the plan condition guard walks dotted paths with it. */
+export async function chatRelationsFor(collection: string): Promise<ChatRelations> {
+  return relationsFor(assertBusinessCollection(collection))
+}
+
 /** The fields a plan condition may name on a collection (registered + physical). */
 export async function chatFieldSet(collection: string): Promise<Set<string>> {
   return fieldSet(assertBusinessCollection(collection))

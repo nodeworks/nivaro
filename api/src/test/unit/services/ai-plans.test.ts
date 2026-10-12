@@ -35,20 +35,40 @@ vi.mock('../../../services/io-holder.js', () => ({
   })
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
-vi.mock('../../../services/user-scopes.js', () => ({ isAdminRole: vi.fn(() => false) }))
+const isAdminRole = vi.fn(async () => false)
+vi.mock('../../../services/user-scopes.js', () => ({
+  isAdminRole: (...a: unknown[]) => isAdminRole(...(a as [])),
+  getUserScopeEnforcement: vi.fn(async () => ({ deny: false, filters: [] }))
+}))
 const readItems = vi.fn()
 vi.mock('../../../services/items.js', () => ({
   readItems: (...a: unknown[]) => readItems(...a),
   createOne: vi.fn(),
   updateOne: vi.fn()
 }))
-vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
-vi.mock('../../../services/queues.js', () => ({
-  getLabels: vi.fn(async () => ({ 'orders:1': 'PO-1', 'orders:2': 'PO-2', 'orders:3': 'PO-3' }))
+// Readable fields per collection; absent = every field.
+const allowedFields: Record<string, string[]> = {}
+vi.mock('../../../services/permissions.js', () => ({
+  can: vi.fn(async () => true),
+  getAllowedFields: vi.fn(async (_u: unknown, _a: string, c: string) => allowedFields[c] ?? null),
+  getRowFilter: vi.fn(async () => null)
 }))
+const getLabels = vi.fn(async (_m: Map<string, Set<string>>) => ({
+  'orders:1': 'PO-1',
+  'orders:2': 'PO-2',
+  'orders:3': 'PO-3'
+}))
+vi.mock('../../../services/queues.js', () => ({
+  getLabels: (m: Map<string, Set<string>>) => getLabels(m)
+}))
+const compiled = vi.fn(async (_c: string, _w: unknown): Promise<unknown[]> => [])
 vi.mock('../../../services/ai-chat.js', () => ({
-  compileChatFilterFor: vi.fn(async () => []),
-  chatFieldSet: vi.fn(async () => new Set(['amount', 'status']))
+  compileChatFilterFor: (c: string, w: unknown) => compiled(c, w),
+  chatFieldSet: vi.fn(async () => new Set(['amount', 'status', 'secret'])),
+  chatRelationsFor: vi.fn(async (c: string) => ({
+    m2o: c === 'orders' ? [{ field: 'vendor', collection: 'vendors' }] : [],
+    aliases: []
+  }))
 }))
 
 const runner = await import('../../../services/ai-plan-runner.js')
@@ -85,6 +105,11 @@ beforeEach(() => {
   emitted.length = 0
   firstRow = { id: 'P1', created_at: new Date() }
   readItems.mockReset()
+  getLabels.mockClear()
+  compiled.mockReset()
+  compiled.mockResolvedValue([])
+  isAdminRole.mockResolvedValue(false)
+  for (const k of Object.keys(allowedFields)) delete allowedFields[k]
 })
 
 describe('runPlanSteps — order rules', () => {
@@ -259,11 +284,13 @@ describe('step conditions', () => {
     expect(out.payload).toMatchObject({ ids: ['1'] })
     expect(out.skipped_records?.map((r) => r.id)).toEqual(['2', '3'])
     expect(out.skipped_records?.[0].reason).toMatch(/amount changed/)
-    expect(out.skipped_records?.[1].reason).toBe('no longer visible to you')
+    expect(out.skipped_records?.[1].reason).toBe('not visible to you')
   })
 
   it('skips the whole step when the checked records are not its own', async () => {
-    readItems.mockResolvedValue({ data: [] })
+    compiled.mockResolvedValue([{ path: ['status'], op: '_eq', value: 'review' }])
+    // visible by id, but no longer matching the where
+    readItems.mockResolvedValueOnce({ data: [{ id: '1' }] }).mockResolvedValueOnce({ data: [] })
     const out = await steps.checkStepCondition(user, {
       ...step(1),
       kind: 'send_message',
@@ -276,6 +303,130 @@ describe('step conditions', () => {
     })
     expect(out.pass).toBe(false)
     expect(out.reason).toBe('PO-1: not still in Finance Review')
+  })
+
+  it('never labels a record the person cannot read (security #1)', async () => {
+    compiled.mockResolvedValue([{ path: ['status'], op: '_eq', value: 'review' }])
+    readItems.mockResolvedValueOnce({ data: [{ id: '1' }] }).mockResolvedValueOnce({ data: [] })
+    const out = await steps.checkStepCondition(user, {
+      ...step(1),
+      kind: 'send_message',
+      condition: { label: 'only if open', collection: 'orders', ids: ['1', '2'], where: {} }
+    })
+    expect(out.pass).toBe(false)
+    const asked = [...(getLabels.mock.calls[0][0].get('orders') ?? [])]
+    expect(asked).toEqual(['1'])
+    expect(out.skipped_records).toEqual([
+      { id: '1', label: 'PO-1', reason: 'not open' },
+      { id: '2', label: '#2', reason: 'not visible to you' }
+    ])
+  })
+
+  it('refuses a condition naming records the person cannot read', async () => {
+    readItems.mockResolvedValue({ data: [{ id: '1' }] })
+    await expect(
+      steps.prepareCondition(
+        user,
+        { collection: 'orders', ids: ['1', '2'], where: { status: { _eq: 'x' } } },
+        null
+      )
+    ).rejects.toThrow('condition names orders records you cannot read')
+  })
+
+  it('refuses a where on a field the person cannot read (security #4)', async () => {
+    allowedFields.orders = ['id', 'amount', 'status', 'vendor']
+    compiled.mockResolvedValue([{ path: ['secret'], op: '_eq', value: 1 }])
+    await expect(
+      steps.prepareCondition(
+        user,
+        { where: { secret: { _eq: 1 } } },
+        {
+          collection: 'orders',
+          ids: ['1']
+        }
+      )
+    ).rejects.toThrow('You do not have access to the field "secret" on orders')
+  })
+
+  it('refuses a dotted where into a hidden field of the linked record', async () => {
+    allowedFields.vendors = ['id', 'name']
+    compiled.mockResolvedValue([{ path: ['vendor', 'rating'], op: '_lt', value: 3 }])
+    await expect(
+      steps.prepareCondition(
+        user,
+        { where: { 'vendor.rating': { _lt: 3 } } },
+        {
+          collection: 'orders',
+          ids: ['1']
+        }
+      )
+    ).rejects.toThrow('You do not have access to the field "rating" on vendors')
+  })
+
+  it('refuses a hop it cannot check, and an unchanged field that is hidden', async () => {
+    compiled.mockResolvedValue([{ path: ['lines', 'amount'], op: '_gt', value: 0 }])
+    await expect(
+      steps.prepareCondition(
+        user,
+        { where: { 'lines.amount': { _gt: 0 } } },
+        {
+          collection: 'orders',
+          ids: ['1']
+        }
+      )
+    ).rejects.toThrow(/cannot go through "lines"/)
+    compiled.mockResolvedValue([])
+    allowedFields.orders = ['id', 'amount']
+    await expect(
+      steps.prepareCondition(user, { unchanged: ['secret'] }, { collection: 'orders', ids: ['1'] })
+    ).rejects.toThrow('You do not have access to the field "secret" on orders')
+  })
+
+  it('a readable where passes the guard and is checked again when the step runs', async () => {
+    allowedFields.orders = ['id', 'status']
+    compiled.mockResolvedValue([{ path: ['status'], op: '_eq', value: 'review' }])
+    const cond = await steps.prepareCondition(
+      user,
+      { where: { status: { _eq: 'review' } } },
+      {
+        collection: 'orders',
+        ids: ['1']
+      }
+    )
+    expect(cond?.where).toEqual({ status: { _eq: 'review' } })
+    allowedFields.orders = ['id']
+    await expect(
+      steps.checkStepCondition(user, {
+        ...step(1),
+        kind: 'bulk_update',
+        targets: { collection: 'orders', ids: ['1'] },
+        condition: cond
+      })
+    ).rejects.toThrow('You do not have access to the field "status" on orders')
+  })
+})
+
+describe('run_flow re-checks the flow when it runs (security #2)', () => {
+  it('refuses a flow that is no longer manual', async () => {
+    isAdminRole.mockResolvedValue(true)
+    firstRow = { name: 'Nightly', status: 'active', trigger: 'event' }
+    const kind = steps.getPlanStepKind('run_flow')!
+    await expect(
+      kind.execute(user, { flow_id: 'F1', data: {} }, { planId: 'P1', stepId: 's1' })
+    ).rejects.toThrow('Flow "Nightly" is no longer a manual flow')
+  })
+
+  it('refuses an inactive flow and a person who is no longer an administrator', async () => {
+    isAdminRole.mockResolvedValue(true)
+    firstRow = { name: 'Nightly', status: 'inactive', trigger: 'manual' }
+    const kind = steps.getPlanStepKind('run_flow')!
+    await expect(
+      kind.execute(user, { flow_id: 'F1', data: {} }, { planId: 'P1', stepId: 's1' })
+    ).rejects.toThrow('The flow is no longer active')
+    isAdminRole.mockResolvedValue(false)
+    await expect(
+      kind.execute(user, { flow_id: 'F1', data: {} }, { planId: 'P1', stepId: 's1' })
+    ).rejects.toThrow('Only administrators can run flows')
   })
 })
 
