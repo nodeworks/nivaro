@@ -1051,6 +1051,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.traffic_digest = v === true ? true : null
     }
+    if ('ai_weekly_summary' in body) {
+      // #1868/#1908 — the Monday AI-written summaries in the daily summary (administrators; opt-in).
+      const v = body.ai_weekly_summary
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'ai_weekly_summary must be true, false or null' })
+      }
+      patch.ai_weekly_summary = v === true ? true : null
+    }
     if ('traffic_pins' in body) {
       // #1125 — the Traffic Map watch list: entity keys (`<lane>/<entity>`), at most 40.
       const v = body.traffic_pins

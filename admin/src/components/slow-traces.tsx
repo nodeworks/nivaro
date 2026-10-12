@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, ChevronRight, Timer } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { ExplainButton } from '@/components/explain-button'
 import { PlanViewer } from '@/components/plan-viewer'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -261,6 +262,9 @@ function TraceRow({ trace }: { trace: Trace }) {
           <p className='mb-2 break-all font-mono text-[10.5px] text-muted-foreground'>
             {trace.url}
           </p>
+          <div className='mb-2'>
+            <ExplainButton kind='trace' params={{ id: trace.id }} label='Explain this slow request' />
+          </div>
           {trace.spans.length === 0 ? (
             <p className='text-[11px] text-muted-foreground'>
               No instrumented phases on this route yet — the whole request is unaccounted.
