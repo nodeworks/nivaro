@@ -437,9 +437,12 @@ export async function resolveRecordLabels(
     if (meta) registered.add(collection)
   }
   const byTarget = new Map<string, Set<string>>()
-  for (const [collection, ids] of wanted) if (registered.has(collection)) byTarget.set(collection, ids)
+  for (const [collection, ids] of wanted)
+    if (registered.has(collection)) byTarget.set(collection, ids)
   const { linkLabelsAsUser } = await import('../services/ai-link-labels.js')
-  const labels = await linkLabelsAsUser(viewer, byTarget).catch(() => ({}) as Record<string, string>)
+  const labels = await linkLabelsAsUser(viewer, byTarget).catch(
+    () => ({}) as Record<string, string>
+  )
   for (const [k, v] of Object.entries(labels)) out.set(k, v)
   return out
 }
@@ -689,8 +692,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       visibleRows.map((r) => (r.current_path as string | null) ?? null),
       req.user!
     )
-    const pageLabel = (path: string | null | undefined) =>
-      presencePageLabel(path, recordLabels)
+    const pageLabel = (path: string | null | undefined) => presencePageLabel(path, recordLabels)
 
     // #1394 — stuck: at the keyboard, same route, nothing saved for ten
     // minutes. Shown to admins and to the person's own manager only: it reads
