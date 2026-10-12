@@ -3,7 +3,7 @@ import { db } from '../db/index.js'
 import { newChainId, startChain } from './chain.js'
 import { getFile, readFileBuffer } from './files.js'
 import { loadQueueStanding, publishQueueStanding } from './import-queue-standing.js'
-import { emitJobProgress } from './live-progress.js'
+import { emitImportProgress, emitJobProgress } from './live-progress.js'
 import { notifyUser } from './notification-channels.js'
 import type { ImportDefinition } from './staged-imports.js'
 import {
@@ -318,7 +318,11 @@ async function runOne(
                   .where('id', next.id)
                   .update({ row_count: Number(data?.row_count ?? 0) })
               }
-              app.io?.emit('import:progress', { id: next.id, stage, ...data })
+              emitImportProgress(next.created_by ? String(next.created_by) : null, {
+                id: next.id,
+                stage,
+                ...data
+              })
               emitJobProgress(next.created_by ? String(next.created_by) : null, {
                 key: `import:${next.id}`,
                 kind: 'import',
@@ -354,7 +358,11 @@ async function runOne(
       `${label(next)} import completed`,
       summary ? summary.split('\n')[0] : `Imported ${rowCount} rows.`
     )
-    app.io?.emit('import:progress', { id: next.id, stage: 'completed', row_count: rowCount })
+    emitImportProgress(next.created_by ? String(next.created_by) : null, {
+      id: next.id,
+      stage: 'completed',
+      row_count: rowCount
+    })
     emitJobProgress(next.created_by ? String(next.created_by) : null, {
       key: `import:${next.id}`,
       kind: 'import',
@@ -399,7 +407,11 @@ async function runOne(
     // The failure belongs in front of whoever queued it — a silent 'error' row
     // is how imports get re-run blindly.
     await notifyCreator(app, next, `${label(next)} import failed`, message.slice(0, 500))
-    app.io?.emit('import:progress', { id: next.id, stage: 'error', error: message })
+    emitImportProgress(next.created_by ? String(next.created_by) : null, {
+      id: next.id,
+      stage: 'error',
+      error: message
+    })
     emitJobProgress(next.created_by ? String(next.created_by) : null, {
       key: `import:${next.id}`,
       kind: 'import',
