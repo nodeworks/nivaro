@@ -7,6 +7,7 @@ import {
 } from './event-journal-store.js'
 import { publishToStream, streamActive } from './event-stream.js'
 import { getIo } from './io-holder.js'
+import { notifyJournalListeners } from './journal-listeners.js'
 import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
@@ -112,6 +113,8 @@ export async function journaledEmit(
   }
   // No sequence, no stream, or the append failed: the adapter's pub/sub as before.
   if (path === 'adapter') io.to(room).emit(event, out)
+  // #1675 / #1680 — pushed widgets and saved-view streams hear this process's own writes here.
+  if (!opts.selfViaStream) notifyJournalListeners({ seq, room, event, payload })
   if (observer) {
     try {
       observer(performance.now() - t0, seq != null)

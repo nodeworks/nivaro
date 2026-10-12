@@ -1,5 +1,5 @@
 import { createNivaro } from '@nivaro/sdk'
-import { NivaroProvider, QueryWidgetBody } from '@nivaro/shared'
+import { liveWidgetInterval, NivaroProvider, QueryWidgetBody, useLiveWidget } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -189,6 +189,20 @@ function WidgetCard({
 }) {
   const qc = useQueryClient()
   const filtersKey = JSON.stringify(globalFilters)
+  // Pushed widgets (#1675): the server recomputes this widget as the viewer when its collection
+  // changes and pushes the figure; meanwhile the poll is only a safety net. Widgets the server
+  // will not push (latest rows) keep the poll and the collection refresh below.
+  const liveParams = useMemo(
+    () => (globalFilters.length ? { extra_filters: globalFilters } : null),
+    [globalFilters]
+  )
+  const live = useLiveWidget({
+    kind: 'dashboard',
+    widget: widget.id,
+    params: liveParams,
+    onData: (d) => qc.setQueryData(['widget-data', widget.id, filtersKey], d),
+    onStale: () => void qc.invalidateQueries({ queryKey: ['widget-data', widget.id] })
+  })
   const { data, isLoading } = useQuery({
     queryKey: ['widget-data', widget.id, filtersKey],
     queryFn: () =>
@@ -198,10 +212,12 @@ function WidgetCard({
         })
         .then((r) => r.data.data),
     // #53 — the widget's own interval when it has one, else the page default.
-    refetchInterval:
+    refetchInterval: liveWidgetInterval(
+      live,
       widget.refresh_seconds && widget.refresh_seconds >= 10
         ? widget.refresh_seconds * 1000
         : 60_000
+    )
   })
 
   // Live dashboards (#264): a write to this widget's source collection
@@ -209,7 +225,7 @@ function WidgetCard({
   // bulk writes coalesce into one refetch.
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   useEffect(() => {
-    if (!widget.collection) return
+    if (!widget.collection || live) return
     const unsub = adminRealtime.subscribeCollections([widget.collection], () => {
       if (debounceRef.current) return
       debounceRef.current = setTimeout(() => {
@@ -221,7 +237,7 @@ function WidgetCard({
       unsub()
       if (debounceRef.current) clearTimeout(debounceRef.current)
     }
-  }, [widget.collection, widget.id, qc])
+  }, [widget.collection, widget.id, qc, live])
 
   const cfg = TYPE_CONFIG[widget.type]
 
