@@ -1746,22 +1746,39 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     }
 
     // #1804 — "remember that …" is kept as a note, not sent to the model.
-    const { addMemoryNote, memoryPromptBlock, parseRememberCommand, readMemory } = await import(
-      '../services/ai-memory.js'
-    )
+    const {
+      AI_MEMORY_PROFILE_PATH,
+      addMemoryNote,
+      memoryFullMessage,
+      memoryPromptBlock,
+      parseRememberCommand,
+      readMemory
+    } = await import('../services/ai-memory.js')
     const rememberText = parseRememberCommand(history[history.length - 1].content)
     if (rememberText) {
-      const { note, dropped, duplicate } = await addMemoryNote(String(req.user!.id), rememberText)
-      const body: Record<string, unknown> = {
-        reply: duplicate
-          ? `I already remember that: “${note.text}”.`
-          : `Got it — I'll remember: “${note.text}”.${dropped ? ` (To make room I forgot the oldest note: “${dropped.text}”.)` : ''} You can see and edit what I remember under Profile → Ask AI memory.`,
-        trace: [],
-        proposals: [],
-        remembered: note,
-        request_id: null,
-        playbooks_used: 0
-      }
+      const kept = await addMemoryNote(String(req.user!.id), rememberText)
+      // A full memory refuses (Rob, 2026-10-12): no note is ever dropped to
+      // make room — the person picks what to remove on Profile.
+      const body: Record<string, unknown> =
+        'full' in kept
+          ? {
+              reply: `I couldn't remember that: ${memoryFullMessage(true)}`,
+              trace: [],
+              proposals: [],
+              memory_full: true,
+              request_id: null,
+              playbooks_used: 0
+            }
+          : {
+              reply: kept.duplicate
+                ? `I already remember that: “${kept.note.text}”.`
+                : `Got it — I'll remember: “${kept.note.text}”. You can see and edit what I remember under [Profile → Ask AI memory](${AI_MEMORY_PROFILE_PATH}).`,
+              trace: [],
+              proposals: [],
+              remembered: kept.note,
+              request_id: null,
+              playbooks_used: 0
+            }
       if (turn) Object.assign(body, await turn.record(body))
       return reply.send({ data: body })
     }
