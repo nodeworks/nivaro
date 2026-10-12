@@ -14,6 +14,7 @@ export {
   type AiPlanSubscribe
 } from './components/ai/AiPlanCard'
 export { AiStepList } from './components/ai/AiStepList'
+export { AskPanel } from './components/ai/AskPanel'
 export {
   type AnswerFormat,
   type AnswerRows,
@@ -23,7 +24,19 @@ export {
   listOf,
   rowsOfBlock
 } from './components/ai/answer-formats'
+export {
+  ASK_OPEN_EVENT,
+  ASK_RECORD_MIME,
+  AskContextProvider,
+  type AskPageContext,
+  type AskRecordRef,
+  openAskPanel,
+  useAskHost,
+  useAskRecordDrag,
+  usePublishAskContext
+} from './components/ai/ask-context'
 export { DataGuideCard } from './components/ai/DataGuideCard'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
@@ -128,7 +141,6 @@ export {
   startDocumentExtraction,
   useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
-export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'

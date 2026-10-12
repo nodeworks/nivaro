@@ -15,6 +15,7 @@ import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
+import { aiAskContextRoutes } from './ai-ask-context.js'
 import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
 import { aiExplainRoutes } from './ai-explain.js'
@@ -362,6 +363,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiConversationRoutes, { prefix: '/ai/conversations' })
   await app.register(aiWatchRoutes, { prefix: '/ai/watches' })
   await app.register(aiPlanRoutes, { prefix: '/ai' })
+  await app.register(aiAskContextRoutes, { prefix: '/ai/ask' })
   await app.register(aiDesignRoutes, { prefix: '/ai-design' })
   await app.register(activityRoutes, { prefix: '/activity' })
   await app.register(cronRoutes, { prefix: '/cron' })

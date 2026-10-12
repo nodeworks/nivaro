@@ -67,6 +67,7 @@ import {
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { cn, humanHours } from '../lib/utils'
+import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
   type AvailableBulkAction,
   BulkActionButtons,
@@ -4637,6 +4638,30 @@ export function CollectionBrowserView({
   const aggregates = itemsRes?.aggregates
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
+  // #1835 — Ask AI from this page: the list, its filters and the rows on
+  // screen ("which of these are late?"). Ids and filters only.
+  usePublishAskContext(
+    collection
+      ? {
+          list: {
+            collection,
+            label:
+              (meta as { display_name?: string | null } | undefined)?.display_name || collection,
+            ids: rows.slice(0, 100).map((r) => String(r.id)),
+            filters: filters.map((f) => ({
+              path: f.path.join('.'),
+              op: f.op,
+              value: f.value,
+              ...(f.not ? { not: true } : {})
+            })),
+            search: appliedSearch || null,
+            total
+          }
+        }
+      : null
+  )
+  const askDrag = useAskRecordDrag()
+
   // ── Surgical live row patches (#267) ──────────────────────────────────────
   // When the host provides a RealtimeAdapter, an update to a VISIBLE row
   // refetches just that one record (through /items — RBAC/RLS apply) and
@@ -7901,6 +7926,7 @@ export function CollectionBrowserView({
                       return (
                         <tr
                           key={String(id)}
+                          {...askDrag({ collection, id: String(id) })}
                           onClick={() => openRow(id)}
                           onMouseEnter={() => prefetchRecord(id)}
                           title={risk ? `At risk — ${risk.rule}` : undefined}

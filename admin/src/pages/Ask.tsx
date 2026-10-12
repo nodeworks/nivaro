@@ -1029,9 +1029,20 @@ function AskPageInner() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && !e.shiftKey) {
+                  // #1933 — the same keys as the Ask AI panel.
+                  const last = [...turns].reverse().find((t) => t.role === 'user')?.content
+                  if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault()
+                    if (last) askAgain(last)
+                  } else if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
                     submit()
+                  } else if (e.key === 'ArrowUp' && !input && last) {
+                    e.preventDefault()
+                    setInput(last)
+                  } else if (e.key === 'Escape' && send.active) {
+                    e.preventDefault()
+                    void send.stop()
                   }
                 }}
                 rows={1}

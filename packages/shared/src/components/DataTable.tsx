@@ -1,11 +1,10 @@
-import { EmptyState } from './EmptyState'
 import {
   CalendarDays,
   Check,
-  Inbox,
   ChevronDown,
   ChevronsUpDown,
   ChevronUp,
+  Inbox,
   Pin,
   Search,
   X
@@ -26,6 +25,9 @@ import {
   parseNumberFilter
 } from '../lib/number-filter'
 import { cn, formatNumber } from '../lib/utils'
+import { CellCopyLayer } from './CellCopyLayer'
+import { EmptyState } from './EmptyState'
+import { HScrollProxy } from './HScrollProxy'
 import { Button } from './ui/button'
 import { Checkbox } from './ui/checkbox'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
@@ -33,8 +35,6 @@ import { Input } from './ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select'
 import { Skeleton } from './ui/skeleton'
-import { HScrollProxy } from './HScrollProxy'
-import { CellCopyLayer } from './CellCopyLayer'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from './ui/table'
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -137,6 +137,8 @@ export interface DataTableProps<T = Record<string, unknown>> {
   onSelectionChange?: (ids: string[]) => void
   /** Optional per-row class — e.g. at-risk background tinting. */
   rowClassName?: (row: T) => string | undefined
+  /** Optional per-row drag props — rows dragged into Ask AI (#1886). */
+  rowDragProps?: (row: T) => { draggable?: boolean; onDragStart?: (e: React.DragEvent) => void }
   /** Grouped rendering: when set, `rows` is ignored for the body; each group renders
    *  a full-width header row followed by its rows (unless collapsed). Pagination hides. */
   rowGroups?: Array<{ key: string; header: React.ReactNode; rows: T[] }>
@@ -838,6 +840,7 @@ export function DataTable<T = Record<string, unknown>>({
   selectedIds,
   onSelectionChange,
   rowClassName,
+  rowDragProps,
   enterKey,
   rowGroups,
   collapsedGroups,
@@ -951,6 +954,7 @@ export function DataTable<T = Record<string, unknown>>({
     return (
       <TableRow
         key={rowId}
+        {...rowDragProps?.(row)}
         className={cn(
           // NAMED group: queue cells already use bare `group-hover:` against
           // their own local group, and claiming the unnamed one here would

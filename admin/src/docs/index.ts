@@ -4,6 +4,7 @@ import type { DocSection } from './types.js'
 
 export * from './sections/access-insights.js'
 export * from './sections/admin-ux.js'
+export * from './sections/ai-ask-context.js'
 export * from './sections/ai-conversations.js'
 export * from './sections/ai-design.js'
 export * from './sections/ai-explain.js'
@@ -66,6 +67,7 @@ import {
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
+import { aiAskContextDocs } from './sections/ai-ask-context.js'
 import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
 import { aiExplainGuide } from './sections/ai-explain.js'
@@ -614,6 +616,7 @@ export const navSections: NavGroup[] = [
     label: 'AI Features',
     items: [
       aiChatDocs,
+      aiAskContextDocs,
       aiConversationsDocs,
       aiKnowledgeDocs,
       aiActionsDocs,
