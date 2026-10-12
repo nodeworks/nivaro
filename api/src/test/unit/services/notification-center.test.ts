@@ -35,3 +35,18 @@ describe('sanitizePrefs', () => {
     expect(emptyTotals().notifications).toBe(0)
   })
 })
+
+describe('ack state', () => {
+  it('uses bracketed underscores and judges the parsed detail', async () => {
+    const { ACK_PENDING_LIKE, ACK_DONE_LIKE, ackPending } = await import(
+      '../../../services/notification-channels.js'
+    )
+    expect(ACK_PENDING_LIKE).toContain('ack[_]required')
+    expect(ACK_DONE_LIKE).toContain('ack[_]at')
+    expect(ackPending(JSON.stringify({ ack_required: true }))).toBe(true)
+    expect(ackPending(JSON.stringify({ ack_required: true, ack_at: '2026-01-01' }))).toBe(false)
+    // text that merely contains the marker is not a pending ack
+    expect(ackPending(JSON.stringify({ body: '"ack_required":true' }))).toBe(false)
+    expect(ackPending(null)).toBe(false)
+  })
+})

@@ -20,6 +20,7 @@ import {
 import {
   ACK_DONE_LIKE,
   ACK_PENDING_LIKE,
+  ackPending,
   classifyNotification,
   decideDelivery,
   detailColumn,
@@ -336,9 +337,11 @@ export async function notificationsRoutes(app: FastifyInstance) {
                 .orderBy('timestamp', 'desc')
                 .limit(20)
                 .select('*')
-            ).map((r) =>
-              serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app })
             )
+              .filter((r) => ackPending((r as Record<string, unknown>).detail))
+              .map((r) =>
+                serializeFor(r as Record<string, unknown>, { recipientUserId: userId, app })
+              )
           )
         : []
     return reply.send({ data, pinned, total, page, limit })

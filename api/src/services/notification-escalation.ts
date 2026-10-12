@@ -5,6 +5,7 @@ import { sendMail } from './mail.js'
 import {
   ACK_DONE_LIKE,
   ACK_PENDING_LIKE,
+  ackPending,
   getNotifyPrefs,
   NOTIFY_CATEGORY_LABELS,
   type NotificationDelivery,
@@ -76,7 +77,18 @@ async function runChannelEscalation(
       .where('timestamp', '>=', since)
       .whereIn('category', categories)
       .where((qb) => qb.whereNull('snoozed_until').orWhere('snoozed_until', '<=', now))
-      .select('id', 'subject', 'message', 'category', 'timestamp', 'delivery', 'target')) as Array<{
+      .select(
+        'id',
+        'subject',
+        'message',
+        'category',
+        'timestamp',
+        'delivery',
+        'target',
+        'collection',
+        'item',
+        'detail'
+      )) as Array<{
       id: number
       subject: string
       message: string | null
@@ -207,7 +219,18 @@ export async function runAckEscalation(
     .where('detail', 'like', ACK_PENDING_LIKE)
     .whereNot('detail', 'like', ACK_DONE_LIKE)
     .limit(500)
-    .select('id', 'recipient', 'subject', 'message', 'timestamp', 'delivery', 'target')) as Array<{
+    .select(
+      'id',
+      'recipient',
+      'subject',
+      'message',
+      'timestamp',
+      'delivery',
+      'target',
+      'collection',
+      'item',
+      'detail'
+    )) as Array<{
     id: number
     recipient: string
     subject: string
@@ -215,8 +238,12 @@ export async function runAckEscalation(
     timestamp: Date
     delivery: string | null
     target: string | null
+    collection: string | null
+    item: string | number | null
+    detail: string | null
   }>
   for (const row of rows) {
+    if (!ackPending(row.detail)) continue
     const ageH = (now.getTime() - new Date(row.timestamp).getTime()) / 3_600_000
     const delivery: NotificationDelivery = parseDelivery(row.delivery) ?? {}
     const stamps = { ...(delivery.escalation ?? {}) }
@@ -249,8 +276,27 @@ export async function runAckEscalation(
       if (who?.manager_id) {
         const name =
           `${who.first_name ?? ''} ${who.last_name ?? ''}`.trim() || who.email || 'Someone'
+        // The subject can carry record text: the manager only sees it when
+        // they can read that record; otherwise a neutral line.
+        let canSee = false
+        if (row.collection && row.item != null) {
+          try {
+            const mgr = await db('nivaro_users').where({ id: who.manager_id }).first()
+            if (mgr) {
+              const { readOne } = await import('./items.js')
+              canSee = !!(await readOne(mgr as never, row.collection, String(row.item)))
+            }
+          } catch {
+            canSee = false
+          }
+        }
+        const subj = canSee
+          ? `${name} has not acknowledged: ${row.subject}`
+          : row.collection && row.item != null
+            ? `${name} has not acknowledged a notification about ${row.collection} #${row.item}`
+            : `${name} has not acknowledged a notification`
         await notifyUser(app, who.manager_id, {
-          subject: `${name} has not acknowledged: ${row.subject}`.slice(0, 255),
+          subject: subj.slice(0, 255),
           message:
             'This notification asked for an acknowledgement and has been waiting over a day.',
           category: 'workflow',

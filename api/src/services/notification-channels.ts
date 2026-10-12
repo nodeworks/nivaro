@@ -132,8 +132,16 @@ export function detailColumn(detail: NotificationDetail | null | undefined): str
 }
 
 /** SQL fragment: rows that still need an acknowledgement (#2365). */
-export const ACK_PENDING_LIKE = '%"ack_required":true%'
-export const ACK_DONE_LIKE = '%"ack_at"%'
+// `[_]` — a bare `_` is a LIKE wildcard.
+export const ACK_PENDING_LIKE = '%"ack[_]required":true%'
+export const ACK_DONE_LIKE = '%"ack[_]at"%'
+
+/** Authoritative ack state from the parsed detail (the LIKE patterns are only
+ *  a prefilter: a string value can contain the same text). */
+export function ackPending(raw: unknown): boolean {
+  const d = parseDetail(raw)
+  return d?.ack_required === true && typeof d.ack_at !== 'string'
+}
 
 export function parseDetail(raw: unknown): NotificationDetail | null {
   if (!raw) return null
@@ -822,8 +830,15 @@ export async function notifyUser(
     label: opts.source?.label ?? null,
     id: opts.source?.id ?? null
   }
+  // The ack flags are server-owned: only opts.ack_required sets them.
+  const {
+    ack_required: _ar,
+    ack_at: _aa,
+    ack_by: _ab,
+    ...safeDetail
+  } = (opts.detail ?? {}) as Record<string, unknown>
   const detail = detailColumn({
-    ...(opts.detail ?? {}),
+    ...safeDetail,
     why,
     ...(opts.ack_required ? { ack_required: true } : {})
   })
