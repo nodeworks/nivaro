@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { down, up } from './445_issue_occurrences.js'
+import { down, up } from '../../../db/migrations/445_issue_occurrences.js'
 
 function fakeKnex(exists: boolean) {
   const created: string[] = []
