@@ -284,6 +284,7 @@ export const opsAssistantDocs: DocSection = {
         'Pick the ops channel on the Ops Console (it must be admin-only; `PUT /api/ops-assistant/channel { room }`). If it later stops being admin-only, threads go quiet.',
         'The ops channel, and any channel already holding assistant ops posts, only ever gains active administrators: joining, adding, bulk-adding and default-role auto-join refuse anyone else (403 `OPS_CHANNEL_ADMINS_ONLY`), and the channel cannot be opened to everyone or to a non-admin role. Every assistant ops post is flagged, and message lists, search, mentions, pins, saved messages and room summaries leave flagged posts out for anyone who is not an administrator.',
         'Start incident mode from the Ops Console or an approved card (`POST /api/ops-assistant/incident { on: true, title }`). The assistant opens a thread in the ops channel and, every 2 minutes (`ops-incident-updates` job), posts what changed: new issues, server errors starting, rising, falling, recovering — plus every approved action. Ending it posts a summary: duration, the 5-minute error peak, issues seen and actions taken.',
+        'While incident mode is on, every administrator sees a slim banner across the app — "Incident in progress: <title> · started <time> · Open thread" (the ops channel). It appears and clears live: starting or ending sends a payload-free `ops:incident` notice to the admin-only `ops` watch room, and the tab re-reads `GET /api/ops-assistant/incident` (admin-only). Non-administrators never join the room or ask the route, and see nothing.',
         'A critical alert (a new critical issue, or a critical integration signal with new rows) opens its own alert thread when no incident is on, feeds the incident thread when one is, and an alert thread closes with a summary after 30 quiet minutes.',
         'Threads live in `nivaro_ops_incidents` (migration 442); `GET /api/ops-assistant/incident` returns the current one and the last ten.'
       ]
@@ -552,6 +553,11 @@ DELETE /api/notification-templates/:key       # revert`
     {
       type: 'p',
       text: 'Broadcasts → history → "who saw this?" now opens with a per-audience roll-up: by role and by every scope dimension (zone, region…), delivered / opened (the inbox row was read — known for the in-app message channel) / acknowledged (banner dismissed) / still unread, with the unread names. "Nudge N unread" re-sends a "Reminder: …" inbox row (+ push through the normal rules) to exactly those people and records it as a `nudge` delivery; a second click skips anyone already nudged unless `again` is set. The in-app delivery of a broadcast keeps the inbox row id it produced (`notification_id` on the delivery receipt), which is what makes "opened" knowable.'
+    },
+    { type: 'h2', id: 'broadcast-draft', text: 'Draft a broadcast from bullets' },
+    {
+      type: 'p',
+      text: 'Broadcasts → Message → "Draft from bullets": write a few points, one per line, and AI drafts the message for the chosen audience, severity and channels — a short banner line (≤200 characters), a fuller email with a subject (also used for the in-app message), and an SMS of at most 160 characters (always cut to fit, whatever the model returns). "Use" copies a draft into the composer; you edit and send as usual — nothing is sent or saved by drafting. Anyone who may send a broadcast may draft one (`POST /api/announcements/draft { bullets, audience, channels, severity }`, admin). The AI provider receives your points (with secret-looking values masked) and an audience description of role names, scope-dimension labels and counts — never a recipient’s name, email or phone, nor which zone values were picked. It runs on the per-feature "generate" model; each draft is logged as `broadcast-draft` activity.'
     },
     { type: 'h2', id: 'mail-delivery-board', text: 'Delivery board' },
     {

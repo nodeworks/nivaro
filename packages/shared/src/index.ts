@@ -245,6 +245,12 @@ export { QuickPicker, useQuickPickerStepDefs } from './components/item-edit/Quic
 export type { QuickPickerDialogProps } from './components/item-edit/QuickPickerDialog'
 export { QuickPickerDialog, useQuickPickerSteps } from './components/item-edit/QuickPickerDialog'
 export { RecordChatActions } from './components/item-edit/RecordChatActions'
+export {
+  RecordOutboxBanner,
+  RecordOutboxHost,
+  useRecordOutbox,
+  useRecordOutboxEntry
+} from './components/item-edit/RecordOutbox'
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
@@ -274,6 +280,11 @@ export {
 } from './components/monitoring/AskTheLogs'
 export { CallerChangesSection } from './components/monitoring/CallerChanges'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
+export {
+  IncidentBanner,
+  type IncidentNow,
+  incidentThreadPath
+} from './components/monitoring/IncidentBanner'
 export { PartnerDependenciesPanel } from './components/monitoring/PartnerDependencies'
 export {
   type MiniMapSummary,
@@ -605,7 +616,26 @@ export {
   useOptionalRealtime,
   useRealtimeStatus
 } from './lib/realtime'
-export { useRecordTabs } from './lib/record-tabs'
+export {
+  bindRecordOutbox,
+  clearRecordOutbox,
+  clearRecordOutboxFor,
+  disableRecordOutbox,
+  discardRecordOutbox,
+  isOfflineSaveError,
+  midairCollisionOf,
+  RECORD_OUTBOX_TTL_MS,
+  type RecordOutboxEntry,
+  retryRecordOutbox
+} from './lib/record-outbox'
+export {
+  focusPopoutOpener,
+  isRecordPopout,
+  openRecordPopout,
+  POPOUT_PARAM,
+  recordPopoutHref
+} from './lib/record-popout'
+export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
 export {
   captureReplayClip,
   clipEndOffset,
@@ -680,6 +710,7 @@ export {
   serverNow,
   setServerClockOffset
 } from './lib/server-clock'
+export * from './lib/socket-realtime'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'

@@ -31,13 +31,14 @@ export * from './sections/import-templates.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
+export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-progress.js'
 export * from './sections/live-records.js'
-export * from './sections/live-lists.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
+export * from './sections/offline-popout.js'
 export * from './sections/ops-observability.js'
 export * from './sections/ops-tooling.js'
 export * from './sections/overview.js'
@@ -242,6 +243,7 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
+import { collabLiveLists } from './sections/live-lists.js'
 import {
   aiActionsDocs,
   flowMapReplayDocs,
@@ -249,7 +251,6 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
-import { collabLiveLists } from './sections/live-lists.js'
 import { collabLiveProgress } from './sections/live-progress.js'
 import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
 import {
@@ -289,6 +290,7 @@ import {
   obsTrafficMapLenses,
   obsTrafficMapPlatform
 } from './sections/observability.js'
+import { collabOfflinePopout } from './sections/offline-popout.js'
 import {
   dbHealthDocs,
   deploysVersionsDocs,
@@ -375,6 +377,7 @@ import {
   sdkPipeline,
   sdkReact,
   sdkReactLayout,
+  sdkReactLive,
   sdkRealtime,
   sdkRest,
   sdkSetup,
@@ -570,6 +573,7 @@ export const navSections: NavGroup[] = [
       sdkForms,
       sdkReact,
       sdkReactLayout,
+      sdkReactLive,
       sdkNotifications,
       sdkActivity,
       sdkExternalApis,
@@ -810,6 +814,7 @@ export const navSections: NavGroup[] = [
       collabItemLocking,
       collabLiveRecords,
       collabLiveProgress,
+      collabOfflinePopout,
       collabLiveLists,
       collabLiveOps,
       collabPresence,

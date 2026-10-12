@@ -126,7 +126,7 @@ export async function undoCheck(
           records.map((r) => r.id)
         )
       )
-      const labels = await labelsFor(c, [...visible])
+      const labels = await labelsFor(c, [...visible], admin)
       for (const r of records) {
         const v = checked.get(r) ?? { status: 'gone' as UndoRecordStatus }
         if (v.status === 'revertible') base.revertible++

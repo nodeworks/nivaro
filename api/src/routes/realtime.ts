@@ -13,8 +13,12 @@ import {
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
 import {
+  INSPECT_RING,
+  inspectedEvents,
   resetTransportStats,
   scopeRealtimeStats,
+  startInspect,
+  stopInspect,
   transportStats
 } from '../services/socket-transport.js'
 import { sseListenerCount } from '../services/sse-hub.js'
@@ -101,6 +105,59 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         rooms: stats.rooms
       }
     }
+  })
+
+  /**
+   * #1731 — Socket inspector. One connected client's rooms and the last 100 events sent to it
+   * (names, sizes, times — never payloads). Recording is OFF until an admin starts it here and
+   * switches itself off when nobody reads it for 10 minutes. This node's sockets, the caller's
+   * tenant only; sign-in rooms are never listed.
+   */
+  const inspectTarget = (id: string) => {
+    const scope = tenantScope()
+    const sock = scopeRealtimeStats(getRealtimeStats(), scope).sockets.find((s) => s.id === id)
+    return sock ? { sock, scope } : null
+  }
+  const inspectView = (id: string) => {
+    const hit = inspectTarget(id)
+    if (!hit) return null
+    const events = inspectedEvents(id, hit.scope)
+    return {
+      id,
+      user:
+        hit.sock.user && typeof hit.sock.user === 'object'
+          ? ((hit.sock.user as { name?: string }).name ?? null)
+          : null,
+      app: hit.sock.app,
+      transport: hit.sock.transport,
+      rooms: hit.sock.rooms,
+      recording: events !== null,
+      ring: INSPECT_RING,
+      events: events ?? []
+    }
+  }
+
+  app.get<{ Params: { id: string } }>('/sockets/:id/inspect', async (req, reply) => {
+    const view = inspectView(String(req.params.id))
+    if (!view) return reply.code(404).send({ error: 'Client not connected to this node' })
+    return { data: view }
+  })
+
+  app.post<{ Params: { id: string } }>('/sockets/:id/inspect', async (req, reply) => {
+    const id = String(req.params.id)
+    const hit = inspectTarget(id)
+    if (!hit) return reply.code(404).send({ error: 'Client not connected to this node' })
+    if (!startInspect(id, hit.scope))
+      return reply.code(429).send({ error: 'Too many clients are being inspected; stop one first' })
+    return { data: inspectView(id) }
+  })
+
+  app.delete<{ Params: { id: string } }>('/sockets/:id/inspect', async (req, reply) => {
+    const id = String(req.params.id)
+    if (!inspectTarget(id))
+      return reply.code(404).send({ error: 'Client not connected to this node' })
+    stopInspect(id)
+    return { data: { recording: false } }
   })
 
   // #1730 — start the byte counters over (after trimming a heavy broadcast, to see the effect).

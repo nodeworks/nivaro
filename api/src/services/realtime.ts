@@ -47,19 +47,10 @@ export function broadcastCollectionUpdate(
     action: extra?.action,
     changed_fields: extra?.changed_fields?.slice(0, 50)
   })
-  // GraphQL subscriptions hear the same minimal event.
-  if (extra?.action) {
-    publishItemEvent({
-      collection,
-      item: String(item),
-      action: extra.action,
-      changed_fields: extra.changed_fields?.slice(0, 50) ?? []
-    })
-  }
   // #1826 — a staged import run writing through the items service says so, so a form open on
   // the record can warn "an import is updating this record" instead of looking like a person.
   const source = extra?.source ?? (currentTrafficSource()?.kind === 'import' ? 'import' : undefined)
-  void journaledEmit(`collection:${collection}`, 'collection:update', {
+  const journaled = journaledEmit(`collection:${collection}`, 'collection:update', {
     collection,
     item,
     ...(extra?.action ? { action: extra.action } : {}),
@@ -67,4 +58,18 @@ export function broadcastCollectionUpdate(
     ...(source ? { source } : {}),
     ...(extra?.bulk != null ? { bulk: extra.bulk } : {})
   })
+  // GraphQL subscriptions hear the same minimal event, once it has its journal position: the
+  // SSE transport sends that as the event id, so a reconnect resumes from it (#1749).
+  if (extra?.action) {
+    const ev = {
+      collection,
+      item: String(item),
+      action: extra.action,
+      changed_fields: extra.changed_fields?.slice(0, 50) ?? []
+    }
+    void journaled.then(
+      (r) => publishItemEvent(r.seq == null ? ev : { ...ev, seq: r.seq }),
+      () => publishItemEvent(ev)
+    )
+  }
 }
