@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import type { OpsProposalCard } from './ops-proposals.js'
 
 /**
  * Cards for links to this app pasted into chat (#930 record links, #947
@@ -20,6 +21,7 @@ export type AppCard =
   | { kind: 'report'; id: string; name: string; widgets: number }
   | { kind: 'dashboard'; id: string; name: string; widgets: number }
   | { kind: 'view'; id: string; name: string; collection: string; total: number | null }
+  | OpsProposalCard
 
 function titleCase(s: string): string {
   return s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
@@ -45,6 +47,14 @@ export async function appCardFor(
     return null
   }
   const parts = url.pathname.split('/').filter(Boolean).map(decodeURIComponent)
+
+  // #2015 — an ops assistant proposal: an approval card for administrators,
+  // nothing (the plain link) for anyone else.
+  if (parts[0] === 'ops-console' && url.searchParams.get('proposal')) {
+    if (!isAdmin) return null
+    const { proposalCardFor } = await import('./ops-proposals.js')
+    return proposalCardFor(String(user.id), String(url.searchParams.get('proposal')))
+  }
 
   // /collections/:c/:id  |  /records/:c/:id
   if ((parts[0] === 'collections' || parts[0] === 'records') && parts.length >= 3) {

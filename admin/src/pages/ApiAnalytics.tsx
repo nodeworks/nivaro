@@ -1,5 +1,10 @@
 import { createNivaro } from '@nivaro/sdk'
-import { ApiRequestLog, type ApiRequestLogFilters, NivaroProvider } from '@nivaro/shared'
+import {
+  ApiRequestLog,
+  type ApiRequestLogFilters,
+  AskTheLogs,
+  NivaroProvider
+} from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
 import React, { useEffect, useRef, useState } from 'react'
@@ -106,6 +111,8 @@ export function ApiAnalyticsPage() {
   const [linkFilters] = useState(() => requestLinkFilters(params))
   const [reqFilters, setReqFilters] = useState<RequestLinkFilters>(linkFilters ?? {})
   const requestsRef = useRef<HTMLDivElement>(null)
+  // #1914 — "Ask the logs" can open its filter here with its own look-back.
+  const [askHours, setAskHours] = useState<number | null>(null)
   useEffect(() => {
     if (linkFilters) requestsRef.current?.scrollIntoView({ block: 'start' })
   }, [linkFilters])
@@ -180,7 +187,10 @@ export function ApiAnalyticsPage() {
               size='sm'
               variant={hours === r.hours ? 'default' : 'outline'}
               className='h-7 px-2.5 text-[12px]'
-              onClick={() => setHours(r.hours)}
+              onClick={() => {
+                setHours(r.hours)
+                setAskHours(null)
+              }}
             >
               {r.label}
             </Button>
@@ -189,6 +199,16 @@ export function ApiAnalyticsPage() {
       </header>
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
+        <NivaroProvider client={sharedClient}>
+          <AskTheLogs
+            className='mb-6'
+            onOpenRequests={(f, h) => {
+              setReqFilters(f)
+              setAskHours(h)
+              requestsRef.current?.scrollIntoView({ block: 'start', behavior: 'smooth' })
+            }}
+          />
+        </NivaroProvider>
         {/* Stat strip */}
         <div className='mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4'>
           <StatCard
@@ -361,7 +381,7 @@ export function ApiAnalyticsPage() {
         <div className='mt-6 scroll-mt-4' ref={requestsRef} id='api-request-log'>
           <NivaroProvider client={sharedClient}>
             <ApiRequestLog
-              hours={hours}
+              hours={askHours ?? hours}
               allInstances={allInstances}
               filters={reqFilters}
               onFiltersChange={setReqFilters}

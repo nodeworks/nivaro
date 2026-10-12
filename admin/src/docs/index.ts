@@ -4,6 +4,7 @@ import type { DocSection } from './types.js'
 
 export * from './sections/admin-ux.js'
 export * from './sections/ai-design.js'
+export * from './sections/ai-explain.js'
 export * from './sections/ai-knowledge.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
@@ -27,7 +28,6 @@ export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
 export * from './sections/live-ops.js'
 export * from './sections/low-code.js'
-export * from './sections/ai-explain.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
 export * from './sections/ops-observability.js'
@@ -62,6 +62,7 @@ import {
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
 import { aiDesignDocs } from './sections/ai-design.js'
+import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
 import {
   adminI18nDocs,
@@ -260,7 +261,6 @@ import {
   submissionFormsApiDoc,
   submissionFormsGuide
 } from './sections/monitoring.js'
-import { aiExplainGuide } from './sections/ai-explain.js'
 import {
   obsApiAnalytics,
   obsDataQuality,
@@ -278,6 +278,7 @@ import {
   deploysVersionsDocs,
   instanceOverridesDocs,
   mailHarnessDocs,
+  opsAssistantDocs,
   opsConsoleDocs
 } from './sections/ops-observability.js'
 import {
@@ -839,6 +840,7 @@ export const navSections: NavGroup[] = [
       dbHealthDocs,
       dbTuning,
       opsConsoleDocs,
+      opsAssistantDocs,
       deploysVersionsDocs,
       instanceOverridesDocs,
       mailHarnessDocs,

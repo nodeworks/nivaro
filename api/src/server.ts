@@ -765,6 +765,38 @@ export async function buildServer() {
         const { computeNextTable } = await import('./services/help-video-next.js')
         await computeNextTable()
       })
+      // Log alert rules over the request log (#1960): count each rule's
+      // filter inside its window, across replicas, and raise an issue past
+      // the threshold (outside the cooldown).
+      app.cron.schedule(
+        'log-alert-requests',
+        '*/5 * * * *',
+        async () => {
+          const { evaluateRequestRules } = await import('./services/log-alert-requests.js')
+          await evaluateRequestRules()
+        },
+        {
+          idempotent: 'safe',
+          description:
+            'Checks the log alert rules saved from "Ask the logs": counts the matching API requests in each rule\'s window and raises an issue when one passes its threshold (once per cooldown).'
+        }
+      )
+      // Incident threads (#2016): critical issues open a thread in the ops
+      // channel; open threads get new errors / recoveries; quiet alert
+      // threads close with a summary.
+      app.cron.schedule(
+        'ops-incident-updates',
+        '*/2 * * * *',
+        async () => {
+          const { runIncidentUpdates } = await import('./services/ops-incidents.js')
+          await runIncidentUpdates(app)
+        },
+        {
+          idempotent: 'unsafe',
+          description:
+            'Posts incident-thread updates in the ops chat channel: opens a thread for a new critical issue, reports new errors and recoveries under open threads, and closes alert threads after 30 quiet minutes.'
+        }
+      )
       // Session replay heatmaps (#1364): fold settled recordings into
       // per-route click / scroll aggregates (no person in them). Bounded per
       // run with a high-water mark, so a backlog drains over several nights.

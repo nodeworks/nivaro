@@ -347,7 +347,11 @@ async function answerQuestion(
   const { buildChatSystemPrompt, CHAT_TOOLS, MAX_ROUNDS, executeChatTool } = await import(
     './ai-chat.js'
   )
-  const systemPrompt = await buildChatSystemPrompt(asker)
+  // #1967 — ops tools only for an administrator in an admin-only channel,
+  // judged now (and again by executeOpsTool on every call).
+  const ops = await import('./ops-assistant.js')
+  const opsOn = await ops.opsToolsAllowed(asker, room).catch(() => false)
+  const systemPrompt = `${await buildChatSystemPrompt(asker)}${opsOn ? `\n\n${ops.OPS_PROMPT}` : ''}`
   const { userTimeZone, formatForPerson } = await import('./user-time.js')
   const zone = await userTimeZone(asker)
 
@@ -370,6 +374,7 @@ async function answerQuestion(
         SET_REMINDER_TOOL,
         WATCH_TOOL,
         HELP_TOOL,
+        ...(opsOn ? [ops.OPS_STATUS_TOOL, ops.OPS_PROPOSE_TOOL] : []),
         ...[...extensionBotTools.values()].map((t) => ({
           name: t.name,
           description: t.description,
@@ -433,6 +438,15 @@ async function answerQuestion(
             content: hit
               ? hit.answer
               : 'No curated answer for that — suggest they check the in-app Docs page (left nav).'
+          })
+          continue
+        }
+        if (ops.OPS_TOOL_NAMES.has(block.name)) {
+          const out = await ops.executeOpsTool(app, asker, room, block.name, input)
+          results.push({
+            type: 'tool_result',
+            tool_use_id: block.id,
+            content: JSON.stringify(out ?? null).slice(0, 30_000)
           })
           continue
         }

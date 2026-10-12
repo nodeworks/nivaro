@@ -14,6 +14,7 @@ import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
 import { aiDesignRoutes } from './ai-design.js'
+import { aiExplainRoutes } from './ai-explain.js'
 import { aiKnowledgeRoutes } from './ai-knowledge.js'
 import { aiPlanRoutes } from './ai-plans.js'
 import { aiSettingsRoutes } from './ai-settings.js'
@@ -135,6 +136,7 @@ import { notificationSubscriptionsRoutes } from './notification-subscriptions.js
 import { notificationTemplateRoutes } from './notification-templates.js'
 import { notificationsRoutes } from './notifications.js'
 import { offboardingRoutes } from './offboarding.js'
+import { opsAssistantRoutes } from './ops-assistant.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
 import { opsDbRoutes } from './ops-db.js'
 import { opsLogsRoutes } from './ops-logs.js'
@@ -145,6 +147,7 @@ import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
+import { personSummaryRoutes } from './person-summary.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
 import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { pinnedRoutes } from './pinned.js'
@@ -215,7 +218,6 @@ import { teamMiscRoutes, teamUserRoutes } from './team.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
-import { aiExplainRoutes } from './ai-explain.js'
 import { traceRoutes } from './traces.js'
 import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
@@ -410,6 +412,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })
   await app.register(usersRoutes, { prefix: '/users' })
+  await app.register(personSummaryRoutes, { prefix: '/users' })
   await app.register(teamUserRoutes, { prefix: '/users' })
   await app.register(directoryRoutes, { prefix: '/directory' })
   await app.register(revisionsRoutes, { prefix: '/revisions' })
@@ -522,6 +525,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
+  await app.register(opsAssistantRoutes, { prefix: '/ops-assistant' })
   await app.register(commandCenterRoutes, { prefix: '/command-center' })
   await app.register(featureFlagRoutes)
   await app.register(eventsStreamRoutes, { prefix: '/events' })

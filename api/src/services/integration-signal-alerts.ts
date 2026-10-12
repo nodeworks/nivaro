@@ -219,6 +219,7 @@ interface SubscriptionRow {
  * problem must never fail the cycle that wrote the snapshot.
  */
 export async function deliverSignalAlerts(summary: CycleSummary): Promise<void> {
+  await noteCriticalSignals(summary).catch(() => undefined)
   try {
     await deliver(summary)
   } catch (err) {
@@ -226,6 +227,24 @@ export async function deliverSignalAlerts(summary: CycleSummary): Promise<void> 
       '[integration-signal-alerts] delivery failed:',
       err instanceof Error ? err.message : err
     )
+  }
+}
+
+/** #2016 — a critical signal with new rows opens (or feeds) an incident thread in the ops channel. */
+async function noteCriticalSignals(summary: CycleSummary): Promise<void> {
+  const app = _app
+  if (!app) return
+  for (const r of summary.results) {
+    if (r.error || r.new_keys.length === 0) continue
+    const def = getIntegrationSignal(r.signal)
+    if (!def) continue
+    const settings = await resolveThresholds(def)
+    if (!settings.enabled || settings.severity !== 'critical') continue
+    const { noteCriticalAlert } = await import('./ops-incidents.js')
+    await noteCriticalAlert(app, {
+      key: `signal:${def.id}`,
+      title: `${r.new_keys.length} new · ${def.label}`
+    })
   }
 }
 

@@ -16,6 +16,7 @@ import { formatDuration } from '../help-videos/viewer/format'
 import { parseMomentUrl } from '../help-videos/viewer/moments'
 import { type MessageToken, splitMessageTokens } from './chat-core'
 import { useLinkPreview } from './chat-hooks'
+import { OpsProposalCard, type OpsProposalCardData } from './OpsProposalCard'
 
 /**
  * Chat message formatting (#929, #930, #941, #962).
@@ -489,7 +490,7 @@ export function tsvToTable(text: string): string | null {
 // ── Link previews (#930, #947) ───────────────────────────────────────────────
 
 interface AppCardData {
-  kind: 'record' | 'queue' | 'report' | 'dashboard' | 'view'
+  kind: 'record' | 'queue' | 'report' | 'dashboard' | 'view' | 'ops-proposal'
   id: string
   name?: string
   label?: string
@@ -513,6 +514,9 @@ function AppLinkCard({ path, navigate }: { path: string; navigate?: (u: string) 
     retry: false
   })
   if (!data) return null
+  // #2015 — an ops assistant proposal: an approval card (admins only).
+  if (data.kind === 'ops-proposal')
+    return <OpsProposalCard path={path} card={data as unknown as OpsProposalCardData} />
   const Icon =
     data.kind === 'queue'
       ? ListChecks

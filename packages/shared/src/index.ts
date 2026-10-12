@@ -225,6 +225,13 @@ export {
   InboundCallersView,
   ReplayBlock
 } from './components/monitoring/ApiRequestLog'
+export {
+  AskTheLogs,
+  type LogFilter as AskLogFilter,
+  logFilterChips,
+  lookBackHours,
+  toRequestLogFilters
+} from './components/monitoring/AskTheLogs'
 export { CallerChangesSection } from './components/monitoring/CallerChanges'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
 export { PartnerDependenciesPanel } from './components/monitoring/PartnerDependencies'

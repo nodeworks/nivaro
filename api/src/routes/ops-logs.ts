@@ -1,8 +1,10 @@
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { cleanLogFilter, filterChips } from '../services/log-filters.js'
 import { bustLogRules, readLog } from '../services/log-ring.js'
 import { swallowStats } from '../services/swallow-counter.js'
 
@@ -37,6 +39,42 @@ function parseWhen(v: string): number | undefined {
   }
   const t = Date.parse(s)
   return Number.isFinite(t) ? t : undefined
+}
+
+/** Stored as a request-log rule's pattern: a regex that matches nothing. */
+const NEVER_MATCHES = '(?!)'
+
+function safeJson(raw: string): unknown {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null
+  }
+}
+
+/** threshold 1–100000, window 1–1440 min, cooldown 1–10080 min; null clears. */
+function ruleLimits(b: {
+  threshold?: unknown
+  window_minutes?: unknown
+  cooldown_minutes?: unknown
+}):
+  | { threshold: number | null; window_minutes: number | null; cooldown_minutes: number | null }
+  | string {
+  const pick = (v: unknown, max: number, label: string): number | null | string => {
+    if (v === undefined || v === null || v === '') return null
+    const n = Number(v)
+    if (!Number.isInteger(n) || n < 1 || n > max) return `${label} must be a whole number 1–${max}`
+    return n
+  }
+  const threshold = pick(b.threshold, 100_000, 'threshold')
+  const windowMin = pick(b.window_minutes, 1440, 'window_minutes')
+  const cooldown = pick(b.cooldown_minutes, 10_080, 'cooldown_minutes')
+  for (const v of [threshold, windowMin, cooldown]) if (typeof v === 'string') return v
+  return {
+    threshold: threshold as number | null,
+    window_minutes: windowMin as number | null,
+    cooldown_minutes: cooldown as number | null
+  }
 }
 
 export async function opsLogsRoutes(app: FastifyInstance) {
@@ -107,55 +145,210 @@ export async function opsLogsRoutes(app: FastifyInstance) {
     return reply.send({ data: rows })
   })
 
-  // #253 — log alert rules CRUD.
+  // #253 — log alert rules CRUD. #1960 adds rules over the request log (a
+  // saved "Ask the logs" filter) and a threshold / window / cooldown on any rule.
   app.get('/rules', async (_req, reply) => {
-    const rows = await db('nivaro_log_alert_rules')
+    const rows = (await db('nivaro_log_alert_rules')
       .orderBy('id', 'desc')
-      .catch(() => [])
-    return reply.send({ data: rows })
+      .catch(() => [])) as Array<Record<string, unknown>>
+    return reply.send({
+      data: rows.map((r) => ({
+        ...r,
+        filters: typeof r.filters === 'string' ? safeJson(r.filters) : (r.filters ?? null)
+      }))
+    })
   })
-  app.post<{ Body: { name?: string; pattern?: string; level?: string | null } }>(
-    '/rules',
-    async (req, reply) => {
-      const name = String(req.body?.name ?? '').trim()
-      const pattern = String(req.body?.pattern ?? '').trim()
-      if (!name || !pattern) return reply.code(400).send({ error: 'name and pattern are required' })
-      try {
-        new RegExp(pattern)
-      } catch {
-        return reply.code(400).send({ error: 'pattern is not a valid regular expression' })
+  app.post<{
+    Body: {
+      name?: string
+      pattern?: string
+      level?: string | null
+      filters?: unknown
+      threshold?: number | null
+      window_minutes?: number | null
+      cooldown_minutes?: number | null
+      origin?: string | null
+    }
+  }>('/rules', async (req, reply) => {
+    const name = String(req.body?.name ?? '').trim()
+    const extended = await hasColumn('nivaro_log_alert_rules', 'filters')
+    const filters = req.body?.filters != null ? cleanLogFilter(req.body.filters) : null
+    const limits = ruleLimits(req.body ?? {})
+    if (typeof limits === 'string') return reply.code(400).send({ error: limits })
+    if ((filters || limits.threshold != null || limits.cooldown_minutes != null) && !extended)
+      return reply.code(409).send({
+        error: 'Alerts with filters, thresholds or cooldowns need migration 442 on this database',
+        code: 'MIGRATION_PENDING'
+      })
+    let pattern = String(req.body?.pattern ?? '').trim()
+    let level = req.body?.level || null
+    if (filters?.target === 'log') {
+      // A ring rule from a question: the text it asked for, as a literal.
+      if (!pattern && filters.q) pattern = filters.q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      if (!level && filters.level) level = filters.level
+    } else if (filters) {
+      // A request-log rule. The ring never evaluates it; an older replica
+      // that does not know `filters` reads a pattern that never matches.
+      pattern = NEVER_MATCHES
+      level = null
+    }
+    if (!name || !pattern) return reply.code(400).send({ error: 'name and pattern are required' })
+    try {
+      new RegExp(pattern)
+    } catch {
+      return reply.code(400).send({ error: 'pattern is not a valid regular expression' })
+    }
+    if (level && !['debug', 'info', 'warn', 'error', 'fatal'].includes(level))
+      return reply.code(400).send({ error: 'level must be debug, info, warn, error or fatal' })
+    const origin = ['manual', 'ask', 'suggested'].includes(String(req.body?.origin))
+      ? String(req.body?.origin)
+      : 'manual'
+    await db('nivaro_log_alert_rules').insert({
+      name: name.slice(0, 200),
+      pattern: pattern.slice(0, 500),
+      level,
+      is_active: true,
+      created_by: req.user?.id ?? null,
+      created_at: new Date(),
+      ...(extended
+        ? {
+            filters: filters ? JSON.stringify(filters) : null,
+            threshold: limits.threshold,
+            window_minutes: limits.window_minutes,
+            cooldown_minutes: limits.cooldown_minutes,
+            origin
+          }
+        : {})
+    })
+    bustLogRules()
+    await logActivity({
+      action: 'log-alert-rule-create',
+      user: req.user?.id,
+      comment: `${name}${origin !== 'manual' ? ` (${origin})` : ''}`,
+      req
+    })
+    const row = await db('nivaro_log_alert_rules').orderBy('id', 'desc').first()
+    return reply.code(201).send({ data: row })
+  })
+  app.patch<{
+    Params: { id: string }
+    Body: {
+      is_active?: boolean
+      threshold?: number | null
+      window_minutes?: number | null
+      cooldown_minutes?: number | null
+    }
+  }>('/rules/:id', async (req, reply) => {
+    const body = req.body ?? {}
+    const patch: Record<string, unknown> = {}
+    if ('is_active' in body) patch.is_active = body.is_active === true
+    if ('threshold' in body || 'window_minutes' in body || 'cooldown_minutes' in body) {
+      if (!(await hasColumn('nivaro_log_alert_rules', 'threshold')))
+        return reply.code(409).send({
+          error: 'Thresholds and cooldowns need migration 442 on this database',
+          code: 'MIGRATION_PENDING'
+        })
+      const limits = ruleLimits(body)
+      if (typeof limits === 'string') return reply.code(400).send({ error: limits })
+      for (const k of ['threshold', 'window_minutes', 'cooldown_minutes'] as const)
+        if (k in body) patch[k] = limits[k]
+    }
+    if (Object.keys(patch).length === 0) return reply.code(400).send({ error: 'Nothing to change' })
+    const n = await db('nivaro_log_alert_rules')
+      .where({ id: Number(req.params.id) })
+      .update(patch)
+    if (!n) return reply.code(404).send({ error: 'Rule not found' })
+    bustLogRules()
+    await logActivity({
+      action: 'log-alert-rule-update',
+      user: req.user?.id,
+      comment: `#${req.params.id} ${Object.entries(patch)
+        .map(([k, v]) => `${k}=${v}`)
+        .join(' ')}`,
+      req
+    })
+    return reply.send({ data: { ok: true } })
+  })
+
+  // #2013 — errors that keep recurring with no rule watching them, with the
+  // pattern / filter, threshold and cooldown filled in. Nothing is saved
+  // until an admin accepts one (POST /rules with origin 'suggested').
+  app.get('/rule-suggestions', async (_req, reply) => {
+    const { buildRuleSuggestions } = await import('../services/log-rule-suggest.js')
+    return reply.send({ data: await buildRuleSuggestions() })
+  })
+
+  // #1914 — "Ask the logs": a question → the request list's own filter
+  // object, returned for the admin to check as chips before anything runs.
+  // The model sees the question, the filter's field names and the time;
+  // never a log row, a path list or a person list.
+  app.post<{ Body: { question?: unknown } }>('/ask', async (req, reply) => {
+    const {
+      askLogsSystemPrompt,
+      ASK_LOGS_TOOL,
+      cleanQuestion,
+      filterFromToolInput,
+      resolvePeople
+    } = await import('../services/log-question.js')
+    const question = cleanQuestion(req.body?.question)
+    if (!question) return reply.code(400).send({ error: 'Type a question first' })
+    const { getAiClient, getAiModelSettings } = await import('../services/ai-client.js')
+    const client = await getAiClient()
+    if (!client)
+      return reply.code(503).send({
+        error: 'No AI provider is set up. An administrator can add one in Settings → AI Features.',
+        code: 'AI_NOT_CONFIGURED'
+      })
+    const { userTimeZone, formatForPerson } = await import('../services/user-time.js')
+    const { scrubText } = await import('../services/ai-explain.js')
+    const zone = await userTimeZone(req.user!)
+    const now = new Date()
+    const { model } = await getAiModelSettings()
+    let input: unknown
+    try {
+      const res = await client.messages.create({
+        model,
+        max_tokens: 500,
+        system: askLogsSystemPrompt(now, zone, formatForPerson(now, zone)),
+        tools: [ASK_LOGS_TOOL as never],
+        tool_choice: { type: 'tool', name: ASK_LOGS_TOOL.name },
+        messages: [{ role: 'user', content: scrubText(question) }]
+      })
+      input = (res.content.find((b) => b.type === 'tool_use') as { input?: unknown } | undefined)
+        ?.input
+    } catch (err) {
+      req.log.warn({ err }, 'ask the logs failed')
+      return reply.code(502).send({ error: 'The AI call failed. Try again in a moment.' })
+    }
+    if (!input) return reply.code(502).send({ error: 'The AI did not return a filter. Try again.' })
+    const { filter, person, summary } = filterFromToolInput(input)
+    let people: Array<{ id: string; name: string; email: string | null }> = []
+    if (person) {
+      people = await resolvePeople(person)
+      if (people.length === 1) {
+        filter.user = people[0].id
+        filter.user_label = people[0].name
+        people = []
       }
-      await db('nivaro_log_alert_rules').insert({
-        name: name.slice(0, 200),
-        pattern: pattern.slice(0, 500),
-        level: req.body?.level || null,
-        is_active: true,
-        created_by: req.user?.id ?? null,
-        created_at: new Date()
-      })
-      bustLogRules()
-      await logActivity({ action: 'log-alert-rule-create', user: req.user?.id, comment: name, req })
-      const row = await db('nivaro_log_alert_rules').orderBy('id', 'desc').first()
-      return reply.code(201).send({ data: row })
     }
-  )
-  app.patch<{ Params: { id: string }; Body: { is_active?: boolean } }>(
-    '/rules/:id',
-    async (req, reply) => {
-      const n = await db('nivaro_log_alert_rules')
-        .where({ id: Number(req.params.id) })
-        .update({ is_active: req.body?.is_active === true })
-      if (!n) return reply.code(404).send({ error: 'Rule not found' })
-      bustLogRules()
-      await logActivity({
-        action: 'log-alert-rule-update',
-        user: req.user?.id,
-        comment: `#${req.params.id} is_active=${req.body?.is_active === true}`,
-        req
-      })
-      return reply.send({ data: { ok: true } })
-    }
-  )
+    await logActivity({
+      action: 'ops-logs-ask',
+      user: req.user?.id,
+      comment: question.slice(0, 300),
+      req
+    })
+    return reply.send({
+      data: {
+        question,
+        filter,
+        chips: filterChips(filter),
+        summary,
+        person_query: person && !filter.user ? person : null,
+        people
+      }
+    })
+  })
+
   app.delete<{ Params: { id: string } }>('/rules/:id', async (req, reply) => {
     const n = await db('nivaro_log_alert_rules')
       .where({ id: Number(req.params.id) })
