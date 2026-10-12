@@ -68,6 +68,9 @@ const LOG_ROW_CAP = 20000
 const MAX_SUGGESTIONS = 25
 const MIN_PEOPLE = 2
 const MIN_DAYS_ONE_PERSON = 3
+/** A one-person habit is only shown for roles at least this big — in a
+ *  smaller role it would single that person out. */
+const MIN_MEMBERS_FOR_ONE_PERSON = 3
 
 // ── Parsing the log ───────────────────────────────────────────────────────────
 
@@ -268,7 +271,8 @@ export function toActiveFilters(
 /** Plain-words summary of a filter set, for the name fallback and the prompt. */
 export function describeConditions(
   conditions: LoggedCondition[],
-  fieldInfo: Map<string, { label: string }>
+  fieldInfo: Map<string, { label: string }>,
+  withValues = true
 ): string {
   const OPS: Record<string, string> = {
     _eq: 'is',
@@ -286,7 +290,13 @@ export function describeConditions(
   return conditions
     .map((c) => {
       const label = fieldInfo.get(c.path[0])?.label ?? titleCase(c.path.join(' '))
-      const v = Array.isArray(c.value) ? c.value.join(', ') : c.value == null ? '' : String(c.value)
+      const v = !withValues
+        ? ''
+        : Array.isArray(c.value)
+          ? c.value.join(', ')
+          : c.value == null
+            ? ''
+            : String(c.value)
       return `${label} ${OPS[c.op] ?? c.op}${v ? ` ${v.slice(0, 60)}` : ''}`.trim()
     })
     .join(' and ')
@@ -478,6 +488,7 @@ export function buildSuggestions(ctx: RoleViewContext): RoleViewSuggestion[] {
     const role = ctx.roles.get(c.role.toUpperCase())
     const col = ctx.collections.get(c.collection)
     if (!role || !col) continue
+    if (c.people < MIN_PEOPLE && role.members < MIN_MEMBERS_FOR_ONE_PERSON) continue
     const summary = describeConditions(c.conditions, col.fields)
     out.push({
       id: suggestionId(c),
@@ -500,7 +511,7 @@ export function buildSuggestions(ctx: RoleViewContext): RoleViewSuggestion[] {
 const VIEWS_SYSTEM = `You name saved list views for a business application. Each view is a filter people in a role keep applying by hand.
 Answer with ONE JSON object and nothing else:
 {"views":[{"id":"<view id>","name":"<short view name, <=40 chars>","description":"<who it is for and what it shows, <=140 chars>","columns":["<field key>"]}]}
-Rules: only use view ids and field keys from the input. "columns" lists 4-8 field keys of that collection that matter most for the filter's purpose (the filtered fields first), or is omitted. Names are plain words a person would click ("My open orders"), never field keys.`
+Rules: only use view ids and field keys from the input. Filters are given as field and operator only (no values). "columns" lists 4-8 field keys of that collection that matter most for the filter's purpose (the filtered fields first), or is omitted. Names are plain words a person would click ("My open orders"), never field keys.`
 
 export function buildViewsPrompt(suggestions: RoleViewSuggestion[], ctx: RoleViewContext): string {
   return JSON.stringify({
@@ -508,9 +519,12 @@ export function buildViewsPrompt(suggestions: RoleViewSuggestion[], ctx: RoleVie
       id: s.id,
       role: s.role.name,
       collection: s.collection_label,
+      // Field names + operators only: the values people typed are logged
+      // request data and never leave the instance.
       filter: describeConditions(
         s.conditions,
-        ctx.collections.get(s.collection)?.fields ?? new Map()
+        ctx.collections.get(s.collection)?.fields ?? new Map(),
+        false
       ),
       sort: s.sort,
       fields: [...(ctx.collections.get(s.collection)?.fields.keys() ?? [])].slice(0, 60)
