@@ -4,13 +4,16 @@ import type { DocSection } from './types.js'
 
 export * from './sections/access-insights.js'
 export * from './sections/admin-ux.js'
+export * from './sections/ai-conversations.js'
 export * from './sections/ai-design.js'
+export * from './sections/ai-explain.js'
 export * from './sections/ai-knowledge.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
 export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
+export * from './sections/config-review.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
@@ -30,7 +33,6 @@ export * from './sections/live-ops.js'
 export * from './sections/live-records.js'
 export * from './sections/live-lists.js'
 export * from './sections/low-code.js'
-export * from './sections/ai-explain.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
 export * from './sections/ops-observability.js'
@@ -65,7 +67,9 @@ import {
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
+import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
+import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
 import {
   adminI18nDocs,
@@ -94,6 +98,7 @@ import {
   collabUserActivityFeed
 } from './sections/collaboration.js'
 import { commandCenterDocs } from './sections/command-center.js'
+import { configReviewDocs } from './sections/config-review.js'
 import {
   contentOpsAddendums,
   contentOpsCascadeFilters,
@@ -266,7 +271,6 @@ import {
   submissionFormsApiDoc,
   submissionFormsGuide
 } from './sections/monitoring.js'
-import { aiExplainGuide } from './sections/ai-explain.js'
 import {
   obsApiAnalytics,
   obsDataQuality,
@@ -612,6 +616,7 @@ export const navSections: NavGroup[] = [
     label: 'AI Features',
     items: [
       aiChatDocs,
+      aiConversationsDocs,
       aiKnowledgeDocs,
       aiActionsDocs,
       aiPlansDocs,
@@ -847,6 +852,7 @@ export const navSections: NavGroup[] = [
       obsRealtimePipeline,
       dbHealthDocs,
       dbTuning,
+      configReviewDocs,
       opsConsoleDocs,
       deploysVersionsDocs,
       instanceOverridesDocs,

@@ -131,7 +131,7 @@ export async function accessInsightRoutes(app: FastifyInstance): Promise<void> {
       const exists = await db('nivaro_users').where({ id: req.params.id }).first('id')
       if (!exists) return reply.code(404).send({ error: 'User not found' })
       const { summarizePersonAccess } = await import('../services/person-access.js')
-      const data = await summarizePersonAccess(req.params.id, { selfView: !req.isAdmin })
+      const data = await summarizePersonAccess(req.params.id, { viewerIsAdmin: !!req.isAdmin })
       if (!data) return reply.code(404).send({ error: 'User not found' })
       return reply.send({ data })
     }

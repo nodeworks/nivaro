@@ -20,6 +20,7 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn() }))
 vi.mock('../../../services/file-usage.js', () => ({
   findOrphanFiles: vi.fn(),
+  forgetUnusedFiles: vi.fn(),
   getFileUsage: vi.fn()
 }))
 vi.mock('../../../services/files.js', () => ({

@@ -1761,6 +1761,7 @@ export function SettingsPage() {
   // has no entry for a feature.
   const [aiModels, setAiModels] = useState<Record<string, string>>({})
   const [aiAnswerCacheMinutes, setAiAnswerCacheMinutes] = useState('')
+  const [aiConversationDays, setAiConversationDays] = useState('')
   const [aiPromptCaching, setAiPromptCaching] = useState(true)
   const [aiChatGuide, setAiChatGuide] = useState('')
   const [aiTest, setAiTest] = useState<{
@@ -1900,6 +1901,11 @@ export function SettingsPage() {
     }
     setAiAnswerCacheMinutes(
       settings.ai_answer_cache_minutes == null ? '' : String(settings.ai_answer_cache_minutes)
+    )
+    setAiConversationDays(
+      settings.ai_conversation_retention_days == null
+        ? ''
+        : String(settings.ai_conversation_retention_days)
     )
     setAiPromptCaching(settings.ai_prompt_caching !== false)
     setAiChatGuide(settings.ai_chat_guide ?? '')
@@ -2153,6 +2159,10 @@ export function SettingsPage() {
       })(),
       ai_answer_cache_minutes:
         aiAnswerCacheMinutes.trim() === '' ? null : Math.max(0, Number(aiAnswerCacheMinutes) || 0),
+      ai_conversation_retention_days:
+        aiConversationDays.trim() === ''
+          ? null
+          : Math.max(0, Math.round(Number(aiConversationDays) || 0)),
       ai_prompt_caching: aiPromptCaching,
       ai_chat_guide: aiChatGuide.trim() || null,
       ai_max_tokens_generate: aiMaxGenerate,
@@ -3044,6 +3054,22 @@ export function SettingsPage() {
                         data-ai-answer-cache
                       />
                       <span className='text-[12px] text-slate-500'>minutes</span>
+                    </div>
+                  </Field>
+                  <Field
+                    label='Ask AI conversation history'
+                    hint='How long a conversation nobody has touched is kept in its owner’s history. Pinned conversations are always kept. Blank = 180 days, 0 = keep forever. The AI call log has its own retention.'
+                  >
+                    <div className='flex items-center gap-2'>
+                      <Input
+                        value={aiConversationDays}
+                        onChange={(e) => setAiConversationDays(e.target.value)}
+                        placeholder='180'
+                        inputMode='numeric'
+                        className='h-8 w-24 text-[13px]'
+                        data-ai-conversation-retention
+                      />
+                      <span className='text-[12px] text-slate-500'>days</span>
                     </div>
                   </Field>
                   <Field

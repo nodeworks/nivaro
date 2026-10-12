@@ -63,7 +63,8 @@ import {
   mayAffectMatch,
   useRowChanges,
   useRowLocks,
-  viewerMatches
+  viewerMatches,
+  writerOf
 } from '../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { isOwnWrite } from '../lib/own-writes'
@@ -4785,11 +4786,13 @@ export function CollectionBrowserView({
       }
       if (bulk) countPill()
       const visible = visibleIdsRef.current
-      const own = (ev: CollectionUpdateEvent) =>
-        (typeof ev.by === 'string' &&
-          !!selfUserId &&
-          ev.by.toUpperCase() === selfUserId.toUpperCase()) ||
-        isOwnWrite(collection, ev.item as string)
+      const own = (ev: CollectionUpdateEvent) => isOwnWrite(collection, ev.item as string)
+      // The writer is only ever read back from the viewer's own /items read
+      // (user_updated, field-permission checked) — events never name them.
+      const byOf = (row?: Record<string, unknown> | null) => {
+        const w = writerOf(row)
+        return w && selfUserId && w.toUpperCase() === selfUserId.toUpperCase() ? 'self' : w
+      }
 
       // Deleted: gone from a visible page; elsewhere only the total moved.
       const deletedVisible: string[] = []
@@ -4835,7 +4838,7 @@ export function CollectionBrowserView({
                 ...prev,
                 data: prev.data.map((r) => (String(r.id) === id ? { ...r, ...fresh } : r))
               }))
-              if (!own(ev)) rowChanges.note([id], ev.by ?? null)
+              if (!own(ev)) rowChanges.note([id], byOf(fresh))
             })
             .catch(() => countPill())
         }
@@ -4877,12 +4880,13 @@ export function CollectionBrowserView({
       if (removed.length > 0) rowChanges.forget(removed)
       for (const [id] of patches) {
         const ev = latest.get(id)
-        if (ev && !own(ev)) rowChanges.note([id], ev.by ?? null)
+        const by = byOf(patches.get(id))
+        if (ev && !own(ev) && by !== 'self') rowChanges.note([id], by)
       }
       for (const { row, ev } of added) {
         const id = String(row.id)
         // The writer's own new record is theirs to find; others' is marked.
-        rowChanges.note([id], ev.by ?? null, 'create')
+        if (byOf(row) !== 'self') rowChanges.note([id], byOf(row), 'create')
       }
     }
 
@@ -7428,7 +7432,14 @@ export function CollectionBrowserView({
               </span>
             )}
             {v.is_shared && !v.is_default && !v.role_default && <span title='Shared'>⚭</span>}
-            <button type='button' onClick={() => applyView(v)}>
+            <button
+              type='button'
+              onClick={() => {
+                applyView(v)
+                // Feeds the config review's "views nobody opens" (#2020).
+                client.request(post(`/saved-views/${v.id}/opened`, {})).catch(() => {})
+              }}
+            >
               {v.name}
             </button>
             {viewCounts.get(v.id) != null && (

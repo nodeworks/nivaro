@@ -5074,8 +5074,7 @@ export async function createOne(
 
     void deferEffect('realtime:create', () =>
       broadcastCollectionUpdate(req?.server?.io, collection, returnedId as string | number, {
-        action: 'create',
-        by: user?.id
+        action: 'create'
       })
     )
 
@@ -5387,8 +5386,7 @@ export async function updateOne(
   void deferEffect('realtime:update', () =>
     broadcastCollectionUpdate(req?.server?.io, collection, id, {
       action: 'update',
-      changed_fields: Object.keys(columnPayload ?? {}),
-      by: user?.id
+      changed_fields: Object.keys(columnPayload ?? {})
     })
   )
 
@@ -5521,6 +5519,6 @@ export async function deleteOne(
   await hooks.trigger('after', { ...ctx, previousData })
 
   void deferEffect('realtime:delete', () =>
-    broadcastCollectionUpdate(req?.server?.io, collection, id, { action: 'delete', by: user?.id })
+    broadcastCollectionUpdate(req?.server?.io, collection, id, { action: 'delete' })
   )
 }

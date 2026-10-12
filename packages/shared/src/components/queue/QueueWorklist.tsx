@@ -117,7 +117,6 @@ export interface QueueRealtimeAdapter {
       item?: unknown
       action?: string
       changed_fields?: string[]
-      by?: string
     }) => void
   ) => () => void
 }
@@ -867,7 +866,6 @@ export function QueueWorklist({
       item?: unknown
       action?: string
       changed_fields?: string[]
-      by?: string
     }
     // Aspect notices (`$tasks`, `$addendums`, `$integrations`, …) move a
     // row's counts and badges, not its columns (#1874): refresh those reads
@@ -926,12 +924,10 @@ export function QueueWorklist({
           continue
         }
         stats = true
-        const own =
-          (!!ev?.by && !!userId && ev.by.toUpperCase() === userId.toUpperCase()) ||
-          (ev?.collection != null && isOwnWrite(ev.collection, ev.item as string))
+        const own = ev?.collection != null && isOwnWrite(ev.collection, ev.item as string)
         if (key && (visible || ev?.action === 'create' || viewRef.current === 'kanban')) {
           refresh = true
-          if (!own) livePendingRef.current.push({ key, by: ev?.by ?? null })
+          if (!own) livePendingRef.current.push({ key, by: null })
         } else pill += 1
       }
       if (pill > 0) setPendingUpdates((n) => n + pill)

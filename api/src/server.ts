@@ -192,6 +192,8 @@ export async function buildServer() {
     const { setAppRef, setIo } = await import('./services/io-holder.js')
     setIo(app.io)
     setAppRef(app)
+    const { wireOpsLive } = await import('./services/ops-live.js')
+    wireOpsLive()
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
     const { setExtensionRoutes, startTrafficMapEmitter } = await import('./services/traffic-map.js')
@@ -720,6 +722,10 @@ export async function buildServer() {
               app.log.warn({ err }, '[retention] integration obligations prune failed')
             )
           await pruneAiCalls().catch(() => 0)
+          // #1833 — Ask AI conversations past ai_conversation_retention_days (pinned kept).
+          await import('./services/ai-conversations.js')
+            .then((m) => m.pruneConversations())
+            .catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
             .del()
@@ -843,6 +849,14 @@ export async function buildServer() {
       app.cron.schedule('config-health-sweep', '10 3 * * *', async () => {
         const { runConfigHealthSweep } = await import('./services/config-health.js')
         await runConfigHealthSweep()
+      })
+
+      // Config review (#1913/#2020/#1999): monthly report of configuration
+      // problems, cleanup suggestions and label inconsistencies, with the
+      // model re-wording reasons when AI is configured; admins are told.
+      app.cron.schedule('config-review-monthly', '20 4 1 * *', async () => {
+        const { runMonthlyConfigReview } = await import('./services/config-review/index.js')
+        await runMonthlyConfigReview()
       })
 
       // Extension event outbox (#504): deliver pending rows to registered
@@ -2162,6 +2176,7 @@ export async function buildServer() {
         'dq-nightly',
         'conformance-nightly',
         'config-health-sweep',
+        'config-review-monthly',
         'dead-link-sweep',
         'storage-snapshot',
         'file-integrity-sweep'

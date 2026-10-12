@@ -225,6 +225,8 @@ export type CMSSettings = {
   ai_gateway_extract_model?: string | null
   ai_models?: string | null
   ai_answer_cache_minutes?: number | null
+  /** #1833 — days an untouched Ask AI conversation is kept; null = 180, 0 = forever. */
+  ai_conversation_retention_days?: number | null
   ai_prompt_caching?: boolean | null
   ai_chat_guide?: string | null
   ai_max_tokens_generate: number | null

@@ -416,3 +416,16 @@ export function useLiveQueryRefresh(
     { debounceMs: opts.debounceMs ?? 600, enabled: opts.enabled, focusable: true }
   )
 }
+
+/**
+ * Who last wrote a row, from the viewer's OWN permission-checked read of it
+ * (`user_updated`, present only when the collection has it and the viewer may
+ * read that field). The live event itself never names the writer.
+ */
+export function writerOf(row: Record<string, unknown> | undefined | null): string | null {
+  const v = row?.user_updated
+  if (typeof v === 'string' && v) return v
+  if (v && typeof v === 'object' && typeof (v as { id?: unknown }).id === 'string')
+    return (v as { id: string }).id
+  return null
+}
