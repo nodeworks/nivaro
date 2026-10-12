@@ -55,7 +55,7 @@ export async function accessInsightRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: 'Invalid collection' })
     const action = (req.query.action ?? 'update') as DeniedAction
     if (!DENIED_ACTIONS.has(action)) return reply.code(400).send({ error: 'Invalid action' })
-    const { explainDenied } = await import('../services/denied-explain.js')
+    const { explainDenied, TransitionNotFoundError } = await import('../services/denied-explain.js')
     try {
       const data = await explainDenied(req.user!, !!req.isAdmin, {
         collection,
@@ -67,6 +67,8 @@ export async function accessInsightRoutes(app: FastifyInstance): Promise<void> {
     } catch (err) {
       if (err instanceof UnknownCollectionError)
         return reply.code(400).send({ error: 'Unknown collection' })
+      if (err instanceof TransitionNotFoundError)
+        return reply.code(404).send({ error: 'Transition not found for this record' })
       throw err
     }
   })
@@ -129,7 +131,7 @@ export async function accessInsightRoutes(app: FastifyInstance): Promise<void> {
       const exists = await db('nivaro_users').where({ id: req.params.id }).first('id')
       if (!exists) return reply.code(404).send({ error: 'User not found' })
       const { summarizePersonAccess } = await import('../services/person-access.js')
-      const data = await summarizePersonAccess(req.params.id)
+      const data = await summarizePersonAccess(req.params.id, { selfView: !req.isAdmin })
       if (!data) return reply.code(404).send({ error: 'User not found' })
       return reply.send({ data })
     }

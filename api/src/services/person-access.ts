@@ -104,7 +104,14 @@ async function scopeLabels(
   }
 }
 
-export async function summarizePersonAccess(userId: string): Promise<PersonAccessSummary | null> {
+/**
+ * `selfView`: a non-admin reading their OWN access. Totals are left out —
+ * "4,271 of 88,000" would tell them roughly how much is hidden from them.
+ */
+export async function summarizePersonAccess(
+  userId: string,
+  opts: { selfView?: boolean } = {}
+): Promise<PersonAccessSummary | null> {
   const user = (await db('nivaro_users').where({ id: userId }).first()) as
     | (User & { first_name?: string | null; last_name?: string | null; email?: string | null })
     | undefined
@@ -183,7 +190,7 @@ export async function summarizePersonAccess(userId: string): Promise<PersonAcces
         collection: c,
         collection_label: label,
         visible,
-        total: shownTotal,
+        total: opts.selfView ? null : shownTotal,
         can_update: canUpdate,
         can_create: canCreate,
         can_delete: canDelete,

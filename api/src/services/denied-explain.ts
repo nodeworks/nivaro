@@ -1,6 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
-import { explainAccess } from './access-explain.js'
+import { explainAccess, viewerSafeReasons } from './access-explain.js'
 import { humanCollection, listPhrase, personName } from './access-words.js'
 import { applyRowFilter, can, getRowFilter } from './permissions.js'
 import { parseJson } from './pipeline-engine.js'
@@ -21,6 +21,13 @@ import { type AccessReason, checkTransitionOwner } from './record-access.js'
  */
 
 export type DeniedAction = 'read' | 'update' | 'delete' | 'transition'
+
+/** The transition is unknown or belongs to another workflow than the record's (→ 404). */
+export class TransitionNotFoundError extends Error {
+  constructor() {
+    super('Transition not found for this record')
+  }
+}
 
 export interface DeniedReason {
   type: AccessReason['type'] | 'lock' | 'transition_roles' | 'transition_owner' | 'transition_state'
@@ -98,8 +105,11 @@ export async function explainDenied(
   const label = humanCollection(collection)
 
   // 1. Can they see it at all (role read, row filter, scopes, existence)?
+  // A non-admin hears only that the record is not visible to them and their
+  // OWN limits — never the record's value on the dimension that hid it.
   const seen = await explainAccess(user, isAdmin, collection, id)
-  for (const r of seen.reasons) reasons.push({ type: r.type, message: r.message })
+  const seenReasons = isAdmin ? seen.reasons : viewerSafeReasons(seen.reasons)
+  for (const r of seenReasons) reasons.push({ type: r.type, message: r.message })
   const visible = seen.access
 
   if (
@@ -170,6 +180,7 @@ export async function explainDenied(
       .first()
       .catch(() => null)) as
       | {
+          template: string
           label: string
           from_state: string | null
           required_roles: string | null
@@ -178,57 +189,61 @@ export async function explainDenied(
         }
       | null
       | undefined
-    const instance = (await db('nivaro_workflow_instances')
-      .where({ collection, item: String(id) })
-      .whereNull('completed_at')
-      .first('id', 'current_state')
-      .catch(() => null)) as { id: string; current_state: string } | null | undefined
-    if (tx) {
-      if (tx.auto_trigger === true || tx.auto_trigger === 1) {
-        reasons.push({
-          type: 'transition_state',
-          message: `"${tx.label}" runs automatically and cannot be clicked`
-        })
-      }
-      if (
-        instance &&
-        tx.from_state &&
-        String(tx.from_state).toUpperCase() !== String(instance.current_state).toUpperCase()
-      ) {
-        reasons.push({
-          type: 'transition_state',
-          message: `"${tx.label}" does not start from the record's current step`
-        })
-      }
-      const roles = (parseJson(tx.required_roles) as string[] | null) ?? []
-      if (!isAdmin && roles.length > 0 && !(user.role && roles.includes(String(user.role)))) {
-        const rows = (await db('nivaro_roles')
-          .whereIn('id', roles)
-          .select('name')
-          .catch(() => [])) as Array<{ name: string }>
-        requiredRoleNames = rows.map((r) => r.name)
-        reasons.push({
-          type: 'transition_roles',
-          message: `"${tx.label}" is limited to ${listPhrase(requiredRoleNames, 'or') || 'other roles'}`
-        })
-      }
-      if (!isAdmin && (tx.require_owner === true || tx.require_owner === 1) && instance) {
-        // The verdict is the transition route's own check; the owner list
-        // only supplies the names of who CAN make the move.
-        const full = ((await db('nivaro_users').where({ id: user.id }).first()) ?? user) as User
-        const verdict = await checkTransitionOwner({
-          user: full,
-          isAdmin,
-          collection,
-          item: String(id),
-          instanceId: String(instance.id)
-        })
-        if (!verdict.allowed) {
-          const { explainRecordOwners } = await import('./owner-explain.js')
-          const ex = await explainRecordOwners(collection, String(id)).catch(() => null)
-          ownerNames = (ex?.owners ?? []).filter((o) => !o.unavailable).map((o) => o.name)
-          reasons.push({ type: 'transition_owner', message: verdict.message })
-        }
+    // The transition must belong to a workflow this record runs (its main
+    // pipeline or a branch) — otherwise the id names some other template's
+    // rules and roles, which are none of this record's business.
+    const instance = tx
+      ? ((await db('nivaro_workflow_instances')
+          .where({ collection, item: String(id), template: tx.template })
+          .orderByRaw('CASE WHEN completed_at IS NULL THEN 0 ELSE 1 END')
+          .orderBy('id', 'desc')
+          .first('id', 'current_state')
+          .catch(() => null)) as { id: string; current_state: string } | null | undefined)
+      : null
+    if (!tx || !instance) throw new TransitionNotFoundError()
+    if (tx.auto_trigger === true || tx.auto_trigger === 1) {
+      reasons.push({
+        type: 'transition_state',
+        message: `"${tx.label}" runs automatically and cannot be clicked`
+      })
+    }
+    if (
+      tx.from_state &&
+      String(tx.from_state).toUpperCase() !== String(instance.current_state).toUpperCase()
+    ) {
+      reasons.push({
+        type: 'transition_state',
+        message: `"${tx.label}" does not start from the record's current step`
+      })
+    }
+    const roles = (parseJson(tx.required_roles) as string[] | null) ?? []
+    if (!isAdmin && roles.length > 0 && !(user.role && roles.includes(String(user.role)))) {
+      const rows = (await db('nivaro_roles')
+        .whereIn('id', roles)
+        .select('name')
+        .catch(() => [])) as Array<{ name: string }>
+      requiredRoleNames = rows.map((r) => r.name)
+      reasons.push({
+        type: 'transition_roles',
+        message: `"${tx.label}" is limited to ${listPhrase(requiredRoleNames, 'or') || 'other roles'}`
+      })
+    }
+    if (!isAdmin && (tx.require_owner === true || tx.require_owner === 1)) {
+      // The verdict is the transition route's own check; the owner list
+      // only supplies the names of who CAN make the move.
+      const full = ((await db('nivaro_users').where({ id: user.id }).first()) ?? user) as User
+      const verdict = await checkTransitionOwner({
+        user: full,
+        isAdmin,
+        collection,
+        item: String(id),
+        instanceId: String(instance.id)
+      })
+      if (!verdict.allowed) {
+        const { explainRecordOwners } = await import('./owner-explain.js')
+        const ex = await explainRecordOwners(collection, String(id)).catch(() => null)
+        ownerNames = (ex?.owners ?? []).filter((o) => !o.unavailable).map((o) => o.name)
+        reasons.push({ type: 'transition_owner', message: verdict.message })
       }
     }
   }

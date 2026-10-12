@@ -1287,7 +1287,11 @@ async function runChatTool(
       const { explainAccess } = await import('./access-explain.js')
       const res = await explainAccess(target, targetAdmin, collection, id)
       // Never the trash id — a tool answer must not hand out a restore handle.
-      const reasons = res.reasons.map(({ trash_id: _trash, ...r }) => r)
+      // A non-admin never hears the hidden record's own dimension value.
+      const { viewerSafeReasons } = await import('./access-explain.js')
+      const reasons = askerAdmin
+        ? res.reasons.map(({ trash_id: _trash, ...r }) => r)
+        : viewerSafeReasons(res.reasons)
       const who =
         target.id === user.id
           ? 'you'
@@ -1384,7 +1388,7 @@ async function runChatTool(
         }
       }
       const { summarizePersonAccess } = await import('./person-access.js')
-      const r = await summarizePersonAccess(targetId)
+      const r = await summarizePersonAccess(targetId, { selfView: !askerAdmin })
       if (!r) throw new Error('User not found')
       return {
         result: {

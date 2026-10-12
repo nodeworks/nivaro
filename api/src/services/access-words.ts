@@ -144,17 +144,25 @@ export function ownerSourceSentence(name: string, src: OwnerSource): string {
       const g = src.group_name?.trim()
         ? `the owner group "${src.group_name.trim()}"`
         : 'an owner group'
+      // A filter on a field the reader cannot see is named only as such —
+      // its wanted value would reveal the record's (the group matched).
+      const shown = (src.matched ?? []).filter((m) => !m.hidden)
+      const hiddenN = (src.matched ?? []).length - shown.length
+      const parts = [
+        shown.length > 0 ? `whose ${listPhrase(shown.map((m) => `${m.label} is ${m.wants}`))}` : '',
+        hiddenN > 0
+          ? `matching on ${hiddenN === 1 ? 'a field' : `${hiddenN} fields`} you cannot see`
+          : ''
+      ].filter(Boolean)
       const why =
-        src.matched && src.matched.length > 0
-          ? ` — it covers records whose ${listPhrase(
-              src.matched.map((m) => `${m.label} is ${m.wants}`)
-            )}, and this record's ${listPhrase(
-              src.matched.map((m) =>
-                m.hidden
-                  ? `${m.label} is not visible to you`
-                  : `${m.label} is ${m.record_value || 'empty'}`
-              )
-            )}`
+        parts.length > 0
+          ? ` — it covers records ${parts.join(' and ')}${
+              shown.length > 0
+                ? `, and this record's ${listPhrase(
+                    shown.map((m) => `${m.label} is ${m.record_value || 'empty'}`)
+                  )}`
+                : ''
+            }`
           : ''
       const team = src.via_team
         ? ` ${name} is in the team "${src.via_team}", which sits in it.`
@@ -292,9 +300,14 @@ export function personCollectionSentence(name: string, f: PersonCollectionFact):
   const edit = f.can_update ? 'and can edit them' : 'but cannot edit them'
   if (f.strict)
     return `${name} sees no ${f.collection_label}: their ${f.strict} filter is strict and ${f.collection_label} has no ${f.strict} link.`
+  // No total (a person reading their own access): the visible count alone,
+  // so the size of what is hidden from them is never implied.
+  if (f.visible != null && f.total == null && (f.scopes.length > 0 || f.row_filter))
+    return `${name} sees ${f.visible.toLocaleString('en-US')} ${f.collection_label} because ${listPhrase(reasons)}, ${edit}.`
   if (f.visible != null && f.total != null && f.visible < f.total)
     return `${name} sees ${f.visible.toLocaleString('en-US')} of ${f.total.toLocaleString('en-US')} ${f.collection_label} because ${listPhrase(reasons)}, ${edit}.`
-  return `${name} sees all ${f.total != null ? `${f.total.toLocaleString('en-US')} ` : ''}${f.collection_label} ${edit}.`
+  const all = f.total ?? f.visible
+  return `${name} sees all ${all != null ? `${all.toLocaleString('en-US')} ` : ''}${f.collection_label} ${edit}.`
 }
 
 export function personCannotSentence(name: string, labels: string[]): string | null {

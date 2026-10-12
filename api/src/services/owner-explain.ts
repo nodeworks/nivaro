@@ -385,22 +385,31 @@ export async function explainRecordOwners(
   }
 }
 
-/** Blank record values of fields the caller's role cannot read. */
+/** What a filter on a field the caller cannot read is shown as. */
+export const HIDDEN_FIELD_LABEL = 'a field you cannot see'
+
+/** Blank everything a filter on a field the caller's role cannot read would reveal. */
 export async function redactOwnerFacts(
   ex: OwnerExplanation,
   user: User,
   isAdmin: boolean
 ): Promise<OwnerExplanation> {
   if (isAdmin) return ex
+  // null = every field (getAllowedFields' own convention); a lookup failure
+  // reads as nothing readable, so it fails closed.
   const allowed = await getAllowedFields(user, 'read', ex.collection).catch(() => [] as string[])
-  if (Array.isArray(allowed) && allowed.includes('*')) return ex
-  const ok = new Set(Array.isArray(allowed) ? allowed : [])
+  if (allowed === null || allowed.includes('*')) return ex
+  const ok = new Set(allowed)
   const hidden = (field: string) => !ok.has(field.split('.')[0])
   const anyHidden = ex.groups.some((g) => g.filters.some((f) => hidden(f.field)))
   if (!anyHidden) return ex
+  // The winning group MATCHED this record, so its wanted value on a field
+  // is the record's value too — blank both, and the field's name, for any
+  // field the caller cannot read.
+  const masked = { field: '', label: HIDDEN_FIELD_LABEL, wants: '', record_value: '' }
   const groups = ex.groups.map((g) => ({
     ...g,
-    filters: g.filters.map((f) => (hidden(f.field) ? { ...f, record_value: '' } : f))
+    filters: g.filters.map((f) => (hidden(f.field) ? masked : f))
   }))
   const owners = ex.owners.map((o) => {
     const sources = o.sources.map((s) =>
@@ -408,7 +417,7 @@ export async function redactOwnerFacts(
         ? {
             ...s,
             matched: s.matched.map((m) =>
-              m.field && hidden(m.field) ? { ...m, record_value: '', hidden: true } : m
+              m.field && hidden(m.field) ? { ...masked, hidden: true } : m
             )
           }
         : s

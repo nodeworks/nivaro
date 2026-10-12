@@ -307,8 +307,9 @@ describe('redactOwnerFacts', () => {
     const out = await redactOwnerFacts(ex, BETH, false)
     expect(out.groups[0].filters[0].record_value).toBe('')
     expect(out.owners[0].sources[0].matched?.[0].record_value).toBe('')
-    expect(out.owners[0].sentences[0]).toContain("this record's Salary band is not visible to you")
-    expect(out.owners[0].sentences[0]).not.toContain("this record's Salary band is A")
+    expect(out.groups[0].filters[0].wants).toBe('')
+    expect(out.owners[0].sentences[0]).toContain('matching on a field you cannot see')
+    expect(out.owners[0].sentences[0]).not.toContain('Salary band')
   })
   it('leaves everything for admins and for full-field roles', async () => {
     expect(await redactOwnerFacts(ex, BETH, true)).toBe(ex)
