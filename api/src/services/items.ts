@@ -282,8 +282,10 @@ async function finalProjection(
     const have = await tableColumns(collection)
     const listed = allowedFields.filter((f) => have.has(f.toLowerCase()))
     out = [...new Set([...out.filter((c) => c !== '*'), ...listed])]
-    if (out.length === 0) out = ['id']
   }
+  // Rows are keyed by id everywhere (row keys, expansions, $state, to-many):
+  // a field list that leaves it out still reads it.
+  if (!out.includes('*') && !out.includes('id')) out = ['id', ...out]
   return systemProjection(collection, out, allowedFields)
 }
 
