@@ -5064,6 +5064,8 @@ interface OwnerGapCluster {
     matched_filters: string[]
     mismatched_filters: string[]
   } | null
+  /** Why no group matches, in words (#2012); absent on older servers. */
+  reason?: string
 }
 
 interface HygieneFinding {
@@ -5877,6 +5879,11 @@ export function OwnerGapsCard({
                             Assign owners…
                           </Button>
                         </div>
+                        {g.reason && (
+                          <p className='mt-1 pl-8 text-[11.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
+                            {g.reason}
+                          </p>
+                        )}
                         <p className='mt-1 pl-8 text-[11.5px] leading-relaxed'>
                           {g.suggestion ? (
                             <>
