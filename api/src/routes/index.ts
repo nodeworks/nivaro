@@ -237,6 +237,7 @@ import { userActivityRoutes } from './user-activity.js'
 import { userGroupsRoutes } from './user-groups.js'
 import { userScopesRoutes } from './user-scopes.js'
 import { usersRoutes } from './users.js'
+import { viewStreamRoutes } from './view-stream.js'
 import { viewSubscriptionsRoutes } from './view-subscriptions.js'
 import { virtualCollectionsRoutes } from './virtual-collections.js'
 import { webhooksRoutes } from './webhooks.js'
@@ -584,6 +585,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(commandCenterRoutes, { prefix: '/command-center' })
   await app.register(featureFlagRoutes)
   await app.register(eventsStreamRoutes, { prefix: '/events' })
+  // #1680 — the event stream narrowed to one saved view, judged as the caller.
+  await app.register(viewStreamRoutes, { prefix: '/events/views' })
   await app.register(apiKeyUsageRoutes, { prefix: '/api-keys' })
   await app.register(opsRedisRoutes, { prefix: '/ops-redis' })
   await app.register(cronTimelineRoutes, { prefix: '/cron-timeline' })

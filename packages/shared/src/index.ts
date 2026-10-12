@@ -539,6 +539,7 @@ export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket
 export * from './lib/live'
 export * from './lib/live-list'
 export * from './lib/live-ops'
+export * from './lib/live-widgets'
 export {
   type NotificationSound,
   playNotificationSound,

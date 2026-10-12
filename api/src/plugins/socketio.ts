@@ -47,6 +47,7 @@ import {
   splitTenantRoom
 } from '../services/socket-transport.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
+import { registerWidgetLive } from '../services/widget-live.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -990,6 +991,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)
+    // #1675 — pushed dashboard/report widgets, computed as this socket's sign-in, sent to it alone.
+    registerWidgetLive(socket, () => authenticatedUser)
 
     /** Cloud: collection rooms are per tenant (tenant-rooms.ts) — journaled
      *  events from a tenant's context go to `t:<tenant>:collection:<c>`. A cloud

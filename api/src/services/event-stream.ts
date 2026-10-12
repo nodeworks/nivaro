@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import type { JournalEntry } from './event-journal.js'
 import { getIo } from './io-holder.js'
+import { notifyJournalListeners } from './journal-listeners.js'
 
 /**
  * Cross-replica realtime events on a Redis stream (#1737).
@@ -183,6 +184,9 @@ async function readLoop(): Promise<void> {
           } catch {
             /* one bad emit never stops the reader */
           }
+          // #1675 / #1680 — another replica's write, for pushed widgets and saved-view streams
+          // (this replica's own writes reached them from journaledEmit).
+          if (d.node !== NODE) notifyJournalListeners(d.entry)
         }
       }
       if (afterError) {
