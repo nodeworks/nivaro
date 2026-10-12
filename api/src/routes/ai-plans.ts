@@ -37,7 +37,7 @@ import { cancelPlan, getPlan, listPlans, recheckPlan, runPlan } from '../service
  *   POST /ai/plans/:id/unschedule      owner; back to waiting for approval
  *   GET  /ai/plans/:id/undo            admin; what can still be reverted
  *   POST /ai/plans/:id/undo            admin; {step_id?} revert (#1954)
- *   POST /ai/plans/:id/flow            admin; {records} draft flow (#1849)
+ *   POST /ai/plans/:id/flow            admin; {records, run_as?} draft flow (#1849)
  *   GET  /ai/plan-templates            templates (#1952)
  *   POST /ai/plan-templates/propose    {key, values} → a proposed plan, as the person
  *   POST /ai/plan-templates            admin; create  ·  PATCH/DELETE /ai/plan-templates/:key
@@ -201,18 +201,20 @@ export async function aiPlanRoutes(app: FastifyInstance) {
     }
   )
 
-  app.post<{ Params: { id: string }; Body: { records?: string } | undefined }>(
-    '/plans/:id/flow',
-    { preHandler: requireAdmin },
-    async (req, reply) => {
-      try {
-        const records = (req.body?.records ?? 'same') as FlowRecords
-        return reply.code(201).send({ data: await planToFlow(req.user!, req.params.id, records) })
-      } catch (err) {
-        return fail(reply, err)
-      }
+  app.post<{
+    Params: { id: string }
+    Body: { records?: string; run_as?: string | null } | undefined
+  }>('/plans/:id/flow', { preHandler: requireAdmin }, async (req, reply) => {
+    try {
+      const records = (req.body?.records ?? 'same') as FlowRecords
+      const runAs = req.body?.run_as ? String(req.body.run_as) : null
+      return reply
+        .code(201)
+        .send({ data: await planToFlow(req.user!, req.params.id, records, runAs) })
+    } catch (err) {
+      return fail(reply, err)
     }
-  )
+  })
 
   app.get('/plan-templates', { preHandler: authenticate }, async () => ({
     data: await listTemplates()

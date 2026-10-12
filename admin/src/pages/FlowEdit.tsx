@@ -68,6 +68,7 @@ const NOTIFY_CATEGORY_OPTIONS = [
 ]
 
 import { Textarea } from '@/components/ui/textarea'
+import { UserCombobox } from '@/components/user-combobox'
 import { api, exportFlow } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatRelative } from '@/lib/utils'
@@ -1429,9 +1430,10 @@ function EditOperationDialog({
                     <PencilLine className='mr-1 inline h-3 w-3' />
                     Updates or creates records through the normal record rules (permissions,
                     validation, hooks, history). It runs as whoever triggered the flow — the tester
-                    runs it as you — else the flow's author. Updates take record ids (
-                    <code className='font-mono'>{'{{keys}}'}</code> on an event flow) or a filter,
-                    at most 200 records.
+                    runs it as you. When nobody triggers it (a webhook, a schedule, a system event)
+                    it runs only as the Run as user below, and refuses without one. Updates take
+                    record ids (<code className='font-mono'>{'{{keys}}'}</code> on an event flow) or
+                    a filter, at most 200 records.
                   </div>
                   <div className='grid grid-cols-2 gap-3'>
                     <div className='space-y-1.5'>
@@ -1452,10 +1454,23 @@ function EditOperationDialog({
                       <Input
                         value={(optsState.collection as string) ?? ''}
                         onChange={(e) => setOpt('collection', e.target.value)}
-                        placeholder='{{collection}}'
+                        placeholder='orders'
                         className='font-mono text-[13px]'
                       />
                     </div>
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Run as (when nobody triggers it)</Label>
+                    <UserCombobox
+                      value={(optsState.run_as as string) || null}
+                      onChange={(v) => setOpt('run_as', v ?? undefined)}
+                      placeholder='Nobody — refuse to run'
+                      noneLabel='Nobody — refuse to run'
+                    />
+                    <p className='text-[11px] text-slate-400'>
+                      Never the flow's author by default: an anonymous webhook must not write with
+                      an administrator's rights.
+                    </p>
                   </div>
                   {(optsState.mode as string) !== 'create' && (
                     <>

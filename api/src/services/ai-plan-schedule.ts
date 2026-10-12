@@ -128,12 +128,10 @@ export async function recheckPendingSteps(user: User, doc: StoredPlanDoc): Promi
 }
 
 async function owner(row: Record<string, unknown>): Promise<User | null> {
-  const { getUser } = await import('./users.js')
+  const { canSignIn, getUser } = await import('./users.js')
   const u = await getUser(String(row.user))
-  if (!u) return null
-  const r = u as unknown as Record<string, unknown>
-  if (r.is_redacted || r.status === 'suspended') return null
-  return u
+  // Only an account that could sign in right now runs a plan in its name.
+  return u && canSignIn(u) ? u : null
 }
 
 /** Send a scheduled plan back for approval and tell its owner why. */
