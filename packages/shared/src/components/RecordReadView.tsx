@@ -1,9 +1,10 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Pencil } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
+import { useLiveRecord } from '../lib/live'
 import { useRecordReader } from '../lib/record-loader'
 import { sanitizeHtml } from '../lib/sanitize-html'
 import { formatRelative, titleCase } from '../lib/utils'
@@ -1060,6 +1061,30 @@ export function RecordReadView({
     staleTime: 30_000,
     retry: false
   })
+  // #1869 — Summary refreshes when someone else writes the record, and the
+  // values that moved briefly highlight (edit mode shows its own ghosts).
+  const qc = useQueryClient()
+  useLiveRecord(collection, itemId, (batch) => {
+    if (batch.aspectsOnly || batch.deleted) return
+    void qc.invalidateQueries({ queryKey: ['rrv-record', collection, itemId] })
+    void qc.invalidateQueries({ queryKey: ['field-touch', collection, itemId] })
+  })
+  const prevRecordRef = useRef<Record<string, unknown> | null>(null)
+  const [flashFields, setFlashFields] = useState<Set<string>>(() => new Set())
+  useEffect(() => {
+    const prev = prevRecordRef.current
+    prevRecordRef.current = record ?? null
+    if (!prev || !record || prev === record) return
+    const moved = Object.keys(record).filter(
+      (k) => !k.startsWith('__') && JSON.stringify(prev[k]) !== JSON.stringify(record[k])
+    )
+    if (moved.length === 0) return
+    setFlashFields(new Set(moved))
+    const t = setTimeout(() => setFlashFields(new Set()), 2400)
+    return () => clearTimeout(t)
+  }, [record])
+  const flashClass = (field: string) =>
+    flashFields.has(field) ? ' nvr-value-pulse-bg rounded-sm' : ''
   // The layout's field-config merges assignment overrides (hidden, labels,
   // interfaces) the way the edit form sees them — the raw registry does not.
   const { data: layoutFields } = useQuery({
@@ -1517,7 +1542,8 @@ export function RecordReadView({
                       // Session replay masking hook (#1361) — the value, not its label.
                       data-replay-field={a.field}
                       data-field-collection={collection}
-                      className={`mt-1 min-w-0 ${
+                      data-remote-changed={flashFields.has(a.field) || undefined}
+                      className={`mt-1 min-w-0${flashClass(a.field)} ${
                         emphasis
                           ? 'text-[17px] font-semibold tracking-[-0.01em] text-slate-900 dark:text-white'
                           : `${isM2M(a) || long ? '' : wide ? 'line-clamp-3 break-words ' : 'truncate '}text-[13px] font-medium text-slate-800 dark:text-slate-100`
@@ -1592,7 +1618,7 @@ export function RecordReadView({
               <p
                 data-replay-field={titleAssignment.field}
                 data-field-collection={collection}
-                className='truncate text-[22px] font-semibold leading-tight tracking-[-0.015em] text-slate-900 dark:text-white'
+                className={`truncate text-[22px] font-semibold leading-tight tracking-[-0.015em] text-slate-900 dark:text-white${flashClass(titleAssignment.field)}`}
               >
                 {record ? renderValue(titleAssignment) : '…'}
               </p>
@@ -1610,7 +1636,8 @@ export function RecordReadView({
                   <dd
                     data-replay-field={a.field}
                     data-field-collection={collection}
-                    className='mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100'
+                    data-remote-changed={flashFields.has(a.field) || undefined}
+                    className={`mt-0.5 truncate text-[13px] font-medium text-slate-800 dark:text-slate-100${flashClass(a.field)}`}
                   >
                     {record ? renderValue(a) : '…'}
                   </dd>

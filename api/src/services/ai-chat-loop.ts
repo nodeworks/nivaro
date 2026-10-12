@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { User } from '../types.js'
 import { buildWrapUpMessages, CHAT_TOOLS, executeChatTool, MAX_ROUNDS } from './ai-chat.js'
+import { hashToolResult } from './ai-result-hash.js'
 import { consumeText, isAbortError, streamMessage } from './ai-stream.js'
 
 /**
@@ -17,6 +18,8 @@ export interface ChatTraceEntry {
   tool: string
   input: Record<string, unknown>
   summary: string
+  /** Fingerprint of what the tool showed the model (#1809 shared threads). */
+  result_hash?: string
 }
 
 export interface ChatLoopCallbacks {
@@ -232,7 +235,7 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       onStatus?.({ round, tool: block.name, text, step })
       try {
         const { result, summary } = await executeChatTool(user, block.name, input)
-        trace.push({ tool: block.name, input, summary })
+        trace.push({ tool: block.name, input, summary, result_hash: hashToolResult(result) })
         onStatus?.({
           round,
           tool: block.name,

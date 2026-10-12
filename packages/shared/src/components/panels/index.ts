@@ -3,6 +3,12 @@ export { CommentPanel } from './CommentPanel'
 export { OwnersSlot } from './OwnersSlot'
 export type { LockHolder, LockQueueEntry } from './ItemLockBanner'
 export { AccessDeniedPanel } from './AccessDeniedPanel'
+export {
+  deniedToastAction,
+  isAccessRefusal,
+  WhyDeniedButton,
+  WhyOwnersButton
+} from './AccessInsights'
 export { ErpFailureBanner } from './ErpFailureBanner'
 export { ExternalRequestsChip } from './ExternalRequestsChip'
 export { ItemActionButtons } from './ItemActionButtons'

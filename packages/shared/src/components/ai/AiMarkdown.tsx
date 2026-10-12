@@ -16,6 +16,7 @@ import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { type GlossaryTerm, glossarySegments, useGlossary } from '../../lib/glossary'
 import { cn } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
+import { type AnswerFormat, chartOf, formatsFor, listOf, rowsOfBlock } from './answer-formats'
 import { GlossaryMark, useGlossaryHref } from './GlossaryText'
 
 /**
@@ -31,7 +32,7 @@ import { GlossaryMark, useGlossaryHref } from './GlossaryText'
  * x | y |") — the pipe-separated rows are split back apart before parsing.
  */
 
-type Block =
+export type AiMarkdownBlock =
   | { kind: 'p'; text: string }
   | { kind: 'h'; level: number; text: string }
   | { kind: 'ul'; items: string[] }
@@ -39,6 +40,7 @@ type Block =
   | { kind: 'code'; text: string }
   | { kind: 'table'; header: string[]; rows: string[][] }
   | { kind: 'chart'; spec: ChartSpec }
+type Block = AiMarkdownBlock
 
 /** A chart the model attached (#724): a fenced ```chart block holding JSON. */
 export type ChartSpec = {
@@ -467,15 +469,105 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
   )
 }
 
+function BlockView({ b, link, gl }: { b: Block; link: boolean; gl?: InlineGlossary }) {
+  switch (b.kind) {
+    case 'h':
+      return (
+        <p className={cn('font-semibold', b.level <= 2 ? 'text-[1.05em]' : '')}>
+          {renderInline(b.text, link, gl)}
+        </p>
+      )
+    case 'ul':
+      return (
+        <ul className='list-disc space-y-0.5 pl-5'>
+          {b.items.map((it, j) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static content
+            <li key={j}>{renderInline(it, link, gl)}</li>
+          ))}
+        </ul>
+      )
+    case 'ol':
+      return (
+        <ol className='list-decimal space-y-0.5 pl-5'>
+          {b.items.map((it, j) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: static content
+            <li key={j}>{renderInline(it, link, gl)}</li>
+          ))}
+        </ol>
+      )
+    case 'code':
+      return (
+        <pre className='overflow-x-auto rounded-md bg-black/[0.05] p-2 font-mono text-[0.9em] dark:bg-white/10'>
+          {b.text}
+        </pre>
+      )
+    case 'table':
+      return <TableBlock header={b.header} rows={b.rows} autolink={link} />
+    case 'chart':
+      return <ChartBlock spec={b.spec} />
+    default:
+      return <p>{renderInline(b.text, link, gl)}</p>
+  }
+}
+
+const FORMAT_LABEL: Record<AnswerFormat, string> = { table: 'Table', chart: 'Chart', list: 'List' }
+
+/**
+ * A table, chart or data list with a Table · Chart · List switch (#1885).
+ * The other formats are drawn from the rows already in the answer — no new
+ * question and no model call.
+ */
+function SwitchableBlock({ b, link, gl }: { b: Block; link: boolean; gl?: InlineGlossary }) {
+  const formats = useMemo(() => formatsFor(b), [b])
+  const [format, setFormat] = useState<AnswerFormat>(formats[0])
+  const shown = useMemo((): Block => {
+    if (format === formats[0]) return b
+    const rows = rowsOfBlock(b)
+    if (!rows) return b
+    if (format === 'table') return { kind: 'table', header: rows.header, rows: rows.rows }
+    if (format === 'list') return { kind: 'ul', items: listOf(rows) }
+    const spec = chartOf(rows)
+    return spec ? { kind: 'chart', spec } : b
+  }, [b, format, formats])
+  if (formats.length < 2) return <BlockView b={b} link={link} gl={gl} />
+  return (
+    <div data-ai-switchable={format}>
+      <fieldset className='mb-0.5 flex min-w-0 justify-end gap-0.5' aria-label='Show as'>
+        {formats.map((f) => (
+          <button
+            key={f}
+            type='button'
+            onClick={() => setFormat(f)}
+            aria-pressed={f === format}
+            data-ai-format={f}
+            className={cn(
+              'rounded px-1.5 py-px text-[10.5px] font-medium transition-colors',
+              f === format
+                ? 'bg-accent text-foreground'
+                : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+            )}
+          >
+            {FORMAT_LABEL[f]}
+          </button>
+        ))}
+      </fieldset>
+      <BlockView b={shown} link={link} gl={gl} />
+    </div>
+  )
+}
+
 export function AiMarkdown({
   content,
   className,
-  autolink
+  autolink,
+  switchable
 }: {
   content: string
   className?: string
   /** Turn friendly ids into record links. Default: on whenever a NivaroProvider is present. */
   autolink?: boolean
+  /** Offer Table · Chart · List on blocks that hold rows (#1885). */
+  switchable?: boolean
 }) {
   const blocks = useMemo(() => parseAiMarkdown(content), [content])
   const client = useOptionalNivaroClient()
@@ -488,48 +580,14 @@ export function AiMarkdown({
     <div data-ai-markdown className={cn('space-y-1.5 [&_strong]:font-semibold', className)}>
       {blocks.map((b, i) => {
         const key = `${b.kind}-${i}`
-        switch (b.kind) {
-          case 'h':
-            return (
-              <p key={key} className={cn('font-semibold', b.level <= 2 ? 'text-[1.05em]' : '')}>
-                {renderInline(b.text, link, gl)}
-              </p>
-            )
-          case 'ul':
-            return (
-              <ul key={key} className='list-disc space-y-0.5 pl-5'>
-                {b.items.map((it, j) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: static content
-                  <li key={j}>{renderInline(it, link, gl)}</li>
-                ))}
-              </ul>
-            )
-          case 'ol':
-            return (
-              <ol key={key} className='list-decimal space-y-0.5 pl-5'>
-                {b.items.map((it, j) => (
-                  // biome-ignore lint/suspicious/noArrayIndexKey: static content
-                  <li key={j}>{renderInline(it, link, gl)}</li>
-                ))}
-              </ol>
-            )
-          case 'code':
-            return (
-              <pre
-                key={key}
-                className='overflow-x-auto rounded-md bg-black/[0.05] p-2 font-mono text-[0.9em] dark:bg-white/10'
-              >
-                {b.text}
-              </pre>
-            )
-          case 'table':
-            return <TableBlock key={key} header={b.header} rows={b.rows} autolink={link} />
-          case 'chart':
-            return <ChartBlock key={key} spec={b.spec} />
-          default:
-            return <p key={key}>{renderInline(b.text, link, gl)}</p>
-        }
+        return switchable && SWITCHABLE_KINDS.has(b.kind) ? (
+          <SwitchableBlock key={key} b={b} link={link} gl={gl} />
+        ) : (
+          <BlockView key={key} b={b} link={link} gl={gl} />
+        )
       })}
     </div>
   )
 }
+
+const SWITCHABLE_KINDS = new Set<Block['kind']>(['table', 'chart', 'ul', 'ol'])

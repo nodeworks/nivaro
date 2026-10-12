@@ -180,6 +180,7 @@ const TrafficMap = lazy(() => import('@/pages/traffic-map/TrafficMap'))
 const MonitorsPage = lazy(() => import('@/pages/Monitors'))
 const SecurityCenter = lazy(() => import('@/pages/SecurityCenter'))
 const ConfigHealth = lazy(() => import('@/pages/ConfigHealth'))
+const ConfigReview = lazy(() => import('@/pages/ConfigReview'))
 const LegalHolds = lazy(() => import('@/pages/LegalHolds'))
 const FindReplace = lazy(() => import('@/pages/FindReplace'))
 const M2MMatrix = lazy(() => import('@/pages/M2MMatrix'))
@@ -572,6 +573,7 @@ export default function App() {
                   <Route path='monitors' element={<MonitorsPage />} />
                   <Route path='security-center' element={<SecurityCenter />} />
                   <Route path='config-health' element={<ConfigHealth />} />
+                  <Route path='config-review' element={<ConfigReview />} />
                   <Route path='legal-holds' element={<LegalHolds />} />
                   <Route path='find-replace' element={<FindReplace />} />
                   <Route path='m2m-matrix' element={<M2MMatrix />} />

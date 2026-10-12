@@ -2,14 +2,18 @@ import type { DocSection } from './types.js'
 
 // ─── Section imports ──────────────────────────────────────────────────────────
 
+export * from './sections/access-insights.js'
 export * from './sections/admin-ux.js'
+export * from './sections/ai-conversations.js'
 export * from './sections/ai-design.js'
+export * from './sections/ai-explain.js'
 export * from './sections/ai-knowledge.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
 export * from './sections/collaboration.js'
 export * from './sections/command-center.js'
+export * from './sections/config-review.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
@@ -26,8 +30,9 @@ export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
 export * from './sections/live-ops.js'
+export * from './sections/live-records.js'
+export * from './sections/live-lists.js'
 export * from './sections/low-code.js'
-export * from './sections/ai-explain.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
 export * from './sections/ops-observability.js'
@@ -50,6 +55,7 @@ export * from './sections/tree-advanced.js'
 export * from './sections/trees.js'
 export * from './sections/workflows-pipelines.js'
 
+import { accessInsightsDocs } from './sections/access-insights.js'
 import {
   adminUxAiMapping,
   adminUxAiQuery,
@@ -61,7 +67,9 @@ import {
   adminUxSavedViews,
   adminUxSemanticSearch
 } from './sections/admin-ux.js'
+import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
+import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
 import {
   adminI18nDocs,
@@ -90,6 +98,7 @@ import {
   collabUserActivityFeed
 } from './sections/collaboration.js'
 import { commandCenterDocs } from './sections/command-center.js'
+import { configReviewDocs } from './sections/config-review.js'
 import {
   contentOpsAddendums,
   contentOpsCascadeFilters,
@@ -235,6 +244,8 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
+import { collabLiveLists } from './sections/live-lists.js'
+import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -260,7 +271,6 @@ import {
   submissionFormsApiDoc,
   submissionFormsGuide
 } from './sections/monitoring.js'
-import { aiExplainGuide } from './sections/ai-explain.js'
 import {
   obsApiAnalytics,
   obsDataQuality,
@@ -606,9 +616,11 @@ export const navSections: NavGroup[] = [
     label: 'AI Features',
     items: [
       aiChatDocs,
+      aiConversationsDocs,
       aiKnowledgeDocs,
       aiActionsDocs,
       aiPlansDocs,
+      accessInsightsDocs,
       aiOverview,
       aiGenerate,
       aiSummarize,
@@ -786,6 +798,9 @@ export const navSections: NavGroup[] = [
       collabApprovals,
       collabChat,
       collabItemLocking,
+      collabLiveRecords,
+      collabLiveLists,
+      collabLiveOps,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,
@@ -838,6 +853,7 @@ export const navSections: NavGroup[] = [
       obsRealtimePipeline,
       dbHealthDocs,
       dbTuning,
+      configReviewDocs,
       opsConsoleDocs,
       deploysVersionsDocs,
       instanceOverridesDocs,

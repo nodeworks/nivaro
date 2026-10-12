@@ -20,6 +20,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
 import { notifyUser } from './notification-channels.js'
+import { announceRecordAspect } from './record-events.js'
 
 export const TASK_STATUSES = ['open', 'in_progress', 'done', 'cancelled'] as const
 /** Still to do. */
@@ -479,6 +480,8 @@ export async function createTask(
   }
   if (cols.doneWhen && doneWhen) row.done_when = doneWhen
   const [task] = (await db('nivaro_tasks').insert(row).returning('*')) as unknown as [TaskRow]
+  // #1874: list/queue rows showing an open-task count refresh it.
+  announceRecordAspect(task?.collection, task?.item, '$tasks')
 
   const names = await namesOf([assignee, delegatedFrom])
   const parts: string[] = []
@@ -523,6 +526,7 @@ export async function completeTask(
   if (cols.completedBy) patch.completed_by = actorId
   if (cols.autoClosed) patch.auto_closed = opts.auto ?? null
   await db('nivaro_tasks').where({ id: task.id }).update(patch)
+  announceRecordAspect(task.collection, task.item, '$tasks')
   const updated = (await db('nivaro_tasks').where({ id: task.id }).first()) as TaskRow
 
   let sentence = opts.reason

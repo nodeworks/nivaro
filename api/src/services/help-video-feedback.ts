@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivity } from './activity.js'
+import { announceHelpVideoQuestion } from './help-video-live.js'
 import { authorRoleIds, isUuid, type VideoRow, viewerMaySee } from './help-videos.js'
 import { getApp } from './io-holder.js'
 
@@ -244,6 +245,7 @@ export async function askQuestion(
   }
   await db('nivaro_help_video_questions').insert(row)
   void notifyAuthorsOfQuestionSafely(video, text, at_ms, user.id)
+  void announceQuestionSafely(video, String(row.id), 'asked', user.id)
   return serializeQuestion(row, { userId: user.id, author: false }, new Map())
 }
 
@@ -271,6 +273,7 @@ export async function answerQuestion(
     comment: `at ${fmt(Number(row.at_ms ?? 0))}`
   })
   void notifyAskerSafely(video, row, answer)
+  void announceQuestionSafely(video, questionId, 'answered', user.id, String(row.user ?? ''))
   const fresh: Record<string, unknown> = { ...row, answer, answered_by: user.id, answered_at: now }
   const names = await namesFor([row.user, user.id])
   return serializeQuestion(fresh, { userId: user.id, author: true }, names)
@@ -346,6 +349,23 @@ export async function notifyAuthorsOfQuestion(
     }
   }
   return delivered
+}
+
+/** Live signal to the people who should re-read the questions list (ids only). */
+async function announceQuestionSafely(
+  video: VideoRow,
+  questionId: string,
+  kind: 'asked' | 'answered',
+  actorId: string,
+  askerId = ''
+): Promise<void> {
+  try {
+    const authors = await questionRecipients(video, actorId)
+    const to = kind === 'answered' && askerId ? [askerId, ...authors] : authors
+    announceHelpVideoQuestion(to, String(video.id), questionId, kind)
+  } catch {
+    /* decoration */
+  }
 }
 
 async function notifyAuthorsOfQuestionSafely(

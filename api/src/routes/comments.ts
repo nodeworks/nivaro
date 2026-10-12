@@ -11,6 +11,7 @@ import { notifyUser } from '../services/notification-channels.js'
 import { renderNotificationTemplate } from '../services/notification-templates.js'
 import { can } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
+import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -415,6 +416,8 @@ export async function commentsRoutes(app: FastifyInstance) {
       // Auto-watch (#400): commenting subscribes the commenter when their
       // preference says so — fire-and-forget.
       void ensureAutoWatch(userId, body.collection, body.item, 'commented')
+      // #1874: list/queue rows showing a comment count refresh it.
+      announceRecordAspect(body.collection, body.item, '$comments')
       // Live comments (#280): co-viewers' threads update the moment this
       // lands — record-room broadcast, clients invalidate the comments query.
       app.io
@@ -558,6 +561,7 @@ export async function commentsRoutes(app: FastifyInstance) {
     if (!text) return reply.code(400).send({ error: 'text is required' })
 
     await db('nivaro_comments').where({ id }).update({ text, updated_at: new Date() })
+    announceRecordAspect(existing.collection, existing.item, '$comments')
     const row = (await db('nivaro_comments').where({ id }).first()) as CommentRow
     await logActivity({
       action: 'update',
@@ -580,6 +584,7 @@ export async function commentsRoutes(app: FastifyInstance) {
     }
 
     await db('nivaro_comments').where({ id }).delete()
+    announceRecordAspect(existing.collection, existing.item, '$comments')
     await logActivity({
       action: 'delete',
       collection: 'nivaro_comments',
