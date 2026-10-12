@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Bell,
   ClipboardList,
@@ -13,6 +13,7 @@ import { useState } from 'react'
 import { toast } from 'sonner'
 import { useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useLiveOps } from '../../lib/live-ops'
 import { type StuckState, stuckText } from '../../lib/presence-state'
 import { cn, humanHours, titleCase } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
@@ -414,6 +415,13 @@ export function TeamLoadCard({
   expectedRows?: number
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
+  // Live: open/breached/uncovered counts move as records change hands, complete or breach.
+  useLiveOps(
+    'team',
+    () => void qc.invalidateQueries({ queryKey: ['nvr-person-team-load', userId] }),
+    { debounceMs: 2000 }
+  )
   const { data, isLoading, isError } = useQuery<{
     reports: TeamLoadRow[]
     total_reports: number

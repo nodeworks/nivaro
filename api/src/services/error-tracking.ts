@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { NIVARO_VERSION } from '../version.js'
+import { emitOps } from './ops-live.js'
 
 /**
  * Error tracking into nivaro_issues.
@@ -27,6 +29,48 @@ export function issueFingerprint(source: string, route: string, message: string)
     .digest('hex')
 }
 
+const OCCURRENCE_KEEP = 50
+const OCCURRENCE_DAYS = 30
+
+/** Best-effort: store the hit, then keep only the last 50 (and 30 days) for that issue. */
+async function recordOccurrence(
+  issueId: number,
+  opts: { source: string; route: string; userId?: string | null; build?: string | null }
+): Promise<void> {
+  try {
+    if (!(await db.schema.hasTable('nivaro_issue_occurrences'))) return
+    await db('nivaro_issue_occurrences').insert({
+      issue: issueId,
+      occurred_at: new Date(),
+      user_id: opts.userId ?? null,
+      route: opts.route.slice(0, 300),
+      build: (opts.build ?? (opts.source === 'server' ? NIVARO_VERSION : null))?.slice(0, 60) ?? null,
+      source: opts.source.slice(0, 10)
+    })
+    const keep = (await db('nivaro_issue_occurrences')
+      .where('issue', issueId)
+      .orderBy([
+        { column: 'occurred_at', order: 'desc' },
+        { column: 'id', order: 'desc' }
+      ])
+      .limit(OCCURRENCE_KEEP)
+      .select('id')) as Array<{ id: number }>
+    await db('nivaro_issue_occurrences')
+      .where('issue', issueId)
+      .where((w) => {
+        void w
+          .whereNotIn(
+            'id',
+            keep.map((k) => k.id)
+          )
+          .orWhere('occurred_at', '<', new Date(Date.now() - OCCURRENCE_DAYS * 86_400_000))
+      })
+      .del()
+  } catch {
+    /* the log is best-effort */
+  }
+}
+
 export async function trackError(opts: {
   source: 'server' | 'client'
   route: string
@@ -39,11 +83,28 @@ export async function trackError(opts: {
   recordingOffsetMs?: number | null
   /** #300 — redacted request context (method/route/query keys/body SHAPE, never values). */
   requestContext?: string | null
+  /** The frontend build the error came from (client reports); server errors name this API's version. */
+  build?: string | null
 }): Promise<number | null> {
   // Returns the issue id (new or bumped); null when tracking failed.
   try {
     const message = issueMessage(opts.message)
     const fingerprint = issueFingerprint(opts.source, opts.route, message)
+
+    // The occurrence an open issue page streams (admin room): who, where, which build.
+    // Names a person by id only — the page resolves it through an admin-only route.
+    const announce = (issueId: number, count: number) => {
+      void recordOccurrence(issueId, opts)
+      emitOps(`issue:${issueId}`, {
+        occurrence: {
+          route: opts.route.slice(0, 300),
+          source: opts.source,
+          user_id: opts.userId ?? null,
+          build: opts.build ?? (opts.source === 'server' ? NIVARO_VERSION : null),
+          count
+        }
+      })
+    }
 
     const existing = await db('nivaro_issues')
       .where({ fingerprint })
@@ -66,6 +127,7 @@ export async function trackError(opts: {
               }
             : {})
         })
+      announce(Number(existing.id), Number(existing.occurrence_count ?? 0) + 1)
       return Number(existing.id)
     }
 
@@ -97,6 +159,7 @@ export async function trackError(opts: {
     // `.returning('id')` yields an OBJECT on this stack
     const first = (inserted as unknown[])[0] as { id?: unknown } | number | undefined
     const id = typeof first === 'object' && first ? Number(first.id) : Number(first)
+    if (Number.isFinite(id)) announce(id, 1)
     return Number.isFinite(id) ? id : null
   } catch {
     /* tracking must never break the request path */

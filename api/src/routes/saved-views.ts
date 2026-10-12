@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
-import { logActivity } from '../services/activity.js'
+import { logActivity, logActivityThrottled } from '../services/activity.js'
 import { writeRevision } from '../services/revisions.js'
 
 interface SavedViewRow {
@@ -270,6 +270,29 @@ export async function savedViewsRoutes(app: FastifyInstance) {
     })
 
     return reply.send({ data: formatView(updated) })
+  })
+
+  // POST /:id/opened — a person applied the view. One activity row per
+  // person + view per hour feeds the config review's "views nobody opens"
+  // cleanup (#2020); only views the caller can see are recorded.
+  app.post('/:id/opened', async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const view = (await db<SavedViewRow>('nivaro_saved_views')
+      .where({ id: Number(id) || 0 })
+      .first('id', 'collection', 'user', 'is_shared', 'role')) as SavedViewRow | undefined
+    if (!view) return reply.code(404).send({ error: 'Not found' })
+    const visible =
+      sameId(view.user, req.user!.id) ||
+      (!!view.is_shared && (view.role == null || sameId(view.role, req.user!.role ?? null)))
+    if (!visible && !req.isAdmin) return reply.code(404).send({ error: 'Not found' })
+    void logActivityThrottled(app.redis, `saved-view-open:${view.id}:${req.user!.id}`, 3600, {
+      action: 'saved-view-open',
+      user: req.user!.id,
+      collection: 'nivaro_saved_views',
+      item: String(view.id),
+      comment: view.collection
+    })
+    return reply.code(204).send()
   })
 
   // DELETE /:id — delete (owner or admin)

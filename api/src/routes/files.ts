@@ -6,7 +6,7 @@ import sharp from 'sharp'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { findOrphanFiles, getFileUsage } from '../services/file-usage.js'
+import { findOrphanFiles, forgetUnusedFiles, getFileUsage } from '../services/file-usage.js'
 import {
   cleanDownloadName,
   createPresignedFile,
@@ -323,22 +323,39 @@ export async function filesRoutes(app: FastifyInstance) {
 
   app.get('/usage/orphans', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as { limit?: string; offset?: string }
-    const result = await findOrphanFiles({
-      limit: Number(q.limit ?? 50),
-      offset: Number(q.offset ?? 0)
-    })
-    return reply.send(result)
+    try {
+      const result = await findOrphanFiles({
+        limit: Math.min(200, Number(q.limit ?? 50) || 50),
+        offset: Number(q.offset ?? 0)
+      })
+      return reply.send(result)
+    } catch (err) {
+      req.log.warn({ err }, 'unused-file scan failed')
+      return reply
+        .code(503)
+        .send({ error: 'Could not check every place a file can be used. Try again shortly.' })
+    }
   })
 
-  // #38 — bulk-delete the unreferenced files (orphans), admin only, capped per
-  // call so a huge backlog is worked through in visible chunks.
+  // #38 — bulk-delete the unused files, admin only, capped per call so a
+  // huge backlog is worked through in visible chunks. Always rescans with the
+  // full reference check (findOrphanFiles) — never the cached list — and
+  // deletes nothing when any reference source cannot be read.
   app.delete('/usage/orphans', { preHandler: requireAdmin }, async (req, reply) => {
     const q = req.query as { limit?: string }
     const limit = Math.min(500, Math.max(1, Number(q.limit ?? 200) || 200))
-    const { data } = await findOrphanFiles({ limit, offset: 0 })
+    let found: Awaited<ReturnType<typeof findOrphanFiles>>
+    try {
+      found = await findOrphanFiles({ limit, offset: 0, fresh: true })
+    } catch (err) {
+      req.log.warn({ err }, 'unused-file scan failed; nothing deleted')
+      return reply.code(503).send({
+        error: 'Could not check every place a file can be used, so nothing was deleted.'
+      })
+    }
     let deleted = 0
     let failed = 0
-    for (const f of data) {
+    for (const f of found.data) {
       try {
         await deleteFile(String(f.id))
         deleted++
@@ -346,15 +363,16 @@ export async function filesRoutes(app: FastifyInstance) {
         failed++
       }
     }
+    forgetUnusedFiles()
     await logActivity({
       action: 'files-orphans-purge',
       user: req.user?.id,
       collection: 'nivaro_files',
-      comment: `${deleted} unreferenced file(s) deleted${failed ? `, ${failed} failed` : ''}`,
+      comment: `${deleted} unused file(s) deleted${failed ? `, ${failed} failed` : ''}`,
       req
     })
     return reply.send({
-      data: { deleted, failed, remaining: Math.max(0, (await findOrphanFiles({ limit: 1 })).total) }
+      data: { deleted, failed, remaining: Math.max(0, found.total - deleted) }
     })
   })
 

@@ -16,6 +16,7 @@ import {
   CalendarRange,
   CheckSquare,
   Clapperboard,
+  ClipboardCheck,
   ClipboardList,
   Clock,
   Code2,
@@ -646,6 +647,12 @@ export const navCategories: NavCategory[] = [
         label: 'Config Health',
         to: '/config-health',
         keywords: 'lint hygiene'
+      },
+      {
+        icon: ClipboardCheck,
+        label: 'Config Review',
+        to: '/config-review',
+        keywords: 'monthly cleanup tidy duplicate unused labels contradicting rules'
       },
       {
         icon: SearchCode,

@@ -13,6 +13,7 @@ import {
   olderReason
 } from '../services/client-version.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
+import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
@@ -737,6 +738,51 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const room = await collectionRoom(collection)
         if (room) socket.leave(room)
       }
+    })
+    // ── Live operations pages (services/ops-live.ts) ────────────────────────
+    // `ops:join {topic}` — an allowlisted topic, gated like the route that serves the
+    // same page (admin topics check the role at join, through the same ordered gate the
+    // watch rooms use so a quick join + leave cannot leave a socket behind).
+    const opsRoomOf = async (topic: string): Promise<string | null> => {
+      if (!process.env.CLOUD_META_DB_URL) return opsRoom(topic, '')
+      const t = await socketTenant(socket)
+      return t ? opsRoom(topic, t.tenantId || t.slug) : null
+    }
+    socket.on(
+      'ops:join',
+      inSocketTenant(socket, async (payload: { topic?: string }) => {
+        const spec = opsTopicGate(payload?.topic)
+        const user = authenticatedUser
+        if (!spec || !user) return
+        try {
+          const room = await opsRoomOf(spec.topic)
+          if (!room) return
+          await watchGate.join(
+            `ops:${spec.topic}`,
+            async () => {
+              if (spec.gate === 'auth') return true
+              if (!user.role) return false
+              const role = await db('nivaro_roles').where({ id: user.role }).first()
+              return !!role?.admin_access
+            },
+            () => socket.join(room)
+          )
+        } catch (err) {
+          app.log.warn({ err, topic: spec.topic }, 'ops:join check failed')
+        }
+      })
+    )
+    socket.on('ops:leave', (payload: { topic?: string }) => {
+      const spec = opsTopicGate(payload?.topic)
+      if (!spec) return
+      if (!process.env.CLOUD_META_DB_URL) {
+        // Self-hosted: no await, so a quick join + leave keeps its order.
+        watchGate.leave(`ops:${spec.topic}`, () => socket.leave(opsRoom(spec.topic, '')))
+        return
+      }
+      void opsRoomOf(spec.topic).then((room) => {
+        if (room) watchGate.leave(`ops:${spec.topic}`, () => socket.leave(room))
+      })
     })
     // ── Record presence v2 — viewer avatars + field editing indicators ──────
     // Room per record; viewer lists live in a module-level map (single-node
