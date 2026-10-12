@@ -35,6 +35,7 @@ import { playNotificationSound } from '../lib/notification-sound'
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
+import { AiMemoryCard } from './profile/AiMemoryCard'
 import { BrowserPushCard } from './profile/BrowserPushCard'
 import { DelegationCard } from './profile/DelegationCard'
 import { MailSuppressedPill } from './profile/MailSuppressedPill'
@@ -1884,6 +1885,7 @@ function OwnProfile({
           <TimezoneCard />
           <DisplayPrefsCard />
           <LinkAppCard />
+          <AiMemoryCard />
           {/* An admin may set their OWN restrictions too — the self-serve card
               only edits defaults, so without this an admin's own row could be
               changed from nowhere in the UI. */}

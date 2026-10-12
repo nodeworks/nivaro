@@ -1494,16 +1494,20 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { messages, fresh } = req.body as {
+    const { messages, fresh, conversation_id, save } = req.body as {
       messages?: Array<{ role: string; content: string }>
       fresh?: boolean
       /** #688 — deliver the answer as it is written (socket or SSE). */
       stream?: boolean
+      /** #1833 — continue this stored conversation (history comes from it). */
+      conversation_id?: string
+      /** #1833 — start a stored conversation with this question. */
+      save?: boolean
     }
     if (!Array.isArray(messages) || messages.length === 0) {
       return reply.code(400).send({ error: 'messages array is required' })
     }
-    const history = messages
+    let history = messages
       .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
       .slice(-20)
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 4000) }))
@@ -1511,15 +1515,60 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(400).send({ error: 'last message must be from the user' })
     }
 
+    // #1833 / #1809 — a stored conversation: the history is the server's copy
+    // as THIS asker may read it (never what the client sent), and both turns
+    // are kept. Without conversation_id / save the route is unchanged.
+    const { openConversationTurn } = await import('../services/ai-conversation-turn.js')
+    const turnOpen = await openConversationTurn(app, req.user!, {
+      conversationId: conversation_id,
+      save,
+      question: history[history.length - 1].content
+    })
+    if (turnOpen && 'error' in turnOpen) {
+      return reply.code(turnOpen.status).send({ error: turnOpen.error })
+    }
+    const turn = turnOpen
+    if (turn) {
+      // The stored history alternates user/assistant from a user turn, so an
+      // EVEN cut keeps the first message a question.
+      history = [...turn.history.slice(-18), history[history.length - 1]].map((m) => ({
+        role: m.role,
+        content: m.content.slice(0, 4000)
+      }))
+    }
+
+    // #1804 — "remember that …" is kept as a note, not sent to the model.
+    const { addMemoryNote, memoryPromptBlock, parseRememberCommand, readMemory } = await import(
+      '../services/ai-memory.js'
+    )
+    const rememberText = parseRememberCommand(history[history.length - 1].content)
+    if (rememberText) {
+      const { note, dropped, duplicate } = await addMemoryNote(String(req.user!.id), rememberText)
+      const body: Record<string, unknown> = {
+        reply: duplicate
+          ? `I already remember that: “${note.text}”.`
+          : `Got it — I'll remember: “${note.text}”.${dropped ? ` (To make room I forgot the oldest note: “${dropped.text}”.)` : ''} You can see and edit what I remember under Profile → Ask AI memory.`,
+        trace: [],
+        proposals: [],
+        remembered: note,
+        request_id: null,
+        playbooks_used: 0
+      }
+      if (turn) Object.assign(body, await turn.record(body))
+      return reply.send({ data: body })
+    }
+    const memoryBlock = memoryPromptBlock(await readMemory(String(req.user!.id)).catch(() => []))
+
     const { buildChatSystemPrompt } = await import('../services/ai-chat.js')
     // Playbooks: similar past questions + the tool plans that answered them,
     // offered as worked examples. Only the newest user turn is matched.
     const question = history[history.length - 1].content
     const playbooks = await retrievePlaybooks(question)
-    const system = await buildChatSystemPrompt(req.user!, {
-      playbooks: formatPlaybooksForPrompt(playbooks),
-      question
-    })
+    const system =
+      (await buildChatSystemPrompt(req.user!, {
+        playbooks: formatPlaybooksForPrompt(playbooks),
+        question
+      })) + memoryBlock
     const playbooksUsed = playbooks.length
     // `convo` below aliases `history` and grows per round — judge "standalone" now.
     const standalone = history.length === 1
@@ -1557,7 +1606,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         // a cache miss is the normal path
       }
     }
-    if (cachedBody && !mode) return reply.send({ data: cachedBody })
+    if (cachedBody && !mode && !turn) return reply.send({ data: cachedBody })
 
     /** The whole answer: the loop, the playbook, the cache write, the body. */
     const answer = async (delivery: StreamDelivery | null): Promise<Record<string, unknown>> => {
@@ -1659,9 +1708,21 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       }
     }
 
+    /** The answer, kept in the stored conversation when there is one (#1833). */
+    const answerTurn = async (delivery: StreamDelivery | null) => {
+      try {
+        const payload = await answer(delivery)
+        if (turn) Object.assign(payload, await turn.record(payload))
+        return payload
+      } catch (err) {
+        if (turn) await turn.fail()
+        throw err
+      }
+    }
+
     if (!mode) {
       try {
-        return reply.send({ data: await answer(null) })
+        return reply.send({ data: await answerTurn(null) })
       } catch (err) {
         req.log.error({ err }, 'AI chat failed')
         return reply.code(502).send({ error: 'AI request failed' })
@@ -1670,7 +1731,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
     const run = async (d: StreamDelivery) => {
       try {
-        d.done({ data: await answer(d) })
+        d.done({ data: await answerTurn(d) })
       } catch (err) {
         req.log.error({ err }, 'AI chat failed')
         d.error('AI request failed')

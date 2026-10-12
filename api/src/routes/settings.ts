@@ -62,6 +62,7 @@ const allowedSettingsKeys = [
   'ai_gateway_extract_model',
   'ai_models',
   'ai_answer_cache_minutes',
+  'ai_conversation_retention_days',
   'ai_prompt_caching',
   'ai_chat_guide',
   'ai_max_tokens_generate',

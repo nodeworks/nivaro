@@ -720,6 +720,10 @@ export async function buildServer() {
               app.log.warn({ err }, '[retention] integration obligations prune failed')
             )
           await pruneAiCalls().catch(() => 0)
+          // #1833 — Ask AI conversations past ai_conversation_retention_days (pinned kept).
+          await import('./services/ai-conversations.js')
+            .then((m) => m.pruneConversations())
+            .catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
             .del()
