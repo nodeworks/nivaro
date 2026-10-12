@@ -913,7 +913,7 @@ Server listening on http://0.0.0.0:3055</code></pre>
           <!-- SYNC:files -->
           <h1 class="doc-h1" id="files">Files</h1>
           <p class="doc-p">The file manager lets you upload, browse, and delete files. Uploaded files are stored on local disk and metadata is tracked in <code class="doc-code">nivaro_files</code>.</p>
-          <p class="doc-p">The Unused scope lists files no record references (every foreign key into nivaro_files is checked live). "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).</p>
+          <p class="doc-p">The Unused scope lists files nothing uses and that are older than 30 days: no foreign key points at them, and no file field, many-to-many file link, config JSON (pages, widgets, templates, settings), rich text or <code class="doc-code">*file*</code> column names them — the same check Config review uses. The scan is cached for five minutes; if any place a file can be named cannot be read, nothing is listed and the purge deletes nothing. "Delete all unused (N)" removes them 200 per click after an inline confirm — the count says how many remain — and the purge is activity-logged (files-orphans-purge). API: DELETE /api/files/usage/orphans?limit= (#38).</p>
           <p class="doc-p">On a record form every file chip carries a "used in" glyph with a count. Opening it lists what carried that file on this record: the addendum that attached it, the integration push whose payload named it, the email it rode, and the layout that generated it (a PDF stamped generated_by_layout). A match on the file's uuid reads as certain; one found only by its download name — an email body or a push payload that spells out the filename — is marked "by name". A file nothing carried says so. API: POST /api/files/usage/on-record {collection, item, file_ids} (read permission on the record; 200 ids per call).</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Endpoint</th><th>Description</th></tr></thead>
@@ -4164,7 +4164,7 @@ Authorization: Bearer &lt;admin-token&gt;
           <!-- /SYNC:graphql-mutations -->
         </div>
 
-        <div class="doc-section" id="s-graphql-subscriptions" data-toc='[{"id":"graphql-subscriptions","label":"GraphQL Subscriptions"}]'>
+        <div class="doc-section" id="s-graphql-subscriptions" data-toc='[{"id":"graphql-subscriptions","label":"GraphQL Subscriptions"},{"id":"graphql-sse","label":"Subscriptions over Server-Sent Events"},{"id":"graphql-live-queries","label":"Live queries"}]'>
           <!-- SYNC:graphql-subscriptions -->
           <h1 class="doc-h1" id="graphql-subscriptions">GraphQL Subscriptions</h1>
           <p class="doc-p">Nivaro supports GraphQL subscriptions over WebSocket using the <code class="doc-code">graphql-ws</code> protocol. Connect to the dedicated WebSocket endpoint:</p>
@@ -4239,8 +4239,56 @@ const unsub = client.subscribe(
 // Later:
 unsub()</code></pre>
           <h3 class="doc-h3">Authentication</h3>
-          <p class="doc-p">Pass a static token via <code class="doc-code">connectionParams.authorization</code>. The server validates it before allowing subscriptions. Session cookies are not supported on WebSocket — use static tokens.</p>
-          <div class="doc-note">The GraphiQL explorer at <code class="doc-code">GET /api/graphql</code> does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws or a tool like Altair GraphQL Client.</div>
+          <p class="doc-p">Pass a static token via <code class="doc-code">connectionParams.authorization</code>, or a one-shot ticket via <code class="doc-code">connectionParams.ticket</code>. A ticket comes from <code class="doc-code">GET /api/events/ticket</code>, called with any sign-in the HTTP API accepts (session cookie, static token, View-as, or a named API key — whose scopes, row restrictions and depth cap then apply to the connection). A ticket works once and expires after 60 seconds.</p>
+          <p class="doc-p">A connection stays tied to what signed it in. When that sign-in ends — logout, a revoked session or API key, a rotated token, or an account that is no longer active — the connection closes with code 4401 within 30 seconds.</p>
+          <div class="doc-note">The GraphiQL explorer at <code class="doc-code">GET /api/graphql</code> does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws, the SSE endpoint below, or a tool like Altair GraphQL Client.</div>
+          <h2 class="doc-h2" id="graphql-sse">Subscriptions over Server-Sent Events</h2>
+          <p class="doc-p">For clients whose proxies block WebSockets, every subscription (and every live query) is also served over Server-Sent Events at <code class="doc-code">/api/graphql/stream</code>. It uses the graphql-sse "distinct connections" shape: one operation per stream, each result as <code class="doc-code">event: next</code> with the execution result as data, then <code class="doc-code">event: complete</code>. A plain query answers once and completes. Mutations are refused with 405 — send them to <code class="doc-code">POST /api/graphql</code>.</p>
+          <pre class="doc-pre"><code>// fetch-based clients (headers allowed): POST with the usual body
+POST /api/graphql/stream
+Authorization: Bearer nvk_…
+Accept: text/event-stream
+{ "query": "subscription { itemMutated(collection: "orders") { item action changed_fields } }" }
+
+// EventSource (no headers): get a ticket first, then open the stream
+const { data } = await fetch('/api/events/ticket', { credentials: 'include' }).then((r) =&gt; r.json())
+const q = encodeURIComponent('subscription { itemMutated(collection: "orders") { item action } }')
+const es = new EventSource(`/api/graphql/stream?query=${q}&amp;ticket=${data.ticket}`)
+es.addEventListener('next', (e) =&gt; console.log(JSON.parse(e.data)))
+es.addEventListener('complete', () =&gt; es.close())</code></pre>
+          <ul class="doc-ul">
+            <li>Authentication is the HTTP API's own: session cookie, Bearer static token, View-as, or a named API key with its scopes and row restrictions. EventSource cannot send headers, so it uses <code class="doc-code">?ticket=</code> (one-shot, 60 seconds). A long-lived credential never goes in the URL.</li>
+            <li>The same filters and per-subscriber checks as WebSocket apply: the collection read gate, <code class="doc-code">fields</code> / <code class="doc-code">actions</code> narrowing, and workflow / pipeline events built for each subscriber.</li>
+            <li>A comment heartbeat goes out every 25 seconds (<code class="doc-code">GRAPHQL_SSE_HEARTBEAT_MS</code>), and each heartbeat re-checks the sign-in. When it has ended, the stream sends a result with error code <code class="doc-code">SESSION_ENDED</code>, then <code class="doc-code">complete</code>.</li>
+            <li>Resume: <code class="doc-code">itemMutated</code> events carry their event-journal position as the SSE <code class="doc-code">id</code>. Reconnect with <code class="doc-code">Last-Event-ID</code> (EventSource does this by itself) to get the events you missed, replayed through the same filters. When the journal no longer reaches back that far (about 24 hours), the stream sends <code class="doc-code">event: reset</code> — refetch what you show. Workflow and pipeline subscriptions resume live only.</li>
+            <li>Query variables in a GET URL end up in request logs. Use POST for variables that carry anything sensitive.</li>
+          </ul>
+          <h2 class="doc-h2" id="graphql-live-queries">Live queries</h2>
+          <p class="doc-p">Mark a query <code class="doc-code">@live</code> and send it over either subscription transport (graphql-ws or <code class="doc-code">/api/graphql/stream</code>). You get its result at once, then the new result whenever a write changes what it read. <code class="doc-code">POST /api/graphql</code> ignores <code class="doc-code">@live</code> and answers once.</p>
+          <pre class="doc-pre"><code>query OpenOrders @live(throttle: 1000) {
+  orders(filter: { status: { _eq: "open" } }, sort: ["-date_created"], limit: 20) {
+    id
+    status
+    customer { name }
+  }
+  orders_metadata(filter: { status: { _eq: "open" } }) { total }
+}
+
+// next → { "data": { … }, "extensions": { "live": { "revision": 1 } } }
+// next → { "data": { … }, "extensions": { "live": { "revision": 2 } } }   after a matching write</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>What the query read</th><th>Re-runs on</th></tr></thead>
+            <tbody><tr><tr><td>A list (root list, nested to-many, <code class="doc-code">_metadata</code>, <code class="doc-code">_aggregated</code>, M2M / M2A links)</td><td>Any create, update or delete in that collection — a new or changed row may join the list.</td></tr>
+              <tr><td>A collection named in a <code class="doc-code">filter</code> (through a relation)</td><td>Any write in that collection.</td></tr>
+              <tr><td>A single record (<code class="doc-code">_by_id</code>, a nested many-to-one)</td><td>A write to a record the result held, or to the id the query asked for.</td></tr></tr></tbody>
+          </table></div>
+          <ul class="doc-ul">
+            <li>Every re-run runs as you, never as the person who wrote: your role, row filters, user scopes and API key scopes apply each time, read fresh. If you lose access, the next result carries the errors your query now gets, with no data. If your sign-in ends, you get <code class="doc-code">SESSION_ENDED</code> and the live query completes.</li>
+            <li>Re-runs are throttled (<code class="doc-code">@live(throttle: ms)</code>, 100–60000, default 500) and a burst of writes collapses into one re-run. A result identical to the last one is not sent again.</li>
+            <li>Writes made by raw SQL produce no event, so they show up only on the next re-run something else triggers. A sort on a related record's field re-sorts only when the sorted collection itself changes.</li>
+            <li>Limits: 10 open live queries per person (<code class="doc-code">LIVE_QUERY_MAX_PER_USER</code>) and 500 per server (<code class="doc-code">LIVE_QUERY_MAX</code>). A query over the limit gets one result with error code <code class="doc-code">LIVE_QUERY_LIMIT</code>. The query cost limits (<code class="doc-code">GRAPHQL_MAX_SELECTIONS</code>, <code class="doc-code">GRAPHQL_MAX_DEPTH</code>, an API key's own depth cap) apply as on <code class="doc-code">POST /api/graphql</code>.</li>
+            <li>In multi-tenant hosting a live query hears its own tenant's writes only.</li>
+          </ul>
           <!-- /SYNC:graphql-subscriptions -->
         </div>
 
@@ -5204,8 +5252,61 @@ function AutoForm() {
           <!-- /SYNC:sdk-react-layout -->
         </div>
 
-        <div class="doc-section" id="s-sdk-react-live" data-toc='[]'>
+        <div class="doc-section" id="s-sdk-react-live" data-toc='[{"id":"sdk-react-live","label":"SDK — React Live Data (@nivaro/react)"},{"id":"sdk-react-live-adapter","label":"Connect the socket once"},{"id":"sdk-react-live-record","label":"useLiveRecord"},{"id":"sdk-react-live-list","label":"useLiveList"}]'>
           <!-- SYNC:sdk-react-live -->
+          <h1 class="doc-h1" id="sdk-react-live">SDK — React Live Data (@nivaro/react)</h1>
+          <p class="doc-p"><code class="doc-code">useLiveRecord</code> and <code class="doc-code">useLiveList</code> are react-query reads that stay current. When the host mounts a realtime adapter, other people's writes are patched into the cached data in place; without one (or while the socket reconnects) the read polls instead. Nothing to wire by hand: no socket events, no invalidation.</p>
+          <h2 class="doc-h2" id="sdk-react-live-adapter">Connect the socket once</h2>
+          <p class="doc-p"><code class="doc-code">createSocketRealtime</code> turns the Socket.io connection your app already holds into the adapter every live surface reads (<code class="doc-code">RealtimeContext</code>). Your app keeps owning the socket: it connects, sends <code class="doc-code">auth {token}</code> and its <code class="doc-code">client:hello</code>. The adapter joins and leaves collection rooms, admin watch rooms and live operations topics (reference counted), joins them again after every reconnect, replays missed events, and raises the same window events the admin app does (<code class="doc-code">nvr:catchup-full</code>, <code class="doc-code">nvr:access-changed</code>, <code class="doc-code">nvr:config-update</code>, <code class="doc-code">nvr:force-refresh</code>).</p>
+          <pre class="doc-pre"><code>import { io } from 'socket.io-client'
+import { createSocketRealtime, RealtimeContext } from '@nivaro/react'
+
+const socket = io(API_URL, { transports: ['websocket', 'polling'], withCredentials: true })
+socket.on('connect', async () =&gt; socket.emit('auth', { token: await wsToken() }))
+
+// Once, at module level — the adapter is shared by every component.
+const realtime = createSocketRealtime({ socket })
+
+&lt;NivaroProvider client={client}&gt;
+  &lt;RealtimeContext.Provider value={realtime}&gt;
+    &lt;App /&gt;
+  &lt;/RealtimeContext.Provider&gt;
+&lt;/NivaroProvider&gt;</code></pre>
+          <div class="doc-note">Shared components (My Work, Notes, tasks, record pages, collection lists, queues) read the same context, so mounting the adapter makes them live too. Set <code class="doc-code">windowEvents: { forceRefresh: false }</code> (or another key) when your app already raises that window event itself.</div>
+          <h2 class="doc-h2" id="sdk-react-live-record">useLiveRecord</h2>
+          <pre class="doc-pre"><code>const { data: order, deleted, live, isLoading } = useLiveRecord('orders', id, {
+  fields: ['title', 'status', 'customer.name']
+})
+if (deleted) return &lt;p&gt;This order was deleted.&lt;/p&gt;</code></pre>
+          <p class="doc-p">With an explicit <code class="doc-code">fields</code> list a change re-reads only the requested fields it touched (<code class="doc-code">customer</code> changed → <code class="doc-code">customer.name</code> is read again) and merges them into the cached record; a change to a field you did not ask for costs no request. Without <code class="doc-code">fields</code> the whole record is re-read, because a virtual computed field may depend on any column. <code class="doc-code">data</code> is null when the record does not exist or the viewer cannot read it.</p>
+          <h2 class="doc-h2" id="sdk-react-live-list">useLiveList</h2>
+          <pre class="doc-pre"><code>const { data: page, live } = useLiveList('orders', {
+  filter: { status: { _eq: 'open' } },
+  sort: ['-created_at'],
+  fields: ['title', 'status'],
+  limit: 25
+})</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Someone else…</th><th>What the list does</th></tr></thead>
+            <tbody><tr><tr><td>changes a row on the page</td><td>Re-reads that row as the viewer under the list's own filter and search, and patches it in place.</td></tr>
+              <tr><td>changes a row so it no longer matches</td><td>The re-read returns nothing, so the row leaves (a paged list refetches to fill the gap).</td></tr>
+              <tr><td>creates or changes a record so it now matches</td><td>Refetches the page quietly; where it belongs in the sort order is the server's to decide.</td></tr>
+              <tr><td>changes a sort field of a row on the page</td><td>Refetches the page (the order may have moved).</td></tr>
+              <tr><td>deletes a row on the page</td><td>Drops it from the cached page.</td></tr>
+              <tr><td>runs a bulk or raw write</td><td>Refetches the page quietly.</td></tr>
+              <tr><td>changes a record the filter cannot see</td><td>Nothing: an update that touches no field the filter reads cannot bring a record in.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Option</th><th>Default</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>enabled</td><td>true</td><td>Pause the read and the live feed.</td></tr>
+              <tr><td>pollMs</td><td>30000</td><td>Poll interval while there is no live socket (0 = never).</td></tr>
+              <tr><td>safetyPollMs</td><td>none</td><td>A slow poll while the socket is live.</td></tr>
+              <tr><td>debounceMs</td><td>250</td><td>Events inside this window are handled as one patch.</td></tr>
+              <tr><td>includeOwn</td><td>false</td><td>Also react to this tab's own writes (a save never echoes back by default).</td></tr>
+              <tr><td>fields (useLiveRecord)</td><td>all</td><td>Fields to read; enables the partial re-read.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">The socket only says THAT a record changed (its id, the action and the changed field names). Values always come from a fresh read through the viewer's own permission-checked <code class="doc-code">/items</code> route, so row filters, User Scopes and field policies apply exactly as on the first load. A list read always carries <code class="doc-code">id</code> (it is added to an explicit <code class="doc-code">fields</code> list) so rows can be matched to events. Changes to a related record (a filter on <code class="doc-code">customer.region</code>) do not reach a list of orders; pass <code class="doc-code">safetyPollMs</code> when that matters.</div>
+          <p class="doc-p">Query keys are <code class="doc-code">liveRecordKey(collection, id, fields)</code> and <code class="doc-code">liveListKey(collection, query)</code> — invalidate them yourself after a write if you set <code class="doc-code">includeOwn: false</code> and want the list re-sorted at once.</p>
           <!-- /SYNC:sdk-react-live -->
         </div>
 
@@ -8064,6 +8165,8 @@ ctx.storage.setActive('s3');</code></pre>
             <li>Every answer shows the tool trace: exactly which queries produced it.</li>
             <li>A breakdown or a series (per state, per month, per vendor) comes with a chart: the model attaches a fenced <code class="doc-code">chart</code> block ({type, title, data:[{label, value}]}) that renders as a bar, line or pie under the prose.</li>
             <li>The same standalone question by the same person inside the answer-cache window (Settings → AI Features, default 15 minutes) answers from cache — the page says when it was first answered and offers "Ask again". Answers that propose an action are never cached; <code class="doc-code">fresh: true</code> in the request skips the cache.</li>
+            <li>Under a single number (an ungrouped count, sum, average, minimum or maximum) the page offers "Tell me when this goes over…": pick a threshold (goes over, reaches, drops under, falls to) or a trend watch (alerts when the series changes direction or moves outside its recent range, using the anomaly engine statistics), and how often to check (daily or hourly). The watch is re-read hourly AS YOU, so permissions and row-level security apply; you get an in-app notification when it crosses (once per crossing, not every check). "Numbers you watch" at the top of /ask lists each with its current value, change today, threshold and last alert — edit the threshold, pause or stop watching. Watches live in your own account preferences (20 at most) via <code class="doc-code">GET/POST/PATCH/DELETE /api/ai/watches</code> (<code class="doc-code">POST /:id/check</code> reads one now), and appear in your daily summary with the change since yesterday and whether they are close to the threshold. Ask "what am I watching" to have the assistant list them (my_watches).</li>
+            <li>The past_state tool reads revision and pipeline history under the same read gates as the revision API: "what did this record look like on March 1" (as_of), "when did the amount change and who changed it" (changes), "how long was it in Finance Review" (time_in_state).</li>
             <li>Uses the chat model from Settings → AI Features → Model per feature; a model the gateway refuses falls back to the default model.</li>
             <li>Answers stream as they are written: send <code class="doc-code">stream: true</code> and the route answers <code class="doc-code">202 {data: {stream_id}}</code> at once, then emits <code class="doc-code">ai:delta</code> (text, with its round), <code class="doc-code">ai:status</code> (the tool running), <code class="doc-code">ai:done</code> (the full normal body — proposals, trace, request_id) and <code class="doc-code">ai:error</code> to your Socket.io user room; add <code class="doc-code">Accept: text/event-stream</code> to get the same events as SSE instead (widgets, hosts without the socket). A caller with neither gets the plain reply. <code class="doc-code">POST /api/ai/chat/:stream_id/stop</code> halts a running answer. /summarize and /generate take the same <code class="doc-code">stream</code> option with text deltas only. The /ask page streams by default, shows what the model is doing while tools run, and has a Stop button.</li>
           </ul>
@@ -8106,14 +8209,96 @@ GET    /api/ai-knowledge/docs-search?q=           (signed in)</code></pre>
         <div class="doc-section" id="s-ai-conversations" data-toc='[{"id":"ai-conversations","label":"Ask AI history &amp; sharing"},{"id":"ai-conversations-history","label":"History, pins and retention"},{"id":"ai-conversations-opt-out","label":"Don’t save my questions"},{"id":"ai-conversations-memory","label":"Ask AI memory"},{"id":"ai-conversations-sharing","label":"Sharing a conversation"},{"id":"ai-conversations-branch","label":"Branching"},{"id":"ai-conversations-chat","label":"Posting to chat"},{"id":"ai-conversations-export","label":"Export and formats"},{"id":"ai-conversations-api","label":"API"}]'>
           <!-- SYNC:ai-conversations -->
           <h1 class="doc-h1" id="ai-conversations">Ask AI history &amp; sharing</h1>
-          <p class="doc-p">Every Ask AI conversation is kept for the person who started it — questions, answers, the tool calls behind them and proposal outcomes — listed newest first with search and pins, resumable, shareable with colleagues (each person's questions run with their own access, and an answer is shown to someone else only when it re-runs to the same result with theirs), branchable from an edited question, postable to chat as a card, and exportable as CSV or Excel re-run as the reader. Run <code class="doc-code">pnpm sync-docs</code> to fill this section from the admin docs.</p>
+          <p class="doc-p">Every Ask AI conversation is kept for the person who started it: each question, the answer, the tool calls behind it and any action it proposed (with that proposal’s outcome, read live). The History list beside the chat shows them newest first, pinned ones on top, and searches titles and text. Opening one resumes it — the next question goes to the model with the whole thread. The AI call log stays the administrator’s record; this history is the person’s own, and administrators get no view into it.</p>
+          <h2 class="doc-h2" id="ai-conversations-history">History, pins and retention</h2>
+          <ul class="doc-ul">
+            <li>Pin a conversation from the list or the page header; pins sort first and are never pruned.</li>
+            <li>Delete removes the conversation and everything in it. Someone it was shared with can remove it from their own list instead. Deleting a single message deletes your own; the owner removing someone else’s message only empties it — it stays a withheld turn, so later answers that may repeat it stay withheld too.</li>
+            <li>Settings → AI Features → Ask AI conversation history: how many days an untouched conversation is kept (blank = 180, 0 = forever). The nightly retention job prunes the rest, except conversations any participant has pinned.</li>
+          </ul>
+          <h2 class="doc-h2" id="ai-conversations-opt-out">Don’t save my questions</h2>
+          <p class="doc-p">Each person can turn Ask AI history off — Profile → Ask AI history, or the switch at the top of the History list on the Ask page. From then on nothing they ask is stored as a conversation: answers still work live (the thread lives in the open page only), but there is no History entry, and Share, Post to chat, Branch, export and saved plan cards are unavailable because they need a saved conversation. A saved conversation opened while history is off is read-only. Turning it on offers a separate “Also delete my saved conversations” — it deletes only the conversations that person started (with their shares to other people); conversations others shared with them stay.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Still kept while history is off</th><th>What and for how long</th></tr></thead>
+            <tbody><tr><tr><td>Ask AI memory notes</td><td>Only the notes the person explicitly saved; they edit or delete them on Profile.</td></tr>
+              <tr><td>Thumbs up/down</td><td>Only when the person chooses to give one: the rating and any comment they type, kept in the AI feedback table.</td></tr>
+              <tr><td>AI call log (administrators)</td><td>One row per model call with tokens, cost, latency and capped copies of the request and response — which include the question — pruned after 30 days. Visible to administrators in AI analytics. Unchanged by this switch.</td></tr>
+              <tr><td>Activity log</td><td>An <code class="doc-code">ai-chat</code> entry per question with the number of tool calls — no question text.</td></tr>
+              <tr><td>Answer cache</td><td>The same standalone question by the same person answers from a per-person Redis cache for the configured window (default 15 minutes), then expires.</td></tr>
+              <tr><td>Not kept</td><td>The conversation itself, and the shared playbook of worked examples (a question asked with history off never becomes one).</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="ai-conversations-memory">Ask AI memory</h2>
+          <p class="doc-p">Say “remember that amounts are in thousands” (or “remember: I work Zone 3 inventory requests”) and Ask AI keeps the note instead of answering. Notes ride every later question as context about you. Profile → Ask AI memory lists them for editing or deleting. At most 20 notes of 300 characters; when the list is full a new note is refused — nothing is ever dropped to make room — and the answer links to Profile → Ask AI memory to remove one first. Notes are stored in your preferences and never grant access to anything. Nobody else writes them — administrators included: they are left out of user reads, lists and revisions, and an administrator’s edit of your preferences keeps your notes as they were.</p>
+          <p class="doc-p">Remember this? When a question shows a lasting preference (“by my zone I mean Zone 3”, “show amounts in thousands”), Ask AI may offer a note under its answer. Nothing is kept unless you click Remember; “Not now” hides the offer. Offers are only ever shown to the person who asked — never to someone a conversation is shared with — and are never offered for one-off facts, record values, other people or anything that reads as an instruction to Ask AI (“call…”, “ignore…”, “always run…”). The offer says plainly that the note is added to every future question. With Ask AI history off, offers still appear and Remember keeps only the note. At most two per answer, none once your memory is full (a click on a full list is refused the same way, with a link to Profile).</p>
+          <p class="doc-p">Administrators can view and clear a person’s notes for a support or compliance request: People → the person → Admin tools → Ask AI memory. The notes stay hidden until Show notes; each view and each clear (one note or all) is written to the activity log as <code class="doc-code">ai-memory-view</code> / <code class="doc-code">ai-memory-clear</code> with counts only. Administrators can remove notes but never add or reword them.</p>
+          <h2 class="doc-h2" id="ai-conversations-sharing">Sharing a conversation</h2>
+          <p class="doc-p">The owner shares a conversation with colleagues (Share in the header). They are notified, see it in their History, can read it and can ask follow-ups in the same thread; a new question or answer appears for everyone who has it open. Each person’s questions run with their own permissions.</p>
+          <p class="doc-p">An answer is shown to someone other than the person it was asked for only when it is safe to: it made at least one data call, every call is a plain read (not saved SQL, not an action proposal) that did not error, re-running each one with the reader’s access returns exactly what the model saw, and every earlier answer in the thread is readable by the reader too (the model saw those answers and may repeat them). Otherwise — including an answer with no data calls, or data that has changed since — the answer is withheld from that reader with an “Ask it with my access” button. Opening a thread re-checks at most 10 calls; anything past that is withheld until asked again. A follow-up asked by the reader is built only from the turns they may read.</p>
+          <div class="doc-note">Answers do not stream token by token to other participants: until the answer is checked against their access, nobody else sees its text. They see the question arrive and the answer appear once it is finished and checked.</div>
+          <h2 class="doc-h2" id="ai-conversations-branch">Branching</h2>
+          <p class="doc-p">Hover an earlier question and choose Edit to ask a different version of it. The answer continues in a new conversation (a branch) that holds everything before the edited question as you could read it — an answer withheld from you is copied as an empty placeholder that still counts as withheld; the original thread stays as it was. History nests branches under their source, and the conversation page links between them.</p>
+          <h2 class="doc-h2" id="ai-conversations-chat">Posting to chat</h2>
+          <p class="doc-p">The owner can Post to chat: it sends the conversation to a channel, direct message or record room as a card: the question, a short answer and an Open link. The card is built for each reader — the short answer appears only when the sharing rule above admits them; otherwise it says the answer was given with the poster’s access. Anyone who can read the room can open the conversation and ask follow-ups with their own access.</p>
+          <h2 class="doc-h2" id="ai-conversations-export">Export and formats</h2>
+          <ul class="doc-ul">
+            <li>An answer built from a query offers CSV and Excel. The download re-runs the query with your access today — it never copies the answer’s text — and is named after the question and the time.</li>
+            <li>A table, chart or “label: value” list in an answer has a Table · Chart · List switch. The other formats are drawn from the same rows, with no new question and no model call. A chart needs a column of numbers.</li>
+          </ul>
+          <h2 class="doc-h2" id="ai-conversations-api">API</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>POST /api/ai/chat { messages, save: true }</td><td>Ask and start a stored conversation. The answer carries <code class="doc-code">conversation_id</code>.</td></tr>
+              <tr><td>POST /api/ai/chat { messages, conversation_id }</td><td>Ask inside a conversation. The server builds the history from the turns the caller may read; only the newest question in <code class="doc-code">messages</code> is used.</td></tr>
+              <tr><td>POST /api/ai/memory { text }</td><td>Keep a note the answer offered (<code class="doc-code">memory_suggestions</code> on the answer) in the caller’s own memory. 409 when the memory is full.</td></tr>
+              <tr><td>GET /api/users/:id/ai-memory</td><td>Administrators: a person’s notes. Logged as <code class="doc-code">ai-memory-view</code>.</td></tr>
+              <tr><td>DELETE /api/users/:id/ai-memory[/:noteId]</td><td>Administrators: clear all notes, or one. Logged as <code class="doc-code">ai-memory-clear</code>.</td></tr>
+              <tr><td>GET /api/ai/conversations?q=&amp;pinned=1</td><td>Mine and shared with me, newest first.</td></tr>
+              <tr><td>GET /api/ai/conversations/:id</td><td>The thread as the caller may read it (<code class="doc-code">visible: false</code> = withheld), shares (owner only), branches, parent.</td></tr>
+              <tr><td>PATCH /api/ai/conversations/:id { title?, pinned? }</td><td>Rename (owner) or pin (each person their own).</td></tr>
+              <tr><td>DELETE /api/ai/conversations/:id</td><td>Owner: delete. Shared: remove from my list.</td></tr>
+              <tr><td>DELETE /api/ai/conversations/mine</td><td>Delete every conversation the caller started (with its shares). PATCH /api/users/me/preferences { ai_history_off: true | null } is the opt-out; with it on, <code class="doc-code">save</code> is ignored and <code class="doc-code">conversation_id</code> answers 409.</td></tr>
+              <tr><td>POST /api/ai/conversations/:id/shares { user_ids }</td><td>Owner shares with people (notifies them).</td></tr>
+              <tr><td>DELETE /api/ai/conversations/:id/shares/:shareId</td><td>Owner stops sharing.</td></tr>
+              <tr><td>POST /api/ai/conversations/:id/branch { message_id, question }</td><td>New conversation holding the turns before that question; ask <code class="doc-code">question</code> in it next.</td></tr>
+              <tr><td>POST /api/ai/conversations/:id/post { room, note? }</td><td>Owner only: post to a chat room they can see.</td></tr>
+              <tr><td>GET /api/ai/conversations/:id/messages/:mid/export?format=csv|xlsx&amp;step=</td><td>The rows behind an answer, re-run as the caller.</td></tr>
+              <tr><td>DELETE /api/ai/conversations/:id/messages/:mid</td><td>Remove one message (owner, or your own).</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Live updates: participants receive <code class="doc-code">ai:conversation</code> <code class="doc-code">{conversation_id, by, message_id, state: asking|answered|failed}</code> on their user room — ids only; the client refetches and the server filters the answer per reader.</p>
           <!-- /SYNC:ai-conversations -->
         </div>
 
         <div class="doc-section" id="s-ai-panel" data-toc='[{"id":"ai-panel","label":"Ask AI panel shortcuts"},{"id":"ai-panel-starters","label":"Starter questions and follow-ups"},{"id":"ai-panel-slash","label":"Slash commands"},{"id":"ai-panel-choices","label":"Clarifying questions"},{"id":"ai-panel-views","label":"Saved views by name"},{"id":"ai-panel-compare","label":"Comparing"},{"id":"ai-panel-drill","label":"Drilling into a chart"},{"id":"ai-panel-live","label":"Live answers"},{"id":"ai-panel-api","label":"API"}]'>
           <!-- SYNC:ai-panel -->
           <h1 class="doc-h1" id="ai-panel">Ask AI panel shortcuts</h1>
-          <p class="doc-p">Starter questions per page, follow-up chips, slash commands, clarifying pickers, saved views by name, a compare tool, chart drill-down and live answers. Everything runs with your own permissions. Run <code>pnpm sync-docs</code> to render the full section.</p>
+          <p class="doc-p">Everything here runs as you: starter questions name only what you can open, saved views are the ones you can see, and every figure or row is read with your own permissions, row rules and scopes. None of it adds a model call beyond the answer itself.</p>
+          <h2 class="doc-h2" id="ai-panel-starters">Starter questions and follow-ups</h2>
+          <p class="doc-p">The empty chat offers two or three questions fitted to the page it was opened from — “Why is workflows #12 late?” on a record you can open, “Which records in queue 7 breach their SLA today?” on a queue, “What changed since last month?” on a report — plus the examples an administrator wrote into the collection’s data guide. After each answer, three short next questions drawn from what the tools found appear under it; one click asks one. They are written in the same call as the answer.</p>
+          <h2 class="doc-h2" id="ai-panel-slash">Slash commands</h2>
+          <p class="doc-p">Type / in the Ask box to list the commands, then Tab or Enter to pick one.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Command</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>/chart &lt;question&gt;</td><td>Answers with a chart (bar, line or pie) built from the numbers the tools return.</td></tr>
+              <tr><td>/table &lt;question&gt;</td><td>Answers as a table.</td></tr>
+              <tr><td>/explain</td><td>Explains how the last answer was reached: what was read, how the figure was computed, access limits.</td></tr>
+              <tr><td>/steps &lt;question&gt;</td><td>Answers as a short numbered list of steps.</td></tr>
+              <tr><td>/export [xlsx]</td><td>Downloads the last answer’s rows as CSV (or Excel), re-run with your access.</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="ai-panel-choices">Clarifying questions</h2>
+          <p class="doc-p">When a question is genuinely ambiguous (“which zone?”, “this year or the funding year?”) and no sensible default exists, the answer asks with clickable options instead of guessing: the distinct values of a column, matching records you can read, or short interpretations. Picking one continues the same conversation. Answers that ask a question are never cached or shared as replayable.</p>
+          <h2 class="doc-h2" id="ai-panel-views">Saved views by name</h2>
+          <p class="doc-p">Say “my late IRs view” and Ask AI resolves it to a saved view you can see — your own, ones shared with everyone, and ones shared with your role. The view’s filter is checked against the fields you may read (a view that filters on a hidden field is refused, not trimmed) and its rows are read as you. The filter can then be extended or grouped by a follow-up question.</p>
+          <h2 class="doc-h2" id="ai-panel-compare">Comparing</h2>
+          <p class="doc-p">Ask for “Q1 vs Q2 spend by zone”, “this year vs last year” or “compare these two requests”. The compare tool runs the same guarded aggregate over both sets and returns values with deltas (B minus A, and percent), or lays two to four records side by side with the differing fields first. Fields you cannot read are never shown.</p>
+          <h2 class="doc-h2" id="ai-panel-drill">Drilling into a chart</h2>
+          <p class="doc-p">Click a bar, point or slice of a chart answer to open the rows behind it in a sheet. The grouping is re-run as you and matched to the point you clicked; Open as list takes you to the collection filtered to exactly those records (up to 500).</p>
+          <h2 class="doc-h2" id="ai-panel-live">Live answers</h2>
+          <p class="doc-p">A number or chart answer that was built only from counts and sums stays current while you leave it open: when records in its collection change, the same aggregate is re-run as you (debounced, no model call) and the fresh figure appears under the answer, marked “updated …”. Updates stop while the tab is hidden and when you pause or close the answer. Only the newest two such answers refresh.</p>
+          <h2 class="doc-h2" id="ai-panel-api">API</h2>
+          <pre class="doc-pre"><code>GET  /api/ai/starters?page=&amp;collection=&amp;id=     (signed in) starter questions for a screen
+POST /api/ai/chat                               body.command = chart | table | explain | steps
+POST /api/ai/chart-drill {collection, group_by, filter?, label}   (signed in) rows behind a chart point
+POST /api/ai/live-answer {input: {collection, op, field?, group_by?, filter?}}   (signed in) re-run one aggregate</code></pre>
           <!-- /SYNC:ai-panel -->
         </div>
 
@@ -8136,7 +8321,7 @@ row security, computed fields and activity logging all run.</code></pre>
           <!-- /SYNC:ai-actions -->
         </div>
 
-        <div class="doc-section" id="s-ai-plans" data-toc='[{"id":"ai-plans","label":"Multi-step Plans"},{"id":"ai-plans-api","label":"API"}]'>
+        <div class="doc-section" id="s-ai-plans" data-toc='[{"id":"ai-plans","label":"Multi-step Plans"},{"id":"ai-plans-api","label":"API"},{"id":"ai-plans-impact","label":"Impact and change report"},{"id":"ai-plans-later","label":"Run later"},{"id":"ai-plans-history","label":"Plan history, undo and templates"}]'>
           <!-- SYNC:ai-plans -->
           <h1 class="doc-h1" id="ai-plans">Multi-step Plans</h1>
           <p class="doc-p">A request that needs several changes together — "close out the lines on these 12 POs and tell their owners" — comes back from Ask AI as one numbered plan instead of separate proposals. Each step carries its own preview, built as you when the plan is proposed; nothing runs until you approve.</p>
@@ -8157,6 +8342,29 @@ POST /api/ai/plans/:id/run        {mode: "all" | "next"} → 202; steps run in t
 POST /api/ai/plans/:id/retry      re-check the failed + remaining steps → status paused
 POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its next step</code></pre>
           <p class="doc-p">The chat answer carries proposed plans in <code class="doc-code">plans</code> next to <code class="doc-code">proposals</code>. Progress is pushed to your Socket.io user room as <code class="doc-code">ai:plan</code> ({plan_id, status, records_changed, step, plan}); <code class="doc-code">ai:status</code> events of a streamed answer now also arrive with <code class="doc-code">done: true</code> and a short <code class="doc-code">result</code> when each tool returns. Plans are stored in nivaro_ai_proposals with action_type <code class="doc-code">plan</code>.</p>
+          <h2 class="doc-h2" id="ai-plans-impact">Impact and change report</h2>
+          <p class="doc-p">Every plan card leads with its impact, read off the step previews: "Touches 34 records in 3 collections, messages 12 people, moves 5 records to Approved". "What changes" opens the change report — every field the plan would change (or, for steps that ran, did change), per record, old value → new value — with an Excel download. The report is built for whoever looks at it: a record you cannot read shows as #id with no values, a field you cannot read as (hidden).</p>
+          <h2 class="doc-h2" id="ai-plans-later">Run later</h2>
+          <p class="doc-p">"Run later…" approves the plan for a set time. Each minute the <code class="doc-code">ai-plans-scheduled</code> job picks up the due plans; before running, every pending step is rebuilt as you at that moment. If the records a step would act on changed, or a step no longer builds, nothing runs: the plan comes back to you for approval with the new previews and the reason, and you get a notification. Cancel the schedule from the card to approve it again by hand.</p>
+          <p class="doc-p">When a plan finishes, the person who approved it gets a notification (in-app, plus push or Teams by their own notification rules) with the outcome, the failed step if any, and a link to the plan.</p>
+          <h2 class="doc-h2" id="ai-plans-history">Plan history, undo and templates</h2>
+          <ul class="doc-ul">
+            <li>/ai-plans (Home → AI Plans) lists plans with who approved them and when, their steps, impact and outcome. Everyone sees their own; administrators see every plan.</li>
+            <li>Undo (administrators): a step that wrote records can be reverted record by record, but only where nothing has changed the record since — its newest revision is still the plan's write and every field still holds the value the plan wrote. Records changed since are named and left alone. Messages, chat posts, flows and tasks cannot be undone.</li>
+            <li>Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a 'Run as' person named on the operation — never as the flow's author — and refuses without one; that person must be active, and the collection must be named, not templated.</li>
+            <li>Templates: ready-made plans for common chores (close out a record's open lines, reassign a leaver's open records, move old drafts to a status, tell the owners of matching records). Fill in the blanks and the usual plan preview appears; nothing runs until you approve. Administrators add their own (blanks + steps as JSON).</li>
+            <li>Data Integrity: on a run's field + rule filter, "Fix as a plan…" builds the confident fixes for that cluster as a plan, previewed record by record in the change report before approval.</li>
+          </ul>
+          <pre class="doc-pre"><code>GET  /api/ai/plans?scope=mine|all&amp;status=
+GET  /api/ai/plans/:id/changes          (+ /changes.xlsx)
+POST /api/ai/plans/:id/schedule         {"run_at": "2026-10-16T21:00:00Z"}
+POST /api/ai/plans/:id/unschedule
+GET  /api/ai/plans/:id/undo             administrators
+POST /api/ai/plans/:id/undo             {"step_id"?: "…"}  administrators
+POST /api/ai/plans/:id/flow             {"records": "same"|"filter"|"trigger"}  administrators
+GET  /api/ai/plan-templates
+POST /api/ai/plan-templates/propose     {"key": "old-drafts", "values": {…}}
+POST /api/config-conformance/runs/:id/plan  {"field", "rule"}  administrators</code></pre>
           <!-- /SYNC:ai-plans -->
         </div>
 
@@ -8407,10 +8615,34 @@ Authorization: Bearer &lt;token&gt;
           <!-- /SYNC:ai-duplicate-detection -->
         </div>
 
-        <div class="doc-section" id="s-ai-design" data-toc='[{"id":"ai-design","label":"AI design helpers"}]'>
+        <div class="doc-section" id="s-ai-design" data-toc='[{"id":"ai-design","label":"AI design helpers"},{"id":"ai-design-layout-review","label":"Layout review"},{"id":"ai-design-help-text","label":"Field help text drafts"},{"id":"ai-design-role","label":"Design a role from a description"},{"id":"ai-design-role-views","label":"Suggested views per role"}]'>
           <!-- SYNC:ai-design -->
           <h1 class="doc-h1" id="ai-design">AI design helpers</h1>
-          <p class="doc-p">Admin-only helpers that propose configuration and never write it on their own: a layout review, field help text drafts, a role designed from a sentence, and saved views suggested per role. Run <code class="doc-code">pnpm sync-docs</code> to fill this section from the admin docs.</p>
+          <p class="doc-p">Four admin-only helpers that propose configuration and never write it on their own: a layout review, field help text drafts, a role designed from a sentence, and saved views suggested per role. Each suggestion is applied one at a time by an admin, is logged, and can be undone.</p>
+          <h2 class="doc-h2" id="ai-design-layout-review">Layout review</h2>
+          <p class="doc-p">Layout editor → settings rail → **Review this layout**. Rule checks run first and are counted, never guessed: a step with more than 15 fields or a section with more than 12, a required field inside a section that starts collapsed, a required field the layout hides, required or rule-bound fields with no help text, two fields with the same label, and empty sections. When AI is set up, the model adds unclear labels (with a better one) and help text for the fields that need it. Every field it names must be on the layout; anything else is dropped.</p>
+          <p class="doc-p">Each finding names the field and, where it can, carries a fix: **Open section**, **Move field** (to the emptiest sibling step or section), **Add help text**, **Rename** or **Show field**. Help text and labels are editable before you apply them and are written as this layout's overrides, so other layouts keep theirs. A layout version is captured before every fix, so the newest fix offers **Undo** and any of them can be rolled back from Version history.</p>
+          <h2 class="doc-h2" id="ai-design-help-text">Field help text drafts</h2>
+          <p class="doc-p">Collection → Settings → **Field help text** lists the visible fields with no help text. **Draft help text** asks the AI for one or two sentences per field, built from its type, choices, validation rules, field rules, cascade parents, relation and formula, plus the collection note and the data guide (Settings → AI Features). Accept, edit or skip each draft. Accepting writes the field's help text; the activity entry (<code class="doc-code">ai-help-text</code>) keeps the previous text.</p>
+          <h2 class="doc-h2" id="ai-design-role">Design a role from a description</h2>
+          <p class="doc-p">Roles → **Design with AI**. Describe the role ("Reads invoices in Zone 3, approves inventory requests, cannot export") and the AI proposes a name, policies with field limits and row filters, pages to switch off, and User Scopes for its members. Every collection, field, row-filter column, page and scope value is checked against this instance; a grant whose field limit or row filter cannot be kept is dropped whole rather than widened, and each drop is listed. The designer never proposes admin access.</p>
+          <p class="doc-p">Edit the change set (remove grants, field limits or page restrictions, rename), then **Run simulator on the edits**: the simulator shows each collection's create/read/update/delete outcome and how many rows a member would see under the read filter. **Create role** is only possible while the simulation matches the proposal — the server checks the simulation's fingerprint. User Scopes belong to people, so creating the role does not apply them: they come back as <code class="doc-code">scopes_to_set_per_member</code> for you to set on each member after adding them.</p>
+          <h2 class="doc-h2" id="ai-design-role-views">Suggested views per role</h2>
+          <p class="doc-p">Roles → a role → **Suggested views** → **Find suggestions**. The API log of the last 14 days shows which filters people applied by hand in collection lists. A filter set counts when two or more members of the role applied it, or one member applied it on three separate days (shown only for roles with three or more members, so one person's filtering is not singled out). Filter sets a shared view visible to that role already holds are left out, as are admin roles. Each suggestion shows the filters, the most used sort, and how many members applied it; the AI names it from field names and operators only (the values people filtered by never leave the instance) and picks columns from the collection's real fields. **Create view** writes a shared saved view scoped to the role.</p>
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>POST /api/ai-design/layouts/:id/review        { ai?: boolean }  → { findings[], ai_used, ai_error, ai_configured }
+POST /api/ai-design/layouts/:id/apply         { fix }           → { applied, undo_version_id }
+GET  /api/ai-design/help-text/:collection                       → { candidates[] }
+POST /api/ai-design/help-text/:collection/draft { fields? }     → { drafts[] }
+POST /api/ai-design/help-text/:collection/apply { field, text } → { field, note, previous }
+POST /api/ai-design/roles/design   { description, ui_routes? }  → { proposal, dropped[], simulation[], hash }
+POST /api/ai-design/roles/simulate { proposal, ui_routes? }     → { proposal, dropped[], simulation[], hash }
+POST /api/ai-design/roles/apply    { proposal, hash }           → 201 { id, name, policies, scopes_to_set_per_member }
+POST /api/ai-design/role-views/suggest { days?, ai? }           → { suggestions[], ai_used, ai_error }
+POST /api/ai-design/role-views/apply { role, collection, name, filters, sort?, columns? } → 201 { id }
+
+All routes require an administrator. Drafting and role design answer 503 when AI is not set up;
+the layout review and view suggestions still run their rule checks without it.</code></pre>
           <!-- /SYNC:ai-design -->
         </div>
 
@@ -14959,7 +15191,7 @@ GET /api/approvals/decisions?instance=X
           <!-- /SYNC:approval-chains -->
         </div>
 
-        <div class="doc-section" id="s-collab-chat" data-toc='[{"id":"collab-chat","label":"Chat &amp; Channels"},{"id":"chat-admin-ui","label":"Chat in the admin UI"},{"id":"chat-edit-delete","label":"Editing and deleting messages"}]'>
+        <div class="doc-section" id="s-collab-chat" data-toc='[{"id":"collab-chat","label":"Chat &amp; Channels"},{"id":"chat-admin-ui","label":"Chat in the admin UI"},{"id":"chat-edit-delete","label":"Editing and deleting messages"},{"id":"collab-chat-polls","label":"Polls, slash commands and search by meaning"},{"id":"collab-chat-assistant","label":"The assistant in rooms"}]'>
           <!-- SYNC:collab-chat -->
           <h1 class="doc-h1" id="collab-chat">Chat &amp; Channels</h1>
           <p class="doc-p">Team chat has four kinds of room, and each decides who can see it differently. Everything goes through <code class="doc-code">/api/chat</code> — the underlying <code class="doc-code">chat_messages</code> collection is deliberately not readable through the items API or GraphQL, because "who may read this row" depends on the room, which a per-collection policy cannot express.</p>
@@ -14989,6 +15221,19 @@ GET /api/approvals/decisions?instance=X
             <li>Deleted messages stop counting: they are excluded from the sidebar’s room previews and from unread counts, so a removed message can’t leave a phantom badge.</li>
           </ul>
           <div class="doc-note">To reach a whole group at once, use @channel in a channel room — it notifies up to 300 members and is limited to the channel’s creator or an admin. Regular @mentions are per-person.</div>
+          <h2 class="doc-h2" id="collab-chat-polls">Polls, slash commands and search by meaning</h2>
+          <p class="doc-p">Type <code class="doc-code">/poll</code> in the composer to ask a room a question: 2–10 options, single or several answers, anonymous votes, and an optional close time. Results update live; when the poll closes (by its author or an admin, or at the close time) a summary line is posted in the room. Anonymous polls show counts only, never who voted.</p>
+          <p class="doc-p">Typing <code class="doc-code">/</code> lists the commands: <code class="doc-code">/task</code> (on the room’s record or for a person), <code class="doc-code">/remind</code>, <code class="doc-code">/poll</code> and <code class="doc-code">/note</code> (on the record) each open a small form above the box. Extensions add their own with <code class="doc-code">ctx.chat.registerCommand({ name, description, run })</code>; they run as the person typing.</p>
+          <p class="doc-p">Chat search also finds messages by meaning, listed after the exact matches and limited to rooms you can see. The room info drawer’s Files and Links tabs are searchable and each link has a Show jump. The @mention picker lists people who are online first.</p>
+          <h2 class="doc-h2" id="collab-chat-assistant">The assistant in rooms</h2>
+          <p class="doc-p">When Settings names a chat assistant (<code class="doc-code">chat_bot_name</code>), mentioning it in any room asks it a question. It answers with the same permission-checked tools as Ask AI, run as the person who asked.</p>
+          <ul class="doc-ul">
+            <li>The answer is written into the room as it arrives. The person who asked gets a Stop button; what arrived before Stop is posted, marked "(stopped)". The socket event is <code class="doc-code">chat:bot-stream</code> (phases start, delta, status, private, end, error), and <code class="doc-code">POST /api/chat/bot/streams/:id/stop</code> stops it. Only the person who asked can stop it.</li>
+            <li>In a record’s room the assistant already knows the record. It reads it as the person asking, and if they cannot read it there is no record context. Its record tools default to that record, so "@assistant what’s blocking this?" needs no id.</li>
+            <li>In a channel, the channel’s name, topic, description and pinned messages are part of the question, so a channel about one program or vendor gets answers about that program or vendor. The assistant treats this text as background, not as instructions. Pinned ops posts are included only in an admin-only ops room.</li>
+            <li>Who sees the answer is decided before any of it is written. The answer is posted in the room only when everyone who can read the room could read everything it used. In a DM, a private channel or a small role channel (up to 20 other people), every tool call is re-run as each reader and must return the same result. In General, open channels, big role channels and record rooms, only reads of the room’s own record can be checked this way: one reader from every role that can read the collection re-runs each read. Anything else, such as lists, totals, saved queries, your own tasks or extension tools, goes privately to the person who asked. That answer is saved in their conversation with the assistant, the bubble in the room shows "Only you can see this", and the room gets a short notice with no data in it.</li>
+          </ul>
+          <div class="doc-note">To keep answers in the room, ask about the record or name the fields you need. A read of a few fields that every role can see passes the check. A read of every field usually does not.</div>
           <!-- /SYNC:collab-chat -->
         </div>
 
@@ -15118,6 +15363,10 @@ GET /api/notifications?lane=attention|critical|needs_you|fyi&amp;category=workfl
           <p class="doc-p">Each inbox row shows small chips per channel: In-app (landed / skipped and why), Push (sent · time / no browser registered / held by quiet hours or the matrix / failed), Email (sent · time / held for your daily summary / off for the category / dropped by mail test mode / no address / failed with the SMTP reason) and SMS. The email chip links to the mail-log row that recorded the send. Hover any chip for the reason — the same reason the test bench simulator would give. The record is written by notifyUser as each channel reports back (<code class="doc-code">delivery</code> on GET /notifications); rows from older writers carry only the in-app chip.</p>
           <h3 class="doc-h3">Replying from the notification</h3>
           <p class="doc-p">A chat mention offers Reply — an inline box that posts straight back into the room. A mention in a record note offers Reply onto the record's thread. A workflow-transition notification offers "Comment on this", which adds a note to the record (the row stays unread; commenting is not acknowledging). Reply actions are server-declared like every inline action (<code class="doc-code">actions[].input</code> names the field the box fills) so hosts stay domain-blind; the normal permissions apply — posting on a record needs create rights on its collection.</p>
+          <h3 class="doc-h3">Notices that need acknowledgement</h3>
+          <p class="doc-p">A flow "Send notification" step (Needs acknowledgement), or an extension passing <code class="doc-code">ack_required: true</code> to <code class="doc-code">notifyUser</code>, marks a notice as needing an explicit Acknowledge. It shows an Acknowledge button in the bell and the notification center, stays pinned above the lists until acknowledged (reading it does not count), reminds by push after 4 hours and tells the recipient's manager after 24 hours. The sender sees who has and has not acknowledged in the Sent view.</p>
+          <h3 class="doc-h3">Keeping the inbox tidy</h3>
+          <p class="doc-p">In the notification center: select rows (or everything matching a filter) to mark read, snooze, archive or open their records in tabs; "Archive everything read and older than N days" in one action, or turn on automatic clean-up. Archived notifications stay searchable under the Archived filter. In Profile &gt; Notification rules: pick a sound per category (or none) on top of the global sound; a card suggests muting categories you mostly never open, with undo; and every rule change shows what last week would have looked like (in-app, push and email counts) replayed through the same delivery decision the sender uses.</p>
           <h3 class="doc-h3">Channel fallback chain (if it stays unread)</h3>
           <p class="doc-p">Snooze: a notification can sleep for an hour, until tomorrow 8am, until next week — or, when it is about a record, until the record changes. "Until the record changes" wakes it the moment someone else writes a field on that record or moves it to another pipeline state (your own edits do not wake it); it returns unread in the inbox and the bell. <code class="doc-code">POST /api/notifications/:id/snooze</code> with <code class="doc-code">{ "until": "&lt;iso&gt;" }</code>, <code class="doc-code">{ "until_change": true }</code>, or <code class="doc-code">{ "until": null }</code> to wake it now.</p>
           <p class="doc-p">Profile → Notification rules → "If it stays unread": per category, how long an in-app notification may sit unread before it climbs to a browser push, then to an email — one notification escalating channels, stopping the moment it is read or snoozed. Each step fires once, and a channel that already delivered the row at send time is not repeated (an email sent immediately is never re-sent as an escalation). Only rows from the last 7 days are considered, so switching the rule on does not replay an old inbox. Runs every 5 minutes (<code class="doc-code">notification-escalation</code> cron); the escalation shows as an extra chip on the row.</p>
@@ -16776,15 +17025,31 @@ scrape_configs:
         <div class="doc-section" id="s-realtime-pipeline" data-toc='[{"id":"realtime-pipeline","label":"Realtime Event Pipeline"},{"id":"realtime-pipeline-journal","label":"Catching up after a long absence"},{"id":"realtime-pipeline-stream","label":"Across servers"},{"id":"realtime-pipeline-raw","label":"Changes made outside the API"},{"id":"realtime-pipeline-probe","label":"Delivery probe"}]'>
           <!-- SYNC:realtime-pipeline -->
           <h1 class="doc-h1" id="realtime-pipeline">Realtime Event Pipeline</h1>
-          <p class="doc-p">When a record changes, open pages hear <code class="doc-code">collection:update</code> with the collection, the record id, the action and the NAMES of the fields written (never a value). Admin → Realtime → Event pipeline shows the counters and the delivery probe.</p>
+          <p class="doc-p">When a record changes, open pages hear <code class="doc-code">collection:update</code> with the collection, the record id, the action and the NAMES of the fields written (never a value). This page covers how those events survive a sleeping laptop, a server that lost Redis for a moment, and writes that bypass the items service. Admin → Realtime → Event pipeline shows the counters and the delivery probe.</p>
           <h2 class="doc-h2" id="realtime-pipeline-journal">Catching up after a long absence</h2>
-          <p class="doc-p">The fast journal in Redis keeps 15 minutes (5,000 events); every event is also written to <code class="doc-code">nivaro_event_journal</code> and kept 24 hours, so a laptop back from a night asleep replays the changes instead of reloading every list.</p>
+          <p class="doc-p">Every event carries a sequence number. A client that reconnects sends the last one it saw and receives what it missed. The fast journal in Redis keeps 15 minutes (5,000 events); every event is also written to <code class="doc-code">nivaro_event_journal</code> and kept 24 hours, so a laptop back from a night asleep replays the changes instead of reloading every list. Past 24 hours, or more than 500 events for the pages it has open, the client reloads as before.</p>
           <h2 class="doc-h2" id="realtime-pipeline-stream">Across servers</h2>
-          <p class="doc-p">Record-change events travel between API servers on a Redis stream, each server reading from its own position, so a server that loses Redis briefly misses nothing. <code class="doc-code">REALTIME_EVENT_STREAM=off</code> restores the Socket.io adapter.</p>
+          <p class="doc-p">With several API servers, record-change events travel between them on a Redis stream (<code class="doc-code">nvr:ev:stream</code>), each server reading from its own position. A server that loses Redis briefly picks up where it stopped, so its users miss nothing. Other socket traffic (presence, chat, notifications) still uses the Socket.io adapter. <code class="doc-code">REALTIME_EVENT_STREAM=off</code> restores the adapter for record changes too.</p>
+          <div class="doc-note">During a rolling deploy from a build without the stream, users connected to an older server miss events from newer servers until that server is replaced; they then catch up from the journal on reconnect.</div>
           <h2 class="doc-h2" id="realtime-pipeline-raw">Changes made outside the API</h2>
-          <p class="doc-p">Procedures and scripts report changed records with <code class="doc-code">EXEC nivaro_announce_writes</code> or an INSERT into <code class="doc-code">nivaro_raw_writes</code>; the API broadcasts them every 5 seconds.</p>
+          <p class="doc-p">Batch edits, imports run by a procedure, stored-rollup recalculations and extensions that run SQL announce the records they changed, so open pages refresh. A stored procedure or an outside script reports its changes by writing to the inbox table <code class="doc-code">nivaro_raw_writes</code>; the API reads it every 5 seconds and broadcasts each change with <code class="doc-code">source: "raw"</code>.</p>
+          <pre class="doc-pre"><code>-- From a stored procedure (SQL Server): comma list of ids, or NULL for "records in this collection changed"
+EXEC nivaro_announce_writes @Collection = 'forecasts', @Ids = '101,102,103',
+  @Action = 'update', @Fields = 'status,amount', @Source = 'procedure:reforecast'
+
+-- Any database: insert rows directly (item NULL = collection-wide)
+INSERT INTO nivaro_raw_writes (collection, item, action, changed_fields, source)
+VALUES ('forecasts', '101', 'update', 'status', 'script:fix-lines')
+
+// From an extension
+await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fields: ['status'] })</code></pre>
+          <ul class="doc-ul">
+            <li>More than 100 records of one collection in one go become a single event with <code class="doc-code">item: "*"</code> and <code class="doc-code">bulk: &lt;count&gt;</code>: lists show the "new changes" pill and open records refetch quietly.</li>
+            <li>Imports run by a procedure announce the collections listed in their "Recalculate rollups" setting.</li>
+            <li>Only names and ids are broadcast. Pages read the new values through /items, where permissions apply.</li>
+          </ul>
           <h2 class="doc-h2" id="realtime-pipeline-probe">Delivery probe</h2>
-          <p class="doc-p">A Realtime delivery monitor sends a probe event through the normal path every 5 minutes and raises an issue when delivery is slow or missing.</p>
+          <p class="doc-p">A Realtime delivery monitor (Monitors → New → Realtime delivery) runs every 5 minutes: a test connection inside the server joins a private room, a probe event goes out through the normal path (journal, durable table, stream) and the monitor records how long it took to arrive. Slower than the limit (default 2,000 ms), never arriving, or arriving without being journaled fails the check and raises an issue. "Run probe now" on the Realtime console runs the same check; the last 50 results from every server are kept.</p>
           <!-- /SYNC:realtime-pipeline -->
         </div>
 
@@ -16803,15 +17068,15 @@ scrape_configs:
           <h2 class="doc-h2" id="realtime-load-test-smoke">Smoke run (shared development database)</h2>
           <p class="doc-p">The development database is shared with staging, so the default mode refuses anything but <code class="doc-code">127.0.0.1:3132</code> and caps a run at 200 sockets, 5 writes per second and 60 seconds. Start a throwaway API on that port with its own Redis channel prefix, and no migrations or crons:</p>
           <pre class="doc-pre"><code>cd api
-          SKIP_BOOT_MIGRATIONS=1 CRON_TICKS=off PORT=3132 REDIS_CHANNEL_PREFIX=lt: npx tsx src/index.ts
-          # in another shell (use the pid of the node process that listens on 3132)
-          cd api &amp;&amp; npx tsx ../scripts/realtime-load-test.mts --api-pid &lt;pid&gt; \
-            --sockets 200 --ramp 8 --rate 5 --duration 40 --out /tmp/rt-load.json</code></pre>
+SKIP_BOOT_MIGRATIONS=1 CRON_TICKS=off PORT=3132 REDIS_CHANNEL_PREFIX=lt: npx tsx src/index.ts
+# in another shell (use the pid of the node process that listens on 3132)
+cd api &amp;&amp; npx tsx ../scripts/realtime-load-test.mts --api-pid &lt;pid&gt; \
+  --sockets 200 --ramp 8 --rate 5 --duration 40 --out /tmp/rt-load.json</code></pre>
           <h2 class="doc-h2" id="realtime-load-test-full">Full scale (dedicated environment only)</h2>
           <p class="doc-p">A real capacity test needs thousands of sockets and a sustained write rate, which belongs on an environment with its own database and Redis, never the shared one and never a deployed host. Run the API there with the production settings you want to size, run the script from a separate machine (one Node process holds a few thousand sockets: raise <code class="doc-code">ulimit -n</code>, and run several copies at once if you need more, adding their results), and lift the smoke limits explicitly:</p>
           <pre class="doc-pre"><code>npx tsx scripts/realtime-load-test.mts --target https://loadtest.internal:3055 \
-            --full-scale --confirm-dedicated loadtest.internal:3055 \
-            --sockets 5000 --ramp 120 --rate 50 --duration 600 --out rt-5000.json</code></pre>
+  --full-scale --confirm-dedicated loadtest.internal:3055 \
+  --sockets 5000 --ramp 120 --rate 50 --duration 600 --out rt-5000.json</code></pre>
           <ul class="doc-ul">
             <li><code class="doc-code">--confirm-dedicated</code> must equal the target host and port; it is the only thing between the script and a database that real people use.</li>
             <li><code class="doc-code">--api-pid</code> only works against a process on the same machine; against a remote API read the process memory from your monitoring and divide by the connected sockets (<code class="doc-code">server_socket_count</code> in the report).</li>
@@ -16820,14 +17085,14 @@ scrape_configs:
           </ul>
           <h2 class="doc-h2" id="realtime-load-test-report">Reading the report</h2>
           <div class="doc-table-wrap"><table class="doc-table">
-          <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
-          <tbody><tr><td>connections</td><td>Clients that signed in, connect time p50/p95/p99, drops and connect errors</td></tr>
-          <tr><td>writes</td><td>Writes sent and failed, HTTP time of the write itself</td></tr>
-          <tr><td>delivery</td><td>Updates received against expected (clients in the collection room times writes), latency per client group, record-signal latency</td></tr>
-          <tr><td>memory</td><td>RSS before and after connecting, in KB per socket</td></tr>
-          <tr><td>redis</td><td>Commands and bytes during the run, stream length before and after</td></tr>
-          <tr><td>stream</td><td>Entries published and delivered, publish failures, delivery lag samples</td></tr>
-          <tr><td>cleanup</td><td>Whether the throwaway table, metadata rows and user are gone</td></tr></tbody>
+            <thead><tr><th>Field</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>connections</td><td>Clients that signed in, connect time p50/p95/p99, drops and connect errors</td></tr>
+              <tr><td>writes</td><td>Writes sent and failed, HTTP time of the write itself</td></tr>
+              <tr><td>delivery</td><td>Updates received against expected (clients in the collection room times writes), latency per client group, record-signal latency</td></tr>
+              <tr><td>memory</td><td>RSS before and after connecting, in KB per socket</td></tr>
+              <tr><td>redis</td><td>Commands and bytes during the run, stream length before and after</td></tr>
+              <tr><td>stream</td><td>Entries published and delivered, publish failures, delivery lag samples</td></tr>
+              <tr><td>cleanup</td><td>Whether the throwaway table, metadata rows and user are gone</td></tr></tr></tbody>
           </table></div>
           <!-- /SYNC:realtime-load-test -->
         </div>
@@ -17034,7 +17299,7 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
           <ul class="doc-ul">
             <li>Log tail — the last 2,000 log lines from this replica, held in memory (nothing is persisted), auto-refreshing every 10 seconds with level filters and a plain-text search. It captures structured logger output; anything printed with bare console.log goes to stdout only and will not appear here.</li>
             <li>Search the tail with a regular expression (the .* toggle, case-insensitive; an invalid pattern falls back to a plain substring match) and bound it with since / until — an ISO datetime, epoch milliseconds, or the relative forms now-15m, now-2h, now-1d (#82).</li>
-            <li>Log alert rules — a rule is a name plus a regular expression (optionally with a minimum level). When a log line matches, an issue is raised in the Issue Log; a 5-minute per-rule cooldown keeps a noisy line from raising the same issue every second. Rules apply as lines arrive, on every replica.</li>
+            <li>Log alert rules — a rule is a name plus a regular expression (optionally with a minimum level). When a log line matches, an issue is raised in the Issue Log; a 5-minute per-rule cooldown keeps a noisy line from raising the same issue every second. Rules apply as lines arrive, on every replica. A rule may also carry a threshold ("10 matches in 15 minutes") and its own cooldown, and a rule saved from Ask the logs can watch the request log instead — see Ops assistant.</li>
             <li>Keep patterns simple: patterns longer than 200 characters, or ones using nested quantifiers (the shapes that can hang a regex engine), are accepted but quietly never match — if a rule seems inert, shorten and simplify its pattern.</li>
             <li>Silent failures — a counter panel for deliberate catch-and-continue sites in the code, showing how often each has fired since this process started. A site firing 50 times in an hour raises an issue on its own.</li>
           </ul>
@@ -17065,9 +17330,35 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
           <!-- /SYNC:ops-console -->
         </div>
 
-        <div class="doc-section" id="s-ops-assistant" data-toc='[{"id":"ops-assistant","label":"Ops assistant"}]'>
+        <div class="doc-section" id="s-ops-assistant" data-toc='[{"id":"ops-assistant","label":"Ops assistant"},{"id":"ops-ask-logs","label":"Ask the logs"},{"id":"ops-log-alerts","label":"Alerts from a question, and suggested alerts"},{"id":"ops-chat-tools","label":"The assistant in an ops channel"},{"id":"ops-incident-threads","label":"Incident mode and incident threads"}]'>
           <!-- SYNC:ops-assistant -->
           <h1 class="doc-h1" id="ops-assistant">Ops assistant</h1>
+          <p class="doc-p">Administrator tools that use AI to read operations data — never to change it on its own. Ask the logs turns a question into the request list’s own filters; log alerts can be saved from a question or accepted from suggestions; in an admin-only chat channel the assistant answers from live operations data and proposes actions as approval cards; incident mode keeps a running thread in the ops channel.</p>
+          <h2 class="doc-h2" id="ops-ask-logs">Ask the logs</h2>
+          <p class="doc-p">On API Analytics and the Ops Console: type "errors for Beth yesterday afternoon" or "who called /items/orders most today". The question becomes the same filter object the request list uses (path, method, status class, caller, auth kind, errors, a time window, or "rank by caller / path"; or level + text over the server log). The filter shows as chips before anything runs — take any chip away. Run reads the normal admin routes (<code class="doc-code">GET /api/api-analytics/requests</code>, which now takes <code class="doc-code">group=caller|path</code> for a top-20 ranking, or <code class="doc-code">GET /api/ops-logs/tail</code>); "Open in the request list" fills the full list below. A person named in the question is matched to accounts on the server; when several match, pick one.</p>
+          <div class="doc-note">What reaches the AI provider: the question (scrubbed of tokens and secrets), the filter’s field names and allowed values, and the current time and your time zone. Never a log line, a path list or a list of people.</div>
+          <pre class="doc-pre"><code>POST /api/ops-logs/ask { "question": "errors for Beth yesterday afternoon" }   (admin)
+→ 200 { "data": { "filter": { "target": "requests", "errors": true, "user": "&lt;id&gt;", "user_label": "Beth Ng", "from": "…", "to": "…" },
+                  "chips": [...], "summary": "…", "person_query": null, "people": [] } }</code></pre>
+          <h2 class="doc-h2" id="ops-log-alerts">Alerts from a question, and suggested alerts</h2>
+          <ul class="doc-ul">
+            <li>"Save as alert" stores the question’s filter as a log alert rule with a threshold, a window and a cooldown ("10 matches in 15 minutes, then quiet for 60"). A request-log rule is checked every 5 minutes (<code class="doc-code">log-alert-requests</code> job) across every server, against its own window — the question’s time words do not carry over; development instances never count. A server-log rule keeps working on each server as lines arrive.</li>
+            <li>Suggested log alerts (Ops Console) lists errors that keep coming back with no rule watching them: failing requests over the last 24 hours that happened in at least two different hours, and error lines in this server’s log seen in at least two different minutes. Each comes with the filter or pattern, a threshold (about twice the busiest quarter-hour) and a cooldown; Accept saves it as shown (origin "suggested"), Dismiss hides it in your browser. No AI is involved.</li>
+            <li>Rules: <code class="doc-code">POST /api/ops-logs/rules { name, pattern?, level?, filters?, threshold?, window_minutes?, cooldown_minutes?, origin? }</code>, <code class="doc-code">PATCH /api/ops-logs/rules/:id { is_active?, threshold?, window_minutes?, cooldown_minutes? }</code>, <code class="doc-code">GET /api/ops-logs/rule-suggestions</code>. Filters, thresholds and cooldowns need migration 442 (409 MIGRATION_PENDING before it).</li>
+          </ul>
+          <h2 class="doc-h2" id="ops-chat-tools">The assistant in an ops channel</h2>
+          <p class="doc-p">In an admin-only channel — a private or admin-role channel whose every member is an active administrator, checked against the database each time a question is asked — an administrator can mention the assistant: "anything failing right now?", "why is the queue slow?". It reads request volume and errors, slow paths, circuit breakers, open issues, running / failed / paused background jobs, recent imports, failed partner pushes and readiness. In any other room, or for anyone who is not an administrator, the tools are not offered and a call is refused.</p>
+          <p class="doc-p">It may propose one action as an approval card: pause a background job, refuse or rate-limit a noisy caller or entity for some minutes (a circuit breaker), retry a failed partner push, or turn incident mode on or off. Nothing runs until an administrator presses Approve. Approval re-checks the approver and runs the action through the same admin route a person would use (<code class="doc-code">/api/cron/:id/pause</code>, <code class="doc-code">/api/traffic-map/breakers</code>, <code class="doc-code">/api/erp-submissions/:id/retry</code>, <code class="doc-code">/api/ops-assistant/incident</code>), as the approver; one decision per card; every proposal, approval and dismissal is logged as activity, and the outcome is posted under the card. People who are not administrators see only a link.</p>
+          <div class="doc-note">What reaches the AI provider from an ops channel: counts, method + path patterns (ids replaced by *), job ids and labels, issue titles, collection names and submission ids, scrubbed of tokens. Never request bodies, record values or people’s names.</div>
+          <h2 class="doc-h2" id="ops-incident-threads">Incident mode and incident threads</h2>
+          <ul class="doc-ul">
+            <li>Pick the ops channel on the Ops Console (it must be admin-only; <code class="doc-code">PUT /api/ops-assistant/channel { room }</code>). If it later stops being admin-only, threads go quiet.</li>
+            <li>The ops channel, and any channel already holding assistant ops posts, only ever gains active administrators: joining, adding, bulk-adding and default-role auto-join refuse anyone else (403 <code class="doc-code">OPS_CHANNEL_ADMINS_ONLY</code>), and the channel cannot be opened to everyone or to a non-admin role. Every assistant ops post is flagged, and message lists, search, mentions, pins, saved messages and room summaries leave flagged posts out for anyone who is not an administrator.</li>
+            <li>Start incident mode from the Ops Console or an approved card (<code class="doc-code">POST /api/ops-assistant/incident { on: true, title }</code>). The assistant opens a thread in the ops channel and, every 2 minutes (<code class="doc-code">ops-incident-updates</code> job), posts what changed: new issues, server errors starting, rising, falling, recovering — plus every approved action. Ending it posts a summary: duration, the 5-minute error peak, issues seen and actions taken.</li>
+            <li>While incident mode is on, every administrator sees a slim banner across the app — "Incident in progress: &lt;title&gt; · started &lt;time&gt; · Open thread" (the ops channel). It appears and clears live: starting or ending sends a payload-free <code class="doc-code">ops:incident</code> notice to the admin-only <code class="doc-code">ops</code> watch room, and the tab re-reads <code class="doc-code">GET /api/ops-assistant/incident</code> (admin-only). Non-administrators never join the room or ask the route, and see nothing.</li>
+            <li>A critical alert (a new critical issue, or a critical integration signal with new rows) opens its own alert thread when no incident is on, feeds the incident thread when one is, and an alert thread closes with a summary after 30 quiet minutes.</li>
+            <li>Threads live in <code class="doc-code">nivaro_ops_incidents</code> (migration 442); <code class="doc-code">GET /api/ops-assistant/incident</code> returns the current one and the last ten.</li>
+          </ul>
           <!-- /SYNC:ops-assistant -->
         </div>
 
@@ -17132,7 +17423,7 @@ GET /api/environments/env-presence         → every registered API, compared</c
           <!-- /SYNC:instance-overrides -->
         </div>
 
-        <div class="doc-section" id="s-mail-harness" data-toc='[{"id":"mail-harness","label":"Mail Templates &amp; Test Harness"},{"id":"mail-harness-types","label":"Registered types"},{"id":"mail-harness-blocks","label":"What the detailed templates carry"},{"id":"mail-harness-why","label":"The \"why me\" footer"},{"id":"mail-harness-branding","label":"Mail branding per workspace"},{"id":"notification-bench","label":"Notification test bench"},{"id":"notification-targets","label":"What a notification click does"},{"id":"delegation-console","label":"Delegation console"},{"id":"notification-templates","label":"In-app notification templates"},{"id":"notification-analytics","label":"Notification analytics"},{"id":"broadcast-receipts","label":"Broadcast receipts by audience"},{"id":"mail-delivery-board","label":"Delivery board"},{"id":"mail-bounces","label":"Bounced addresses"},{"id":"mail-harness-links","label":"Where links land"},{"id":"mail-harness-api","label":"API"}]'>
+        <div class="doc-section" id="s-mail-harness" data-toc='[{"id":"mail-harness","label":"Mail Templates &amp; Test Harness"},{"id":"mail-harness-types","label":"Registered types"},{"id":"mail-harness-blocks","label":"What the detailed templates carry"},{"id":"mail-harness-why","label":"The \"why me\" footer"},{"id":"mail-harness-branding","label":"Mail branding per workspace"},{"id":"notification-bench","label":"Notification test bench"},{"id":"notification-targets","label":"What a notification click does"},{"id":"delegation-console","label":"Delegation console"},{"id":"notification-templates","label":"In-app notification templates"},{"id":"notification-analytics","label":"Notification analytics"},{"id":"broadcast-receipts","label":"Broadcast receipts by audience"},{"id":"broadcast-draft","label":"Draft a broadcast from bullets"},{"id":"mail-delivery-board","label":"Delivery board"},{"id":"mail-bounces","label":"Bounced addresses"},{"id":"mail-harness-links","label":"Where links land"},{"id":"mail-harness-api","label":"API"}]'>
           <!-- SYNC:mail-harness -->
           <h1 class="doc-h1" id="mail-harness">Mail Templates &amp; Test Harness</h1>
           <p class="doc-p">Every email the instance sends is registered as a mail TYPE (Mail Templates → "Send a real one"): what it is, which Liquid template renders it, and how to build it from a real sample — a workflow transition, a changed record, a user, a recent inbox row. Pick a type, pick a sample, and you see the exact email production would send, its subject, and the people it would go to with the reason each is on the list. Send it to yourself, to any address, or (admin, logged, confirmed) to the real recipients. Mail test mode still applies to every send.</p>
@@ -17183,6 +17474,8 @@ DELETE /api/notification-templates/:key       # revert</code></pre>
           <p class="doc-p">Data Tools → Notification Analytics (admin). Over 7 / 30 / 90 days: notifications sent and read, the read rate and median time-to-read (read timestamps are stamped from this release on), a per-day series, and roll-ups by category, lane, kind, sender (people vs "System / automations") and collection — each with its own read rate and time-to-read — plus per-channel delivery outcomes (push sent vs no device, email sent / summary / off / failed) and the mute picture: how many people mute something, and which collections draw the most mutes against what they sent (the "stop telling me about this" rate).</p>
           <h2 class="doc-h2" id="broadcast-receipts">Broadcast receipts by audience</h2>
           <p class="doc-p">Broadcasts → history → "who saw this?" now opens with a per-audience roll-up: by role and by every scope dimension (zone, region…), delivered / opened (the inbox row was read — known for the in-app message channel) / acknowledged (banner dismissed) / still unread, with the unread names. "Nudge N unread" re-sends a "Reminder: …" inbox row (+ push through the normal rules) to exactly those people and records it as a <code class="doc-code">nudge</code> delivery; a second click skips anyone already nudged unless <code class="doc-code">again</code> is set. The in-app delivery of a broadcast keeps the inbox row id it produced (<code class="doc-code">notification_id</code> on the delivery receipt), which is what makes "opened" knowable.</p>
+          <h2 class="doc-h2" id="broadcast-draft">Draft a broadcast from bullets</h2>
+          <p class="doc-p">Broadcasts → Message → "Draft from bullets": write a few points, one per line, and AI drafts the message for the chosen audience, severity and channels — a short banner line (≤200 characters), a fuller email with a subject (also used for the in-app message), and an SMS of at most 160 characters (always cut to fit, whatever the model returns). "Use" copies a draft into the composer; you edit and send as usual — nothing is sent or saved by drafting. Anyone who may send a broadcast may draft one (<code class="doc-code">POST /api/announcements/draft { bullets, audience, channels, severity }</code>, admin). The AI provider receives your points (with secret-looking values masked) and an audience description of role names, scope-dimension labels and counts — never a recipient’s name, email or phone, nor which zone values were picked. It runs on the per-feature "generate" model; each draft is logged as <code class="doc-code">broadcast-draft</code> activity.</p>
           <h2 class="doc-h2" id="mail-delivery-board">Delivery board</h2>
           <p class="doc-p">Mail Log → Delivery rolls the outbound log up over the last 7 / 14 / 30 days: sent / failed / dropped / deferred with the success rate (sent ÷ attempted), a per-day stacked chart, a per-template table (labelled with the mail type when one template maps to exactly one type; a row opens the log filtered to it), the busiest recipients, "Not reaching" (addresses whose LATEST attempt failed), and failure reasons grouped by the stable head of the SMTP error (addresses, ids and session tokens collapsed). Raw sends log a template name too (flow ops as flow:&lt;op key&gt;, the digest as daily_digest); rows older than that land in "Untemplated sends".</p>
           <p class="doc-p">A red banner at the top of the board means the RELAY is failing, not the addresses: the newest 20 send attempts are judged as one, and when at least 80% failed with one normalised error class the banner names it and when the streak began. Mixed failure classes are bounces and never raise it. The readiness check <code class="doc-code">mail-relay</code> makes the same judgement (skip under 8 attempts, pass, fail); <code class="doc-code">GET /api/mail-log/relay</code> returns it as JSON.</p>
