@@ -7,6 +7,7 @@ import {
   computeWidgetData,
   normalizeWidgetFilters,
   registeredFieldSet,
+  SYSTEM_COLLECTION,
   widgetSourceRefusal
 } from '../services/dashboard-widgets.js'
 import { readItems } from '../services/items.js'
@@ -131,8 +132,10 @@ function formatDashboard(d: DashboardRow, widgets: WidgetRow[] = []) {
   }
 }
 
-/** Verify a collection name is registered in nivaro_collections (prevents SQL injection). */
+/** Verify a collection name is registered in nivaro_collections (prevents SQL injection).
+ *  System collections are never a widget source. */
 async function resolveCollection(name: string): Promise<boolean> {
+  if (SYSTEM_COLLECTION.test(name)) return false
   const row = await db('nivaro_collections').where('collection', name).first()
   return !!row
 }
@@ -668,6 +671,8 @@ Respond ONLY with JSON: {"name":"...","widgets":[{"type":"count","title":"...","
       return reply.code(403).send({ error: 'Forbidden' })
     }
     if (!widget.collection) return reply.code(400).send({ error: 'Widget has no collection' })
+    if (SYSTEM_COLLECTION.test(widget.collection))
+      return reply.code(400).send({ error: 'Unknown collection' })
 
     const fieldSet = await registeredFieldSet(widget.collection)
     // Readable fields only: the widget's own filter on a field the viewer cannot read refuses;
