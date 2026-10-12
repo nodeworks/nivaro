@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { Policy, Role, User } from '../types.js'
+import { isSystemCollection, systemReadableColumns } from './system-collections.js'
 
 export type Action = 'create' | 'read' | 'update' | 'delete'
 
@@ -63,10 +64,13 @@ export async function getRowFilter(
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (!role || role.admin_access) return null
 
+  // A system table answers only to a policy naming it, never the wildcard.
+  const system = isSystemCollection(collection)
   const policy = (await db('nivaro_policies')
     .where({ role: user.role, action })
     .where((qb) => {
-      qb.where({ collection }).orWhere({ collection: '*' })
+      qb.where({ collection })
+      if (!system) qb.orWhere({ collection: '*' })
     })
     // Prefer an exact-collection policy over the wildcard when both exist
     .orderByRaw(`CASE WHEN collection = '*' THEN 1 ELSE 0 END`)
@@ -173,6 +177,10 @@ export async function can(user: User, action: Action, collection: string): Promi
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (!role) return false
   if (role.admin_access) return true
+  // A non-admin never writes a system table, and reads only the listed ones
+  // (still through a policy, the wildcard included, so nobody gains a read).
+  if (isSystemCollection(collection) && (action !== 'read' || !systemReadableColumns(collection)))
+    return false
 
   const policy = await db<Policy>('nivaro_policies')
     .where({ role: user.role, action })
@@ -248,7 +256,43 @@ export async function getAllowedFields(
     .first()
 
   if (!policy) return []
-  return parsePolicyFields(policy.fields)
+  const fields = parsePolicyFields(policy.fields)
+  if (!isSystemCollection(collection)) return fields
+  // A system table reads only its listed columns, narrowed further by the
+  // policy's own list; one not listed reads nothing.
+  const readable = action === 'read' ? await existingReadableColumns(collection) : []
+  return fields === null ? readable : readable.filter((c) => fields.includes(c))
+}
+
+const readableColumnsCache = new Map<string, Promise<string[]>>()
+
+/** The listed readable columns the table actually has (an older or
+ *  self-hosted schema may lack some); learnt once per process. */
+function existingReadableColumns(collection: string): Promise<string[]> {
+  const key = collection.toLowerCase()
+  const wanted = systemReadableColumns(key)
+  if (!wanted) return Promise.resolve([])
+  let hit = readableColumnsCache.get(key)
+  if (!hit) {
+    hit = Promise.resolve(db(key).columnInfo())
+      .then((info) => {
+        const have = new Set(Object.keys(info ?? {}).map((c) => c.toLowerCase()))
+        return wanted.filter((c) => have.has(c))
+      })
+      .catch(() => {
+        readableColumnsCache.delete(key)
+        return ['id']
+      })
+    readableColumnsCache.set(key, hit)
+  }
+  return hit
+}
+
+/** Whether the user's role is an administrator's. */
+export async function isAdminRole(user: User): Promise<boolean> {
+  if (!user?.role) return false
+  const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
+  return !!role?.admin_access
 }
 
 export async function getPoliciesForRole(

@@ -3,6 +3,7 @@ import { db } from '../../../db/index.js'
 import {
   can,
   getAllowedFields,
+  getRowFilter,
   parseRowFilter,
   type RowCondition
 } from '../../../services/permissions.js'
@@ -180,5 +181,92 @@ describe('getAllowedFields()', () => {
     const user = makeRegularUser()
     const result = await getAllowedFields(user, 'read', 'articles')
     expect(result).toEqual([])
+  })
+})
+
+// ─── System tables (nivaro_* / directus_*) ───────────────────────────────────
+// A `*` policy never reaches a system table. A non-admin reads only the listed
+// ones (nivaro_users), still through a policy, and writes none.
+
+describe('system tables', () => {
+  const regularRole = { id: 'regular-role-id', admin_access: false }
+  const wildcard = { id: 9, role: 'regular-role-id', collection: '*', action: 'read', fields: null }
+
+  it('a non-admin never writes one, whatever the policies say', async () => {
+    for (const action of ['create', 'update', 'delete'] as const) {
+      mockDbSequence([regularRole, wildcard])
+      expect(await can(makeRegularUser(), action, 'nivaro_users')).toBe(false)
+    }
+  })
+
+  it('a non-admin reads an unlisted one never', async () => {
+    for (const c of ['nivaro_settings', 'nivaro_api_keys', 'directus_users', 'NIVARO_ROLES']) {
+      mockDbSequence([regularRole, wildcard])
+      expect(await can(makeRegularUser(), 'read', c)).toBe(false)
+    }
+  })
+
+  it('a non-admin reads nivaro_users through a policy, the wildcard included', async () => {
+    mockDbSequence([regularRole, wildcard])
+    expect(await can(makeRegularUser(), 'read', 'nivaro_users')).toBe(true)
+    mockDbSequence([regularRole, null])
+    expect(await can(makeRegularUser(), 'read', 'nivaro_users')).toBe(false)
+  })
+
+  it('an admin keeps everything', async () => {
+    mockDbFirst({ id: 'admin-role-id', admin_access: true })
+    expect(await can(makeAdminUser(), 'update', 'nivaro_settings')).toBe(true)
+  })
+
+  it('getAllowedFields narrows nivaro_users to the listed columns the table has', async () => {
+    let n = 0
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation(() => {
+      const result = [regularRole, wildcard][n++] ?? null
+      return {
+        where: vi.fn().mockReturnThis(),
+        orWhere: vi.fn().mockReturnThis(),
+        first: vi.fn().mockResolvedValue(result),
+        columnInfo: vi.fn().mockResolvedValue({
+          id: {},
+          first_name: {},
+          last_name: {},
+          email: {},
+          static_token: {},
+          password_hash: {},
+          phone: {},
+          role: {}
+        })
+      } as unknown as ReturnType<typeof db>
+    })
+    const fields = await getAllowedFields(makeRegularUser(), 'read', 'nivaro_users')
+    expect(fields).toEqual(['id', 'first_name', 'last_name', 'email'])
+  })
+
+  it('getAllowedFields gives nothing on an unlisted one or for a write', async () => {
+    mockDbSequence([regularRole, wildcard])
+    expect(await getAllowedFields(makeRegularUser(), 'read', 'nivaro_settings')).toEqual([])
+    mockDbSequence([regularRole, wildcard])
+    expect(await getAllowedFields(makeRegularUser(), 'update', 'nivaro_users')).toEqual([])
+  })
+
+  it('getRowFilter never falls back to the wildcard on a system table', async () => {
+    const chains: Array<{ orWhere: ReturnType<typeof vi.fn> }> = []
+    let n = 0
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation(() => {
+      const result = [regularRole, null][n++] ?? null
+      const chain = {
+        where: vi.fn(function (this: unknown, arg: unknown) {
+          if (typeof arg === 'function') arg(chain)
+          return chain
+        }),
+        orWhere: vi.fn().mockReturnThis(),
+        orderByRaw: vi.fn().mockReturnThis(),
+        first: vi.fn().mockResolvedValue(result)
+      }
+      chains.push(chain)
+      return chain as unknown as ReturnType<typeof db>
+    })
+    await getRowFilter(makeRegularUser(), 'read', 'nivaro_users')
+    expect(chains[1].orWhere).not.toHaveBeenCalled()
   })
 })

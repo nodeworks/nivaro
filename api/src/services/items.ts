@@ -48,7 +48,7 @@ import {
   peopleFields,
   peopleReadable
 } from './m2a-expand.js'
-import { applyRowFilter, can, getAllowedFields, getRowFilter } from './permissions.js'
+import { applyRowFilter, can, getAllowedFields, getRowFilter, isAdminRole } from './permissions.js'
 import { enforcePickerRules } from './picker-rules.js'
 import { checkQuota, incrementUsage, QuotaExceededError } from './quotas.js'
 import { broadcastCollectionUpdate } from './realtime.js'
@@ -77,6 +77,12 @@ import {
   applyRowRulesOnUpdate
 } from './row-rules-autofill.js'
 import { applySectionLocks } from './section-locks.js'
+import {
+  isSecretColumn,
+  isSystemCollection,
+  sensitiveColumns,
+  systemReadableColumns
+} from './system-collections.js'
 import { writeTrashRow } from './trash.js'
 import { isPathMaintained } from './tree-path.js'
 import { filterRowsByTreePermissions, getTreePermission } from './tree-permissions.js'
@@ -219,6 +225,92 @@ function assertRecordId(id: unknown): void {
 function assertNotRouteOnly(collection: string): void {
   const route = ROUTE_ONLY_COLLECTIONS.get(collection)
   if (route) throw new RouteOnlyCollectionError(collection, route)
+}
+
+/**
+ * Whether the generic items API serves this collection to this caller at all.
+ * A system table is an administrator's, except a listed one a non-admin may
+ * read (see system-collections.ts) — independent of can(), so registering a
+ * system table later never opens it. An unlisted one answers as unknown.
+ */
+async function assertServable(
+  user: User,
+  collection: string,
+  action: 'create' | 'read' | 'update' | 'delete'
+): Promise<void> {
+  assertNotRouteOnly(collection)
+  if (!isSystemCollection(collection) || (await isAdminRole(user))) return
+  if (!systemReadableColumns(collection)) throw new CollectionNotFoundError(collection)
+  if (action !== 'read') throw new ForbiddenError()
+}
+
+/** `*` and the sensitive columns in a projection over a system table: a
+ *  narrowed caller's `*` names its readable columns, never the whole row, and
+ *  a credential column is never selected, whoever asks. */
+async function systemProjection(
+  collection: string,
+  cols: string[],
+  allowedFields: string[] | null
+): Promise<string[]> {
+  if (!isSystemCollection(collection)) return cols
+  let out = cols
+  if (allowedFields !== null && out.includes('*'))
+    out = [...new Set([...out.filter((c) => c !== '*'), ...allowedFields])]
+  const sensitive = sensitiveColumns(collection)
+  if (sensitive.length === 0) return out
+  const keep = (c: string) => !sensitive.includes(c.toLowerCase())
+  if (!out.includes('*')) return out.filter(keep)
+  const all = Object.keys(await db(collection).columnInfo()).filter(keep)
+  return [...new Set([...out.filter((c) => c !== '*'), ...all])].filter(keep)
+}
+
+/**
+ * A credential named anywhere in a filter, sort or condition path is refused
+ * (a relation path reaches nivaro_users from any record); on the system table
+ * itself, every sensitive column is. Admins included: a filter is an oracle.
+ */
+function assertNoSensitivePaths(
+  collection: string,
+  filter: Record<string, unknown>,
+  sort: string[],
+  conditions: Array<FilterCondition | OrCondition> | undefined
+): void {
+  const own = sensitiveColumns(collection)
+  const bad: string[] = []
+  const check = (path: string, atRoot: boolean) => {
+    const segs = path.split('.')
+    segs.forEach((seg, i) => {
+      if (isSecretColumn(seg) || (atRoot && i === 0 && own.includes(seg.toLowerCase())))
+        bad.push(seg)
+    })
+  }
+  const walk = (f: unknown, atRoot: boolean) => {
+    if (Array.isArray(f)) {
+      for (const c of f) walk(c, atRoot)
+      return
+    }
+    if (!f || typeof f !== 'object') return
+    for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
+      if (k === '_and' || k === '_or') walk(v, atRoot)
+      else if (k.startsWith('_') || k.startsWith('$')) walk(v, false)
+      else {
+        check(k, atRoot)
+        walk(v, false)
+      }
+    }
+  }
+  walk(filter, true)
+  for (const s of sort) check(s.startsWith('-') ? s.slice(1) : s, true)
+  for (const c of conditions ?? []) {
+    const list = 'or' in c ? c.or : [c]
+    for (const one of list)
+      if (Array.isArray(one?.path)) check(one.path.map(String).join('.'), true)
+  }
+  if (bad.length === 0) return
+  throw Object.assign(
+    new Error(`${[...new Set(bad)].map((f) => `"${f}"`).join(', ')} cannot be filtered or sorted`),
+    { statusCode: 400, code: 'FIELD_NOT_FILTERABLE', fields: [...new Set(bad)] }
+  )
 }
 
 // ─── Change-reason requirement ───────────────────────────────────────────────
@@ -1065,10 +1157,6 @@ async function expandRelations(
     }
   }
 
-  const SYSTEM_SENSITIVE: Record<string, string[]> = {
-    nivaro_users: ['password_hash', 'totp_secret', 'static_token', 'external_id']
-  }
-
   for (const [fieldName, subFields] of expandEntries) {
     const rel = rels.find(
       (r) => r.many_collection === collection && r.many_field === fieldName && !r.junction_field
@@ -1129,15 +1217,7 @@ async function expandRelations(
           : [...new Set(['id', ...subDirect.filter((f) => relAllowedFields.includes(f))])]
 
     // Strip system-sensitive columns
-    const sensitiveCols = SYSTEM_SENSITIVE[relCollection]
-    if (sensitiveCols) {
-      if (selectCols[0] === '*') {
-        const allCols = await db(relCollection).columnInfo()
-        selectCols = Object.keys(allCols).filter((c) => !sensitiveCols.includes(c))
-      } else {
-        selectCols = selectCols.filter((f) => !sensitiveCols.includes(f))
-      }
-    }
+    selectCols = await systemProjection(relCollection, selectCols, relAllowedFields)
 
     // Batch fetch — cap at 1000 unique FKs
     const batchValues = [...fkSet].slice(0, 1000)
@@ -3041,7 +3121,7 @@ export async function readItems(
   req?: FastifyRequest,
   workspaceId?: string
 ) {
-  assertNotRouteOnly(collection)
+  await assertServable(user, collection, 'read')
 
   // These five have no interdependency, but each is a separate round trip and
   // the SQL Server sits ~37ms away — run serially they were half the floor cost
@@ -3073,6 +3153,8 @@ export async function readItems(
   }
 
   const { fields = ['*'], filter = {}, limit = 25, offset = 0, page, search } = query
+  // Before the cursor plan: a keyset over a credential is an oracle too.
+  assertNoSensitivePaths(collection, filter, query.sort ?? [], conditions)
   // A cursor walk sorts by the caller's columns and then by id; everything
   // below reads `sort`, so it is settled here.
   const keyset =
@@ -3114,18 +3196,7 @@ export async function readItems(
       : directFields.filter((f) => f === '*' || allowedFields.includes(f))
 
   // Strip sensitive columns from system tables not backed by nivaro_fields
-  const SYSTEM_SENSITIVE: Record<string, string[]> = {
-    nivaro_users: ['password_hash', 'totp_secret', 'static_token', 'external_id']
-  }
-  const sensitiveCols = SYSTEM_SENSITIVE[collection]
-  if (sensitiveCols) {
-    if (selectFields[0] === '*') {
-      const allCols = await db(collection).columnInfo()
-      selectFields = Object.keys(allCols).filter((c) => !sensitiveCols.includes(c))
-    } else {
-      selectFields = selectFields.filter((f) => !sensitiveCols.includes(f))
-    }
-  }
+  selectFields = await systemProjection(collection, selectFields, allowedFields)
 
   // `$state` is keyed by the record id, so an explicit projection that asks for
   // it must carry one — `fields=name,$state` would otherwise match nothing.
@@ -3295,6 +3366,8 @@ export async function readItems(
       // Never search a secret: these are stripped from responses, and matching
       // on them would let a caller confirm a token by probing for it.
       searchCols = textCols.filter((c) => !/password|token|secret|totp|external_id/i.test(c))
+      // Nor a column outside the caller's field list (a match is a read).
+      if (allowedFields) searchCols = searchCols.filter((c) => allowedFields.includes(c))
     }
 
     if (searchCols.length) {
@@ -3371,7 +3444,8 @@ export async function readItems(
     const agg = await span('aggregate', async () =>
       runAggregate(countQ, collection, spec, {
         allowedFields,
-        encrypted: await getEncryptedFields(collection)
+        encrypted: await getEncryptedFields(collection),
+        sensitive: sensitiveColumns(collection)
       })
     )
     return {
@@ -3667,7 +3741,7 @@ export async function readOne(
   workspaceId?: string,
   fields?: string[]
 ) {
-  assertNotRouteOnly(collection)
+  await assertServable(user, collection, 'read')
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
 
@@ -3728,6 +3802,7 @@ export async function readOne(
         ? ['*']
         : directFields
       : directFields.filter((f) => f === '*' || allowedFields.includes(f))
+  selectCols = await systemProjection(collection, selectCols, allowedFields)
 
   // The state read is keyed by the record id — an explicit projection that asks
   // for `$state` must carry one.
@@ -4702,7 +4777,7 @@ export async function createOne(
   workspaceId?: string,
   opts?: { skipRollupRecalc?: boolean; dryRun?: { insert: boolean } }
 ) {
-  assertNotRouteOnly(collection)
+  await assertServable(user, collection, 'create')
   const dry = opts?.dryRun ?? null
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)
@@ -5090,7 +5165,7 @@ export async function updateOne(
   req?: FastifyRequest,
   workspaceId?: string
 ) {
-  assertNotRouteOnly(collection)
+  await assertServable(user, collection, 'update')
   assertRecordId(id)
   await enforceContracts(collection, user?.id, data, 'update')
   let nestedWrites = await extractAliasO2MWrites(collection, data)
@@ -5400,7 +5475,7 @@ export async function deleteOne(
   req?: FastifyRequest,
   workspaceId?: string
 ) {
-  assertNotRouteOnly(collection)
+  await assertServable(user, collection, 'delete')
   assertRecordId(id)
   const col = await getCollection(collection)
   if (!col) throw new CollectionNotFoundError(collection)

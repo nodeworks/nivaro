@@ -1,0 +1,248 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+// System tables through the generic items API. A role holding a `*` policy
+// used to read nivaro_users whole (static_token included) and write any
+// user's role or token. Now: a non-admin reads only the listed people
+// columns and writes nothing; credentials are never selected, filtered,
+// sorted or grouped, admins included.
+
+const USER_COLS = [
+  'id',
+  'first_name',
+  'last_name',
+  'email',
+  'external_id',
+  'role',
+  'status',
+  'static_token',
+  'totp_secret',
+  'password_hash',
+  'phone',
+  'avatar',
+  'is_redacted',
+  'account_kind',
+  'title'
+]
+
+// Any query-builder call chains; awaiting answers rows for the table. Every
+// select is recorded per table.
+const rec = vi.hoisted(() => ({
+  rows: {} as Record<string, unknown[]>,
+  selects: [] as Array<{ table: string; cols: unknown[] }>
+}))
+vi.mock('../../../db/index.js', () => {
+  const chain = (table: string): unknown =>
+    new Proxy(() => undefined, {
+      get(_t, prop) {
+        if (prop === 'then')
+          return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
+            Promise.resolve(rec.rows[table] ?? []).then(res, rej)
+        if (prop === 'columnInfo')
+          return async () =>
+            table === 'nivaro_users' ? Object.fromEntries(USER_COLS.map((c) => [c, {}])) : {}
+        if (prop === 'first') return () => Promise.resolve((rec.rows[table] ?? [])[0])
+        if (prop === 'select')
+          return (...cols: unknown[]) => {
+            rec.selects.push({ table, cols: cols.flat() })
+            return chain(table)
+          }
+        if (prop === 'toSQL') return () => ({ sql: '', bindings: [] })
+        return () => chain(table)
+      },
+      apply: () => chain(table)
+    })
+  const db = new Proxy((table: string) => chain(table), {
+    get(_t, prop) {
+      if (prop === 'raw')
+        return (sql: string, bindings?: unknown[]) =>
+          /information_schema\.columns/i.test(sql) && bindings?.[0] === 'nivaro_users'
+            ? USER_COLS.map((c) => ({ c, t: 'nvarchar', l: 255, COLUMN_NAME: c }))
+            : { sql, toString: () => sql }
+      if (prop === 'transaction') return async (fn: (t: unknown) => unknown) => fn(db)
+      return () => chain('raw')
+    }
+  })
+  return { db, dbRead: db, isMssql: () => true }
+})
+
+const perm = vi.hoisted(() => ({ admin: false }))
+vi.mock('../../../services/permissions.js', async (orig) => {
+  const real = await orig<typeof import('../../../services/permissions.js')>()
+  const { systemReadableColumns, isSystemCollection } = await import(
+    '../../../services/system-collections.js'
+  )
+  return {
+    ...real,
+    isAdminRole: vi.fn(async () => perm.admin),
+    // The `*` role: everything on business tables; on system tables what
+    // permissions.ts now answers (covered on its own in permissions.test.ts).
+    can: vi.fn(async (_u: unknown, action: string, c: string) =>
+      perm.admin || !isSystemCollection(c) ? true : action === 'read' && !!systemReadableColumns(c)
+    ),
+    // The listed columns the table has (permissions.ts learns them the same way).
+    getAllowedFields: vi.fn(async (_u: unknown, _a: string, c: string) =>
+      perm.admin || !isSystemCollection(c)
+        ? null
+        : (systemReadableColumns(c) ?? []).filter((f) => USER_COLS.includes(f))
+    ),
+    getRowFilter: vi.fn(async () => null)
+  }
+})
+vi.mock('../../../services/collections.js', async (orig) => ({
+  ...(await orig<object>()),
+  getCollection: vi.fn(async (c: string) =>
+    c === 'nivaro_users' || c === 'workflows' ? { collection: c } : undefined
+  ),
+  getFields: vi.fn(async () => []),
+  getRelations: vi.fn(async () => [])
+}))
+
+import { planAggregate } from '../../../services/item-aggregates.js'
+import {
+  CollectionNotFoundError,
+  createOne,
+  deleteOne,
+  ForbiddenError,
+  readItems,
+  readOne,
+  updateOne
+} from '../../../services/items.js'
+
+const someone = { id: 'U-1', role: 'WORKFLOW-CREATOR' } as never
+const ADMIN_ID = 'AAAAAAAA-0000-4000-8000-000000000001'
+
+const SECRETS = ['static_token', 'password_hash', 'totp_secret', 'external_id']
+const usersSelect = () =>
+  rec.selects.filter((s) => s.table === 'nivaro_users').flatMap((s) => s.cols.map(String))
+
+beforeEach(() => {
+  perm.admin = false
+  rec.selects = []
+  rec.rows = {}
+})
+
+describe('a non-admin with a * role', () => {
+  it('readOne selects only the people columns, never a credential', async () => {
+    await readOne(someone, 'nivaro_users', ADMIN_ID).catch(() => undefined)
+    const cols = usersSelect()
+    expect(cols.length).toBeGreaterThan(0)
+    expect(cols).not.toContain('*')
+    for (const s of [...SECRETS, 'phone', 'role']) expect(cols).not.toContain(s)
+    expect(cols).toEqual(expect.arrayContaining(['id', 'first_name', 'last_name', 'email']))
+  })
+
+  it('readOne with an explicit fields list naming secrets gets none of them', async () => {
+    await readOne(someone, 'nivaro_users', ADMIN_ID, undefined, [
+      'id',
+      '*',
+      'static_token',
+      'password_hash'
+    ]).catch(() => undefined)
+    const cols = usersSelect()
+    expect(cols).not.toContain('*')
+    for (const s of SECRETS) expect(cols).not.toContain(s)
+  })
+
+  it('readItems (list and batch-read) selects only the people columns', async () => {
+    await readItems(someone, 'nivaro_users', { fields: ['id', '*'], limit: 5 }).catch(
+      () => undefined
+    )
+    const cols = usersSelect()
+    expect(cols.length).toBeGreaterThan(0)
+    expect(cols).not.toContain('*')
+    for (const s of [...SECRETS, 'phone', 'role']) expect(cols).not.toContain(s)
+    expect(cols).toEqual(expect.arrayContaining(['id', 'first_name', 'email', 'is_redacted']))
+  })
+
+  it('cannot filter, sort or search-by-cursor on a credential', async () => {
+    const asks = [
+      { filter: { static_token: { _starts_with: 'a' } } },
+      { filter: { _or: [{ password_hash: { _nnull: true } }] } },
+      { sort: ['-static_token'] },
+      { sort: ['totp_secret'], after: 'x' },
+      { filter: { external_id: { _eq: 'x' } } }
+    ]
+    for (const q of asks) {
+      await expect(readItems(someone, 'nivaro_users', q as never)).rejects.toMatchObject({
+        statusCode: 400,
+        code: 'FIELD_NOT_FILTERABLE'
+      })
+    }
+  })
+
+  it('cannot reach a credential through a relation path from a business record', async () => {
+    await expect(
+      readItems(someone, 'workflows', {
+        filter: { created_by: { static_token: { _starts_with: 'a' } } }
+      } as never)
+    ).rejects.toMatchObject({ statusCode: 400 })
+    await expect(
+      readItems(someone, 'workflows', { sort: ['created_by.static_token'] } as never)
+    ).rejects.toMatchObject({ statusCode: 400 })
+  })
+
+  it('cannot write nivaro_users: own role, an admin static_token, create, delete', async () => {
+    await expect(
+      updateOne(someone, 'nivaro_users', 'U-1', { role: 'ADMIN-ROLE' })
+    ).rejects.toBeInstanceOf(ForbiddenError)
+    await expect(
+      updateOne(someone, 'nivaro_users', ADMIN_ID, { static_token: 'mine' })
+    ).rejects.toBeInstanceOf(ForbiddenError)
+    await expect(createOne(someone, 'nivaro_users', { email: 'x@y' })).rejects.toBeInstanceOf(
+      ForbiddenError
+    )
+    await expect(deleteOne(someone, 'nivaro_users', ADMIN_ID)).rejects.toBeInstanceOf(
+      ForbiddenError
+    )
+  })
+
+  it('an unlisted system table answers as unknown, read or write', async () => {
+    for (const c of ['nivaro_settings', 'directus_users', 'NIVARO_API_KEYS']) {
+      await expect(readItems(someone, c)).rejects.toBeInstanceOf(CollectionNotFoundError)
+      await expect(readOne(someone, c, '1')).rejects.toBeInstanceOf(CollectionNotFoundError)
+      await expect(updateOne(someone, c, '1', { x: 1 })).rejects.toBeInstanceOf(
+        CollectionNotFoundError
+      )
+    }
+  })
+})
+
+describe('an administrator', () => {
+  it('reads nivaro_users whole except the credentials', async () => {
+    perm.admin = true
+    await readOne(someone, 'nivaro_users', ADMIN_ID).catch(() => undefined)
+    const cols = usersSelect()
+    expect(cols).toEqual(expect.arrayContaining(['id', 'role', 'phone', 'email']))
+    for (const s of SECRETS) expect(cols).not.toContain(s)
+  })
+
+  it('still cannot filter or sort on a credential', async () => {
+    perm.admin = true
+    await expect(
+      readItems(someone, 'nivaro_users', { filter: { static_token: { _eq: 'x' } } } as never)
+    ).rejects.toMatchObject({ statusCode: 400 })
+  })
+
+  it('passes the system-table gate for a write', async () => {
+    perm.admin = true
+    // Whatever happens further in (the mock database), it is not the gate.
+    const err = await updateOne(someone, 'nivaro_users', ADMIN_ID, { title: 'x' }).catch((e) => e)
+    expect(err).not.toBeInstanceOf(ForbiddenError)
+    expect(err).not.toBeInstanceOf(CollectionNotFoundError)
+  })
+})
+
+describe('aggregates', () => {
+  it('never group or aggregate a credential, whoever asks', async () => {
+    const guards = { allowedFields: null, sensitive: SECRETS }
+    for (const spec of [{ groupBy: ['static_token'] }, { countDistinct: ['password_hash'] }]) {
+      await expect(planAggregate('nivaro_users', spec, guards)).rejects.toMatchObject({
+        code: 'FIELD_FORBIDDEN'
+      })
+    }
+    // The same column without the guard plans fine: the refusal is the guard's.
+    await expect(
+      planAggregate('nivaro_users', { groupBy: ['title'] }, guards)
+    ).resolves.toMatchObject({ groupBy: ['title'] })
+  })
+})

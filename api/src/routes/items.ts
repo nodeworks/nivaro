@@ -39,13 +39,18 @@ import {
   upsertInfoOf
 } from '../services/items.js'
 import { startJobRun } from '../services/job-runs.js'
-import { can } from '../services/permissions.js'
+import { can, getAllowedFields } from '../services/permissions.js'
 import {
   coerceBool,
   parseJson,
   resolveTransitionTarget,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import {
+  isSecretColumn,
+  isSystemCollection,
+  sensitiveColumns
+} from '../services/system-collections.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import { runUnit } from '../services/unit-of-work.js'
 import type { ItemsQuery, User } from '../types.js'
@@ -677,9 +682,21 @@ export async function itemsRoutes(app: FastifyInstance) {
     let current = baseCollection
     let target: string | null = null
     for (const seg of segments) {
+      // A credential is never a path's leaf (`created_by.static_token`).
+      if (isSecretColumn(seg)) return { readable: false, target: null }
       const relations = await getRelations(current)
       const info = classifyRelationSegment(current, seg, relations)
-      if (!info) return { readable: true, target } // plain column leaf — no further hop
+      if (!info) {
+        // plain column leaf — no further hop. On a system table, only a
+        // column the caller may read there.
+        if (isSystemCollection(current)) {
+          if (sensitiveColumns(current).includes(seg.toLowerCase()))
+            return { readable: false, target: null }
+          const fields = await getAllowedFields(user, 'read', current)
+          if (fields && !fields.includes(seg)) return { readable: false, target: null }
+        }
+        return { readable: true, target }
+      }
       const hop = info.relatedCollection
       if (!hop) return { readable: false, target: null }
       if (hop.startsWith('nivaro_') && hop !== 'nivaro_users')
@@ -697,7 +714,7 @@ export async function itemsRoutes(app: FastifyInstance) {
   app.get('/:collection/distinct', async (req, reply) => {
     const { collection } = req.params as { collection: string }
     const { field, limit } = req.query as { field?: string; limit?: string }
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (isSystemCollection(collection)) return reply.code(403).send({ error: 'Forbidden' })
     if (!/^[a-zA-Z0-9_]+$/.test(collection))
       return reply.code(400).send({ error: 'Invalid collection' })
     if (!(await can(req.user!, 'read', collection)))
@@ -737,7 +754,7 @@ export async function itemsRoutes(app: FastifyInstance) {
       /** "Line {{line_number}} · {{item_description}}" — plain child columns. */
       row_label?: string
     }
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (isSystemCollection(collection)) return reply.code(403).send({ error: 'Forbidden' })
     const field = String(body.field ?? '')
     const formula = String(body.formula ?? '').trim()
     if (!/^[A-Za-z0-9_]+$/.test(field) || !formula || formula.length > 500) {
@@ -832,7 +849,7 @@ export async function itemsRoutes(app: FastifyInstance) {
   app.get('/:collection/resolve-paths', async (req, reply) => {
     const { collection } = req.params as { collection: string }
     const { ids, paths } = req.query as { ids?: string; paths?: string }
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (isSystemCollection(collection)) return reply.code(403).send({ error: 'Forbidden' })
     if (!(await can(req.user!, 'read', collection)))
       return reply.code(403).send({ error: 'Forbidden' })
     const requestedIds = (ids ?? '')
@@ -899,7 +916,7 @@ export async function itemsRoutes(app: FastifyInstance) {
   app.get('/:collection/:id/resolve-paths', async (req, reply) => {
     const { collection, id } = req.params as { collection: string; id: string }
     const { paths } = req.query as { paths?: string }
-    if (collection.startsWith('nivaro_')) return reply.code(403).send({ error: 'Forbidden' })
+    if (isSystemCollection(collection)) return reply.code(403).send({ error: 'Forbidden' })
     if (!paths) return reply.send({ data: {} })
     const pathList = paths
       .split(',')
@@ -1553,6 +1570,16 @@ export async function itemsRoutes(app: FastifyInstance) {
     }
 
     try {
+      // The clone writes raw, so it is gated here: a registered business
+      // collection the caller may both read and create in. System tables never.
+      if (isSystemCollection(collection)) return reply.code(403).send({ error: 'Forbidden' })
+      const { getCollection } = await import('../services/collections.js')
+      if (!(await getCollection(collection))) throw new CollectionNotFoundError(collection)
+      if (
+        !(await can(req.user!, 'read', collection)) ||
+        !(await can(req.user!, 'create', collection))
+      )
+        return reply.code(403).send({ error: 'Forbidden' })
       const original = (await db(collection).where({ id }).first()) as
         | Record<string, unknown>
         | undefined
