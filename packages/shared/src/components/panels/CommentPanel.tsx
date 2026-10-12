@@ -92,7 +92,7 @@ function MentionTextarea({
   const [highlight, setHighlight] = useState(0)
   const debouncedQuery = useDebounced(mention?.query ?? '', 200)
 
-  const { data: users = [] } = useQuery<MentionUser[]>({
+  const { data: fetchedUsers = [] } = useQuery<MentionUser[]>({
     queryKey: ['users', 'mention-search', debouncedQuery],
     queryFn: () =>
       client
@@ -103,6 +103,23 @@ function MentionTextarea({
     enabled: !!mention && debouncedQuery.length >= 2,
     staleTime: 30_000
   })
+  // Online people first (#2405). Same query key + shape as the chat panel's
+  // presence read, so the two share one cache entry.
+  const { data: presence } = useQuery({
+    queryKey: ['presence-online'],
+    queryFn: () =>
+      client.request<{ data: Array<{ user_id: string; is_idle?: boolean; away?: boolean }> }>(
+        get('/presence/online')
+      ),
+    enabled: !!mention,
+    refetchInterval: 15_000,
+    staleTime: 5_000
+  })
+  const onlineState = (id: string): 0 | 1 | 2 => {
+    const p = presence?.data?.find((r) => String(r.user_id).toUpperCase() === id.toUpperCase())
+    return !p ? 2 : p.is_idle || p.away ? 1 : 0
+  }
+  const users = [...fetchedUsers].sort((a, b) => onlineState(a.id) - onlineState(b.id))
   // Role mentions (#441): "@finance-approvers" fans server-side to every
   // member of the role. /chat/roles is the non-admin-readable role list.
   const { data: allRoles = [] } = useQuery<Array<{ id: string; name: string }>>({
@@ -276,10 +293,21 @@ function MentionTextarea({
                     i === highlight ? 'bg-nvr-cyan/10' : ''
                   }`}
                 >
-                  <span className='flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy/80 dark:text-nvr-cyan'>
+                  <span className='relative flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-nvr-cyan/15 text-[10px] font-semibold text-nvr-navy/80 dark:text-nvr-cyan'>
                     {(
                       `${u.first_name?.[0] ?? ''}${u.last_name?.[0] ?? ''}`.trim() || u.email[0]
                     ).toUpperCase()}
+                    {onlineState(u.id) < 2 && (
+                      <span
+                        data-mention-presence={onlineState(u.id) === 0 ? 'online' : 'idle'}
+                        title={onlineState(u.id) === 0 ? 'Online' : 'Idle'}
+                        className={`absolute -bottom-px -right-px h-2 w-2 rounded-full ring-2 ring-white dark:ring-popover ${
+                          onlineState(u.id) === 0
+                            ? 'bg-emerald-500'
+                            : 'border border-amber-500 bg-white dark:bg-popover'
+                        }`}
+                      />
+                    )}
                   </span>
                   <span className='min-w-0 flex-1'>
                     <span className='block truncate text-[12px] font-medium text-slate-700 dark:text-slate-200'>

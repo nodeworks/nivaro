@@ -31,6 +31,14 @@ import {
   touchWatermark,
   upsertMembership
 } from '../services/chat-send.js'
+import {
+  castVote,
+  closeDuePolls,
+  closePoll,
+  createPoll,
+  loadPolls
+} from '../services/chat-polls.js'
+import { dropEmbedding, indexChatMessage, searchByMeaning } from '../services/chat-semantic.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
 import {
   loadVisibleMessage,
@@ -168,7 +176,7 @@ export async function chatRoutes(app: FastifyInstance) {
       rows = older.slice(0, limit).reverse()
     }
 
-    const data = await decorateMessages(rows, cols, hideOps)
+    const data = await decorateMessages(rows, cols, hideOps, String(req.user!.id))
     return { data, meta: { has_older: hasOlder, has_newer: hasNewer, anchor: anchorId } }
   })
 
@@ -176,7 +184,8 @@ export async function chatRoutes(app: FastifyInstance) {
   async function decorateMessages(
     rows: Array<Record<string, unknown>>,
     cols: Set<string>,
-    hideOps: (qb: Knex.QueryBuilder) => Knex.QueryBuilder = (qb) => qb
+    hideOps: (qb: Knex.QueryBuilder) => Knex.QueryBuilder = (qb) => qb,
+    viewerId?: string
   ): Promise<Array<Record<string, unknown>>> {
     const masqAdmins = [
       ...new Set(
@@ -272,8 +281,13 @@ export async function chatRoutes(app: FastifyInstance) {
       }
     }
 
+    // Polls (#2337), one batched read; due polls close lazily here too.
+    const polls = await loadPolls(ids, String(viewerId ?? ''))
+    if ([...polls.values()].some((p) => !p.closed_at && p.closed)) void closeDuePolls(app)
+
     return rows.map((r) => ({
       ...r,
+      poll: polls.get(Number(r.id)) ?? null,
       message: r.deleted_at ? '' : r.message,
       attachments: r.deleted_at ? [] : parseAttachments(r.attachments),
       reactions: reactionsByMsg.get(Number(r.id)) ?? [],
@@ -494,6 +508,9 @@ export async function chatRoutes(app: FastifyInstance) {
       editPatch.time_refs = refs.length ? JSON.stringify(refs) : null
     }
     await db('chat_messages').where('id', msg.id).update(editPatch)
+    void dropEmbedding(Number(msg.id)).then(() =>
+      indexChatMessage(Number(msg.id), String(msg.room), text)
+    )
     // The send is an accountability record (accountability='activity' on
     // chat_messages) — a rewrite of that record must be too.
     void logActivity({
@@ -520,6 +537,7 @@ export async function chatRoutes(app: FastifyInstance) {
       .where('id', msg.id)
       .update({ message: '', attachments: null, deleted_at: new Date() })
     await db('nivaro_chat_reactions').where({ message_id: msg.id }).del()
+    void dropEmbedding(Number(msg.id))
     // Admins may delete OTHER people's messages — the log records who did.
     void logActivity({
       action: 'chat-message-delete',
@@ -546,6 +564,7 @@ export async function chatRoutes(app: FastifyInstance) {
       to?: string
       has_attachment?: string
       mentions_me?: string
+      meaning?: string
     }
     const term = String(q.q ?? '').trim()
     const filtered =
@@ -594,7 +613,164 @@ export async function chatRoutes(app: FastifyInstance) {
         'date_created',
         ...(cols.has('parent_id') ? ['parent_id'] : [])
       )
-    return reply.send({ data: rows })
+    const exact: Array<Record<string, unknown>> = (rows as Array<Record<string, unknown>>).map(
+      (r) => ({ ...r, match: 'exact' })
+    )
+
+    // By meaning (#2354): after the exact matches, messages that say the same
+    // thing in other words. `rooms` is already the asker's own visible set.
+    // Only for a plain text query — a sender/date/attachment filter narrows by
+    // fact, and meaning hits would not honour it.
+    const plain = !q.sender && !q.from && !q.to && !q.has_attachment && !q.mentions_me
+    if (term.length >= 3 && plain && q.meaning !== '0') {
+      try {
+        const hits = await searchByMeaning(term, rooms, {
+          limit: 20,
+          exclude: new Set(exact.map((r) => Number(r.id)))
+        })
+        if (hits.length) {
+          const ids = hits.map((h) => h.id)
+          const found = (await db('chat_messages')
+            .whereIn('id', ids)
+            .whereIn('room', rooms.slice(0, 200))
+            .whereNull('deleted_at')
+            .select(
+              'id',
+              'room',
+              'sender',
+              'sender_name',
+              'message',
+              'date_created',
+              ...(cols.has('parent_id') ? ['parent_id'] : [])
+            )) as Array<Record<string, unknown>>
+          const byId = new Map(found.map((r) => [Number(r.id), r]))
+          for (const h of hits) {
+            const r = byId.get(h.id)
+            if (r) exact.push({ ...r, match: 'meaning', score: Math.round(h.score * 100) / 100 })
+          }
+        }
+      } catch (err) {
+        app.log.warn({ err }, 'chat meaning search failed')
+      }
+    }
+    return reply.send({ data: exact })
+  })
+
+  // ── Slash commands (#2338) ────────────────────────────────────────────────
+
+  /** Extension-registered commands for the composer's `/` list. */
+  app.get('/commands', async () => {
+    const { listChatCommands } = await import('../services/chat-commands.js')
+    return { data: await listChatCommands() }
+  })
+
+  /** Run an extension command AS the caller, in a room they can see. */
+  app.post<{ Params: { name: string } }>('/commands/:name/run', async (req, reply) => {
+    const b = req.body as { room?: string; args?: string }
+    const room = String(b.room ?? '')
+    if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    const { runChatCommand } = await import('../services/chat-commands.js')
+    let out: Awaited<ReturnType<typeof runChatCommand>>
+    try {
+      out = await runChatCommand(req.params.name, String(b.args ?? ''), {
+        userId: String(req.user!.id),
+        room
+      })
+    } catch (err) {
+      app.log.warn({ err, command: req.params.name }, 'chat command failed')
+      return reply.code(502).send({ error: 'That command failed' })
+    }
+    if (!out) return reply.code(404).send({ error: 'Unknown command' })
+    let posted: number | null = null
+    if (out.post) {
+      try {
+        const row = await postChatMessage(
+          app,
+          {
+            user: req.user!,
+            isAdmin: !!req.isAdmin,
+            masqueradeAdminId: req.masqueradeAdminId ?? null
+          },
+          { room, message: out.post }
+        )
+        posted = row.id
+      } catch (err) {
+        if (err instanceof ChatSendError)
+          return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+        throw err
+      }
+    }
+    return { data: { posted_message_id: posted, reply: out.reply ?? null } }
+  })
+
+  // ── Polls (#2337) ─────────────────────────────────────────────────────────
+
+  /** Post a poll into a room. The question is the message; options + votes
+   *  live in nivaro_chat_polls / nivaro_chat_poll_votes. */
+  app.post('/polls', async (req, reply) => {
+    const b = req.body as {
+      room?: string
+      question?: string
+      options?: unknown
+      multiple?: boolean
+      anonymous?: boolean
+      closes_at?: string | null
+      parent_id?: number | null
+    }
+    try {
+      const out = await createPoll(
+        app,
+        {
+          user: req.user!,
+          isAdmin: !!req.isAdmin,
+          masqueradeAdminId: req.masqueradeAdminId ?? null
+        },
+        {
+          room: String(b.room ?? ''),
+          question: String(b.question ?? ''),
+          options: b.options,
+          multiple: !!b.multiple,
+          anonymous: !!b.anonymous,
+          closesAt: b.closes_at ?? null,
+          parentId: b.parent_id ?? null
+        }
+      )
+      return reply.code(201).send({ data: out })
+    } catch (err) {
+      if (err instanceof ChatSendError)
+        return reply.code(err.statusCode).send({ error: err.message, code: err.code })
+      throw err
+    }
+  })
+
+  /** Vote (or change a vote). `options` = the chosen option indexes; an empty
+   *  list withdraws the vote. */
+  app.post<{ Params: { id: string } }>('/polls/:id/vote', async (req, reply) => {
+    const out = await castVote(
+      app,
+      req.user!,
+      Number(req.params.id),
+      (req.body as { options?: unknown })?.options
+    )
+    if (!out.ok) return reply.code(out.status).send({ error: out.error })
+    return { data: { voted: true } }
+  })
+
+  /** Close a poll now — its author, or an administrator. */
+  app.post<{ Params: { id: string } }>('/polls/:id/close', async (req, reply) => {
+    const p = await db('nivaro_chat_polls')
+      .where('id', Number(req.params.id))
+      .first()
+      .catch(() => null)
+    if (!p) return reply.code(404).send({ error: 'Not found' })
+    if (!(await canSeeRoom(req.user!, String(p.room)))) return reply.code(403).send(forbidden)
+    const own = String(p.created_by ?? '').toUpperCase() === String(req.user!.id).toUpperCase()
+    if (!own && !req.isAdmin)
+      return reply
+        .code(403)
+        .send({ error: 'Only the poll author or an administrator can close it' })
+    const closed = await closePoll(app, Number(p.id))
+    return { data: { closed } }
   })
 
   /**
