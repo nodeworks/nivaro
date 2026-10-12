@@ -473,6 +473,7 @@ export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
+export * from './lib/live'
 export {
   type NotificationSound,
   playNotificationSound,
@@ -517,6 +518,7 @@ export {
   RealtimeContext,
   useOptionalRealtime
 } from './lib/realtime'
+export { useRecordTabs } from './lib/record-tabs'
 export {
   captureReplayClip,
   clipEndOffset,

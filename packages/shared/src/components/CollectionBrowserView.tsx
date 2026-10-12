@@ -55,6 +55,7 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
+import { LIVE_ASPECTS } from '../lib/live'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
@@ -4664,8 +4665,35 @@ export function CollectionBrowserView({
   useEffect(() => {
     if (!realtime || !collection) return
     const scheduleInvalidate = () => setPendingLive((n) => n + 1)
+    // Aspect notices (#1874/#1873/#1825/#1824 — `$tasks`, `$addendums`, …)
+    // say a row's related counts/badges moved, not its columns: refresh just
+    // those per-page reads, coalesced, and never count them into the pill.
+    const aspectKeys = new Map<string, unknown[]>()
+    let aspectTimer: ReturnType<typeof setTimeout> | null = null
+    const noteAspects = (fields: string[]) => {
+      const add = (k: unknown[]) => aspectKeys.set(JSON.stringify(k), k)
+      if (fields.includes(LIVE_ASPECTS.tasks)) add(['cbv-task-counts', collection])
+      if (fields.includes(LIVE_ASPECTS.addendums)) add(['cbv-addendum-summary', collection])
+      if (fields.includes(LIVE_ASPECTS.integrations)) add(['cbv-integrations-summary', collection])
+      if (fields.includes(LIVE_ASPECTS.comments)) add(['row-comment-counts', collection])
+      if (fields.includes(LIVE_ASPECTS.state)) {
+        add(['cbv-pipeline-instances', collection])
+        add(['cbv-owners', collection])
+      }
+      if (aspectTimer) return
+      aspectTimer = setTimeout(() => {
+        aspectTimer = null
+        for (const k of aspectKeys.values()) void qc.invalidateQueries({ queryKey: k })
+        aspectKeys.clear()
+      }, 300)
+    }
     const unsub = realtime.subscribeCollections([collection], (ev) => {
       const id = String(ev.item)
+      const fields = ev.changed_fields
+      if (!ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
+        if (id === '*' || visibleIdsRef.current.has(id)) noteAspects(fields)
+        return
+      }
       if (ev.action !== 'delete' && visibleIdsRef.current.has(id)) {
         client
           .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
@@ -4690,6 +4718,7 @@ export function CollectionBrowserView({
     })
     return () => {
       unsub()
+      if (aspectTimer) clearTimeout(aspectTimer)
     }
   }, [realtime, collection, qc, client])
 

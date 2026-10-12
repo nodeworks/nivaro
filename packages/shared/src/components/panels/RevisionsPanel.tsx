@@ -11,10 +11,11 @@ import {
   Search,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
+import { useLiveRecordQueries } from '../../lib/live'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
 import { RelatedItemLabel } from '../item-edit/RelationCombobox'
 import { UserAvatar } from '../UserAvatar'
@@ -1440,6 +1441,22 @@ function RevisionsList({
         .then((r) => r.data ?? []),
     staleTime: 30_000
   })
+  // #1881 — an open history takes new changes at the top as they land
+  // (someone else's write; the record form refreshes after its own save),
+  // and marks the rows that arrived while it was open.
+  const qc = useQueryClient()
+  useLiveRecordQueries(collection, item, [['revisions', collection, item]], { client: qc })
+  const seenRef = useRef<Set<string> | null>(null)
+  const freshKeys = useMemo(() => {
+    if (!data) return new Set<string>()
+    const keys = data.map(rowKey)
+    if (!seenRef.current) {
+      seenRef.current = new Set(keys)
+      return new Set<string>()
+    }
+    const seen = seenRef.current
+    return new Set(keys.filter((k) => !seen.has(k)))
+  }, [data])
   const count = data?.length ?? 0
   const snapshots = useMemo(() => (data ?? []).filter(isSnapshot), [data])
 
@@ -1492,7 +1509,14 @@ function RevisionsList({
               const isLast = globalIdx === (data?.length ?? 1) - 1
               if (isEvent(rev)) {
                 return (
-                  <div key={rowKey(rev)} className='nvr-fade-in'>
+                  <div
+                    key={rowKey(rev)}
+                    className={cn(
+                      'nvr-fade-in relative',
+                      freshKeys.has(rowKey(rev)) && 'rounded-md bg-nvr-cyan/[0.06]'
+                    )}
+                  >
+                    {freshKeys.has(rowKey(rev)) && <NewMark />}
                     <EventRow revision={rev} isLast={isLast} />
                   </div>
                 )
@@ -1501,7 +1525,14 @@ function RevisionsList({
               // not make the later save read as "every field changed".
               const prev = (data ?? []).slice(globalIdx + 1).find(isSnapshot)
               return (
-                <div key={rowKey(rev)} className='nvr-fade-in'>
+                <div
+                  key={rowKey(rev)}
+                  className={cn(
+                    'nvr-fade-in relative',
+                    freshKeys.has(rowKey(rev)) && 'rounded-md bg-nvr-cyan/[0.06]'
+                  )}
+                >
+                  {freshKeys.has(rowKey(rev)) && <NewMark />}
                   <RevisionRow
                     revision={rev}
                     previousData={prev?.data ?? null}
@@ -1517,6 +1548,19 @@ function RevisionsList({
         ))}
       </div>
     </div>
+  )
+}
+
+/** A history row that landed while the panel was open (#1881). */
+function NewMark() {
+  return (
+    // Under the timeline dot, inside the row's 36px gutter.
+    <span
+      data-revision-new
+      className='pointer-events-none absolute left-0 top-[32px] z-[1] w-9 text-center text-[8.5px] font-bold uppercase leading-3 tracking-wide text-[#0e7490] dark:text-[#67e8f9]'
+    >
+      New
+    </span>
   )
 }
 

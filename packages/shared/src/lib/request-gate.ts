@@ -1,4 +1,5 @@
 import type { Command, NivaroClient } from '@nivaro/sdk'
+import { noteOwnWriteFromCommand } from './own-writes'
 
 /**
  * Two transport-level wrappers over a NivaroClient.
@@ -191,7 +192,16 @@ export function withGetCoalescing(
   const batch = opts.batchReads ? readBatcher(client) : null
   const request = <T>(command: Command<T>): Promise<T> => {
     const c = command as unknown as AnyCommand
-    if (!isRead(c)) return client.request<T>(command)
+    if (!isRead(c)) {
+      // Live hooks (lib/live.ts) drop events for records this tab just wrote —
+      // noted before sending (the event can beat the response) and again with
+      // the response so a create's new id counts.
+      noteOwnWriteFromCommand(c._method, c._path, c._body)
+      return client.request<T>(command).then((res) => {
+        noteOwnWriteFromCommand(c._method, c._path, c._body, res)
+        return res
+      })
+    }
     const key = commandKey(c)
     const current = inflight.get(key)
     if (current) return (current as Promise<T>).then(cloneResult)
