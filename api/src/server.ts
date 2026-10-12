@@ -852,6 +852,24 @@ export async function buildServer() {
         await deliverPendingExtensionEvents()
       })
 
+      // Ask AI plans scheduled to run later (#1903): each minute, run the due
+      // ones (or send them back for approval when their records changed).
+      app.cron.schedule(
+        'ai-plans-scheduled',
+        '* * * * *',
+        async () => {
+          await import('./services/ai-plan-integrity.js')
+          const { runDuePlans } = await import('./services/ai-plan-schedule.js')
+          await runDuePlans()
+        },
+        {
+          quiet: true,
+          idempotent: 'safe',
+          description:
+            'Runs Ask AI plans that were approved to run at a set time; re-checks each step first and holds the plan for approval again when its records changed.'
+        }
+      )
+
       // Ops monitors: freshness / deploy-regression / synthetic checks.
       app.cron.schedule('ops-monitors', '*/5 * * * *', async () => {
         // #365 — alert engines pause during maintenance: a planned freeze must

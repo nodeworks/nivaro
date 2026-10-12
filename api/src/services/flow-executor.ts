@@ -1050,6 +1050,133 @@ async function runTaskOp(op: FlowOperation, data: FlowData, ctx: ExecutionContex
   }
 }
 
+/** Templated string values inside a filter / data object (other values as-is). */
+function resolveDeep(v: unknown, data: FlowData): unknown {
+  if (typeof v === 'string') return resolveTemplate(v, data)
+  if (Array.isArray(v)) return v.map((x) => resolveDeep(x, data))
+  if (v && typeof v === 'object') {
+    return Object.fromEntries(
+      Object.entries(v as Record<string, unknown>).map(([k, x]) => [k, resolveDeep(x, data)])
+    )
+  }
+  return v
+}
+
+const ITEM_WRITE_MAX = 200
+
+/**
+ * item-write (#1849): update or create records THROUGH THE ITEMS SERVICE —
+ * RBAC, validation, hooks, revisions and activity all apply. It runs as
+ * whoever triggered the flow (the tester runs it as the administrator
+ * testing), else the flow's author; nobody to run as = refused. Update
+ * targets are `ids` (a list, or a templated comma list like `{{keys}}`) or
+ * a `filter` resolved as that person (at most 200 records). A dry run only
+ * counts and previews.
+ */
+export async function runItemWrite(
+  op: FlowOperation,
+  data: FlowData,
+  ctx: ExecutionContext
+): Promise<{ status: 'resolve' | 'reject'; output: FlowData }> {
+  const opts = parseOpts(op)
+  const mode = opts.mode === 'create' ? 'create' : 'update'
+  const collection = resolveTemplate(String(opts.collection ?? ''), data).trim()
+  const resultKey = (opts.result_key as string) || 'write'
+  const reject = (why: string) => ({
+    status: 'reject' as const,
+    output: { ...data, $error: `item-write: ${why}` }
+  })
+  if (!collection || !COLLECTION_RE.test(collection) || /^(nivaro|directus)_/i.test(collection))
+    return reject('invalid collection')
+  const values = resolveDeep(opts.data ?? {}, data) as Record<string, unknown>
+  if (!values || typeof values !== 'object' || Object.keys(values).length === 0)
+    return reject('no fields to write')
+  const userId = ctx.userId ?? (await resolveFlowCreator(ctx.flowId))
+  if (!userId) return reject('no one to run as (no triggering user and no flow author)')
+  const { getUser } = await import('./users.js')
+  const user = await getUser(userId)
+  if (!user) return reject('the person it runs as no longer exists')
+  const items = await import('./items.js')
+
+  if (mode === 'create') {
+    if (ctx.dryRun) {
+      return {
+        status: 'resolve' as const,
+        output: {
+          ...data,
+          [`$preview_${op.key}`]: { op: 'item-write', mode, collection, data: values }
+        }
+      }
+    }
+    try {
+      const created = (await items.createOne(user, collection, values)) as Record<string, unknown>
+      return {
+        status: 'resolve' as const,
+        output: { ...data, [resultKey]: { id: created?.id ?? null } }
+      }
+    } catch (err) {
+      return reject(err instanceof Error ? err.message : 'create failed')
+    }
+  }
+
+  let ids: string[] = []
+  const rawIds = Array.isArray(opts.ids) ? opts.ids.map(String).join(',') : String(opts.ids ?? '')
+  if (rawIds.trim()) {
+    ids = resolveTemplate(rawIds, data)
+      .split(',')
+      .map((x) => x.trim())
+      .filter(Boolean)
+  } else if (opts.filter && typeof opts.filter === 'object') {
+    try {
+      const res = (await items.readItems(user, collection, {
+        filter: resolveDeep(opts.filter, data) as Record<string, unknown>,
+        fields: ['id'],
+        limit: ITEM_WRITE_MAX + 1
+      })) as { data?: Array<Record<string, unknown>> }
+      ids = (res.data ?? []).map((r) => String(r.id))
+    } catch (err) {
+      return reject(err instanceof Error ? err.message : 'filter failed')
+    }
+  } else {
+    return reject('update needs ids or a filter')
+  }
+  if (ids.length > ITEM_WRITE_MAX) return reject(`more than ${ITEM_WRITE_MAX} records — narrow it`)
+  if (ctx.dryRun) {
+    return {
+      status: 'resolve' as const,
+      output: {
+        ...data,
+        [`$preview_${op.key}`]: {
+          op: 'item-write',
+          mode,
+          collection,
+          records: ids.length,
+          ids: ids.slice(0, 20),
+          data: values
+        }
+      }
+    }
+  }
+  let updated = 0
+  const errors: string[] = []
+  for (const id of ids) {
+    try {
+      await items.updateOne(user, collection, id, { ...values })
+      updated++
+    } catch (err) {
+      if (errors.length < 5) errors.push(`${id}: ${err instanceof Error ? err.message : 'failed'}`)
+    }
+  }
+  const output = { ...data, [resultKey]: { updated, failed: ids.length - updated, errors } }
+  if (updated < ids.length) {
+    return {
+      status: 'reject' as const,
+      output: { ...output, $error: `item-write: ${ids.length - updated} record(s) refused` }
+    }
+  }
+  return { status: 'resolve' as const, output }
+}
+
 /**
  * chat-post (#970): post a message into a chat room as the assistant (or as a
  * platform line when the instance has no assistant). Channels, General and
@@ -1174,6 +1301,8 @@ async function runOperationInner(
       return runChatPost(op, data, ctx)
     case 'task':
       return runTaskOp(op, data, ctx)
+    case 'item-write':
+      return runItemWrite(op, data, ctx)
     default: {
       const { getOp } = await import('../flows/registry.js')
       const customOp = getOp(op.type)

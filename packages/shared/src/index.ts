@@ -8,11 +8,14 @@ export { AiMarkdown, parseAiMarkdown } from './components/ai/AiMarkdown'
 export {
   type AiPlan,
   AiPlanCard,
+  type AiPlanImpact,
   type AiPlanStatus,
   type AiPlanStep,
   type AiPlanStepState,
   type AiPlanSubscribe
 } from './components/ai/AiPlanCard'
+export { type AiPlanChangeRow, AiPlanChanges } from './components/ai/AiPlanChanges'
+export { AiPlansView } from './components/ai/AiPlansView'
 export { AiStepList } from './components/ai/AiStepList'
 export { DataGuideCard } from './components/ai/DataGuideCard'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
