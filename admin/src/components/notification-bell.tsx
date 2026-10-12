@@ -3,7 +3,8 @@ import {
   NivaroProvider,
   type NotificationRouteMap,
   playNotificationSound,
-  NotificationBell as SharedNotificationBell
+  NotificationBell as SharedNotificationBell,
+  soundForCategory
 } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Bell, KeyRound } from 'lucide-react'
@@ -76,12 +77,13 @@ export function NotificationBell({
   const subscribe = useCallback(
     (onNew: () => void) => {
       const socket = getSocket()
-      const handler = (n: { title?: string; subject?: string }) => {
+      const handler = (n: { title?: string; subject?: string; category?: string }) => {
         onNew()
         queryClient.invalidateQueries({ queryKey: ['notifications'] })
         toast.info(n.subject ?? n.title ?? 'New notification')
-        const prefs = (prefsRef.current ?? {}) as { notification_sound?: string }
-        playNotificationSound(prefs.notification_sound)
+        playNotificationSound(
+          soundForCategory(prefsRef.current as Record<string, unknown>, n.category)
+        )
       }
       socket.on('notification:new', handler)
       return () => {

@@ -6,6 +6,7 @@ import { addendumSummaryBatch } from '../services/addendum-summary.js'
 import { writeStartHistory } from '../services/instance-start.js'
 import { can } from '../services/permissions.js'
 import { syncAddendumInQueues } from '../services/queue-materialization.js'
+import { announceAddendumChange } from '../services/record-events.js'
 import { emitWorkflowStartEvent } from '../services/workflow-transitions.js'
 
 function parseJsonSafe(val: unknown): unknown {
@@ -412,6 +413,11 @@ export async function addendumsRoutes(app: FastifyInstance) {
     }
 
     void syncAddendumInQueues(String(insertedId), body.parent_collection, String(body.parent_id))
+
+    void announceAddendumChange(String(insertedId), {
+      collection: body.parent_collection,
+      id: String(body.parent_id)
+    })
     return reply.code(201).send({ data: formatAddendum(created) })
   })
 
@@ -485,6 +491,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       req
     })
 
+    void announceAddendumChange(id)
     return reply.send({ data: formatAddendum(updated) })
   })
 
@@ -514,6 +521,10 @@ export async function addendumsRoutes(app: FastifyInstance) {
 
     await db('nivaro_addendums').where({ id }).delete()
     void syncAddendumInQueues(id, String(existing.parent_collection), String(existing.parent_id))
+    void announceAddendumChange(id, {
+      collection: String(existing.parent_collection),
+      id: String(existing.parent_id)
+    })
 
     await logActivity({
       action: 'delete',
@@ -556,6 +567,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       req
     })
 
+    void announceAddendumChange(id)
     return reply.send({ data: { id, status: 'review' } })
   })
 
@@ -605,6 +617,11 @@ export async function addendumsRoutes(app: FastifyInstance) {
     })
 
     void syncAddendumInQueues(id, String(existing.parent_collection), String(existing.parent_id))
+
+    void announceAddendumChange(id, {
+      collection: String(existing.parent_collection),
+      id: String(existing.parent_id)
+    })
     return reply.send({ data: { id, status: 'approved' } })
   })
 
@@ -628,6 +645,7 @@ export async function addendumsRoutes(app: FastifyInstance) {
       comment: `restored ${result.line_changes_applied ?? 0} line change(s)${(result.line_changes_failed ?? 0) > 0 ? `, ${result.line_changes_failed} failed` : ''}`,
       req
     })
+    void announceAddendumChange(id)
     return reply.send({ data: { id, status: 'reverted' } })
   })
 
@@ -662,6 +680,11 @@ export async function addendumsRoutes(app: FastifyInstance) {
     })
 
     void syncAddendumInQueues(id, String(existing.parent_collection), String(existing.parent_id))
+
+    void announceAddendumChange(id, {
+      collection: String(existing.parent_collection),
+      id: String(existing.parent_id)
+    })
     return reply.send({ data: { id, status: 'rejected' } })
   })
 }

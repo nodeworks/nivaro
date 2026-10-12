@@ -1,3 +1,4 @@
+import { relayLiveEvent } from '@nivaro/shared'
 import { useEffect, useRef, useState } from 'react'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
@@ -64,6 +65,11 @@ export function useRecordPresence(collection: string | undefined, item: string |
     socket.on('auth:ok', () => {
       socket.emit('record:join', { collection, item })
     })
+
+    // This socket is the one inside the record room (and the user room): hand
+    // the live-record notices to the shared hooks (lib/live.ts useLiveEvent).
+    const relayed = ['record:integrity', 'record:automation', 'owners:changed', 'access:changed']
+    for (const ev of relayed) socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
 
     socket.on(
       'record:viewers',

@@ -7,6 +7,7 @@ import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import { HelpVideoRenderQueue } from '@/components/help-video-render-queue'
 import { SimpleSelect } from '@/components/ui/simple-select'
+import { ExplainButton } from '@/components/explain-button'
 import { api } from '@/lib/api'
 import { describeCron } from '@/lib/cron-text'
 import { adminRealtime, joinWatchRoom } from '@/lib/socket'
@@ -899,6 +900,11 @@ export default function BackgroundJobs() {
                           <span className='break-words text-[11.5px] text-slate-500 dark:text-muted-foreground'>
                             {r.outcome ?? '—'}
                           </span>
+                        )}
+                        {r.error && (
+                          <div className='mt-1'>
+                            <ExplainButton kind='job-run' params={{ id: r.id }} />
+                          </div>
                         )}
                         {r.chain_id && r.status !== 'running' && (
                           <button

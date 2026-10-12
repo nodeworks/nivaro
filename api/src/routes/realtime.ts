@@ -109,6 +109,37 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
     return { data: { reset: true } }
   })
 
+  /**
+   * Event pipeline health (#1673 durable journal, #1737 stream, #1875 raw
+   * writes, #1682 delivery probe). Counters are this process's; probe results
+   * are shared through Redis so every replica shows the same history.
+   */
+  app.get('/pipeline', async () => {
+    const [{ eventStreamStats }, { durableJournalStats }, { rawWriteStats }, probe] =
+      await Promise.all([
+        import('../services/event-stream.js'),
+        import('../services/event-journal-store.js'),
+        import('../services/raw-write-announcer.js'),
+        import('../services/realtime-probe.js')
+      ])
+    return {
+      data: {
+        journal_seq: await currentSeq(),
+        stream: eventStreamStats(),
+        durable: durableJournalStats(),
+        raw_writes: rawWriteStats(),
+        probes: await probe.recentProbeResults(app, 20)
+      }
+    }
+  })
+
+  /** Run the delivery probe now (#1682) — the same check the realtime monitor runs. */
+  app.post<{ Body: { threshold_ms?: number } }>('/probe', async (req) => {
+    const { runRealtimeProbe } = await import('../services/realtime-probe.js')
+    const result = await runRealtimeProbe(app, { thresholdMs: Number(req.body?.threshold_ms) })
+    return { data: result }
+  })
+
   // Now-editing pulse (#273): active edit locks (cross-replica truth) + this
   // node's record-room viewers.
   app.get('/now-editing', async () => {

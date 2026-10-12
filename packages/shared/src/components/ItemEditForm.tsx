@@ -167,7 +167,7 @@ import {
   invalidateRecordNotes,
   RecordInsightsButton
 } from './item-edit/RecordInsights'
-import { RecordLiveSync } from './item-edit/RecordLiveSync'
+import { type RecordGone, RecordLiveSync } from './item-edit/RecordLiveSync'
 import { RecordRecapStrip } from './item-edit/RecordRecapStrip'
 import { RecordSubscribeButton } from './item-edit/RecordSubscribeButton'
 import { ValidationSummary, type ValidationSummaryItem } from './item-edit/ValidationSummary'
@@ -201,9 +201,11 @@ import {
   AddendumPanel,
   CommentPanel,
   CustomActionButtons,
+  deniedToastAction,
   ExternalRequestsChip,
   ItemActionButtons,
   ItemLockBanner,
+  isAccessRefusal,
   LockHolderButton,
   OwnersSlot,
   PipelinePanel,
@@ -213,6 +215,7 @@ import {
   RevisionsPanel,
   TaskPanel,
   useItemLock,
+  WhyDeniedButton,
   WorkflowPanel
 } from './panels'
 import { RecordEventPathSheet } from './panels/IntegrationActivitySection'
@@ -305,6 +308,8 @@ interface SaveStepItem {
   detail?: string
   progress?: { done: number; total: number }
   error?: string
+  /** The server refused on access (403) — the dialog offers "Why?" (#1867). */
+  denied?: boolean
 }
 
 function SaveStepIcon({ status }: { status: SaveStepStatus }) {
@@ -320,11 +325,14 @@ function SaveStepIcon({ status }: { status: SaveStepStatus }) {
 function SaveProgressDialog({
   open,
   steps,
-  onClose
+  onClose,
+  record
 }: {
   open: boolean
   steps: SaveStepItem[]
   onClose: () => void
+  /** The saved record — set for an existing record, so a refusal can be explained. */
+  record?: { collection: string; itemId: string } | null
 }) {
   const allSettled =
     steps.length > 0 && steps.every((s) => s.status === 'done' || s.status === 'error')
@@ -426,6 +434,16 @@ function SaveProgressDialog({
                       {step.error && (
                         <p className='text-[11px] text-red-500 mt-0.5 break-words leading-snug'>
                           {step.error}
+                          {step.denied && record && (
+                            <>
+                              {' '}
+                              <WhyDeniedButton
+                                collection={record.collection}
+                                itemId={record.itemId}
+                                action='update'
+                              />
+                            </>
+                          )}
                         </p>
                       )}
                       {step.status === 'running' && rowPct !== null && (
@@ -1332,6 +1350,9 @@ export function ItemEditForm({
     return () => document.removeEventListener('mousedown', handleOutside)
   }, [showPdfDropdown])
 
+  // Deleted by someone else (#1871) or hidden by an access change (#1925)
+  // while open: the form stays on screen, read-only, and stops re-reading.
+  const [recordGone, setRecordGone] = useState<RecordGone | null>(null)
   const {
     data: itemData,
     isLoading: itemLoading,
@@ -1342,7 +1363,7 @@ export function ItemEditForm({
       client
         .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${itemId}`))
         .then((r) => r.data),
-    enabled: !isNew,
+    enabled: !isNew && !recordGone,
     staleTime: 30_000,
     // 403/404 are access verdicts, not transient — retrying just delays the
     // AccessDeniedPanel explanation.
@@ -3771,7 +3792,7 @@ export function ItemEditForm({
   const {
     lockHolder,
     acquired: lockAcquired,
-    isReadOnly,
+    isReadOnly: lockReadOnly,
     takeOver,
     takingOver,
     requestLock,
@@ -3788,6 +3809,7 @@ export function ItemEditForm({
     released: lockReleased,
     relock: relockLock
   } = useItemLock(collection, !isNew ? itemId : undefined, lockEnabled)
+  const isReadOnly = lockReadOnly || !!recordGone
   relockOnEditRef.current = lockReleased && !lockHolder ? () => void relockLock() : null
 
   // ── Layout / groups ────────────────────────────────────────────────────────
@@ -6108,6 +6130,7 @@ export function ItemEditForm({
     // eslint-disable-next-line react-hooks/exhaustive-deps -- ref indirection keeps the handle stable
   }, [registerSaveHandler])
   function handleSave() {
+    if (recordGone) return
     if (!validateAll()) return
     void (async () => {
       const challenge = await preflightChangeReason()
@@ -6346,7 +6369,7 @@ export function ItemEditForm({
           throw err
         }
         const msg = errMsg(err)
-        updateStep('main', { status: 'error', error: msg })
+        updateStep('main', { status: 'error', error: msg, denied: isAccessRefusal(err) })
         const resp = (err as { response?: { data?: { error?: string; field?: string } } })?.response
         if (resp?.data?.field)
           setValidationErrors({ [resp.data.field]: resp.data.error ?? 'Invalid' })
@@ -6985,7 +7008,19 @@ export function ItemEditForm({
       qc.invalidateQueries({ queryKey: ['item', collection] })
       onDeleted?.()
     },
-    onError: () => toast.error('Failed to delete')
+    onError: (err) =>
+      toast.error(
+        'Failed to delete',
+        isAccessRefusal(err) && itemId
+          ? {
+              action: deniedToastAction(client, {
+                collection,
+                itemId: String(itemId),
+                action: 'delete'
+              })
+            }
+          : undefined
+      )
   })
 
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -8675,7 +8710,9 @@ export function ItemEditForm({
   // ── Access denied / not found ──────────────────────────────────────────────
   // A 403/404 on the record load used to leave a silently empty form —
   // explain WHY (role permission, RLS, or which User Scope excludes it).
-  if (itemLoadDenied) {
+  // A record that was showing and then stopped answering keeps its form —
+  // RecordLiveSync says why (deleted / access) and saving is off.
+  if (itemLoadDenied && !itemData) {
     return (
       <div className={cn('nvr-fade-in flex flex-1 min-h-0 flex-col overflow-y-auto', className)}>
         <AccessDeniedPanel
@@ -8760,6 +8797,11 @@ export function ItemEditForm({
                                 open={saveDialogOpen}
                                 steps={saveSteps}
                                 onClose={() => setSaveDialogOpen(false)}
+                                record={
+                                  !isNew && itemId != null
+                                    ? { collection, itemId: String(itemId) }
+                                    : null
+                                }
                               />
                               <Dialog
                                 open={!!reimportDialog}
@@ -10722,6 +10764,9 @@ export function ItemEditForm({
                                       <RecordLiveSync
                                         collection={collection}
                                         itemId={String(itemId)}
+                                        dirty={isDirty}
+                                        loadDenied={itemLoadDenied}
+                                        onGoneChange={setRecordGone}
                                       />
                                     )}
                                     {staleBy && (

@@ -180,6 +180,26 @@ describe('room gates (#1720)', () => {
     vi.mocked(can).mockResolvedValueOnce(false)
     expect(await roomStillAllowed(ANA, 't:A:collection:orders', notAdmin)).toBe(false)
   })
+  it('gates live operations rooms by their topic (ops-live.ts)', async () => {
+    const admin = async () => true
+    for (const t of ['readiness', 'broadcasts', 'issue:42']) {
+      expect(await roomStillAllowed(ANA, `t:A:ops:${t}`, notAdmin)).toBe(false)
+      expect(await roomStillAllowed(ANA, `ops:${t}`, admin)).toBe(true)
+    }
+    for (const t of ['issues', 'support', 'team', 'delegation', 'my-work'])
+      expect(await roomStillAllowed(ANA, `t:A:ops:${t}`, notAdmin)).toBe(true)
+    expect(await roomStillAllowed(ANA, 'ops:bogus', notAdmin)).toBe(false)
+  })
+  it("keeps the tenant-wide `all` room for the socket's own tenant only", async () => {
+    const ctx = { tenantNames: ['T-A', 'acme'] }
+    expect(await roomStillAllowed(ANA, 't:T-A:all', notAdmin, ctx)).toBe(true)
+    expect(await roomStillAllowed(ANA, 't:T-B:all', notAdmin, ctx)).toBe(false)
+    expect(await roomStillAllowed(ANA, 'all', notAdmin, ctx)).toBe(false)
+  })
+  it('gates watch:conformance (and any watch room) for administrators', async () => {
+    expect(await roomStillAllowed(ANA, 't:A:watch:conformance', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 't:A:watch:conformance', async () => true)).toBe(true)
+  })
   it('keeps page presence for any signed-in person', async () => {
     expect(await roomStillAllowed(ANA, 'presence:some-page', notAdmin)).toBe(true)
   })

@@ -7,6 +7,7 @@ import {
   BarChart3,
   Bell,
   BellDot,
+  BookMarked,
   BookOpen,
   Braces,
   Building2,
@@ -15,6 +16,7 @@ import {
   CalendarRange,
   CheckSquare,
   Clapperboard,
+  ClipboardCheck,
   ClipboardList,
   Clock,
   Code2,
@@ -437,6 +439,13 @@ export const navCategories: NavCategory[] = [
       },
       { icon: BarChart2, label: 'API Analytics', to: '/api-analytics', section: 'Usage' },
       { icon: Sparkles, label: 'AI Analytics', to: '/ai-analytics', section: 'Usage' },
+      {
+        icon: BookMarked,
+        label: 'AI Knowledge',
+        to: '/ai-knowledge',
+        section: 'Usage',
+        keywords: 'glossary data guide docs gaps ask ai suggestions'
+      },
       { icon: MessagesSquare, label: 'Chat Analytics', to: '/chat-analytics', section: 'Usage' },
       {
         icon: Clapperboard,
@@ -638,6 +647,12 @@ export const navCategories: NavCategory[] = [
         label: 'Config Health',
         to: '/config-health',
         keywords: 'lint hygiene'
+      },
+      {
+        icon: ClipboardCheck,
+        label: 'Config Review',
+        to: '/config-review',
+        keywords: 'monthly cleanup tidy duplicate unused labels contradicting rules'
       },
       {
         icon: SearchCode,

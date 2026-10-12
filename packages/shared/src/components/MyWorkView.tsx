@@ -6,8 +6,11 @@ import {
   resolveNotificationTarget,
   runNotificationTarget
 } from '../lib/notification-target'
+import { useLiveEvent } from '../lib/live'
+import { useFreshIds, useLiveOps } from '../lib/live-ops'
 import { useOptionalRealtime } from '../lib/realtime'
 import { slaChip, withinDay } from '../lib/sla-chip'
+import { cn } from '../lib/utils'
 import { canOpenChatRoom, openChatRoom } from './chat/chat-core'
 import { useMyRecordRooms } from './chat/chat-hooks'
 import { LearningPathCard } from './help-videos/viewer/LearningPathCard'
@@ -89,6 +92,9 @@ interface MyWorkData {
     notifications: number
   }
 }
+
+/** Minimum gap between live refetches: My Work re-aggregates live owner resolution. */
+const LIVE_GAP_MS = 8000
 
 const MY_WORK_SECTIONS = ['records', 'tasks', 'team', 'waiting', 'notifications']
 const SECTION_LABEL: Record<string, string> = {
@@ -223,6 +229,42 @@ export function MyWorkView({
     },
     staleTime: 60_000
   })
+
+  // Live: records, tasks and notifications enter and leave as they change. A poke names nothing;
+  // the page re-reads /my-work. The re-aggregation is expensive, so a burst waits (client
+  // debounce) and refetches are at least LIVE_GAP_MS apart — a trailing one is never dropped.
+  const lastLive = useRef(0)
+  const liveTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const livePoke = () => {
+    const run = () => {
+      liveTimer.current = null
+      lastLive.current = Date.now()
+      setUpdatesPending(false)
+      void qc.invalidateQueries({ queryKey: ['my-work'] })
+    }
+    const wait = lastLive.current + LIVE_GAP_MS - Date.now()
+    if (liveTimer.current) return
+    if (wait <= 0) run()
+    else liveTimer.current = setTimeout(run, wait)
+  }
+  useLiveOps('my-work', livePoke, { debounceMs: 1500 })
+  // A new inbox row reaches this person on their own room (no table poke: inserts are constant).
+  useLiveEvent('notification:new', livePoke, { debounceMs: 1500 })
+  useEffect(
+    () => () => {
+      if (liveTimer.current) clearTimeout(liveTimer.current)
+    },
+    []
+  )
+  const freshKeys = useFreshIds([
+    ...(data?.owned ?? []).map((o) => `o:${o.collection}:${o.item}`),
+    ...(data?.tasks ?? []).map((t) => `t:${t.id}`),
+    ...(data?.team_tasks ?? []).map((t) => `tt:${t.id}`),
+    ...(data?.requested ?? []).map((t) => `r:${t.id}`),
+    ...(data?.notifications ?? []).map((n) => `n:${n.id}`)
+  ])
+  const hl = (key: string) =>
+    freshKeys.has(key) ? 'bg-nvr-cyan/10 transition-colors duration-700' : 'transition-colors duration-700'
 
   const liveCollections = useMemo(() => {
     const set = new Set<string>()
@@ -508,7 +550,11 @@ export function MyWorkView({
                 ) : (
                   <ul className='divide-y divide-slate-100 dark:divide-border/60'>
                     {filteredOwned.map((o) => (
-                      <li key={`${o.collection}:${o.item}`}>
+                      <li
+                        key={`${o.collection}:${o.item}`}
+                        className={hl(`o:${o.collection}:${o.item}`)}
+                        data-my-work-fresh={freshKeys.has(`o:${o.collection}:${o.item}`) || undefined}
+                      >
                         <button
                           type='button'
                           onClick={() => open(o.collection, o.item)}
@@ -542,7 +588,10 @@ export function MyWorkView({
               ) : (
                 <ul className='divide-y divide-slate-100 dark:divide-border/60'>
                   {data.tasks.map((t) => (
-                    <li key={t.id} className='flex items-center gap-2.5 px-4 py-2'>
+                    <li
+                      key={t.id}
+                      className={cn('flex items-center gap-2.5 px-4 py-2', hl(`t:${t.id}`))}
+                    >
                       <button
                         type='button'
                         title='Mark done'
@@ -614,7 +663,7 @@ export function MyWorkView({
                     {(data.team_tasks ?? []).map((t) => (
                       <li
                         key={t.id}
-                        className='flex items-center gap-2.5 px-4 py-2'
+                        className={cn('flex items-center gap-2.5 px-4 py-2', hl(`tt:${t.id}`))}
                         data-my-work-team-task={t.id}
                       >
                         {t.priority === 'urgent' && (
@@ -691,7 +740,7 @@ export function MyWorkView({
                       return (
                         <li
                           key={t.id}
-                          className='flex items-center gap-2.5 px-4 py-2'
+                          className={cn('flex items-center gap-2.5 px-4 py-2', hl(`r:${t.id}`))}
                           data-my-work-requested={t.id}
                         >
                           <button
@@ -763,7 +812,10 @@ export function MyWorkView({
               ) : (
                 <ul className='divide-y divide-slate-100 dark:divide-border/60'>
                   {data.notifications.map((n) => (
-                    <li key={n.id} className='flex items-start gap-2.5 px-4 py-2'>
+                    <li
+                      key={n.id}
+                      className={cn('flex items-start gap-2.5 px-4 py-2', hl(`n:${n.id}`))}
+                    >
                       <UserAvatar
                         userId={n.sender}
                         className='mt-0.5 h-5 w-5'

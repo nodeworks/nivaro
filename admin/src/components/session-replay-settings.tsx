@@ -225,13 +225,16 @@ function CostCard({ settings }: { settings: ReplaySettingsRow | undefined }) {
   useEffect(() => {
     if (!dirty) setDraft(readCostDraft(settings))
   }, [stored, dirty])
-  // The routes that cost the most this week, offered as suggestions.
+  // The routes that cost the most this week, offered as suggestions. The cost panel caches the
+  // whole summary under this same key, so fetch that shape and narrow it with `select`.
   const usage = useQuery({
     queryKey: ['ops', '/ops-db/session-replay'],
     queryFn: () =>
       api
-        .get<{ data: { by_route: Array<{ route: string }> } }>('/ops-db/session-replay')
-        .then((r) => r.data.data.by_route.map((x) => x.route).filter(Boolean)),
+        .get<{ data: { by_route?: Array<{ route: string }> } }>('/ops-db/session-replay')
+        .then((r) => r.data.data),
+    select: (d: { by_route?: Array<{ route: string }> }) =>
+      (Array.isArray(d?.by_route) ? d.by_route : []).map((x) => x.route).filter(Boolean),
     staleTime: 60_000
   })
   const save = useSaveSettings(

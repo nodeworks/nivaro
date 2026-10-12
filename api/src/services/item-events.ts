@@ -36,7 +36,8 @@ function deliver(ev: ItemEvent): void {
   const { tenant = '', ...event } = ev
   const payload = { itemMutated: { ...event, data: null } }
   // Only subscribers of the same tenant hear it (they subscribe under their own tenant key).
-  pubsub.publish(topics.itemMutated(ev.collection, ev.item, tenant), payload)
+  // A raw bulk write (#1875) arrives as item '*' — publish it once.
+  if (ev.item !== '*') pubsub.publish(topics.itemMutated(ev.collection, ev.item, tenant), payload)
   pubsub.publish(topics.itemMutated(ev.collection, '*', tenant), payload)
 }
 

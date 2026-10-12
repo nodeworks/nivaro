@@ -275,7 +275,10 @@ export async function itemLocksRoutes(app: FastifyInstance) {
     // Release all active locks when disabling
     if (!item_locking_enabled) {
       await db('nivaro_item_locks').where({ collection }).delete()
-      app.io?.to(`collection:${collection}`).emit('item-lock-disabled', { collection })
+      // Cloud: the requesting tenant's collection room (tenant-rooms.ts).
+      app.io?.to(tenantScopedRoom(`collection:${collection}`)).emit('item-lock-disabled', {
+        collection
+      })
     }
 
     await logActivity({

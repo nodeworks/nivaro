@@ -55,6 +55,7 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
+import { LIVE_ASPECTS } from '../lib/live'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
 import { updateItemIds, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
@@ -4665,6 +4666,28 @@ export function CollectionBrowserView({
   useEffect(() => {
     if (!realtime || !collection) return
     const scheduleInvalidate = () => setPendingLive((n) => n + 1)
+    // Aspect notices (#1874/#1873/#1825/#1824 — `$tasks`, `$addendums`, …)
+    // say a row's related counts/badges moved, not its columns: refresh just
+    // those per-page reads, coalesced, and never count them into the pill.
+    const aspectKeys = new Map<string, unknown[]>()
+    let aspectTimer: ReturnType<typeof setTimeout> | null = null
+    const noteAspects = (fields: string[]) => {
+      const add = (k: unknown[]) => aspectKeys.set(JSON.stringify(k), k)
+      if (fields.includes(LIVE_ASPECTS.tasks)) add(['cbv-task-counts', collection])
+      if (fields.includes(LIVE_ASPECTS.addendums)) add(['cbv-addendum-summary', collection])
+      if (fields.includes(LIVE_ASPECTS.integrations)) add(['cbv-integrations-summary', collection])
+      if (fields.includes(LIVE_ASPECTS.comments)) add(['row-comment-counts', collection])
+      if (fields.includes(LIVE_ASPECTS.state)) {
+        add(['cbv-pipeline-instances', collection])
+        add(['cbv-owners', collection])
+      }
+      if (aspectTimer) return
+      aspectTimer = setTimeout(() => {
+        aspectTimer = null
+        for (const k of aspectKeys.values()) void qc.invalidateQueries({ queryKey: k })
+        aspectKeys.clear()
+      }, 300)
+    }
     const refreshRow = (id: string) =>
       client
         .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
@@ -4684,12 +4707,19 @@ export function CollectionBrowserView({
         })
         .catch(() => scheduleInvalidate())
     const unsub = realtime.subscribeCollections([collection], (ev) => {
-      // A coalesced burst (#1681) lists its ids — or none ("many"), which is one refresh.
-      const ids = updateItemIds(ev)
+      // A coalesced burst (#1681) lists its ids — or none ("many"), which is one refresh;
+      // a bulk raw write names '*'.
+      const ids = updateItemIds(ev)?.map(String) ?? null
+      const anyVisible =
+        ids === null || ids.some((id) => id === '*' || visibleIdsRef.current.has(id))
+      const fields = ev.changed_fields
+      if (!ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
+        if (anyVisible) noteAspects(fields)
+        return
+      }
       if (ids === null) return scheduleInvalidate()
       let offPage = false
-      for (const raw of ids) {
-        const id = String(raw)
+      for (const id of ids) {
         if (ev.action !== 'delete' && visibleIdsRef.current.has(id)) void refreshRow(id)
         else offPage = true
       }
@@ -4697,6 +4727,7 @@ export function CollectionBrowserView({
     })
     return () => {
       unsub()
+      if (aspectTimer) clearTimeout(aspectTimer)
     }
   }, [realtime, collection, qc, client])
 
@@ -7182,7 +7213,14 @@ export function CollectionBrowserView({
               </span>
             )}
             {v.is_shared && !v.is_default && !v.role_default && <span title='Shared'>⚭</span>}
-            <button type='button' onClick={() => applyView(v)}>
+            <button
+              type='button'
+              onClick={() => {
+                applyView(v)
+                // Feeds the config review's "views nobody opens" (#2020).
+                client.request(post(`/saved-views/${v.id}/opened`, {})).catch(() => {})
+              }}
+            >
               {v.name}
             </button>
             {v.default_for_role && (

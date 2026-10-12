@@ -13,6 +13,7 @@ import {
   olderReason
 } from '../services/client-version.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
+import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
@@ -165,9 +166,10 @@ export function emitForceRefresh(
   return { sockets, users: users.size }
 }
 
-/** Cloud: every socket of a tenant sits in this room, on every replica (force refresh). */
+/** Cloud: every signed-in socket of a tenant sits in this room (record-events.ts
+ *  TENANT_ALL_ROOM, joined at sign-in), on every replica — force refresh rides it. */
 function tenantSocketsRoom(tenant: string): string {
-  return tenantScopedRoom('sockets', tenant)
+  return tenantScopedRoom('all', tenant)
 }
 
 export function getRealtimeStats(): {
@@ -546,7 +548,6 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         tenantKey = String(t.tenantId || t.slug)
         socket.data.nvrTenantKey = tenantKey
         socket.data.nvrTenantNames = [t.tenantId, t.slug].filter(Boolean).map(String)
-        socket.join(tenantSocketsRoom(tenantKey))
         noteTenantSocket(tenantKey, 1, t.slug)
       })
     }
@@ -667,20 +668,25 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Missed-event catch-up (#266): client sends its last-seen sequence after
     // (re)joining its rooms; we replay what it missed, or tell it honestly
     // that the window is gone and it should refetch.
-    socket.on('catchup', async (payload: { cursor?: number }) => {
-      const cursor = Number(payload?.cursor)
-      if (!Number.isFinite(cursor) || cursor < 0) return
-      try {
-        const { replaySince } = await import('../services/event-journal.js')
-        const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
-        const result = await replaySince(cursor, rooms)
-        if (result.full) socket.emit('catchup:full', {})
-        else socket.emit('catchup:events', { events: result.events })
-      } catch (err) {
-        app.log.debug({ err }, 'catchup failed')
-        socket.emit('catchup:full', {})
-      }
-    })
+    // Cloud: replay runs in the socket's tenant (its journal table), and the
+    // socket's rooms are tenant-prefixed, so only its tenant's events return.
+    socket.on(
+      'catchup',
+      inSocketTenant(socket, async (payload: { cursor?: number }) => {
+        const cursor = Number(payload?.cursor)
+        if (!Number.isFinite(cursor) || cursor < 0) return
+        try {
+          const { replaySince } = await import('../services/event-journal.js')
+          const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
+          const result = await replaySince(cursor, rooms)
+          if (result.full) socket.emit('catchup:full', {})
+          else socket.emit('catchup:events', { events: result.events })
+        } catch (err) {
+          app.log.debug({ err }, 'catchup failed')
+          socket.emit('catchup:full', {})
+        }
+      })
+    )
 
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
     const watchGate = createWatchRoomGate()
@@ -727,6 +733,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Set once `auth` succeeds below; gates authenticated-only handlers
     // (e.g. collection:join) for the lifetime of this socket connection.
     let authenticatedUser: User | null = null
+    /** Cloud: an authenticated socket joins its tenant's `all` room, where
+     *  tenant-wide notices (owners:changed, access:changed — record-events.ts)
+     *  go instead of io.emit (TENANT_ALL_ROOM there). Self-hosted: nothing to join. */
+    const joinTenantAllRoom = async () => {
+      if (!process.env.CLOUD_META_DB_URL) return
+      const t = await socketTenant(socket).catch(() => null)
+      if (t) socket.join(tenantScopedRoom('all', t.tenantId || t.slug))
+    }
 
     /** Sign the socket in as `user`, bound to what signed it in (#1719). */
     const signIn = (user: User, bind: SocketBind) => {
@@ -742,6 +756,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       // A revoke publishes to these rooms, which reach the socket on every replica.
       if (bind.kind === 'session') socket.join(sessionRoom(bind.sid))
       else if (bind.kind === 'masq') socket.join(masqRoom(bind.token))
+      void joinTenantAllRoom()
       socket.emit('auth:ok', { userId: user.id })
     }
 
@@ -777,7 +792,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         }
         // Tell every viewer rather than making them poll. This is the whole
         // reason the list can feel instant instead of up to a minute stale.
-        io.emit('presence:changed', { user_id: userId })
+        // Cloud: the socket's own tenant only (its `all` room); self-hosted: everyone.
+        if (cloud)
+          io.to(tenantScopedRoom('all', tenantNow())).emit('presence:changed', { user_id: userId })
+        else io.emit('presence:changed', { user_id: userId })
       } catch (err) {
         app.log.debug({ err, userId }, 'presence write failed')
       }
@@ -950,27 +968,86 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)
 
-    socket.on('collection:join', async (payload: { collection?: string }) => {
+    /** Cloud: collection rooms are per tenant (tenant-rooms.ts) — journaled
+     *  events from a tenant's context go to `t:<tenant>:collection:<c>`. A cloud
+     *  socket with no resolvable tenant joins nothing. Self-hosted: unchanged. */
+    const collectionRoom = async (collection: string): Promise<string | null> => {
+      if (!process.env.CLOUD_META_DB_URL) return `collection:${collection}`
+      const t = await socketTenant(socket)
+      return t ? tenantScopedRoom(`collection:${collection}`, t.tenantId || t.slug) : null
+    }
+    socket.on(
+      'collection:join',
+      inSocketTenant(socket, async (payload: { collection?: string }) => {
+        const collection = payload?.collection
+        if (typeof collection !== 'string' || collection.length === 0) return
+        const user = authenticatedUser
+        if (!user) return
+        // A real collection name only: `orders:5` would name another room kind.
+        if (!(await isKnownCollection(collection))) return
+        try {
+          const allowed = await can(user, 'read', collection)
+          const room = allowed ? await collectionRoom(collection) : null
+          if (room) socket.join(room)
+        } catch (err) {
+          app.log.warn({ err, collection }, 'collection:join permission check failed')
+        }
+      })
+    )
+    socket.on('collection:leave', async (payload: { collection?: string }) => {
       const collection = payload?.collection
       if (typeof collection !== 'string' || collection.length === 0) return
-      const user = authenticatedUser
-      if (!user) return
-      // A real collection name only: `orders:5` would name another room kind.
-      if (!(await isKnownCollection(collection))) return
-      try {
-        const allowed = await can(user, 'read', collection)
-        if (allowed) {
-          socket.join(`collection:${collection}`)
-        }
-      } catch (err) {
-        app.log.warn({ err, collection }, 'collection:join permission check failed')
+      // Self-hosted: leave at once (no await), as before.
+      if (!process.env.CLOUD_META_DB_URL) socket.leave(`collection:${collection}`)
+      else {
+        const room = await collectionRoom(collection)
+        if (room) socket.leave(room)
       }
     })
-    socket.on('collection:leave', (payload: { collection?: string }) => {
-      const collection = payload?.collection
-      if (typeof collection === 'string' && collection.length > 0) {
-        socket.leave(`collection:${collection}`)
+    // ── Live operations pages (services/ops-live.ts) ────────────────────────
+    // `ops:join {topic}` — an allowlisted topic, gated like the route that serves the
+    // same page (admin topics check the role at join, through the same ordered gate the
+    // watch rooms use so a quick join + leave cannot leave a socket behind).
+    const opsRoomOf = async (topic: string): Promise<string | null> => {
+      if (!process.env.CLOUD_META_DB_URL) return opsRoom(topic, '')
+      const t = await socketTenant(socket)
+      return t ? opsRoom(topic, t.tenantId || t.slug) : null
+    }
+    socket.on(
+      'ops:join',
+      inSocketTenant(socket, async (payload: { topic?: string }) => {
+        const spec = opsTopicGate(payload?.topic)
+        const user = authenticatedUser
+        if (!spec || !user) return
+        try {
+          const room = await opsRoomOf(spec.topic)
+          if (!room) return
+          await watchGate.join(
+            `ops:${spec.topic}`,
+            async () => {
+              if (spec.gate === 'auth') return true
+              if (!user.role) return false
+              const role = await db('nivaro_roles').where({ id: user.role }).first()
+              return !!role?.admin_access
+            },
+            () => socket.join(room)
+          )
+        } catch (err) {
+          app.log.warn({ err, topic: spec.topic }, 'ops:join check failed')
+        }
+      })
+    )
+    socket.on('ops:leave', (payload: { topic?: string }) => {
+      const spec = opsTopicGate(payload?.topic)
+      if (!spec) return
+      if (!process.env.CLOUD_META_DB_URL) {
+        // Self-hosted: no await, so a quick join + leave keeps its order.
+        watchGate.leave(`ops:${spec.topic}`, () => socket.leave(opsRoom(spec.topic, '')))
+        return
       }
+      void opsRoomOf(spec.topic).then((room) => {
+        if (room) watchGate.leave(`ops:${spec.topic}`, () => socket.leave(room))
+      })
     })
     // ── Record presence v2 — viewer avatars + field editing indicators ──────
     // Room per record; viewer lists live in a module-level map (single-node

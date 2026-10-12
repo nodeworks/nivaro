@@ -192,6 +192,8 @@ export async function buildServer() {
     const { setAppRef, setIo } = await import('./services/io-holder.js')
     setIo(app.io)
     setAppRef(app)
+    const { wireOpsLive } = await import('./services/ops-live.js')
+    wireOpsLive()
     const { setJournalRedis } = await import('./services/event-journal.js')
     setJournalRedis(app.redis)
     const { setExtensionRoutes, startTrafficMapEmitter } = await import('./services/traffic-map.js')
@@ -209,6 +211,21 @@ export async function buildServer() {
     app.addHook('onClose', async () => {
       await closeItemEvents()
     })
+    // Realtime event pipeline: journaled events cross replicas on a Redis
+    // stream (#1737); the durable journal (#1673) keeps the sequence ahead of
+    // a Redis that lost its keys. Both fail open — events still flow without.
+    {
+      const { initEventStream, closeEventStream } = await import('./services/event-stream.js')
+      await initEventStream(app.redis)
+      const { alignJournalSequence, flushJournal } = await import('./services/event-journal.js')
+      void alignJournalSequence()
+      const { flushRawWriteQueue } = await import('./services/raw-write-announcer.js')
+      app.addHook('onClose', async () => {
+        flushRawWriteQueue()
+        await flushJournal().catch(() => {})
+        await closeEventStream()
+      })
+    }
     const { setTransitionGuardRedis } = await import('./services/transition-guard.js')
     setTransitionGuardRedis(app.redis)
     // Idempotency keys: one store hook for the whole app (no-op without a claim).
@@ -705,6 +722,10 @@ export async function buildServer() {
               app.log.warn({ err }, '[retention] integration obligations prune failed')
             )
           await pruneAiCalls().catch(() => 0)
+          // #1833 — Ask AI conversations past ai_conversation_retention_days (pinned kept).
+          await import('./services/ai-conversations.js')
+            .then((m) => m.pruneConversations())
+            .catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
             .del()
@@ -828,6 +849,14 @@ export async function buildServer() {
       app.cron.schedule('config-health-sweep', '10 3 * * *', async () => {
         const { runConfigHealthSweep } = await import('./services/config-health.js')
         await runConfigHealthSweep()
+      })
+
+      // Config review (#1913/#2020/#1999): monthly report of configuration
+      // problems, cleanup suggestions and label inconsistencies, with the
+      // model re-wording reasons when AI is configured; admins are told.
+      app.cron.schedule('config-review-monthly', '20 4 1 * *', async () => {
+        const { runMonthlyConfigReview } = await import('./services/config-review/index.js')
+        await runMonthlyConfigReview()
       })
 
       // Extension event outbox (#504): deliver pending rows to registered
@@ -1327,6 +1356,24 @@ export async function buildServer() {
       // so "remind me in a minute" lands within the minute. The request that
       // sets a near-term reminder also arms a timer (services/reminders.ts),
       // which is what delivers on a dev laptop where crons do not tick.
+      // Raw writers announce changes (#1875): drain the inbox procedures and
+      // scripts write to, and broadcast it. One process drains (scheduler
+      // lease); the broadcast reaches every replica through the stream.
+      app.cron.schedule(
+        'raw-write-announcements',
+        '*/5 * * * * *',
+        async () => {
+          const { drainRawWrites } = await import('./services/raw-write-announcer.js')
+          await drainRawWrites()
+        },
+        { quiet: true }
+      )
+      // Durable event journal (#1673): keep 24 hours.
+      app.cron.schedule('event-journal-prune', '17 */1 * * *', async () => {
+        const { pruneEventJournal } = await import('./services/event-journal-store.js')
+        await pruneEventJournal()
+      })
+
       app.cron.schedule(
         'chat-reminders',
         '*/20 * * * * *',
@@ -1752,6 +1799,22 @@ export async function buildServer() {
         })
       }
 
+      // Watched numbers (#1892, #1987): re-read each due watch as its owner,
+      // alert on a crossing or an unusual move, and list them in the digest.
+      {
+        const { registerWatchDigest, runWatchChecks } = await import('./services/ai-watches.js')
+        registerWatchDigest()
+        app.cron.schedule(
+          'ai-watch-checks',
+          '10 * * * *',
+          async () => {
+            const r = await runWatchChecks(app)
+            if (r.checked) app.log.info(`ai-watches: ${r.checked} checked, ${r.alerts} alert(s)`)
+          },
+          { dryRun: async () => runWatchChecks(app, { dryRun: true }) }
+        )
+      }
+
       // Tasks (#1007, #1016): due-tomorrow reminders + overdue escalation
       // once a day, the self-closing check every hour, and a daily-summary
       // section of what is due or overdue.
@@ -2113,6 +2176,7 @@ export async function buildServer() {
         'dq-nightly',
         'conformance-nightly',
         'config-health-sweep',
+        'config-review-monthly',
         'dead-link-sweep',
         'storage-snapshot',
         'file-integrity-sweep'

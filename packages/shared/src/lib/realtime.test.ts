@@ -33,3 +33,15 @@ describe('coalesced updates (#1681)', () => {
     expect(updateTouches(many, 'anything')).toBe(true)
   })
 })
+
+describe('live hooks see a coalesced burst per record (lib/live expandCoalesced)', () => {
+  it('lists become one event per id; "many" becomes one bulk event', async () => {
+    const { expandCoalesced } = await import('./live')
+    expect(expandCoalesced(burst as never).map((e) => e.item)).toEqual([7, 'abc'])
+    const bulk = expandCoalesced(many as never)
+    expect(bulk).toHaveLength(1)
+    expect(bulk[0]).toMatchObject({ item: '*', bulk: 5000 })
+    expect(bulk[0]).not.toHaveProperty('coalesced')
+    expect(expandCoalesced(one as never)).toEqual([one])
+  })
+})

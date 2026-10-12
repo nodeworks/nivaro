@@ -35,6 +35,7 @@ import { playNotificationSound } from '../lib/notification-sound'
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
+import { AiMemoryCard } from './profile/AiMemoryCard'
 import { BrowserPushCard } from './profile/BrowserPushCard'
 import { DelegationCard } from './profile/DelegationCard'
 import { MailSuppressedPill } from './profile/MailSuppressedPill'
@@ -305,13 +306,77 @@ export function NotificationRulesCard() {
       client.request(patch('/users/me/preferences', body)),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
   })
+  // #2407 — replay last week through the sender's delivery decision with the
+  // rules about to be saved; shown next to the save as "before -> after".
+  type PreviewTotals = {
+    notifications: number
+    inapp: number
+    push: number
+    email_sent: number
+    email_deferred: number
+  }
+  const [preview, setPreview] = useState<{
+    total: number
+    current: PreviewTotals
+    proposed: PreviewTotals
+  } | null>(null)
+  const previewMut = useMutation({
+    mutationFn: (next: Record<string, unknown>) =>
+      client.request<{
+        data: { total_notifications: number; current: PreviewTotals; proposed: PreviewTotals }
+      }>(post('/notifications/rules-preview', { notification_prefs: next })),
+    onSuccess: (r) =>
+      setPreview({
+        total: r.data.total_notifications,
+        current: r.data.current,
+        proposed: r.data.proposed
+      })
+  })
   const commit = (overrides: Partial<typeof np>) => {
-    save.mutate({
+    const next = {
       quiet_start: overrides.quiet_start ?? (effStart || undefined),
       quiet_end: overrides.quiet_end ?? (effEnd || undefined),
       matrix: overrides.matrix ?? np.matrix ?? {},
       escalation: overrides.escalation ?? np.escalation ?? {}
-    })
+    }
+    previewMut.mutate(next)
+    save.mutate(next)
+  }
+  // #2385 — per-category sound on top of the global one.
+  const catSounds = (prefs?.notification_sounds ?? {}) as Record<string, string>
+  const setCatSound = (cat: string, v: string) => {
+    const next = { ...catSounds }
+    if (v === 'default') delete next[cat]
+    else next[cat] = v
+    if (v !== 'default') playNotificationSound(v)
+    saveRaw.mutate({ notification_sounds: Object.keys(next).length ? next : null })
+  }
+  // #2367 — a monthly nudge from the person's own analytics, with an undo.
+  const { data: noise } = useQuery({
+    queryKey: ['nvr-noise-suggestions'],
+    queryFn: () =>
+      client
+        .request<{
+          data: Array<{ category: string; label: string; message: string }>
+        }>(get('/notifications/noise-suggestions'))
+        .then((r) => r.data ?? []),
+    staleTime: 600_000
+  })
+  const [muted, setMuted] = useState<Record<string, unknown>>({})
+  const [dismissed, setDismissed] = useState<string[]>(() => {
+    try {
+      const raw = JSON.parse(localStorage.getItem('nvr-noise-dismissed') ?? 'null')
+      return raw && Date.now() - raw.at < 30 * 86_400_000 ? raw.cats : []
+    } catch {
+      return []
+    }
+  })
+  const dismiss = (cat: string) => {
+    const cats = [...dismissed, cat]
+    setDismissed(cats)
+    try {
+      localStorage.setItem('nvr-noise-dismissed', JSON.stringify({ at: Date.now(), cats }))
+    } catch {}
   }
   // Channel fallback chain: per category, how long a row may stay unread
   // before it climbs to push, then to email. '' = never.
@@ -404,6 +469,72 @@ export function NotificationRulesCard() {
         </p>
       </header>
       <div className='space-y-3 p-4'>
+        {(noise ?? [])
+          .filter((n) => !dismissed.includes(n.category))
+          .map((n) => (
+            <div
+              key={n.category}
+              data-noise-suggestion={n.category}
+              className='flex flex-wrap items-center gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-[12px] text-amber-900 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200'
+            >
+              <span className='min-w-0 flex-1'>{n.message} Mute them?</span>
+              {n.category in muted ? (
+                <button
+                  type='button'
+                  className='underline'
+                  onClick={() => {
+                    commit({
+                      matrix: {
+                        ...(np.matrix ?? {}),
+                        [n.category]: muted[n.category] as never
+                      }
+                    })
+                    setMuted(({ [n.category]: _u, ...rest }) => rest)
+                  }}
+                >
+                  Muted — undo
+                </button>
+              ) : (
+                <>
+                  <button
+                    type='button'
+                    className='rounded border border-amber-300 px-2 py-0.5 font-medium dark:border-amber-800'
+                    onClick={() => {
+                      const cur = np.matrix?.[n.category] ?? { inapp: true, push: true }
+                      setMuted((m) => ({ ...m, [n.category]: cur }))
+                      commit({
+                        matrix: {
+                          ...(np.matrix ?? {}),
+                          [n.category]: { ...cur, inapp: false, push: false }
+                        }
+                      })
+                    }}
+                  >
+                    Mute
+                  </button>
+                  <button type='button' className='underline' onClick={() => dismiss(n.category)}>
+                    Not now
+                  </button>
+                </>
+              )}
+            </div>
+          ))}
+        {preview && preview.total > 0 && (
+          <div
+            data-rules-preview
+            className='flex flex-wrap items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-600 dark:border-border dark:bg-background/40 dark:text-muted-foreground'
+          >
+            <span className='min-w-0 flex-1'>
+              Last week with this change: {preview.proposed.inapp} in-app instead of{' '}
+              {preview.current.inapp}, {preview.proposed.email_sent} emails instead of{' '}
+              {preview.current.email_sent}, {preview.proposed.push} pushes instead of{' '}
+              {preview.current.push}.
+            </span>
+            <button type='button' className='underline' onClick={() => setPreview(null)}>
+              Dismiss
+            </button>
+          </div>
+        )}
         <div className='flex flex-wrap items-center gap-2 text-[12.5px] text-slate-600 dark:text-muted-foreground'>
           Quiet hours (ET):
           <input
@@ -470,6 +601,10 @@ export function NotificationRulesCard() {
                 <HeaderHelp text='Individual email = one message as each event happens. Daily summary = held and delivered once a day in your action summary (deliver-at time below). No email = never emailed for this category (in-app and push are unaffected).' />
               </th>
               <th className='py-1 text-center font-semibold'>
+                Sound
+                <HeaderHelp text='A different sound for this category, or none. Default follows the Sound setting above.' />
+              </th>
+              <th className='py-1 text-center font-semibold'>
                 Quiet hours
                 <HeaderHelp text='Ticked = this category still pushes and emails during your quiet hours (the in-app row always lands either way). Leave it off to have quiet hours hold this category until morning. Critical alerts always get through.' />
               </th>
@@ -502,6 +637,21 @@ export function NotificationRulesCard() {
                         value={emailModeOf(c.key)}
                         options={EMAIL_OPTIONS}
                         onChange={(v: string) => setEmail(c.key, v as EmailMode)}
+                      />
+                    </div>
+                  </td>
+                  <td className='py-1 text-center'>
+                    <div className='inline-block'>
+                      <SimpleSelectXs
+                        ariaLabel={`Sound for ${c.label}`}
+                        value={catSounds[c.key] ?? 'default'}
+                        options={[
+                          { value: 'default', label: 'Default' },
+                          { value: 'off', label: 'None' },
+                          { value: 'subtle', label: 'Subtle blip' },
+                          { value: 'chime', label: 'Chime' }
+                        ]}
+                        onChange={(v: string) => setCatSound(c.key, v)}
                       />
                     </div>
                   </td>
@@ -1735,6 +1885,7 @@ function OwnProfile({
           <TimezoneCard />
           <DisplayPrefsCard />
           <LinkAppCard />
+          <AiMemoryCard />
           {/* An admin may set their OWN restrictions too — the self-serve card
               only edits defaults, so without this an admin's own row could be
               changed from nowhere in the UI. */}

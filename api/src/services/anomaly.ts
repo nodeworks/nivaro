@@ -130,3 +130,23 @@ export async function evaluateAnomalyAlert(
 
   return result
 }
+
+/**
+ * The same statistics the alert engine uses, on a plain series: how far
+ * `current` sits from the mean of `history` in standard deviations. Shared
+ * with watched numbers (ai-watches.ts), which keep their own value history.
+ * Returns null when there are fewer than MIN_SAMPLES prior values.
+ */
+export function judgeAgainstHistory(
+  history: number[],
+  current: number,
+  sensitivity = 2
+): { anomalous: boolean; mean: number; stddev: number; zscore: number } | null {
+  if (history.length < MIN_SAMPLES) return null
+  const mean = history.reduce((s, v) => s + v, 0) / history.length
+  const variance = history.reduce((s, v) => s + (v - mean) ** 2, 0) / history.length
+  const stddev = Math.sqrt(variance)
+  const sens = sensitivity > 0 ? sensitivity : 2
+  const zscore = stddev === 0 ? 0 : (current - mean) / stddev
+  return { anomalous: stddev > 0 && Math.abs(current - mean) > sens * stddev, mean, stddev, zscore }
+}

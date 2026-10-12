@@ -77,6 +77,12 @@ export interface NotificationDetail {
     label?: string | null
     id?: string | number | null
   } | null
+  /** #2365 — the sender asked for an explicit acknowledgement. */
+  ack_required?: boolean
+  /** ISO time the recipient acknowledged; absent while pending. */
+  ack_at?: string
+  /** Who acknowledged (the recipient's user id). */
+  ack_by?: string
 }
 
 export interface NotifyUserOptions {
@@ -103,6 +109,10 @@ export interface NotifyUserOptions {
   target?: NotificationTargetSpec | null
   /** What produced this row (the bell's "why me?"). */
   source?: { kind: string; label?: string | null; id?: string | number | null } | null
+  /** #2365 — needs an explicit Acknowledge from the recipient: the row stays
+   *  pinned in the bell until acknowledged, escalates up the recipient's
+   *  chain, and the sender sees who has and has not acknowledged. */
+  ack_required?: boolean
   /** Structured content stored with the row. */
   detail?: Omit<NotificationDetail, 'why'> | null
   /** Internal: set on outbox re-deliveries to prevent re-enqueue loops. */
