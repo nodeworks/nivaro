@@ -24,6 +24,7 @@
 
 import { isConfigWrite, noteConfigWrite } from './config-epoch.js'
 import { isOwnerWrite, ownersChanged } from './owner-signal.js'
+import { opsTopicsOfWrite, raiseOpsWrite } from './ops-signal.js'
 
 const TABLES = new Set([
   'nivaro_relations',
@@ -186,6 +187,8 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
 
     // Caches derived from owner resolution clear once the write has landed.
     const ownerWrite = isOwnerWrite(sql)
+    // Live operations pages (issues, support, my work…) hear about writes the same way.
+    const opsTopics = opsTopicsOfWrite(sql)
 
     if (isInvalidatingWrite(sql)) {
       // Clear before AND after: before, so nothing reads the old rows while
@@ -194,9 +197,15 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
       return original.call(this, connection, query).finally(() => {
         clearMetadataQueryCache()
         if (ownerWrite) ownersChanged()
+        if (opsTopics.length) raiseOpsWrite(opsTopics)
       })
     }
-    if (ownerWrite) return original.call(this, connection, query).finally(() => ownersChanged())
+    if (ownerWrite || opsTopics.length) {
+      return original.call(this, connection, query).finally(() => {
+        if (ownerWrite) ownersChanged()
+        if (opsTopics.length) raiseOpsWrite(opsTopics)
+      })
+    }
 
     const inTransaction = !!(connection as { __knexTxId?: unknown } | null)?.__knexTxId
     if (!ENABLED || inTransaction || query.output || !isCacheableRead(sql)) {

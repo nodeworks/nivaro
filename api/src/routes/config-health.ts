@@ -15,9 +15,11 @@ export async function configHealthRoutes(app: FastifyInstance): Promise<void> {
       { column: 'id', order: 'asc' }
     ])
     if (q.family === 'hygiene' || q.family === 'lint') query = query.where('family', q.family)
+    else query = query.whereIn('family', ['hygiene', 'lint'])
     if (q.include_dismissed !== 'true') query = query.where('status', 'open')
     const rows = await query
     const counts = (await db('nivaro_config_health')
+      .whereIn('family', ['hygiene', 'lint'])
       .groupBy('family', 'status')
       .count({ c: '*' })
       .select('family', 'status')) as Array<{ family: string; status: string; c: number }>

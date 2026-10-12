@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowDown, ArrowUp, Check, ChevronsUpDown, Plus, Trash2, Wand2 } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { ExplainButton } from '@/components/explain-button'
 import { FieldPicker } from '@/components/field-picker'
 import { RelationPicker } from '@/components/relation-picker'
 import { Button } from '@/components/ui/button'
@@ -791,6 +792,14 @@ export function FieldRulesSection({
           </Button>
         )}
       </div>
+
+      {isAdmin && list.length > 0 && (
+        <ExplainButton
+          kind='config'
+          params={{ type: 'field-rules', collection }}
+          label='Describe these rules in plain English'
+        />
+      )}
 
       {isLoading ? (
         <div className='space-y-2'>

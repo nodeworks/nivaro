@@ -16,8 +16,6 @@ export interface CollectionUpdateEvent {
   source?: 'raw'
   /** With item '*': a raw write touched this many records of the collection. */
   bulk?: number
-  /** The user id who made the write (absent for system writes). */
-  by?: string
   _seq?: number
 }
 
