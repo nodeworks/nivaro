@@ -16,13 +16,20 @@ import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
  *   changed_fields entry, so list rows (CBV, queues) and open records both
  *   hear it, while the traffic map / GraphQL subscriptions (which key on
  *   `action`) do not count it as a write. Aspects: `$state` (pipeline moved),
- *   `$addendums`, `$comments`, `$tasks`, `$integrations`.
+ *   `$addendums`, `$comments`, `$tasks`, `$integrations`, `$lock` (an edit lock
+ *   was taken or released — list rows show/clear the lock icon).
  * - `emitRecordEvent(c, id, 'record:integrity')` goes only to the record
  *   room (`record:<c>:<id>` — joined after a `can(read)` check), for signals
  *   nobody outside the open record needs.
  */
 
-export type RecordAspect = '$state' | '$addendums' | '$comments' | '$tasks' | '$integrations'
+export type RecordAspect =
+  | '$state'
+  | '$addendums'
+  | '$comments'
+  | '$tasks'
+  | '$integrations'
+  | '$lock'
 
 export function announceRecordAspect(
   collection: string | null | undefined,

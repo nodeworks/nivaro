@@ -49,6 +49,7 @@ import {
   parseDateFilter
 } from '../lib/date-filter'
 import { evaluateNumeric, extractExpressionTokens } from '../lib/expression'
+import { deliverLive, releaseLiveOwner } from '../lib/focus-mode'
 import {
   type ColumnFormatConfig,
   countFromResolved,
@@ -56,8 +57,17 @@ import {
   formatValue
 } from '../lib/format-value'
 import { LIVE_ASPECTS } from '../lib/live'
+import {
+  conditionFields,
+  lockLabel,
+  mayAffectMatch,
+  useRowChanges,
+  useRowLocks,
+  viewerMatches
+} from '../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
-import { useOptionalRealtime } from '../lib/realtime'
+import { isOwnWrite } from '../lib/own-writes'
+import { type CollectionUpdateEvent, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import {
   effectiveScopeSeedIds,
@@ -84,12 +94,14 @@ import { HierarchyScopePicker, useHierarchyScope } from './cbv/HierarchyScope'
 import { ViewDefaultMenu } from './cbv/ViewDefaultMenu'
 import { canOpenChatRoom, discussRecord, useRecordRoomTypes } from './chat/chat-core'
 import { FilterControl } from './DataTable'
+import { FocusModeToggle } from './FocusModeToggle'
 import { FULFILMENT_FILTER_OPTIONS, FulfilmentPill, fulfilmentFigures } from './FulfilmentPill'
 import { HScrollProxy } from './HScrollProxy'
 import { startDocumentExtraction, useDocumentAutofillConfig } from './import/DocumentAutofillButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from './integrations/IntegrationDots'
 import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
+import { LiveRowMark } from './LiveRowMark'
 import { MapView } from './MapView'
 import { RevisionsPanel } from './panels'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
@@ -1938,6 +1950,64 @@ function dateRangeFor(preset: string): { from: string; to: string } | null {
   }
   if (preset === 'year') return { from: `${now.getFullYear()}-01-01`, to }
   return null
+}
+
+/** A filter chip list compiled to the items route's `conditions` dialect. */
+function filtersToConditions(
+  filters: ActiveFilter[]
+): Array<{ path: string[]; op: string; value: unknown }> {
+  const conds: Array<{ path: string[]; op: string; value: unknown }> = []
+  for (const f of filters) {
+    const isDateType =
+      f.fieldType === 'date' || f.fieldType === 'datetime' || f.fieldType === 'timestamp'
+    if (f.op === '_between') {
+      const [a, b] = String(f.value).split('..')
+      if (f.not) {
+        const branches: Array<{ path: string[]; op: string; value: unknown }> = []
+        if (a) branches.push({ path: f.path, op: '_lt', value: a })
+        if (b) branches.push({ path: f.path, op: '_gt', value: isDateType ? `${b}T23:59:59` : b })
+        if (branches.length) (conds as unknown[]).push({ or: branches })
+        continue
+      }
+      if (a) conds.push({ path: f.path, op: '_gte', value: a })
+      if (b) conds.push({ path: f.path, op: '_lte', value: isDateType ? `${b}T23:59:59` : b })
+      continue
+    }
+    if (
+      f.path[0]?.startsWith('$has_') ||
+      f.path[0] === '$missing_required' ||
+      f.path[0] === '$unseen'
+    ) {
+      // Presence filters (#397/#398): the server reads the VALUE's
+      // truthiness, so NOT flips the value rather than the operator.
+      conds.push({ path: f.path, op: '_eq', value: !f.not })
+      continue
+    }
+    if (f.op === '_preset') {
+      const r = dateRangeFor(String(f.value))
+      if (r) {
+        if (f.not) {
+          ;(conds as unknown[]).push({
+            or: [
+              { path: f.path, op: '_lt', value: r.from },
+              { path: f.path, op: '_gt', value: `${r.to}T23:59:59` }
+            ]
+          })
+        } else {
+          conds.push({ path: f.path, op: '_gte', value: r.from })
+          conds.push({ path: f.path, op: '_lte', value: `${r.to}T23:59:59` })
+        }
+      }
+      continue
+    }
+    let op = f.op.includes(':') ? f.op.split(':')[0] : f.op
+    let value: unknown = f.op.includes(':') ? f.op.split(':')[1] : f.value || null
+    if (f.fieldType === 'boolean' && (value === 'true' || value === 'false'))
+      value = value === 'true'
+    if (f.not) op = NEGATED_OPS[op] ?? op
+    conds.push({ path: f.path, op, value })
+  }
+  return conds
 }
 
 type ColFilterVal =
@@ -4422,57 +4492,7 @@ export function CollectionBrowserView({
   // (OR across picked rules). Session-only, like the addendums pill.
   const [riskFilter, setRiskFilter] = useState<number[]>([])
   const conditionsParam = useMemo(() => {
-    const conds: Array<{ path: string[]; op: string; value: unknown }> = []
-    for (const f of filters) {
-      const isDateType =
-        f.fieldType === 'date' || f.fieldType === 'datetime' || f.fieldType === 'timestamp'
-      if (f.op === '_between') {
-        const [a, b] = String(f.value).split('..')
-        if (f.not) {
-          const branches: Array<{ path: string[]; op: string; value: unknown }> = []
-          if (a) branches.push({ path: f.path, op: '_lt', value: a })
-          if (b) branches.push({ path: f.path, op: '_gt', value: isDateType ? `${b}T23:59:59` : b })
-          if (branches.length) (conds as unknown[]).push({ or: branches })
-          continue
-        }
-        if (a) conds.push({ path: f.path, op: '_gte', value: a })
-        if (b) conds.push({ path: f.path, op: '_lte', value: isDateType ? `${b}T23:59:59` : b })
-        continue
-      }
-      if (
-        f.path[0]?.startsWith('$has_') ||
-        f.path[0] === '$missing_required' ||
-        f.path[0] === '$unseen'
-      ) {
-        // Presence filters (#397/#398): the server reads the VALUE's
-        // truthiness, so NOT flips the value rather than the operator.
-        conds.push({ path: f.path, op: '_eq', value: !f.not })
-        continue
-      }
-      if (f.op === '_preset') {
-        const r = dateRangeFor(String(f.value))
-        if (r) {
-          if (f.not) {
-            ;(conds as unknown[]).push({
-              or: [
-                { path: f.path, op: '_lt', value: r.from },
-                { path: f.path, op: '_gt', value: `${r.to}T23:59:59` }
-              ]
-            })
-          } else {
-            conds.push({ path: f.path, op: '_gte', value: r.from })
-            conds.push({ path: f.path, op: '_lte', value: `${r.to}T23:59:59` })
-          }
-        }
-        continue
-      }
-      let op = f.op.includes(':') ? f.op.split(':')[0] : f.op
-      let value: unknown = f.op.includes(':') ? f.op.split(':')[1] : f.value || null
-      if (f.fieldType === 'boolean' && (value === 'true' || value === 'false'))
-        value = value === 'true'
-      if (f.not) op = NEGATED_OPS[op] ?? op
-      conds.push({ path: f.path, op, value })
-    }
+    const conds = filtersToConditions(filters)
     for (const qf of effQuickFilters) {
       const vals = appliedQuick[qf.key] ?? []
       if (vals.length === 0) continue
@@ -4637,15 +4657,21 @@ export function CollectionBrowserView({
   const aggregates = itemsRes?.aggregates
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
-  // ── Surgical live row patches (#267) ──────────────────────────────────────
-  // When the host provides a RealtimeAdapter, an update to a VISIBLE row
-  // refetches just that one record (through /items — RBAC/RLS apply) and
-  // patches it into the cached page in place: no full-table refetch, no
-  // scroll jump. Creates/deletes and off-page rows fall back to a full
-  // invalidate, debounced so bulk writes coalesce.
+  // ── Live rows (#267, #1743, #1828, #1872, #2029, #2386) ──────────────────
+  // When the host provides a RealtimeAdapter, a batch of changes is judged by
+  // the SERVER as the viewer: one normal /items read with this list's own
+  // conditions plus `id in (…)` says which of the changed records belong in
+  // the list now (RBAC / RLS / User Scopes apply — the client never re-runs
+  // filters). Visible rows that still match are patched in place and flash
+  // ("changed by Beth just now"); one that stopped matching is removed; a
+  // newly created / newly matching record is placed at the top, marked new
+  // (page 1, ungrouped). Anything the client cannot place falls back to the
+  // "N updates · Refresh" pill. Focus mode holds the whole feed back.
   // Long-request honesty (#370): after 3s the loading pill starts counting.
   const loadElapsed = useElapsedLoading(isFetching)
   const realtime = useOptionalRealtime()
+  const { userId: selfUserId } = useItemEditAuth()
+  const rowChanges = useRowChanges()
   const visibleIdsRef = useRef<Set<string>>(new Set())
   visibleIdsRef.current = new Set(rows.map((r) => String(r.id)))
   const itemsKeyRef = useRef<unknown[]>([])
@@ -4656,15 +4682,30 @@ export function CollectionBrowserView({
     sort,
     groupBy ? 'grouped' : page,
     groupBy ? 500 : effPageSize,
-    conditionsParam
+    conditionsParam,
+    aggParam
   ]
-  // Live pill (#240): off-page/create/delete changes count into a pill the
-  // viewer clicks to refresh — a paging table that silently reshuffles rows
-  // under the cursor reads as a glitch, not freshness.
+  const liveCtxRef = useRef({
+    conditions: conditionsParam,
+    search: appliedSearch,
+    page,
+    grouped: !!groupBy
+  })
+  liveCtxRef.current = {
+    conditions: conditionsParam,
+    search: appliedSearch,
+    page,
+    grouped: !!groupBy
+  }
+  const liveOwner = useRef({}).current
+  const [lockTick, setLockTick] = useState(0)
+  // Live pill (#240): changes the client cannot place (off-page, bulk writes)
+  // count into a pill the viewer clicks to refresh — a paging table that
+  // silently reshuffles rows under the cursor reads as a glitch, not freshness.
   const [pendingLive, setPendingLive] = useState(0)
   useEffect(() => {
     if (!realtime || !collection) return
-    const scheduleInvalidate = () => setPendingLive((n) => n + 1)
+    const countPill = (n = 1) => setPendingLive((c) => c + n)
     // Aspect notices (#1874/#1873/#1825/#1824 — `$tasks`, `$addendums`, …)
     // say a row's related counts/badges moved, not its columns: refresh just
     // those per-page reads, coalesced, and never count them into the pill.
@@ -4679,7 +4720,10 @@ export function CollectionBrowserView({
       if (fields.includes(LIVE_ASPECTS.state)) {
         add(['cbv-pipeline-instances', collection])
         add(['cbv-owners', collection])
+        // A state move can put a record into / out of a saved view.
+        add(['cbv-view-count', collection])
       }
+      if (fields.includes(LIVE_ASPECTS.lock)) setLockTick((n) => n + 1)
       if (aspectTimer) return
       aspectTimer = setTimeout(() => {
         aspectTimer = null
@@ -4687,40 +4731,191 @@ export function CollectionBrowserView({
         aspectKeys.clear()
       }, 300)
     }
-    const unsub = realtime.subscribeCollections([collection], (ev) => {
-      const id = String(ev.item)
-      const fields = ev.changed_fields
-      if (!ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
-        if (id === '*' || visibleIdsRef.current.has(id)) noteAspects(fields)
+
+    const patchItems = (
+      fn: (prev: { data: Array<Record<string, unknown>>; total: number }) => {
+        data: Array<Record<string, unknown>>
+        total: number
+      }
+    ) =>
+      qc.setQueryData(
+        itemsKeyRef.current,
+        (prev: { data: Array<Record<string, unknown>>; total: number } | undefined) =>
+          prev ? { ...prev, ...fn(prev) } : prev
+      )
+
+    let buf: CollectionUpdateEvent[] = []
+    let flushTimer: ReturnType<typeof setTimeout> | null = null
+    let countsTimer: ReturnType<typeof setTimeout> | null = null
+    let disposed = false
+
+    const flush = async () => {
+      flushTimer = null
+      const events = buf
+      buf = []
+      if (events.length === 0 || disposed) return
+      // Saved-view pills count as the viewer; re-ask once the burst settles.
+      if (!countsTimer)
+        countsTimer = setTimeout(() => {
+          countsTimer = null
+          void qc.invalidateQueries({ queryKey: ['cbv-view-count', collection] })
+        }, 1500)
+      const latest = new Map<string, CollectionUpdateEvent>()
+      let bulk = false
+      for (const ev of events) {
+        const id = String(ev.item)
+        if (id === '*') {
+          bulk = true
+          continue
+        }
+        const prior = latest.get(id)
+        // A create followed by updates stays a create; a delete is final.
+        const action =
+          prior?.action === 'delete' || ev.action === 'delete'
+            ? 'delete'
+            : prior?.action === 'create'
+              ? 'create'
+              : ev.action
+        const fields = new Set([...(prior?.changed_fields ?? []), ...(ev.changed_fields ?? [])])
+        latest.set(id, {
+          ...ev,
+          action,
+          changed_fields: ev.changed_fields || prior?.changed_fields ? [...fields] : undefined
+        })
+      }
+      if (bulk) countPill()
+      const visible = visibleIdsRef.current
+      const own = (ev: CollectionUpdateEvent) =>
+        (typeof ev.by === 'string' &&
+          !!selfUserId &&
+          ev.by.toUpperCase() === selfUserId.toUpperCase()) ||
+        isOwnWrite(collection, ev.item as string)
+
+      // Deleted: gone from a visible page; elsewhere only the total moved.
+      const deletedVisible: string[] = []
+      for (const [id, ev] of latest) {
+        if (ev.action !== 'delete') continue
+        if (visible.has(id)) deletedVisible.push(id)
+        else countPill()
+        latest.delete(id)
+      }
+      if (deletedVisible.length > 0) {
+        const gone = new Set(deletedVisible)
+        patchItems((prev) => ({
+          data: prev.data.filter((r) => !gone.has(String(r.id))),
+          total: Math.max(0, prev.total - deletedVisible.length)
+        }))
+        rowChanges.forget(deletedVisible)
+      }
+      if (latest.size === 0) return
+
+      const ctx = liveCtxRef.current
+      let matched: Map<string, Record<string, unknown>>
+      try {
+        matched = await viewerMatches(
+          client,
+          collection,
+          [...latest.keys()],
+          ctx.conditions,
+          ctx.search
+        )
+      } catch {
+        // Could not ask the server: patch what is on screen, pill the rest.
+        for (const [id, ev] of latest) {
+          if (!visible.has(id)) {
+            countPill()
+            continue
+          }
+          client
+            .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
+            .then((res) => {
+              const fresh = res?.data
+              if (!fresh) return
+              patchItems((prev) => ({
+                ...prev,
+                data: prev.data.map((r) => (String(r.id) === id ? { ...r, ...fresh } : r))
+              }))
+              if (!own(ev)) rowChanges.note([id], ev.by ?? null)
+            })
+            .catch(() => countPill())
+        }
         return
       }
-      if (ev.action !== 'delete' && visibleIdsRef.current.has(id)) {
-        client
-          .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-          .then((res) => {
-            const fresh = res?.data
-            if (!fresh) return
-            qc.setQueryData(
-              itemsKeyRef.current,
-              (prev: { data: Array<Record<string, unknown>>; total: number } | undefined) =>
-                prev
-                  ? {
-                      ...prev,
-                      data: prev.data.map((r) => (String(r.id) === id ? { ...r, ...fresh } : r))
-                    }
-                  : prev
-            )
-          })
-          .catch(() => scheduleInvalidate())
-      } else {
-        scheduleInvalidate()
+      if (disposed) return
+      const condFields = conditionFields(ctx.conditions)
+      const canPlace = ctx.page === 1 && !ctx.grouped
+      const patches = new Map<string, Record<string, unknown>>()
+      const removed: string[] = []
+      const added: Array<{ row: Record<string, unknown>; ev: CollectionUpdateEvent }> = []
+      for (const [id, ev] of latest) {
+        const row = matched.get(id)
+        if (visible.has(id)) {
+          if (row) patches.set(id, row)
+          else removed.push(id)
+        } else if (row) {
+          const newlyHere =
+            ev.action === 'create' || (!!ctx.conditions && mayAffectMatch(ev, condFields))
+          if (newlyHere && canPlace) added.push({ row, ev })
+          else countPill()
+        }
       }
-    })
-    return () => {
-      unsub()
-      if (aspectTimer) clearTimeout(aspectTimer)
+      if (patches.size > 0 || removed.length > 0 || added.length > 0) {
+        const gone = new Set(removed)
+        patchItems((prev) => {
+          const kept = prev.data
+            .filter((r) => !gone.has(String(r.id)))
+            .map((r) => {
+              const fresh = patches.get(String(r.id))
+              return fresh ? { ...r, ...fresh } : r
+            })
+          return {
+            data: [...added.map((a) => a.row), ...kept],
+            total: Math.max(0, prev.total - removed.length + added.length)
+          }
+        })
+      }
+      if (removed.length > 0) rowChanges.forget(removed)
+      for (const [id] of patches) {
+        const ev = latest.get(id)
+        if (ev && !own(ev)) rowChanges.note([id], ev.by ?? null)
+      }
+      for (const { row, ev } of added) {
+        const id = String(row.id)
+        // The writer's own new record is theirs to find; others' is marked.
+        rowChanges.note([id], ev.by ?? null, 'create')
+      }
     }
-  }, [realtime, collection, qc, client])
+
+    const handle = (evs: CollectionUpdateEvent[]) => {
+      for (const ev of evs) {
+        const fields = ev.changed_fields
+        if (!ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
+          if (String(ev.item) === '*' || visibleIdsRef.current.has(String(ev.item)))
+            noteAspects(fields)
+          continue
+        }
+        buf.push(ev)
+      }
+      if (buf.length > 0 && !flushTimer) flushTimer = setTimeout(() => void flush(), 300)
+    }
+
+    const unsub = realtime.subscribeCollections([collection], (ev) =>
+      deliverLive(liveOwner, [ev], handle)
+    )
+    return () => {
+      disposed = true
+      unsub()
+      releaseLiveOwner(liveOwner)
+      if (aspectTimer) clearTimeout(aspectTimer)
+      if (flushTimer) clearTimeout(flushTimer)
+      if (countsTimer) clearTimeout(countsTimer)
+    }
+  }, [realtime, collection, qc, client, selfUserId, rowChanges, liveOwner])
+  const rowLocks = useRowLocks(
+    collection,
+    rows.map((r) => String(r.id)),
+    lockTick
+  )
 
   // ── At-risk row highlighting (nivaro_at_risk_rules) ───────────────────────
   // One rules probe per collection; when any active rule exists, the visible
@@ -5239,6 +5434,35 @@ export function CollectionBrowserView({
     staleTime: 30_000
   })
   const invalidateViews = () => qc.invalidateQueries({ queryKey: ['cbv-views', collection] })
+  // Live counts on the view pills (#2029): how many records match each view,
+  // asked as the viewer (limit 1 — only the total matters). The live feed
+  // invalidates ['cbv-view-count', collection] once a burst of changes settles.
+  const viewCountQueries = useQueries({
+    queries: views.slice(0, 12).map((v) => {
+      const conds = filtersToConditions(v.filters ?? [])
+      return {
+        queryKey: ['cbv-view-count', collection, v.id, JSON.stringify(conds)],
+        queryFn: () =>
+          client
+            .request<{ total?: number }>(
+              get(`/items/${collection}`, {
+                limit: 1,
+                ...(conds.length > 0 ? { conditions: JSON.stringify(conds) } : {})
+              })
+            )
+            .then((r) => (typeof r.total === 'number' ? r.total : null))
+            .catch(() => null),
+        enabled: !!collection && scopeGateOpen,
+        staleTime: 60_000,
+        retry: false,
+        placeholderData: (prev: number | null | undefined) => prev
+      }
+    })
+  })
+  const viewCounts = new Map<number, number | null>()
+  views.slice(0, 12).forEach((v, i) => {
+    viewCounts.set(v.id, viewCountQueries[i]?.data ?? null)
+  })
   // Columns a view marks admin-only (Lines Ready): hidden from everyone else.
   const [columnAdminOnly, setColumnAdminOnly] = useState<Set<string>>(() => new Set())
   const applyView = (v: SavedView) => {
@@ -6227,6 +6451,7 @@ export function CollectionBrowserView({
             </button>
           )
         })}
+        <FocusModeToggle />
         {pendingLive > 0 && (
           <button
             type='button'
@@ -7206,6 +7431,15 @@ export function CollectionBrowserView({
             <button type='button' onClick={() => applyView(v)}>
               {v.name}
             </button>
+            {viewCounts.get(v.id) != null && (
+              <span
+                data-view-count={v.id}
+                data-tip='Records matching this view right now (as you see them)'
+                className='rounded-full bg-slate-100 px-1.5 text-[10.5px] font-medium tabular-nums text-slate-500 dark:bg-slate-800 dark:text-slate-400'
+              >
+                {(viewCounts.get(v.id) as number).toLocaleString()}
+              </span>
+            )}
             {v.default_for_role && (
               <span
                 data-view-role-default={v.default_for_role}
@@ -7407,7 +7641,10 @@ export function CollectionBrowserView({
             : 'flex min-h-0 flex-1 flex-col p-4 pt-3'
         }
       >
-        <div className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'>
+        <div
+          ref={rowChanges.rootRef}
+          className='nvr-fade-in relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900'
+        >
           {/* Refetch overlay — rows stay visible (placeholderData) but dim so
               paginate/sort/filter visibly does something */}
           {isFetching && !isLoading && (
@@ -7883,6 +8120,7 @@ export function CollectionBrowserView({
                       const state = pipelineData?.instances?.[String(id)]
                       const risk = riskMap[String(id)]
                       const unseen = unseenMap?.[String(id)]
+                      const rowLock = rowLocks.get(String(id)) ?? null
                       const riskTint =
                         !isSelected && risk ? rowHighlightClass(risk.color) : undefined
                       // Pinned cells need an OPAQUE bg — tinted rows carry the tint
@@ -7896,7 +8134,12 @@ export function CollectionBrowserView({
                           key={String(id)}
                           onClick={() => openRow(id)}
                           onMouseEnter={() => prefetchRecord(id)}
-                          title={risk ? `At risk — ${risk.rule}` : undefined}
+                          data-row-key={String(id)}
+                          title={
+                            rowChanges.titleFor(String(id)) ??
+                            (rowLock && !rowLock.is_mine ? lockLabel(rowLock) : undefined) ??
+                            (risk ? `At risk — ${risk.rule}` : undefined)
+                          }
                           style={enterStyle}
                           className={`nvr-row-enter group h-8 cursor-pointer border-b border-slate-100 transition-colors duration-150 hover:bg-nvr-cyan/[0.04] dark:border-slate-800 dark:hover:bg-nvr-cyan/[0.08] ${
                             isSelected ? 'bg-nvr-cyan/[0.08]' : (riskTint ?? '')
@@ -7910,7 +8153,15 @@ export function CollectionBrowserView({
                               onClick={(e) => e.stopPropagation()}
                             >
                               <span className='flex items-center gap-1'>
-                                <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />
+                                {rowLock || rowChanges.isNew(String(id)) ? (
+                                  <LiveRowMark
+                                    lock={rowLock}
+                                    isNew={rowChanges.isNew(String(id))}
+                                    dataAttr='data-cbv-live-mark'
+                                  />
+                                ) : (
+                                  <UnseenDot change={unseen} dataAttr='data-cbv-unseen' />
+                                )}
                                 <input
                                   type='checkbox'
                                   checked={isSelected}

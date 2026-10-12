@@ -26,6 +26,9 @@ export function broadcastCollectionUpdate(
     source?: 'raw'
     /** #1875 — with item '*': how many records the raw write touched. */
     bulk?: number
+    /** Who wrote it (a user id, never a name) — lists flash "changed by …" and
+     *  skip the writer's own echo. Absent for system writes. */
+    by?: string
   }
 ): void {
   void io // kept for signature compat — journaledEmit resolves io globally
@@ -60,6 +63,7 @@ export function broadcastCollectionUpdate(
     ...(extra?.action ? { action: extra.action } : {}),
     ...(extra?.changed_fields?.length ? { changed_fields: extra.changed_fields.slice(0, 50) } : {}),
     ...(extra?.source ? { source: extra.source } : {}),
-    ...(extra?.bulk != null ? { bulk: extra.bulk } : {})
+    ...(extra?.bulk != null ? { bulk: extra.bulk } : {}),
+    ...(extra?.by ? { by: String(extra.by) } : {})
   })
 }
