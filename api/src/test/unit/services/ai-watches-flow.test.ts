@@ -96,3 +96,40 @@ describe('watch lifecycle (evaluator stubbed, notifications captured)', () => {
     await expect(deleteWatch('U1', w.id)).rejects.toMatchObject({ statusCode: 404 })
   })
 })
+
+describe('a watch whose field the owner cannot read', () => {
+  beforeEach(() => {
+    store.prefs = {}
+    notify.mockClear()
+  })
+
+  it('refuses to create it, so no hidden value is returned', async () => {
+    const { FieldAccessError } = await import('../../../services/ai-aggregate-guard.js')
+    setWatchEvaluator(async () => {
+      throw new FieldAccessError('You do not have access to the field "salary" on employees.')
+    })
+    await expect(
+      createWatch(user, { collection: 'employees', op: 'max', field: 'salary', threshold: 1 })
+    ).rejects.toThrow(/salary/)
+    expect(await readWatches('U1')).toHaveLength(0)
+  })
+
+  it('pauses on a later check with the reason and never alerts', async () => {
+    const { FieldAccessError } = await import('../../../services/ai-aggregate-guard.js')
+    setWatchEvaluator(async () => 5)
+    const w = await createWatch(user, {
+      collection: 'employees',
+      op: 'max',
+      field: 'salary',
+      threshold: 10
+    })
+    setWatchEvaluator(async () => {
+      throw new FieldAccessError('You do not have access to the field "salary" on employees.')
+    })
+    const o = await checkWatch(null, user, w.id)
+    expect(o.alert).toBeNull()
+    expect(o.watch.active).toBe(false)
+    expect(o.watch.last_error).toMatch(/access/)
+    setWatchEvaluator(null)
+  })
+})

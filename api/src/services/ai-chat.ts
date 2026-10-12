@@ -2,6 +2,12 @@ import type Anthropic from '@anthropic-ai/sdk'
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { logActivityThrottled } from './activity.js'
+import {
+  assertFilterReadable,
+  describeUnreadable,
+  FieldAccessError,
+  readableFieldSet
+} from './ai-aggregate-guard.js'
 import { settingsRow } from './ai-client.js'
 import { WATCH_TOOLS } from './ai-watch-tool-defs.js'
 import { embedText, searchEmbeddings } from './embeddings.js'
@@ -16,7 +22,7 @@ import {
 } from './items.js'
 import { can, getRowFilter } from './permissions.js'
 import { getLabels } from './queues.js'
-import { isAdminRole } from './user-scopes.js'
+import { applyUserScopesToQuery, isAdminRole } from './user-scopes.js'
 
 /**
  * Ask-your-data chat — a Claude tool-use loop over the CMS.
@@ -974,23 +980,43 @@ export async function executeChatTool(
           'Your access to this collection is row-filtered — aggregates are unavailable. Use query_items instead.'
         )
       }
-      const valid = await fieldSet(collection)
+      const allFields = await fieldSet(collection)
+      // Only columns the role may read: the table is queried directly below.
+      const valid = await readableFieldSet(user, collection, allFields)
       const op = String(input.op)
       if (!['count', 'sum', 'avg', 'min', 'max'].includes(op)) throw new Error('Invalid op')
       const field = input.field != null ? String(input.field) : null
+      if (field && allFields.has(field) && !valid.has(field))
+        throw new FieldAccessError(describeUnreadable(field, allFields, collection))
       if (op !== 'count' && (!field || !valid.has(field))) {
         throw new Error(
           `'field' must be a valid column for ${op}. Valid fields: ${describeFields(valid)}`
         )
       }
       const groupBy = input.group_by != null ? String(input.group_by) : null
-      if (groupBy && (!valid.has(groupBy) || !SEGMENT_RE.test(groupBy))) {
+      if (groupBy && allFields.has(groupBy) && !valid.has(groupBy))
+        throw new FieldAccessError(describeUnreadable(groupBy, allFields, collection))
+      if (groupBy && !valid.has(groupBy)) {
         throw new Error(`Invalid group_by field. Valid fields: ${describeFields(valid)}`)
       }
-      const conditions = await compileChatFilter(collection, input.filter, valid)
+      if (groupBy && !SEGMENT_RE.test(groupBy)) {
+        throw new Error(`Invalid group_by field. Valid fields: ${describeFields(valid)}`)
+      }
+      // Compile against every column so a hidden one is named as "no access",
+      // then check each condition's path against the role's readable fields.
+      const conditions = await compileChatFilter(collection, input.filter, allFields)
+      const hidden = new Set([...allFields].filter((f) => !valid.has(f)))
+      await assertFilterReadable(
+        user,
+        collection,
+        conditions.map((c) => c.path),
+        hidden,
+        relationsFor
+      )
 
       const q = db(collection)
       await applyConditions(q as never, conditions, collection)
+      await applyUserScopesToQuery(q, collection, user)
       const aggAlias = 'value'
       if (op === 'count') q.count({ [aggAlias]: '*' })
       else if (field) {
