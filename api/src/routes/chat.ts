@@ -1165,6 +1165,16 @@ export async function chatRoutes(app: FastifyInstance) {
     }
   })
 
+  /** Stop the assistant's streaming answer (#1810) — only the person who asked. */
+  app.post<{ Params: { id: string } }>('/bot/streams/:id/stop', async (req, reply) => {
+    const { stopBotStream } = await import('../services/chat-bot-stream.js')
+    const r = await stopBotStream(app, req.params.id, String(req.user!.id))
+    if (r === 'forbidden')
+      return reply.code(403).send({ error: 'Only the person who asked can stop this answer' })
+    if (r === 'gone') return reply.code(404).send({ error: 'That answer is no longer running' })
+    return { data: { status: r } }
+  })
+
   // ── Channels ──────────────────────────────────────────────────────────────
 
   app.post('/channels', async (req, reply) => {

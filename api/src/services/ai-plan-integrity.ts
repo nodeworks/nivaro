@@ -79,7 +79,8 @@ registerPlanStepKind({
     }
     const labels = await labelsFor(
       run.collection,
-      items.map((i) => i.id)
+      items.map((i) => i.id),
+      user
     )
     const more = byItem.size > MAX_RECORDS ? byItem.size - MAX_RECORDS : 0
     return {
