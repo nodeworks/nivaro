@@ -405,6 +405,14 @@ export function RoomInfoDrawer({
   const info = useRoomInfo(room)
   const [tab, setTab] = useState<InfoTab>('members')
   const shared = useRoomShared(room, tab === 'files' || tab === 'links')
+  const [sharedQ, setSharedQ] = useState('')
+  const sq = sharedQ.trim().toLowerCase()
+  const sharedFiles = sq
+    ? shared.files.filter((f) => `${f.name} ${f.sender_name ?? ''}`.toLowerCase().includes(sq))
+    : shared.files
+  const sharedLinks = sq
+    ? shared.links.filter((l) => `${l.url} ${l.sender_name ?? ''}`.toLowerCase().includes(sq))
+    : shared.links
   const summary = useRoomSummary()
   const [since, setSince] = useState('')
   const [summaryText, setSummaryText] = useState<string | null>(null)
@@ -625,12 +633,22 @@ export function RoomInfoDrawer({
                 Nothing pinned. Hover a message and use the pin to keep it here.
               </p>
             ))}
+          {(tab === 'files' || tab === 'links') && (
+            <input
+              value={sharedQ}
+              onChange={(e) => setSharedQ(e.target.value)}
+              placeholder={tab === 'files' ? 'Search files or people' : 'Search links or people'}
+              aria-label='Search shared items'
+              data-chat-shared-search
+              className='mb-2 h-7 w-full rounded-md border border-slate-200 bg-transparent px-2 text-[11.5px] outline-none focus:border-slate-400 dark:border-slate-700'
+            />
+          )}
           {tab === 'files' &&
             (shared.loading ? (
               <p className='py-4 text-center text-[11.5px] text-slate-500'>Loading…</p>
-            ) : shared.files.length ? (
+            ) : sharedFiles.length ? (
               <ul className='space-y-1'>
-                {shared.files.map((f) => (
+                {sharedFiles.map((f) => (
                   <li
                     key={`${f.message_id}:${f.file_id}`}
                     className='flex items-center gap-2 text-[11.5px]'
@@ -645,6 +663,7 @@ export function RoomInfoDrawer({
                       {f.name}
                     </a>
                     <span className='shrink-0 text-[10.5px] text-slate-500'>
+                      {f.sender_name ? `${f.sender_name} · ` : ''}
                       {f.size != null ? `${formatFileSize(f.size)} · ` : ''}
                       {formatRelative(f.date_created)}
                     </span>
@@ -666,9 +685,9 @@ export function RoomInfoDrawer({
           {tab === 'links' &&
             (shared.loading ? (
               <p className='py-4 text-center text-[11.5px] text-slate-500'>Loading…</p>
-            ) : shared.links.length ? (
+            ) : sharedLinks.length ? (
               <ul className='space-y-1'>
-                {shared.links.map((l) => (
+                {sharedLinks.map((l) => (
                   <li
                     key={`${l.message_id}:${l.url}`}
                     className='flex items-center gap-2 text-[11.5px]'
@@ -695,7 +714,15 @@ export function RoomInfoDrawer({
                     </a>
                     <span className='shrink-0 text-[10.5px] text-slate-500'>
                       {l.sender_name ?? ''}
+                      {l.date_created ? ` · ${formatRelative(l.date_created)}` : ''}
                     </span>
+                    <button
+                      type='button'
+                      onClick={() => onOpenMessage(l.message_id)}
+                      className='shrink-0 text-[10.5px] font-medium text-slate-500 hover:text-slate-800 dark:hover:text-slate-100'
+                    >
+                      Show
+                    </button>
                   </li>
                 ))}
               </ul>

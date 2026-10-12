@@ -106,6 +106,18 @@ export type ExtensionApp = FastifyInstance & { cron: ExtensionCronManager }
  * than the earliest an extension may run against, so an extension checks
  * before using them.
  */
+export interface ChatCommandDef {
+  name: string
+  /** One line in the slash list. */
+  description: string
+  /** e.g. `/standup <what you did>` */
+  usage?: string
+  run(
+    args: string,
+    ctx: { userId: string; room: string }
+  ): Promise<{ post?: string; reply?: string } | void> | { post?: string; reply?: string } | void
+}
+
 export interface ExtensionContext {
   app: ExtensionApp
   database: Knex
@@ -160,6 +172,13 @@ export interface ExtensionContext {
       text: string,
       opts?: { as?: 'bot' | 'system'; parent_id?: number | null }
     ): Promise<number | null>
+    /** Add a slash command to the chat composer (#2338). The name is
+     *  lower-case letters/digits/dashes and cannot reuse a built-in
+     *  (`task`, `remind`, `poll`, `note`). `run` receives the text after the
+     *  command, the person typing and the room; return `post` to send that
+     *  text into the room as the person, and/or `reply` to show them a private
+     *  line. Runs AS the person: read data through `readItems`, not raw SQL. */
+    registerCommand(def: ChatCommandDef): void
   }
   /** Hook helpers scoped to this extension — hooks are tagged and can be
    *  disabled / removed with it. */

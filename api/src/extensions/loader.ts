@@ -586,6 +586,10 @@ export function registrationMembers(
       )
     },
     chat: {
+      registerCommand: (def) => {
+        note('chat')
+        void import('../services/chat-commands.js').then((m) => m.registerChatCommand(extId, def))
+      },
       post: async (room, text, o) => {
         note('chat')
         try {
