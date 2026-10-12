@@ -69,29 +69,59 @@ export async function registeredFieldSet(collection: string): Promise<Set<string
   return new Set(rows.map((r) => String(r.field)))
 }
 
-function escapeLike(v: string): string {
-  return v.replace(/[[%_]/g, (c) => `[${c}]`)
+/** A widget filter as an items-service filter member (null-safe eq / neq). */
+function toItemsFilter(f: WidgetFilter): Record<string, unknown> {
+  const op = f.op ?? 'eq'
+  const v = f.value
+  if (op === 'eq') return { [f.field]: v === null ? { _null: true } : { _eq: v } }
+  if (op === 'neq') return { [f.field]: v === null ? { _nnull: true } : { _neq: v } }
+  if (op === 'contains') return { [f.field]: { _contains: String(v ?? '') } }
+  if (op === 'in') {
+    const list = Array.isArray(v) ? v : String(v ?? '').split(',')
+    return { [f.field]: { _in: list } }
+  }
+  return { [f.field]: { [`_${op}`]: v } }
 }
 
-function applyConditions(query: Knex.QueryBuilder, conds: WidgetFilter[]) {
-  for (const f of conds) {
-    const op = f.op ?? 'eq'
-    if (op === 'eq') {
-      if (f.value === null) query.whereNull(f.field)
-      else query.where(f.field, f.value as string)
-    } else if (op === 'neq') {
-      if (f.value === null) query.whereNotNull(f.field)
-      else query.whereNot(f.field, f.value as string)
-    } else if (op === 'gt') query.where(f.field, '>', f.value as string)
-    else if (op === 'gte') query.where(f.field, '>=', f.value as string)
-    else if (op === 'lt') query.where(f.field, '<', f.value as string)
-    else if (op === 'lte') query.where(f.field, '<=', f.value as string)
-    else if (op === 'contains') query.where(f.field, 'like', `%${escapeLike(String(f.value))}%`)
-    else if (op === 'in') {
-      const list = Array.isArray(f.value) ? f.value : String(f.value ?? '').split(',')
-      query.whereIn(f.field, list as string[])
-    }
+/** The role's readable-field test for `collection` (null list = every field). */
+async function readableTest(user: User, collection: string): Promise<(f: string) => boolean> {
+  const { getAllowedFields } = await import('./permissions.js')
+  const allowed = await getAllowedFields(user, 'read', collection)
+  if (allowed == null || allowed.includes('*')) return () => true
+  return (f) => f === 'id' || allowed.includes(f)
+}
+
+/**
+ * May `user` build this widget? Used by the widget create/update routes: a widget can only
+ * be built over a collection its author can read, with a field and filters they can read.
+ * Null = yes; otherwise the refusal.
+ */
+export async function widgetSourceRefusal(
+  user: User,
+  widget: { type: string; collection: string | null; field: string | null; filters?: unknown }
+): Promise<string | null> {
+  const { can } = await import('./permissions.js')
+  let collection = widget.collection
+  if (widget.type === 'saved_view') {
+    if (!widget.field) return null
+    const view = (await db('nivaro_saved_views')
+      .where('id', Number(widget.field))
+      .first('collection')
+      .catch(() => null)) as { collection: string } | null | undefined
+    collection = view?.collection ?? null
   }
+  if (!collection) return null
+  if (!(await can(user, 'read', collection).catch(() => false)))
+    return `No read access to ${collection}`
+  const readable = await readableTest(user, collection)
+  const named = [
+    ...(widget.type !== 'saved_view' && widget.field ? [widget.field] : []),
+    ...(widget.type !== 'saved_view'
+      ? normalizeWidgetFilters(widget.filters).map((f) => f.field)
+      : [])
+  ]
+  const hidden = named.find((f) => !readable(f))
+  return hidden ? `You do not have access to the field "${hidden}"` : null
 }
 
 async function resolveCollection(name: string): Promise<boolean> {
@@ -143,6 +173,9 @@ export async function computeWidgetData(
         const fieldSet = await registeredFieldSet(collection)
         if (fieldSet.has(candidate.trim())) sumField = candidate.trim()
       }
+      // A sum over a field the viewer cannot read would show it in aggregate.
+      if (sumField && !(await readableTest(ctx.user, collection))(sumField))
+        return { error: 'Forbidden', status: 403 }
     } catch {
       sumField = null
     }
@@ -180,58 +213,106 @@ export async function computeWidgetData(
   if (!(await resolveCollection(widget.collection))) {
     return { error: 'Unknown collection', status: 400 }
   }
+  // Every type reads AS THE VIEWER: read permission on the collection, the role's row
+  // filter, User Scopes and the role's field list — the same gates as the collection
+  // browser. A widget is never computed without a viewer (a public link reads as its creator).
+  if (!ctx.user) return { error: 'Forbidden', status: 403 }
+  const user = ctx.user
   const col = widget.collection
+  const { can } = await import('./permissions.js')
+  if (!(await can(user, 'read', col).catch(() => false))) return { error: 'Forbidden', status: 403 }
 
   // A filter (widget-level or dashboard-level) applies only when the field is
   // actually registered on this collection — report-studio entity-filter
   // semantics, and the guard that keeps field names out of raw SQL.
   const fieldSet = await registeredFieldSet(col)
-  const conds = [...normalizeWidgetFilters(widget.filters), ...extraFilters].filter((f) =>
-    fieldSet.has(f.field)
-  )
-  const scoped = () => {
-    const q = db(col)
-    applyConditions(q, conds)
-    return q
-  }
+  const readable = await readableTest(user, col)
+  const own = normalizeWidgetFilters(widget.filters).filter((f) => fieldSet.has(f.field))
+  // A filter on a field the viewer cannot read would answer questions about it (a count
+  // becomes an oracle): the widget's own refuses, a dashboard filter-bar one does not bind.
+  if (own.some((f) => !readable(f.field))) return { error: 'Forbidden', status: 403 }
+  const conds = [...own, ...extraFilters.filter((f) => fieldSet.has(f.field) && readable(f.field))]
+  const filter = conds.length ? { _and: conds.map(toItemsFilter) } : {}
 
   try {
-    if (widget.type === 'count') {
-      const result = await scoped().count('* as count').first()
-      return { data: { value: Number(result?.count ?? 0) } }
-    }
-
-    if (widget.type === 'sum') {
-      if (!widget.field) return { data: { value: null } }
-      const result = await scoped().sum(`${widget.field} as total`).first()
-      return { data: { value: result?.total !== null ? Number(result?.total) : null } }
-    }
-
-    if (widget.type === 'avg') {
-      if (!widget.field) return { data: { value: null } }
-      const result = await scoped().avg(`${widget.field} as average`).first()
-      return { data: { value: result?.average !== null ? Number(result?.average) : null } }
+    const items = await import('./items.js')
+    if (widget.type === 'count' || widget.type === 'sum' || widget.type === 'avg') {
+      if (widget.type !== 'count') {
+        if (!widget.field) return { data: { value: null } }
+        if (!readable(widget.field)) return { error: 'Forbidden', status: 403 }
+      }
+      const fn = widget.type
+      const res = await items.aggregateItems(user, col, {
+        filter,
+        aggregate: fn === 'count' ? { countAll: true } : { [fn]: [widget.field as string] }
+      })
+      const row = (res.data ?? [])[0] as unknown as Record<string, unknown> | undefined
+      if (fn === 'count') return { data: { value: Number(row?.countAll ?? 0) } }
+      const v = (row?.[fn] as Record<string, unknown> | undefined)?.[widget.field as string]
+      return { data: { value: v == null ? null : Number(v) } }
     }
 
     if (widget.type === 'latest') {
-      const rows = await scoped().orderBy('created_at', 'desc').limit(10)
-      return { data: { rows } }
+      // readItems narrows the columns to the role's field list and strips system secrets.
+      const res = await items.readItems(user, col, {
+        fields: ['*'],
+        filter,
+        sort: ['-created_at'],
+        limit: 10
+      })
+      return { data: { rows: res.data ?? [] } }
     }
 
     if (widget.type === 'bar_chart' || widget.type === 'line_chart') {
-      const rows = await scoped()
+      if (!readable('created_at')) return { error: 'Forbidden', status: 403 }
+      // Daily buckets need SQL the items service does not offer, so readItems' row gates are
+      // applied by hand: the role's row filter and User Scopes (fields were checked above).
+      const { applyRowFilter, getRowFilter } = await import('./permissions.js')
+      const { applyUserScopesToQuery } = await import('./user-scopes.js')
+      const q = db(col)
         .select(db.raw('CAST(created_at AS DATE) as date'))
         .count('* as count')
         .whereRaw('created_at >= DATEADD(day, -30, GETDATE())')
         .groupByRaw('CAST(created_at AS DATE)')
         .orderBy('date', 'asc')
+      const rowFilter = await getRowFilter(user, 'read', col)
+      if (rowFilter) applyRowFilter(q, rowFilter, user)
+      await applyUserScopesToQuery(q, col, user)
+      for (const f of conds) applyCondition(q, f)
+      const rows = await q
       return {
         data: { rows: rows.map((r) => ({ date: String(r.date), count: Number(r.count) })) }
       }
     }
 
     return { error: 'Unsupported widget type', status: 400 }
-  } catch {
-    return { error: 'Failed to compute widget data', status: 500 }
+  } catch (err) {
+    const status = (err as { statusCode?: number }).statusCode
+    if (status === 403) return { error: 'Forbidden', status: 403 }
+    return { error: 'Failed to compute widget data', status: status === 400 ? 400 : 500 }
+  }
+}
+
+function escapeLike(v: string): string {
+  return v.replace(/[[%_]/g, (c) => `[${c}]`)
+}
+
+/** One readable, registered widget filter on a raw query (the chart path only). */
+function applyCondition(query: Knex.QueryBuilder, f: WidgetFilter) {
+  const op = f.op ?? 'eq'
+  if (op === 'eq') {
+    if (f.value === null) query.whereNull(f.field)
+    else query.where(f.field, f.value as string)
+  } else if (op === 'neq') {
+    if (f.value === null) query.whereNotNull(f.field)
+    else query.whereNot(f.field, f.value as string)
+  } else if (op === 'gt') query.where(f.field, '>', f.value as string)
+  else if (op === 'gte') query.where(f.field, '>=', f.value as string)
+  else if (op === 'lt') query.where(f.field, '<', f.value as string)
+  else if (op === 'lte') query.where(f.field, '<=', f.value as string)
+  else if (op === 'contains') query.where(f.field, 'like', `%${escapeLike(String(f.value))}%`)
+  else if (op === 'in') {
+    const list = Array.isArray(f.value) ? f.value : String(f.value ?? '').split(',')
+    query.whereIn(f.field, list as string[])
   }
 }
