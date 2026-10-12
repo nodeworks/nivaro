@@ -162,8 +162,8 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
       height: number
     }>
 
-    // A public link shows what its creator could see (#1675 security pass): every widget reads
-    // as that person, so a link never shows more than they could; no active creator, no data.
+    // A public link shows what its creator can see: every widget reads as that person, so a
+    // link never shows more than they could; no active creator, no data.
     const creator = link.created_by
       ? ((await db('nivaro_users').where({ id: link.created_by, status: 'active' }).first()) as
           | User

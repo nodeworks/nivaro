@@ -1,10 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
-import { computeWidgetData } from '../../../services/dashboard-widgets.js'
 import { resolveWidgetData } from '../../../services/report-studio.js'
 import type { User } from '../../../types.js'
 
-// Widget data reads as the viewer (#1675 security pass). The permission layer and the items
+// Report widget data reads as the viewer (#1675 security pass; dashboard widgets:
+// dashboard-widget-access.test.ts). The permission layer and the items
 // service are stand-ins: `orders` rows carry a zone; the ZONE1 viewer's row filter shows zone 1
 // only, NOREAD cannot read the collection, LIMITED's role reads id + title only.
 const ORDERS = [
@@ -73,49 +73,6 @@ beforeEach(() => {
   ;(db as unknown as { raw: ReturnType<typeof vi.fn> }).raw = vi.fn(async () =>
     ['id', 'title', 'zone', 'amount', 'created_at'].map((name) => ({ name }))
   )
-})
-
-describe('dashboard widget data reads as the viewer', () => {
-  const latest = {
-    type: 'latest',
-    collection: 'orders',
-    field: null,
-    filters: null
-  }
-
-  it("a row-filtered viewer's latest rows exclude what their row filter hides", async () => {
-    const r = await computeWidgetData(latest, [], { user: user('ZONE1') })
-    expect(r).toEqual({ data: { rows: [ORDERS[0], ORDERS[2]] } })
-    expect(items.readItems).toHaveBeenCalledWith(
-      expect.objectContaining({ id: 'ZONE1' }),
-      'orders',
-      expect.objectContaining({ sort: ['-created_at'], limit: 10 })
-    )
-  })
-
-  it('a viewer without read access to the collection gets nothing', async () => {
-    expect(await computeWidgetData(latest, [], { user: user('NOREAD') })).toEqual({
-      error: 'Forbidden',
-      status: 403
-    })
-    const count = { type: 'count', collection: 'orders', field: null, filters: null }
-    expect(await computeWidgetData(count, [], { user: user('NOREAD') })).toEqual({
-      error: 'Forbidden',
-      status: 403
-    })
-  })
-
-  it('no viewer (a public link without a creator) gets nothing', async () => {
-    expect(await computeWidgetData(latest, [], {})).toEqual({ error: 'Forbidden', status: 403 })
-  })
-
-  it('a sum over a field the role cannot read refuses', async () => {
-    const sum = { type: 'sum', collection: 'orders', field: 'amount', filters: null }
-    expect(await computeWidgetData(sum, [], { user: user('LIMITED') })).toEqual({
-      error: 'Forbidden',
-      status: 403
-    })
-  })
 })
 
 describe('report widgets read as the viewer', () => {
