@@ -7,6 +7,7 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import type { CMSFile, User } from '../types.js'
+import { PRIVATE_TAG } from './private-files.js'
 import { getStorage, getStorageProviderName } from './storage/index.js'
 import { deleteStoredObject, getActiveStorageDriver, readStoredObject } from './storage-drivers.js'
 import { putStoredObjectFromFile } from './stored-object-stream.js'
@@ -72,7 +73,8 @@ export async function uploadFileBuffer(
   buffer: Buffer,
   filename: string,
   mimeType: string,
-  folderId?: string
+  folderId?: string,
+  opts: { private?: boolean } = {}
 ): Promise<StoredFile> {
   const fileId = randomUUID()
   const diskId = ulid().toLowerCase()
@@ -97,7 +99,9 @@ export async function uploadFileBuffer(
     folder: folderId ?? null,
     uploaded_by: user.id,
     uploaded_on: new Date(),
-    filesize: buffer.length
+    filesize: buffer.length,
+    // A render/export made from records stays with whoever made it (see private-files.ts).
+    ...(opts.private ? { tags: JSON.stringify([PRIVATE_TAG]) } : {})
   })
 
   const file = (await db<StoredFile>('nivaro_files').where({ id: fileId }).first()) as StoredFile
@@ -261,9 +265,12 @@ export async function listFiles(
     ids?: string[]
     /** File tags (#159): rows whose tags JSON contains this label. */
     tag?: string
+    /** Who is asking: private renders/exports (tag `__private`) list only for their maker
+     *  and administrators. Leave out for internal callers that show every file. */
+    viewer?: { id?: string | null; isAdmin?: boolean }
   } = {}
 ) {
-  const { folder, limit = 50, offset = 0, search, ids, tag } = opts
+  const { folder, limit = 50, offset = 0, search, ids, tag, viewer } = opts
   // Help-video recordings, renders, captions and posters never list here:
   // they are served only through the ticketed help-video media routes.
   const { helpVideoFileColumnsReady, whereNotHelpVideoFile } = await import('./help-video-files.js')
@@ -294,6 +301,18 @@ export async function listFiles(
   whereNotHelpVideoFile(q, 'f.id')
   const countQ = db('nivaro_files')
   whereNotHelpVideoFile(countQ, 'nivaro_files.id')
+  if (viewer && !viewer.isAdmin) {
+    const marker = `%"${PRIVATE_TAG}"%`
+    const own = viewer.id ?? null
+    q.where(function () {
+      this.whereNull('f.tags').orWhere('f.tags', 'not like', marker)
+      if (own) this.orWhere('f.uploaded_by', own)
+    })
+    countQ.where(function () {
+      this.whereNull('tags').orWhere('tags', 'not like', marker)
+      if (own) this.orWhere('uploaded_by', own)
+    })
+  }
   if (folder) countQ.where({ folder })
   if (ids && ids.length > 0) countQ.whereIn('id', ids)
   if (search) {

@@ -32,15 +32,13 @@ type RenderOutcome =
   | { pdf: Buffer; tpl: PdfTemplate; collection: string }
 
 /**
- * Render a template against one record. `strict` reads the record as the caller
- * (RLS + field permissions) instead of straight from the table — the background
- * variant uses it; the interactive route keeps its historic raw read.
+ * Render a template against one record, reading the record AND its child rows as the caller
+ * (RLS, User Scopes and field permissions) — never straight from the table.
  */
 async function renderTemplate(
   user: User,
   id: string,
-  body: { collection?: string; item_id?: string | number },
-  strict: boolean
+  body: { collection?: string; item_id?: string | number }
 ): Promise<RenderOutcome> {
   const tpl = await db<PdfTemplate>('nivaro_pdf_templates').where({ id }).first()
   if (!tpl) return { error: 'Template not found', code: 404 }
@@ -49,7 +47,7 @@ async function renderTemplate(
   if (!collection || body.item_id === undefined || body.item_id === null || body.item_id === '') {
     return { error: 'collection and item_id are required', code: 400 }
   }
-  if (collection.startsWith('nivaro_')) {
+  if (/^(nivaro|directus)_/i.test(collection)) {
     return { error: 'System collections cannot be rendered', code: 400 }
   }
   if (tpl.collection && body.collection && body.collection !== tpl.collection) {
@@ -59,14 +57,10 @@ async function renderTemplate(
   const allowed = await can(user, 'read', collection)
   if (!allowed) return { error: 'Forbidden', code: 403 }
 
-  const item = (
-    strict
-      ? await readOne(user, collection, String(body.item_id)).catch(() => null)
-      : await db(collection)
-          .where({ id: body.item_id })
-          .first()
-          .catch(() => undefined)
-  ) as Record<string, unknown> | null | undefined
+  const item = (await readOne(user, collection, String(body.item_id)).catch(() => null)) as
+    | Record<string, unknown>
+    | null
+    | undefined
   if (!item) return { error: 'Item not found', code: 404 }
 
   // Designer table blocks loop `children.<alias>` — fetch child rows only
@@ -86,18 +80,12 @@ async function renderTemplate(
       for (const rel of rels) {
         const alias = rel.one_field ?? rel.many_collection
         if (!alias || !String(tpl.template).includes(`children.${alias}`)) continue
-        children[alias] = strict
-          ? (((
-              await readItems(user, rel.many_collection, {
-                filter: { [rel.many_field]: { _eq: body.item_id } },
-                limit: 200
-              }).catch(() => ({ data: [] }))
-            ).data ?? []) as Array<Record<string, unknown>>)
-          : ((await db(rel.many_collection)
-              .where(rel.many_field, body.item_id)
-              .limit(200)
-              .select('*')
-              .catch(() => [])) as Array<Record<string, unknown>>)
+        children[alias] = ((
+          await readItems(user, rel.many_collection, {
+            filter: { [rel.many_field]: { _eq: body.item_id } },
+            limit: 200
+          }).catch(() => ({ data: [] }))
+        ).data ?? []) as Array<Record<string, unknown>>
       }
     } catch {
       /* a broken relation renders an empty table, never a 500 */
@@ -212,7 +200,7 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
     if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
     const { id } = req.params as { id: string }
     const body = (req.body ?? {}) as { collection?: string; item_id?: string | number }
-    const out = await renderTemplate(req.user, id, body, false)
+    const out = await renderTemplate(req.user, id, body)
     if ('error' in out) return reply.code(out.code).send({ error: out.error })
     const { pdf, tpl, collection } = out
 
@@ -254,7 +242,7 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
     void (async () => {
       try {
         run.progress({ phase: 'Rendering the document' })
-        const out = await renderTemplate(user, id, body, true)
+        const out = await renderTemplate(user, id, body)
         if ('error' in out) {
           await run.fail(out.error)
           return
@@ -263,7 +251,16 @@ export async function pdfTemplatesRoutes(app: FastifyInstance) {
         const safeName = tpl.name.replace(/[^a-zA-Z0-9_-]+/g, '-').toLowerCase() || 'document'
         const filename = `${safeName}-${String(body.item_id)}.pdf`
         const { uploadFileBuffer } = await import('../services/files.js')
-        const stored = await uploadFileBuffer(user, out.pdf, filename, 'application/pdf')
+        const stored = await uploadFileBuffer(
+          user,
+          out.pdf,
+          filename,
+          'application/pdf',
+          undefined,
+          {
+            private: true
+          }
+        )
         await logActivity({
           action: 'pdf-render',
           collection: out.collection,

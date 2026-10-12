@@ -179,3 +179,24 @@ export function guardPreferencesWrite(
   if (kept.length) out.ai_memory = kept
   return { value: out }
 }
+
+/**
+ * Ask AI history opt-out: `preferences.ai_history_off === true` means the
+ * person's questions are never stored as conversations (answers still work
+ * live). Read on every question, so turning it on takes effect at once.
+ */
+export function historyOffFromPreferences(preferences: unknown): boolean {
+  let prefs = preferences
+  if (typeof prefs === 'string') {
+    try {
+      prefs = JSON.parse(prefs)
+    } catch {
+      return false
+    }
+  }
+  return (prefs as Record<string, unknown> | null)?.ai_history_off === true
+}
+
+export async function aiHistoryOff(userId: string): Promise<boolean> {
+  return historyOffFromPreferences(await readPrefs(userId).catch(() => ({})))
+}

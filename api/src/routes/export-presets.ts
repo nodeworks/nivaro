@@ -362,7 +362,9 @@ export async function exportPresetRoutes(app: FastifyInstance): Promise<void> {
           user,
           result.buffer,
           result.filename,
-          result.contentType
+          result.contentType,
+          undefined,
+          { private: true }
         )
         // The tray (#2122) turns file_id into a download chip that outlives the page.
         await run.complete(`${result.filename} → file ${stored.id}`, {
