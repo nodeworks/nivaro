@@ -12,7 +12,7 @@ import { cn } from '@/lib/utils'
  * per-API-node observability — the stats route says so in its payload.
  */
 
-type Tab = 'sockets' | 'traffic' | 'editing' | 'concurrency' | 'firehose'
+type Tab = 'sockets' | 'payload' | 'traffic' | 'editing' | 'concurrency' | 'firehose'
 
 interface SocketRow {
   id: string
@@ -25,6 +25,35 @@ interface SocketRow {
   rooms: string[]
   build?: string | null
   api_version?: string | null
+  /** #1672 — 'websocket', or 'polling' when the upgrade was blocked. */
+  transport?: string | null
+  /** #1681 — the client takes coalesced collection:update bursts. */
+  coalesce?: boolean
+}
+
+/** #1730 — bytes written to sockets, by event type and by room kind (this node). */
+interface TransportTraffic {
+  since: string
+  events: number
+  bytes: number
+  coalesced: { bursts: number; messages_saved: number }
+  by_event: Array<{ event: string; count: number; bytes: number }>
+  by_room: Array<{ room: string; count: number; bytes: number }>
+}
+
+interface RealtimeStats {
+  node_scope: string
+  journal_seq: number
+  socket_count: number
+  sockets: SocketRow[]
+  rooms: Array<{ room: string; size: number }>
+  api_version?: string
+  versions?: VersionGroup[]
+  transports?: Record<string, number>
+  sse_streams?: number
+  polling_allowed?: boolean
+  compression?: boolean
+  traffic?: TransportTraffic
 }
 
 /** #1048 — open tabs grouped by the build they run (this node). */
@@ -62,6 +91,7 @@ export default function Realtime() {
           {(
             [
               ['sockets', 'Sockets & rooms'],
+              ['payload', 'Payload size'],
               ['traffic', 'Live traffic'],
               ['editing', 'Now editing'],
               ['concurrency', 'Concurrency'],
@@ -86,6 +116,7 @@ export default function Realtime() {
       </header>
       <div className='flex-1 overflow-y-auto p-6'>
         {tab === 'sockets' && <SocketsTab />}
+        {tab === 'payload' && <PayloadTab />}
         {tab === 'traffic' && <TrafficTab />}
         {tab === 'editing' && <EditingTab />}
         {tab === 'concurrency' && <ConcurrencyTab />}
@@ -423,15 +454,7 @@ function VersionsTable({ groups, apiVersion }: { groups: VersionGroup[]; apiVers
 // ─── Sockets & rooms (#270) ──────────────────────────────────────────────────
 
 function SocketsTab() {
-  const { data, isLoading } = useQuery<{
-    node_scope: string
-    journal_seq: number
-    socket_count: number
-    sockets: SocketRow[]
-    rooms: Array<{ room: string; size: number }>
-    api_version?: string
-    versions?: VersionGroup[]
-  }>({
+  const { data, isLoading } = useQuery<RealtimeStats>({
     queryKey: ['realtime-stats'],
     queryFn: () => api.get('/realtime/stats').then((r) => r.data.data),
     refetchInterval: 10_000
@@ -444,6 +467,7 @@ function SocketsTab() {
         {data.socket_count} socket(s) on this node · journal seq {data.journal_seq} ·{' '}
         {data.node_scope}
       </p>
+      <TransportStrip data={data} />
       <VersionsTable groups={data.versions ?? []} apiVersion={data.api_version ?? '—'} />
       <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
         <table className='w-full text-[12px] tabular-nums'>
@@ -451,6 +475,7 @@ function SocketsTab() {
             <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/40'>
               <th className='px-3 py-2'>User</th>
               <th className='px-3 py-2'>App</th>
+              <th className='px-3 py-2'>Transport</th>
               <th className='px-3 py-2'>Build</th>
               <th className='px-3 py-2 text-right'>Connected</th>
               <th className='px-3 py-2 text-right'>RTT</th>
@@ -463,6 +488,16 @@ function SocketsTab() {
               <tr key={s.id}>
                 <td className='px-3 py-1.5 font-mono text-[11px]'>{s.user ?? '(unauth)'}</td>
                 <td className='px-3 py-1.5'>{s.app ?? '—'}</td>
+                <td className='px-3 py-1.5'>
+                  <span
+                    className={cn(
+                      'font-mono text-[11px]',
+                      s.transport === 'polling' && 'text-amber-700 dark:text-amber-300'
+                    )}
+                  >
+                    {s.transport ?? '—'}
+                  </span>
+                </td>
                 <td className='px-3 py-1.5 font-mono text-[11px]'>{s.build ?? '—'}</td>
                 <td className='px-3 py-1.5 text-right'>{formatDuration(s.connected_seconds)}</td>
                 <td className='px-3 py-1.5 text-right'>
@@ -489,6 +524,176 @@ function SocketsTab() {
             </span>
           ))}
         </div>
+      </div>
+    </div>
+  )
+}
+
+/**
+ * #1672 — how clients reach this node: sockets per transport, plus the read-only SSE streams
+ * tabs fall back to when neither websocket nor polling gets through.
+ */
+function TransportStrip({ data }: { data: RealtimeStats }) {
+  const t = data.transports ?? {}
+  const cells: Array<[string, string, string]> = [
+    ['Websocket', String(t.websocket ?? 0), 'Sockets on the websocket transport'],
+    [
+      'Long-polling',
+      String(t.polling ?? 0),
+      'Sockets whose websocket upgrade was blocked (a proxy stripped it) and fell back to HTTP long-polling — needs sticky sessions behind a load balancer'
+    ],
+    [
+      'SSE fallback',
+      String(data.sse_streams ?? 0),
+      'Read-only event streams: the tab could reach neither transport and reads collection changes over GET /api/events/stream'
+    ],
+    [
+      'Polling allowed',
+      data.polling_allowed === false ? 'No' : 'Yes',
+      'SOCKET_POLLING=off refuses polling where the balancer is not sticky; blocked clients then use the SSE stream'
+    ],
+    [
+      'Compression',
+      data.compression === false ? 'Off' : 'On',
+      'Per-message deflate for frames over 1 KB (SOCKET_COMPRESSION=off disables it)'
+    ]
+  ]
+  return (
+    <div className='grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-slate-200 bg-slate-200 sm:grid-cols-5 dark:border-border dark:bg-border'>
+      {cells.map(([label, value, tip]) => (
+        <div key={label} data-tip={tip} className='bg-white px-3 py-2 dark:bg-card'>
+          <div className='text-[10.5px] uppercase tracking-wide text-slate-400'>{label}</div>
+          <div className='text-[15px] font-semibold tabular-nums'>{value}</div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`
+}
+
+// ─── Payload size (#1730, #1681) ─────────────────────────────────────────────
+
+function PayloadTab() {
+  const { data, isLoading, refetch } = useQuery<RealtimeStats>({
+    queryKey: ['realtime-stats'],
+    queryFn: () => api.get('/realtime/stats').then((r) => r.data.data),
+    refetchInterval: 10_000
+  })
+  const [resetting, setResetting] = useState(false)
+  if (isLoading) return <p className='text-[13px] text-slate-400'>Loading…</p>
+  const traffic = data?.traffic
+  if (!traffic) return null
+  const reset = async () => {
+    setResetting(true)
+    try {
+      await api.post('/realtime/traffic/reset')
+      await refetch()
+      toast.success('Counters reset')
+    } catch {
+      toast.error('Could not reset the counters')
+    } finally {
+      setResetting(false)
+    }
+  }
+  return (
+    <div className='space-y-4'>
+      <div className='flex flex-wrap items-center justify-between gap-2'>
+        <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>
+          {traffic.events.toLocaleString()} messages · {formatBytes(traffic.bytes)} written to
+          sockets on this node since {new Date(traffic.since).toLocaleString()} (before
+          compression).{' '}
+          {traffic.coalesced.bursts > 0 &&
+            `Bursts merged: ${traffic.coalesced.bursts.toLocaleString()}, saving ${traffic.coalesced.messages_saved.toLocaleString()} messages.`}
+        </p>
+        <button
+          type='button'
+          disabled={resetting}
+          onClick={() => void reset()}
+          className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 px-2.5 py-1 text-[12px] hover:bg-muted disabled:opacity-50 dark:border-border'
+        >
+          <RefreshCw className='h-3 w-3' />
+          Reset counters
+        </button>
+      </div>
+      <div className='grid gap-4 lg:grid-cols-2'>
+        <ByteTable
+          title='Heaviest event types'
+          keyLabel='Event'
+          rows={traffic.by_event.map((r) => ({ key: r.event, count: r.count, bytes: r.bytes }))}
+          total={traffic.bytes}
+        />
+        <ByteTable
+          title='Heaviest rooms'
+          keyLabel='Room'
+          rows={traffic.by_room.map((r) => ({ key: r.room, count: r.count, bytes: r.bytes }))}
+          total={traffic.bytes}
+        />
+      </div>
+      <p className='text-[11.5px] text-slate-400'>
+        Rooms are grouped by kind (one row for every record room of a collection). A message sent to
+        many sockets counts once per socket — the cost of a broadcast is its size times its
+        audience.
+      </p>
+    </div>
+  )
+}
+
+function ByteTable({
+  title,
+  keyLabel,
+  rows,
+  total
+}: {
+  title: string
+  keyLabel: string
+  rows: Array<{ key: string; count: number; bytes: number }>
+  total: number
+}) {
+  return (
+    <div>
+      <h2 className='mb-2 text-[13px] font-medium'>{title}</h2>
+      <div className='overflow-x-auto rounded-lg border border-slate-200 dark:border-border'>
+        <table className='w-full text-[12px] tabular-nums'>
+          <thead>
+            <tr className='border-b border-slate-200 bg-slate-50 text-left text-[10.5px] uppercase tracking-wide text-slate-400 dark:border-border dark:bg-muted/40'>
+              <th className='px-3 py-2'>{keyLabel}</th>
+              <th className='px-3 py-2 text-right'>Messages</th>
+              <th className='px-3 py-2 text-right'>Bytes</th>
+              <th className='px-3 py-2 text-right'>Avg</th>
+              <th className='px-3 py-2 text-right'>Share</th>
+            </tr>
+          </thead>
+          <tbody className='divide-y divide-slate-100 dark:divide-border/60'>
+            {rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className='px-3 py-3 text-slate-400'>
+                  Nothing sent yet.
+                </td>
+              </tr>
+            )}
+            {rows.map((r) => (
+              <tr key={r.key}>
+                <td className='max-w-[280px] truncate px-3 py-1.5 font-mono text-[11px]'>
+                  {r.key}
+                </td>
+                <td className='px-3 py-1.5 text-right'>{r.count.toLocaleString()}</td>
+                <td className='px-3 py-1.5 text-right'>{formatBytes(r.bytes)}</td>
+                <td className='px-3 py-1.5 text-right'>
+                  {formatBytes(Math.round(r.bytes / Math.max(1, r.count)))}
+                </td>
+                <td className='px-3 py-1.5 text-right'>
+                  {total > 0 ? `${Math.round((r.bytes / total) * 100)}%` : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   )

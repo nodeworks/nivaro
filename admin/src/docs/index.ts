@@ -323,6 +323,7 @@ import {
 } from './sections/platform-additions.js'
 import { qualityChecksDocs } from './sections/quality-checks.js'
 import { queuesGuide } from './sections/queues.js'
+import { realtimeTransport } from './sections/realtime-transport.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
 import {
@@ -816,6 +817,7 @@ export const navSections: NavGroup[] = [
       obsTrafficMapAct,
       obsTrafficMapLenses,
       obsTrafficMapPlatform,
+      realtimeTransport,
       commandCenterDocs,
       wallboardPulseDocs,
       recordGraphDocs,

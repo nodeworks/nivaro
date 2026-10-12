@@ -7,6 +7,7 @@ import { clearPickerRuleCache } from '../services/picker-rules.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
+import { requestAccessRecheck } from '../services/socket-access.js'
 import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
 import { accessRequestRoutes } from './access-requests.js'
@@ -274,8 +275,24 @@ export async function registerRoutes(app: FastifyInstance) {
   // Definition rows (widgets, custom queries) are cached per id for renders
   // (#494); a write to their editors drops that cache the same way.
   const DEFINITION_ROUTES = /^\/api\/(widgets-internal|custom-queries)\b/
+  // #1720 — writes that can change what someone may see (role, policies, user scopes, teams,
+  // channel membership, tree permissions, status) ask every replica to re-check the rooms
+  // open sockets hold. Per person when the path names one, everyone otherwise; debounced.
+  const ACCESS_USER_ROUTE = /^\/api\/(users|user-scopes|offboarding)\/([0-9a-f-]{36})\b/i
+  const ACCESS_ALL_ROUTE =
+    /^\/api\/(roles|user-groups|scope-dimensions|chat\/channels|tree-permissions|access-requests\/[^/]+\/resolve|users\/bulk|directory|retention|offboarding)\b/
+  const ACCESS_READ_LIKE = /\/(impact|simulate|row-filter-impact|preview|coverage|dry-run)\b/
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
+    const path = req.url.split('?')[0]
+    if (!ACCESS_READ_LIKE.test(path)) {
+      const one = ACCESS_USER_ROUTE.exec(path)
+      if (one) requestAccessRecheck({ userIds: [one[2]] })
+      else if (ACCESS_ALL_ROUTE.test(path)) requestAccessRecheck({ all: true })
+      // A person narrowing their own scopes (Profile) re-checks only their own sockets.
+      else if (path.startsWith('/api/users/me/scopes') && req.user?.id)
+        requestAccessRecheck({ userIds: [String(req.user.id)] })
+    }
     if (DEFINITION_ROUTES.test(req.url) && !/\/(render|action|execute|run)\b/.test(req.url)) {
       bustDefinitionCache()
     }

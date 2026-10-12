@@ -6,6 +6,7 @@ import { io } from 'socket.io-client'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 import { cn, formatRelative } from '@/lib/utils'
 
 /**
@@ -52,7 +53,7 @@ export function PresenceLiveMap() {
   const [connected, setConnected] = useState(false)
 
   useEffect(() => {
-    const socket = io(API_URL, { transports: ['websocket'], withCredentials: true })
+    const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
     socket.on('connect', async () => {
       let token = user?.static_token ?? null
       if (!token) {

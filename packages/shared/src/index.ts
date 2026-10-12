@@ -335,6 +335,7 @@ export { QueueKanbanBoard } from './components/queue/QueueKanbanBoard'
 export type { QueueRealtimeAdapter, QueueWorklistProps } from './components/queue/QueueWorklist'
 export { QueueWorklist } from './components/queue/QueueWorklist'
 export { QueueWorkloadView } from './components/queue/QueueWorkloadView'
+export { RealtimeStaleMark, RealtimeStatusBanner } from './components/RealtimeStatusBanner'
 export { RecentRecordsRail } from './components/RecentRecordsRail'
 export { RecordDrilldownSheet } from './components/RecordDrilldownSheet'
 export {
@@ -492,7 +493,11 @@ export {
   type CollectionUpdateEvent,
   type RealtimeAdapter,
   RealtimeContext,
-  useOptionalRealtime
+  type RealtimeStatus,
+  updateItemIds,
+  updateTouches,
+  useOptionalRealtime,
+  useRealtimeStatus
 } from './lib/realtime'
 export {
   captureReplayClip,
@@ -561,6 +566,13 @@ export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
+export {
+  type ClockSample,
+  measureClockOffset,
+  serverClockOffset,
+  serverNow,
+  setServerClockOffset
+} from './lib/server-clock'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export {

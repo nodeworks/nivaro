@@ -78,6 +78,7 @@ import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/IntegrationDots'
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
+import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { TickerNumber } from '../TickerNumber'
@@ -3267,6 +3268,7 @@ export function QueueWorklist({
               }
             />
           )}
+          <RealtimeStaleMark className='h-8' />
           {pendingUpdates > 0 && (
             <button
               type='button'

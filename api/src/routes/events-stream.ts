@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import { REVOKED_PREFIX } from '../auth/session.js'
 import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { can } from '../services/permissions.js'
 import { type SseEvent, subscribeSse } from '../services/sse-hub.js'
@@ -50,6 +51,13 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
     }
     const user = req.user
     if (!user) return reply.code(401).send({ error: 'Unauthorized' })
+    // #1719 — the stream is the read-only fallback for a blocked websocket, so it ends with the
+    // sign-in like a socket does: a cookie session that is gone or revoked, or an account no
+    // longer active, closes it at the next heartbeat (`event: session.ended` first).
+    const sid =
+      req.authMethod === 'session'
+        ? ((req.session as unknown as { sessionId?: string } | undefined)?.sessionId ?? null)
+        : null
 
     // Per-connection collection filter. Unauthorized collections are dropped
     // SILENTLY (a 403 here would let a caller probe which collections exist).
@@ -108,13 +116,34 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
       void deliver(ev)
     })
 
+    const stillSignedIn = async (): Promise<boolean> => {
+      try {
+        if (sid) {
+          const [sess, revoked] = await app.redis.mget(`sess:${sid}`, `${REVOKED_PREFIX}${sid}`)
+          if (!sess || revoked) return false
+        }
+        const { db } = await import('../db/index.js')
+        const row = await db('nivaro_users').where({ id: user.id }).first('status')
+        return !!row && row.status !== 'suspended' // the gate this stream opened with
+      } catch {
+        return true // a failed check never ends a stream; the next heartbeat asks again
+      }
+    }
+
     const heartbeat = setInterval(() => {
       if (closed) return
-      try {
-        raw.write(': hb\n\n')
-      } catch {
-        cleanup()
-      }
+      void stillSignedIn().then((ok) => {
+        if (closed) return
+        try {
+          if (ok) raw.write(': hb\n\n')
+          else {
+            raw.write('event: session.ended\ndata: {"reason":"signed_out"}\n\n')
+            cleanup()
+          }
+        } catch {
+          cleanup()
+        }
+      })
     }, HEARTBEAT_MS)
     heartbeat.unref()
 

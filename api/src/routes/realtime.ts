@@ -1,14 +1,19 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { getTenantId, getTenantSlug } from '../db/tenant-context.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import {
   emitForceRefresh,
   getClientVersionGroups,
   getRealtimeStats,
-  getRecordViewerSnapshot
+  getRecordViewerSnapshot,
+  socketCompressionOn,
+  socketPollingAllowed
 } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { currentSeq } from '../services/event-journal.js'
+import { resetTransportStats, transportStats } from '../services/socket-transport.js'
+import { sseListenerCount } from '../services/sse-hub.js'
 import { NIVARO_VERSION } from '../version.js'
 
 /**
@@ -44,13 +49,29 @@ export async function recordViewersRoutes(app: FastifyInstance): Promise<void> {
 export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
   app.addHook('preHandler', requireAdmin)
 
+  // Cloud mode: the caller's tenant only (one process serves many); self-hosted: the one scope.
+  const tenantScope = () =>
+    process.env.CLOUD_META_DB_URL ? (getTenantId() ?? getTenantSlug() ?? '-') : null
+
   app.get('/stats', async () => {
     const stats = getRealtimeStats()
+    // #1672 — which transport each client is on; the SSE fallback streams are counted apart.
+    const transports: Record<string, number> = {}
+    for (const s of stats.sockets) {
+      const t = s.transport ?? 'unknown'
+      transports[t] = (transports[t] ?? 0) + 1
+    }
     return {
       data: {
         node_scope: 'this API process only (Redis adapter fans out across nodes)',
         journal_seq: await currentSeq(),
         socket_count: stats.sockets.length,
+        transports,
+        sse_streams: sseListenerCount(),
+        polling_allowed: socketPollingAllowed(),
+        compression: socketCompressionOn(),
+        // #1730 — bytes per event type and per room kind; #1681 — bursts merged.
+        traffic: transportStats(15, tenantScope()),
         // #1048 — open tabs by the build they run; `older` groups are what "Reload old tabs" reaches.
         api_version: NIVARO_VERSION,
         versions: getClientVersionGroups(),
@@ -63,6 +84,8 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
                 null)
               : ((s.user as string | null) ?? null),
           app: s.app,
+          transport: s.transport,
+          coalesce: s.coalesce,
           build: s.version?.build ?? null,
           api_version: s.version?.api ?? null,
           connected_seconds: Math.round((Date.now() - s.connectedAt) / 1000),
@@ -74,6 +97,12 @@ export async function realtimeRoutes(app: FastifyInstance): Promise<void> {
         rooms: stats.rooms
       }
     }
+  })
+
+  // #1730 — start the byte counters over (after trimming a heavy broadcast, to see the effect).
+  app.post('/traffic/reset', async () => {
+    resetTransportStats(tenantScope())
+    return { data: { reset: true } }
   })
 
   // Now-editing pulse (#273): active edit locks (cross-replica truth) + this

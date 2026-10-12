@@ -18,6 +18,7 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
+import { serverNow } from '../../lib/server-clock'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { invalidateRecordData, invalidateRecordInsights } from '../item-edit/RecordInsights'
@@ -194,7 +195,7 @@ const ERROR_CLASS_TEXT: Record<string, string> = {
 
 /** "in 25 min" / "in 2h" / "on the next check" for a ladder retry time. */
 function retryWhen(iso: string): string {
-  const mins = Math.ceil((new Date(iso).getTime() - Date.now()) / 60_000)
+  const mins = Math.ceil((new Date(iso).getTime() - serverNow()) / 60_000)
   if (!Number.isFinite(mins) || mins <= 0) return 'on the next check'
   if (mins < 60) return `in ${mins} min`
   return `in ${Math.round(mins / 60)}h`

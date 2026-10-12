@@ -707,9 +707,20 @@ export async function authRoutes(app: FastifyInstance) {
   // hits the API directly under wildcard CORS), so the client fetches this
   // one-time token same-origin and passes it in the socket `auth` payload.
   // 2-minute TTL, deleted on first use by the socket auth handler.
+  // #1719 — the token remembers what signed this request in (the session id, or the
+  // masquerade token), so the socket it opens closes when that session or masquerade ends.
   app.get('/ws-token', { preHandler: requireAuth }, async (req, reply) => {
     const token = randomUUID()
-    await app.redis.setex(`ws:token:${token}`, 120, req.user!.id)
+    const bind: { u: string; s?: string; m?: string } = { u: String(req.user!.id) }
+    if (req.authMethod === 'session') {
+      const sid = (req.session as unknown as { sessionId?: string })?.sessionId
+      if (sid) bind.s = sid
+    } else if (req.authMethod === 'masquerade') {
+      const h = req.headers.authorization
+      const bearer = h?.startsWith('Bearer ') ? h.slice(7).trim() : ''
+      if (bearer.startsWith('nvm_')) bind.m = bearer
+    }
+    await app.redis.setex(`ws:token:${token}`, 120, JSON.stringify(bind))
     return reply.send({ token })
   })
 
@@ -848,6 +859,8 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Not a masquerade session' })
     }
     await app.redis.del(`masq:${token}`)
+    // #1719 — the View-as tab's sockets end with the masquerade, on every replica.
+    void import('../services/socket-access.js').then((m) => m.endMasqueradeSockets(token))
     await logActivity({
       action: 'masquerade-stop',
       user: req.masqueradeAdminId,

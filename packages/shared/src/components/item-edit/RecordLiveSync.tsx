@@ -1,7 +1,7 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { UploadCloud } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { useOptionalRealtime } from '../../lib/realtime'
+import { updateTouches, useOptionalRealtime } from '../../lib/realtime'
 
 /**
  * Record-level live sync (#274 state sync, #281 live revision feed, #282
@@ -22,7 +22,8 @@ export function RecordLiveSync({ collection, itemId }: { collection: string; ite
   useEffect(() => {
     if (!realtime) return
     const unsub = realtime.subscribeCollections([collection], (ev) => {
-      if (String(ev.item) !== String(itemId)) return
+      // A coalesced burst (#1681) carries its ids (or none, "many") instead of one item.
+      if (!updateTouches(ev, itemId)) return
       for (const key of [
         ['item', collection, itemId],
         ['pipeline-instance', collection, itemId],

@@ -56,7 +56,7 @@ import {
   formatValue
 } from '../lib/format-value'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../lib/open-in-tabs'
-import { useOptionalRealtime } from '../lib/realtime'
+import { updateItemIds, useOptionalRealtime } from '../lib/realtime'
 import { rowHighlightClass, rowHighlightDotClass } from '../lib/row-highlight'
 import {
   effectiveScopeSeedIds,
@@ -91,6 +91,7 @@ import { UserChip, UserRosterCluster } from './item-edit/GroupSection'
 import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerDialog'
 import { MapView } from './MapView'
 import { RevisionsPanel } from './panels'
+import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { TipLayer } from './TipLayer'
@@ -4664,29 +4665,35 @@ export function CollectionBrowserView({
   useEffect(() => {
     if (!realtime || !collection) return
     const scheduleInvalidate = () => setPendingLive((n) => n + 1)
+    const refreshRow = (id: string) =>
+      client
+        .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
+        .then((res) => {
+          const fresh = res?.data
+          if (!fresh) return
+          qc.setQueryData(
+            itemsKeyRef.current,
+            (prev: { data: Array<Record<string, unknown>>; total: number } | undefined) =>
+              prev
+                ? {
+                    ...prev,
+                    data: prev.data.map((r) => (String(r.id) === id ? { ...r, ...fresh } : r))
+                  }
+                : prev
+          )
+        })
+        .catch(() => scheduleInvalidate())
     const unsub = realtime.subscribeCollections([collection], (ev) => {
-      const id = String(ev.item)
-      if (ev.action !== 'delete' && visibleIdsRef.current.has(id)) {
-        client
-          .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${id}`))
-          .then((res) => {
-            const fresh = res?.data
-            if (!fresh) return
-            qc.setQueryData(
-              itemsKeyRef.current,
-              (prev: { data: Array<Record<string, unknown>>; total: number } | undefined) =>
-                prev
-                  ? {
-                      ...prev,
-                      data: prev.data.map((r) => (String(r.id) === id ? { ...r, ...fresh } : r))
-                    }
-                  : prev
-            )
-          })
-          .catch(() => scheduleInvalidate())
-      } else {
-        scheduleInvalidate()
+      // A coalesced burst (#1681) lists its ids — or none ("many"), which is one refresh.
+      const ids = updateItemIds(ev)
+      if (ids === null) return scheduleInvalidate()
+      let offPage = false
+      for (const raw of ids) {
+        const id = String(raw)
+        if (ev.action !== 'delete' && visibleIdsRef.current.has(id)) void refreshRow(id)
+        else offPage = true
       }
+      if (offPage) scheduleInvalidate()
     })
     return () => {
       unsub()
@@ -6198,6 +6205,7 @@ export function CollectionBrowserView({
             </button>
           )
         })}
+        <RealtimeStaleMark className='h-8' />
         {pendingLive > 0 && (
           <button
             type='button'

@@ -16,7 +16,30 @@ import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
-import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import {
+  canSeeRecordRoom,
+  masqRoom,
+  parseWsTokenValue,
+  RECHECK_EVENT,
+  type RecheckTarget,
+  runLocalRecheck,
+  type SocketAccessHooks,
+  type SocketBind,
+  sessionRoom,
+  sha,
+  sweepSockets
+} from '../services/socket-access.js'
+import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import {
+  type Coalescer,
+  collectionUpdateOf,
+  createCoalescer,
+  encodeEvent,
+  eventNameOf,
+  noteCoalesced,
+  noteTenantSocket,
+  recordOutbound
+} from '../services/socket-transport.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -75,6 +98,10 @@ interface SocketMeta {
   app: string | null
   /** #1048 — the build this tab runs (from client:hello); null = not reported. */
   version: ClientVersion | null
+  /** #1672 — the engine transport right now: 'websocket' or 'polling' (the fallback). */
+  transport: string | null
+  /** #1681 — the client said it understands coalesced collection:update messages. */
+  coalesce: boolean
 }
 const socketMeta = new Map<string, SocketMeta>()
 let _ioRef: SocketIOServer | null = null
@@ -142,7 +169,9 @@ export function getRealtimeStats(): {
         rtt: null,
         reconnects: 0,
         app: null,
-        version: null
+        version: null,
+        transport: null,
+        coalesce: false
       }
       sockets.push({ id, ...meta, rooms: [...sock.rooms].filter((r) => r !== id) })
     }
@@ -286,10 +315,34 @@ export function createWatchRoomGate(): {
   }
 }
 
+/**
+ * #1672 — whether clients may fall back to HTTP long-polling when the websocket upgrade is
+ * blocked. Polling needs sticky sessions behind a load balancer (each poll must reach the
+ * process holding the session); `SOCKET_POLLING=off` turns it off where the balancer is not
+ * sticky, and clients then fall back to the read-only SSE stream instead.
+ */
+export function socketPollingAllowed(): boolean {
+  return (process.env.SOCKET_POLLING ?? 'on').toLowerCase() !== 'off'
+}
+
+/** #1730 — per-message deflate for frames over 1 KB; `SOCKET_COMPRESSION=off` disables it. */
+export function socketCompressionOn(): boolean {
+  return (process.env.SOCKET_COMPRESSION ?? 'on').toLowerCase() !== 'off'
+}
+
+/** The room a broadcast is being written for (set around adapter.apply; null = direct emit). */
+let broadcastRoom: string | null = null
+
+function roomsLabel(rooms: unknown): string | null {
+  if (!(rooms instanceof Set) || rooms.size === 0) return 'all'
+  return String([...rooms][0])
+}
+
 export const socketioPlugin = fp(async (app: FastifyInstance) => {
   const io = new SocketIOServer(app.server, {
     cors: { origin: '*', credentials: true },
-    transports: ['websocket', 'polling']
+    transports: socketPollingAllowed() ? ['websocket', 'polling'] : ['websocket'],
+    perMessageDeflate: socketCompressionOn() ? { threshold: 1024 } : false
   })
   _ioRef = io
 
@@ -304,6 +357,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       key: `${process.env.REDIS_CHANNEL_PREFIX ?? ''}socket.io`
     })
   )
+  // #1730 — byte accounting per room: every broadcast (local or relayed from another replica)
+  // writes to its sockets inside adapter.apply, so the room in flight is known there.
+  {
+    const adapter = io.of('/').adapter as unknown as {
+      apply(opts: { rooms?: unknown }, cb: (s: unknown) => void): unknown
+    }
+    const origApply = adapter.apply.bind(adapter)
+    adapter.apply = (opts, cb) => {
+      const prev = broadcastRoom
+      broadcastRoom = roomsLabel(opts?.rooms)
+      try {
+        return origApply(opts, cb)
+      } finally {
+        broadcastRoom = prev
+      }
+    }
+  }
   // socketId → where in the admin that user is right now (presence map;
   // per-node like recordViewers — same accepted Redis-adapter limitation)
   const pagePresence = new Map<
@@ -396,8 +466,67 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       rtt: null,
       reconnects: 0,
       app: null,
-      version: null
+      version: null,
+      transport: socket.conn?.transport?.name ?? null,
+      coalesce: false
     })
+    socket.conn?.on?.('upgrade', (t: { name?: string }) => {
+      const meta = socketMeta.get(socket.id)
+      if (meta) meta.transport = t?.name ?? meta.transport
+    })
+
+    // #1732 — which tenant this socket belongs to (cloud), for per-tenant counters.
+    let tenantKey: string | null = null
+    if (process.env.CLOUD_META_DB_URL) {
+      void socketTenant(socket).then((t) => {
+        if (!t || !socket.connected) return
+        tenantKey = String(t.tenantId || t.slug)
+        socket.data.nvrTenantKey = tenantKey
+        noteTenantSocket(tenantKey, 1, t.slug)
+      })
+    }
+
+    // #1730 byte accounting + #1681 burst coalescing, at the one place every packet to this
+    // socket passes: the client's writeToEngine (broadcasts and direct emits alike).
+    const client = socket.client as unknown as {
+      writeToEngine(encoded: unknown, opts: Record<string, unknown>): void
+    }
+    const origWrite = client.writeToEngine.bind(client)
+    const sizeOf = (p: unknown) =>
+      typeof p === 'string'
+        ? Buffer.byteLength(p)
+        : p instanceof Uint8Array || p instanceof ArrayBuffer
+          ? p.byteLength
+          : 0
+    let coalescer: Coalescer | null = null
+    const sendCoalesced = (payload: Record<string, unknown>) => {
+      const encoded = encodeEvent('collection:update', payload)
+      recordOutbound(
+        'collection:update',
+        `collection:${String(payload.collection ?? '')}`,
+        sizeOf(encoded),
+        tenantKey
+      )
+      origWrite(encoded, {})
+    }
+    client.writeToEngine = (encoded, opts) => {
+      const list = Array.isArray(encoded) ? encoded : [encoded]
+      const room = broadcastRoom
+      for (const p of list) {
+        if (typeof p === 'string') {
+          if (coalescer && !opts?.volatile) {
+            const payload = collectionUpdateOf(p)
+            if (payload) {
+              coalescer.push(payload)
+              continue
+            }
+          }
+          recordOutbound(eventNameOf(p) ?? `packet:${p[0] ?? '?'}`, room, sizeOf(p), tenantKey)
+        } else recordOutbound('binary', room, sizeOf(p), tenantKey)
+        origWrite(p, opts)
+      }
+    }
+
     // Zombie socket reaper (#310): a connection that never authenticates is
     // holding a slot for nothing — drop it after 45s. Legit clients auth
     // within the first second of connecting.
@@ -422,14 +551,40 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
     // Client self-report: reconnect count + which app (admin/headless host).
     // #1048 — and which build the tab runs (build / api / tab / loaded, see client-version).
-    socket.on('client:hello', (payload: { reconnects?: number; app?: string }) => {
-      const meta = socketMeta.get(socket.id)
-      if (!meta) return
-      if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
-      if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
-      const version = clientVersionFromHello(payload)
-      if (version.build || version.api || version.tab) meta.version = version
-    })
+    socket.on(
+      'client:hello',
+      (payload: { reconnects?: number; app?: string; features?: unknown; transport?: string }) => {
+        const meta = socketMeta.get(socket.id)
+        if (!meta) return
+        if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
+        if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
+        // #1681 — opt-in: only a client that understands merged messages gets them, so an older
+        // client (a portal on a pinned package) keeps one message per change.
+        if (
+          Array.isArray(payload?.features) &&
+          payload.features.includes('coalesce') &&
+          !coalescer
+        ) {
+          meta.coalesce = true
+          coalescer = createCoalescer({
+            send: sendCoalesced,
+            onCollapse: (n) => noteCoalesced(n, tenantKey)
+          })
+        }
+        const version = clientVersionFromHello(payload)
+        if (version.build || version.api || version.tab) meta.version = version
+      }
+    )
+
+    // #2132 — clock sync: the client stamps its send time, the server answers with its own
+    // clock, and the client takes the offset from the midpoint of the round trip.
+    socket.on(
+      'time:sync',
+      (payload: { c?: number }, ack?: (r: { s: number; c: number | null }) => void) => {
+        if (typeof ack !== 'function') return
+        ack({ s: Date.now(), c: typeof payload?.c === 'number' ? payload.c : null })
+      }
+    )
 
     // Missed-event catch-up (#266): client sends its last-seen sequence after
     // (re)joining its rooms; we replay what it missed, or tell it honestly
@@ -492,6 +647,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Set once `auth` succeeds below; gates authenticated-only handlers
     // (e.g. collection:join) for the lifetime of this socket connection.
     let authenticatedUser: User | null = null
+
+    /** Sign the socket in as `user`, bound to what signed it in (#1719). */
+    const signIn = (user: User, bind: SocketBind) => {
+      authenticatedUser = user
+      socket.data.nvrBind = bind
+      const meta = socketMeta.get(socket.id)
+      if (meta)
+        meta.user = {
+          id: user.id,
+          name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
+        }
+      socket.join(`user:${user.id}`)
+      // A revoke publishes to these rooms, which reach the socket on every replica.
+      if (bind.kind === 'session') socket.join(sessionRoom(bind.sid))
+      else if (bind.kind === 'masq') socket.join(masqRoom(bind.token))
+      socket.emit('auth:ok', { userId: user.id })
+    }
 
     // Authenticate the socket via the user's static token, or a short-lived
     // one-time WS token minted by GET /api/auth/ws-token (session-cookie users
@@ -560,22 +732,22 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const token = payload?.token?.trim()
       if (!token) return
       try {
-        const wsUserId = await app.redis.get(`ws:token:${token}`)
-        if (wsUserId) {
+        const wsValue = await app.redis.get(`ws:token:${token}`)
+        if (wsValue) {
           await app.redis.del(`ws:token:${token}`) // one-time use
+          const minted = parseWsTokenValue(wsValue)
           const user = await db<User>('nivaro_users')
-            .where({ id: wsUserId, status: 'active' })
+            .where({ id: minted.userId, status: 'active' })
             .first()
           if (user) {
-            authenticatedUser = user
-            const meta = socketMeta.get(socket.id)
-            if (meta)
-              meta.user = {
-                id: user.id,
-                name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
-              }
-            socket.join(`user:${user.id}`)
-            socket.emit('auth:ok', { userId: user.id })
+            // Bound to the session (or masquerade) the token was minted from; a token from an
+            // older API carries neither and is bound to the account alone.
+            const bind: SocketBind = minted.sid
+              ? { kind: 'session', sid: minted.sid }
+              : minted.masq
+                ? { kind: 'masq', token: minted.masq }
+                : { kind: 'token', tokenHash: user.static_token ? sha(user.static_token) : '' }
+            signIn(user, bind)
             void markOnline(user.id, socket.id)
           }
           return
@@ -591,16 +763,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             .where({ id: payloadIds.user_id, status: 'active' })
             .first()
           if (user) {
-            authenticatedUser = user
             touchMasqueradeMarker(app.redis, String(user.id), payloadIds.admin_id)
-            const meta = socketMeta.get(socket.id)
-            if (meta)
-              meta.user = {
-                id: user.id,
-                name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
-              }
-            socket.join(`user:${user.id}`)
-            socket.emit('auth:ok', { userId: user.id })
+            signIn(user, { kind: 'masq', token })
             void markOnline(user.id, socket.id)
           }
           return
@@ -609,17 +773,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         const user = await db<User>('nivaro_users')
           .where({ static_token: token, status: 'active' })
           .first()
-        if (user) {
-          authenticatedUser = user
-          const meta = socketMeta.get(socket.id)
-          if (meta)
-            meta.user = {
-              id: user.id,
-              name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
-            }
-          socket.join(`user:${user.id}`)
-          socket.emit('auth:ok', { userId: user.id })
-        }
+        if (user) signIn(user, { kind: 'token', tokenHash: sha(token) })
       } catch (err) {
         app.log.warn({ err }, 'Socket auth failed')
       }
@@ -653,9 +807,25 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       })
     })
 
-    socket.on('presence:join', (roomId: string) => {
-      socket.join(`presence:${roomId}`)
-    })
+    // Signed-in sockets only: an anonymous connection must not sit in any room.
+    // `presence:admin` carries every session row (IP, device) — administrators only.
+    socket.on(
+      'presence:join',
+      inSocketTenant(socket, async (roomId: string) => {
+        const user = authenticatedUser
+        if (!user || typeof roomId !== 'string' || !roomId) return
+        if (roomId === 'admin') {
+          const role = user.role
+            ? await db('nivaro_roles')
+                .where({ id: user.role })
+                .first('admin_access')
+                .catch(() => null)
+            : null
+          if (!role?.admin_access || authenticatedUser !== user) return
+        }
+        socket.join(`presence:${roomId.slice(0, 200)}`)
+      })
+    )
     socket.on('presence:leave', (roomId: string) => {
       socket.leave(`presence:${roomId}`)
     })
@@ -785,11 +955,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const { collection, item } = payload ?? {}
       const user = authenticatedUser
       if (!user || typeof collection !== 'string' || !collection || item == null) return
-      try {
-        if (!(await can(user, 'read', collection))) return
-      } catch {
-        return
-      }
+      // The record read gate (role, row filter, user scopes) — the same answer GET /items gives:
+      // a record the person cannot open is not a room they may sit in (#1720).
+      if (!(await canSeeRecordRoom(user, collection, String(item)))) return
       const room = `record:${collection}:${String(item)}`
       joinedRecordRoom = room
       joinedRecordRooms.add(room)
@@ -910,8 +1078,24 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       })
     })
 
+    // #1720 — what socket-access needs from this closure: the signed-in user, a way to swap
+    // in a fresh row (role changed), and a room leave that keeps the record viewer list right.
+    const accessHooks: SocketAccessHooks = {
+      user: () => authenticatedUser,
+      applyUser: (u) => {
+        authenticatedUser = u
+      },
+      leaveRoom: (room) => {
+        if (joinedRecordRooms.has(room)) leaveOneRoom(room)
+        else socket.leave(room)
+      }
+    }
+    socket.data.nvrAccess = accessHooks
+
     socket.on('disconnect', () => {
       noteSocket('disconnect')
+      coalescer?.dispose()
+      if (tenantKey) noteTenantSocket(tenantKey, -1)
       clearInterval(rttTimer)
       socketMeta.delete(socket.id)
       if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
@@ -924,8 +1108,32 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     })
   })
 
+  // #1720 — another replica asked for a room re-check; run this node's share.
+  io.on(RECHECK_EVENT, (target: RecheckTarget) => {
+    void runLocalRecheck(io, target ?? { all: true })
+  })
+
+  // #1719 — sweep this node's signed-in sockets: an ended session, masquerade or token, or an
+  // account no longer active, closes the socket even when nothing announced it.
+  const sweepMs = Math.max(5_000, Number(process.env.SOCKET_SWEEP_MS) || 30_000)
+  const sweepTimer = setInterval(() => {
+    void sweepSockets(io, {
+      redis: app.redis,
+      judge: async (role, stamps) => {
+        const { getSessionPolicy, limitsFor, judgeSession } = await import(
+          '../services/session-policy.js'
+        )
+        const policy = await getSessionPolicy()
+        if (!policy) return 'ok'
+        return judgeSession(limitsFor(policy, role), stamps, Date.now()).ok ? 'ok' : 'expired'
+      }
+    }).catch((err) => app.log.debug({ err }, 'socket sweep failed'))
+  }, sweepMs)
+  sweepTimer.unref?.()
+
   app.decorate('io', io)
   app.addHook('onClose', async () => {
+    clearInterval(sweepTimer)
     io.close()
   })
 })
