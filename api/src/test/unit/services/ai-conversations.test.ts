@@ -242,7 +242,9 @@ describe('messagesForViewer — memory offers stay with the asker (#1845)', () =
       meta: JSON.stringify({
         request_id: 'r1',
         memory_suggestions: [{ text: 'By my zone I mean Zone 3' }],
-        remembered: { id: 'n1', text: 'amounts in thousands' }
+        remembered: { id: 'n1', text: 'amounts in thousands' },
+        followups: ['Which of these are in Zone 3?'],
+        choices: [{ label: 'Zone 3', value: 'Zone 3' }]
       }),
       created_at: new Date(0)
     }
@@ -257,6 +259,9 @@ describe('messagesForViewer — memory offers stay with the asker (#1845)', () =
     expect(shared[1].meta.request_id).toBe('r1')
     expect(shared[1].meta).not.toHaveProperty('memory_suggestions')
     expect(shared[1].meta).not.toHaveProperty('remembered')
+    expect(shared[1].meta).not.toHaveProperty('followups')
+    expect(shared[1].meta).not.toHaveProperty('choices')
+    expect(own[1].meta.followups).toEqual(['Which of these are in Zone 3?'])
   })
 })
 
