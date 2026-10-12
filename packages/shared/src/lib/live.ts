@@ -110,6 +110,21 @@ function isOwnEvent(ev: Record<string, unknown>, selfId: string): boolean {
   return collection !== '' && ev.item != null && isOwnWrite(collection, ev.item as string)
 }
 
+/**
+ * One `collection:update` as plain per-record events: a coalesced burst (#1681) lists ids
+ * (one event each) or says `many` (one bulk `'*'` event carrying the count); anything else
+ * passes through. Exported for tests.
+ */
+export function expandCoalesced(
+  ev: CollectionUpdateEvent & Record<string, unknown>
+): Array<CollectionUpdateEvent & Record<string, unknown>> {
+  if (!ev.coalesced) return [ev]
+  const { coalesced: _c, items, many, count, ...base } = ev
+  if (many || !Array.isArray(items))
+    return [{ ...base, item: '*', ...(typeof count === 'number' ? { bulk: count } : {}) }]
+  return items.map((item) => ({ ...base, item }))
+}
+
 /** Fold raw events into one batch (exported for tests). */
 export function toLiveBatch(events: LiveEvent[]): LiveBatch {
   const ids = [...new Set(events.map((e) => String(e.item)))]
@@ -188,13 +203,18 @@ export function useLiveCollection(
       else handlerRef.current(toLiveBatch(evs))
     }
     const unsub = realtime.subscribeCollections(names, (raw) => {
-      const ev = raw as CollectionUpdateEvent & Record<string, unknown>
-      if (!ev || !names.includes(String(ev.collection))) return
-      const live: LiveEvent = { ...ev, own: isOwnEvent(ev, selfRef.current) }
+      const first = raw as CollectionUpdateEvent & Record<string, unknown>
+      if (!first || !names.includes(String(first.collection))) return
       const o = optsRef.current
-      if (live.own && !o.includeOwn) return
-      if (o.match && !o.match(live)) return
-      pending.push(live)
+      // A coalesced burst (#1681) becomes one event per id it lists — or one bulk '*' event
+      // when it said "many" — so record matching and own-write checks work per record.
+      for (const ev of expandCoalesced(first)) {
+        const live: LiveEvent = { ...ev, own: isOwnEvent(ev, selfRef.current) }
+        if (live.own && !o.includeOwn) continue
+        if (o.match && !o.match(live)) continue
+        pending.push(live)
+      }
+      if (pending.length === 0) return
       const wait = o.debounceMs ?? 250
       if (wait <= 0) flush()
       else if (!timer) timer = setTimeout(flush, wait)

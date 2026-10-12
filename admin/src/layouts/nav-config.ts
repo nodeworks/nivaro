@@ -43,6 +43,7 @@ import {
   LayoutGrid,
   LifeBuoy,
   Link2,
+  ListChecks,
   ListFilter,
   ListOrdered,
   Mail,
@@ -141,6 +142,12 @@ export const navCategories: NavCategory[] = [
       { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards', keywords: 'kpi widgets' },
       { icon: Radar, label: 'Command Center', to: '/command', keywords: 'map live' },
       { icon: Sparkles, label: 'Ask AI', to: '/ask', keywords: 'chat question assistant' },
+      {
+        icon: ListChecks,
+        label: 'AI Plans',
+        to: '/ai-plans',
+        keywords: 'ask ai plan history undo templates scheduled'
+      },
       { icon: MessagesSquare, label: 'Chat', to: '/chat', keywords: 'messages dm channels' },
       { icon: LifeBuoy, label: 'Support', to: '/support', keywords: 'help tickets request' },
       {

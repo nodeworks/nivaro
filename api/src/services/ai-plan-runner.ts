@@ -26,6 +26,7 @@ export type PlanStepStatus = 'pending' | 'running' | 'done' | 'failed' | 'skippe
 
 export type PlanStatus =
   | 'proposed'
+  | 'scheduled'
   | 'running'
   | 'paused'
   | 'executed'
@@ -97,11 +98,38 @@ export interface ConditionOutcome {
   skipped_records?: PlanSkippedRecord[]
 }
 
+/** One record a step wrote, captured as it ran (#2002 change report, #1954
+ *  undo). `before` is read raw — it is never shown without a per-viewer
+ *  access check (services/ai-plan-report.ts). */
+export interface PlanMadeRecord {
+  id: string
+  before: Record<string, unknown>
+  after: Record<string, unknown>
+  /** Newest nivaro_revisions id for the record just after the write. */
+  rev: number | null
+  /** When the write landed on another collection than the step's (a Data
+   *  Integrity fix may repair a grid line). */
+  collection?: string
+  /** The step created the record (undo = delete it). */
+  created?: boolean
+  /** Reverted by an administrator (#1954). */
+  undone?: boolean
+}
+
+export interface PlanStepMade {
+  collection: string
+  records: PlanMadeRecord[]
+  undone_at?: string | null
+  undone_by?: string | null
+}
+
 export interface StepOutcome {
   ok: boolean
   result: Record<string, unknown>
   records_changed: number
   error?: string
+  /** What the step wrote — the plan service keeps it out of `result`. */
+  made?: PlanStepMade | null
 }
 
 export interface PlanRunDeps {

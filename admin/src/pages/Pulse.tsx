@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { io } from 'socket.io-client'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 import { cn, formatRelative } from '@/lib/utils'
 
 /**
@@ -60,7 +61,7 @@ export function PulsePage() {
   }, [seed])
 
   useEffect(() => {
-    const socket = io(API_URL, { transports: ['websocket'], withCredentials: true })
+    const socket = io(API_URL, { ...SOCKET_TRANSPORT_OPTIONS, withCredentials: true })
 
     socket.on('connect', async () => {
       let token = user?.static_token ?? null

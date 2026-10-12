@@ -5,6 +5,7 @@ import { db } from '../db/index.js'
 import { NIVARO_VERSION } from '../version.js'
 import { startJobRun } from './job-runs.js'
 import { notifyUser } from './notification-channels.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * Ops monitors evaluator. Three check types share one lifecycle: evaluate on
@@ -536,7 +537,7 @@ export async function evaluateAllMonitors(app: FastifyInstance | null): Promise<
     try {
       const { getIo } = await import('./io-holder.js')
       getIo()
-        ?.to('watch:monitors')
+        ?.to(tenantScopedRoom('watch:monitors'))
         .emit('monitor:status', { id: m.id, name: m.name, status: r.status })
     } catch {
       /* emit is decoration */

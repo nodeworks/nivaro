@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Redis } from 'ioredis'
 import { pubsub, topics } from '../graphql/pubsub.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Record-change events for GraphQL subscriptions (`itemMutated`).
@@ -21,6 +22,8 @@ export interface ItemEvent {
   action: 'create' | 'update' | 'delete'
   changed_fields: string[]
   at: string
+  /** Cloud: the tenant whose write this was ('' self-hosted) — topics are per tenant. */
+  tenant?: string
 }
 
 // REDIS_CHANNEL_PREFIX: see plugins/socketio.ts (pub/sub ignores the db index).
@@ -30,14 +33,21 @@ let pub: Redis | null = null
 let sub: Redis | null = null
 
 function deliver(ev: ItemEvent): void {
-  const payload = { itemMutated: { ...ev, data: null } }
+  const { tenant = '', ...event } = ev
+  const payload = { itemMutated: { ...event, data: null } }
+  // Only subscribers of the same tenant hear it (they subscribe under their own tenant key).
   // A raw bulk write (#1875) arrives as item '*' — publish it once.
-  if (ev.item !== '*') pubsub.publish(topics.itemMutated(ev.collection, ev.item), payload)
-  pubsub.publish(topics.itemMutated(ev.collection, '*'), payload)
+  if (ev.item !== '*') pubsub.publish(topics.itemMutated(ev.collection, ev.item, tenant), payload)
+  pubsub.publish(topics.itemMutated(ev.collection, '*', tenant), payload)
 }
 
 export function publishItemEvent(ev: Omit<ItemEvent, 'at'>): void {
-  const full: ItemEvent = { ...ev, at: new Date().toISOString() }
+  // The tenant rides the event, so a replica relaying it over Redis keys it the same way.
+  const full: ItemEvent = {
+    ...ev,
+    tenant: ev.tenant ?? currentTenantKey(),
+    at: new Date().toISOString()
+  }
   try {
     deliver(full)
   } catch {

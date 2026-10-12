@@ -1,4 +1,5 @@
 import { Check, GitBranch, GitMerge } from 'lucide-react'
+import { serverNow } from '../../lib/server-clock'
 import { formatRelative, humanHours } from '../../lib/utils'
 import { OwnerAvatars } from '../queue/OwnerAvatars'
 
@@ -36,7 +37,7 @@ export interface BranchLanesData {
 
 function sinceText(iso: string | null, until?: string | null): string | null {
   if (!iso) return null
-  const end = until ? new Date(until).getTime() : Date.now()
+  const end = until ? new Date(until).getTime() : serverNow()
   const ms = end - new Date(iso).getTime()
   if (!Number.isFinite(ms) || ms < 0) return null
   const m = Math.floor(ms / 60000)

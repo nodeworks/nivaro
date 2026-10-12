@@ -8,6 +8,7 @@ export * from './sections/ai-conversations.js'
 export * from './sections/ai-design.js'
 export * from './sections/ai-explain.js'
 export * from './sections/ai-knowledge.js'
+export * from './sections/ai-panel.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
@@ -72,6 +73,7 @@ import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
 import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
+import { aiPanelDocs } from './sections/ai-panel.js'
 import {
   adminI18nDocs,
   aiChatDocs,
@@ -343,6 +345,7 @@ import {
 } from './sections/platform-additions.js'
 import { qualityChecksDocs } from './sections/quality-checks.js'
 import { queuesGuide } from './sections/queues.js'
+import { realtimeTransport } from './sections/realtime-transport.js'
 import { recordInsightsDocs } from './sections/record-insights.js'
 import { recordIntegrations } from './sections/record-integrations.js'
 import {
@@ -619,6 +622,7 @@ export const navSections: NavGroup[] = [
     items: [
       aiChatDocs,
       aiConversationsDocs,
+      aiPanelDocs,
       aiKnowledgeDocs,
       aiActionsDocs,
       aiPlansDocs,
@@ -846,6 +850,7 @@ export const navSections: NavGroup[] = [
       obsTrafficMapAct,
       obsTrafficMapLenses,
       obsTrafficMapPlatform,
+      realtimeTransport,
       commandCenterDocs,
       wallboardPulseDocs,
       recordGraphDocs,
