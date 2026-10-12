@@ -70,6 +70,44 @@ POST /api/ai/plans/:id/cancel     discard, or stop a running plan before its nex
     {
       type: 'p',
       text: 'The chat answer carries proposed plans in `plans` next to `proposals`. Progress is pushed to your Socket.io user room as `ai:plan` ({plan_id, status, records_changed, step, plan}); `ai:status` events of a streamed answer now also arrive with `done: true` and a short `result` when each tool returns. Plans are stored in nivaro_ai_proposals with action_type `plan`.'
+    },
+    { type: 'h2', id: 'ai-plans-impact', text: 'Impact and change report' },
+    {
+      type: 'p',
+      text: 'Every plan card leads with its impact, read off the step previews: "Touches 34 records in 3 collections, messages 12 people, moves 5 records to Approved". "What changes" opens the change report — every field the plan would change (or, for steps that ran, did change), per record, old value → new value — with an Excel download. The report is built for whoever looks at it: a record you cannot read shows as #id with no values, a field you cannot read as (hidden).'
+    },
+    { type: 'h2', id: 'ai-plans-later', text: 'Run later' },
+    {
+      type: 'p',
+      text: '"Run later…" approves the plan for a set time. Each minute the `ai-plans-scheduled` job picks up the due plans; before running, every pending step is rebuilt as you at that moment. If the records a step would act on changed, or a step no longer builds, nothing runs: the plan comes back to you for approval with the new previews and the reason, and you get a notification. Cancel the schedule from the card to approve it again by hand.'
+    },
+    {
+      type: 'p',
+      text: 'When a plan finishes, the person who approved it gets a notification (in-app, plus push or Teams by their own notification rules) with the outcome, the failed step if any, and a link to the plan.'
+    },
+    { type: 'h2', id: 'ai-plans-history', text: 'Plan history, undo and templates' },
+    {
+      type: 'ul',
+      items: [
+        '/ai-plans (Home → AI Plans) lists plans with who approved them and when, their steps, impact and outcome. Everyone sees their own; administrators see every plan.',
+        "Undo (administrators): a step that wrote records can be reverted record by record, but only where nothing has changed the record since — its newest revision is still the plan's write and every field still holds the value the plan wrote. Records changed since are named and left alone. Messages, chat posts, flows and tasks cannot be undone.",
+        'Make a draft flow (administrators, plans that ran to the end): the steps become flow operations, chained in order, with the records as the same ids, the original filter, or whichever record fired an update event. The flow is created switched off and opens in the tester. Record updates and creates use the new Write Records flow operation, which runs as whoever triggered the flow through the normal record rules. When nobody triggers it (a webhook, a schedule, a system event) it runs only as a \'Run as\' person named on the operation — never as the flow\'s author — and refuses without one; that person must be active, and the collection must be named, not templated.',
+        "Templates: ready-made plans for common chores (close out a record's open lines, reassign a leaver's open records, move old drafts to a status, tell the owners of matching records). Fill in the blanks and the usual plan preview appears; nothing runs until you approve. Administrators add their own (blanks + steps as JSON).",
+        'Data Integrity: on a run\'s field + rule filter, "Fix as a plan…" builds the confident fixes for that cluster as a plan, previewed record by record in the change report before approval.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/ai/plans?scope=mine|all&status=
+GET  /api/ai/plans/:id/changes          (+ /changes.xlsx)
+POST /api/ai/plans/:id/schedule         {"run_at": "2026-10-16T21:00:00Z"}
+POST /api/ai/plans/:id/unschedule
+GET  /api/ai/plans/:id/undo             administrators
+POST /api/ai/plans/:id/undo             {"step_id"?: "…"}  administrators
+POST /api/ai/plans/:id/flow             {"records": "same"|"filter"|"trigger"}  administrators
+GET  /api/ai/plan-templates
+POST /api/ai/plan-templates/propose     {"key": "old-drafts", "values": {…}}
+POST /api/config-conformance/runs/:id/plan  {"field", "rule"}  administrators`
     }
   ]
 }

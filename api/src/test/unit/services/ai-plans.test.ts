@@ -35,6 +35,9 @@ vi.mock('../../../services/io-holder.js', () => ({
   })
 }))
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
+vi.mock('../../../services/notification-channels.js', () => ({
+  notifyUser: vi.fn(async () => ({}))
+}))
 const isAdminRole = vi.fn(async () => false)
 vi.mock('../../../services/user-scopes.js', () => ({
   isAdminRole: (...a: unknown[]) => isAdminRole(...(a as [])),

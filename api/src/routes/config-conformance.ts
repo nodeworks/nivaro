@@ -830,6 +830,24 @@ export async function configConformanceRoutes(app: FastifyInstance): Promise<voi
     return { data: { cleared, failed, total: ids.length } }
   })
 
+  /** #2006 — offer one cluster's (field + rule) fix as an Ask AI plan: the
+   *  same confident fix "Apply confident fixes" would make, previewed record
+   *  by record in the plan's change report, run only once approved. */
+  app.post<{ Params: { id: string } }>('/runs/:id/plan', async (req, reply) => {
+    const b = (req.body ?? {}) as { field?: string; rule?: string }
+    if (!b.field || !IDENT.test(b.field) || !b.rule) {
+      return reply.code(400).send({ error: 'field and rule are required' })
+    }
+    const { proposeIntegrityPlan } = await import('../services/ai-plan-integrity.js')
+    try {
+      const plan = await proposeIntegrityPlan(req.user!, Number(req.params.id), b.field, b.rule)
+      return reply.code(201).send({ data: plan })
+    } catch (err) {
+      const status = (err as { statusCode?: number }).statusCode ?? 400
+      return reply.code(status).send({ error: (err as Error).message })
+    }
+  })
+
   /** Which collections have anything to check, with per-kind counts — the
    *  picker only offers collections where a run can find something. */
   app.get('/collections', async () => {
