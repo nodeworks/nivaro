@@ -14,6 +14,8 @@ import {
   type WidgetQueryConfig
 } from '../services/report-studio.js'
 import {
+  type ColumnSpec,
+  type LookupSpec,
   type RelRow,
   type ReviewListConfig,
   resolveReviewListRows,
@@ -21,6 +23,13 @@ import {
 } from '../services/review-list.js'
 import { type RollupConfig, resolveRollupRows, validateRollupConfig } from '../services/rollup.js'
 import { markCacheHit } from '../services/traffic-map.js'
+import {
+  assertHostReadable,
+  assertLookupReadable,
+  assertWidgetFieldsReadable,
+  readableIds,
+  readOneAs
+} from '../services/widget-access.js'
 import type { User } from '../types.js'
 
 // ── helpers ──────────────────────────────────────────────────────────────────
@@ -116,6 +125,73 @@ function validateRedirectUrl(url: string): string | null {
   return trimmed
 }
 
+// ── as-the-viewer helpers (#1675 security pass) ──────────────────────────────
+
+/** `{col: {_eq: v}}` widget filters as items-service `_and` members. */
+function eqFilters(raw: Record<string, unknown>): Array<Record<string, unknown>> {
+  const out: Array<Record<string, unknown>> = []
+  for (const [col, cond] of Object.entries(raw)) {
+    if (cond && typeof cond === 'object' && '_eq' in (cond as object))
+      out.push({ [col]: { _eq: (cond as Record<string, unknown>)._eq } })
+  }
+  return out
+}
+
+type SpecList = Array<string | ColumnSpec> | null | undefined
+
+function specFields(...lists: SpecList[]): string[] {
+  const out: string[] = []
+  for (const list of lists)
+    for (const s of list ?? []) {
+      if (typeof s === 'string') out.push(s)
+      else if (s && 'field' in s && typeof s.field === 'string') out.push(s.field)
+    }
+  return out
+}
+
+function lookupsOf(...lists: SpecList[]): LookupSpec[] {
+  const out: LookupSpec[] = []
+  for (const list of lists)
+    for (const s of list ?? []) if (s && typeof s === 'object' && 'lookup' in s) out.push(s.lookup)
+  return out
+}
+
+function reviewListFields(cfg: ReviewListConfig): string[] {
+  return [
+    cfg.group_by,
+    cfg.aggregate_sum ?? '',
+    cfg.sibling_field ?? '',
+    cfg.status.field,
+    cfg.status.stamp_user_field ?? '',
+    cfg.status.stamp_date_field ?? '',
+    ...(cfg.static_filter ?? []).map((f) => f.field),
+    ...specFields(cfg.group_meta, cfg.line_columns)
+  ].filter(Boolean)
+}
+
+function rollupFields(cfg: RollupConfig): string[] {
+  return [
+    ...cfg.levels.map((l) => l.field),
+    ...cfg.measures.flatMap((m) => [m.sum, ...(m.filter ?? []).map((f) => f.field)]),
+    ...(cfg.static_filter ?? []).map((f) => f.field),
+    ...(cfg.merge_leaf_by ?? []),
+    ...specFields(cfg.leaf_columns)
+  ].filter(Boolean)
+}
+
+/** A record-slot walk: the host record readable, every configured field readable. */
+async function gateWalk(
+  user: User,
+  cfg: { host_collection: string; collection: string },
+  recordId: string | null,
+  fields: string[],
+  lookups: LookupSpec[]
+): Promise<void> {
+  if (recordId != null) await assertHostReadable(user, cfg.host_collection, recordId)
+  await assertWidgetFieldsReadable(user, cfg.collection, fields)
+  for (const l of lookups) await assertLookupReadable(user, l)
+}
+
 // ── render engine ─────────────────────────────────────────────────────────────
 
 async function renderWidget(
@@ -129,59 +205,64 @@ async function renderWidget(
   const config = (parseJson(widget.config) ?? {}) as Record<string, unknown>
   const type = widget.widget_type as string
 
+  // stat / list read AS THE VIEWER through the items service (#1675 security pass): row
+  // filters, User Scopes and the role's field list apply, and a widget whose own field or
+  // filter names a column the viewer cannot read refuses instead of showing it.
   if (type === 'stat') {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     const collection = config.collection as string
     const field = config.field as string
     const aggregation = (config.aggregation as string) ?? 'none'
 
-    // Permission check — caller must be able to read this collection
-    if (user && !(await can(user, 'read', collection))) {
+    if (!(await can(user, 'read', collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
     const rawFilters = substituteFilters(config.filters ?? {}, inputs) as Record<string, unknown>
-
-    let query = db(collection)
-    for (const [col, cond] of Object.entries(rawFilters)) {
-      if (cond && typeof cond === 'object' && '_eq' in (cond as object)) {
-        query = query.where(col, (cond as Record<string, unknown>)._eq as string)
-      }
-    }
+    const and = eqFilters(rawFilters)
+    await assertWidgetFieldsReadable(user, collection, [
+      ...(field ? [field] : []),
+      ...and.flatMap((c) => Object.keys(c))
+    ])
+    const filter = and.length ? { _and: and } : {}
 
     if (aggregation === 'none') {
       const idInput = config.id_input as string | undefined
       const idVal = idInput ? inputs[idInput] : inputs[field]
       if (idInput && (idVal == null || idVal === ''))
         return { value: null, display: config.display ?? {}, awaiting: [idInput] }
-      const row = idVal
-        ? await db(collection).where('id', idVal).select(field).first()
-        : await query.select(field).first()
+      let row: Record<string, unknown> | null
+      if (idVal) row = await readOneAs(user, collection, idVal, [field])
+      else {
+        const { readItems } = await import('../services/items.js')
+        const res = await readItems(user, collection, { fields: [field], filter, limit: 1 })
+        row = ((res.data ?? [])[0] as Record<string, unknown> | undefined) ?? null
+      }
       return { value: row?.[field] ?? null, display: config.display ?? {} }
     }
 
-    const aggFns: Record<string, string> = {
-      sum: 'sum',
-      count: 'count',
-      avg: 'avg',
-      min: 'min',
-      max: 'max'
-    }
-    const fn = aggFns[aggregation] ?? 'count'
-    const result = await (
-      query as unknown as Record<
-        string,
-        (col: string, alias: string) => Promise<Record<string, unknown>[]>
-      >
-    )[fn](field, 'value')
-    const value = result[0]?.value ?? 0
+    const fn =
+      (['sum', 'count', 'avg', 'min', 'max'] as const).find((f) => f === aggregation) ?? 'count'
+    const { aggregateItems } = await import('../services/items.js')
+    const res = await aggregateItems(user, collection, {
+      filter,
+      aggregate:
+        fn === 'count' ? (field ? { count: [field] } : { countAll: true }) : { [fn]: [field] }
+    })
+    const agg = (res.data ?? [])[0] as unknown as Record<string, unknown> | undefined
+    const value =
+      fn === 'count' && !field
+        ? (agg?.countAll ?? 0)
+        : ((agg?.[fn] as Record<string, unknown> | undefined)?.[field] ?? 0)
     return { value, display: config.display ?? {} }
   }
 
   if (type === 'list') {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
     const collection = config.collection as string
     const fields = (config.fields as string[]) ?? []
 
-    if (user && !(await can(user, 'read', collection))) {
+    if (!(await can(user, 'read', collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
@@ -189,25 +270,28 @@ async function renderWidget(
     const limit = Math.min((config.limit as number) ?? 50, 500)
     const orderField = config.order_field as string | undefined
     const orderDir = (config.order_dir as 'asc' | 'desc') ?? 'asc'
-
-    let query = db(collection)
-      .select(fields.length ? fields : ['*'])
-      .limit(limit)
-    for (const [col, cond] of Object.entries(rawFilters)) {
-      if (cond && typeof cond === 'object' && '_eq' in (cond as object)) {
-        query = query.where(col, (cond as Record<string, unknown>)._eq as string)
-      }
-    }
-    if (orderField) query = query.orderBy(orderField, orderDir)
-    const rows = await query
-    return { rows, fields, display: config.display ?? {} }
+    const and = eqFilters(rawFilters)
+    await assertWidgetFieldsReadable(user, collection, [
+      ...fields,
+      ...and.flatMap((c) => Object.keys(c)),
+      ...(orderField ? [orderField] : [])
+    ])
+    const { readItems } = await import('../services/items.js')
+    const res = await readItems(user, collection, {
+      fields: fields.length ? fields : ['*'],
+      filter: and.length ? { _and: and } : {},
+      sort: orderField ? [`${orderDir === 'desc' ? '-' : ''}${orderField}`] : [],
+      limit
+    })
+    return { rows: res.data ?? [], fields, display: config.display ?? {} }
   }
 
   if (type === 'review_list') {
     const cfg = config as unknown as ReviewListConfig
 
     // Permission check — caller must be able to read the target collection
-    if (user && !(await can(user, 'read', cfg.collection))) {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    if (!(await can(user, 'read', cfg.collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
@@ -216,14 +300,24 @@ async function renderWidget(
       throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
     }
 
-    return await resolveReviewListRows(db, cfg, String(recordId))
+    await gateWalk(
+      user,
+      cfg,
+      String(recordId),
+      reviewListFields(cfg),
+      lookupsOf(cfg.group_meta, cfg.line_columns)
+    )
+    return await resolveReviewListRows(db, cfg, String(recordId), undefined, (ids) =>
+      readableIds(user as User, cfg.collection, ids)
+    )
   }
 
   if (type === 'rollup') {
     const cfg = config as unknown as RollupConfig
 
     // Permission check — caller must be able to read the target collection
-    if (user && !(await can(user, 'read', cfg.collection))) {
+    if (!user) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+    if (!(await can(user, 'read', cfg.collection))) {
       throw Object.assign(new Error('Forbidden'), { statusCode: 403 })
     }
 
@@ -248,9 +342,13 @@ async function renderWidget(
       if (!staged?.created?.length) {
         throw Object.assign(new Error('Missing input: record_id'), { statusCode: 400 })
       }
+      await gateWalk(user, cfg, null, rollupFields(cfg), lookupsOf(cfg.leaf_columns))
       return await resolveRollupRows(db, cfg, null, undefined, staged)
     }
-    return await resolveRollupRows(db, cfg, String(recordId), undefined, staged)
+    await gateWalk(user, cfg, String(recordId), rollupFields(cfg), lookupsOf(cfg.leaf_columns))
+    return await resolveRollupRows(db, cfg, String(recordId), undefined, staged, (ids) =>
+      readableIds(user, cfg.collection, ids)
+    )
   }
 
   if (type === 'report_widget') {
@@ -642,10 +740,10 @@ async function renderWidget(
             const itemId = inputs[tIdInput]
             if (itemId) {
               try {
-                const row = (await db(tCollection).where('id', itemId).select(tField).first()) as
-                  | Record<string, unknown>
-                  | undefined
-                if (row) resolved.is_on = normBitR(row[tField]) === normBitR(tOnValue)
+                // As the viewer: a record or field they cannot read reports no state.
+                const row = user ? await readOneAs(user, tCollection, itemId, [tField]) : null
+                if (row && tField in row)
+                  resolved.is_on = normBitR(row[tField]) === normBitR(tOnValue)
               } catch {
                 /* non-blocking — falls back to client-side inputs check */
               }
@@ -800,6 +898,8 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
   })
 
   app.post('/:id/render', async (req, reply) => {
+    // Every widget reads as the person rendering it — no sign-in, no data (#1675 security pass).
+    if (!req.user) return reply.code(401).send({ error: 'Unauthorized' })
     const { id } = req.params as { id: string }
     const body = req.body as Record<string, unknown>
     const widget = await cachedDefinition(`widget:${Number(id)}`, () =>
@@ -857,10 +957,13 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
           inputs[b.key] = null
           continue
         }
-        const relatedRow = await db(rel.one_collection)
-          .where('id', fkValue)
-          .select(safeFields)
-          .first()
+        // As the caller: a related record or field they cannot read binds nothing.
+        const relatedRow = await readOneAs(
+          req.user as User,
+          rel.one_collection,
+          fkValue,
+          safeFields
+        ).catch(() => null)
         // Walk safe fields into the fetched row
         let val: unknown = relatedRow
         for (const p of safeFields) {
