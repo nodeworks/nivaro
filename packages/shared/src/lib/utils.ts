@@ -1,6 +1,7 @@
 import { type ClassValue, clsx } from 'clsx'
 import * as LucideIcons from 'lucide-react'
 import { twMerge } from 'tailwind-merge'
+import { serverNow } from './server-clock'
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))
@@ -73,7 +74,9 @@ let _compactNumbers = false
 export function setTimeDisplay(mode: string | null | undefined): void {
   _timeDisplay = mode === 'exact' ? 'exact' : 'relative'
 }
-export function setNumberFormat(opts: { locale?: string; compact?: boolean } | null | undefined): void {
+export function setNumberFormat(
+  opts: { locale?: string; compact?: boolean } | null | undefined
+): void {
   if (opts?.locale) {
     try {
       new Intl.NumberFormat(opts.locale)
@@ -86,7 +89,6 @@ export function setNumberFormat(opts: { locale?: string; compact?: boolean } | n
   }
   _compactNumbers = opts?.compact === true
 }
-
 
 /** Hours → the largest sensible unit: "45m", "18h", "3d 7h", "26d", "1mo 5d".
  *  "845h" is not a duration anyone can read — past a couple of days, people
@@ -123,7 +125,8 @@ export function formatRelative(date: string | Date) {
   // relative form would have appeared.
   if (_timeDisplay === 'exact') return formatDateTime(date)
   const d = new Date(date)
-  const diff = Date.now() - d.getTime()
+  // Server time (#2132): a drifting machine clock must not say "3m ago" for a fresh write.
+  const diff = serverNow() - d.getTime()
   const mins = Math.floor(diff / 60000)
   if (mins < 1) return 'just now'
   if (mins < 60) return `${mins}m ago`
@@ -187,7 +190,10 @@ export function formatNumber(n: number | null | undefined): string {
   if (n == null) return '—'
   // Number prefs (#230/#411): per-user locale + compact notation.
   if (_compactNumbers && Math.abs(n) >= 10_000) {
-    return new Intl.NumberFormat(_numberLocale, { notation: 'compact', maximumFractionDigits: 1 }).format(n)
+    return new Intl.NumberFormat(_numberLocale, {
+      notation: 'compact',
+      maximumFractionDigits: 1
+    }).format(n)
   }
   return n.toLocaleString(_numberLocale)
 }

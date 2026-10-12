@@ -6,7 +6,7 @@ import { logActivity } from '../services/activity.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
 import { readItems } from '../services/items.js'
 import { announceRecordAspect } from '../services/record-events.js'
-import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 
 /** The help-video editor locks a video under this name (#1523). */
 export const HELP_VIDEO_LOCK_COLLECTION = 'nivaro_help_videos'
@@ -234,7 +234,10 @@ function emitLockEvent(
   user: string,
   locked: boolean
 ) {
-  app.io?.to(`item:${collection}:${item}`).emit('item-lock', { collection, item, user, locked })
+  // Cloud: this tenant's room (tenant-rooms.ts). Nothing in core joins item rooms today.
+  app.io
+    ?.to(tenantScopedRoom(`item:${collection}:${item}`))
+    .emit('item-lock', { collection, item, user, locked })
   noteLockAnnounced(collection, item, locked)
 }
 
@@ -247,7 +250,8 @@ const ANNOUNCED_MAX = 5000
 
 function noteLockAnnounced(collection: string, item: string, locked: boolean) {
   if (/^(nivaro_|directus_)/i.test(collection)) return
-  const key = `${collection}\u0000${item}`
+  // Per tenant: the same record id in two tenants is two records.
+  const key = `${currentTenantKey()}\u0000${collection}\u0000${item}`
   if (announcedLocks.get(key) === locked) return
   if (announcedLocks.size >= ANNOUNCED_MAX) announcedLocks.clear()
   if (locked) announcedLocks.set(key, true)

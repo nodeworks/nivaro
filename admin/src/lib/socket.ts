@@ -1,8 +1,17 @@
-import { createLeaderSocket, type RealtimeAdapter } from '@nivaro/shared'
+import {
+  type ClockSample,
+  type CollectionUpdateEvent,
+  createLeaderSocket,
+  measureClockOffset,
+  type RealtimeAdapter,
+  type RealtimeStatus,
+  setServerClockOffset
+} from '@nivaro/shared'
 import { io, type Socket } from 'socket.io-client'
 import { api } from '@/lib/api'
-import { readMasquerade } from '@/lib/masquerade'
+import { readMasquerade, stopMasquerade } from '@/lib/masquerade'
 import { clientVersion } from '@/lib/page-context'
+import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 /**
  * One shared authenticated socket for chat + collection feeds + realtime
@@ -20,6 +29,13 @@ import { clientVersion } from '@/lib/page-context'
  * - `client:hello` reports reconnect count + app label; `nvr:ping`/`nvr:pong`
  *   feeds the /realtime RTT column; `client:force-refresh` (#285) surfaces as
  *   a window event AppLayout renders as a countdown banner.
+ * - Transport fallback (#1672): websocket first, long-polling when the upgrade is blocked, and
+ *   the read-only SSE stream (leader tab only) when the server refuses polling too.
+ * - Coalesced bursts (#1681): `features: ['coalesce']` in client:hello; consumers read ids
+ *   through updateItemIds/updateTouches.
+ * - Session end (#1719) and room access changes (#1720) surface as window events; the
+ *   connection state (#1725) feeds the reconnect banner and stale marks; `time:sync` (#2132)
+ *   sets the server clock offset.
  */
 
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
@@ -28,6 +44,156 @@ let socket: Socket | null = null
 let reconnects = -1
 let lastSeq = 0
 let everAuthed = false
+
+// ── Connection state (#1725) ────────────────────────────────────────────────
+let status: RealtimeStatus = { state: 'live', transport: null, refreshed: null }
+const statusListeners = new Set<(s: RealtimeStatus) => void>()
+function setStatus(patch: Partial<RealtimeStatus>) {
+  const next = { ...status, ...patch }
+  if (
+    next.state === status.state &&
+    next.transport === status.transport &&
+    next.refreshed === status.refreshed
+  )
+    return
+  status = next
+  for (const l of statusListeners) l(status)
+}
+/** Waiting for the catch-up answer after a reconnect; the state turns live when it lands. */
+let catchupTimer: ReturnType<typeof setTimeout> | null = null
+function caughtUp(refreshed: string | null) {
+  if (catchupTimer) clearTimeout(catchupTimer)
+  catchupTimer = null
+  setStatus({ state: 'live', refreshed })
+}
+
+/**
+ * #1719 — the server ended the sign-in this socket was opened under (logout in another tab, a
+ * revoked or expired session, a suspended account, a View-as that stopped). The tab returns to
+ * sign-in — unless the browser already holds a newer sign-in (the cookie moved on to a fresh
+ * session), in which case the socket simply reconnects under it.
+ */
+let sessionEnded = false
+async function onSessionEnded(reason: string | undefined) {
+  if (sessionEnded) return
+  sessionEnded = true
+  closeSse()
+  if (reason === 'masquerade_ended') {
+    void stopMasquerade()
+    return
+  }
+  const stillSignedIn = await fetch('/api/auth/me', { credentials: 'include', cache: 'no-store' })
+    .then((r) => r.ok)
+    .catch(() => false)
+  if (stillSignedIn) {
+    sessionEnded = false
+    // The server closes the socket right after telling it; reconnect once it has.
+    if (socket?.connected) socket.once('disconnect', () => socket?.connect())
+    else socket?.connect()
+    return
+  }
+  if (window.location.pathname === '/login') return
+  const redirect = window.location.pathname + window.location.search
+  const error =
+    reason === 'expired'
+      ? '&error=session_expired'
+      : reason === 'account_inactive'
+        ? '&error=suspended'
+        : ''
+  window.location.href = `/login?redirect=${encodeURIComponent(redirect)}${error}`
+}
+
+// ── Clock sync (#2132) ──────────────────────────────────────────────────────
+function syncClock(s: Socket) {
+  const samples: ClockSample[] = []
+  const once = () =>
+    new Promise<void>((resolve) => {
+      const sent = Date.now()
+      const t = setTimeout(resolve, 3000)
+      s.emit('time:sync', { c: sent }, (r: { s?: number }) => {
+        clearTimeout(t)
+        if (typeof r?.s === 'number') samples.push({ sent, server: r.s, received: Date.now() })
+        resolve()
+      })
+    })
+  void (async () => {
+    for (let i = 0; i < 3; i++) await once()
+    const offset = measureClockOffset(samples)
+    if (offset != null) setServerClockOffset(offset)
+  })()
+}
+
+// ── SSE fallback (#1672) ────────────────────────────────────────────────────
+// When neither websocket nor polling connects but the API answers plain HTTP, the server has
+// polling off (no sticky sessions) and a proxy blocks the upgrade: the leader tab reads
+// collection changes from GET /api/events/stream instead (read-only — chat, presence and
+// watch rooms wait for the socket) and relays them to the other tabs like socket events.
+let sseMode = false
+let sse: EventSource | null = null
+let sseKey = ''
+let socketFailures = 0
+let leaderDeliver: ((event: string, payload: unknown) => void) | null = null
+
+function closeSse() {
+  sse?.close()
+  sse = null
+  sseKey = ''
+}
+
+function syncSse() {
+  if (!sseMode || sessionEnded || typeof EventSource === 'undefined') return closeSse()
+  // Only the leader carries the feed — one stream per browser, like the socket.
+  if (!leaderDeliver) return closeSse()
+  const cols = [...joinedCollections].sort()
+  const key = cols.join(',')
+  if (sse && key === sseKey) return
+  closeSse()
+  if (cols.length === 0) {
+    setStatus({ state: 'live', transport: 'sse' })
+    return
+  }
+  sseKey = key
+  const stream = new EventSource(`/api/events/stream?collections=${encodeURIComponent(key)}`, {
+    withCredentials: true
+  })
+  sse = stream
+  stream.addEventListener('collection.update', (e) => {
+    try {
+      // The stream's _seq is per process, not the journal cursor — never feed lastSeq from it.
+      const { _seq: _ignored, ...payload } = JSON.parse((e as MessageEvent).data)
+      leaderDeliver?.('collection:update', payload)
+    } catch {
+      /* a malformed frame is skipped */
+    }
+  })
+  stream.addEventListener('session.ended', () => void onSessionEnded('signed_out'))
+  stream.onopen = () => setStatus({ state: 'live', transport: 'sse', refreshed: null })
+  stream.onerror = () => {
+    if (sse === stream) setStatus({ state: 'reconnecting' })
+  }
+}
+
+async function considerSseFallback() {
+  socketFailures++
+  if (sseMode || socketFailures < 2) return
+  // A View-as tab never falls back (H9): EventSource cannot send the View-as token, so the
+  // stream would open on the administrator's own cookie and show their events in this tab.
+  if (readMasquerade()) return
+  const reachable = await fetch('/api/version', { cache: 'no-store', credentials: 'include' })
+    .then((r) => r.ok)
+    .catch(() => false)
+  // The API is down, not blocked: the socket's own reconnect handles that.
+  if (!reachable || sseMode || socket?.connected) return
+  sseMode = true
+  syncSse()
+}
+
+function leaveSseMode() {
+  socketFailures = 0
+  if (!sseMode) return
+  sseMode = false
+  closeSse()
+}
 
 async function authToken(): Promise<string | null> {
   try {
@@ -41,7 +207,7 @@ async function authToken(): Promise<string | null> {
 export function getSocket(): Socket {
   if (socket) return socket
   socket = io(API_URL, {
-    transports: ['websocket'],
+    ...SOCKET_TRANSPORT_OPTIONS,
     withCredentials: true,
     reconnection: true,
     // Reconnect jitter (#332): after an API restart every open tab reconnects
@@ -51,18 +217,44 @@ export function getSocket(): Socket {
     randomizationFactor: 0.6
   })
   socket.on('connect', () => {
+    leaveSseMode()
     reconnects += 1
     void authToken().then((token) => {
       if (token) socket?.emit('auth', { token })
     })
   })
+  socket.on('connect_error', () => {
+    if (sessionEnded) return
+    if (!sseMode) setStatus({ state: 'reconnecting', refreshed: null })
+    void considerSseFallback()
+  })
+  socket.on('disconnect', () => {
+    if (sessionEnded) return
+    if (catchupTimer) clearTimeout(catchupTimer)
+    catchupTimer = null
+    setStatus({ state: 'reconnecting', refreshed: null })
+  })
+  socket.on('session:ended', (p: { reason?: string }) => void onSessionEnded(p?.reason))
+  // #1720 — the server took rooms away after a permission change: what this tab shows may
+  // include things the person can no longer see, so every cached read is fetched again.
+  socket.on('access:changed', (p: { rooms_left?: string[] }) => {
+    if (!p?.rooms_left?.length) return
+    window.dispatchEvent(new CustomEvent('nvr:access-changed', { detail: p }))
+  })
   socket.on('auth:ok', () => {
+    const engine = socket?.io.engine
+    const transportName = () =>
+      (engine?.transport?.name as RealtimeStatus['transport'] | undefined) ?? null
+    engine?.once('upgrade', () => setStatus({ transport: transportName() }))
     // #1048 — the same build signal every request carries (x-nivaro-client).
     socket?.emit('client:hello', {
       reconnects: Math.max(0, reconnects),
       app: 'admin',
+      features: ['coalesce'],
+      transport: transportName(),
       ...clientVersion()
     })
+    if (socket) syncClock(socket)
     // Rejoin what this tab holds, then replay whatever happened while away.
     for (const room of joinedCollections) socket?.emit('collection:join', { collection: room })
     // Watch rooms ride the LEADER's socket only (a follower's own socket joining one would keep
@@ -78,7 +270,13 @@ export function getSocket(): Socket {
     }
     if (everAuthed && lastSeq > 0) {
       const cursor = lastSeq
+      setStatus({ transport: transportName() })
+      // Live once the catch-up answers (or after a while without one — the replay is a bonus).
+      if (catchupTimer) clearTimeout(catchupTimer)
+      catchupTimer = setTimeout(() => caughtUp(null), 8000)
       setTimeout(() => socket?.emit('catchup', { cursor }), Math.random() * 2000)
+    } else {
+      setStatus({ state: 'live', transport: transportName(), refreshed: null })
     }
     everAuthed = true
   })
@@ -97,10 +295,14 @@ export function getSocket(): Socket {
           l({ ...ev.payload, _seq: ev.seq })
         }
       }
+      caughtUp(null)
     }
   )
   socket.on('catchup:full', () => {
     window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
+    caughtUp(
+      'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.'
+    )
   })
   socket.on('client:force-refresh', (p: { seconds?: number; message?: string }) => {
     window.dispatchEvent(new CustomEvent('nvr:force-refresh', { detail: p ?? {} }))
@@ -161,6 +363,8 @@ function ensureLeaderSocket() {
   leaderHandle = createLeaderSocket(masq ? `admin-feed:as:${masq.user_id}` : 'admin-feed', {
     becomeLeader(deliver, emitRef) {
       const s = getSocket()
+      leaderDeliver = deliver
+      syncSse()
       for (const c of joinedCollections) {
         if (s.connected) s.emit('collection:join', { collection: c })
       }
@@ -183,6 +387,7 @@ function ensureLeaderSocket() {
         if (event === '__join_collection') {
           joinedCollections.add(String(payload))
           if (so.connected) so.emit('collection:join', { collection: payload })
+          else syncSse()
         } else if (event === '__join_watch') {
           const r = String(payload)
           leaderWatchRefs.set(r, (leaderWatchRefs.get(r) ?? 0) + 1)
@@ -214,6 +419,8 @@ function ensureLeaderSocket() {
       // The socket stays up for chat; we just stop being the feed source.
       leaderWatchRefs.clear()
       leaderOpsRefs.clear()
+      leaderDeliver = null
+      closeSse()
     }
   })
   return leaderHandle
@@ -256,6 +463,17 @@ export const adminRealtime: RealtimeAdapter = {
     }
     handle.emit(event, payload)
   },
+  status() {
+    return status
+  },
+  onStatus(cb) {
+    // The state is this tab's own socket; make sure there is one to report on.
+    getSocket()
+    statusListeners.add(cb)
+    return () => {
+      statusListeners.delete(cb)
+    }
+  },
   joinWatch(room) {
     return joinWatchRoom(room)
   }
@@ -280,7 +498,7 @@ export function joinWatchRoom(room: string): () => void {
 /** Subscribe to live updates for a collection; returns an unsubscribe. */
 export function onCollectionUpdate(
   collection: string,
-  handler: (payload?: { collection?: string; item?: string | number }) => void
+  handler: (payload?: CollectionUpdateEvent) => void
 ): () => void {
   return adminRealtime.subscribeCollections([collection], (ev) => handler(ev))
 }

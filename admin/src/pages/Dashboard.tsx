@@ -25,6 +25,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { api, type CMSField, type Collection } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
+import { getSocket } from '@/lib/socket'
 import { cn, formatDateTime, formatNumber, titleCase } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -338,26 +339,20 @@ export function DashboardPage() {
   const liveCount = onlineCount ?? presenceData?.total ?? null
 
   useEffect(() => {
-    let socket: {
-      emit(...a: unknown[]): void
-      on(ev: string, cb: (...a: unknown[]) => void): void
-      disconnect(): void
-    } | null = null
-    import('socket.io-client')
-      .then(({ io }) => {
-        socket = io(window.location.origin, {
-          transports: ['websocket'],
-          path: '/socket.io'
-        }) as typeof socket
-        socket?.on('connect', () => socket?.emit('presence:join', 'admin'))
-        socket?.on('presence:update', (p: unknown) => {
-          const payload = p as { sessions: unknown[] }
-          setOnlineCount(payload.sessions.length)
-        })
-      })
-      .catch(() => {})
+    // The shared authenticated socket — `presence:admin` refuses anonymous connections.
+    const socket = getSocket()
+    const join = () => socket.emit('presence:join', 'admin')
+    const onUpdate = (p: unknown) => {
+      const payload = p as { sessions: unknown[] }
+      setOnlineCount(payload.sessions.length)
+    }
+    if (socket.connected) join()
+    socket.on('auth:ok', join)
+    socket.on('presence:update', onUpdate)
     return () => {
-      socket?.disconnect()
+      socket.emit('presence:leave', 'admin')
+      socket.off('auth:ok', join)
+      socket.off('presence:update', onUpdate)
     }
   }, [])
 

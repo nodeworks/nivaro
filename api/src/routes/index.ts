@@ -8,6 +8,7 @@ import { accessAnnouncement, announceAccessChanged } from '../services/record-ev
 import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
+import { requestAccessRecheck } from '../services/socket-access.js'
 import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
 import { accessInsightRoutes } from './access-insights.js'
@@ -284,8 +285,35 @@ export async function registerRoutes(app: FastifyInstance) {
   // Definition rows (widgets, custom queries) are cached per id for renders
   // (#494); a write to their editors drops that cache the same way.
   const DEFINITION_ROUTES = /^\/api\/(widgets-internal|custom-queries)\b/
+  // #1720 — writes that can change what someone may see ask every replica to re-check the
+  // rooms open sockets hold (debounced). Kept narrow (H4): a write naming a person re-checks
+  // that person; a channel change re-checks channel rooms only; an everyone-pass (roles,
+  // policies, teams, scope dimensions, tree permissions, directory sync, retention,
+  // offboarding) runs only for an administrator's write — a non-admin cannot make every
+  // socket re-gate on demand.
+  const ACCESS_USER_ROUTE = /^\/api\/(users|user-scopes|offboarding)\/([0-9a-f-]{36})\b/i
+  const ACCESS_CHANNEL_MEMBER = /^\/api\/chat\/channels\/[^/]+\/members\/([0-9a-f-]{36})\b/i
+  const ACCESS_CHANNEL_ROUTE = /^\/api\/chat\/channels\/[^/]+$/
+  const ACCESS_ALL_ROUTE =
+    /^\/api\/(roles|user-groups|scope-dimensions|tree-permissions|access-requests\/[^/]+\/resolve|users\/bulk|directory|retention|offboarding)\b/
+  const ACCESS_READ_LIKE = /\/(impact|simulate|row-filter-impact|preview|coverage|dry-run)\b/
   app.addHook('onResponse', async (req, reply) => {
     if (req.method === 'GET' || reply.statusCode >= 400) return
+    const path = req.url.split('?')[0]
+    if (!ACCESS_READ_LIKE.test(path)) {
+      const one = ACCESS_USER_ROUTE.exec(path)
+      const member = ACCESS_CHANNEL_MEMBER.exec(path)
+      if (one) requestAccessRecheck({ userIds: [one[2]] })
+      // Someone taken off a channel: that person's rooms.
+      else if (member && req.method === 'DELETE') requestAccessRecheck({ userIds: [member[1]] })
+      // A channel made private, archived or re-roled: channel rooms only.
+      else if (ACCESS_CHANNEL_ROUTE.test(path) && req.method !== 'POST')
+        requestAccessRecheck({ roomPrefixes: ['chat:ch:'] })
+      else if (ACCESS_ALL_ROUTE.test(path) && req.isAdmin) requestAccessRecheck({ all: true })
+      // A person narrowing their own scopes (Profile) re-checks only their own sockets.
+      else if (path.startsWith('/api/users/me/scopes') && req.user?.id)
+        requestAccessRecheck({ userIds: [String(req.user.id)] })
+    }
     if (DEFINITION_ROUTES.test(req.url) && !/\/(render|action|execute|run)\b/.test(req.url)) {
       bustDefinitionCache()
     }
