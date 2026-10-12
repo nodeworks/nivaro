@@ -41,7 +41,9 @@ import {
   encodeEvent,
   eventNameOf,
   isCredentialRoom,
+  isInspected,
   noteCoalesced,
+  noteInspected,
   noteTenantSocket,
   recordOutbound,
   splitTenantRoom
@@ -608,6 +610,13 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         sizeOf(encoded),
         tenantKey
       )
+      if (isInspected(socket.id))
+        noteInspected(
+          socket.id,
+          'collection:update',
+          `collection:${String(payload.collection ?? '')}`,
+          sizeOf(encoded)
+        )
       origWrite(encoded, {})
     }
     client.writeToEngine = (encoded, opts) => {
@@ -623,7 +632,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             }
           }
           recordOutbound(eventNameOf(p) ?? `packet:${p[0] ?? '?'}`, room, sizeOf(p), tenantKey)
-        } else recordOutbound('binary', room, sizeOf(p), tenantKey)
+          if (isInspected(socket.id))
+            noteInspected(socket.id, eventNameOf(p) ?? `packet:${p[0] ?? '?'}`, room, sizeOf(p))
+        } else {
+          recordOutbound('binary', room, sizeOf(p), tenantKey)
+          if (isInspected(socket.id)) noteInspected(socket.id, 'binary', room, sizeOf(p))
+        }
         origWrite(p, opts)
       }
     }
