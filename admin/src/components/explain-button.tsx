@@ -1,5 +1,6 @@
 import { useMutation } from '@tanstack/react-query'
 import { Loader2, Sparkles } from 'lucide-react'
+import { useEffect } from 'react'
 import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
@@ -29,18 +30,25 @@ export function ExplainButton({
   kind,
   params,
   label = 'Explain',
-  size = 'sm'
+  size = 'sm',
+  autoRun = false
 }: {
   kind: string
   params: Record<string, unknown>
   label?: string
   size?: 'sm' | 'default'
+  /** Run once on mount (the button was already clicked to reveal this). */
+  autoRun?: boolean
 }) {
   const { user } = useAuth()
   const run = useMutation({
     mutationFn: async (fresh: boolean) =>
       (await api.post(`/ai-explain/${kind}`, { ...params, fresh })).data.data as ExplainAnswer
   })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: fire once on mount
+  useEffect(() => {
+    if (autoRun && user?.is_admin) run.mutate(false)
+  }, [])
   if (!user?.is_admin) return null
   const a = run.data
   const err = (run.error as { response?: { data?: { error?: string } } } | null)?.response?.data

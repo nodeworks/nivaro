@@ -112,7 +112,14 @@ export function RoleDesigner({
   const create = useMutation({
     mutationFn: () =>
       api
-        .post<{ data: { id: string; name: string; policies: number } }>('/ai-design/roles/apply', {
+        .post<{
+          data: {
+            id: string
+            name: string
+            policies: number
+            scopes_to_set_per_member: RoleProposal['scopes']
+          }
+        }>('/ai-design/roles/apply', {
           proposal,
           hash: result?.hash,
           ui_routes: uiRoutes
@@ -120,6 +127,13 @@ export function RoleDesigner({
         .then((r) => r.data.data),
     onSuccess: (data) => {
       toast.success(`Role "${data.name}" created with ${data.policies} policies`)
+      if (data.scopes_to_set_per_member.length > 0)
+        toast.info(
+          `User Scopes were not applied — set ${data.scopes_to_set_per_member
+            .map((s) => s.dimension)
+            .join(', ')} on each member under Users → Access after adding them.`,
+          { duration: 10_000 }
+        )
       onCreated(data.id)
     },
     onError: (e) => toast.error(errOf(e, 'Could not create the role'))
@@ -304,7 +318,7 @@ export function RoleDesigner({
             {proposal.scopes.length > 0 && (
               <div className='mt-3 rounded border border-slate-200 bg-slate-50 px-3 py-2 text-[11.5px] dark:border-border dark:bg-muted/30'>
                 <p className='font-medium text-slate-600 dark:text-slate-300'>
-                  User Scopes for its members
+                  User Scopes to set on each member (not saved with the role)
                 </p>
                 {proposal.scopes.map((s) => (
                   <p key={s.dimension} className='text-slate-500'>
@@ -312,8 +326,8 @@ export function RoleDesigner({
                   </p>
                 ))}
                 <p className='mt-1 text-slate-400'>
-                  Scopes belong to people, not roles — set them on each member under Users → Access
-                  after adding them to the role.
+                  Creating the role does not apply these. Scopes belong to people, not roles — after
+                  adding members, set them on each one under Users → Access.
                 </p>
               </div>
             )}

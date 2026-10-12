@@ -134,6 +134,12 @@ export async function usersRoutes(app: FastifyInstance) {
     const userId = id === 'me' ? req.user!.id : id
     const user = await getUser(userId)
     if (!user) return reply.code(404).send({ error: 'Not found' })
+    // #1804 — Ask AI memory is the person's own; an admin reading another
+    // account never gets it.
+    if (String(userId).toUpperCase() !== String(req.user!.id).toUpperCase()) {
+      const { stripAiMemory } = await import('../services/ai-memory.js')
+      return reply.send({ data: stripAiMemory(user) })
+    }
     return reply.send({ data: user })
   })
 
@@ -218,6 +224,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
     }
     const previousUser = await getUser(id)
+    const isSelf = String(id).toUpperCase() === String(req.user!.id).toUpperCase()
+    if ('preferences' in filtered) {
+      // #1804 — nobody writes notes into someone else's Ask AI prompt.
+      const { guardPreferencesWrite } = await import('../services/ai-memory.js')
+      const g = guardPreferencesWrite(filtered.preferences, previousUser?.preferences, isSelf)
+      if ('error' in g) return reply.code(400).send({ error: g.error })
+      filtered.preferences = g.value
+    }
     const user = await updateUser(id, filtered)
     const activityId = await logActivity({
       action: 'update',
@@ -227,8 +241,13 @@ export async function usersRoutes(app: FastifyInstance) {
       req
     })
     if (activityId && user) {
-      const userData = user as unknown as Record<string, unknown>
-      const prevData = previousUser as unknown as Record<string, unknown> | null
+      // Revisions are read by admins — they never carry Ask AI memory (#1804).
+      const { stripAiMemory } = await import('../services/ai-memory.js')
+      const userData = stripAiMemory(user) as unknown as Record<string, unknown>
+      const prevData = (previousUser ? stripAiMemory(previousUser) : null) as Record<
+        string,
+        unknown
+      > | null
       const delta = prevData
         ? Object.fromEntries(
             Object.entries(userData).filter(
@@ -243,6 +262,10 @@ export async function usersRoutes(app: FastifyInstance) {
         data: userData,
         delta
       })
+    }
+    if (!isSelf) {
+      const { stripAiMemory } = await import('../services/ai-memory.js')
+      return reply.send({ data: stripAiMemory(user) })
     }
     return reply.send({ data: user })
   })
@@ -1075,6 +1098,22 @@ export async function usersRoutes(app: FastifyInstance) {
           .send({ error: 'traffic_pins must hold at most 40 entity keys like items/workflows' })
       }
       patch.traffic_pins = keys.length ? keys : null
+    }
+    if ('ai_history_off' in body) {
+      // #1833 — "Don't save my questions": Ask AI stores no conversations.
+      const v = body.ai_history_off
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'ai_history_off must be true, false or null' })
+      }
+      patch.ai_history_off = v === true ? true : null
+    }
+    if ('ai_memory' in body) {
+      // #1804 — the person's own Ask AI notes (Profile → Ask AI memory). The
+      // card sends the whole list; null clears it.
+      const { normalizeAiMemory } = await import('../services/ai-memory.js')
+      const r = normalizeAiMemory(body.ai_memory)
+      if ('error' in r) return reply.code(400).send({ error: r.error })
+      patch.ai_memory = r.value
     }
     if ('team_alerts' in body) {
       // #1037 — the lines a manager wants to hear about when their team crosses them.

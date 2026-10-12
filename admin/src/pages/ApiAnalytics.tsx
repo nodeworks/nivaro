@@ -7,9 +7,10 @@ import {
 } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
-import React, { useEffect, useRef, useState } from 'react'
+import React, { Fragment, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
+import { ExplainButton } from '@/components/explain-button'
 import { SlowTracesPanel } from '@/components/slow-traces'
 import { Button } from '@/components/ui/button'
 import {
@@ -21,6 +22,7 @@ import {
   TableRow
 } from '@/components/ui/table'
 import { api } from '@/lib/api'
+import { useAuth } from '@/lib/auth'
 import { cn, formatNumber } from '@/lib/utils'
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
@@ -640,6 +642,8 @@ function GraphqlPanel({ hours, allInstances }: { hours: number; allInstances: bo
 
 function RumPanel() {
   const [days, setDays] = useState(1)
+  const { user } = useAuth()
+  const [explained, setExplained] = useState<string | null>(null)
   const { data } = useQuery({
     queryKey: ['rum-summary', days],
     queryFn: () => api.get('/rum/summary', { params: { days } }).then((r) => r.data)
@@ -694,26 +698,58 @@ function RumPanel() {
               <th className='py-1 pr-3 font-semibold'>Samples</th>
               <th className='py-1 pr-3 font-semibold'>LCP p75</th>
               <th className='py-1 pr-3 font-semibold'>Full load p75</th>
-              <th className='py-1 font-semibold'>Route change p75</th>
+              <th className='py-1 pr-3 font-semibold'>Route change p75</th>
+              {user?.is_admin && (
+                <th className='py-1 font-semibold'>
+                  <span className='sr-only'>Explain</span>
+                </th>
+              )}
             </tr>
           </thead>
           <tbody>
             {rows.slice(0, 25).map((r) => (
-              <tr key={r.route} className='border-t border-slate-100 dark:border-border'>
-                <td className='py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
-                  {r.route}
-                </td>
-                <td className='py-1.5 pr-3 text-slate-500'>{r.samples}</td>
-                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
-                  {ms(r.lcp_p75)}
-                </td>
-                <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
-                  {ms(r.load_p75)}
-                </td>
-                <td className='py-1.5 text-slate-600 dark:text-muted-foreground'>
-                  {ms(r.route_p75)}
-                </td>
-              </tr>
+              <Fragment key={r.route}>
+                <tr className='border-t border-slate-100 dark:border-border'>
+                  <td className='py-1.5 pr-3 font-mono text-[11.5px] text-slate-700 dark:text-foreground'>
+                    {r.route}
+                  </td>
+                  <td className='py-1.5 pr-3 text-slate-500'>{r.samples}</td>
+                  <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
+                    {ms(r.lcp_p75)}
+                  </td>
+                  <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
+                    {ms(r.load_p75)}
+                  </td>
+                  <td className='py-1.5 pr-3 text-slate-600 dark:text-muted-foreground'>
+                    {ms(r.route_p75)}
+                  </td>
+                  {user?.is_admin && (
+                    <td className='py-1.5 text-right'>
+                      <button
+                        type='button'
+                        data-rum-explain={r.route}
+                        onClick={() => setExplained(explained === r.route ? null : r.route)}
+                        className='text-[11.5px] font-medium text-nvr-cyan hover:underline'
+                      >
+                        {explained === r.route ? 'Hide' : 'Explain'}
+                      </button>
+                    </td>
+                  )}
+                </tr>
+                {user?.is_admin && explained === r.route && (
+                  <tr>
+                    <td colSpan={6} className='pb-3'>
+                      <ExplainButton
+                        key={`${r.route}-${days}`}
+                        kind='rum-route'
+                        params={{ route: r.route, days }}
+                        label='Explain this slow page'
+                        autoRun
+                      />
+                    </td>
+                  </tr>
+                )}
+              </Fragment>
             ))}
           </tbody>
         </table>
