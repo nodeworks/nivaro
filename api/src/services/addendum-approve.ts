@@ -197,6 +197,34 @@ export async function applyAddendumApproval(
     }
   }
 
+  // Claim the row first: the panel route and the pipeline path can both
+  // approve, and two concurrent applies would create id-less lines twice.
+  // Losing the race = 409; a throw mid-apply puts the status back.
+  const claimed = (await db('nivaro_addendums')
+    .where({ id: addendumId })
+    .whereIn('status', from)
+    .update({ status: 'approved', updated_at: new Date() })) as unknown as number
+  if (!claimed) return { ok: false, status: 409, error: 'This addendum is already being approved' }
+  try {
+    return await applyClaimedApproval(existing, addendumId, approverUserId, opts)
+  } catch (err) {
+    await db('nivaro_addendums')
+      .where({ id: addendumId })
+      .update({ status: existing.status, updated_at: new Date() })
+      .catch(() => {})
+    throw err
+  }
+}
+
+async function applyClaimedApproval(
+  existing: Record<string, unknown>,
+  addendumId: string,
+  approverUserId: string | null,
+  opts: {
+    pdfAuthHeaders?: Record<string, string>
+    app?: FastifyInstance | null
+  }
+): Promise<ApproveAddendumResult> {
   const now = new Date()
   const parentCollection = String(existing.parent_collection)
   const parentId = String(existing.parent_id)
@@ -317,7 +345,13 @@ export async function applyAddendumApproval(
               data,
               allowedKeys,
               prior?.base ?? null,
-              author ?? null
+              // A suspended / redacted author can no longer make these
+              // changes themselves, so their proposal applies nothing.
+              author &&
+                author.status !== 'suspended' &&
+                !(author as { is_redacted?: unknown }).is_redacted
+                ? author
+                : null
             )
             lineChangesApplied += r.applied
             lineChangesFailed += r.failed

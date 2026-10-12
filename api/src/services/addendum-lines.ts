@@ -248,16 +248,23 @@ async function permittedIds(
   if (admin || !action || ok.size === 0) return ok
   const { applyRowFilter, getRowFilter } = await import('./permissions.js')
   const rf = await getRowFilter(user, action, collection)
-  if (!rf || rf.length === 0) return ok
-  const pass = new Set<string>()
-  const list = [...ok]
-  for (let i = 0; i < list.length; i += 1000) {
-    const q = db(collection).whereIn(`${collection}.id`, list.slice(i, i + 1000))
-    applyRowFilter(q, rf, user)
-    for (const r of (await q.select(`${collection}.id`)) as Array<{ id: unknown }>)
-      pass.add(String(r.id))
+  if (rf && rf.length > 0) {
+    const pass = new Set<string>()
+    const list = [...ok]
+    for (let i = 0; i < list.length; i += 1000) {
+      const q = db(collection).whereIn(`${collection}.id`, list.slice(i, i + 1000))
+      applyRowFilter(q, rf, user)
+      for (const r of (await q.select(`${collection}.id`)) as Array<{ id: unknown }>)
+        pass.add(String(r.id))
+    }
+    ok = pass
   }
-  ok = pass
+  // Tree permissions: an explicit deny on the line (or its nearest ancestor)
+  // blocks it, exactly as items.ts does for the person's own write.
+  const { getTreePermission } = await import('./tree-permissions.js')
+  for (const id of [...ok]) {
+    if ((await getTreePermission(user, action, collection, id)) === false) ok.delete(id)
+  }
   return ok
 }
 
@@ -310,6 +317,20 @@ export async function applyAddendumLines(
     const creatable = mayCreate
       ? capTo(columns, await getAllowedFields(author!, 'create', l.collection))
       : new Set<string>()
+    // Never through a proposal: ownership / tenancy / credential columns
+    // (items.ts would force a non-admin's workspace; nothing runs as the
+    // author here) and the fields the AUTHOR's role has section-locked.
+    const { PARENT_WRITE_BLOCKED_COLUMNS } = await import('./addendum-approve.js')
+    const locked =
+      author && !(await isAdminUser(author))
+        ? await (await import('./section-locks.js')).sectionLockedFields(
+            l.collection,
+            author.role as string | null
+          )
+        : new Set<string>()
+    for (const set of [updatable, creatable])
+      for (const c of [...set])
+        if (PARENT_WRITE_BLOCKED_COLUMNS.has(c) || locked.has(c)) set.delete(c)
     // What the approver was shown: readable columns (ids always pair rows).
     const approverCols = capTo(columns, await getAllowedFields(approver, 'read', l.collection))
     // Plan against every real column, then cap each op (see `author` above).
@@ -461,4 +482,50 @@ export function projectRows(rows: Row[], allowed: string[] | null): Row[] {
   if (allowed === null) return rows
   const keep = new Set([...allowed, 'id'])
   return rows.map((r) => Object.fromEntries(Object.entries(r).filter(([k]) => keep.has(k))))
+}
+
+/**
+ * An addendum's `data` as one reader may see it: proposed parent fields
+ * limited to the reader's readable columns of the parent; each proposed line
+ * set limited to lines their row filter / User Scopes allow (an id-less row
+ * is a new line — the author's own text) and to their readable columns of
+ * the line collection; nothing at all for a line collection they cannot read.
+ */
+export async function redactAddendumData(
+  user: User,
+  isAdmin: boolean,
+  parentCollection: string,
+  data: Row | null
+): Promise<Row | null> {
+  if (!data || typeof data !== 'object' || isAdmin) return data
+  const { can, getAllowedFields } = await import('./permissions.js')
+  const { compileAccessGates, visibleIds } = await import('./record-access.js')
+  const links = new Map((await addendumLineLinks(parentCollection, data)).map((l) => [l.alias, l]))
+  const parentCols = await getAllowedFields(user, 'read', parentCollection)
+  const out: Row = {}
+  for (const [k, v] of Object.entries(data)) {
+    const link = links.get(k)
+    if (!link) {
+      if (Array.isArray(v)) continue // a relation set we cannot place — never leak it
+      if (parentCols === null || parentCols.includes(k)) out[k] = v
+      continue
+    }
+    if (!(await can(user, 'read', link.collection))) {
+      out[k] = []
+      continue
+    }
+    const rows = (v as unknown[]).filter((r): r is Row => !!r && typeof r === 'object')
+    const gates = await compileAccessGates(user, link.collection)
+    const ids = rows
+      .map((r) => r.id)
+      .filter((x) => !isBlank(x))
+      .map(String)
+    const visible = await visibleIds(gates, [...new Set(ids)])
+    const allowed = await getAllowedFields(user, 'read', link.collection)
+    out[k] = projectRows(
+      rows.filter((r) => isBlank(r.id) || visible.has(String(r.id))),
+      allowed
+    )
+  }
+  return out
 }

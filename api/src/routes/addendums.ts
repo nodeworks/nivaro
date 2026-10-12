@@ -111,6 +111,38 @@ function formatAddendum(row: Record<string, unknown>) {
   }
 }
 
+/** The parent record must be readable to this caller (row filter + User Scopes). */
+async function parentReadable(
+  req: import('fastify').FastifyRequest,
+  collection: string,
+  itemId: string
+): Promise<boolean> {
+  if (!(await can(req.user!, 'read', collection))) return false
+  const { readOne } = await import('../services/items.js')
+  const parent = await readOne(req.user!, collection, itemId, req.workspaceId ?? undefined, [
+    'id'
+  ]).catch(() => null)
+  return !!parent
+}
+
+/** formatAddendum + `data` redacted to what this caller may read. */
+async function formatAddendumFor(
+  req: import('fastify').FastifyRequest,
+  row: Record<string, unknown>
+) {
+  const { redactAddendumData } = await import('../services/addendum-lines.js')
+  const out = formatAddendum(row)
+  return {
+    ...out,
+    data: await redactAddendumData(
+      req.user!,
+      !!req.isAdmin,
+      String(row.parent_collection),
+      out.data as Record<string, unknown> | null
+    )
+  }
+}
+
 export async function addendumsRoutes(app: FastifyInstance) {
   // ─── Change orders (must be before /:id routes) ───────────────────────────────
 
@@ -120,6 +152,8 @@ export async function addendumsRoutes(app: FastifyInstance) {
     { preHandler: authenticate },
     async (req, reply) => {
       const { collection, itemId } = req.params as { collection: string; itemId: string }
+      if (!(await parentReadable(req, collection, itemId)))
+        return reply.code(404).send({ error: 'Not found' })
 
       const rows = (await db('nivaro_addendum_approvals as co')
         .leftJoin('nivaro_addendums as a', 'co.addendum_id', 'a.id')
@@ -161,6 +195,8 @@ export async function addendumsRoutes(app: FastifyInstance) {
 
     if (!(await can(req.user!, 'read', collection)))
       return reply.code(403).send({ error: 'Forbidden' })
+    if (!(await parentReadable(req, collection, itemId)))
+      return reply.code(404).send({ error: 'Not found' })
 
     const listRows = () =>
       db('nivaro_addendums')
@@ -209,12 +245,13 @@ export async function addendumsRoutes(app: FastifyInstance) {
           states.set(String(x.item), { key: x.key, label: x.label, color: x.color })
       }
     }
-    return reply.send({
-      data: rows.map((r) => ({
-        ...formatAddendum(r),
+    const data = []
+    for (const r of rows)
+      data.push({
+        ...(await formatAddendumFor(req, r)),
         workflow_state: states.get(String(r.id)) ?? null
-      }))
-    })
+      })
+    return reply.send({ data })
   })
 
   // GET /addendums/:id/lines — what the addendum does to the record's child
@@ -340,8 +377,10 @@ export async function addendumsRoutes(app: FastifyInstance) {
       | Record<string, unknown>
       | undefined
     if (!row) return reply.code(404).send({ error: 'Not found' })
+    if (!(await parentReadable(req, String(row.parent_collection), String(row.parent_id))))
+      return reply.code(404).send({ error: 'Not found' })
 
-    return reply.send({ data: formatAddendum(row) })
+    return reply.send({ data: await formatAddendumFor(req, row) })
   })
 
   // POST /addendums — create
@@ -576,6 +615,26 @@ export async function addendumsRoutes(app: FastifyInstance) {
       timeline_impact_days: number | null
     }>
 
+    // The proposal is frozen once review starts: an approver must approve
+    // the version they read. Editable only while 'draft' AND its pipeline (if
+    // any) has not moved past the state it started in.
+    if ('data' in body) {
+      let frozen = String(existing.status) !== 'draft'
+      if (!frozen) {
+        const moved = (await db('nivaro_workflow_history as h')
+          .join('nivaro_workflow_instances as i', 'i.id', 'h.instance')
+          .where('i.collection', 'nivaro_addendums')
+          .where('i.item', String(id))
+          .whereNotNull('h.from_state')
+          .first('h.id')) as unknown
+        frozen = !!moved
+      }
+      if (frozen)
+        return reply.code(409).send({
+          error: 'This addendum is in review — its proposed changes can no longer be edited.'
+        })
+    }
+
     const patch: Record<string, unknown> = { updated_at: new Date() }
     if (body.title !== undefined) patch.title = body.title
     if ('description' in body) patch.description = body.description ?? null
@@ -602,6 +661,32 @@ export async function addendumsRoutes(app: FastifyInstance) {
       patch.timeline_impact_days = body.timeline_impact_days ?? null
 
     await db('nivaro_addendums').where({ id }).update(patch)
+    if ('data' in body && patch.data) {
+      // A line set the draft did not carry at create gets its base now, so
+      // approval diffs it against the lines as they were when it was proposed.
+      try {
+        const { snapshotAddendumBase } = await import('../services/addendum-lines.js')
+        const snap = (parseJsonSafe(existing.revert_snapshot) ?? {}) as {
+          base?: Record<string, unknown>
+        }
+        const fresh = await snapshotAddendumBase(
+          String(existing.parent_collection),
+          String(existing.parent_id),
+          parseJsonSafe(patch.data) as Record<string, unknown>
+        )
+        const added = Object.fromEntries(
+          Object.entries(fresh).filter(([alias]) => !snap.base || !(alias in snap.base))
+        )
+        if (Object.keys(added).length > 0)
+          await db('nivaro_addendums')
+            .where({ id })
+            .update({
+              revert_snapshot: JSON.stringify({ ...snap, base: { ...(snap.base ?? {}), ...added } })
+            })
+      } catch (err) {
+        req.log.warn({ err }, 'addendum line base snapshot failed')
+      }
+    }
     if ('data' in body) {
       const { storeAddendumImpact } = await import('../services/addendum-render.js')
       await storeAddendumImpact(
