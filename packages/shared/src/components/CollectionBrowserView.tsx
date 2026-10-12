@@ -78,6 +78,7 @@ import {
 } from '../lib/use-my-scopes'
 import { useNewItemLayouts } from '../lib/use-new-item-layouts'
 import { cn, humanHours } from '../lib/utils'
+import { useAskRecordDrag, usePublishAskContext } from './ai/ask-context'
 import {
   type AvailableBulkAction,
   BulkActionButtons,
@@ -4659,6 +4660,30 @@ export function CollectionBrowserView({
   const aggregates = itemsRes?.aggregates
   const totalPages = Math.max(1, Math.ceil(total / effPageSize))
 
+  // #1835 — Ask AI from this page: the list, its filters and the rows on
+  // screen ("which of these are late?"). Ids and filters only.
+  usePublishAskContext(
+    collection
+      ? {
+          list: {
+            collection,
+            label:
+              (meta as { display_name?: string | null } | undefined)?.display_name || collection,
+            ids: rows.slice(0, 100).map((r) => String(r.id)),
+            filters: filters.map((f) => ({
+              path: f.path.join('.'),
+              op: f.op,
+              value: f.value,
+              ...(f.not ? { not: true } : {})
+            })),
+            search: appliedSearch || null,
+            total
+          }
+        }
+      : null
+  )
+  const askDrag = useAskRecordDrag()
+
   // ── Live rows (#267, #1743, #1828, #1872, #2029, #2386) ──────────────────
   // When the host provides a RealtimeAdapter, a batch of changes is judged by
   // the SERVER as the viewer: one normal /items read with this list's own
@@ -8147,6 +8172,7 @@ export function CollectionBrowserView({
                       return (
                         <tr
                           key={String(id)}
+                          {...askDrag({ collection, id: String(id) })}
                           onClick={() => openRow(id)}
                           onMouseEnter={() => prefetchRecord(id)}
                           data-row-key={String(id)}

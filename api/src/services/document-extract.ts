@@ -109,7 +109,9 @@ function countPages(text: string): number | null {
 export async function extractDocumentText(
   buffer: Buffer,
   filename: string,
-  mimeType?: string | null
+  mimeType?: string | null,
+  /** sheetRows caps the rows read per sheet (dense mode) — Ask AI's bound (#1842). */
+  opts: { sheetRows?: number } = {}
 ): Promise<ExtractedDocument> {
   const ext = extname(filename || '').toLowerCase()
   const mime = (mimeType ?? '').toLowerCase()
@@ -142,7 +144,11 @@ export async function extractDocumentText(
   }
 
   if (['.xlsx', '.xls', '.xlsm', '.csv'].includes(ext) || /spreadsheet|excel|csv/.test(mime)) {
-    const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true })
+    const wb = XLSX.read(buffer, {
+      type: 'buffer',
+      cellDates: true,
+      ...(opts.sheetRows ? { sheetRows: opts.sheetRows, dense: true } : {})
+    })
     const parts: string[] = []
     for (const name of wb.SheetNames.slice(0, 8)) {
       const csv = XLSX.utils.sheet_to_csv(wb.Sheets[name], { blankrows: false })

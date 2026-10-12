@@ -27,6 +27,7 @@ export {
 export { type AiPlanChangeRow, AiPlanChanges } from './components/ai/AiPlanChanges'
 export { AiPlansView } from './components/ai/AiPlansView'
 export { AiStepList } from './components/ai/AiStepList'
+export { AskPanel } from './components/ai/AskPanel'
 export {
   type AnswerFormat,
   type AnswerRows,
@@ -36,6 +37,17 @@ export {
   listOf,
   rowsOfBlock
 } from './components/ai/answer-formats'
+export {
+  ASK_OPEN_EVENT,
+  ASK_RECORD_MIME,
+  AskContextProvider,
+  type AskPageContext,
+  type AskRecordRef,
+  openAskPanel,
+  useAskHost,
+  useAskRecordDrag,
+  usePublishAskContext
+} from './components/ai/ask-context'
 export { DataGuideCard } from './components/ai/DataGuideCard'
 export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
