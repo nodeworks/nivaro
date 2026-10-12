@@ -31,6 +31,7 @@ vi.mock('../../../db/index.js', () => {
 const hv = vi.hoisted(() => ({ calls: [] as Array<{ q: unknown; col: string }> }))
 vi.mock('../../../services/help-video-files.js', () => ({
   isFilesCollection: (c: string) => /^(nivaro|directus)_files$/i.test(c),
+  helpVideoFileColumnsReady: async () => {},
   whereNotHelpVideoFile: (q: unknown, col: string) => {
     hv.calls.push({ q, col })
     return q
@@ -38,6 +39,7 @@ vi.mock('../../../services/help-video-files.js', () => ({
 }))
 vi.mock('../../../services/permissions.js', async (orig) => ({
   ...(await orig<object>()),
+  isAdminRole: vi.fn(async () => true),
   can: vi.fn(async () => true),
   getAllowedFields: vi.fn(async () => null),
   getRowFilter: vi.fn(async () => null)

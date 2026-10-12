@@ -98,6 +98,8 @@ export interface AggregateGuards {
   allowedFields: string[] | null
   /** Fields stored encrypted: their values mean nothing to the database. */
   encrypted?: string[]
+  /** Credential columns: never grouped or aggregated, whoever asks. */
+  sensitive?: readonly string[]
 }
 
 interface Planned {
@@ -114,6 +116,7 @@ export async function planAggregate(
 ): Promise<Planned> {
   const types = await columnTypes(collection)
   const blocked = new Set((guards.encrypted ?? []).map((f) => f.toLowerCase()))
+  const sensitive = new Set((guards.sensitive ?? []).map((f) => f.toLowerCase()))
   const resolve = (field: string, use: string) => {
     if (typeof field !== 'string' || !IDENT.test(field)) {
       throw refuse('AGGREGATE_FIELD_INVALID', `"${String(field)}" is not a field name`)
@@ -125,9 +128,10 @@ export async function planAggregate(
       })
     }
     if (
-      guards.allowedFields &&
-      col.name !== 'id' &&
-      !guards.allowedFields.some((f) => f.toLowerCase() === col.name.toLowerCase())
+      sensitive.has(col.name.toLowerCase()) ||
+      (guards.allowedFields &&
+        col.name !== 'id' &&
+        !guards.allowedFields.some((f) => f.toLowerCase() === col.name.toLowerCase()))
     ) {
       throw Object.assign(new Error(`You do not have access to "${field}"`), {
         statusCode: 403,
