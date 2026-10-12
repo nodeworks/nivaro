@@ -27,6 +27,7 @@ import {
   type WorkflowState,
   type WorkflowTransition
 } from '../services/pipeline-engine.js'
+import { currentTenantKey } from '../services/tenant-rooms.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import type { User } from '../types.js'
 import { pubsub, topics } from './pubsub.js'
@@ -55,6 +56,95 @@ import {
 interface GQLContext {
   user?: User
   isAdmin?: boolean
+  /** Subscriptions (graphql-ws): the tenant the connection resolved to ('' self-hosted). */
+  tenantKey?: string
+  /** Subscriptions in cloud mode: run a permission read inside the connection's tenant. */
+  withTenant?: <T>(fn: () => Promise<T>) => Promise<T>
+}
+
+/**
+ * The tenant a subscription listens under. A graphql-ws connection runs outside any tenant
+ * context, so it brings its own key; in cloud mode a connection without one hears nothing
+ * rather than another tenant's events.
+ */
+function subscriptionTenant(ctx: GQLContext): string {
+  if (ctx.tenantKey != null) return ctx.tenantKey
+  return process.env.CLOUD_META_DB_URL ? 't:none' : currentTenantKey()
+}
+
+/** May this subscriber hear a collection's events? The collection read gate (admins: all). */
+async function mayReadForSubscription(
+  ctx: GQLContext,
+  user: User,
+  collection: string
+): Promise<boolean> {
+  if (ctx.isAdmin) return true
+  if (/^(nivaro_|directus_)/i.test(collection)) return false
+  const readable = () => can(user, 'read', collection)
+  return ctx.withTenant ? ctx.withTenant(readable) : readable()
+}
+
+/** Run a read as the subscriber, inside their connection's tenant (cloud). */
+function asSubscriber<T>(ctx: GQLContext, fn: () => Promise<T>): Promise<T> {
+  return ctx.withTenant ? ctx.withTenant(fn) : fn()
+}
+
+/** May this subscriber read the record (role, row filter, user scopes)? */
+async function maySeeRecordForSubscription(
+  ctx: GQLContext,
+  user: User,
+  collection: string,
+  item: string
+): Promise<boolean> {
+  if (!(await mayReadForSubscription(ctx, user, collection))) return false
+  try {
+    await asSubscriber(ctx, () =>
+      assertInstanceAccess(user, ctx.isAdmin ?? false, collection, item, undefined, 'read')
+    )
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Workflow / pipeline state events carry ids only; each subscriber gets the instance built AS
+ * THEM (their role decides which transitions show), and an event for a record they can no
+ * longer read is skipped rather than delivered.
+ */
+function instanceEventsAsSubscriber(
+  source: AsyncIterableIterator<unknown>,
+  field: 'workflowStateChanged' | 'pipelineStateChanged',
+  ctx: GQLContext,
+  user: User
+): AsyncIterableIterator<unknown> {
+  const build = async (ev: { collection: string; item: string; instance_id?: unknown }) => {
+    if (!(await maySeeRecordForSubscription(ctx, user, ev.collection, String(ev.item)))) return null
+    return asSubscriber(ctx, async () => {
+      const instance = await db<WorkflowInstance>('nivaro_workflow_instances')
+        .where({ id: ev.instance_id as WorkflowInstance['id'] })
+        .first()
+      if (!instance) return null
+      const payload = await buildInstancePayload(instance, user.role, ctx.isAdmin ?? false)
+      return { [field]: { collection: ev.collection, item: ev.item, instance: payload } }
+    })
+  }
+  return {
+    async next() {
+      for (;;) {
+        const r = await source.next()
+        if (r.done) return r
+        const ev = (r.value as Record<string, unknown>)[field] as Parameters<typeof build>[0]
+        const out = ev ? await build(ev).catch(() => null) : null
+        if (out) return { value: out, done: false }
+      }
+    },
+    return: () => source.return!(),
+    throw: (e: unknown) => source.throw!(e),
+    [Symbol.asyncIterator]() {
+      return this
+    }
+  }
 }
 
 // ─── Guards ───────────────────────────────────────────────────────────────────
@@ -739,8 +829,9 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .where({ id: instanceId })
         .first()
       const payload = await buildInstancePayload(instance!, user.role, ctx.isAdmin ?? false)
+      // Ids only: each subscriber's resolver reads the instance as THAT subscriber.
       pubsub.publish(topics.workflowStateChanged(collection, item), {
-        workflowStateChanged: { collection, item, instance: payload }
+        workflowStateChanged: { collection, item, instance_id: instance!.id }
       })
       return payload
     }
@@ -838,8 +929,9 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .where({ id: instance.id })
         .first()
       const payload = await buildInstancePayload(updatedInstance!, user.role, ctx.isAdmin ?? false)
+      // Ids only: each subscriber's resolver reads the instance as THAT subscriber.
       pubsub.publish(topics.workflowStateChanged(collection, item), {
-        workflowStateChanged: { collection, item, instance: payload }
+        workflowStateChanged: { collection, item, instance_id: updatedInstance!.id }
       })
       return { instance: payload, newState: newStateObj ? gqlState(newStateObj) : null }
     }
@@ -935,8 +1027,9 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .where({ id: instanceId })
         .first()
       const payload = await buildInstancePayload(instance!, user.role, ctx.isAdmin ?? false)
+      // Ids only: each subscriber's resolver reads the instance as THAT subscriber.
       pubsub.publish(topics.pipelineStateChanged(collection, item), {
-        pipelineStateChanged: { collection, item, instance: payload }
+        pipelineStateChanged: { collection, item, instance_id: instance!.id }
       })
       return payload
     }
@@ -1034,8 +1127,9 @@ export const domainMutationFields: GraphQLFieldConfigMap<unknown, GQLContext> = 
         .where({ id: instance.id })
         .first()
       const payload = await buildInstancePayload(updatedInstance!, user.role, ctx.isAdmin ?? false)
+      // Ids only: each subscriber's resolver reads the instance as THAT subscriber.
       pubsub.publish(topics.pipelineStateChanged(collection, item), {
-        pipelineStateChanged: { collection, item, instance: payload }
+        pipelineStateChanged: { collection, item, instance_id: updatedInstance!.id }
       })
       return payload
     }
@@ -1051,9 +1145,23 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
       collection: { type: new GraphQLNonNull(GraphQLString) },
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
-    subscribe: (_src, args, ctx) => {
-      requireUser(ctx)
-      return pubsub.asyncIterator(topics.workflowStateChanged(args.collection, args.item))
+    subscribe: async (_src, args, ctx) => {
+      const user = requireUser(ctx)
+      // A record's state belongs to people who may read that record.
+      if (
+        !(await maySeeRecordForSubscription(ctx, user, String(args.collection), String(args.item)))
+      )
+        throw new GraphQLError('You do not have permission to read this record', {
+          extensions: { code: 'FORBIDDEN' }
+        })
+      return instanceEventsAsSubscriber(
+        pubsub.asyncIterator(
+          topics.workflowStateChanged(args.collection, args.item, subscriptionTenant(ctx))
+        ),
+        'workflowStateChanged',
+        ctx,
+        user
+      )
     },
     resolve: (payload: unknown) => (payload as Record<string, unknown>).workflowStateChanged
   },
@@ -1064,9 +1172,23 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
       collection: { type: new GraphQLNonNull(GraphQLString) },
       item: { type: new GraphQLNonNull(GraphQLID) }
     },
-    subscribe: (_src, args, ctx) => {
-      requireUser(ctx)
-      return pubsub.asyncIterator(topics.pipelineStateChanged(args.collection, args.item))
+    subscribe: async (_src, args, ctx) => {
+      const user = requireUser(ctx)
+      // A record's state belongs to people who may read that record.
+      if (
+        !(await maySeeRecordForSubscription(ctx, user, String(args.collection), String(args.item)))
+      )
+        throw new GraphQLError('You do not have permission to read this record', {
+          extensions: { code: 'FORBIDDEN' }
+        })
+      return instanceEventsAsSubscriber(
+        pubsub.asyncIterator(
+          topics.pipelineStateChanged(args.collection, args.item, subscriptionTenant(ctx))
+        ),
+        'pipelineStateChanged',
+        ctx,
+        user
+      )
     },
     resolve: (payload: unknown) => (payload as Record<string, unknown>).pipelineStateChanged
   },
@@ -1088,16 +1210,16 @@ export const domainSubscriptionFields: GraphQLFieldConfigMap<unknown, GQLContext
         throw new GraphQLError('Unknown collection', { extensions: { code: 'BAD_USER_INPUT' } })
       }
       // The same gate as reading the collection. System tables stay with admins.
-      const system = /^(nivaro_|directus_)/i.test(collection)
-      const allowed = ctx.isAdmin || (!system && (await can(user, 'read', collection)))
+      const allowed = await mayReadForSubscription(ctx, user, collection)
       if (!allowed) {
         throw new GraphQLError('You do not have permission to read this collection', {
           extensions: { code: 'FORBIDDEN' }
         })
       }
+      const tenant = subscriptionTenant(ctx)
       const topic = args.item
-        ? topics.itemMutated(collection, String(args.item))
-        : topics.itemMutated(collection, '*')
+        ? topics.itemMutated(collection, String(args.item), tenant)
+        : topics.itemMutated(collection, '*', tenant)
       const source = pubsub.asyncIterator<{
         itemMutated: { action: string; changed_fields: string[] }
       }>(topic)

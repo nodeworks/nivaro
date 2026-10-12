@@ -8,6 +8,7 @@ import { logActivity } from './activity.js'
 import { getAiClient } from './ai-client.js'
 import { parseRoom } from './chat.js'
 import { BOT_EMAIL } from './machine-accounts.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 export type { BotToolDef } from '@nivaro/extension-kit'
 
@@ -184,7 +185,7 @@ export async function postBotMessage(
       sender_name: senderName,
       date_created: new Date().toISOString()
     }
-    app.io?.to(`chat:${room}`).emit('chat:message', row)
+    app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', row)
     const parsed = parseRoom(room)
     if (parsed.kind === 'dm') {
       for (const p of parsed.participants ?? []) {

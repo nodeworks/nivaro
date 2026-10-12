@@ -4,6 +4,7 @@ import { getTenantId } from '../db/tenant-context.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { chainFields } from './chain-columns.js'
 import { currentTraceCaller, noteDerivedWrite } from './request-trace.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 // Mission-control pulse: logActivity broadcasts each entry to the admin-only
 // 'pulse' socket room when the server has registered itself here.
@@ -96,7 +97,8 @@ export async function logActivity(opts: {
     const id = typeof row === 'object' && row !== null ? row.id : (row as number)
     noteDerivedWrite('activity')
     try {
-      _pulseApp?.io?.to('pulse').emit('activity:pulse', {
+      // Cloud: the writing tenant's pulse room (tenant-rooms.ts).
+      _pulseApp?.io?.to(tenantScopedRoom('pulse')).emit('activity:pulse', {
         id,
         action: opts.action,
         collection: opts.collection ?? null,

@@ -56,7 +56,7 @@ import {
   formatMultiValue,
   formatValue
 } from '../lib/format-value'
-import { LIVE_ASPECTS } from '../lib/live'
+import { expandCoalesced, LIVE_ASPECTS } from '../lib/live'
 import {
   conditionFields,
   lockLabel,
@@ -105,6 +105,7 @@ import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerD
 import { LiveRowMark } from './LiveRowMark'
 import { MapView } from './MapView'
 import { RevisionsPanel } from './panels'
+import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
 import { TipLayer } from './TipLayer'
@@ -4891,7 +4892,9 @@ export function CollectionBrowserView({
     }
 
     const handle = (evs: CollectionUpdateEvent[]) => {
-      for (const ev of evs) {
+      // A coalesced burst (#1681) arrives as one message listing ids (or "many"): one event
+      // per record (or one bulk '*') from here on, like single writes.
+      for (const ev of evs.flatMap((e) => expandCoalesced(e as never) as CollectionUpdateEvent[])) {
         const fields = ev.changed_fields
         if (!ev.action && fields?.length && fields.every((f) => f.startsWith('$'))) {
           if (String(ev.item) === '*' || visibleIdsRef.current.has(String(ev.item)))
@@ -6455,6 +6458,7 @@ export function CollectionBrowserView({
             </button>
           )
         })}
+        <RealtimeStaleMark className='h-8' />
         <FocusModeToggle />
         {pendingLive > 0 && (
           <button

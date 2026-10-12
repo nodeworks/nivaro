@@ -15,6 +15,7 @@ import {
   obligationTabsFor,
   toneForOutcome
 } from '../../lib/obligation-filters'
+import { serverNow } from '../../lib/server-clock'
 import { cn, formatRelative, humanHours, titleCase } from '../../lib/utils'
 import { EmptyState } from '../EmptyState'
 import { ErrorSurface } from '../ErrorSurface'
@@ -78,7 +79,7 @@ export function roleForTone(
  *  usual "Xh ago". `formatRelative` alone reads a future timestamp as "just
  *  now", which says the wrong thing about something that has not come due. */
 function dueLabel(dueAt: string): string {
-  const diffMs = new Date(dueAt).getTime() - Date.now()
+  const diffMs = new Date(dueAt).getTime() - serverNow()
   if (diffMs > 0) return `due in ${humanHours(diffMs / 3_600_000)}`
   return formatRelative(dueAt)
 }

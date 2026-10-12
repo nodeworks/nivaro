@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify'
+import { revokeSessions } from '../auth/session.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -84,7 +85,8 @@ export async function securityRoutes(app: FastifyInstance): Promise<void> {
       // revoke logs someone else out — refuse rather than guess.
       return reply.code(409).send({ error: 'Prefix is ambiguous — refresh and retry' })
     }
-    await app.redis.del(matches[0])
+    // Revoke, never a bare DEL (logout race) — and it closes that session's sockets (#1719).
+    await revokeSessions(app.redis, [matches[0].slice('sess:'.length)])
     await logActivity({ action: 'session-revoke', user: req.user?.id, comment: prefix, req })
     return { data: { revoked: true } }
   })
@@ -261,7 +263,7 @@ export async function securitySelfRoutes(app: FastifyInstance) {
           try {
             const uid = raw ? ((JSON.parse(raw) as { userId?: string }).userId ?? null) : null
             if (uid && String(uid).toUpperCase() === me && key.slice(5) !== currentSid) {
-              await app.redis.del(key)
+              await revokeSessions(app.redis, [key.slice('sess:'.length)])
               revoked++
             }
           } catch {
