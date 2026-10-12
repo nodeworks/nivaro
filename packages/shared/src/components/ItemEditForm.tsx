@@ -4248,10 +4248,47 @@ export function ItemEditForm({
   const pipelineCollection = viewingAddendum ? 'nivaro_addendums' : collection
   const pipelineItem = viewingAddendum ? addendumViewId : itemId
 
+  // A SETTLED addendum picked in the Viewing menu (approved / reverted /
+  // imported): its lines come from the server snapshot — before → after —
+  // since the live lines already are its "after" and data may be empty.
+  const viewedAddendum = addendumData.find((a) => a.id === addendumViewId)
+  const viewedSettled = !!viewedAddendum && ['approved', 'reverted'].includes(viewedAddendum.status)
+  type AddendumLines = Record<
+    string,
+    {
+      collection: string
+      fk: string
+      before: Record<string, unknown>[]
+      after: Record<string, unknown>[]
+    }
+  >
+  const { data: viewedAddendumLines } = useQuery<AddendumLines>({
+    queryKey: ['addendum-lines', addendumViewId],
+    queryFn: () =>
+      client
+        .request<{ data: AddendumLines }>(get(`/addendums/${addendumViewId}/lines`))
+        .then((r) => r.data ?? {}),
+    enabled: viewedSettled,
+    staleTime: 60_000
+  })
+
   const addendumO2MMap = useMemo<AddendumO2MMap>(() => {
     const map: AddendumO2MMap = {}
+    if (viewedSettled && viewedAddendum && viewedAddendumLines) {
+      for (const [alias, l] of Object.entries(viewedAddendumLines)) {
+        map[alias] = [
+          {
+            addendumId: viewedAddendum.id,
+            addendumTitle: viewedAddendum.title,
+            addendumStatus: viewedAddendum.status,
+            rows: l.after,
+            baseRows: l.before
+          }
+        ]
+      }
+    }
     for (const a of addendumData) {
-      if (['approved', 'rejected'].includes(a.status)) continue
+      if (['approved', 'rejected', 'reverted'].includes(a.status)) continue
       for (const [key, val] of Object.entries(a.data ?? {})) {
         if (!Array.isArray(val) || val.length === 0) continue
         if (!map[key]) map[key] = []
@@ -4264,7 +4301,7 @@ export function ItemEditForm({
       }
     }
     return map
-  }, [addendumData])
+  }, [addendumData, viewedSettled, viewedAddendum, viewedAddendumLines])
 
   // When a specific layout is requested by slug, only show fields explicitly
   // assigned to that layout — unassigned fields should not appear.

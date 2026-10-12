@@ -74,6 +74,8 @@ interface Addendum {
   previous_amount: number | null
   new_amount: number | null
   attachments: string[] | null
+  /** Set on rows imported from the previous system — read-only history, never reverted. */
+  legacy_id?: number | null
 }
 
 const usd = new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' })
@@ -1160,6 +1162,15 @@ function AddendumAttachments({ ids }: { ids: string[] | null }) {
 
 // ─── AddendumCard ──────────────────────────────────────────────────────────────
 
+/** GET /addendums/:id/lines — one O2M alias, before → after. */
+export interface AddendumLineSet {
+  collection: string
+  fk: string
+  before: Record<string, unknown>[]
+  after: Record<string, unknown>[]
+  source: 'applied' | 'imported' | 'proposal'
+}
+
 function AddendumCard({
   addendum,
   configuredFields,
@@ -1223,6 +1234,20 @@ function AddendumCard({
       staleTime: 30_000,
       enabled: !!parentId
     }))
+  })
+
+  // Approved / reverted / imported: the lines as the approval found and left
+  // them (server snapshot) — the live lines already ARE the proposal, so a
+  // diff against them would show nothing.
+  const settled = ['approved', 'reverted'].includes(addendum.status)
+  const { data: appliedLines } = useQuery<Record<string, AddendumLineSet>>({
+    queryKey: ['addendum-lines', addendum.id],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, AddendumLineSet> }>(get(`/addendums/${addendum.id}/lines`))
+        .then((r) => r.data ?? {}),
+    enabled: expanded && settled,
+    staleTime: 60_000
   })
 
   const originalO2MMap = Object.fromEntries(
@@ -1582,7 +1607,7 @@ function AddendumCard({
           {(changeCount > 0 || addendum.previous_amount != null || addendum.new_amount != null) && (
             <div className='px-4 py-3'>
               <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
-                Proposed changes
+                {settled ? 'Changes' : 'Proposed changes'}
               </p>
               <div className='space-y-1.5'>
                 {changeCount === 0 &&
@@ -1704,10 +1729,23 @@ function AddendumCard({
                     </div>
                   )
                 })}
+                {settled &&
+                  Object.entries(appliedLines ?? {}).map(([alias, l]) => (
+                    <AddendumLinesDiff
+                      key={`applied-${alias}`}
+                      client={client}
+                      childCollection={l.collection}
+                      fkField={l.fk}
+                      proposed={l.after}
+                      original={l.before}
+                      label={fieldMap[alias]?.label ?? titleCase(alias)}
+                    />
+                  ))}
                 {o2mRelations.map(({ field, rel }) => {
                   const proposedRows = proposedData[field]
                   const orig = originalO2MMap[field]
                   if (
+                    settled ||
                     !Array.isArray(proposedRows) ||
                     !orig ||
                     !rel?.many_collection ||
@@ -1740,7 +1778,7 @@ function AddendumCard({
               {isAdmin && (
                 <div className='mt-2 flex items-center justify-end gap-2'>
                   {addendum.status === 'approved' ? (
-                    confirmRevert ? (
+                    addendum.legacy_id != null ? null : confirmRevert ? (
                       <span className='flex items-center gap-1.5'>
                         <span className='text-[11px] text-amber-600 dark:text-amber-400'>
                           Roll every applied change back?
@@ -1863,6 +1901,7 @@ function AddendumCard({
             )}
             {isAdmin &&
               addendum.status === 'approved' &&
+              addendum.legacy_id == null &&
               (confirmRevert ? (
                 <span className='ml-auto flex items-center gap-1.5'>
                   <span className='text-[11px] text-amber-600 dark:text-amber-400'>

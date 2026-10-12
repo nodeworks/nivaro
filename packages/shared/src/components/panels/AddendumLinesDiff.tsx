@@ -83,6 +83,9 @@ export function diffAddendumLines(proposed: Row[], original: Row[], fkField: str
     const cells: Array<{ field: string; before: unknown; after: unknown }> = []
     for (const k of Object.keys(row)) {
       if (!visibleKey(k, fkField)) continue
+      // A column one side never carried (an imported snapshot predates it) is
+      // unknown, not changed.
+      if (!(k in orig)) continue
       if (same(orig[k], row[k])) continue
       cells.push({ field: k, before: orig[k], after: row[k] })
     }
