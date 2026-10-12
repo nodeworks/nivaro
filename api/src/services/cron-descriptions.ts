@@ -54,6 +54,8 @@ export const CRON_DESCRIPTIONS: Record<string, string> = {
     'Hourly — for every manager who set team alert lines on their dashboard: past-SLA per person, out with nobody covering, stuck records, quiet reports. One notice per report and rule per day.',
   'task-done-when-sweep':
     'Closes open tasks whose “done when” condition the record now meets (catches writes the after-save check never sees).',
+  'ai-watch-checks':
+    'Hourly — re-reads each number someone is watching from Ask AI (as that person), alerts on a crossed threshold or an unusual move, and keeps the series the daily summary reports.',
   'line-sla-sweep':
     'Daily — records with grid lines still missing a required id past their line-SLA window; notifies current owners once per day and feeds the digest.',
   'queue-entry-notify':

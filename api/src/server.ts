@@ -1752,6 +1752,22 @@ export async function buildServer() {
         })
       }
 
+      // Watched numbers (#1892, #1987): re-read each due watch as its owner,
+      // alert on a crossing or an unusual move, and list them in the digest.
+      {
+        const { registerWatchDigest, runWatchChecks } = await import('./services/ai-watches.js')
+        registerWatchDigest()
+        app.cron.schedule(
+          'ai-watch-checks',
+          '10 * * * *',
+          async () => {
+            const r = await runWatchChecks(app)
+            if (r.checked) app.log.info(`ai-watches: ${r.checked} checked, ${r.alerts} alert(s)`)
+          },
+          { dryRun: async () => runWatchChecks(app, { dryRun: true }) }
+        )
+      }
+
       // Tasks (#1007, #1016): due-tomorrow reminders + overdue escalation
       // once a day, the self-closing check every hour, and a daily-summary
       // section of what is due or overdue.
