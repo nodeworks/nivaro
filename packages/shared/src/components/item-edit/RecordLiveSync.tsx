@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { ArrowLeft, Bot, Copy, EyeOff, Trash2, UploadCloud } from 'lucide-react'
+import { ArrowLeft, Bot, Copy, EyeOff, FileUp, Trash2, UploadCloud } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
@@ -43,6 +43,9 @@ interface InstanceHead {
     timestamp?: string
   }>
 }
+
+/** The import notice lapses this long after the last import write to the record. */
+const IMPORT_QUIET_MS = 8_000
 
 /**
  * Query heads that hold one record's data (`[head, collection, id, …]`).
@@ -155,6 +158,10 @@ export function RecordLiveSync({
   const [gone, setGoneState] = useState<RecordGone | null>(null)
   const [automation, setAutomation] = useState<Record<string, string>>({})
   const [restoring, setRestoring] = useState(false)
+  // #1826 — a staged import run is writing this record (the events say `source: 'import'`).
+  // Each import write renews the notice; it lapses a few seconds after the run goes quiet.
+  const [importing, setImporting] = useState(false)
+  const importTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const openedAt = useRef(Date.now())
   const lastMoveToast = useRef<number | null>(null)
@@ -240,6 +247,11 @@ export function RecordLiveSync({
       return
     }
     if (goneRef.current) return
+    if (batch.events.some((e) => e.source === 'import' && !e.own)) {
+      setImporting(true)
+      if (importTimer.current) clearTimeout(importTimer.current)
+      importTimer.current = setTimeout(() => setImporting(false), IMPORT_QUIET_MS)
+    }
     // A batch that names no fields may have moved anything — refresh it all.
     const touched = (aspect: string) => batchTouches(batch, aspect)
     if (touched(LIVE_ASPECTS.state)) {
@@ -292,6 +304,7 @@ export function RecordLiveSync({
   useEffect(
     () => () => {
       if (flashTimer.current) clearTimeout(flashTimer.current)
+      if (importTimer.current) clearTimeout(importTimer.current)
     },
     []
   )
@@ -459,7 +472,13 @@ export function RecordLiveSync({
 
   const flows = Object.values(automation)
   const showTabs = tabs.otherDirty && !tabsDismissed && !dirty && !gone
-  if (!gone && flows.length === 0 && !showTabs && (!realtime || (!flash && uploads.length === 0)))
+  if (
+    !gone &&
+    flows.length === 0 &&
+    !showTabs &&
+    !importing &&
+    (!realtime || (!flash && uploads.length === 0))
+  )
     return null
   return (
     <div className='space-y-2'>
@@ -517,6 +536,20 @@ export function RecordLiveSync({
           >
             Dismiss
           </button>
+        </div>
+      )}
+      {importing && !gone && (
+        <div
+          data-record-importing
+          role='status'
+          className='flex items-center gap-3 rounded-lg border border-amber-300 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/40 dark:bg-amber-500/10'
+        >
+          <FileUp className='h-4 w-4 shrink-0 animate-pulse text-amber-500' />
+          <p className='min-w-0 flex-1 text-[12px] text-amber-800 dark:text-amber-300'>
+            <span className='font-semibold'>An import is updating this record</span> — the changed
+            fields refresh here as it goes.
+            {dirty ? ' Your unsaved edits may be out of date; check them before saving.' : ''}
+          </p>
         </div>
       )}
       {flows.length > 0 && !gone && (

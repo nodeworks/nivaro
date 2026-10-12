@@ -3,6 +3,7 @@ import { journaledEmit } from './event-journal.js'
 import { publishItemEvent } from './item-events.js'
 import { publishSseEvent } from './sse-hub.js'
 import { noteWrite } from './traffic-map.js'
+import { currentTrafficSource } from './traffic-source.js'
 
 /**
  * Best-effort broadcast that a record in `collection` changed. Consumers join
@@ -22,8 +23,9 @@ export function broadcastCollectionUpdate(
   extra?: {
     action?: 'create' | 'update' | 'delete'
     changed_fields?: string[]
-    /** #1875 — 'raw' when a procedure, import or script made the write. */
-    source?: 'raw'
+    /** #1875 — 'raw' when a procedure, import or script made the write; 'import' (#1826)
+     *  when a staged import run wrote it through the items service. */
+    source?: 'raw' | 'import'
     /** #1875 — with item '*': how many records the raw write touched. */
     bulk?: number
   }
@@ -54,12 +56,15 @@ export function broadcastCollectionUpdate(
       changed_fields: extra.changed_fields?.slice(0, 50) ?? []
     })
   }
+  // #1826 — a staged import run writing through the items service says so, so a form open on
+  // the record can warn "an import is updating this record" instead of looking like a person.
+  const source = extra?.source ?? (currentTrafficSource()?.kind === 'import' ? 'import' : undefined)
   void journaledEmit(`collection:${collection}`, 'collection:update', {
     collection,
     item,
     ...(extra?.action ? { action: extra.action } : {}),
     ...(extra?.changed_fields?.length ? { changed_fields: extra.changed_fields.slice(0, 50) } : {}),
-    ...(extra?.source ? { source: extra.source } : {}),
+    ...(source ? { source } : {}),
     ...(extra?.bulk != null ? { bulk: extra.bulk } : {})
   })
 }

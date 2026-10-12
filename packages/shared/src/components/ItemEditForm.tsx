@@ -1497,21 +1497,23 @@ export function ItemEditForm({
     window.addEventListener('nvr:set-field', onSet)
     return () => window.removeEventListener('nvr:set-field', onSet)
   })
-  // Config hot-push (#268): a schema/layout edit anywhere re-resolves this
-  // form's definition in place and shows an "updated" chip — no stale form
-  // until reload, no forced reload either (the draft is untouched).
+  // Config hot-push (#268, #1740): a schema/layout/rule/pipeline edit re-resolves this form's
+  // definition in place AND says so — "This form was changed, reload to see the new version".
+  // An event naming another collection is not about this form. What the person typed is kept:
+  // the draft store writes it ~1s after the last keystroke and offers it back after the reload.
   const [configUpdated, setConfigUpdated] = useState(false)
   useEffect(() => {
-    const onConfig = () => {
+    const onConfig = (e: Event) => {
+      const changed = (e as CustomEvent<{ collection?: string }>).detail?.collection
+      if (changed && changed !== collection) return
       void qc.invalidateQueries({ queryKey: ['field-config'] })
       void qc.invalidateQueries({ queryKey: ['active-layout'] })
       void qc.invalidateQueries({ queryKey: ['collection-meta'] })
       setConfigUpdated(true)
-      setTimeout(() => setConfigUpdated(false), 8000)
     }
     window.addEventListener('nvr:config-update', onConfig)
     return () => window.removeEventListener('nvr:config-update', onConfig)
-  }, [qc])
+  }, [qc, collection])
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)
@@ -10675,10 +10677,28 @@ export function ItemEditForm({
                                       />
                                     )}
                                     {configUpdated && (
-                                      <div className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'>
-                                        <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
-                                        Form definition updated — fields refreshed in place. Your
-                                        unsaved edits are untouched.
+                                      <div
+                                        data-form-config-changed
+                                        role='status'
+                                        className='mb-2 flex items-center gap-2 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/5 px-3 py-1.5 text-[12px] text-[#007a99] dark:text-nvr-cyan'
+                                      >
+                                        <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-nvr-cyan' />
+                                        <span className='min-w-0 flex-1'>
+                                          This form was changed. Reload to see the new version
+                                          {isDirty ? ' — what you typed is kept.' : '.'}
+                                        </span>
+                                        <button
+                                          type='button'
+                                          onClick={() =>
+                                            window.setTimeout(
+                                              () => window.location.reload(),
+                                              isDirty ? 1200 : 0
+                                            )
+                                          }
+                                          className='h-6 shrink-0 rounded-md border border-nvr-cyan/40 bg-white px-2 text-[11.5px] font-medium hover:bg-nvr-cyan/10 dark:bg-transparent'
+                                        >
+                                          Reload
+                                        </button>
                                       </div>
                                     )}
 
