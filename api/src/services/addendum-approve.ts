@@ -287,6 +287,41 @@ export async function applyAddendumApproval(
           .update({ ...scalarPatch, updated_at: now })
       }
 
+      // ── 1b. Proposed child rows (an O2M alias in `data`, e.g. the lines) ──
+      // Added / changed / removed lines land through the items service AS
+      // THE APPROVER, diffed against the lines as they were when the draft
+      // was made (snapshot.base) — see services/addendum-lines.ts.
+      let appliedO2M: Record<string, unknown> | null = null
+      {
+        const { addendumLineLinks, applyAddendumLines } = await import('./addendum-lines.js')
+        const links = (await addendumLineLinks(parentCollection, data)).filter((l) =>
+          allowedKeys.has(l.alias)
+        )
+        if (links.length > 0) {
+          const approver = approverUserId
+            ? ((await db('nivaro_users').where({ id: approverUserId }).first()) as User | undefined)
+            : undefined
+          if (approver) {
+            const prior = parseJsonSafe(existing.revert_snapshot) as {
+              base?: Record<string, import('./addendum-lines.js').LineSet>
+            } | null
+            const r = await applyAddendumLines(
+              approver,
+              parentCollection,
+              parentId,
+              data,
+              allowedKeys,
+              prior?.base ?? null
+            )
+            lineChangesApplied += r.applied
+            lineChangesFailed += r.failed
+            if (Object.keys(r.o2m).length > 0) appliedO2M = r.o2m
+          } else {
+            lineChangesFailed += links.length
+          }
+        }
+      }
+
       // ── 2. Child-row patches (`__line_changes`) through updateOne ─────────
       // Recorded at draft time by actions like PO closeout. Each row goes
       // through the items service AS THE APPROVER so revisions apply and the
@@ -354,6 +389,7 @@ export async function applyAddendumApproval(
       if (Object.keys(revertParent).length > 0) revert.parent = revertParent
       if (Object.keys(revertSubRows).length > 0) revert.sub_rows = revertSubRows
       if (revertLineChanges) revert.line_changes = revertLineChanges
+      if (appliedO2M) revert.o2m = appliedO2M
       if (Object.keys(revert).length > 0) {
         try {
           // Server-only column (migration 281) — clients can neither read nor
@@ -502,8 +538,18 @@ export async function revertAddendumApproval(
     parent?: Record<string, unknown>
     sub_rows?: Record<string, unknown[]>
     line_changes?: { collection?: string; rows?: Array<Record<string, unknown>> }
+    o2m?: Record<string, import('./addendum-lines.js').AppliedLines>
+    import?: boolean
   } | null
-  if (!revert) {
+  if (revert?.import) {
+    return {
+      ok: false,
+      status: 409,
+      error:
+        'This addendum was imported from the previous system — its before/after lines are for reading only and cannot be reverted.'
+    }
+  }
+  if (!revert || (!revert.parent && !revert.sub_rows && !revert.line_changes && !revert.o2m)) {
     return {
       ok: false,
       status: 409,
@@ -568,6 +614,20 @@ export async function revertAddendumApproval(
       lineChangesFailed = r.failed
     } else {
       lineChangesFailed = lc.rows.length
+    }
+  }
+
+  // Proposed lines back: created rows removed, patched cells restored,
+  // removed rows re-created — through the items service as the admin.
+  if (revert.o2m && Object.keys(revert.o2m).length > 0) {
+    const admin = (await db('nivaro_users').where({ id: adminUserId }).first()) as User | undefined
+    if (admin) {
+      const { revertAddendumLines } = await import('./addendum-lines.js')
+      const r = await revertAddendumLines(admin, parentId, revert.o2m)
+      lineChangesApplied += r.applied
+      lineChangesFailed += r.failed
+    } else {
+      lineChangesFailed += Object.keys(revert.o2m).length
     }
   }
 

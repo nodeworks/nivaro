@@ -1468,6 +1468,15 @@ export const contentOpsAddendums: DocSection = {
       type: 'p',
       text: "An addendum card lists scalar changes as current → proposed with a ± chip, and any child rows it proposes as a line-by-line block: rows it adds, rows it removes (with what they held), and for a changed row each cell as \"was → will be\" with foreign keys shown by label and money formatted as money. When a record carries two or more addendums, the panel header's **Compare** toggle swaps the cards for one table, oldest first: what each addendum moves the amount by, which fields it touches, how many lines it adds / changes / removes (judged against the record's current rows, so an approved addendum's lines read as landed), and the running total with rejected ones struck out and an approved-only subtotal beneath."
     },
+    { type: 'h3', text: 'Proposed lines on approval' },
+    {
+      type: 'p',
+      text: "The create form pre-fills the record's current child rows, so an addendum's proposed lines are the whole set. Approval writes the difference through the items service as the approver (revisions, hooks and stored rollups all fire): rows without an id are created, changed cells are patched, rows the proposal dropped are removed. What the author changed is read against the lines as they were when the draft was made, never against the lines at approval time, so a later import that moved a figure is not overwritten by a stale pre-filled value; a line removed after the draft is never re-created, and a record past the 1,000-row pre-fill cap never loses rows. Approval keeps a before → after picture of the lines, which an admin Revert uses to undo the change (created rows removed, cells restored, removed rows re-created)."
+    },
+    {
+      type: 'p',
+      text: "Picking an approved addendum in the record's **Viewing** menu shows the lines as it left them, highlighted against the lines before it (changed cells amber, new rows marked New, removed rows struck through), in Edit and Summary mode alike; the card's line-by-line block reads the same picture. Addendums imported from a previous system carry the same picture read-only and cannot be reverted."
+    },
     { type: 'h3', text: 'API' },
     {
       type: 'table',
@@ -1477,6 +1486,11 @@ export const contentOpsAddendums: DocSection = {
           'GET',
           '/api/addendums/:parentCollection/:parentId',
           'List all addendums for a parent record.'
+        ],
+        [
+          'GET',
+          '/api/addendums/:id/lines',
+          'Child rows per O2M field, before → after: the approval snapshot for an approved / reverted addendum, else the lines when the draft was made → the proposed rows. Needs read access to the parent record; columns limited to what you may read.'
         ],
         [
           'POST',

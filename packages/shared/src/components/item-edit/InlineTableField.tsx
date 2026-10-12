@@ -8678,7 +8678,16 @@ export function InlineTableField({
                     </tr>
                   ))
                 }
-                if (entry.rows.length === 0)
+                // What the rows are compared against: a settled addendum's
+                // lines BEFORE it (server snapshot), else the live lines.
+                const baseList = entry.baseRows ?? rows
+                const proposedIds = new Set(
+                  entry.rows.filter((r) => r.id != null).map((r) => String(r.id))
+                )
+                const removedRows = baseList.filter(
+                  (r) => r.id != null && !proposedIds.has(String(r.id))
+                )
+                if (entry.rows.length === 0 && removedRows.length === 0)
                   return (
                     <tr>
                       <td
@@ -8689,7 +8698,43 @@ export function InlineTableField({
                       </td>
                     </tr>
                   )
-                return entry.rows.map((rawRow, ri) => {
+                const removedTrs = removedRows.map((rawRow, ri) => {
+                  const row = applyComputedFields({ ...rawRow } as Record<string, unknown>)
+                  return (
+                    <tr
+                      key={`removed-${String(rawRow.id ?? ri)}`}
+                      className='border-b border-red-100 bg-red-50/40 dark:border-red-500/25 dark:bg-red-500/10'
+                    >
+                      {enableReorder && (rowOrderField || isPendingMode) && <td className='w-6' />}
+                      {showLineNumbers && (
+                        <td className='w-8 px-2 align-middle text-[11px] text-red-300 select-none'>
+                          –
+                        </td>
+                      )}
+                      {isPendingMode && <td className='w-20' />}
+                      {effectiveCols.map((c) => (
+                        <td
+                          key={c.field}
+                          className='px-2 py-1.5 text-[11px] text-red-700/70 line-through dark:text-red-300/70'
+                        >
+                          {isSummaryCol(c)
+                            ? summaryCellContent(c, row)
+                            : renderCell(
+                                c,
+                                row[c.field],
+                                row.id != null ? String(row.id) : undefined
+                              )}
+                        </td>
+                      ))}
+                      <td className='w-20 px-2 py-1.5 text-right'>
+                        <span className='text-[10px] font-medium uppercase tracking-wide text-red-400'>
+                          Removed
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })
+                const proposedTrs = entry.rows.map((rawRow, ri) => {
                   // Derived columns must be recomputed on BOTH sides before the
                   // diff. An addendum that changes a quantity changes the line's
                   // money too, and a reviewer reading a stale stored total would
@@ -8700,7 +8745,10 @@ export function InlineTableField({
                     ...rawRow,
                     ...(rawRow.id != null ? (resolvedPathRows?.[String(rawRow.id)] ?? {}) : {})
                   } as Record<string, unknown>)
-                  const rawOrig = rows.find((r) => String(r.id) === String(row.id))
+                  const rawOrig =
+                    row.id != null
+                      ? baseList.find((r) => String(r.id) === String(row.id))
+                      : undefined
                   const origRow = rawOrig
                     ? applyComputedFields({ ...rawOrig } as Record<string, unknown>)
                     : undefined
@@ -8709,6 +8757,9 @@ export function InlineTableField({
                     isNewRow
                       ? displayCols.map((c) => c.field)
                       : displayCols
+                          // A snapshot that never carried a column (an imported
+                          // one predates it) says nothing about it — not a change.
+                          .filter((c) => !entry.baseRows || c.field in origRow!)
                           .filter(
                             (c) => String(row[c.field] ?? '') !== String(origRow![c.field] ?? '')
                           )
@@ -8757,6 +8808,7 @@ export function InlineTableField({
                     </tr>
                   )
                 })
+                return [...proposedTrs, ...removedTrs]
               })()}
             {/* Pending rows render AFTER saved ones: a row added to an
               existing record belongs at the end of the list, not above

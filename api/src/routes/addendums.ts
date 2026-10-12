@@ -217,6 +217,100 @@ export async function addendumsRoutes(app: FastifyInstance) {
     })
   })
 
+  // GET /addendums/:id/lines — what the addendum does to the record's child
+  // rows, per O2M alias: `before` → `after`. Approved / reverted / imported:
+  // the snapshot taken when it applied. In flight: the lines as they were when
+  // the draft was made (else the live lines) → the proposed rows. Gated on
+  // reading the parent RECORD (row filter + scopes), columns projected to what
+  // the reader may read on the child collection.
+  app.get('/:id/lines', { preHandler: authenticate }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const row = (await db('nivaro_addendums').where({ id }).first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!row) return reply.code(404).send({ error: 'Not found' })
+    const parentCollection = String(row.parent_collection)
+    const parentId = String(row.parent_id)
+    if (!(await can(req.user!, 'read', parentCollection)))
+      return reply.code(403).send({ error: 'Forbidden' })
+    const { readOne } = await import('../services/items.js')
+    const parent = await readOne(
+      req.user!,
+      parentCollection,
+      parentId,
+      req.workspaceId ?? undefined,
+      ['id']
+    ).catch(() => null)
+    if (!parent) return reply.code(404).send({ error: 'Not found' })
+
+    const { getAllowedFields } = await import('../services/permissions.js')
+    const { projectRows, snapshotAddendumBase } = await import('../services/addendum-lines.js')
+    type Snap = {
+      base?: Record<string, { collection: string; fk: string; rows: Record<string, unknown>[] }>
+      o2m?: Record<
+        string,
+        {
+          collection: string
+          fk: string
+          before: Record<string, unknown>[]
+          rows: Record<string, unknown>[]
+        }
+      >
+      import?: boolean
+    }
+    const snap = (parseJsonSafe(row.revert_snapshot) ?? {}) as Snap
+    const data = (parseJsonSafe(row.data) ?? {}) as Record<string, unknown>
+    const out: Record<
+      string,
+      {
+        collection: string
+        fk: string
+        before: Record<string, unknown>[]
+        after: Record<string, unknown>[]
+        source: 'applied' | 'imported' | 'proposal'
+      }
+    > = {}
+    const settled = ['approved', 'reverted'].includes(String(row.status))
+    if (settled && snap.o2m) {
+      for (const [alias, l] of Object.entries(snap.o2m)) {
+        out[alias] = {
+          collection: l.collection,
+          fk: l.fk,
+          before: l.before ?? [],
+          after: l.rows ?? [],
+          source: snap.import ? 'imported' : 'applied'
+        }
+      }
+    } else if (!settled) {
+      const live =
+        snap.base && Object.keys(snap.base).length > 0
+          ? snap.base
+          : await snapshotAddendumBase(parentCollection, parentId, data)
+      for (const [alias, l] of Object.entries(live)) {
+        const proposed = data[alias]
+        if (!Array.isArray(proposed)) continue
+        out[alias] = {
+          collection: l.collection,
+          fk: l.fk,
+          before: l.rows,
+          after: proposed as Record<string, unknown>[],
+          source: 'proposal'
+        }
+      }
+    }
+    for (const l of Object.values(out)) {
+      if (!(await can(req.user!, 'read', l.collection))) {
+        l.before = []
+        l.after = []
+        continue
+      }
+      const allowed = await getAllowedFields(req.user!, 'read', l.collection)
+      l.before = projectRows(l.before, allowed)
+      l.after = projectRows(l.after, allowed)
+    }
+    return reply.send({ data: out })
+  })
+
   // GET /addendums/:id — get single addendum
   app.get('/:id', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -316,6 +410,23 @@ export async function addendumsRoutes(app: FastifyInstance) {
       .returning('id')
 
     const insertedId = typeof row === 'object' ? row.id : row
+    // The lines as they are NOW — approval applies only what the author
+    // changed against this, never stale pre-filled values (addendum-lines.ts).
+    // Server-only column; best-effort (approval falls back to the live lines).
+    try {
+      const { snapshotAddendumBase } = await import('../services/addendum-lines.js')
+      const base = await snapshotAddendumBase(
+        body.parent_collection,
+        String(body.parent_id),
+        sanitizedData
+      )
+      if (Object.keys(base).length > 0)
+        await db('nivaro_addendums')
+          .where({ id: insertedId })
+          .update({ revert_snapshot: JSON.stringify({ base }) })
+    } catch (err) {
+      req.log.warn({ err }, 'addendum line base snapshot failed')
+    }
     // What the proposal changes in money terms (a close-out lowers Requisition
     // Amount): computed from the proposed rows so the card, the list pill and
     // the lists show it without the author typing a number.

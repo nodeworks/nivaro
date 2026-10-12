@@ -17,6 +17,9 @@ export interface AddendumO2MEntry {
   addendumTitle: string
   addendumStatus: string
   rows: Array<Record<string, unknown>>
+  /** Settled addendum (approved / reverted / imported): the lines BEFORE it,
+   *  so the grid diffs rows (= after) against these instead of the live lines. */
+  baseRows?: Array<Record<string, unknown>>
 }
 
 export type AddendumO2MMap = Record<string, AddendumO2MEntry[]>
