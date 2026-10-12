@@ -22,7 +22,9 @@ export async function aiMemoryRoutes(app: FastifyInstance) {
   app.post('/memory', { preHandler: authenticate }, async (req, reply) => {
     const { text } = (req.body ?? {}) as { text?: unknown }
     const r = await addSuggestedNote(String(req.user!.id), text)
-    if ('error' in r) return reply.code(r.status).send({ error: r.error })
+    if ('error' in r) {
+      return reply.code(r.status).send({ error: r.error, ...(r.code ? { code: r.code } : {}) })
+    }
     return reply.send({ data: r })
   })
 }
