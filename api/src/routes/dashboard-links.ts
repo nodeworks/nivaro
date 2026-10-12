@@ -4,6 +4,7 @@ import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { computeWidgetData } from '../services/dashboard-widgets.js'
+import type { User } from '../types.js'
 
 /**
  * Public dashboard share links.
@@ -161,9 +162,18 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
       height: number
     }>
 
+    // A public link shows what its creator could see (#1675 security pass): every widget reads
+    // as that person, so a link never shows more than they could; no active creator, no data.
+    const creator = link.created_by
+      ? ((await db('nivaro_users').where({ id: link.created_by, status: 'active' }).first()) as
+          | User
+          | undefined)
+      : undefined
     const resolved = await Promise.all(
       widgets.map(async (w) => {
-        const result = await computeWidgetData(w)
+        const result = creator
+          ? await computeWidgetData(w, [], { user: creator })
+          : { error: 'No viewer', status: 403 }
         return {
           id: w.id,
           type: w.type,

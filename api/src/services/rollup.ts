@@ -291,7 +291,9 @@ export async function resolveRollupRows(
    *  built from `staged` alone (a new record's pending lines + allocations). */
   recordId: string | null,
   logger: Logger = consoleLogger,
-  staged?: RollupStaged
+  staged?: RollupStaged,
+  /** Narrow the walked ids to what the viewer can read (widgets-internal passes it). */
+  visible?: (ids: Array<string | number>) => Promise<Array<string | number>>
 ): Promise<RollupResult> {
   const relations = (await database('nivaro_relations').select(
     'many_collection',
@@ -307,11 +309,12 @@ export async function resolveRollupRows(
   const configError = validateRollupConfig(config, relations)
   if (configError) badConfig(`rollup: ${configError}`)
 
-  const { idSet, truncated: walkTruncated } =
+  const { idSet: walkedIds, truncated: walkTruncated } =
     recordId == null
       ? { idSet: [] as Array<string | number>, truncated: false }
       : await walkReversePath(database, config, relations, recordId, logger, 'rollup')
   let truncated = walkTruncated
+  const idSet = visible && walkedIds.length > 0 ? await visible(walkedIds) : walkedIds
 
   const leafSpecs = normalizeColumnSpecs(config.leaf_columns)
   const levelFields = config.levels.map((l) => l.field)

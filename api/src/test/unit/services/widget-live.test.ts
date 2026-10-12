@@ -127,7 +127,7 @@ describe('gateWatch', () => {
     expect(r.ok && r.collections).toEqual(['orders', 'invoices'])
   })
 
-  it('dashboard: private dashboards are the owner’s; `latest` rows keep polling', async () => {
+  it('dashboard: private dashboards are the owner’s; unknown types keep polling', async () => {
     const widget: DashboardWidgetRow = {
       id: 'd1',
       dashboard: 'dash',
@@ -144,7 +144,7 @@ describe('gateWatch', () => {
       reason: 'forbidden'
     })
     const latest = makeDeps({
-      dashboardWidget: async () => ({ widget: { ...widget, type: 'latest' }, dashboard })
+      dashboardWidget: async () => ({ widget: { ...widget, type: 'gauge' }, dashboard })
     })
     expect(await gateWatch(alice, { kind: 'dashboard', widget: 'd1' }, latest)).toEqual({
       ok: false,

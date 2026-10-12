@@ -25,12 +25,23 @@ vi.mock('../../../services/review-list.js', () => ({
   validateReviewListConfig: vi.fn(() => null)
 }))
 
+// The as-the-viewer gates (#1675 security pass) are stand-ins here: the host record and the
+// configured fields pass, and the walked ids are narrowed by `readableIds`.
+vi.mock('../../../services/widget-access.js', () => ({
+  assertHostReadable: vi.fn(async () => {}),
+  assertWidgetFieldsReadable: vi.fn(async () => {}),
+  assertLookupReadable: vi.fn(async () => {}),
+  readableIds: vi.fn(async (_u: unknown, _c: string, ids: unknown[]) => ids.slice(0, 1)),
+  readOneAs: vi.fn(async () => null)
+}))
+
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 
 import { db } from '../../../db/index.js'
 import { widgetsInternalRoutes } from '../../../routes/widgets-internal.js'
 import { can } from '../../../services/permissions.js'
 import { resolveReviewListRows, validateReviewListConfig } from '../../../services/review-list.js'
+import { assertHostReadable, readableIds } from '../../../services/widget-access.js'
 
 function buildApp() {
   const app = Fastify({ logger: false })
@@ -91,7 +102,45 @@ describe('POST /widgets-internal/:id/render — review_list dispatch', () => {
 
     expect(res.statusCode).toBe(200)
     expect(JSON.parse(res.body)).toEqual({ data: expected })
-    expect(vi.mocked(resolveReviewListRows)).toHaveBeenCalledWith(db, reviewListConfig, '373944')
+    expect(vi.mocked(resolveReviewListRows)).toHaveBeenCalledWith(
+      db,
+      reviewListConfig,
+      '373944',
+      undefined,
+      expect.any(Function)
+    )
+    // The walked ids are narrowed to what the caller can read, as the caller.
+    const visible = vi.mocked(resolveReviewListRows).mock.calls[0][4] as (
+      ids: unknown[]
+    ) => Promise<unknown[]>
+    expect(await visible(['a', 'b'])).toEqual(['a'])
+    expect(vi.mocked(readableIds)).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'test-user' }),
+      'invoices',
+      ['a', 'b']
+    )
+  })
+
+  it('404s when the caller cannot read the host record', async () => {
+    vi.mocked(db).mockImplementation(
+      makeRenderDbMock({
+        id: 1,
+        widget_type: 'review_list',
+        config: JSON.stringify(reviewListConfig)
+      }) as unknown as typeof db
+    )
+    vi.mocked(assertHostReadable).mockRejectedValueOnce(
+      Object.assign(new Error('Not found'), { statusCode: 404 })
+    )
+    const app = buildApp()
+    await app.ready()
+    const res = await app.inject({
+      method: 'POST',
+      url: '/widgets-internal/1/render',
+      payload: { inputs: { record_id: '373944' } }
+    })
+    expect(res.statusCode).toBe(404)
+    expect(vi.mocked(resolveReviewListRows)).not.toHaveBeenCalled()
   })
 
   it('403s when the caller lacks read permission on config.collection', async () => {
