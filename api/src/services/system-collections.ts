@@ -51,7 +51,7 @@ export function sensitiveColumns(collection: string): readonly string[] {
 /** Credentials by NAME: refused as any segment of a filter, sort or relation
  *  path, since a relation path reaches nivaro_users from any business record
  *  (`created_by.static_token`). */
-const SECRET_COLUMNS = new Set(['password_hash', 'totp_secret', 'static_token'])
+const SECRET_COLUMNS = new Set(['password_hash', 'totp_secret', 'static_token', 'external_id'])
 
 export function isSecretColumn(name: string): boolean {
   return SECRET_COLUMNS.has(name.toLowerCase())

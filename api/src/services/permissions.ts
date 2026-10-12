@@ -64,13 +64,14 @@ export async function getRowFilter(
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (!role || role.admin_access) return null
 
-  // The wildcard's row filter still binds a system table it can read
-  // (nivaro_users): can() admits the read through the same policy, so
-  // skipping it here would read that table unfiltered.
+  // A system table answers only to a policy naming it; can() refuses a read
+  // that only a filtered wildcard would admit, so this never reads unfiltered.
+  const system = isSystemCollection(collection)
   const policy = (await db('nivaro_policies')
     .where({ role: user.role, action })
     .where((qb) => {
-      qb.where({ collection }).orWhere({ collection: '*' })
+      qb.where({ collection })
+      if (!system) qb.orWhere({ collection: '*' })
     })
     // Prefer an exact-collection policy over the wildcard when both exist
     .orderByRaw(`CASE WHEN collection = '*' THEN 1 ELSE 0 END`)
@@ -182,14 +183,24 @@ export async function can(user: User, action: Action, collection: string): Promi
   if (isSystemCollection(collection) && (action !== 'read' || !systemReadableColumns(collection)))
     return false
 
-  const policy = await db<Policy>('nivaro_policies')
+  const policy = (await db<Policy>('nivaro_policies')
     .where({ role: user.role, action })
     .where((qb) => {
       qb.where({ collection }).orWhere({ collection: '*' })
     })
-    .first()
+    // An exact-collection policy wins over the wildcard when both exist.
+    .orderByRaw(`CASE WHEN collection = '*' THEN 1 ELSE 0 END`)
+    .first()) as (Policy & { row_filter?: string | null }) | undefined
 
-  return !!policy
+  if (!policy) return false
+  // A system table reached only through the wildcard is read unfiltered (its
+  // row filter speaks of business columns), so a filtered wildcard reads none:
+  // a role meant to read people under a filter holds an explicit policy.
+  if (isSystemCollection(collection) && policy.collection === '*') {
+    const filter = parseRowFilter(policy.row_filter)
+    if (filter && filter.length > 0) return false
+  }
+  return true
 }
 
 /** Same tolerance for the sibling JSON-text columns on a policy row: a bad

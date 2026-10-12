@@ -100,7 +100,11 @@ vi.mock('../../../services/collections.js', async (orig) => ({
     c === 'nivaro_users' || c === 'workflows' ? { collection: c } : undefined
   ),
   getFields: vi.fn(async () => []),
-  getRelations: vi.fn(async () => [])
+  getRelations: vi.fn(async (c: string) =>
+    c === 'workflows'
+      ? [{ many_collection: 'workflows', many_field: 'created_by', one_collection: 'nivaro_users' }]
+      : []
+  )
 }))
 
 import { planAggregate } from '../../../services/item-aggregates.js'
@@ -292,5 +296,47 @@ describe('a projection that narrows to nothing never becomes *', () => {
     expect(cols.length).toBeGreaterThan(0)
     expect(cols).not.toContain('*')
     expect(cols).not.toContain('salary')
+  })
+})
+
+// A filter is an oracle: a path reaching a system table names only columns
+// the caller may read there.
+describe('filters and sorts that reach a system table', () => {
+  it('a * role cannot filter or sort nivaro_users by a non-directory column', async () => {
+    await expect(
+      readItems(someone, 'nivaro_users', { filter: { role: { _eq: 'ADMIN' } } })
+    ).rejects.toMatchObject({ statusCode: 403 })
+    await expect(readItems(someone, 'nivaro_users', { sort: ['-phone'] })).rejects.toMatchObject({
+      statusCode: 403
+    })
+  })
+
+  it('nor through a relation hop from a business record', async () => {
+    await expect(
+      readItems(someone, 'workflows', { filter: { created_by: { role: { _eq: 'ADMIN' } } } })
+    ).rejects.toMatchObject({ statusCode: 403 })
+    await expect(
+      readItems(someone, 'workflows', { sort: ['created_by.phone'] })
+    ).rejects.toMatchObject({ statusCode: 403 })
+  })
+
+  it('external_id is refused through a relation path too', async () => {
+    perm.admin = true
+    await expect(
+      readItems(someone, 'workflows', { filter: { created_by: { external_id: { _eq: 'x' } } } })
+    ).rejects.toMatchObject({ statusCode: 400 })
+  })
+
+  it('directory columns stay filterable, directly and through a hop', async () => {
+    await readItems(someone, 'nivaro_users', { filter: { last_name: { _eq: 'Lee' } } }).catch(
+      (e) => {
+        expect((e as { statusCode?: number }).statusCode).not.toBe(403)
+      }
+    )
+    await readItems(someone, 'workflows', {
+      filter: { created_by: { first_name: { _eq: 'Rob' } } }
+    }).catch((e) => {
+      expect((e as { statusCode?: number }).statusCode).not.toBe(403)
+    })
   })
 })

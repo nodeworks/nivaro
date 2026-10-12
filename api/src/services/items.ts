@@ -348,6 +348,88 @@ function assertNoSensitivePaths(
   )
 }
 
+/**
+ * Every filter, sort and condition path that reaches a system table may name
+ * only columns the caller can read there — on the table itself and through a
+ * relation hop into it (`created_by.role`). A filter is an oracle: matching on
+ * a column reveals it as surely as selecting it. Business collections keep
+ * their existing behaviour here.
+ */
+async function assertReadableSystemPaths(
+  user: User,
+  collection: string,
+  filter: Record<string, unknown>,
+  sort: string[],
+  conditions: Array<FilterCondition | OrCondition> | undefined
+): Promise<void> {
+  const paths: string[][] = []
+  const walk = (f: unknown, prefix: string[]) => {
+    if (Array.isArray(f)) {
+      for (const c of f) walk(c, prefix)
+      return
+    }
+    if (!f || typeof f !== 'object') return
+    for (const [k, v] of Object.entries(f as Record<string, unknown>)) {
+      if (k === '_and' || k === '_or' || k === '_some' || k === '_none') walk(v, prefix)
+      else if (k.startsWith('_') || k.startsWith('$')) continue
+      else {
+        const path = [...prefix, k]
+        paths.push(path)
+        walk(v, path)
+      }
+    }
+  }
+  walk(filter, [])
+  for (const s of sort) paths.push((s.startsWith('-') ? s.slice(1) : s).split('.'))
+  for (const c of conditions ?? []) {
+    const list = 'or' in c ? c.or : [c]
+    for (const one of list) {
+      const p = (one as { path?: unknown })?.path
+      if (Array.isArray(p)) paths.push(p.map(String))
+      else if (typeof p === 'string') paths.push(p.split('.'))
+    }
+  }
+  if (paths.length === 0) return
+
+  const fieldsFor = new Map<string, Promise<string[] | null>>()
+  const allowedIn = (c: string) => {
+    let hit = fieldsFor.get(c)
+    if (!hit) {
+      hit = getAllowedFields(user, 'read', c)
+      fieldsFor.set(c, hit)
+    }
+    return hit
+  }
+  const bad = new Set<string>()
+  for (const segs of paths) {
+    let current = collection
+    for (let i = 0; i < segs.length; i++) {
+      const seg = segs[i]
+      if (isSystemCollection(current)) {
+        const allowed = await allowedIn(current)
+        if (allowed !== null && seg !== 'id' && !allowed.includes(seg)) {
+          bad.add(segs.slice(0, i + 1).join('.'))
+          break
+        }
+      }
+      if (i === segs.length - 1) break
+      const rels = await getRelsForCollection(current)
+      const m2o = rels.find(
+        (r) => r.many_collection === current && r.many_field === seg && !r.junction_field
+      )
+      const o2m = rels.find((r) => r.one_collection === current && r.one_field === seg)
+      const next = m2o?.one_collection ?? o2m?.many_collection ?? null
+      if (!next) break
+      current = next
+    }
+  }
+  if (bad.size === 0) return
+  throw Object.assign(
+    new Error(`${[...bad].map((f) => `"${f}"`).join(', ')} cannot be filtered or sorted`),
+    { statusCode: 403, code: 'FIELD_NOT_READABLE', fields: [...bad] }
+  )
+}
+
 // ─── Change-reason requirement ───────────────────────────────────────────────
 // nivaro_collections.change_reason_config: { fields, reasons?, allow_free_text? }
 // When a listed field actually changes in an update, the caller must supply
@@ -3190,6 +3272,7 @@ export async function readItems(
   const { fields = ['*'], filter = {}, limit = 25, offset = 0, page, search } = query
   // Before the cursor plan: a keyset over a credential is an oracle too.
   assertNoSensitivePaths(collection, filter, query.sort ?? [], conditions)
+  await assertReadableSystemPaths(user, collection, filter, query.sort ?? [], conditions)
   // A cursor walk sorts by the caller's columns and then by id; everything
   // below reads `sort`, so it is settled here.
   const keyset =

@@ -213,6 +213,33 @@ describe('system tables', () => {
     expect(await can(makeRegularUser(), 'read', 'nivaro_users')).toBe(false)
   })
 
+  // A filtered wildcard speaks of business columns: reached only through it,
+  // a system table would be read unfiltered, so it reads none.
+  it('a wildcard carrying a row filter never reads nivaro_users', async () => {
+    const filtered = {
+      ...wildcard,
+      row_filter: JSON.stringify([{ field: 'zone', op: 'eq', value: 'Z1' }])
+    }
+    mockDbSequence([regularRole, filtered])
+    expect(await can(makeRegularUser(), 'read', 'nivaro_users')).toBe(false)
+  })
+
+  it('an explicit nivaro_users policy reads, and its own row filter applies', async () => {
+    const explicit = {
+      id: 10,
+      role: 'regular-role-id',
+      collection: 'nivaro_users',
+      action: 'read',
+      fields: null,
+      row_filter: JSON.stringify([{ field: 'status', op: 'eq', value: 'active' }])
+    }
+    mockDbSequence([regularRole, explicit])
+    expect(await can(makeRegularUser(), 'read', 'nivaro_users')).toBe(true)
+    mockDbSequence([regularRole, explicit])
+    const rf = await getRowFilter(makeRegularUser(), 'read', 'nivaro_users')
+    expect(rf).toEqual([expect.objectContaining({ field: 'status' })])
+  })
+
   it('an admin keeps everything', async () => {
     mockDbFirst({ id: 'admin-role-id', admin_access: true })
     expect(await can(makeAdminUser(), 'update', 'nivaro_settings')).toBe(true)
@@ -249,9 +276,7 @@ describe('system tables', () => {
     expect(await getAllowedFields(makeRegularUser(), 'update', 'nivaro_users')).toEqual([])
   })
 
-  // can() admits the read through the wildcard, so its row filter must bind
-  // too: skipping it would read the table unfiltered.
-  it('getRowFilter keeps the wildcard row filter on a readable system table', async () => {
+  it('getRowFilter never falls back to the wildcard on a system table', async () => {
     const chains: Array<{ orWhere: ReturnType<typeof vi.fn> }> = []
     let n = 0
     vi.mocked(db as unknown as (t: string) => unknown).mockImplementation(() => {
@@ -269,6 +294,6 @@ describe('system tables', () => {
       return chain as unknown as ReturnType<typeof db>
     })
     await getRowFilter(makeRegularUser(), 'read', 'nivaro_users')
-    expect(chains[1].orWhere).toHaveBeenCalledWith({ collection: '*' })
+    expect(chains[1].orWhere).not.toHaveBeenCalled()
   })
 })
