@@ -12,6 +12,8 @@
  * the moment it is read.
  */
 
+import { clearRecordOutboxFor } from '@nivaro/shared'
+
 const KEY = 'nvr_masq'
 
 export interface MasqueradeTab {
@@ -128,6 +130,8 @@ export async function stopMasquerade(): Promise<void> {
   } catch {
     /* the token expires on its own within four hours */
   }
+  // Nothing queued under the viewed person may outlive the View-as tab.
+  if (m?.user_id) await clearRecordOutboxFor(m.user_id).catch(() => {})
   try {
     sessionStorage.removeItem(KEY)
   } catch {

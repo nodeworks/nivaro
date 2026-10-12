@@ -4,6 +4,8 @@ import {
   bindRecordOutbox,
   claimRecordOutbox,
   clearRecordOutbox,
+  clearRecordOutboxFor,
+  disableRecordOutbox,
   enqueueRecordSave,
   findRecordOutboxEntry,
   getRecordOutbox,
@@ -11,9 +13,11 @@ import {
   midairCollisionOf,
   onRecordOutboxEvent,
   onRecordOutboxRetry,
+  RECORD_OUTBOX_TTL_MS,
   type RecordOutboxEvent,
   replayRecordOutbox,
-  settleRecordOutbox
+  settleRecordOutbox,
+  sweepExpiredRecordOutbox
 } from './record-outbox'
 
 type Cmd = { _method: string; _path: string; _params?: Record<string, unknown>; _body?: unknown }
@@ -54,8 +58,11 @@ beforeEach(() => {
   __resetRecordOutboxForTests({ memory: true })
 })
 afterEach(() => {
+  vi.useRealTimers()
   __resetRecordOutboxForTests({ memory: true })
 })
+
+const settle = () => new Promise((r) => setTimeout(r, 0))
 
 describe('network classification', () => {
   it('treats a thrown fetch and gateway errors as offline, never a 4xx', () => {
@@ -266,6 +273,99 @@ describe('settle + clear', () => {
     bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u1')
     await queue()
     await clearRecordOutbox()
+    expect(getRecordOutbox()).toHaveLength(0)
+  })
+})
+
+describe('shared devices', () => {
+  it('signing in as someone else drops every entry that is not theirs', async () => {
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u1')
+    await queue()
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u2')
+    await settle()
+    await queue({ item: '9' })
+    // u1 back on this browser: their earlier entry is gone for good, and
+    // u2's went the moment u1 signed in.
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u1')
+    await settle()
+    expect(getRecordOutbox()).toHaveLength(0)
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u2')
+    await settle()
+    expect(getRecordOutbox()).toHaveLength(0)
+  })
+
+  it('drops an entry a week after it was queued, telling its owner once', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-01T09:00:00Z'))
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u1')
+    await queue()
+    await queue({ item: '8' })
+    // A later re-save of record 8 does not restart its week.
+    vi.setSystemTime(new Date('2026-10-07T09:00:00Z'))
+    await queue({ item: '8', payload: { name: 'Again' } })
+    const events: RecordOutboxEvent[] = []
+    onRecordOutboxEvent((e) => events.push(e))
+    vi.setSystemTime(
+      new Date(new Date('2026-10-01T09:00:00Z').getTime() + RECORD_OUTBOX_TTL_MS + 1)
+    )
+    await sweepExpiredRecordOutbox()
+    await sweepExpiredRecordOutbox()
+    expect(getRecordOutbox()).toHaveLength(0)
+    expect(events.map((e) => [e.type, e.entry.item])).toEqual([
+      ['expired', '7'],
+      ['expired', '8']
+    ])
+  })
+
+  it('nobody else is told about an expired entry — it is purged at sign-in', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-01T09:00:00Z'))
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u1')
+    await queue()
+    vi.setSystemTime(new Date('2026-10-20T09:00:00Z'))
+    const events: RecordOutboxEvent[] = []
+    onRecordOutboxEvent((e) => events.push(e))
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u2')
+    await settle()
+    await sweepExpiredRecordOutbox()
+    expect(events).toHaveLength(0)
+  })
+})
+
+describe('View as', () => {
+  it('a disabled outbox queues nothing, so the save shows its normal error', async () => {
+    disableRecordOutbox()
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'u1')
+    expect(await queue()).toBeNull()
+    expect(getRecordOutbox()).toHaveLength(0)
+  })
+
+  it('a disabled tab neither binds nor purges anyone', async () => {
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'admin')
+    await queue()
+    __resetRecordOutboxForTests({ memory: true, keepStore: true })
+    disableRecordOutbox()
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'viewed-user')
+    await settle()
+    __resetRecordOutboxForTests({ memory: true, keepStore: true })
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'admin')
+    await settle()
+    expect(getRecordOutbox()).toHaveLength(1)
+  })
+
+  it('leaving View as clears what is stored under the viewed person only', async () => {
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'viewed-user')
+    await queue()
+    __resetRecordOutboxForTests({ memory: true, keepStore: true })
+    await clearRecordOutboxFor('admin')
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'viewed-user')
+    await settle()
+    expect(getRecordOutbox()).toHaveLength(1)
+
+    __resetRecordOutboxForTests({ memory: true, keepStore: true })
+    await clearRecordOutboxFor('viewed-user')
+    bindRecordOutbox(fakeClient({ 'GET /auth/me': offline }), 'viewed-user')
+    await settle()
     expect(getRecordOutbox()).toHaveLength(0)
   })
 })
