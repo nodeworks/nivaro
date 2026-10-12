@@ -162,16 +162,22 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
       height: number
     }>
 
-    // A public link shows what its creator can see: every widget reads as that person, so a
-    // link never shows more than they could. Only the dashboard's owner or an administrator can
-    // mint one (POST / → ownedDashboard; created_by is always the minting user, and no route
-    // changes it), and the creator must STILL be one of those: no active creator, a creator who
-    // no longer owns the dashboard, or a demoted administrator — no data.
-    let creator = link.created_by
+    // A public link shows what the dashboard's OWNER can see — the person who controls its
+    // widgets — never more: an administrator who minted a link on someone else's dashboard
+    // lends no rights to it. The link itself stays valid only while its creator is active and
+    // still the owner or an administrator (only they can mint one; created_by is always the
+    // minting user and no route changes it). An invalid link or an inactive owner: no data.
+    const owner = dashboard.user
+      ? ((await db('nivaro_users').where({ id: dashboard.user, status: 'active' }).first()) as
+          | User
+          | undefined)
+      : undefined
+    const creator = link.created_by
       ? ((await db('nivaro_users').where({ id: link.created_by, status: 'active' }).first()) as
           | User
           | undefined)
       : undefined
+    let valid = !!creator
     if (
       creator &&
       String(dashboard.user ?? '').toUpperCase() !== String(creator.id).toUpperCase()
@@ -181,12 +187,13 @@ export async function dashboardLinkRoutes(app: FastifyInstance) {
             | { admin_access?: boolean | number }
             | undefined)
         : undefined
-      if (!role?.admin_access) creator = undefined
+      if (!role?.admin_access) valid = false
     }
+    const viewer = valid ? owner : undefined
     const resolved = await Promise.all(
       widgets.map(async (w) => {
-        const result = creator
-          ? await computeWidgetData(w, [], { user: creator })
+        const result = viewer
+          ? await computeWidgetData(w, [], { user: viewer })
           : { error: 'No viewer', status: 403 }
         return {
           id: w.id,

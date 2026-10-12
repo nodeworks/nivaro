@@ -258,7 +258,12 @@ describe('building a widget', () => {
 })
 
 describe('public dashboard links', () => {
-  function linkDb(creator: { id: string; role: string }, admin: boolean) {
+  /** Owner ZONE1 (row-filtered to zone 1) owns dashboard d1; `creator` minted the link. */
+  function linkDb(opts: { creator: string; creatorAdmin: boolean; ownerActive?: boolean }) {
+    const people: Record<string, Record<string, unknown> | undefined> = {
+      ZONE1: opts.ownerActive === false ? undefined : { id: 'ZONE1', role: 'R-USER' },
+      ADMIN: { id: 'ADMIN', role: 'R-ADMIN' }
+    }
     return (t: string) => {
       const c = chain(t === 'orders' ? 'x' : t)
       if (t === 'nivaro_dashboard_links')
@@ -268,12 +273,19 @@ describe('public dashboard links', () => {
           token: 'a'.repeat(48),
           is_active: true,
           expires_at: null,
-          created_by: creator.id
+          created_by: opts.creator
         }))
       if (t === 'nivaro_dashboards')
-        c.first = vi.fn(async () => ({ id: 'd1', name: 'D', user: 'OWNER' }))
-      if (t === 'nivaro_users') c.first = vi.fn(async () => ({ ...creator, status: 'active' }))
-      if (t === 'nivaro_roles') c.first = vi.fn(async () => ({ admin_access: admin }))
+        c.first = vi.fn(async () => ({ id: 'd1', name: 'D', user: 'ZONE1' }))
+      if (t === 'nivaro_users') {
+        let id = ''
+        c.where = vi.fn((w: { id?: string }) => {
+          id = String(w?.id ?? '')
+          return c
+        })
+        c.first = vi.fn(async () => people[id])
+      }
+      if (t === 'nivaro_roles') c.first = vi.fn(async () => ({ admin_access: opts.creatorAdmin }))
       if (t === 'nivaro_dashboard_widgets') {
         // biome-ignore lint/suspicious/noThenProperty: a knex builder is thenable
         c.then = (resolve: (v: unknown[]) => void) => resolve([{ id: 'w', ...latest }])
@@ -294,13 +306,26 @@ describe('public dashboard links', () => {
     return JSON.parse(res.body).data.widgets[0].data
   }
 
-  it('renders as a creator who is still an administrator', async () => {
-    vi.mocked(db).mockImplementation(linkDb({ id: 'ZONE1', role: 'R' }, true) as never)
+  it("an admin-minted link on a user's dashboard renders with the OWNER's narrowed rows", async () => {
+    vi.mocked(db).mockImplementation(linkDb({ creator: 'ADMIN', creatorAdmin: true }) as never)
     expect(await render()).toEqual({ rows: [ORDERS[0], ORDERS[2]] })
+    expect(items.readItems).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'ZONE1' }),
+      'orders',
+      expect.anything()
+    )
+  })
+
+  it('an inactive owner shows nothing', async () => {
+    vi.mocked(db).mockImplementation(
+      linkDb({ creator: 'ADMIN', creatorAdmin: true, ownerActive: false }) as never
+    )
+    expect(await render()).toBeNull()
+    expect(items.readItems).not.toHaveBeenCalled()
   })
 
   it('shows nothing once the creator neither owns the dashboard nor administers', async () => {
-    vi.mocked(db).mockImplementation(linkDb({ id: 'ZONE1', role: 'R' }, false) as never)
+    vi.mocked(db).mockImplementation(linkDb({ creator: 'ADMIN', creatorAdmin: false }) as never)
     expect(await render()).toBeNull()
     expect(items.readItems).not.toHaveBeenCalled()
   })
