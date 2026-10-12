@@ -50,6 +50,7 @@ import { commentsRoutes } from './comments.js'
 import { configConformanceRecordRoutes, configConformanceRoutes } from './config-conformance.js'
 import { configDiffRoutes } from './config-diff.js'
 import { configHealthRoutes } from './config-health.js'
+import { configReviewRoutes } from './config-review.js'
 import { configSearchRoutes } from './config-search.js'
 import { configSeedRoutes } from './config-seeds.js'
 import { contentExportRoutes } from './content-export.js'
@@ -373,6 +374,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(securityRoutes, { prefix: '/security' })
   await app.register(securitySelfRoutes, { prefix: '/security' })
   await app.register(configHealthRoutes, { prefix: '/config-health' })
+  await app.register(configReviewRoutes, { prefix: '/config-review' })
   await app.register(legalHoldRoutes, { prefix: '/legal-holds' })
   await app.register(automationTestRoutes, { prefix: '/automation-tests' })
   await app.register(bulkRecipeRoutes, { prefix: '/bulk-recipes' })

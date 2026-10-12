@@ -845,6 +845,14 @@ export async function buildServer() {
         await runConfigHealthSweep()
       })
 
+      // Config review (#1913/#2020/#1999): monthly report of configuration
+      // problems, cleanup suggestions and label inconsistencies, with the
+      // model re-wording reasons when AI is configured; admins are told.
+      app.cron.schedule('config-review-monthly', '20 4 1 * *', async () => {
+        const { runMonthlyConfigReview } = await import('./services/config-review/index.js')
+        await runMonthlyConfigReview()
+      })
+
       // Extension event outbox (#504): deliver pending rows to registered
       // handlers each minute; backoff/dead-letter semantics in the service.
       app.cron.schedule('extension-events-sweep', '* * * * *', async () => {
@@ -2162,6 +2170,7 @@ export async function buildServer() {
         'dq-nightly',
         'conformance-nightly',
         'config-health-sweep',
+        'config-review-monthly',
         'dead-link-sweep',
         'storage-snapshot',
         'file-integrity-sweep'

@@ -84,7 +84,7 @@ import {
   useRef,
   useState
 } from 'react'
-import { Link, useNavigate, useParams } from 'react-router'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
@@ -25904,6 +25904,24 @@ export function TableEditorPage() {
   const goBack = useGoBack('/data-model')
   const qc = useQueryClient()
   const [tab, setTab] = usePersistedTab<Tab>(`nvr_tab_tableeditor_${table ?? ''}`, 'fields')
+  // Deep links (config review findings) open a named tab: ?tab=rules.
+  const [searchParams] = useSearchParams()
+  const tabParam = searchParams.get('tab')
+  useEffect(() => {
+    const known: Tab[] = [
+      'fields',
+      'relations',
+      'attributes',
+      'groups',
+      'behavior',
+      'rules',
+      'imports',
+      'tree',
+      'content',
+      'settings'
+    ]
+    if (tabParam && known.includes(tabParam as Tab)) setTab(tabParam as Tab)
+  }, [tabParam, setTab])
   const { user } = useAuth()
   const isAdmin = (user as { is_admin?: boolean } | null)?.is_admin ?? false
   const [showDrop, setShowDrop] = useState(false)
