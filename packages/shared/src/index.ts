@@ -474,6 +474,7 @@ export { dotsForRecord } from './lib/integration-dots'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export * from './lib/live'
+export * from './lib/live-ops'
 export {
   type NotificationSound,
   playNotificationSound,

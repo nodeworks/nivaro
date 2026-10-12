@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
+import { CLIENT_HEADER, parseClientHeader } from '../services/client-version.js'
 import { trackError } from '../services/error-tracking.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { can } from '../services/permissions.js'
@@ -98,6 +99,7 @@ export async function issuesRoutes(app: FastifyInstance) {
       message: body.message,
       stack: body.stack ?? null,
       userId: req.user?.id ?? null,
+      build: parseClientHeader(req.headers[CLIENT_HEADER])?.build ?? null,
       recordingId,
       recordingOffsetMs
     })

@@ -1,3 +1,4 @@
+import { useFreshIds, useLiveOps } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertOctagon,
@@ -46,10 +47,21 @@ interface Issue {
   raised_by_name?: string | null
   raised_by_email?: string | null
   resolution_notes: string | null
+  occurrence_count?: number | null
+  last_seen_at?: string | null
   recording_id?: string | null
   recording_offset_ms?: number | null
   created_at: string
   updated_at: string
+}
+
+interface LiveOccurrence {
+  route: string
+  source: string
+  user_id: string | null
+  build: string | null
+  count: number
+  at: number
 }
 
 interface CmsUser {
@@ -312,6 +324,20 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
       toast.error(err.response?.data?.error ?? 'Failed to update issue')
   })
 
+  // Live occurrences of THIS issue (admin room): who hit it, on which route and build, as it
+  // happens. Held in this open row only — the log itself keeps a count, not each hit.
+  const [live, setLive] = useState<LiveOccurrence[]>([])
+  useLiveOps(
+    `issue:${issue.id}`,
+    (d) => {
+      const o = d.occurrence as Omit<LiveOccurrence, 'at'> | undefined
+      if (!o) return
+      setLive((cur) => [{ ...o, at: Number(d.at) || Date.now() }, ...cur].slice(0, 25))
+    },
+    { debounceMs: 0 }
+  )
+  const shownCount = live[0]?.count ?? full?.occurrence_count ?? issue.occurrence_count ?? null
+
   const replayId = issue.recording_id ?? full?.recording_id
   const replayOffset = issue.recording_offset_ms ?? full?.recording_offset_ms
 
@@ -330,6 +356,41 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
         </Link>
       )}
       <ExplainButton kind='issue' params={{ id: issue.id }} label='Explain this issue' />
+      {shownCount != null && shownCount > 1 && (
+        <p className='text-[12px] text-muted-foreground' data-issue-occurrences={shownCount}>
+          Seen <span className='font-medium text-foreground'>{shownCount}</span> times
+          {live.length > 0 ? ' — newest first' : ''}
+        </p>
+      )}
+      {live.length > 0 && (
+        <ul
+          className='divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-[11.5px] dark:divide-border/60 dark:border-border dark:bg-card'
+          data-issue-live-occurrences
+        >
+          {live.map((o) => {
+            const who = o.user_id
+              ? users.find((u) => u.id.toLowerCase() === o.user_id?.toLowerCase())
+              : null
+            return (
+              <li
+                key={`${o.at}-${o.count}`}
+                className='flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1.5'
+              >
+                <span className='text-muted-foreground'>{new Date(o.at).toLocaleTimeString()}</span>
+                <span className='font-medium'>
+                  {who ? userLabel(who) : o.user_id ? 'Another user' : 'No signed-in user'}
+                </span>
+                <span className='min-w-0 truncate font-mono text-muted-foreground'>{o.route}</span>
+                {o.build && (
+                  <span className='rounded bg-slate-100 px-1.5 font-mono text-[10.5px] dark:bg-muted'>
+                    {o.build}
+                  </span>
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
       {full?.details && (
         <pre className='max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'>
           {full.details}
@@ -447,7 +508,8 @@ function IssueRows({
   isOpen,
   onToggle,
   selected,
-  onSelect
+  onSelect,
+  fresh
 }: {
   issue: Issue
   users: CmsUser[]
@@ -455,12 +517,17 @@ function IssueRows({
   onToggle: () => void
   selected: boolean
   onSelect: (v: boolean) => void
+  fresh?: boolean
 }) {
   return (
     <>
       <tr
         id={`issue-row-${issue.id}`}
-        className='cursor-pointer border-b border-slate-100 text-[12px] hover:bg-slate-50 dark:border-border/50 dark:hover:bg-muted/40'
+        className={cn(
+          'cursor-pointer border-b border-slate-100 text-[12px] transition-colors duration-700 hover:bg-slate-50 dark:border-border/50 dark:hover:bg-muted/40',
+          fresh && 'bg-nvr-cyan/10'
+        )}
+        data-issue-fresh={fresh ? 'true' : undefined}
         onClick={onToggle}
       >
         <td className='px-3 py-2.5 text-center' onClick={(e) => e.stopPropagation()}>
@@ -478,7 +545,17 @@ function IssueRows({
             <ChevronRight className='inline h-3.5 w-3.5 text-muted-foreground' />
           )}
         </td>
-        <td className='max-w-0 truncate px-2 py-2.5 font-medium'>{issue.title}</td>
+        <td className='max-w-0 truncate px-2 py-2.5 font-medium'>
+          {issue.title}
+          {(issue.occurrence_count ?? 0) > 1 && (
+            <span
+              className='ml-2 rounded-full bg-slate-100 px-1.5 py-px text-[10.5px] font-medium tabular-nums text-slate-600 dark:bg-muted dark:text-muted-foreground'
+              data-issue-count={issue.occurrence_count}
+            >
+              ×{issue.occurrence_count}
+            </span>
+          )}
+        </td>
         <td className='px-2 py-2.5'>
           <SeverityBadge severity={issue.severity} />
         </td>
@@ -539,7 +616,8 @@ export function IssuesPage() {
   const { data: issues = [], isLoading } = useQuery<Issue[]>({
     queryKey: ['issues', qs],
     queryFn: () =>
-      api.get<{ data: Issue[] }>(`/issues${qs ? `?${qs}` : ''}`).then((r) => r.data.data)
+      api.get<{ data: Issue[] }>(`/issues${qs ? `?${qs}` : ''}`).then((r) => r.data.data),
+    refetchInterval: 60_000
   })
 
   const { data: summary } = useQuery<{
@@ -554,6 +632,15 @@ export function IssuesPage() {
         )
         .then((r) => r.data.data)
   })
+
+  // Live: new issues land at the top, counts tick, status changes move rows. The refetch goes
+  // through the same permission-checked route; the safety poll covers a missed event.
+  useLiveOps('issues', () => {
+    void qc.invalidateQueries({ queryKey: ['issues'] })
+    void qc.invalidateQueries({ queryKey: ['issues-summary'] })
+    void qc.invalidateQueries({ queryKey: ['issue-full'] })
+  })
+  const freshIds = useFreshIds(issues.map((i) => i.id))
 
   const { data: users = [] } = useQuery<CmsUser[]>({
     queryKey: ['users-list-for-issues'],
@@ -810,6 +897,7 @@ export function IssuesPage() {
                     isOpen={isOpen}
                     onToggle={() => setExpandedId(isOpen ? null : issue.id)}
                     selected={selected.has(issue.id)}
+                    fresh={freshIds.has(String(issue.id))}
                     onSelect={(v) =>
                       setSelected((prev) => {
                         const next = new Set(prev)

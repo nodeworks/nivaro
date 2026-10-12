@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
 import { db } from '../db/index.js'
+import { NIVARO_VERSION } from '../version.js'
+import { emitOps } from './ops-live.js'
 
 /**
  * Error tracking into nivaro_issues.
@@ -39,11 +41,26 @@ export async function trackError(opts: {
   recordingOffsetMs?: number | null
   /** #300 — redacted request context (method/route/query keys/body SHAPE, never values). */
   requestContext?: string | null
+  /** The frontend build the error came from (client reports); server errors name this API's version. */
+  build?: string | null
 }): Promise<number | null> {
   // Returns the issue id (new or bumped); null when tracking failed.
   try {
     const message = issueMessage(opts.message)
     const fingerprint = issueFingerprint(opts.source, opts.route, message)
+
+    // The occurrence an open issue page streams (admin room): who, where, which build.
+    // Names a person by id only — the page resolves it through an admin-only route.
+    const announce = (issueId: number, count: number) =>
+      emitOps(`issue:${issueId}`, {
+        occurrence: {
+          route: opts.route.slice(0, 300),
+          source: opts.source,
+          user_id: opts.userId ?? null,
+          build: opts.build ?? (opts.source === 'server' ? NIVARO_VERSION : null),
+          count
+        }
+      })
 
     const existing = await db('nivaro_issues')
       .where({ fingerprint })
@@ -66,6 +83,7 @@ export async function trackError(opts: {
               }
             : {})
         })
+      announce(Number(existing.id), Number(existing.occurrence_count ?? 0) + 1)
       return Number(existing.id)
     }
 
@@ -97,6 +115,7 @@ export async function trackError(opts: {
     // `.returning('id')` yields an OBJECT on this stack
     const first = (inserted as unknown[])[0] as { id?: unknown } | number | undefined
     const id = typeof first === 'object' && first ? Number(first.id) : Number(first)
+    if (Number.isFinite(id)) announce(id, 1)
     return Number.isFinite(id) ? id : null
   } catch {
     /* tracking must never break the request path */
