@@ -250,7 +250,17 @@ export function getRecordViewerSnapshot(): Array<{
 
 // Watch rooms admins may join via admin:join (traffic feed, job progress,
 // monitor flips). Allowlisted — a socket can't invent a privileged room name.
-const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors', 'firehose', 'flows', 'traffic-map'])
+const WATCH_ROOMS = new Set([
+  'traffic',
+  'jobs',
+  'monitors',
+  'firehose',
+  'flows',
+  'traffic-map',
+  'conformance'
+])
+/** Watch rooms whose events name tenant data (counts, collections): tenant-prefixed in cloud. */
+const TENANT_WATCH_ROOMS = new Set(['conformance', 'jobs'])
 
 /**
  * Per-socket join/leave ordering for watch rooms. `admin:join` awaits a role lookup while
@@ -460,6 +470,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     const watchGate = createWatchRoomGate()
     // Cloud: the Traffic Map room is per tenant (#1132); every other room keeps its name.
     const watchRoomName = async (room: string): Promise<string | null> => {
+      if (TENANT_WATCH_ROOMS.has(room)) return tenantScopedRoom(`watch:${room}`)
       if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) return `watch:${room}`
       const store = await socketTrafficStore(socket)
       return store ? `watch:traffic-map:${store}` : null
@@ -470,9 +481,9 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
       // Self-hosted: no await before the gate, so a quick join + leave keeps its order.
       const name =
-        room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL
-          ? `watch:${room}`
-          : await watchRoomName(room)
+        TENANT_WATCH_ROOMS.has(room) || (room === 'traffic-map' && process.env.CLOUD_META_DB_URL)
+          ? await watchRoomName(room)
+          : `watch:${room}`
       if (!name) return
       await watchGate.join(
         room,
@@ -484,17 +495,22 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       )
     }
     socket.on('admin:join', inSocketTenant(socket, onAdminJoin))
-    socket.on('admin:leave', (payload: { room?: string }) => {
+    const onAdminLeave = (payload: { room?: string }) => {
       const room = payload?.room
       if (typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) {
+      if (
+        !TENANT_WATCH_ROOMS.has(room) &&
+        (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL)
+      ) {
         watchGate.leave(room, () => socket.leave(`watch:${room}`))
         return
       }
       void watchRoomName(room).then((name) => {
         if (name) watchGate.leave(room, () => socket.leave(name))
       })
-    })
+    }
+    // In the socket's tenant: a tenant-prefixed watch room is named from the tenant context.
+    socket.on('admin:leave', inSocketTenant(socket, onAdminLeave))
 
     // Set once `auth` succeeds below; gates authenticated-only handlers
     // (e.g. collection:join) for the lifetime of this socket connection.

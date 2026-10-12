@@ -2,6 +2,25 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { cronTicksEnabled } from '../plugins/cron.js'
+import { readJobLog } from '../services/job-runs.js'
+
+/** Kinds that hold real capacity: while one runs, admins see "System busy". */
+const BUSY_KINDS = new Set([
+  'backfill',
+  'recalc',
+  'bulk',
+  'export',
+  'tuning',
+  'render',
+  'remediation'
+])
+const BUSY_WINDOW_MS = 2 * 3_600_000
+
+const median = (xs: number[]): number | null => {
+  if (xs.length === 0) return null
+  const sorted = [...xs].sort((a, b) => a - b)
+  return sorted[Math.floor(sorted.length / 2)]
+}
 
 /**
  * Background Jobs console reads. One source of truth (nivaro_job_runs, fed by
@@ -26,6 +45,108 @@ export async function jobRunRoutes(app: FastifyInstance): Promise<void> {
       req
     })
     return reply.send({ data: { cancel_requested: true } })
+  })
+
+  /** One run's live log (#1974): the lines written so far; `after` = the last seq the page has. */
+  app.get<{ Params: { id: string }; Querystring: { after?: string } }>(
+    '/:id/log',
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id) || id < 1) return reply.code(400).send({ error: 'Invalid run id' })
+      const run = await db('nivaro_job_runs').where('id', id).first()
+      if (!run) return reply.code(404).send({ error: 'Not found' })
+      const lines = await readJobLog(id, Number(req.query.after) || 0)
+      return {
+        data: {
+          run: {
+            id: run.id,
+            status: run.status,
+            progress: run.progress ?? null,
+            outcome: run.outcome ?? null,
+            error: run.error ? String(run.error).split('\n')[0].slice(0, 500) : null
+          },
+          lines
+        }
+      }
+    }
+  )
+
+  /**
+   * #2024 — what heavy work is running right now, for the header's "System busy"
+   * chip: heavy cron ticks and long-running kinds (backfills, recalcs, bulk
+   * writes, exports, renders), plus imports in flight. The estimate is the
+   * median of the same job's last completed runs; no history = no estimate.
+   */
+  app.get('/busy', async () => {
+    const heavyCrons = new Map(
+      app.cron
+        .list()
+        .filter((c) => c.heavy)
+        .map((c) => [c.id, c])
+    )
+    const since = new Date(Date.now() - BUSY_WINDOW_MS)
+    const running = (await db('nivaro_job_runs')
+      .where('status', 'running')
+      .where('started_at', '>=', since)
+      .orderBy('id', 'desc')
+      .limit(50)) as Array<Record<string, unknown>>
+    const hot = running.filter(
+      (r) =>
+        BUSY_KINDS.has(String(r.kind)) || (r.kind === 'cron' && heavyCrons.has(String(r.job_id)))
+    )
+    const now = Date.now()
+    const items = await Promise.all(
+      hot.map(async (r) => {
+        const past = (await db('nivaro_job_runs')
+          .where({ kind: r.kind, job_id: r.job_id, status: 'completed' })
+          .whereNotNull('duration_ms')
+          .orderBy('id', 'desc')
+          .limit(7)
+          .pluck('duration_ms')) as unknown[]
+        const expected = median(past.map(Number).filter((n) => Number.isFinite(n) && n > 0))
+        const elapsed = now - new Date(String(r.started_at)).getTime()
+        const cron = heavyCrons.get(String(r.job_id))
+        return {
+          id: Number(r.id),
+          kind: String(r.kind),
+          label: String(r.label ?? cron?.description ?? r.job_id).slice(0, 120),
+          started_at: r.started_at,
+          elapsed_ms: elapsed,
+          expected_ms: expected,
+          remaining_ms: expected == null ? null : Math.max(0, expected - elapsed),
+          overrun: expected != null && elapsed > expected
+        }
+      })
+    )
+    const imports = (await db('nivaro_import_jobs')
+      .where('status', 'processing')
+      .where('started_at', '>=', since)
+      .limit(10)
+      .select('id', 'collection', 'started_at', 'processed_rows', 'total_rows')
+      .catch(() => [])) as Array<Record<string, unknown>>
+    for (const j of imports) {
+      const elapsed = now - new Date(String(j.started_at)).getTime()
+      const done = Number(j.processed_rows) || 0
+      const total = Number(j.total_rows) || 0
+      const expected = done > 0 && total > done ? Math.round((elapsed / done) * total) : null
+      items.push({
+        id: -1,
+        kind: 'import',
+        label: `Import into ${String(j.collection)}`.slice(0, 120),
+        started_at: j.started_at,
+        elapsed_ms: elapsed,
+        expected_ms: expected,
+        remaining_ms: expected == null ? null : Math.max(0, expected - elapsed),
+        overrun: false
+      })
+    }
+    return {
+      data: {
+        busy: items.length > 0,
+        items,
+        heavy_slot: app.cron ? await app.cron.heavySlotHolder().catch(() => null) : null
+      }
+    }
   })
 
   /** Filterable run history. */

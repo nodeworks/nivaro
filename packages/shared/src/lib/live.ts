@@ -1,5 +1,6 @@
 import { useContext, useEffect, useRef } from 'react'
 import { ItemEditAuthContext } from '../context'
+import { deliverLive, releaseLiveOwner } from './focus-mode'
 import { isOwnWrite } from './own-writes'
 import { type CollectionUpdateEvent, useOptionalRealtime } from './realtime'
 
@@ -84,7 +85,9 @@ export const LIVE_ASPECTS = {
   comments: '$comments',
   tasks: '$tasks',
   integrations: '$integrations',
-  owners: '$owners'
+  owners: '$owners',
+  /** An edit lock was taken or released (list rows show the lock icon). */
+  lock: '$lock'
 } as const
 
 export { isOwnWrite, noteOwnWrite, noteOwnWriteFromCommand } from './own-writes'
@@ -143,6 +146,9 @@ export interface LiveOptions {
   match?: (ev: LiveEvent) => boolean
   /** Pause without unmounting. */
   enabled?: boolean
+  /** List surfaces: hold batches while the viewer's focus mode is on (see
+   *  focus-mode.ts) and deliver them together when its window ends. */
+  focusable?: boolean
 }
 
 /**
@@ -162,6 +168,7 @@ export function useLiveCollection(
   optsRef.current = opts
   const selfRef = useRef(userId)
   selfRef.current = userId
+  const ownerRef = useRef({})
   const list = collections == null ? [] : Array.isArray(collections) ? collections : [collections]
   const listKey = list.filter(Boolean).join(',')
   const enabled = opts.enabled !== false
@@ -175,7 +182,10 @@ export function useLiveCollection(
       timer = null
       const evs = pending
       pending = []
-      if (evs.length > 0) handlerRef.current(toLiveBatch(evs))
+      if (evs.length === 0) return
+      if (optsRef.current.focusable)
+        deliverLive(ownerRef.current, evs, (held) => handlerRef.current(toLiveBatch(held)))
+      else handlerRef.current(toLiveBatch(evs))
     }
     const unsub = realtime.subscribeCollections(names, (raw) => {
       const ev = raw as CollectionUpdateEvent & Record<string, unknown>
@@ -192,6 +202,7 @@ export function useLiveCollection(
     return () => {
       unsub()
       if (timer) clearTimeout(timer)
+      releaseLiveOwner(ownerRef.current)
     }
   }, [realtime, listKey, enabled])
 }
@@ -351,6 +362,22 @@ export function useLiveRecordEvent(
     enabled: opts.enabled !== false && !!collection && !!id,
     match: (p) => p?.collection === collection && String(p?.item) === id && (!outer || outer(p))
   })
+}
+
+/**
+ * Join an admin-only watch room while mounted (`jobs`, `conformance`). The
+ * server checks admin access when the socket joins; for anyone else, and for
+ * hosts whose adapter has no `joinWatch`, nothing arrives and the component's
+ * own polling carries on. Returns whether live events can arrive (false = poll normally).
+ */
+export function useLiveWatchRoom(room: string, enabled = true): boolean {
+  const realtime = useOptionalRealtime()
+  const can = !!realtime?.joinWatch
+  useEffect(() => {
+    if (!enabled || !realtime?.joinWatch) return
+    return realtime.joinWatch(room)
+  }, [realtime, room, enabled])
+  return can && enabled
 }
 
 /** Whether the host wired a realtime adapter (collection feeds are live). */
