@@ -17,6 +17,7 @@ import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
+import { aiQualityRoutes } from './ai-quality.js'
 import { aiAskContextRoutes } from './ai-ask-context.js'
 import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
@@ -400,6 +401,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(integrationPartnersRoutes)
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
+  await app.register(aiQualityRoutes, { prefix: '/ai' })
   await app.register(aiConversationRoutes, { prefix: '/ai/conversations' })
   await app.register(aiWatchRoutes, { prefix: '/ai/watches' })
   await app.register(aiPlanRoutes, { prefix: '/ai' })

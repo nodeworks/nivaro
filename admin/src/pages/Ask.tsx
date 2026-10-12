@@ -416,6 +416,18 @@ function AskPageInner() {
   const { user: me } = useAuth()
   const [pending, setPending] = useState<ChatTurn[]>([])
   const [input, setInput] = useState('')
+  // #1893 — remaining daily AI budget; enabled:false (nothing shown) when no cap applies
+  const budget = useQuery({
+    queryKey: ['ai-quality', 'budget-me'],
+    queryFn: async () =>
+      (await api.get('/ai/budget/me', { params: { feature: 'chat' } })).data.data as {
+        enabled: boolean
+        remaining_usd?: number | null
+        resets_at?: string
+        exhausted?: boolean
+      },
+    staleTime: 15_000
+  })
   const scrollRef = useRef<HTMLDivElement>(null)
   const [searchParams, setSearchParams] = useSearchParams()
   const conversationId = searchParams.get('conversation')
@@ -1201,6 +1213,15 @@ function AskPageInner() {
 
           <div className='shrink-0 border-t border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
             <SlashMenu matches={slashList} index={slashIndex} onPick={pickSlash} />
+            {budget.data?.enabled && (
+              <p className='mx-auto mb-2 w-full max-w-3xl text-[11px] text-slate-500 dark:text-muted-foreground'>
+                {budget.data.exhausted
+                  ? 'Today’s AI budget is used up'
+                  : `AI budget left today: $${(budget.data.remaining_usd ?? 0).toFixed(2)}`}
+                {budget.data.resets_at &&
+                  ` · resets ${new Date(budget.data.resets_at).toLocaleTimeString()}`}
+              </p>
+            )}
             <div className='mx-auto flex w-full max-w-3xl items-end gap-2'>
               <textarea
                 value={input}

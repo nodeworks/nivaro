@@ -14,6 +14,7 @@ import {
   recordPlaybook,
   retrievePlaybooks
 } from '../services/ai-playbooks.js'
+import { takeFallbackNote } from '../services/ai-quality.js'
 import { consumeText, streamMessage } from '../services/ai-stream.js'
 import {
   pickStreamMode,
@@ -1927,7 +1928,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         }
         // #1834 — the follow-up questions ride the answer; split them off.
         const split = panel.extractFollowUps(result.text)
-        const text = split.text
+        const text = split.text ? split.text + (takeFallbackNote(requestId) ?? '') : split.text // #1821
         const followups =
           choices.length > 0 || result.stopped
             ? []

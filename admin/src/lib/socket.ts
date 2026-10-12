@@ -350,6 +350,7 @@ const RELAYED_EVENTS = new Set([
   'help-video:question',
   'monitor:status',
   'traffic:request',
+  'ai:call',
   'traffic-map:frame',
   'traffic-map:viewer',
   'lock:requested',

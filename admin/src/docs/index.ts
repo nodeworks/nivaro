@@ -81,6 +81,7 @@ import { aiPanelDocs } from './sections/ai-panel.js'
 import {
   adminI18nDocs,
   aiChatDocs,
+  aiQualityDocs,
   aiPlansDocs,
   fieldImpactDocs,
   formsV2Docs,
@@ -631,6 +632,7 @@ export const navSections: NavGroup[] = [
     label: 'AI Features',
     items: [
       aiChatDocs,
+      aiQualityDocs,
       aiAskContextDocs,
       aiConversationsDocs,
       aiPanelDocs,

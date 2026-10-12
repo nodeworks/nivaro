@@ -357,3 +357,45 @@ export const adminI18nDocs: DocSection = {
     }
   ]
 }
+
+export const aiQualityDocs: DocSection = {
+  id: 'ai-quality',
+  label: 'AI Quality & Budgets',
+  content: [
+    { type: 'h1', id: 'ai-quality', text: 'AI Quality & Budgets' },
+    {
+      type: 'p',
+      text: 'Admin page /ai-quality (Usage nav). Review poor answers, set optional daily spend caps, watch provider health, and try another model before switching.'
+    },
+    { type: 'h2', id: 'ai-quality-review', text: 'Review queue' },
+    {
+      type: 'p',
+      text: "Every thumbs-down Ask AI answer lands here with the question, tool calls, answer and the person's comment, sorted by an automatic cause (wrong tool, wrong filter, missing data, permission, misunderstood question). Reassign the cause, delete the learned playbook, add a hint to the data guide, or mark it handled."
+    },
+    { type: 'h2', id: 'ai-quality-budgets', text: 'Budgets and fallback' },
+    {
+      type: 'ul',
+      items: [
+        'Caps are off by default (no limit). Each cap is a daily dollar amount per person, per role or for everyone, optionally for one feature, per person or as a shared pool. The day is UTC.',
+        "Past a cap the feature switches to the cap's cheaper model if one is set, otherwise it stops with a message naming the cap and when it resets.",
+        'People see what is left today under the Ask AI box, only when a cap applies to them.',
+        'A fallback model (same provider) is tried when a call fails; the answer says a fallback wrote it. With none set, AI features say AI is unavailable.'
+      ]
+    },
+    { type: 'h2', id: 'ai-quality-tools', text: 'Compare, replay and live calls' },
+    {
+      type: 'p',
+      text: 'Compare runs one prompt on two models; Replay re-runs up to 50 recent Ask AI questions as their askers (read-only, no proposals) on a candidate model. Both show a cost estimate you confirm first, are logged as admin activity and count against budgets. Live calls streams each finished AI call (feature, model, person, cost, status) while the tab is open.'
+    },
+    {
+      type: 'pre',
+      code: `GET  /api/ai/health              provider reachable / slow / failing
+GET  /api/ai/budget/me          caller's remaining budget (enabled:false = nothing to show)
+GET  /api/ai/budget/status      admin: spend against each cap
+GET  /api/ai/review-queue       admin: thumbs-down answers
+PUT  /api/ai/quality/config     admin: caps + fallback model
+POST /api/ai/compare/run        admin: needs confirmed_cost_usd from /compare/estimate
+POST /api/ai/replay/run         admin: needs confirmed_cost_usd from /replay/estimate`
+    }
+  ]
+}

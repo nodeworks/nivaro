@@ -1,6 +1,7 @@
 import type Anthropic from '@anthropic-ai/sdk'
 import type { User } from '../types.js'
 import { buildWrapUpMessages, CHAT_TOOLS, executeChatTool, MAX_ROUNDS } from './ai-chat.js'
+import { REPLAYABLE_TOOLS } from './ai-conversations.js'
 import {
   type AiMemoryNote,
   type AiMemorySuggestion,
@@ -69,6 +70,9 @@ export interface ChatLoopResult {
   memorySuggestions: AiMemorySuggestion[]
 }
 
+/** A read-only (replay) run may call only the replayable read tools; every other tool is refused. */
+export const readOnlyAllows = (tool: string): boolean => REPLAYABLE_TOOLS.has(tool)
+
 export interface ChatLoopOptions extends ChatLoopCallbacks {
   client: Anthropic
   model: string
@@ -77,6 +81,8 @@ export interface ChatLoopOptions extends ChatLoopCallbacks {
   /** The conversation; the loop APPENDS to it. */
   convo: Anthropic.MessageParam[]
   maxTokens?: number
+  /** Replay runs (#1916): only REPLAYABLE_TOOLS run, so a re-run never writes or logs. */
+  readOnly?: boolean
   warn?: (err: unknown, msg: string) => void
   /** #1845 — offer the suggest_memory tool; `existing` = the asker's notes.
    *  Only the asker's own Ask AI opts in (never the chat-room bot). */
@@ -284,6 +290,8 @@ export async function runChatLoop(opts: ChatLoopOptions): Promise<ChatLoopResult
       const text = describeToolCall(block.name, input)
       onStatus?.({ round, tool: block.name, text, step })
       try {
+        if (opts.readOnly && !readOnlyAllows(block.name))
+          throw new Error('That tool is disabled in a replay run (it could change data)')
         const { result, summary } = await executeChatTool(user, block.name, input)
         trace.push({ tool: block.name, input, summary, result_hash: hashToolResult(result) })
         onStatus?.({
