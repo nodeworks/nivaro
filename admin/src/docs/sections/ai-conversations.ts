@@ -21,7 +21,15 @@ export const aiConversationsDocs: DocSection = {
     { type: 'h2', id: 'ai-conversations-memory', text: 'Ask AI memory' },
     {
       type: 'p',
-      text: 'Say “remember that amounts are in thousands” (or “remember: I work Zone 3 inventory requests”) and Ask AI keeps the note instead of answering. Notes ride every later question as context about you. Profile → Ask AI memory lists them for editing or deleting. At most 20 notes of 300 characters; when the list is full, a new note replaces the oldest. Notes are stored in your preferences and never grant access to anything. Nobody else reads or writes them — administrators included: they are left out of user reads, lists and revisions, and an administrator’s edit of your preferences keeps your notes as they were.'
+      text: 'Say “remember that amounts are in thousands” (or “remember: I work Zone 3 inventory requests”) and Ask AI keeps the note instead of answering. Notes ride every later question as context about you. Profile → Ask AI memory lists them for editing or deleting. At most 20 notes of 300 characters; when the list is full, a new note replaces the oldest. Notes are stored in your preferences and never grant access to anything. Nobody else writes them — administrators included: they are left out of user reads, lists and revisions, and an administrator’s edit of your preferences keeps your notes as they were.'
+    },
+    {
+      type: 'p',
+      text: 'Remember this? When a question shows a lasting preference (“by my zone I mean Zone 3”, “show amounts in thousands”), Ask AI may offer a note under its answer. Nothing is kept unless you click Remember; “Not now” hides the offer. Offers are only ever shown to the person who asked — never to someone a conversation is shared with — and are never offered for one-off facts, record values or other people. At most two per answer, none once your memory is full (a click on a full list is refused instead of dropping an older note).'
+    },
+    {
+      type: 'p',
+      text: 'Administrators can view and clear a person’s notes for a support or compliance request: People → the person → Admin tools → Ask AI memory. The notes stay hidden until Show notes; each view and each clear (one note or all) is written to the activity log as `ai-memory-view` / `ai-memory-clear` with counts only. Administrators can remove notes but never add or reword them.'
     },
     { type: 'h2', id: 'ai-conversations-sharing', text: 'Sharing a conversation' },
     {
@@ -66,6 +74,18 @@ export const aiConversationsDocs: DocSection = {
         [
           'POST /api/ai/chat { messages, conversation_id }',
           'Ask inside a conversation. The server builds the history from the turns the caller may read; only the newest question in `messages` is used.'
+        ],
+        [
+          'POST /api/ai/memory { text }',
+          'Keep a note the answer offered (`memory_suggestions` on the answer) in the caller’s own memory. 409 when the memory is full.'
+        ],
+        [
+          'GET /api/users/:id/ai-memory',
+          'Administrators: a person’s notes. Logged as `ai-memory-view`.'
+        ],
+        [
+          'DELETE /api/users/:id/ai-memory[/:noteId]',
+          'Administrators: clear all notes, or one. Logged as `ai-memory-clear`.'
         ],
         ['GET /api/ai/conversations?q=&pinned=1', 'Mine and shared with me, newest first.'],
         [

@@ -6,6 +6,10 @@ export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
 export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
 export {
+  type AiMemorySuggestion,
+  AiMemorySuggestions
+} from './components/ai/AiMemorySuggestions'
+export {
   type AiPlan,
   AiPlanCard,
   type AiPlanStatus,
@@ -24,6 +28,7 @@ export {
   rowsOfBlock
 } from './components/ai/answer-formats'
 export { DataGuideCard } from './components/ai/DataGuideCard'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
@@ -128,7 +133,6 @@ export {
   startDocumentExtraction,
   useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
-export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'

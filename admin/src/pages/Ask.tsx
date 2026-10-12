@@ -2,6 +2,8 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   AiFeedbackButtons,
   AiMarkdown,
+  type AiMemorySuggestion,
+  AiMemorySuggestions,
   type AiPlan,
   AiPlanCard,
   type AiPlanSubscribe,
@@ -69,6 +71,8 @@ interface ChatTurn {
   proposals?: Proposal[]
   /** Multi-step plans (#1807) — the card re-reads each from the server. */
   plans?: AiPlan[]
+  /** "Remember this?" offers (#1845) — only ever on the asker's own answers. */
+  memorySuggestions?: AiMemorySuggestion[]
   requestId?: string | null
   playbooksUsed?: number
   /** Served from the answer cache (#723) — when it was first answered. */
@@ -95,6 +99,8 @@ interface ChatBody {
   conversation_id?: string
   /** #1804 — a "remember that …" note was kept instead of asking. */
   remembered?: { id: string; text: string }
+  /** #1845 — notes the model offers to remember; saved only on a click. */
+  memory_suggestions?: AiMemorySuggestion[]
 }
 
 interface ServerMessage {
@@ -180,6 +186,10 @@ function toTurn(m: ServerMessage): ChatTurn {
     trace: m.trace,
     proposals: m.proposals,
     plans: m.own && Array.isArray(m.meta.plans) ? (m.meta.plans as AiPlan[]) : undefined,
+    memorySuggestions:
+      m.own && Array.isArray(m.meta.memory_suggestions)
+        ? (m.meta.memory_suggestions as AiMemorySuggestion[])
+        : undefined,
     requestId: typeof m.meta.request_id === 'string' ? m.meta.request_id : null,
     playbooksUsed: Number(m.meta.playbooks_used ?? 0),
     cachedAt: typeof m.meta.cached_at === 'string' ? m.meta.cached_at : null,
@@ -498,6 +508,7 @@ function AskPageInner() {
           trace: data.trace,
           proposals: data.proposals,
           plans: data.plans,
+          memorySuggestions: data.memory_suggestions,
           requestId: data.request_id ?? null,
           playbooksUsed: data.playbooks_used ?? 0,
           cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null,
@@ -923,6 +934,7 @@ function AskPageInner() {
                                 {t.plans?.map((p) => (
                                   <AiPlanCard key={p.plan_id} plan={p} subscribe={subscribePlan} />
                                 ))}
+                                <AiMemorySuggestions suggestions={t.memorySuggestions} />
                                 {t.trace && t.trace.length > 0 && (
                                   <div className='mt-2 flex flex-wrap gap-1 border-t border-slate-100 pt-2 dark:border-border'>
                                     {t.trace.map((tr, ti) => (
