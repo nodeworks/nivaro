@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { channels, parseRoom } from './chat.js'
 import { cosineSim, embedText } from './embeddings.js'
 
 /**
@@ -19,6 +20,34 @@ const BACKFILL_PER_SEARCH = 25
 /** Local hash embeddings separate poorly (lexical only); neural ones better. */
 const THRESHOLD_NEURAL = 0.45
 const THRESHOLD_LOCAL = 0.3
+
+/**
+ * Which rooms may have their text sent to the embedding provider. Embeddings
+ * can leave the box (Voyage / the AI gateway), so DMs and private channels stay
+ * out by default. CHAT_MEANING_ROOMS: `public` (default: General, open
+ * channels, record rooms) | `all` (also DMs and private channels) | `off`.
+ */
+export type MeaningScope = 'public' | 'all' | 'off'
+export function meaningScope(): MeaningScope {
+  const v = String(process.env.CHAT_MEANING_ROOMS ?? 'public').toLowerCase()
+  return v === 'all' || v === 'off' ? v : 'public'
+}
+export async function roomMayBeEmbedded(room: string): Promise<boolean> {
+  const scope = meaningScope()
+  if (scope === 'off') return false
+  if (scope === 'all') return true
+  const p = parseRoom(room)
+  if (p.kind === 'global' || p.kind === 'entity') return true
+  if (p.kind !== 'channel') return false
+  try {
+    const c = (await channels()).get(String(p.channelKey)) as
+      | { visibility?: string; is_direct?: boolean }
+      | undefined
+    return !!c && c.visibility === 'open' && !c.is_direct
+  } catch {
+    return false
+  }
+}
 
 let tableOk: boolean | null = null
 let probedAt = 0
@@ -78,7 +107,7 @@ export async function indexChatMessage(
   isSystem = false
 ): Promise<void> {
   try {
-    if (isSystem || !(await embeddingsTable())) return
+    if (isSystem || !(await embeddingsTable()) || !(await roomMayBeEmbedded(room))) return
     const text = embeddableText(message)
     if (!text) return
     const vec = await embedText(text)
@@ -90,7 +119,10 @@ export async function indexChatMessage(
   }
 }
 
-async function backfillRooms(rooms: string[]): Promise<void> {
+async function backfillRooms(all: string[]): Promise<void> {
+  const rooms: string[] = []
+  for (const r of all) if (await roomMayBeEmbedded(r)) rooms.push(r)
+  if (!rooms.length) return
   const missing = (await db('chat_messages as m')
     .leftJoin('nivaro_chat_embeddings as e', 'e.message_id', 'm.id')
     .whereIn('m.room', rooms)

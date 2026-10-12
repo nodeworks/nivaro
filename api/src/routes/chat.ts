@@ -645,7 +645,7 @@ export async function chatRoutes(app: FastifyInstance) {
   /** Extension-registered commands for the composer's `/` list. */
   app.get('/commands', async () => {
     const { listChatCommands } = await import('../services/chat-commands.js')
-    return { data: listChatCommands() }
+    return { data: await listChatCommands() }
   })
 
   /** Run an extension command AS the caller, in a room they can see. */

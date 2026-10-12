@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import {
   _resetChatCommands,
+  _setExtensionEnabledCheck,
+  runChatCommand,
   listChatCommands,
   registerChatCommand
 } from '../../../services/chat-commands.js'
 import { cleanPollOptions, pollSummaryLine, validateVote } from '../../../services/chat-polls.js'
-import { embeddableText, rankByMeaning } from '../../../services/chat-semantic.js'
+import {
+  embeddableText,
+  rankByMeaning,
+  roomMayBeEmbedded
+} from '../../../services/chat-semantic.js'
 
 describe('poll helpers', () => {
   it('cleans, dedupes and caps options', () => {
@@ -55,17 +61,39 @@ describe('semantic search helpers', () => {
   })
 })
 
+describe('embedding scope', () => {
+  it('keeps DMs out by default and lets General through', async () => {
+    expect(await roomMayBeEmbedded('dm:A:B')).toBe(false)
+    expect(await roomMayBeEmbedded('global')).toBe(true)
+    expect(await roomMayBeEmbedded('workflows:12')).toBe(true)
+  })
+})
+
 describe('chat command registry', () => {
-  beforeEach(() => _resetChatCommands())
+  beforeEach(() => {
+    _resetChatCommands()
+    _setExtensionEnabledCheck(async () => true)
+  })
   const def = (name: string) => ({ name, description: 'd', run: () => undefined })
   it('rejects built-in names and bad names', () => {
     expect(registerChatCommand('x', def('poll'))).toBe(false)
     expect(registerChatCommand('x', def('Bad Name'))).toBe(false)
   })
-  it('lists registered commands and blocks cross-extension collisions', () => {
+  it('lists registered commands and blocks cross-extension collisions', async () => {
     expect(registerChatCommand('a', def('standup'))).toBe(true)
     expect(registerChatCommand('b', def('standup'))).toBe(false)
     expect(registerChatCommand('a', def('standup'))).toBe(true)
-    expect(listChatCommands().map((c) => c.name)).toEqual(['standup'])
+    expect((await listChatCommands()).map((c) => c.name)).toEqual(['standup'])
+  })
+  it('hides and refuses commands of a disabled extension', async () => {
+    let ran = 0
+    registerChatCommand('a', { name: 'go', description: 'd', run: () => void ran++ })
+    _setExtensionEnabledCheck(async () => false)
+    expect(await listChatCommands()).toEqual([])
+    expect(await runChatCommand('go', '', { userId: 'u', room: 'global' })).toBeNull()
+    expect(ran).toBe(0)
+    _setExtensionEnabledCheck(async () => true)
+    expect(await runChatCommand('go', '', { userId: 'u', room: 'global' })).toEqual({})
+    expect(ran).toBe(1)
   })
 })

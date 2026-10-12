@@ -42,13 +42,21 @@ export function unregisterChatCommands(extension: string): void {
   for (const [k, v] of commands) if (v.extension === extension) commands.delete(k)
 }
 
-export function listChatCommands(): Array<{
-  name: string
-  description: string
-  usage: string | null
-  extension: string
-}> {
-  return [...commands.values()]
+/** Test seam: replaced in tests so the loader (and its imports) never loads. */
+let isEnabled: (extension: string) => Promise<boolean> = async (extension) => {
+  const { extensionRegistry } = await import('../extensions/loader.js')
+  return extensionRegistry.get(extension)?.enabled !== false
+}
+export function _setExtensionEnabledCheck(fn: typeof isEnabled): void {
+  isEnabled = fn
+}
+
+export async function listChatCommands(): Promise<
+  Array<{ name: string; description: string; usage: string | null; extension: string }>
+> {
+  const live: Registered[] = []
+  for (const c of commands.values()) if (await isEnabled(c.extension)) live.push(c)
+  return live
     .map((c) => ({
       name: c.name,
       description: c.description,
@@ -65,6 +73,8 @@ export async function runChatCommand(
 ): Promise<{ post?: string; reply?: string } | null> {
   const c = commands.get(String(name).toLowerCase())
   if (!c) return null
+  // The extension kill switch: a disabled extension's code never runs.
+  if (!(await isEnabled(c.extension))) return null
   const out = await c.run(String(args ?? '').slice(0, 2000), ctx)
   if (!out) return {}
   return {
