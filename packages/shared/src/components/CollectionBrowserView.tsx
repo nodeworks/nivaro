@@ -7174,7 +7174,14 @@ export function CollectionBrowserView({
               </span>
             )}
             {v.is_shared && !v.is_default && !v.role_default && <span title='Shared'>⚭</span>}
-            <button type='button' onClick={() => applyView(v)}>
+            <button
+              type='button'
+              onClick={() => {
+                applyView(v)
+                // Feeds the config review's "views nobody opens" (#2020).
+                client.request(post(`/saved-views/${v.id}/opened`, {})).catch(() => {})
+              }}
+            >
               {v.name}
             </button>
             {v.default_for_role && (
