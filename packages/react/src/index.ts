@@ -57,6 +57,10 @@ export type {
   RealtimeStatus,
   RenderFieldProps,
   ReportViewProps,
+  SocketLike,
+  SocketRealtime,
+  SocketRealtimeOptions,
+  SocketRealtimeWindowEvent,
   TokenResolver
 } from '@nivaro/shared'
 // ─── Realtime sprint 2026-08-24 ─────────────────────────────────────────────
@@ -159,6 +163,7 @@ export {
   conditionsToFilter,
   createGatedClient,
   createLeaderSocket,
+  createSocketRealtime,
   DataTable,
   DbTuningView,
   DEMO_USER,
@@ -621,6 +626,18 @@ export {
   useTabState,
   useWatchFields
 } from './hooks/useLayoutHooks'
+// Live data hooks (#1751) — reads that patch themselves from the host's realtime adapter
+export {
+  type LiveHookOptions,
+  type LiveListOptions,
+  type LiveListResult,
+  type LiveRecordOptions,
+  type LiveRecordResult,
+  liveListKey,
+  liveRecordKey,
+  useLiveList,
+  useLiveRecord
+} from './hooks/useLive'
 // Hooks
 export { useNivaroForm } from './hooks/useNivaroForm'
 export type { RelationOption } from './hooks/useRelationOptions'
