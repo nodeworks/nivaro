@@ -671,10 +671,13 @@ const gatherReadiness: Gatherer = async (params) => {
 // #1910 — a partner failure on an Integrations console row
 const gatherSignalRow: Gatherer = async (params) => {
   const signal = str(params, 'signal')
-  const rowId = Number(str(params, 'id'))
-  const row = (await db('nivaro_integration_signal_rows')
-    .where({ id: rowId, signal })
-    .first('signal', 'row_key', 'payload', 'first_seen', 'last_seen', 'cleared_at')) as
+  // The console knows a row by its key; the numeric id is accepted too.
+  const rowKey = typeof params.row_key === 'string' ? params.row_key.slice(0, 300) : ''
+  const rowQuery = db('nivaro_integration_signal_rows')
+  const row = (await (rowKey
+    ? rowQuery.where({ signal, row_key: rowKey }).whereNull('cleared_at')
+    : rowQuery.where({ id: Number(str(params, 'id')), signal })
+  ).first('signal', 'row_key', 'payload', 'first_seen', 'last_seen', 'cleared_at')) as
     | Record<string, unknown>
     | undefined
   if (!row) throw new ExplainError(404, 'That row is no longer open')
