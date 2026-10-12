@@ -1,10 +1,3 @@
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
 import { UserAvatar } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -17,12 +10,15 @@ import {
   Plus,
   Search,
   Shield,
+  Sparkles,
   Trash2,
   Users,
   X
 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
+import { RoleDesigner } from '@/components/ai-role-designer'
+import { RoleViewSuggestions } from '@/components/ai-role-views'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,6 +32,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { navCategories } from '@/layouts/AppLayout'
@@ -66,7 +69,7 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare'
+type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare' | 'views'
 
 const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
   cat.items.map((item) => ({ category: cat.label, label: item.label, to: item.to }))
@@ -1051,27 +1054,31 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members', 'ui', 'simulate', 'compare'] as ActiveTab[]).map((tab) => (
-          <button
-            key={tab}
-            type='button'
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
-              activeTab === tab
-                ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
-                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
-            )}
-          >
-            {tab === 'ui'
-              ? 'UI Access'
-              : tab === 'simulate'
-                ? 'Simulator'
-                : tab === 'compare'
-                  ? 'Compare'
-                  : tab}
-          </button>
-        ))}
+        {(['permissions', 'members', 'ui', 'simulate', 'compare', 'views'] as ActiveTab[]).map(
+          (tab) => (
+            <button
+              key={tab}
+              type='button'
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
+                activeTab === tab
+                  ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
+              )}
+            >
+              {tab === 'ui'
+                ? 'UI Access'
+                : tab === 'simulate'
+                  ? 'Simulator'
+                  : tab === 'compare'
+                    ? 'Compare'
+                    : tab === 'views'
+                      ? 'Suggested views'
+                      : tab}
+            </button>
+          )
+        )}
       </div>
 
       {/* Tab content */}
@@ -1108,6 +1115,8 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           />
         ) : activeTab === 'simulate' ? (
           <SimulatorTab roleId={role.id} collections={collections} />
+        ) : activeTab === 'views' ? (
+          <RoleViewSuggestions roleId={role.id} />
         ) : (
           <MembersTab roleId={role.id} />
         )}
@@ -1461,6 +1470,7 @@ export function RolesPage() {
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
+  const [isDesigning, setIsDesigning] = useState(false)
   const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery({
@@ -1505,15 +1515,29 @@ export function RolesPage() {
               </span>
             )}
           </div>
-          <Button
-            size='sm'
-            onClick={() => {
-              setIsCreating(true)
-              setSelectedId(null)
-            }}
-          >
-            <Plus className='mr-1.5 h-3.5 w-3.5' /> New Role
-          </Button>
+          <div className='flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => {
+                setIsDesigning(true)
+                setIsCreating(false)
+                setSelectedId(null)
+              }}
+            >
+              <Sparkles className='mr-1.5 h-3.5 w-3.5 text-nvr-cyan' /> Design with AI
+            </Button>
+            <Button
+              size='sm'
+              onClick={() => {
+                setIsCreating(true)
+                setIsDesigning(false)
+                setSelectedId(null)
+              }}
+            >
+              <Plus className='mr-1.5 h-3.5 w-3.5' /> New Role
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -1554,10 +1578,11 @@ export function RolesPage() {
                   <RoleListItem
                     key={role.id}
                     role={role}
-                    selected={!isCreating && selectedId === role.id}
+                    selected={!isCreating && !isDesigning && selectedId === role.id}
                     onClick={() => {
                       setSelectedId(role.id)
                       setIsCreating(false)
+                      setIsDesigning(false)
                     }}
                   />
                 ))}
@@ -1567,7 +1592,20 @@ export function RolesPage() {
         </aside>
 
         <div className='flex-1 overflow-hidden bg-slate-50 dark:bg-background'>
-          {isCreating ? (
+          {isDesigning ? (
+            <RoleDesigner
+              uiRoutes={ALL_NAV_ITEMS.map((i) => ({
+                path: i.to,
+                label: `${i.category} › ${i.label}`
+              }))}
+              onCreated={(id) => {
+                queryClient.invalidateQueries({ queryKey: ['roles'] })
+                setIsDesigning(false)
+                setSelectedId(id)
+              }}
+              onCancel={() => setIsDesigning(false)}
+            />
+          ) : isCreating ? (
             <CreateRolePanel
               onSave={(body) => createRole.mutate(body)}
               onCancel={() => setIsCreating(false)}
