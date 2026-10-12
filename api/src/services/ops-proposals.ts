@@ -279,6 +279,26 @@ export function routeFor(p: Pick<OpsProposal, 'action' | 'params' | 'reason'>): 
   }
 }
 
+/**
+ * Headers for the in-process dispatch: the approver's own credential, and
+ * the host they came in on — cloud resolves the tenant from the host, so
+ * without it the injected request fails closed.
+ */
+export function approvalHeaders(
+  h: Record<string, string | string[] | undefined>,
+  proposalId: string
+): Record<string, string> {
+  const out: Record<string, string> = {
+    'content-type': 'application/json',
+    'x-nivaro-ops-proposal': proposalId
+  }
+  for (const k of ['authorization', 'cookie', 'host', 'x-forwarded-host', 'x-forwarded-proto']) {
+    const v = h[k]
+    if (typeof v === 'string' && v) out[k] = v
+  }
+  return out
+}
+
 export class ProposalError extends Error {
   constructor(
     public statusCode: number,
@@ -320,13 +340,7 @@ export async function decideProposal(
     line = `Dismissed by ${p.decided_by_name}: ${p.summary}.`
   } else {
     const r = routeFor(p)
-    const headers: Record<string, string> = {
-      'content-type': 'application/json',
-      'x-nivaro-ops-proposal': p.id
-    }
-    if (typeof req.headers.authorization === 'string')
-      headers.authorization = req.headers.authorization
-    if (typeof req.headers.cookie === 'string') headers.cookie = req.headers.cookie
+    const headers = approvalHeaders(req.headers, p.id)
     let status = 500
     let message: string | null = null
     try {

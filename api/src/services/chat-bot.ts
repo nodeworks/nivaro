@@ -88,9 +88,13 @@ export async function handleBotMention(
   // The asker can already read every one of these messages — no new
   // disclosure. Deleted messages excluded.
   let roomContext = ''
+  // Ops posts (#1967) ride along only for an administrator asker.
+  const ops = await import('./ops-assistant.js')
+  const askerIsAdmin = await ops.isActiveAdmin(String(asker.id)).catch(() => false)
   try {
-    const recent = (await db('chat_messages')
-      .where({ room })
+    const { opsOnlyHider } = await import('./ops-room-guard.js')
+    const hideOps = await opsOnlyHider(askerIsAdmin)
+    const recent = (await hideOps(db('chat_messages').where({ room }))
       .whereNull('deleted_at')
       .orderBy('id', 'desc')
       .limit(40)
@@ -139,6 +143,11 @@ export async function handleBotMention(
   }
 
   const id = await postBotMessage(app, room, reply)
+  // An answer in an ops room may carry ops facts: an ops post, admins only.
+  if (id != null && askerIsAdmin && (await ops.opsToolsAllowed(asker, room).catch(() => false))) {
+    const { markOpsOnly } = await import('./ops-room-guard.js')
+    await markOpsOnly(id, room).catch(() => undefined)
+  }
   if (id != null) {
     void logActivity({
       action: 'chat-bot-reply',

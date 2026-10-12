@@ -32,6 +32,13 @@ import {
   upsertMembership
 } from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import {
+  nonAdminsFor,
+  OPS_ONLY_CODE,
+  OPS_ONLY_MESSAGE,
+  opsOnlyHider,
+  patchOpensOpsRoom
+} from '../services/ops-room-guard.js'
 
 /**
  * Chat (`/api/chat`).
@@ -82,9 +89,11 @@ export async function chatRoutes(app: FastifyInstance) {
     const cols = await chatColumns()
     const limit = Math.min(Number(q.limit ?? 200) || 200, 500)
     const thread = q.thread ? Number(q.thread) : null
+    // #1967 — the assistant's ops posts are for administrators only.
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
 
     const base = () => {
-      const qb = db('chat_messages').where({ room })
+      const qb = hideOps(db('chat_messages').where({ room }))
       if (cols.has('parent_id')) {
         if (thread) qb.andWhere((w) => w.where('parent_id', thread).orWhere('id', thread))
         else qb.whereNull('parent_id')
@@ -341,6 +350,9 @@ export async function chatRoutes(app: FastifyInstance) {
   app.post<{ Params: { room: string } }>('/rooms/:room/join', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
+    // #1967 — the ops channel (or any channel holding assistant ops posts) only admits admins.
+    if ((await nonAdminsFor(room, [String(req.user!.id)])).length)
+      return reply.code(403).send({ error: OPS_ONLY_MESSAGE, code: OPS_ONLY_CODE })
     // Joining starts the read watermark NOW — a room's whole history is not
     // something the newcomer has to catch up on (General holds years of it).
     await upsertMembership(String(req.user!.id), room, { last_read_at: new Date() })
@@ -541,7 +553,8 @@ export async function chatRoutes(app: FastifyInstance) {
     if (rooms.length === 0) return { data: [] }
     const cols = await chatColumns()
     const me = String(req.user!.id).toUpperCase()
-    const rows = await db('chat_messages')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = await hideOps(db('chat_messages'))
       .whereIn('room', rooms.slice(0, 200))
       .whereNull('deleted_at')
       .modify((qb) => {
@@ -590,7 +603,8 @@ export async function chatRoutes(app: FastifyInstance) {
     if (rooms.length === 0) return { data: [] }
     const cols = await chatColumns()
     const me = String(req.user!.id).toUpperCase()
-    const rows = (await db('chat_messages')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = (await hideOps(db('chat_messages'))
       .whereIn('room', rooms.map((r) => r.room).slice(0, 300))
       .whereNull('deleted_at')
       .whereRaw('(sender IS NULL OR UPPER(CAST(sender AS NVARCHAR(36))) <> ?)', [me])
@@ -716,8 +730,11 @@ export async function chatRoutes(app: FastifyInstance) {
   app.get<{ Params: { room: string } }>('/rooms/:room/pins', async (req, reply) => {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
-    const rows = await db('nivaro_chat_pins as p')
-      .join('chat_messages as m', 'm.id', 'p.message_id')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = await hideOps(
+      db('nivaro_chat_pins as p').join('chat_messages as m', 'm.id', 'p.message_id'),
+      'm.ops_only'
+    )
       .where('p.room', room)
       .whereNull('m.deleted_at')
       .orderBy('p.id', 'desc')
@@ -751,8 +768,11 @@ export async function chatRoutes(app: FastifyInstance) {
     return reply.send({ data: { saved: true } })
   })
   app.get('/saved', async (req, reply) => {
-    const rows = (await db('nivaro_chat_saved as s')
-      .join('chat_messages as m', 's.message_id', 'm.id')
+    const hideOps = await opsOnlyHider(!!req.isAdmin)
+    const rows = (await hideOps(
+      db('nivaro_chat_saved as s').join('chat_messages as m', 's.message_id', 'm.id'),
+      'm.ops_only'
+    )
       .where('s.user', req.user!.id)
       .orderBy('s.id', 'desc')
       .limit(100)
@@ -865,8 +885,8 @@ export async function chatRoutes(app: FastifyInstance) {
       }
       const until = req.body?.until ? new Date(req.body.until) : null
       const hasThreads = await hasColumn('chat_messages', 'parent_id')
-      const msgs = (await db('chat_messages')
-        .where({ room })
+      const hideOps = await opsOnlyHider(!!req.isAdmin)
+      const msgs = (await hideOps(db('chat_messages').where({ room }))
         .where('date_created', '>', since)
         .modify((qb) => {
           if (until && !Number.isNaN(until.getTime())) qb.where('date_created', '<=', until)
@@ -1075,6 +1095,17 @@ export async function chatRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'A role-scoped channel needs a role' })
     }
     if (patch.visibility && patch.visibility !== 'role') patch.role = null
+    if (
+      await patchOpensOpsRoom(`ch:${row.key}`, {
+        visibility: patch.visibility,
+        role: patch.visibility === 'role' || patch.role ? (patch.role ?? row.role) : undefined
+      })
+    )
+      return reply.code(403).send({
+        error:
+          'This channel holds the assistant’s operations posts — it can only be open to administrators.',
+        code: OPS_ONLY_CODE
+      })
     if (Object.keys(patch).length > 0) {
       await db('nivaro_chat_channels').where('id', row.id).update(patch)
       clearChatCaches()
@@ -1115,6 +1146,8 @@ export async function chatRoutes(app: FastifyInstance) {
     }
     const b = req.body as { user_id?: string }
     if (!b.user_id) return reply.code(400).send({ error: 'user_id is required' })
+    if ((await nonAdminsFor(row.room, [String(b.user_id)])).length)
+      return reply.code(403).send({ error: OPS_ONLY_MESSAGE, code: OPS_ONLY_CODE })
     await upsertMembership(String(b.user_id), row.room, {})
     void logActivity({
       action: 'chat-channel-member-add',
@@ -1277,6 +1310,12 @@ export async function chatRoutes(app: FastifyInstance) {
     )
     const toAdd = [...active].filter((u) => !already.has(u))
     const skipped = candidates.length - toAdd.length
+    const refused = await nonAdminsFor(room, toAdd)
+    if (refused.length)
+      return reply.code(403).send({
+        error: `${OPS_ONLY_MESSAGE} ${refused.length} of the people in ${source} are not administrators.`,
+        code: OPS_ONLY_CODE
+      })
     if (b.dry_run) return { data: { would_add: toAdd.length, skipped, source } }
     for (const u of toAdd) await upsertMembership(u, room, { last_read_at: new Date() })
     void logActivity({

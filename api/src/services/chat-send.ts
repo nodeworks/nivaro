@@ -152,6 +152,11 @@ export async function upsertMembership(
     }
     return
   }
+  // A channel holding the assistant's ops posts only gains administrators —
+  // the backstop under every join / add path (services/ops-room-guard.ts).
+  const { nonAdminsFor, OPS_ONLY_CODE, OPS_ONLY_MESSAGE } = await import('./ops-room-guard.js')
+  if ((await nonAdminsFor(room, [user])).length > 0)
+    throw new ChatSendError(403, OPS_ONLY_MESSAGE, OPS_ONLY_CODE)
   try {
     await db('nivaro_chat_memberships').insert({ user, room, joined_at: new Date(), ...patch })
   } catch {

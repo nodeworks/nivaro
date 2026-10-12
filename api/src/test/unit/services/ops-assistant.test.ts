@@ -6,8 +6,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 vi.mock('../../../lib/column-probe.js', () => ({ hasColumn: vi.fn(async () => true) }))
-vi.mock('../../../services/integration-signal-alerts.js', () => ({
-  filterActiveAdminUserIds: vi.fn(async (ids: string[]) => new Set(ids.filter((i) => i !== 'BOB')))
+vi.mock('../../../services/ops-room-guard.js', () => ({
+  activeAdminIds: vi.fn(
+    async (ids: string[]) =>
+      new Set(ids.map((i) => i.toUpperCase()).filter((i) => i === 'ANA' || i === 'KIM'))
+  )
 }))
 
 import { db } from '../../../db/index.js'
