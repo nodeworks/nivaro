@@ -49,6 +49,7 @@ import {
   patchOpensOpsRoom
 } from '../services/ops-room-guard.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { announceChatRead } from '../services/user-sync.js'
 
 /**
  * Chat (`/api/chat`).
@@ -359,6 +360,7 @@ export async function chatRoutes(app: FastifyInstance) {
     const room = decodeURIComponent(req.params.room)
     if (!(await canSeeRoom(req.user!, room))) return reply.code(403).send(forbidden)
     await touchWatermark(String(req.user!.id), room)
+    announceChatRead(String(req.user!.id), room)
     return { data: { room, read: true } }
   })
 

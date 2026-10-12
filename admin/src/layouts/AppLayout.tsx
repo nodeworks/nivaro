@@ -1,8 +1,13 @@
 import {
   AutofillRunsChip,
+  configureTabSound,
+  configureUserSync,
   DEMO_USER,
+  DndMark,
+  DoNotDisturbRow,
   ForceReloadBanner,
   installReplayTail,
+  isDndActive,
   parseThemeAccents,
   registerViewAsOpener,
   resolveAccentColor,
@@ -13,7 +18,8 @@ import {
   setTimeDisplay,
   startRum,
   UserAvatar,
-  useCleanRecording
+  useCleanRecording,
+  useUserSync
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -267,6 +273,13 @@ export function AppLayout() {
   usePagePresence()
   useSessionRecorder()
   const { user } = useAuth()
+  // Do not disturb (#2114): the mark on the person's avatar, cleared when the time runs out.
+  const [, dndTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => dndTick((n) => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
+  const dndOn = isDndActive(user?.preferences as Record<string, unknown> | undefined)
   // "View as" on a person's page (#640) opens a new tab as them.
   useEffect(() => registerViewAsOpener(openViewAsTab), [])
   // A clean help-video recording shows the signed-in person as Demo User.
@@ -695,7 +708,8 @@ export function AppLayout() {
                 <div className='flex w-full shrink-0 justify-center border-t border-white/[0.07] px-1.5 py-2.5'>
                   <Popover>
                     <PopoverTrigger asChild>
-                      <span className='inline-flex cursor-pointer'>
+                      <span className='relative inline-flex cursor-pointer'>
+                        {dndOn && <DndMark className='absolute -right-1 -top-1 z-10' />}
                         <UserAvatar
                           userId={user?.id}
                           alt={displayName}
@@ -732,6 +746,9 @@ export function AppLayout() {
                         </div>
                       </div>
                       <div className='my-2.5 border-t border-slate-100' />
+                      <NivaroProvider client={announcementsClient}>
+                        <DoNotDisturbRow />
+                      </NivaroProvider>
                       <Link
                         to='/profile'
                         className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
@@ -864,6 +881,7 @@ export function AppLayout() {
         <SystemBusy />
         <AutofillChips />
         <JobsTrayHost />
+        <UserSyncHost />
         <OutboxHost userId={authUser?.id ?? null} />
       </TooltipProvider>
     </RealtimeContext.Provider>
@@ -1045,6 +1063,25 @@ function HelpVideoHost({ children }: { children: ReactNode }) {
   )
 }
 
+/**
+ * One person, many tabs (#2383 #2434 #2435): reading a notification or chat room, or saving a
+ * preference, in one tab or device applies in the others at once; and only the most recently
+ * used tab plays a sound. A "View as" tab is someone else, so it keeps its own channels.
+ */
+function UserSyncHost() {
+  const { user, refetch } = useAuth()
+  // Keyed by the signed-in person (plus View-as): after a user switch a stale tab of the
+  // previous person can never share a channel with this one.
+  const scope = `${user?.id ?? ''}${readMasquerade() ? ':as' : ''}`
+  configureUserSync(scope)
+  configureTabSound(scope)
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <UserSyncInner onPrefsChanged={() => void refetch()} />
+    </NivaroProvider>
+  )
+}
+
 /** Incident mode banner (#2016): administrators only; in the banner stack, above the outlet. */
 function IncidentBannerHost() {
   const navigate = useNavigate()
@@ -1058,6 +1095,11 @@ function IncidentBannerHost() {
       </NavigationContext.Provider>
     </NivaroProvider>
   )
+}
+
+function UserSyncInner({ onPrefsChanged }: { onPrefsChanged: () => void }) {
+  useUserSync({ onPrefsChanged })
+  return null
 }
 
 /** The Jobs tray (#1724): long things the person started, on every page. */

@@ -1,4 +1,4 @@
-import { useFreshIds, useLiveOps } from '@nivaro/shared'
+import { signalSentence, useFreshIds, useLiveOps, useTopicPresence } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlertOctagon,
@@ -13,7 +13,9 @@ import {
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { ExplainButton } from '@/components/explain-button'
 import { IssueComments } from '@/components/issue-comments'
+import { IssueGroupsView } from '@/components/issue-groups-view'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -27,8 +29,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
-import { ExplainButton } from '@/components/explain-button'
-import { IssueGroupsView } from '@/components/issue-groups-view'
 import { api } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
 import { cn, formatRelative } from '@/lib/utils'
@@ -301,6 +301,9 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
   const qc = useQueryClient()
   const [notes, setNotes] = useState(issue.resolution_notes ?? '')
   const [assignee, setAssignee] = useState(issue.assigned_to ?? '')
+  // #1882 — "Kim is looking at this": the others who have this issue's row open right now.
+  const { user: me } = useAuth()
+  const presence = useTopicPresence(`issue-view:${issue.id}`, me?.id)
 
   // Full row (list omits the screenshot blob + may lack details)
   const { data: full } = useQuery({
@@ -391,6 +394,18 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
         </Link>
       )}
       <ExplainButton kind='issue' params={{ id: issue.id }} label='Explain this issue' />
+      {presence.viewers.length > 0 && (
+        <p
+          className='flex items-center gap-1.5 text-[12px] text-sky-700 dark:text-sky-300'
+          data-issue-viewing
+        >
+          <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400' />
+          {signalSentence(
+            presence.viewers.map((v) => v.name),
+            'looking at this'
+          )}
+        </p>
+      )}
       {shownCount != null && shownCount > 1 && (
         <p className='text-[12px] text-muted-foreground' data-issue-occurrences={shownCount}>
           Seen <span className='font-medium text-foreground'>{shownCount}</span> times

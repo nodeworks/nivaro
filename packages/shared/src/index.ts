@@ -118,6 +118,7 @@ export * from './components/chat/chat-core'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from './components/chat/chat-core'
 export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
+export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDisturb'
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
 export { EmptyState } from './components/EmptyState'
@@ -512,6 +513,7 @@ export {
 export * from './lib/commands'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { useAfterIdle } from './lib/defer'
+export { breaksThroughDnd, type DndPref, dndUntil, isDndActive } from './lib/dnd'
 export {
   deleteDraft,
   draftHasContent,
@@ -585,6 +587,22 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export {
+  applySignal,
+  expirePeers,
+  type RecordSignalKind,
+  SIGNAL_BEAT_MS,
+  SIGNAL_TTL_MS,
+  type SignalPeers,
+  signalSentence,
+  type TopicPresence,
+  useMyUserId,
+  useRecordSignalPeers,
+  useRecordSignalSender,
+  useRecordSignalWhile,
+  useTopicPresence,
+  whoText
+} from './lib/presence-signals'
 export { type StuckState, stuckText } from './lib/presence-state'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
@@ -695,6 +713,7 @@ export {
 export * from './lib/socket-realtime'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
+export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,
   DEFAULT_THEME_ACCENTS,
@@ -717,6 +736,12 @@ export {
 } from './lib/use-my-scopes'
 export { useOnlineUsers } from './lib/use-online-users'
 export { pageAtPayload, usePageAt } from './lib/use-page-at'
+export {
+  announceLocalPrefs,
+  configureUserSync,
+  type UserSyncOptions,
+  useUserSync
+} from './lib/user-sync'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'

@@ -50,6 +50,7 @@ import {
 import { can } from '../services/permissions.js'
 import { getLabels } from '../services/queues.js'
 import { type RecordHeadline, recordHeadlines } from '../services/record-headline.js'
+import { announceNotificationsRead, movesNotificationState } from '../services/user-sync.js'
 
 // Actual schema (migration 003 + renamed in 012):
 // id INT, timestamp datetime, status varchar ('inbox'|'read'),
@@ -226,6 +227,13 @@ function notificationsFilter(userId: string, q: FilterQuery) {
 
 export async function notificationsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', requireAuth)
+  // Reading, archiving, snoozing or deleting here moves the person's unread state: their other
+  // tabs and devices hear it at once (user room) instead of on their next poll (#2383).
+  app.addHook('onResponse', async (req, reply) => {
+    if (reply.statusCode >= 300 || !req.user) return
+    const tail = req.url.replace(/^.*?\/notifications/, '') || '/'
+    if (movesNotificationState(req.method, tail)) announceNotificationsRead(req.user.id)
+  })
 
   // GET /?page=&limit=&status=all|inbox|read (legacy ?unread=true still honored)
   app.get('/', async (req, reply) => {

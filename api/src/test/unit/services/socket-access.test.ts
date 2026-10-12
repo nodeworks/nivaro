@@ -12,6 +12,12 @@ vi.mock('../../../services/record-access.js', () => ({
   compileAccessGates: vi.fn(async () => ({})),
   visibleIds: vi.fn(async (_g: unknown, ids: string[]) => new Set(ids))
 }))
+vi.mock('../../../services/support-tickets.js', () => ({
+  canSeeTicket: vi.fn(
+    async (v: { id: string; isAdmin: boolean }, t: { created_by: string }) =>
+      v.isAdmin || String(t.created_by).toUpperCase() === v.id
+  )
+}))
 vi.mock('../../../services/socket-tenant.js', () => ({
   inSocketTenant:
     (_s: unknown, fn: (...a: unknown[]) => Promise<void>) =>
@@ -55,13 +61,20 @@ function mockDb(
     admin?: boolean
     users?: Array<Record<string, unknown>>
     keys?: Array<Record<string, unknown>>
+    ticket?: Record<string, unknown> | null
   } = {}
 ) {
   vi.mocked(db).mockImplementation(((table: string) => {
     const b: Record<string, unknown> = {}
     b.where = vi.fn(() => b)
     b.whereIn = vi.fn(() => b)
-    b.first = vi.fn(async () => (table === 'nivaro_roles' ? { admin_access: !!opts.admin } : null))
+    b.first = vi.fn(async () =>
+      table === 'nivaro_roles'
+        ? { admin_access: !!opts.admin }
+        : table === 'nivaro_tasks'
+          ? (opts.ticket ?? null)
+          : null
+    )
     b.select = vi.fn(async () =>
       table === 'nivaro_api_keys' ? (opts.keys ?? []) : (opts.users ?? [])
     )
@@ -102,6 +115,23 @@ function fakeIo(sockets: unknown[]) {
 
 beforeEach(() => mockDb())
 afterEach(() => vi.clearAllMocks())
+
+describe('ticket presence rooms (#1882)', () => {
+  it('admits only people who can open the ticket, and re-checks it', async () => {
+    const notAdmin = async () => false
+    mockDb({ ticket: { id: 5, created_by: 'ANA' } })
+    expect(await roomStillAllowed(ANA, 'ops:ticket:5', notAdmin)).toBe(true)
+    mockDb({ ticket: { id: 5, created_by: 'SOMEONE-ELSE' } })
+    expect(await roomStillAllowed(ANA, 'ops:ticket:5', notAdmin)).toBe(false)
+    expect(await roomStillAllowed(ANA, 'ops:ticket:5', async () => true)).toBe(true)
+    mockDb({ ticket: null })
+    expect(await roomStillAllowed(ANA, 'ops:ticket:5', async () => true)).toBe(false)
+  })
+
+  it('lets anyone signed in sit on an issue page', async () => {
+    expect(await roomStillAllowed(ANA, 'ops:issue-view:9', async () => false)).toBe(true)
+  })
+})
 
 describe('ws-token binding (#1719, H1)', () => {
   it('round-trips every bind kind', () => {
