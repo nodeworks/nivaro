@@ -4,7 +4,9 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { isAuthor, isUuid } from '../services/help-videos.js'
-import { tenantScopedRoom } from '../services/tenant-rooms.js'
+import { readItems } from '../services/items.js'
+import { announceRecordAspect } from '../services/record-events.js'
+import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 
 /** The help-video editor locks a video under this name (#1523). */
 export const HELP_VIDEO_LOCK_COLLECTION = 'nivaro_help_videos'
@@ -96,6 +98,7 @@ async function getCurrentLock(collection: string, item: string): Promise<ItemLoc
   if (!lock) return null
   if (isExpired(lock)) {
     await db('nivaro_item_locks').where({ id: lock.id }).delete()
+    noteLockAnnounced(collection, item, false)
     // An expiry IS a release — the next person in line should hear about it.
     if (_app) await handOffToQueue(_app, collection, item)
     return null
@@ -235,6 +238,25 @@ function emitLockEvent(
   app.io
     ?.to(tenantScopedRoom(`item:${collection}:${item}`))
     .emit('item-lock', { collection, item, user, locked })
+  noteLockAnnounced(collection, item, locked)
+}
+
+// Lists show a lock icon per row, so a lock taken or released is also a
+// payload-free `$lock` notice on the collection feed (rows re-read their
+// locks). A refresh of a lock already announced is not news: remember the
+// last state announced per record and only speak on a change.
+const announcedLocks = new Map<string, boolean>()
+const ANNOUNCED_MAX = 5000
+
+function noteLockAnnounced(collection: string, item: string, locked: boolean) {
+  if (/^(nivaro_|directus_)/i.test(collection)) return
+  // Per tenant: the same record id in two tenants is two records.
+  const key = `${currentTenantKey()}\u0000${collection}\u0000${item}`
+  if (announcedLocks.get(key) === locked) return
+  if (announcedLocks.size >= ANNOUNCED_MAX) announcedLocks.clear()
+  if (locked) announcedLocks.set(key, true)
+  else announcedLocks.delete(key)
+  announceRecordAspect(collection, item, '$lock')
 }
 
 export async function itemLocksRoutes(app: FastifyInstance) {
@@ -294,6 +316,61 @@ export async function itemLocksRoutes(app: FastifyInstance) {
   })
 
   // ── Lock state ────────────────────────────────────────────────────────────
+
+  // POST /:collection/active {ids} — who is editing which of these records
+  // right now (list rows show a lock icon + the editor's name). Only ids the
+  // caller can READ answer — the lock is not a side channel around row
+  // filters / User Scopes — and a collection with locking off answers nothing.
+  app.post<{ Params: { collection: string }; Body: { ids?: unknown } }>(
+    '/:collection/active',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const { collection } = req.params
+      const asked = Array.isArray(req.body?.ids) ? req.body.ids : []
+      const ids = [
+        ...new Set(
+          asked.filter((x) => typeof x === 'string' || typeof x === 'number').map((x) => String(x))
+        )
+      ].slice(0, 200)
+      if (ids.length === 0 || !(await isLockingEnabled(collection))) {
+        return reply.send({ data: [] })
+      }
+      const locks = (await db('nivaro_item_locks')
+        .where({ collection })
+        .whereIn('item', ids)
+        .where('expires_at', '>', new Date())
+        .select('item', 'user')) as Array<{ item: string; user: string }>
+      if (locks.length === 0) return reply.send({ data: [] })
+      const fakeReq = {
+        query: {
+          conditions: JSON.stringify([{ path: ['id'], op: '_in', value: locks.map((l) => l.item) }])
+        }
+      } as never
+      let readable: Set<string>
+      try {
+        const res = (await readItems(
+          req.user!,
+          collection,
+          { fields: ['id'], limit: locks.length + 1 },
+          fakeReq
+        )) as { data?: Array<Record<string, unknown>> }
+        readable = new Set((res.data ?? []).map((r) => String(r.id)))
+      } catch {
+        return reply.send({ data: [] })
+      }
+      const shown = locks.filter((l) => readable.has(String(l.item)))
+      const names = new Map<string, string | null>()
+      for (const uid of new Set(shown.map((l) => l.user))) names.set(uid, await lockHolderName(uid))
+      return reply.send({
+        data: shown.map((l) => ({
+          item: String(l.item),
+          locked_by: l.user,
+          locked_by_name: names.get(l.user) ?? null,
+          is_mine: String(l.user).toUpperCase() === String(req.user!.id).toUpperCase()
+        }))
+      })
+    }
+  )
 
   // GET /:collection/:item/lock — current lock state (null when free/expired/disabled)
   app.get('/:collection/:item/lock', { preHandler: [requireAuth] }, async (req, reply) => {

@@ -482,4 +482,23 @@ describe('collection:join names (isKnownCollection)', () => {
     expect(await isKnownCollection('user_presence')).toBe(true)
     expect(await isKnownCollection('nope')).toBe(false)
   })
+
+  it('keeps the known-collection cache per tenant (N4)', async () => {
+    const hasTable = vi.fn(async (n: string) => n === 'only_in_a')
+    ;(db as unknown as { schema: unknown }).schema = { hasTable }
+    const { runWithTenantDb } = await import('../../../db/tenant-context.js')
+    const inTenant = (id: string) =>
+      new Promise<boolean>((resolve) =>
+        runWithTenantDb(
+          {} as never,
+          id,
+          () => void isKnownCollection('only_in_a').then(resolve),
+          id
+        )
+      )
+    expect(await inTenant('A')).toBe(true)
+    hasTable.mockImplementation(async () => false)
+    // Tenant B asks its own database rather than reading A's cached answer.
+    expect(await inTenant('B')).toBe(false)
+  })
 })

@@ -11,6 +11,7 @@ import { can, scopesAreOpen } from './permissions.js'
 import { compileAccessGates, visibleIds } from './record-access.js'
 import { inSocketTenant } from './socket-tenant.js'
 import { splitTenantRoom } from './socket-transport.js'
+import { currentTenantKey } from './tenant-rooms.js'
 
 /**
  * Socket access over a socket's whole life (#1719, #1720).
@@ -266,7 +267,9 @@ const KNOWN_TTL_MS = 5 * 60_000
  */
 export async function isKnownCollection(name: string): Promise<boolean> {
   if (!COLLECTION_NAME.test(name) || name.length > 128) return false
-  const hit = knownTables.get(name)
+  // Per tenant (N4): each tenant has its own collections and tables.
+  const cacheKey = `${currentTenantKey()}\u0000${name}`
+  const hit = knownTables.get(cacheKey)
   if (hit && Date.now() - hit.at < KNOWN_TTL_MS) return hit.ok
   let ok = false
   try {
@@ -276,7 +279,7 @@ export async function isKnownCollection(name: string): Promise<boolean> {
     ok = false
   }
   if (knownTables.size > 2000) knownTables.clear()
-  knownTables.set(name, { ok, at: Date.now() })
+  knownTables.set(cacheKey, { ok, at: Date.now() })
   return ok
 }
 
