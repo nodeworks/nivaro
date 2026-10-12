@@ -1099,6 +1099,14 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.traffic_pins = keys.length ? keys : null
     }
+    if ('ai_history_off' in body) {
+      // #1833 — "Don't save my questions": Ask AI stores no conversations.
+      const v = body.ai_history_off
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'ai_history_off must be true, false or null' })
+      }
+      patch.ai_history_off = v === true ? true : null
+    }
     if ('ai_memory' in body) {
       // #1804 — the person's own Ask AI notes (Profile → Ask AI memory). The
       // card sends the whole list; null clears it.
