@@ -457,6 +457,7 @@ function VersionsTable({ groups, apiVersion }: { groups: VersionGroup[]; apiVers
 // ─── Sockets & rooms (#270) ──────────────────────────────────────────────────
 
 function SocketsTab() {
+  const [inspecting, setInspecting] = useState<string | null>(null)
   const { data, isLoading } = useQuery<RealtimeStats>({
     queryKey: ['realtime-stats'],
     queryFn: () => api.get('/realtime/stats').then((r) => r.data.data),
@@ -484,6 +485,7 @@ function SocketsTab() {
               <th className='px-3 py-2 text-right'>RTT</th>
               <th className='px-3 py-2 text-right'>Reconnects</th>
               <th className='px-3 py-2'>Rooms</th>
+              <th className='px-3 py-2' />
             </tr>
           </thead>
           <tbody className='divide-y divide-slate-100 dark:divide-border/60'>
@@ -510,11 +512,22 @@ function SocketsTab() {
                 <td className='max-w-[420px] truncate px-3 py-1.5 text-[11px] text-slate-500'>
                   {s.room_count} · {s.rooms.join(', ')}
                 </td>
+                <td className='px-3 py-1.5 text-right'>
+                  <button
+                    type='button'
+                    onClick={() => setInspecting(inspecting === s.id ? null : s.id)}
+                    data-inspect-socket={s.id}
+                    className='rounded-md border border-slate-200 px-2 py-0.5 text-[11px] font-medium text-slate-600 hover:bg-slate-50 dark:border-border dark:text-slate-300 dark:hover:bg-muted'
+                  >
+                    {inspecting === s.id ? 'Close' : 'Inspect'}
+                  </button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+      {inspecting && <SocketInspector id={inspecting} onClose={() => setInspecting(null)} />}
       <div>
         <h2 className='mb-2 text-[13px] font-medium'>Busiest rooms</h2>
         <div className='flex flex-wrap gap-1.5'>
@@ -528,6 +541,116 @@ function SocketsTab() {
           ))}
         </div>
       </div>
+    </div>
+  )
+}
+
+/**
+ * #1731 — Socket inspector: one client's rooms and the last 100 events sent to it. Recording is
+ * off on the server until you open this panel; it stops when you close it (or after 10 minutes
+ * unread). Names, sizes and times only — never what the events said.
+ */
+interface InspectView {
+  id: string
+  user: string | null
+  app: string | null
+  transport: string | null
+  rooms: string[]
+  recording: boolean
+  ring: number
+  events: Array<{ at: string; event: string; room: string | null; bytes: number }>
+}
+
+function SocketInspector({ id, onClose }: { id: string; onClose: () => void }) {
+  const qc = useQueryClient()
+  const key = ['realtime-inspect', id]
+  const start = useMutation({
+    mutationFn: () => api.post(`/realtime/sockets/${id}/inspect`).then((r) => r.data.data),
+    onSuccess: (view: InspectView) => qc.setQueryData(key, view),
+    onError: (err: any) => toast.error(err?.response?.data?.error ?? 'Could not start inspecting')
+  })
+  // biome-ignore lint/correctness/useExhaustiveDependencies: start/stop on the socket id only
+  useEffect(() => {
+    start.mutate()
+    return () => {
+      void api.delete(`/realtime/sockets/${id}/inspect`).catch(() => undefined)
+    }
+  }, [id])
+  const { data } = useQuery<InspectView>({
+    queryKey: key,
+    queryFn: () => api.get(`/realtime/sockets/${id}/inspect`).then((r) => r.data.data),
+    enabled: start.isSuccess,
+    refetchInterval: 2_000,
+    retry: false
+  })
+  return (
+    <div
+      data-socket-inspector={id}
+      className='rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card'
+    >
+      <div className='flex items-center justify-between border-b border-slate-200 px-3 py-2 dark:border-border'>
+        <h2 className='text-[13px] font-medium'>
+          Inspecting {data?.user ?? 'client'} · {data?.app ?? 'app'} · {data?.transport ?? '—'}
+        </h2>
+        <button
+          type='button'
+          onClick={onClose}
+          className='text-[11px] text-slate-500 hover:underline'
+        >
+          Close
+        </button>
+      </div>
+      {!data ? (
+        <p className='px-3 py-3 text-[12px] text-slate-400'>
+          {start.isError ? 'This client is no longer connected to this node.' : 'Starting…'}
+        </p>
+      ) : (
+        <div className='space-y-3 p-3'>
+          <div>
+            <div className='mb-1 text-[10.5px] uppercase tracking-wide text-slate-400'>
+              Rooms ({data.rooms.length})
+            </div>
+            <div className='flex flex-wrap gap-1.5'>
+              {data.rooms.map((r) => (
+                <span
+                  key={r}
+                  className='rounded-full border border-slate-200 px-2 py-0.5 font-mono text-[11px] text-slate-600 dark:border-border dark:text-slate-300'
+                >
+                  {r}
+                </span>
+              ))}
+            </div>
+          </div>
+          <div>
+            <div className='mb-1 text-[10.5px] uppercase tracking-wide text-slate-400'>
+              Events sent since you opened this ({data.events.length} of last {data.ring})
+            </div>
+            {data.events.length === 0 ? (
+              <p className='text-[12px] text-slate-400'>Nothing sent yet — waiting for traffic.</p>
+            ) : (
+              <div className='max-h-[320px] overflow-y-auto'>
+                <table className='w-full text-[12px] tabular-nums'>
+                  <tbody className='divide-y divide-slate-100 dark:divide-border/60'>
+                    {data.events.map((e, i) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: ring has no ids
+                      <tr key={`${e.at}-${i}`}>
+                        <td className='px-2 py-1 text-slate-500'>
+                          {new Date(e.at).toLocaleTimeString()}
+                        </td>
+                        <td className='px-2 py-1 font-mono text-[11px]'>{e.event}</td>
+                        <td className='px-2 py-1 font-mono text-[11px] text-slate-500'>
+                          {e.room ?? 'direct'}
+                        </td>
+                        <td className='px-2 py-1 text-right'>{e.bytes} B</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

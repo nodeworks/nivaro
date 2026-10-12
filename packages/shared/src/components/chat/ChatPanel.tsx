@@ -44,6 +44,7 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
+import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import { type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
@@ -114,8 +115,8 @@ import {
   useUserSearch
 } from './chat-core'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
-import { PollCard } from './PollCard'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
+import { PollCard } from './PollCard'
 import {
   ChannelIntro,
   JumpToDate,
@@ -560,6 +561,19 @@ function EntityChip({ token, url, mine }: { token: string; url: string | null; m
     enabled: (types?.length ?? 0) > 0,
     staleTime: 10 * 60_000
   })
+
+  // #1976: the state pill follows the record. Each viewer re-reads it as themselves; the
+  // socket only says that something moved.
+  const qc = useQueryClient()
+  useLiveRecord(
+    card?.collection,
+    card?.id,
+    (batch) => {
+      if (batchTouches(batch, LIVE_ASPECTS.state))
+        void qc.invalidateQueries({ queryKey: ['nvr-chat-entity-card', token] })
+    },
+    { includeOwn: true, debounceMs: 400 }
+  )
 
   const open = () => {
     if (card) {
