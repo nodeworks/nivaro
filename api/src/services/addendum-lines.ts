@@ -232,9 +232,16 @@ export async function applyAddendumLines(
   parentId: string,
   data: Row,
   allowedKeys: Set<string>,
-  base: Record<string, LineSet> | null
+  base: Record<string, LineSet> | null,
+  /** Who wrote the proposal. Approval never lets a proposal do more than its
+   *  AUTHOR could do to the lines: ops and columns are capped by the author's
+   *  own create / update / delete permissions (null author = nothing applies). */
+  author: User | null
 ): Promise<{ o2m: Record<string, AppliedLines>; applied: number; failed: number }> {
   const { createOne, updateOne, deleteOne } = await import('./items.js')
+  const { can, getAllowedFields } = await import('./permissions.js')
+  const capTo = (cols: Set<string>, allowed: string[] | null) =>
+    allowed === null ? cols : new Set([...cols].filter((c) => allowed.includes(c)))
   const o2m: Record<string, AppliedLines> = {}
   let applied = 0
   let failed = 0
@@ -245,8 +252,47 @@ export async function applyAddendumLines(
     )
     const before = await readLines(l.collection, l.fk, parentId)
     const baseRows = base?.[l.alias]?.collection === l.collection ? base[l.alias].rows : null
-    const writable = new Set(Object.keys(await db(l.collection).columnInfo()))
-    const ops = planLineOps(proposed, before, baseRows, l.fk, writable)
+    const columns = new Set(Object.keys(await db(l.collection).columnInfo()))
+    const authorMay = async (action: 'create' | 'update' | 'delete') =>
+      !!author && (await can(author, action, l.collection))
+    const [mayCreate, mayUpdate, mayDelete] = await Promise.all([
+      authorMay('create'),
+      authorMay('update'),
+      authorMay('delete')
+    ])
+    const updatable = mayUpdate
+      ? capTo(columns, await getAllowedFields(author!, 'update', l.collection))
+      : new Set<string>()
+    const creatable = mayCreate
+      ? capTo(columns, await getAllowedFields(author!, 'create', l.collection))
+      : new Set<string>()
+    // Plan against every real column, then cap each op by the author's rights:
+    // a change the author could not have made is reported failed, not applied.
+    const ops = planLineOps(proposed, before, baseRows, l.fk, columns)
+    const capped: LineOps['updates'] = []
+    for (const u of ops.updates) {
+      const keys = Object.keys(u.patch).filter((k) => updatable.has(k))
+      if (keys.length < Object.keys(u.patch).length) failed++
+      if (keys.length === 0) continue
+      capped.push({
+        id: u.id,
+        patch: Object.fromEntries(keys.map((k) => [k, u.patch[k]])),
+        prior: Object.fromEntries(keys.map((k) => [k, u.prior[k]]))
+      })
+    }
+    ops.updates = capped
+    if (mayCreate) {
+      ops.creates = ops.creates.map((c) =>
+        Object.fromEntries(Object.entries(c).filter(([k]) => creatable.has(k)))
+      )
+    } else {
+      failed += ops.creates.length
+      ops.creates = []
+    }
+    if (!mayDelete) {
+      failed += ops.deletes.length
+      ops.deletes = []
+    }
     const done: AppliedLines = {
       ...l,
       before,

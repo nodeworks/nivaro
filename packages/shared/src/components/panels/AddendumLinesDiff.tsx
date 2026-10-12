@@ -63,7 +63,16 @@ const visibleKey = (k: string, fkField: string) =>
   !k.includes('.')
 
 /** Rows an addendum adds / changes / removes against the record's current rows. */
-export function diffAddendumLines(proposed: Row[], original: Row[], fkField: string) {
+export function diffAddendumLines(
+  proposed: Row[],
+  original: Row[],
+  fkField: string,
+  /** Settled snapshot only: a column the before-picture never carried (an
+   *  imported one predates it) is unknown, not changed. Never for a live
+   *  proposal — there a missing key is a column the reader cannot read, and
+   *  hiding its change would let approval write what the reviewer never saw. */
+  ignoreMissing = false
+) {
   const byId = new Map(original.map((r) => [String(r.id), r]))
   const seen = new Set<string>()
   const added: Row[] = []
@@ -83,9 +92,7 @@ export function diffAddendumLines(proposed: Row[], original: Row[], fkField: str
     const cells: Array<{ field: string; before: unknown; after: unknown }> = []
     for (const k of Object.keys(row)) {
       if (!visibleKey(k, fkField)) continue
-      // A column one side never carried (an imported snapshot predates it) is
-      // unknown, not changed.
-      if (!(k in orig)) continue
+      if (ignoreMissing && !(k in orig)) continue
       if (same(orig[k], row[k])) continue
       cells.push({ field: k, before: orig[k], after: row[k] })
     }
@@ -102,7 +109,8 @@ export function AddendumLinesDiff({
   proposed,
   original,
   label,
-  orderField
+  orderField,
+  ignoreMissing = false
 }: {
   client: Client
   childCollection: string
@@ -112,6 +120,8 @@ export function AddendumLinesDiff({
   label: string
   /** Row-number column ("line_number") — names a row. */
   orderField?: string
+  /** Settled snapshot: see diffAddendumLines. */
+  ignoreMissing?: boolean
 }) {
   const { data: fields = [] } = useQuery<CMSField[]>({
     queryKey: ['field-config', childCollection, null],
@@ -148,8 +158,8 @@ export function AddendumLinesDiff({
   const orderKey = orderField ?? (fieldByName.has('line_number') ? 'line_number' : undefined)
 
   const diff = useMemo(
-    () => diffAddendumLines(proposed, original, fkField),
-    [proposed, original, fkField]
+    () => diffAddendumLines(proposed, original, fkField, ignoreMissing),
+    [proposed, original, fkField, ignoreMissing]
   )
 
   // Labels for foreign keys named in the diff — one batched read per target.

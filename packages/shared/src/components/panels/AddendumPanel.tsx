@@ -1738,6 +1738,7 @@ function AddendumCard({
                       fkField={l.fk}
                       proposed={l.after}
                       original={l.before}
+                      ignoreMissing
                       label={fieldMap[alias]?.label ?? titleCase(alias)}
                     />
                   ))}
