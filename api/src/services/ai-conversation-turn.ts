@@ -101,7 +101,9 @@ export async function openConversationTurn(
         'playbooks_used',
         'cached_at',
         'remembered',
-        'plans'
+        'plans',
+        'choices',
+        'followups'
       ]) {
         const v = payload[k]
         if (v != null && v !== false && !(Array.isArray(v) && v.length === 0)) meta[k] = v
