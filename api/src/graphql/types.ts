@@ -364,6 +364,9 @@ export const ItemMutatedEventType: GraphQLObjectType = new GraphQLObjectType({
       type: new GraphQLNonNull(new GraphQLList(new GraphQLNonNull(GraphQLString)))
     },
     at: { type: GraphQLString },
+    /** The event's journal position — the SSE transport's event id, sent back as
+     *  Last-Event-ID to resume. Null when the event was not journaled. */
+    seq: { type: GraphQLString },
     /** Always null. Kept so existing selections keep validating. */
     data: { type: GraphQLJSON }
   }

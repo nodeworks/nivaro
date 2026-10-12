@@ -1,5 +1,6 @@
 import { WifiOff } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useSyncExternalStore } from 'react'
+import { getRecordOutbox, subscribeRecordOutbox } from '../lib/record-outbox'
 
 /**
  * Offline banner (#348): connectivity loss shows an honest "offline — changes
@@ -9,6 +10,9 @@ import { useEffect, useState } from 'react'
  */
 export function OfflineBanner() {
   const [offline, setOffline] = useState(false)
+  // Saves pressed while offline (#1678) — they go out when the connection returns.
+  const outbox = useSyncExternalStore(subscribeRecordOutbox, getRecordOutbox, getRecordOutbox)
+  const waiting = outbox.filter((e) => e.status === 'queued' || e.status === 'sending').length
   useEffect(() => {
     let alive = true
     const probe = async () => {
@@ -42,8 +46,9 @@ export function OfflineBanner() {
   return (
     <div className='flex items-center justify-center gap-2 border-b border-slate-700 bg-[#0f172a] px-4 py-1.5 text-[12px] text-slate-200'>
       <WifiOff className='h-3.5 w-3.5 text-amber-400' />
-      You're offline — changes are paused and will fail until the connection returns. Retrying
-      automatically.
+      {waiting > 0
+        ? `You're offline — ${waiting} saved record${waiting === 1 ? '' : 's'} will save when you are back online. Retrying automatically.`
+        : "You're offline — changes are paused and will fail until the connection returns. Retrying automatically."}
     </div>
   )
 }

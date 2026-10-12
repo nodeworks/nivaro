@@ -123,24 +123,34 @@ async function writeMemory(
     .update({ preferences: JSON.stringify(notes.length ? { ...rest, ai_memory: notes } : rest) })
 }
 
+/** Where a person picks what to remove — Profile's Ask AI memory card. */
+export const AI_MEMORY_PROFILE_PATH = '/profile#ai-memory'
+
+/** The one "memory is full" sentence, plain (errors) or with the Profile link (answers). */
+export function memoryFullMessage(withLink = false): string {
+  const where = withLink
+    ? `[Profile → Ask AI memory](${AI_MEMORY_PROFILE_PATH})`
+    : 'Profile → Ask AI memory'
+  return `Your Ask AI memory is full (${AI_MEMORY_MAX_NOTES} notes). Remove one under ${where}, then try again.`
+}
+
 /**
- * Add one note. When the list is full the OLDEST note makes room — a person
- * saying "remember" expects it kept; Profile shows what was dropped.
+ * Add one note ("remember that …"). A full list REFUSES — no note is ever
+ * dropped to make room; the person picks what to remove on Profile.
  */
 export async function addMemoryNote(
   userId: string,
   text: string
-): Promise<{ note: AiMemoryNote; dropped: AiMemoryNote | null; duplicate: boolean }> {
+): Promise<{ note: AiMemoryNote; duplicate: boolean } | { full: true }> {
   const prefs = await readPrefs(userId)
   const notes = memoryFromPreferences(prefs)
   const clean = cleanText(text).slice(0, AI_MEMORY_MAX_CHARS)
   const existing = notes.find((n) => n.text.toLowerCase() === clean.toLowerCase())
-  if (existing) return { note: existing, dropped: null, duplicate: true }
+  if (existing) return { note: existing, duplicate: true }
+  if (notes.length >= AI_MEMORY_MAX_NOTES) return { full: true }
   const note: AiMemoryNote = { id: randomUUID(), text: clean, at: new Date().toISOString() }
-  const next = [...notes, note]
-  const dropped = next.length > AI_MEMORY_MAX_NOTES ? (next.shift() ?? null) : null
-  await writeMemory(userId, prefs, next)
-  return { note, dropped, duplicate: false }
+  await writeMemory(userId, prefs, [...notes, note])
+  return { note, duplicate: false }
 }
 
 // ─── Suggestions (#1845) ──────────────────────────────────────────────────────
@@ -261,14 +271,15 @@ export function suggestionsFrom(raw: unknown): AiMemorySuggestion[] {
 }
 
 /**
- * The asker clicked "Remember this?" (#1845). Unlike "remember that …", a
- * full list is refused rather than dropping the oldest note — a click on a
- * suggestion should not quietly forget something they wrote themselves.
+ * The asker clicked "Remember this?" (#1845). Like "remember that …", a full
+ * list is refused — no note is ever dropped to make room.
  */
 export async function addSuggestedNote(
   userId: string,
   text: unknown
-): Promise<{ note: AiMemoryNote; duplicate: boolean } | { error: string; status: number }> {
+): Promise<
+  { note: AiMemoryNote; duplicate: boolean } | { error: string; status: number; code?: string }
+> {
   const clean = cleanText(text)
   if (!clean) return { error: 'text is required', status: 400 }
   if (clean.length > AI_MEMORY_MAX_CHARS) {
@@ -286,10 +297,7 @@ export async function addSuggestedNote(
   const existing = notes.find((n) => n.text.toLowerCase() === clean.toLowerCase())
   if (existing) return { note: existing, duplicate: true }
   if (notes.length >= AI_MEMORY_MAX_NOTES) {
-    return {
-      error: `Ask AI memory holds ${AI_MEMORY_MAX_NOTES} notes — remove one under Profile → Ask AI memory first`,
-      status: 409
-    }
+    return { error: memoryFullMessage(), status: 409, code: 'AI_MEMORY_FULL' }
   }
   const note: AiMemoryNote = { id: randomUUID(), text: clean, at: new Date().toISOString() }
   await writeMemory(userId, prefs, [...notes, note])

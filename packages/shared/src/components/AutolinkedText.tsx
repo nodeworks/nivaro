@@ -1,7 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useMemo } from 'react'
 import { defaultItemUrl, useNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
+import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../lib/live'
 
 /**
  * Renders plain text with entity-registry-shaped record ids (e.g. AB26-12345,
@@ -26,9 +27,9 @@ function useRoomTypes(): RoomType[] {
   const { data } = useQuery({
     queryKey: ['nvr-chat-room-types'],
     queryFn: async () => {
-      const res = (await client.request(
-        get<{ data: RoomType[] }>('/chat/room-types')
-      )) as { data: RoomType[] }
+      const res = (await client.request(get<{ data: RoomType[] }>('/chat/room-types'))) as {
+        data: RoomType[]
+      }
       return (res.data ?? []).filter((t) => t.is_active)
     },
     staleTime: 5 * 60_000
@@ -59,7 +60,9 @@ function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
           try {
             const inst = (await client.request(
               get<{
-                data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null
+                data: {
+                  instance?: { current_state_obj?: { label?: string; color?: string } }
+                } | null
               }>(`/pipelines/instance/${t.collection}/${id}`)
             )) as {
               data: { instance?: { current_state_obj?: { label?: string; color?: string } } } | null
@@ -68,7 +71,12 @@ function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
           } catch {
             /* no pipeline — chip still links */
           }
-          return { collection: t.collection, id, state: state?.label ?? null, color: state?.color ?? null }
+          return {
+            collection: t.collection,
+            id,
+            state: state?.label ?? null,
+            color: state?.color ?? null
+          }
         } catch {
           /* try the next registered type */
         }
@@ -78,6 +86,18 @@ function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
     enabled: types.length > 0,
     staleTime: 10 * 60_000
   })
+
+  // #1976: the state pill follows the record. Each viewer re-reads it as themselves.
+  const qc = useQueryClient()
+  useLiveRecord(
+    card?.collection,
+    card?.id,
+    (batch) => {
+      if (batchTouches(batch, LIVE_ASPECTS.state))
+        void qc.invalidateQueries({ queryKey: ['nvr-record-token', token] })
+    },
+    { includeOwn: true, debounceMs: 400 }
+  )
 
   if (!card) return <>{token}</>
   if (plain) return <span className='font-medium'>{token}</span>
@@ -149,9 +169,14 @@ function RecordPathToken({
         )) as { data: { display_template?: string | null } }
         const template = meta.data?.display_template ?? null
         const tokens = [...(template ?? '').matchAll(/\{\{\s*([\w.[\]]+)/g)].map((m) => m[1])
-        const fields = template ? ['id', ...tokens.map((t) => t.replace(/\[\d+\]/g, ''))].join(',') : undefined
+        const fields = template
+          ? ['id', ...tokens.map((t) => t.replace(/\[\d+\]/g, ''))].join(',')
+          : undefined
         const res = (await client.request(
-          get<{ data: Record<string, unknown> }>(`/items/${collection}/${id}`, fields ? { fields } : {})
+          get<{ data: Record<string, unknown> }>(
+            `/items/${collection}/${id}`,
+            fields ? { fields } : {}
+          )
         )) as { data: Record<string, unknown> }
         if (!res.data) return null
         const label = renderTemplateLabel(template, res.data)

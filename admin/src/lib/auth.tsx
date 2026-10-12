@@ -1,3 +1,4 @@
+import { clearRecordOutbox } from '@nivaro/shared'
 import { createContext, type ReactNode, useCallback, useContext, useEffect, useState } from 'react'
 import { api, type User, WORKSPACE_KEY } from './api'
 
@@ -48,5 +49,7 @@ export function useAuth() {
 export async function logout() {
   const redirect = window.location.pathname + window.location.search
   await api.post('/auth/logout')
+  // Offline saves (#1678) belong to the person signing out — none survive it.
+  await clearRecordOutbox()
   window.location.href = `/login?redirect=${encodeURIComponent(redirect)}`
 }
