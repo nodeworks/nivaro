@@ -4,14 +4,18 @@ import { createRoot } from 'react-dom/client'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
 import './globals.css'
+import { disableRecordOutbox } from '@nivaro/shared'
 import App from './App'
 import { registerCloudPlugin, registerExtensionPlugin } from './extensions/store'
-import { captureMasqueradeFromHash, installMasqueradeFetch } from './lib/masquerade'
+import { captureMasqueradeFromHash, installMasqueradeFetch, readMasquerade } from './lib/masquerade'
 import { installPageContextFetch } from './lib/page-context'
 
 // A "View as" tab (#640) reads its token before anything fetches.
 captureMasqueradeFromHash()
 installMasqueradeFetch()
+// …and never queues an offline save under the person it is viewing as (#1678):
+// a failed save there shows the normal error.
+if (readMasquerade()) disableRecordOutbox()
 // Every fetch to the API (SDK clients included) says which screen it came from (#1113 / #1116).
 // #1048 / #1180 — and which build this tab runs, so old tabs can be counted and reloaded alone.
 installPageContextFetch({
