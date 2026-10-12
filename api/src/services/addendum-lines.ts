@@ -221,6 +221,46 @@ export async function snapshotAddendumBase(
   return out
 }
 
+async function isAdminUser(user: User): Promise<boolean> {
+  if (!user.role) return false
+  const r = (await db('nivaro_roles').where({ id: user.role }).first('admin_access')) as
+    | { admin_access?: boolean | number | null }
+    | undefined
+  return !!r?.admin_access
+}
+
+/**
+ * The line ids (of those given) this person can SEE (row filter + User
+ * Scopes) and, for a write action, may also write under that action's row
+ * filter — what the items service would let them do to that row.
+ */
+async function permittedIds(
+  user: User,
+  collection: string,
+  ids: string[],
+  action: 'update' | 'delete' | null
+): Promise<Set<string>> {
+  if (ids.length === 0) return new Set()
+  const admin = await isAdminUser(user)
+  const { compileAccessGates, visibleIds } = await import('./record-access.js')
+  const gates = await compileAccessGates(user, collection, { actingAdmin: admin })
+  let ok = await visibleIds(gates, ids)
+  if (admin || !action || ok.size === 0) return ok
+  const { applyRowFilter, getRowFilter } = await import('./permissions.js')
+  const rf = await getRowFilter(user, action, collection)
+  if (!rf || rf.length === 0) return ok
+  const pass = new Set<string>()
+  const list = [...ok]
+  for (let i = 0; i < list.length; i += 1000) {
+    const q = db(collection).whereIn(`${collection}.id`, list.slice(i, i + 1000))
+    applyRowFilter(q, rf, user)
+    for (const r of (await q.select(`${collection}.id`)) as Array<{ id: unknown }>)
+      pass.add(String(r.id))
+  }
+  ok = pass
+  return ok
+}
+
 /**
  * Apply the proposed lines AS THE APPROVER through the items service, so
  * revisions, hooks and stored rollups (the parent's requisition amount) fire.
@@ -233,9 +273,13 @@ export async function applyAddendumLines(
   data: Row,
   allowedKeys: Set<string>,
   base: Record<string, LineSet> | null,
-  /** Who wrote the proposal. Approval never lets a proposal do more than its
-   *  AUTHOR could do to the lines: ops and columns are capped by the author's
-   *  own create / update / delete permissions (null author = nothing applies). */
+  /** Who wrote the proposal. A change applies only when BOTH sides hold:
+   *  the AUTHOR could have made it themselves (create / update / delete
+   *  rights, that action's row filter, User Scopes, allowed columns — so
+   *  approval never escalates a proposal), and the APPROVER can see it (a
+   *  readable row, readable columns — approving never writes what the
+   *  reviewer was not shown). Anything else is reported failed, not applied.
+   *  Null author = nothing applies. */
   author: User | null
 ): Promise<{ o2m: Record<string, AppliedLines>; applied: number; failed: number }> {
   const { createOne, updateOne, deleteOne } = await import('./items.js')
@@ -266,12 +310,29 @@ export async function applyAddendumLines(
     const creatable = mayCreate
       ? capTo(columns, await getAllowedFields(author!, 'create', l.collection))
       : new Set<string>()
-    // Plan against every real column, then cap each op by the author's rights:
-    // a change the author could not have made is reported failed, not applied.
+    // What the approver was shown: readable columns (ids always pair rows).
+    const approverCols = capTo(columns, await getAllowedFields(approver, 'read', l.collection))
+    // Plan against every real column, then cap each op (see `author` above).
     const ops = planLineOps(proposed, before, baseRows, l.fk, columns)
+    const touched = [
+      ...new Set([...ops.updates.map((u) => String(u.id)), ...ops.deletes.map((d) => String(d.id))])
+    ]
+    const [authorUpd, authorDel, approverSees] = await Promise.all([
+      mayUpdate
+        ? permittedIds(author!, l.collection, touched, 'update')
+        : Promise.resolve(new Set<string>()),
+      mayDelete
+        ? permittedIds(author!, l.collection, touched, 'delete')
+        : Promise.resolve(new Set<string>()),
+      permittedIds(approver, l.collection, touched, null)
+    ])
     const capped: LineOps['updates'] = []
     for (const u of ops.updates) {
-      const keys = Object.keys(u.patch).filter((k) => updatable.has(k))
+      if (!authorUpd.has(String(u.id)) || !approverSees.has(String(u.id))) {
+        failed++
+        continue
+      }
+      const keys = Object.keys(u.patch).filter((k) => updatable.has(k) && approverCols.has(k))
       if (keys.length < Object.keys(u.patch).length) failed++
       if (keys.length === 0) continue
       capped.push({
@@ -282,17 +343,20 @@ export async function applyAddendumLines(
     }
     ops.updates = capped
     if (mayCreate) {
-      ops.creates = ops.creates.map((c) =>
-        Object.fromEntries(Object.entries(c).filter(([k]) => creatable.has(k)))
-      )
+      ops.creates = ops.creates.map((c) => {
+        const keep = Object.entries(c).filter(([k]) => creatable.has(k) && approverCols.has(k))
+        if (keep.length < Object.keys(c).length) failed++
+        return Object.fromEntries(keep)
+      })
     } else {
       failed += ops.creates.length
       ops.creates = []
     }
-    if (!mayDelete) {
-      failed += ops.deletes.length
-      ops.deletes = []
-    }
+    const allowedDeletes = ops.deletes.filter(
+      (d) => authorDel.has(String(d.id)) && approverSees.has(String(d.id))
+    )
+    failed += ops.deletes.length - allowedDeletes.length
+    ops.deletes = allowedDeletes
     const done: AppliedLines = {
       ...l,
       before,
