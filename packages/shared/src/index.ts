@@ -4,7 +4,12 @@ export { AutolinkedText } from './components/AutolinkedText'
 export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
-export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  AiMarkdown,
+  type AiMarkdownBlock,
+  type ChartPointHandler,
+  parseAiMarkdown
+} from './components/ai/AiMarkdown'
 export {
   type AiPlan,
   AiPlanCard,
@@ -24,6 +29,7 @@ export {
   rowsOfBlock
 } from './components/ai/answer-formats'
 export { DataGuideCard } from './components/ai/DataGuideCard'
+export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
 export { AlertManagerView, type AlertManagerViewProps } from './components/alerts/AlertManagerView'
 export {
@@ -128,7 +134,6 @@ export {
   startDocumentExtraction,
   useDocumentAutofillConfig
 } from './components/import/DocumentAutofillButton'
-export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { ImportFromFileButton } from './components/import/ImportFromFileButton'
 export { ImportIssuesPanel } from './components/import/ImportIssuesPanel'
 export { CollectionImportPanel } from './components/imports/CollectionImportPanel'
@@ -408,6 +413,19 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export {
+  type DrillSource,
+  defaultQuestionFor,
+  drillSourceFor,
+  type LiveSource,
+  liveSourcesFor,
+  type PanelTraceEntry,
+  parseSlash,
+  SLASH_COMMANDS,
+  type SlashCommand,
+  slashMatches,
+  stripFollowUps
+} from './lib/ai-panel'
 export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
