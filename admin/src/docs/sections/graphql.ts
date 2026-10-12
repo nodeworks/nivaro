@@ -810,11 +810,89 @@ unsub()`
     },
     {
       type: 'p',
-      text: 'Pass a static token via `connectionParams.authorization`. The server validates it before allowing subscriptions. Session cookies are not supported on WebSocket — use static tokens.'
+      text: 'Pass a static token via `connectionParams.authorization`, or a one-shot ticket via `connectionParams.ticket`. A ticket comes from `GET /api/events/ticket`, called with any sign-in the HTTP API accepts (session cookie, static token, View-as, or a named API key — whose scopes, row restrictions and depth cap then apply to the connection). A ticket works once and expires after 60 seconds.'
+    },
+    {
+      type: 'p',
+      text: 'A connection stays tied to what signed it in. When that sign-in ends — logout, a revoked session or API key, a rotated token, or an account that is no longer active — the connection closes with code 4401 within 30 seconds.'
     },
     {
       type: 'note',
-      text: 'The GraphiQL explorer at `GET /api/graphql` does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws or a tool like Altair GraphQL Client.'
+      text: 'The GraphiQL explorer at `GET /api/graphql` does not support subscriptions (HTTP-only). Use a WebSocket-capable client such as graphql-ws, the SSE endpoint below, or a tool like Altair GraphQL Client.'
+    },
+    { type: 'h2', id: 'graphql-sse', text: 'Subscriptions over Server-Sent Events' },
+    {
+      type: 'p',
+      text: 'For clients whose proxies block WebSockets, every subscription (and every live query) is also served over Server-Sent Events at `/api/graphql/stream`. It uses the graphql-sse "distinct connections" shape: one operation per stream, each result as `event: next` with the execution result as data, then `event: complete`. A plain query answers once and completes. Mutations are refused with 405 — send them to `POST /api/graphql`.'
+    },
+    {
+      type: 'pre',
+      code: `// fetch-based clients (headers allowed): POST with the usual body
+POST /api/graphql/stream
+Authorization: Bearer nvk_…
+Accept: text/event-stream
+{ "query": "subscription { itemMutated(collection: "orders") { item action changed_fields } }" }
+
+// EventSource (no headers): get a ticket first, then open the stream
+const { data } = await fetch('/api/events/ticket', { credentials: 'include' }).then((r) => r.json())
+const q = encodeURIComponent('subscription { itemMutated(collection: "orders") { item action } }')
+const es = new EventSource(\`/api/graphql/stream?query=\${q}&ticket=\${data.ticket}\`)
+es.addEventListener('next', (e) => console.log(JSON.parse(e.data)))
+es.addEventListener('complete', () => es.close())`
+    },
+    {
+      type: 'ul',
+      items: [
+        "Authentication is the HTTP API's own: session cookie, Bearer static token, View-as, or a named API key with its scopes and row restrictions. EventSource cannot send headers, so it uses `?ticket=` (one-shot, 60 seconds). A long-lived credential never goes in the URL.",
+        'The same filters and per-subscriber checks as WebSocket apply: the collection read gate, `fields` / `actions` narrowing, and workflow / pipeline events built for each subscriber.',
+        'A comment heartbeat goes out every 25 seconds (`GRAPHQL_SSE_HEARTBEAT_MS`), and each heartbeat re-checks the sign-in. When it has ended, the stream sends a result with error code `SESSION_ENDED`, then `complete`.',
+        'Resume: `itemMutated` events carry their event-journal position as the SSE `id`. Reconnect with `Last-Event-ID` (EventSource does this by itself) to get the events you missed, replayed through the same filters. When the journal no longer reaches back that far (about 24 hours), the stream sends `event: reset` — refetch what you show. Workflow and pipeline subscriptions resume live only.',
+        'Query variables in a GET URL end up in request logs. Use POST for variables that carry anything sensitive.'
+      ]
+    },
+    { type: 'h2', id: 'graphql-live-queries', text: 'Live queries' },
+    {
+      type: 'p',
+      text: 'Mark a query `@live` and send it over either subscription transport (graphql-ws or `/api/graphql/stream`). You get its result at once, then the new result whenever a write changes what it read. `POST /api/graphql` ignores `@live` and answers once.'
+    },
+    {
+      type: 'pre',
+      code: `query OpenOrders @live(throttle: 1000) {
+  orders(filter: { status: { _eq: "open" } }, sort: ["-date_created"], limit: 20) {
+    id
+    status
+    customer { name }
+  }
+  orders_metadata(filter: { status: { _eq: "open" } }) { total }
+}
+
+// next → { "data": { … }, "extensions": { "live": { "revision": 1 } } }
+// next → { "data": { … }, "extensions": { "live": { "revision": 2 } } }   after a matching write`
+    },
+    {
+      type: 'table',
+      head: ['What the query read', 'Re-runs on'],
+      rows: [
+        [
+          'A list (root list, nested to-many, `_metadata`, `_aggregated`, M2M / M2A links)',
+          'Any create, update or delete in that collection — a new or changed row may join the list.'
+        ],
+        ['A collection named in a `filter` (through a relation)', 'Any write in that collection.'],
+        [
+          'A single record (`_by_id`, a nested many-to-one)',
+          'A write to a record the result held, or to the id the query asked for.'
+        ]
+      ]
+    },
+    {
+      type: 'ul',
+      items: [
+        'Every re-run runs as you, never as the person who wrote: your role, row filters, user scopes and API key scopes apply each time, read fresh. If you lose access, the next result carries the errors your query now gets, with no data. If your sign-in ends, you get `SESSION_ENDED` and the live query completes.',
+        'Re-runs are throttled (`@live(throttle: ms)`, 100–60000, default 500) and a burst of writes collapses into one re-run. A result identical to the last one is not sent again.',
+        "Writes made by raw SQL produce no event, so they show up only on the next re-run something else triggers. A sort on a related record's field re-sorts only when the sorted collection itself changes.",
+        "Limits: 10 open live queries per person (`LIVE_QUERY_MAX_PER_USER`) and 500 per server (`LIVE_QUERY_MAX`). A query over the limit gets one result with error code `LIVE_QUERY_LIMIT`. The query cost limits (`GRAPHQL_MAX_SELECTIONS`, `GRAPHQL_MAX_DEPTH`, an API key's own depth cap) apply as on `POST /api/graphql`.",
+        "In multi-tenant hosting a live query hears its own tenant's writes only."
+      ]
     }
   ]
 }

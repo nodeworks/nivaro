@@ -1,10 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigation, useOptionalNivaroClient } from './../context'
 import { get, post } from '../lib/commands'
+import { useLiveAvailable, useLiveEvent } from '../lib/live'
 
 /**
- * Admin-authored announcement banners ("maintenance Friday 6pm") — polled
- * every minute, role/window-filtered server-side, dismiss = acknowledge
+ * Admin-authored announcement banners ("maintenance Friday 6pm") — a new or ended
+ * banner arrives over the socket (`announcements:changed`, #1744), the poll (every
+ * minute; every 5 while the socket is live) is the net under it; role/window-filtered server-side, dismiss = acknowledge
  * (stays gone for that user, admins see ack counts). Mount once per app
  * shell; renders nothing when there is nothing to say.
  */
@@ -19,6 +21,7 @@ export function AnnouncementBanner() {
   const qc = useQueryClient()
   // The host's videos page, for a banner's "Watch the video" link.
   const helpVideosPath = useNavigation().helpVideosPath ?? '/help-videos'
+  const live = useLiveAvailable()
   const { data: items = [] } = useQuery<Array<{ id: number; message: string; severity: string }>>({
     queryKey: ['announcements-active'],
     queryFn: () =>
@@ -29,8 +32,16 @@ export function AnnouncementBanner() {
         .then((r) => r.data ?? [])
         .catch(() => []),
     enabled: !!client,
-    refetchInterval: 60_000
+    // The socket says when something changed; the poll still catches a window that simply
+    // elapsed (ends_at passing sends nothing) and a socket that is down.
+    refetchInterval: live ? 300_000 : 60_000
   })
+  // The notice is payload-free: the viewer's audience rules apply when they re-read.
+  useLiveEvent(
+    'announcements:changed',
+    () => void qc.invalidateQueries({ queryKey: ['announcements-active'] }),
+    { debounceMs: 300, includeOwn: true, enabled: !!client }
+  )
   if (items.length === 0) return null
   // Must-acknowledge rows (#90) render a BLOCKING overlay — the app is usable
   // again only after every one of them is explicitly acknowledged.

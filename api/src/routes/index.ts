@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
+import { announceConfigChanged, collectionHint } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
 import { accessAnnouncement, announceAccessChanged } from '../services/record-events.js'
@@ -17,6 +18,7 @@ import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
 import { aiQualityRoutes } from './ai-quality.js'
+import { aiAskContextRoutes } from './ai-ask-context.js'
 import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
 import { aiExplainRoutes } from './ai-explain.js'
@@ -137,12 +139,14 @@ import { mergeRoutes } from './merge.js'
 import { messageActionsRoutes } from './message-actions.js'
 import { metricAlertsRoutes } from './metric-alerts.js'
 import { monitorRoutes } from './monitors.js'
+import { myJobsRoutes } from './my-jobs.js'
 import { myWorkRoutes } from './my-work.js'
 import { notificationBenchRoutes } from './notification-bench.js'
 import { notificationSubscriptionsRoutes } from './notification-subscriptions.js'
 import { notificationTemplateRoutes } from './notification-templates.js'
 import { notificationsRoutes } from './notifications.js'
 import { offboardingRoutes } from './offboarding.js'
+import { opsAssistantRoutes } from './ops-assistant.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
 import { opsDbRoutes } from './ops-db.js'
 import { opsLogsRoutes } from './ops-logs.js'
@@ -153,6 +157,7 @@ import { pagesRoutes } from './pages.js'
 import { partnerDependencyRoutes } from './partner-dependencies.js'
 import { pdfTemplatesRoutes } from './pdf-templates.js'
 import { persistedQueriesRoutes } from './persisted-queries.js'
+import { personSummaryRoutes } from './person-summary.js'
 import { pickerExclusionRoutes } from './picker-exclusions.js'
 import { pickerNarrowingRoutes } from './picker-narrowing.js'
 import { pinnedRoutes } from './pinned.js'
@@ -331,9 +336,14 @@ export async function registerRoutes(app: FastifyInstance) {
       // Config hot-push (#268): tell open clients the schema/layout changed —
       // they re-resolve field-config/layout queries in place and show an
       // "updated" chip instead of serving a stale form until reload.
+      // Tenant-scoped, and named by collection when the request names one (#1740).
       try {
-        const surface = req.url.split('/')[2] ?? 'config'
-        app.io?.emit('config:update', { surface, at: Date.now() })
+        const surface = req.url.split('/')[2]?.split('?')[0] ?? 'config'
+        announceConfigChanged(
+          surface,
+          collectionHint(req),
+          (req as unknown as { nvrTenantId?: string }).nvrTenantId
+        )
       } catch {
         /* broadcast is best-effort */
       }
@@ -366,6 +376,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
   await app.register(announcementRoutes, { prefix: '/announcements' })
+  await app.register(myJobsRoutes, { prefix: '/my-jobs' })
   await app.register(viewSubscriptionsRoutes, { prefix: '/view-subscriptions' })
   await app.register(coverageGapsRoutes)
   await app.register(inactiveUserLinkRoutes, { prefix: '/inactive-user-links' })
@@ -393,6 +404,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiConversationRoutes, { prefix: '/ai/conversations' })
   await app.register(aiWatchRoutes, { prefix: '/ai/watches' })
   await app.register(aiPlanRoutes, { prefix: '/ai' })
+  await app.register(aiAskContextRoutes, { prefix: '/ai/ask' })
   await app.register(aiMemoryRoutes, { prefix: '/ai' })
   await app.register(aiDesignRoutes, { prefix: '/ai-design' })
   await app.register(activityRoutes, { prefix: '/activity' })
@@ -456,6 +468,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })
   await app.register(usersRoutes, { prefix: '/users' })
+  await app.register(personSummaryRoutes, { prefix: '/users' })
   await app.register(teamUserRoutes, { prefix: '/users' })
   await app.register(aiMemoryAdminRoutes, { prefix: '/users' })
   await app.register(directoryRoutes, { prefix: '/directory' })
@@ -569,6 +582,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
+  await app.register(opsAssistantRoutes, { prefix: '/ops-assistant' })
   await app.register(commandCenterRoutes, { prefix: '/command-center' })
   await app.register(featureFlagRoutes)
   await app.register(eventsStreamRoutes, { prefix: '/events' })

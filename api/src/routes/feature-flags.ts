@@ -4,13 +4,14 @@ import { db } from '../db/index.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
+import { announceToTenant } from '../services/record-events.js'
 
 /**
  * Feature flags (#651): ship dark, enable per role or percentage.
  * `GET /feature-flags/mine` resolves the caller's effective set — role gate
  * first, then a stable percentage bucket (sha256(userId+key) % 100) so a
  * gradual rollout never flip-flops for one person. Admin CRUD is audited;
- * a 60s in-process cache keeps the resolve path off the DB per request.
+ * a 2s in-process cache keeps the resolve path off the DB per request.
  */
 
 interface FlagRow {
@@ -23,12 +24,17 @@ interface FlagRow {
   percentage: number | null
 }
 
+// Short on purpose (#1741): a toggle pushes `flags:changed` to open tabs, which re-read this
+// route at once — another replica's cache must not outlive that read by long.
+const CACHE_MS = 2_000
 let cache: { at: number; rows: FlagRow[] } | null = null
 const bust = () => {
   cache = null
+  // Open tabs re-read /feature-flags/mine now instead of on the next page load.
+  announceToTenant('flags:changed')
 }
 async function allFlags(): Promise<FlagRow[]> {
-  if (cache && Date.now() - cache.at < 60_000) return cache.rows
+  if (cache && Date.now() - cache.at < CACHE_MS) return cache.rows
   const rows = (await db('nivaro_feature_flags').select('*')) as FlagRow[]
   cache = { at: Date.now(), rows }
   return rows

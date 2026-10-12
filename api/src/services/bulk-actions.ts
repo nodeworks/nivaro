@@ -503,9 +503,10 @@ export async function runDefinition(
   ids: Array<string | number>,
   reason: string | null,
   req: FastifyRequest,
-  opts: { dryRun?: boolean } = {}
+  opts: { dryRun?: boolean; progress?: unknown } = {}
 ): Promise<BulkRunResult> {
   const { readOne, updateOne } = await import('./items.js')
+  const { openBulkRowProgress } = await import('./live-progress.js')
   const user = req.user as User
   const dryRun = !!opts.dryRun
   const result: BulkRunResult = {
@@ -548,8 +549,15 @@ export async function runDefinition(
       throw new Error(`No transition labelled "${label}" on the ${collection} pipeline`)
   }
 
+  const rp = openBulkRowProgress(opts.dryRun ? null : opts.progress, user?.id, () => ({
+    ok: result.succeeded,
+    failed: result.failed,
+    skipped: result.skipped,
+    reason: result.errors[result.errors.length - 1]?.error ?? null
+  }))
   for (const rawId of ids) {
     const item = String(rawId)
+    rp.next(item)
     try {
       const record = (await readOne(user, collection, item).catch(() => null)) as Record<
         string,
@@ -686,5 +694,6 @@ export async function runDefinition(
       fail(item, (err instanceof Error ? err.message : String(err)).slice(0, 300))
     }
   }
+  rp.end()
   return result
 }

@@ -1,8 +1,13 @@
 import {
   AutofillRunsChip,
+  configureTabSound,
+  configureUserSync,
   DEMO_USER,
+  DndMark,
+  DoNotDisturbRow,
   ForceReloadBanner,
   installReplayTail,
+  isDndActive,
   parseThemeAccents,
   registerViewAsOpener,
   resolveAccentColor,
@@ -13,7 +18,8 @@ import {
   setTimeDisplay,
   startRum,
   UserAvatar,
-  useCleanRecording
+  useCleanRecording,
+  useUserSync
 } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -30,6 +36,7 @@ import {
   Fragment,
   type ReactNode,
   Suspense,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -65,13 +72,19 @@ import {
   ApiUpdateBanner,
   defaultItemUrl,
   ErrorSurface,
+  focusPopoutOpener,
   HelpVideoRecordingProvider,
+  IncidentBanner,
+  JobsTray,
+  isRecordPopout,
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
   RealtimeContext,
-  RealtimeStatusBanner
+  RealtimeStatusBanner,
+  RecordOutboxHost
 } from '@nivaro/shared'
+import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
@@ -260,6 +273,13 @@ export function AppLayout() {
   usePagePresence()
   useSessionRecorder()
   const { user } = useAuth()
+  // Do not disturb (#2114): the mark on the person's avatar, cleared when the time runs out.
+  const [, dndTick] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => dndTick((n) => n + 1), 30_000)
+    return () => clearInterval(t)
+  }, [])
+  const dndOn = isDndActive(user?.preferences as Record<string, unknown> | undefined)
   // "View as" on a person's page (#640) opens a new tab as them.
   useEffect(() => registerViewAsOpener(openViewAsTab), [])
   // A clean help-video recording shows the signed-in person as Demo User.
@@ -303,6 +323,8 @@ export function AppLayout() {
   }, [authUser])
 
   const location = useLocation()
+  // A popped-out record (#2131) is the record page alone — no navigation chrome.
+  const [popout] = useState(isRecordPopout)
   // Real-user monitoring: one 'load' event per page load, one 'route' event
   // per SPA navigation, aggregated per ROUTE PATTERN so ids don't explode
   // the cardinality. Fire-and-forget — never affects the page it measures.
@@ -519,6 +541,7 @@ export function AppLayout() {
             }
           />
           <ViewAsBar />
+          {popout && <PopoutBar />}
           <DevStaleBanner />
           <RecorderBadge />
           <FloatingReplaySlot />
@@ -529,6 +552,7 @@ export function AppLayout() {
           <NivaroProvider client={announcementsClient}>
             <AnnouncementBanner />
           </NivaroProvider>
+          <IncidentBannerHost />
           <div className='flex min-h-0 flex-1 overflow-hidden'>
             <a
               href='#main-content'
@@ -538,7 +562,12 @@ export function AppLayout() {
             </a>
 
             {/* ─── Sidebar ──────────────────────────────────────────────── */}
-            <aside className='flex h-screen shrink-0 overflow-hidden bg-nvr-navy dark:bg-[#090c10]'>
+            <aside
+              className={cn(
+                'flex h-screen shrink-0 overflow-hidden bg-nvr-navy dark:bg-[#090c10]',
+                popout && 'hidden'
+              )}
+            >
               {/* Icon rail — always 52px */}
               <div className='flex w-[52px] shrink-0 flex-col items-center border-r border-white/[0.07]'>
                 {/* Logo mark */}
@@ -679,7 +708,8 @@ export function AppLayout() {
                 <div className='flex w-full shrink-0 justify-center border-t border-white/[0.07] px-1.5 py-2.5'>
                   <Popover>
                     <PopoverTrigger asChild>
-                      <span className='inline-flex cursor-pointer'>
+                      <span className='relative inline-flex cursor-pointer'>
+                        {dndOn && <DndMark className='absolute -right-1 -top-1 z-10' />}
                         <UserAvatar
                           userId={user?.id}
                           alt={displayName}
@@ -716,6 +746,9 @@ export function AppLayout() {
                         </div>
                       </div>
                       <div className='my-2.5 border-t border-slate-100' />
+                      <NivaroProvider client={announcementsClient}>
+                        <DoNotDisturbRow />
+                      </NivaroProvider>
                       <Link
                         to='/profile'
                         className='flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-[13px] text-slate-600 transition-colors hover:bg-slate-50 hover:text-slate-900'
@@ -847,6 +880,9 @@ export function AppLayout() {
         <ForceRefreshBanner />
         <SystemBusy />
         <AutofillChips />
+        <JobsTrayHost />
+        <UserSyncHost />
+        <OutboxHost userId={authUser?.id ?? null} />
       </TooltipProvider>
     </RealtimeContext.Provider>
   )
@@ -1019,7 +1055,62 @@ function HelpVideoHost({ children }: { children: ReactNode }) {
           helpVideosPath: '/help-videos'
         }}
       >
-        <HelpVideoRecordingProvider>{children}</HelpVideoRecordingProvider>
+        <HelpVideoRecordingProvider>
+          <AskPanelHost>{children}</AskPanelHost>
+        </HelpVideoRecordingProvider>
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
+
+/**
+ * One person, many tabs (#2383 #2434 #2435): reading a notification or chat room, or saving a
+ * preference, in one tab or device applies in the others at once; and only the most recently
+ * used tab plays a sound. A "View as" tab is someone else, so it keeps its own channels.
+ */
+function UserSyncHost() {
+  const { user, refetch } = useAuth()
+  // Keyed by the signed-in person (plus View-as): after a user switch a stale tab of the
+  // previous person can never share a channel with this one.
+  const scope = `${user?.id ?? ''}${readMasquerade() ? ':as' : ''}`
+  configureUserSync(scope)
+  configureTabSound(scope)
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <UserSyncInner onPrefsChanged={() => void refetch()} />
+    </NivaroProvider>
+  )
+}
+
+/** Incident mode banner (#2016): administrators only; in the banner stack, above the outlet. */
+function IncidentBannerHost() {
+  const navigate = useNavigate()
+  const { user } = useAuth()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider
+        value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+      >
+        <IncidentBanner enabled={!!user?.is_admin} />
+      </NavigationContext.Provider>
+    </NivaroProvider>
+  )
+}
+
+function UserSyncInner({ onPrefsChanged }: { onPrefsChanged: () => void }) {
+  useUserSync({ onPrefsChanged })
+  return null
+}
+
+/** The Jobs tray (#1724): long things the person started, on every page. */
+function JobsTrayHost() {
+  const navigate = useNavigate()
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <NavigationContext.Provider
+        value={{ navigate: (path) => navigate(path), itemUrl: defaultItemUrl }}
+      >
+        <JobsTray />
       </NavigationContext.Provider>
     </NivaroProvider>
   )
@@ -1033,6 +1124,42 @@ function AutofillChips() {
     <AutofillRunsChip
       onOpen={(run) => navigate(`/collections/${run.collection}/new?autofill=${run.id}`)}
     />
+  )
+}
+
+/** Offline record saves (#1678) replay from any page; a conflict's Review opens the record. */
+function OutboxHost({ userId }: { userId: string | null }) {
+  const navigate = useNavigate()
+  const onOpenRecord = useCallback(
+    (collection: string, itemId: string) => navigate(defaultItemUrl({ collection, itemId })),
+    [navigate]
+  )
+  return (
+    <NivaroProvider client={announcementsClient}>
+      <RecordOutboxHost userId={userId} onOpenRecord={onOpenRecord} />
+    </NivaroProvider>
+  )
+}
+
+/** The slim strip of a popped-out record window (#2131). */
+function PopoutBar() {
+  return (
+    <div
+      data-record-popout-bar
+      data-nvr-recording-hide='always'
+      className='flex shrink-0 items-center gap-2 border-b border-slate-200 bg-white px-4 py-1 text-[11.5px] text-slate-500 dark:border-border dark:bg-card dark:text-slate-400'
+    >
+      <span>Popped-out record — stays live and in step with your main window.</span>
+      <button
+        type='button'
+        onClick={() => {
+          if (!focusPopoutOpener()) window.open('/', '_blank')
+        }}
+        className='ml-auto h-6 rounded-md px-2 font-medium text-slate-600 hover:bg-muted dark:text-slate-300'
+      >
+        Main window
+      </button>
+    </div>
   )
 }
 

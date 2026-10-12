@@ -1695,11 +1695,13 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { messages, fresh, conversation_id, save, command } = req.body as {
+    const { messages, fresh, conversation_id, save, command, context } = req.body as {
       /** #1884 — a slash command that shapes the answer (chart, table, explain, steps). */
       command?: string
       messages?: Array<{ role: string; content: string }>
       fresh?: boolean
+      /** #1835 — the page asked from: ids and filters only, re-read below as the asker. */
+      context?: unknown
       /** #688 — deliver the answer as it is written (socket or SSE). */
       stream?: boolean
       /** #1833 — continue this stored conversation (history comes from it). */
@@ -1745,22 +1747,39 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     }
 
     // #1804 — "remember that …" is kept as a note, not sent to the model.
-    const { addMemoryNote, memoryPromptBlock, parseRememberCommand, readMemory } = await import(
-      '../services/ai-memory.js'
-    )
+    const {
+      AI_MEMORY_PROFILE_PATH,
+      addMemoryNote,
+      memoryFullMessage,
+      memoryPromptBlock,
+      parseRememberCommand,
+      readMemory
+    } = await import('../services/ai-memory.js')
     const rememberText = parseRememberCommand(history[history.length - 1].content)
     if (rememberText) {
-      const { note, dropped, duplicate } = await addMemoryNote(String(req.user!.id), rememberText)
-      const body: Record<string, unknown> = {
-        reply: duplicate
-          ? `I already remember that: “${note.text}”.`
-          : `Got it — I'll remember: “${note.text}”.${dropped ? ` (To make room I forgot the oldest note: “${dropped.text}”.)` : ''} You can see and edit what I remember under Profile → Ask AI memory.`,
-        trace: [],
-        proposals: [],
-        remembered: note,
-        request_id: null,
-        playbooks_used: 0
-      }
+      const kept = await addMemoryNote(String(req.user!.id), rememberText)
+      // A full memory refuses (Rob, 2026-10-12): no note is ever dropped to
+      // make room — the person picks what to remove on Profile.
+      const body: Record<string, unknown> =
+        'full' in kept
+          ? {
+              reply: `I couldn't remember that: ${memoryFullMessage(true)}`,
+              trace: [],
+              proposals: [],
+              memory_full: true,
+              request_id: null,
+              playbooks_used: 0
+            }
+          : {
+              reply: kept.duplicate
+                ? `I already remember that: “${kept.note.text}”.`
+                : `Got it — I'll remember: “${kept.note.text}”. You can see and edit what I remember under [Profile → Ask AI memory](${AI_MEMORY_PROFILE_PATH}).`,
+              trace: [],
+              proposals: [],
+              remembered: kept.note,
+              request_id: null,
+              playbooks_used: 0
+            }
       if (turn) Object.assign(body, await turn.record(body))
       return reply.send({ data: body })
     }
@@ -1782,19 +1801,28 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       ]
     }
     const playbooks = await retrievePlaybooks(question)
+    // #1835 #1886 #1842 #1993 #1837 — what the page handed the question,
+    // read again as the asker (unreadable ids are dropped). Last in the
+    // prompt: it changes with every page, the long prefix stays cached.
+    const { normalizeAskContext, resolveAskContext } = await import('../services/ai-ask-context.js')
+    const pageContext = await resolveAskContext(app, req.user!, normalizeAskContext(context))
     const system =
       (await buildChatSystemPrompt(req.user!, {
         playbooks: formatPlaybooksForPrompt(playbooks),
         question
-      })) + memoryBlock
+      })) +
+      memoryBlock +
+      pageContext.block
     const playbooksUsed = playbooks.length
     // `convo` below aliases `history` and grows per round — judge "standalone" now.
     const standalone = history.length === 1
     // #723 — the same standalone question by the same person inside the
     // window answers from cache (per person: answers are permission-scoped).
+    // A question asked with page context never is: the page, its rows and
+    // the person's access to them all move under the same words.
     const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
     const cacheKey =
-      standalone && answerCacheMinutes > 0 && redis
+      standalone && !pageContext.trace && answerCacheMinutes > 0 && redis
         ? `nvr:aichat:${req.user!.id}:${createHash('sha1')
             .update(`${answerCommand ?? ''}|${question.trim().toLowerCase().replace(/\s+/g, ' ')}`)
             .digest('hex')}`
@@ -1864,7 +1892,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           // until the asker clicks it (POST /ai/memory).
           memorySuggestions: { existing: memoryNotes }
         })
-        const { trace, proposals, plans, choices } = result
+        const { proposals, plans, choices } = result
+        // The context rides the trace: it names what the answer read, and a
+        // tool outside REPLAYABLE_TOOLS keeps the answer its author's (#1809).
+        const trace = pageContext.trace ? [pageContext.trace, ...result.trace] : result.trace
         const panel = await import('../services/ai-panel.js')
         const offers =
           result.memorySuggestions.length && !result.stopped
@@ -1874,10 +1905,10 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           action: 'ai-chat',
           user: user.id,
           comment: result.stopped
-            ? `stopped after ${trace.length} tool call(s)`
+            ? `stopped after ${result.trace.length} tool call(s)`
             : result.truncated
-              ? `tool-call limit after ${trace.length} tool call(s)`
-              : `${trace.length} tool call(s)`,
+              ? `tool-call limit after ${result.trace.length} tool call(s)`
+              : `${result.trace.length} tool call(s)`,
           req
         })
         if (result.truncated) {
@@ -1909,13 +1940,19 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         // they mean nothing without the conversation. A stopped answer is
         // not one either: it was never finished.
         // Someone who turned Ask AI history off keeps their question text out
-        // of the shared playbook store too.
-        if (standalone && trace.length > 0 && !result.stopped && !historyOff) {
+        // of the shared playbook store too; a page-context answer is no playbook.
+        if (
+          standalone &&
+          result.trace.length > 0 &&
+          !result.stopped &&
+          !historyOff &&
+          !pageContext.trace
+        ) {
           void recordPlaybook({
             userId: user.id,
             requestId,
             question,
-            trace,
+            trace: result.trace,
             answer: text,
             rounds: result.rounds
           }).catch((err) => req.log.warn({ err }, 'AI playbook record failed'))

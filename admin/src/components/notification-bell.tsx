@@ -1,5 +1,7 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
+  breaksThroughDnd,
+  isDndActive,
   NivaroProvider,
   type NotificationRouteMap,
   playNotificationSound,
@@ -77,9 +79,17 @@ export function NotificationBell({
   const subscribe = useCallback(
     (onNew: () => void) => {
       const socket = getSocket()
-      const handler = (n: { title?: string; subject?: string; category?: string }) => {
+      const handler = (n: {
+        title?: string
+        subject?: string
+        category?: string
+        lane?: string
+      }) => {
         onNew()
         queryClient.invalidateQueries({ queryKey: ['notifications'] })
+        // Do not disturb (#2114) holds the toast and the sound; the inbox row and the badge
+        // still arrive, and a critical notification still breaks through.
+        if (isDndActive(prefsRef.current as Record<string, unknown>) && !breaksThroughDnd(n)) return
         toast.info(n.subject ?? n.title ?? 'New notification')
         playNotificationSound(
           soundForCategory(prefsRef.current as Record<string, unknown>, n.category)

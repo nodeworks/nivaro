@@ -3,7 +3,7 @@ import { AlarmClock, AlertTriangle, Hash, Paperclip, Quote, Send, Type, X } from
 import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useApiFetchConfig, useNivaroClient } from '../../context'
-import { get } from '../../lib/commands'
+import { get, post } from '../../lib/commands'
 import { cn } from '../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
@@ -19,6 +19,15 @@ import {
   useUserSearch
 } from './chat-core'
 import { useRoomInfo, useScheduledMessages } from './chat-hooks'
+import {
+  type BuiltinSlash,
+  filterSlash,
+  parseSlashLine,
+  SlashForm,
+  SlashMenu,
+  slashQuery,
+  useChatCommands
+} from './SlashCommands'
 import { tsvToTable } from './MessageFormat'
 
 /**
@@ -117,6 +126,13 @@ export const ChatComposer = forwardRef<
   const [mentionQuery, setMentionQuery] = useState<string | null>(null)
   const [recordQ, setRecordQ] = useState<string | null>(null)
   const [pickIndex, setPickIndex] = useState(0)
+  const [slashQ, setSlashQ] = useState<string | null>(null)
+  const [slashForm, setSlashForm] = useState<{ kind: BuiltinSlash; text: string } | null>(null)
+  const commands = useChatCommands()
+  const slashHits = useMemo(
+    () => (slashQ === null ? [] : filterSlash(commands, slashQ).slice(0, 8)),
+    [commands, slashQ]
+  )
   const [files, setFiles] = useState<PendingFile[]>([])
   const [pastedTable, setPastedTable] = useState<{ raw: string; table: string } | null>(null)
   const [scheduleOpen, setScheduleOpen] = useState(false)
@@ -205,7 +221,17 @@ export const ChatComposer = forwardRef<
       if (matches(name) || (u.email ?? '').toLowerCase().startsWith(q))
         push({ user_id: u.id, display_name: name, sub: null, kind: 'person' })
     }
-    return out.slice(0, 8)
+    // People who can answer now come first (#2405): online, then idle, then the rest.
+    // Array.prototype.sort is stable, so the existing ranking holds within each tier.
+    const tier = (c: Candidate) => {
+      if (c.kind !== 'person') return -1
+      const u = (cfg.onlineUsers as ChatOnlineUser[]).find(
+        (o) => String(o.user_id).toUpperCase() === c.user_id.toUpperCase()
+      )
+      return u ? (u.is_idle ? 1 : 0) : 2
+    }
+    const ranked = out.map((c, i) => ({ c, i, t: tier(c) })).sort((a, b) => a.t - b.t || a.i - b.i)
+    return ranked.map((r) => r.c).slice(0, 8)
   }, [mentionQuery, info, dmPeers, cfg.onlineUsers, searched, botName, isChannel, me])
 
   // ── # record picker (#934) ────────────────────────────────────────────────
@@ -254,7 +280,9 @@ export const ChatComposer = forwardRef<
     staleTime: 30_000
   })
 
+  const slashOpen = slashQ !== null && slashHits.length > 0
   const pickerOpen =
+    slashOpen ||
     (mentionQuery !== null && mentionCandidates.length > 0) ||
     (recordQ !== null && recordHits.length > 0)
 
@@ -360,8 +388,43 @@ export const ChatComposer = forwardRef<
     onClearQuote?.()
     typing.clearTyping()
   }
+  const pickSlash = (e: { name: string; builtin: boolean }) => {
+    setSlashQ(null)
+    if (e.builtin) {
+      setSlashForm({ kind: e.name as BuiltinSlash, text: '' })
+      setDraft('')
+    } else {
+      setDraft(`/${e.name} `)
+      requestAnimationFrame(() => inputRef.current?.focus())
+    }
+  }
+  /** `/name args` on send: built-ins open their form, extension commands run server-side. */
+  const runSlashLine = (): boolean => {
+    const line = parseSlashLine(draft.trim())
+    if (!line) return false
+    const entry = commands.find((c) => c.name === line.name)
+    if (!entry) return false
+    if (entry.builtin) {
+      setSlashForm({ kind: line.name as BuiltinSlash, text: line.args })
+      setDraft('')
+      return true
+    }
+    client
+      .request<{ data: { reply: string | null } }>(
+        post(`/chat/commands/${line.name}/run`, { room, args: line.args })
+      )
+      .then((r) => {
+        if (r.data?.reply) toast.message(r.data.reply)
+      })
+      .catch((err) =>
+        toast.error((err as { response?: { error?: string } })?.response?.error ?? 'Command failed')
+      )
+    setDraft('')
+    return true
+  }
   const submit = () => {
     if (disabledReason || uploading) return
+    if (runSlashLine()) return
     const { text, attachments, mentions } = collect()
     if (!text && attachments.length === 0) return
     send.mutate({ text, mentions, attachments, parentId, quoteId: quote?.id ?? null, urgent })
@@ -415,12 +478,18 @@ export const ChatComposer = forwardRef<
     setMentionQuery(mq)
     const rq = mq === null ? recordQuery(value, cursor) : null
     setRecordQ(rq)
-    if (mq !== null || rq !== null) setPickIndex(0)
+    const sq = mq === null && rq === null ? slashQuery(value, cursor) : null
+    setSlashQ(sq)
+    if (mq !== null || rq !== null || sq !== null) setPickIndex(0)
   }
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (pickerOpen) {
-      const n = mentionQuery !== null ? mentionCandidates.length : recordHits.length
+      const n = slashOpen
+        ? slashHits.length
+        : mentionQuery !== null
+          ? mentionCandidates.length
+          : recordHits.length
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         setPickIndex((i) => (i + 1) % n)
@@ -433,7 +502,8 @@ export const ChatComposer = forwardRef<
       }
       if (e.key === 'Enter' || e.key === 'Tab') {
         e.preventDefault()
-        if (mentionQuery !== null) selectMention(mentionCandidates[pickIndex])
+        if (slashOpen) pickSlash(slashHits[pickIndex])
+        else if (mentionQuery !== null) selectMention(mentionCandidates[pickIndex])
         else selectRecord(recordHits[pickIndex])
         return
       }
@@ -441,6 +511,7 @@ export const ChatComposer = forwardRef<
         e.preventDefault()
         setMentionQuery(null)
         setRecordQ(null)
+        setSlashQ(null)
         return
       }
     }
@@ -505,6 +576,16 @@ export const ChatComposer = forwardRef<
 
   return (
     <div className={cn('shrink-0 border-t', th.divider)} data-chat-composer-wrap>
+      {slashForm && (
+        <SlashForm
+          kind={slashForm.kind}
+          room={room}
+          initialText={slashForm.text}
+          parentId={parentId}
+          onClose={() => setSlashForm(null)}
+          th={th}
+        />
+      )}
       {quote && (
         <div className='flex items-start gap-2 px-3 pt-2' data-chat-quote-draft>
           <Quote className='mt-0.5 h-3.5 w-3.5 shrink-0 text-slate-400' />
@@ -599,61 +680,70 @@ export const ChatComposer = forwardRef<
               th.surface,
               'border-slate-200 dark:border-border'
             )}
-            data-chat-picker={mentionQuery !== null ? 'mention' : 'record'}
+            data-chat-picker={slashOpen ? 'slash' : mentionQuery !== null ? 'mention' : 'record'}
           >
-            {mentionQuery !== null
-              ? mentionCandidates.map((c, i) => (
-                  <button
-                    key={c.user_id}
-                    type='button'
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      selectMention(c)
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px]',
-                      i === pickIndex ? th.accentSoft : 'text-slate-700 dark:text-slate-200'
-                    )}
-                  >
-                    {c.kind === 'person' || c.kind === 'bot' ? (
-                      renderAvatar(c.user_id, c.display_name)
-                    ) : (
-                      <span className='flex h-[22px] w-[22px] items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 dark:bg-muted dark:text-slate-300'>
-                        @
+            {slashOpen ? (
+              <SlashMenu
+                entries={slashHits}
+                index={pickIndex}
+                onPick={pickSlash}
+                accentSoft={th.accentSoft}
+              />
+            ) : mentionQuery !== null ? (
+              mentionCandidates.map((c, i) => (
+                <button
+                  key={c.user_id}
+                  type='button'
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    selectMention(c)
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px]',
+                    i === pickIndex ? th.accentSoft : 'text-slate-700 dark:text-slate-200'
+                  )}
+                >
+                  {c.kind === 'person' || c.kind === 'bot' ? (
+                    renderAvatar(c.user_id, c.display_name)
+                  ) : (
+                    <span className='flex h-[22px] w-[22px] items-center justify-center rounded-full bg-slate-200 text-[11px] font-bold text-slate-600 dark:bg-muted dark:text-slate-300'>
+                      @
+                    </span>
+                  )}
+                  <span className='min-w-0 flex-1 truncate'>
+                    {c.kind === 'here' || c.kind === 'channel'
+                      ? `@${c.display_name}`
+                      : c.display_name}
+                    {c.sub && (
+                      <span className='ml-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
+                        {c.sub}
                       </span>
                     )}
-                    <span className='min-w-0 flex-1 truncate'>
-                      {c.kind === 'here' || c.kind === 'channel'
-                        ? `@${c.display_name}`
-                        : c.display_name}
-                      {c.sub && (
-                        <span className='ml-1.5 text-[11px] text-slate-500 dark:text-slate-400'>
-                          {c.sub}
-                        </span>
-                      )}
-                    </span>
-                  </button>
-                ))
-              : recordHits.map((h, i) => (
-                  <button
-                    key={`${h.type}:${h.token}`}
-                    type='button'
-                    onMouseDown={(e) => {
-                      e.preventDefault()
-                      selectRecord(h)
-                    }}
-                    className={cn(
-                      'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px]',
-                      i === pickIndex ? th.accentSoft : 'text-slate-700 dark:text-slate-200'
-                    )}
-                  >
-                    <Hash className='h-3.5 w-3.5 shrink-0 text-slate-400' />
-                    <span className='min-w-0 flex-1 truncate font-medium'>{h.label}</span>
-                    <span className='shrink-0 text-[10.5px] capitalize text-slate-500 dark:text-slate-400'>
-                      {h.type}
-                    </span>
-                  </button>
-                ))}
+                  </span>
+                </button>
+              ))
+            ) : (
+              recordHits.map((h, i) => (
+                <button
+                  key={`${h.type}:${h.token}`}
+                  type='button'
+                  onMouseDown={(e) => {
+                    e.preventDefault()
+                    selectRecord(h)
+                  }}
+                  className={cn(
+                    'flex w-full items-center gap-2 px-3 py-1.5 text-left text-[12.5px]',
+                    i === pickIndex ? th.accentSoft : 'text-slate-700 dark:text-slate-200'
+                  )}
+                >
+                  <Hash className='h-3.5 w-3.5 shrink-0 text-slate-400' />
+                  <span className='min-w-0 flex-1 truncate font-medium'>{h.label}</span>
+                  <span className='shrink-0 text-[10.5px] capitalize text-slate-500 dark:text-slate-400'>
+                    {h.type}
+                  </span>
+                </button>
+              ))
+            )}
           </div>
         )}
         {/* One box: the text gets the whole width, the tools sit under it. In a

@@ -128,6 +128,13 @@ vi.mock('../../../services/queues.js', () => ({
     return out
   }
 }))
+vi.mock('../../../services/ai-link-labels.js', () => ({
+  linkLabelsAsUser: async (_u: unknown, m: Map<string, Set<string>>) => {
+    const out: Record<string, string> = {}
+    for (const [c, ids] of m) for (const id of ids) out[`${c}:${id}`] = `L-${id}`
+    return out
+  }
+}))
 const users: Record<string, Row> = {}
 vi.mock('../../../services/users.js', () => ({
   getUser: async (id: string) => users[id],

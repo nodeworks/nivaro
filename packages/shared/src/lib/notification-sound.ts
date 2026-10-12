@@ -8,6 +8,7 @@
  */
 
 import { isCleanRecording } from '../components/help-videos/recorder/cleanRecording'
+import { shouldPlayHere } from './tab-sound'
 
 export type NotificationSound = 'off' | 'subtle' | 'chime'
 
@@ -38,11 +39,19 @@ function tone(ac: AudioContext, freq: number, start: number, dur: number, peak: 
   osc.stop(start + dur + 0.05)
 }
 
-/** Play the configured notification sound. No-op for 'off'/unknown/unavailable audio. */
-export function playNotificationSound(kind: NotificationSound | string | null | undefined): void {
+/**
+ * Play the configured notification sound. No-op for 'off'/unknown/unavailable audio.
+ * With several tabs open only the most recently used one plays (#2435) — except `preview`,
+ * the sample a settings control plays for the person looking at it.
+ */
+export function playNotificationSound(
+  kind: NotificationSound | string | null | undefined,
+  opts: { preview?: boolean } = {}
+): void {
   if (!kind || kind === 'off') return
   // A clean help-video recording captures this tab's audio: stay silent.
   if (isCleanRecording()) return
+  if (!opts.preview && !shouldPlayHere()) return
   const ac = audioCtx()
   if (!ac) return
   try {

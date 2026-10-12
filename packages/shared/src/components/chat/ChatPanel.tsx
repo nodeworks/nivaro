@@ -44,15 +44,18 @@ import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
+import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import { type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
+import { DoNotDisturbRow } from '../DoNotDisturb'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { UserChip } from '../item-edit/GroupSection'
 import { UserAvatar } from '../UserAvatar'
 import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import { SimpleSelect } from '../ui/SimpleSelect'
+import { BotStreamBubble, useBotStream } from './BotStream'
 import { BulkInvitePanel, ChannelAuditLog, ChannelExtrasEditor } from './ChannelExtras'
 import { ChannelLookPicker, ChannelTile } from './ChannelLook'
 import {
@@ -106,6 +109,7 @@ import {
   usePeerReadAt,
   useRoomMembership,
   useRoomPins,
+  useChatThread,
   useSendChatMessage,
   useSetMyPreferences,
   useTogglePin,
@@ -115,6 +119,7 @@ import {
 } from './chat-core'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
+import { PollCard } from './PollCard'
 import {
   ChannelIntro,
   JumpToDate,
@@ -560,6 +565,19 @@ function EntityChip({ token, url, mine }: { token: string; url: string | null; m
     staleTime: 10 * 60_000
   })
 
+  // #1976: the state pill follows the record. Each viewer re-reads it as themselves; the
+  // socket only says that something moved.
+  const qc = useQueryClient()
+  useLiveRecord(
+    card?.collection,
+    card?.id,
+    (batch) => {
+      if (batchTouches(batch, LIVE_ASPECTS.state))
+        void qc.invalidateQueries({ queryKey: ['nvr-chat-entity-card', token] })
+    },
+    { includeOwn: true, debounceMs: 400 }
+  )
+
   const open = () => {
     if (card) {
       const build = cfg.recordUrl ?? ((c: string, id: string | number) => `/collections/${c}/${id}`)
@@ -975,7 +993,8 @@ export function ChatRoomView({
   onOpenSettings,
   renderMessageBody,
   initialUnread,
-  anchor: anchorProp = null
+  anchor: anchorProp = null,
+  openThread = null
 }: {
   room: string
   label: string
@@ -987,6 +1006,8 @@ export function ChatRoomView({
   initialUnread?: number
   /** Open around a message (a search hit, #977) or a day (#976). */
   anchor?: ChatAnchor
+  /** Deep link (?thread=): open this thread's pane once the root is readable. */
+  openThread?: number | null
 }) {
   const cfg = useChatConfig()
   const th = useTheme()
@@ -1161,6 +1182,13 @@ export function ChatRoomView({
   const [preview, setPreview] = useState<PreviewFile | null>(null)
   const [notifyMenuOpen, setNotifyMenuOpen] = useState(false)
   const [threadRoot, setThreadRoot] = useState<number | null>(null)
+  // A root the viewer cannot read (hidden, deleted) comes back empty, so the
+  // room just opens without the pane.
+  const linkedThread = useChatThread(openThread ? room : null, openThread)
+  const linkedRootOk = !!linkedThread.root && !linkedThread.root.deleted_at
+  useEffect(() => {
+    if (openThread && linkedRootOk) setThreadRoot(openThread)
+  }, [openThread, linkedRootOk])
   const [quote, setQuote] = useState<ChatMessage | null>(null)
   const [threadQuote, setThreadQuote] = useState<ChatMessage | null>(null)
   const [infoOpen, setInfoOpen] = useState(false)
@@ -1172,6 +1200,8 @@ export function ChatRoomView({
   /** Set when MY message mentioned the bot — "…is thinking" until its reply
    *  arrives (or a timeout says it won't). */
   const [botAskedAt, setBotAskedAt] = useState<number | null>(null)
+  // #1810 — the assistant's answer as it is written (needs the host's socket).
+  const botStream = useBotStream(room, me?.id ?? null)
   const composerRef = useRef<ComposerHandle>(null)
   const dividerRef = useRef<HTMLDivElement>(null)
   // Frozen at mount — markRead fires immediately, so the live rooms query
@@ -1721,6 +1751,7 @@ export function ChatRoomView({
                     navigate={cfg.navigate}
                   />
                 ))}
+              {m.poll && <PollCard poll={m.poll} room={m.room} mine={mine} />}
               {(m.attachments ?? []).length > 0 && (
                 <div className={cn('flex flex-wrap gap-1.5', m.message && 'mt-1.5')}>
                   {(m.attachments ?? []).map((aid) => {
@@ -2399,6 +2430,16 @@ export function ChatRoomView({
             })
           )}
           {!searching && !hasNewer && <OutboxBubbles items={outbox} th={th} />}
+          {!searching && !hasNewer && botStream.live && botName && (
+            <BotStreamBubble
+              live={botStream.live}
+              botName={botName}
+              bubbleClass={th.bubbleOther}
+              accentClass={th.accentText}
+              onStop={botStream.stop}
+              onDismiss={botStream.dismiss}
+            />
+          )}
         </div>
       </div>
       {(unseen || hasNewer) && (
@@ -2428,7 +2469,7 @@ export function ChatRoomView({
         </div>
       )}
       <div className='min-h-[18px] shrink-0 px-3.5'>
-        {botAskedAt && botName ? (
+        {botAskedAt && botName && !botStream.live ? (
           <p
             className='flex items-center gap-1.5 text-[11px] italic text-slate-500'
             data-chat-bot-thinking
@@ -4466,6 +4507,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
               }
             />
             <ChatAppearAwayRow />
+            <DoNotDisturbRow />
             {users.length > 0 && (
               <div className='mb-1.5 flex items-center gap-1.5 px-1'>
                 <span className='text-[11px] text-slate-400'>Group by</span>

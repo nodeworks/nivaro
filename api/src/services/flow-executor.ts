@@ -1253,6 +1253,62 @@ async function runChatPost(op: FlowOperation, data: FlowData, ctx: ExecutionCont
   }
 }
 
+// ─── refresh-pages ("Tell open pages", #2078) ─────────────────────────────────
+
+/**
+ * Broadcasts that records changed — collection, ids, changed field NAMES — after a flow wrote
+ * them raw or through a partner, so open forms, lists and queues refresh. The same broadcast
+ * the items service sends, through the raw-write announcer (coalesced; past 100 ids it
+ * collapses into one "some records changed" event). Nothing but ids and names leaves.
+ */
+async function runRefreshPages(op: FlowOperation, data: FlowData, ctx: ExecutionContext) {
+  const opts = parseOpts(op)
+  const t = (k: string) => resolveTemplate(String(opts[k] ?? ''), data).trim()
+  const reject = (why: string) => ({
+    status: 'reject' as const,
+    output: { ...data, $error: `refresh-pages: ${why}` }
+  })
+  const collection = t('collection')
+  if (!/^[A-Za-z_][A-Za-z0-9_]{0,254}$/.test(collection)) return reject('a collection is required')
+  if (/^(nivaro|directus)_/i.test(collection))
+    return reject('system collections cannot be announced')
+  const rawItems = t('items')
+  let ids: string[] = []
+  if (rawItems) {
+    try {
+      const parsed = rawItems.startsWith('[') ? (JSON.parse(rawItems) as unknown[]) : null
+      ids = (parsed ?? rawItems.split(/[\s,;]+/)).map((x) => String(x).trim())
+    } catch {
+      ids = rawItems.split(/[\s,;]+/).map((x) => x.trim())
+    }
+  }
+  ids = [...new Set(ids.filter((i) => /^[A-Za-z0-9_-]{1,100}$/.test(i)))].slice(0, 2000)
+  const fields = t('changed_fields')
+    .split(/[\s,;]+/)
+    .filter((f) => /^[A-Za-z_][A-Za-z0-9_]{0,254}$/.test(f))
+  const action = ['create', 'update', 'delete'].includes(t('action')) ? t('action') : 'update'
+  if (ctx.dryRun) {
+    return {
+      status: 'resolve' as const,
+      output: {
+        ...data,
+        [`$preview_${op.key}`]: { op: 'refresh-pages', collection, ids: ids.length, fields }
+      }
+    }
+  }
+  const { announceRawWrites } = await import('./raw-write-announcer.js')
+  await announceRawWrites(collection, ids.length ? ids : null, {
+    action: action as 'create' | 'update' | 'delete',
+    changed_fields: fields,
+    source: `flow:${ctx.flowName ?? ctx.flowId}`
+  })
+  const resultKey = (opts.result_key as string) || 'refreshed'
+  return {
+    status: 'resolve' as const,
+    output: { ...data, [resultKey]: { collection, ids: ids.length || 'all' } }
+  }
+}
+
 // ─── Dispatcher ───────────────────────────────────────────────────────────────
 
 async function runOperation(
@@ -1312,6 +1368,8 @@ async function runOperationInner(
       return runChatPost(op, data, ctx)
     case 'task':
       return runTaskOp(op, data, ctx)
+    case 'refresh-pages':
+      return runRefreshPages(op, data, ctx)
     case 'item-write':
       return runItemWrite(op, data, ctx)
     default: {

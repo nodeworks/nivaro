@@ -126,7 +126,7 @@ useLiveRecordEvent('record:integrity', 'orders', id, () => refetchIntegrity())`
       items: [
         'Handlers live in a ref — pass inline arrows. Options: `debounceMs` (default 250; 0 = per event), `includeOwn`, `match`, `enabled`.',
         'A batch reports `ids`, `changedFields` (null = unknown, treat as everything), `aspectsOnly`, `created`, `deleted`, `own`.',
-        'Without a host realtime adapter the collection hooks do nothing and the panel behaves as before. Hosts whose record room rides a separate socket forward its events with `relayLiveEvent(event, payload)`.',
+        'Without a host realtime adapter the collection hooks do nothing and the panel behaves as before. Hosts whose record room rides a separate socket forward its events with `relayLiveEvent(event, payload)`. A portal or headless app gets the adapter from the socket it already holds with `createSocketRealtime({ socket })` (see React — Live Data), and `useLiveRecord` / `useLiveList` in `@nivaro/react` wrap these hooks around a react-query read.',
         'Never trust a payload value — re-read through your own permission-checked query.'
       ]
     },
@@ -139,14 +139,34 @@ useLiveRecordEvent('record:integrity', 'orders', id, () => refetchIntegrity())`
       type: 'table',
       head: ['Topic', 'Who may join', 'What moves it'],
       rows: [
-        ['`readiness`', 'Administrators', 'A finished run of the checks (the report rides the event, so other open pages show it without re-running) and a fix finishing'],
-        ['`issues`', 'Signed-in users', 'Any write to the issue log: new issues appear at the top, occurrence counts tick'],
-        ['`issue:<id>`', 'Administrators', 'Each new occurrence of that issue: the person (id), route and build, streamed into the open issue'],
+        [
+          '`readiness`',
+          'Administrators',
+          'A finished run of the checks (the report rides the event, so other open pages show it without re-running) and a fix finishing'
+        ],
+        [
+          '`issues`',
+          'Signed-in users',
+          'Any write to the issue log: new issues appear at the top, occurrence counts tick'
+        ],
+        [
+          '`issue:<id>`',
+          'Administrators',
+          'Each new occurrence of that issue: the person (id), route and build, streamed into the open issue'
+        ],
         ['`support`', 'Signed-in users', 'Tickets, claims, replies and status moves'],
         ['`team`', 'Signed-in users', 'Owner changes, tasks, SLA acknowledgements and escalations'],
-        ['`my-work`', 'Signed-in users', 'Owner changes, tasks, approvals; new notifications arrive on your own room. New rows highlight briefly'],
+        [
+          '`my-work`',
+          'Signed-in users',
+          'Owner changes, tasks, approvals; new notifications arrive on your own room. New rows highlight briefly'
+        ],
         ['`delegation`', 'Signed-in users', 'Out-of-office, delegate and owner-seat changes'],
-        ['`broadcasts`', 'Administrators', 'Deliveries, acknowledgements and notifications being read']
+        [
+          '`broadcasts`',
+          'Administrators',
+          'Deliveries, acknowledgements and notifications being read'
+        ]
       ]
     },
     {
@@ -236,6 +256,124 @@ export const collabLiveOps: DocSection = {
 // Join an administrators-only room while mounted; false = no live adapter, keep polling.
 const live = useLiveWatchRoom('conformance')
 useLiveEvent('conformance:progress', (p) => setProgress(p), { includeOwn: true })`
+    },
+    { type: 'h2', id: 'live-surfaces', text: 'Live surfaces and the socket inspector' },
+    {
+      type: 'ul',
+      items: [
+        'Notes: comment edits, deletes and reactions (on comments and on recorded notes), plus machine entries (transitions, partner events, import runs, change reasons), refresh in an open record as they happen. The notice carries the `$comments` aspect only; each viewer re-reads the thread as themselves.',
+        "Tasks: assigning, claiming, editing, completing and deleting a task refresh the record's Tasks section (`$tasks`).",
+        'Record chips in chat and linked record tokens update their state pill when the record moves. No state name travels in the notice; each viewer re-reads the pill with their own access.',
+        'Queue item sheets follow their record (state, comments) the way the full record page does; drill sheets rendered by the record form already did.',
+        "Realtime console, Sockets and rooms, Inspect: pick a connected client to see its rooms and the last 100 events sent to it (name, room, size, time, never the payload). Recording is off until an administrator opens the panel and stops when it closes or after 10 minutes unread. Routes (administrators only, caller's tenant only): `GET|POST|DELETE /realtime/sockets/:id/inspect`."
+      ]
+    }
+  ]
+}
+
+export const collabPresence: DocSection = {
+  id: 'presence-signals',
+  label: 'Presence, Do Not Disturb & Tab Sync',
+  content: [
+    { type: 'h1', id: 'presence-signals', text: 'Presence, Do Not Disturb & Tab Sync' },
+    {
+      type: 'p',
+      text: 'Small live signals tell you who else is on the thing you are working on, and your own state follows you across tabs and devices. They carry names only, never content, and only reach people who could already open the same record, ticket or page.'
+    },
+    { type: 'h3', id: 'presence-signals-who', text: 'Who is doing what' },
+    {
+      type: 'table',
+      head: ['You see', 'Where', 'Who sees it'],
+      rows: [
+        [
+          '"Beth is writing a note"',
+          'Under the Notes thread while someone has an unsent note',
+          'Everyone viewing that record (the record read gate, row filters and User Scopes included)'
+        ],
+        [
+          '"Kim is approving"',
+          'A pill on the pipeline panel while someone has a transition confirm or requirements dialog open',
+          'Everyone viewing that record. The repeat-transition guard still refuses a second move; this warns before it happens.'
+        ],
+        [
+          '"Kim is looking at this"',
+          'A support ticket sheet, and an issue row in the Issue log',
+          'People who can open the ticket (requester, assignee, its team, administrators); anyone signed in for an issue'
+        ],
+        [
+          '"Kim is replying"',
+          'Above a support ticket reply box while someone is typing a reply',
+          'People who can open the ticket'
+        ],
+        [
+          'Online, idle or away, and the page',
+          'A person’s page header and their user card',
+          'The same people the chat Online list shows: a person restricted to other zones or regions does not see presence outside their own scopes, and the page follows the Presence display setting'
+        ]
+      ]
+    },
+    {
+      type: 'p',
+      text: 'A signal is a heartbeat: the sender repeats it every four seconds while it is true and receivers let it lapse after seven, so a closed tab never leaves a stale "is typing". Typing relays through the record room (`record:signal`), ticket and issue pages through a topic room (`ops:ticket:<id>`, `ops:issue-view:<id>`) whose join is gated like the page and re-checked when access changes.'
+    },
+    {
+      type: 'table',
+      head: ['Event', 'Room', 'Payload'],
+      rows: [
+        [
+          '`record:signal`',
+          '`record:<collection>:<id>` (sender must already be in it)',
+          '`{collection, item, kind: note|transition, state: start|stop, user: {id, name}}`'
+        ],
+        [
+          '`ops:changed` with `viewers`',
+          '`ops:ticket:<id>`, `ops:issue-view:<id>`',
+          '`{topic, viewers: [{id, name}]}`'
+        ],
+        [
+          '`ops:changed` with `signal`',
+          '`ops:ticket:<id>`',
+          '`{topic, signal: {kind: reply, state, user}}`, sent from the client with `ops:signal`'
+        ]
+      ]
+    },
+    { type: 'h3', id: 'presence-signals-dnd', text: 'Do not disturb' },
+    {
+      type: 'p',
+      text: 'Turn it on from the avatar menu or the chat Online tab, for 30 minutes, an hour, four hours, until tomorrow morning, or until you switch it off. While it is on, toasts and sounds are held on every tab and device, and a red mark shows on your avatar (colleagues see it on your people page while you are online). Notifications still land in your inbox and the badge still counts them. Critical notifications (the Critical lane) still break through with their toast and sound. It is stored as `preferences.dnd = {until}` through `PATCH /users/me/preferences` (`null` turns it off) and syncs live, so ending it in one tab ends it everywhere.'
+    },
+    { type: 'h3', id: 'presence-signals-mentions', text: 'Read receipts on mentions' },
+    {
+      type: 'p',
+      text: 'Under a note that mentions someone, a line says whether they have seen it. A mention counts as seen once the person opens the record or reads the mention’s notification after the note was written; both come from watermarks the app already keeps (`nivaro_record_views`, `nivaro_notifications.read_at`), so nothing new is tracked. `GET /api/comments` adds `seen_at` to each mention, only for readers who can open that very record. Open thread views update the moment the person opens the record.'
+    },
+    { type: 'h3', id: 'presence-signals-sync', text: 'Your tabs and devices stay in step' },
+    {
+      type: 'ul',
+      items: [
+        'Reading a notification, or a chat room, clears its unread state on every other tab and device at once (`read:changed` on your `user:<id>` room), instead of on their next poll.',
+        'Saving a display preference (font size, time format, sound, density, do not disturb…) applies in your other tabs and windows immediately: over a BroadcastChannel in the same browser, over `prefs:changed` on your user room across devices. The theme follows across tabs of one browser.',
+        'With several tabs open, a notification or chat sound plays once, from the tab you used last. Tabs that stop answering are ignored, so a frozen tab never takes the sound with it. A "View as" tab keeps its own channels.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `import { useRecordSignalPeers, useRecordSignalWhile, useTopicPresence,
+  signalSentence, useUserSync, isDndActive } from '@nivaro/shared'
+
+// Others signalling on this record, and your own while a dialog is open:
+const approving = useRecordSignalPeers('orders', id, 'transition')
+useRecordSignalWhile('orders', id, 'transition', dialogOpen)
+
+// A ticket or issue page:
+const { viewers, replying, signalReplying } = useTopicPresence(\`ticket:\${ticketId}\`)
+
+// Once in the app shell (cross-tab read state and preferences):
+useUserSync({ onPrefsChanged: refetchMe })`
+    },
+    {
+      type: 'note',
+      text: 'Everything here is best effort and per server node, like the viewer avatars: with several API replicas a viewer list may show only the people connected to the same node.'
     }
   ]
 }

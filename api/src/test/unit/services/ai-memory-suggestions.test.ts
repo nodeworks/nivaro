@@ -44,9 +44,11 @@ import { runChatLoop } from '../../../services/ai-chat-loop.js'
 import {
   AI_MEMORY_MAX_NOTES,
   type AiMemoryNote,
+  addMemoryNote,
   addSuggestedNote,
   forgetMemory,
   looksLikeInstruction,
+  memoryFullMessage,
   offerMemorySuggestion,
   SUGGEST_MEMORY_TOOL_NAME,
   suggestionsFrom
@@ -228,6 +230,42 @@ describe('addSuggestedNote — the click (#1845)', () => {
       status: 400
     })
     expect(store.updates).toEqual([])
+  })
+})
+
+describe('full memory refuses on both paths (Rob, 2026-10-12)', () => {
+  const full = () => Array.from({ length: AI_MEMORY_MAX_NOTES }, (_, i) => note(`n${i}`))
+
+  it('typed "remember that …" no longer drops the oldest note', async () => {
+    seed(ASKER, full())
+    const r = await addMemoryNote(ASKER, 'By my zone I mean Zone 3')
+    expect(r).toEqual({ full: true })
+    expect(store.updates).toEqual([])
+    const kept = JSON.parse(store.users.get(ASKER)!.preferences!).ai_memory as AiMemoryNote[]
+    expect(kept).toHaveLength(AI_MEMORY_MAX_NOTES)
+    expect(kept[0].text).toBe('n0')
+  })
+
+  it('a duplicate still answers "already remembered" on a full list; room → kept', async () => {
+    seed(ASKER, full())
+    expect(await addMemoryNote(ASKER, 'N0')).toMatchObject({ duplicate: true })
+    seed(ASKER, full().slice(1))
+    const r = await addMemoryNote(ASKER, 'By my zone I mean Zone 3')
+    expect(r).toMatchObject({ duplicate: false, note: { text: 'By my zone I mean Zone 3' } })
+    expect(store.updates).toHaveLength(1)
+  })
+
+  it('the "Remember this?" click refuses with AI_MEMORY_FULL and the Profile pointer', async () => {
+    seed(ASKER, full())
+    const r = await addSuggestedNote(ASKER, 'one more')
+    expect(r).toMatchObject({ status: 409, code: 'AI_MEMORY_FULL' })
+    expect('error' in r && r.error).toMatch(/full .*Profile → Ask AI memory/)
+    expect(store.updates).toEqual([])
+  })
+
+  it('memoryFullMessage links to the Profile card for answers', () => {
+    expect(memoryFullMessage(true)).toContain('](/profile#ai-memory)')
+    expect(memoryFullMessage()).not.toContain('](')
   })
 })
 

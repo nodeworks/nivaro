@@ -17,6 +17,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
+import {
+  signalSentence,
+  useRecordSignalPeers,
+  useRecordSignalWhile
+} from '../../lib/presence-signals'
 import { RUN_TRANSITION_EVENT, type RunTransitionRequest } from '../../lib/run-transition'
 import { serverNow } from '../../lib/server-clock'
 import { cn, formatRelative, humanHours } from '../../lib/utils'
@@ -1582,6 +1587,10 @@ function PipelinePanelInner({
   const [showHistory, setShowHistory] = useState(false)
   const [expanded, setExpanded] = useState(false)
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
+  // #1722 — "Kim is approving" for the others, while this panel's confirm or requirements
+  // dialog is open; and the same notice from anyone else's.
+  useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
+  const approvingNames = useRecordSignalPeers(collection, item, 'transition')
   const syncedFromProp = useRef(false)
   useEffect(() => {
     if (!syncedFromProp.current && defaultExpanded !== undefined) {
@@ -2021,6 +2030,15 @@ function PipelinePanelInner({
                 Addendum in review
               </span>
             )}
+            {approvingNames.length > 0 && (
+              <span
+                className='flex items-center gap-1 rounded-full border border-sky-200 bg-sky-50 px-2 py-0.5 text-[11px] font-medium text-sky-700 dark:border-sky-500/20 dark:bg-sky-500/10 dark:text-sky-300'
+                data-pipeline-approving
+              >
+                <span className='h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-sky-400' />
+                {signalSentence(approvingNames, 'approving')}
+              </span>
+            )}
           </div>
           <div className='ml-auto flex items-center gap-2' onClick={(e) => e.stopPropagation()}>
             {!expanded && hasTransitions && !hideActionsCollapsed && (
@@ -2247,6 +2265,8 @@ function PipelineTransitionButtonsInner({
   const [comment, setComment] = useState('')
   const [pendingTransition, setPendingTransition] = useState<string | null>(null)
   const [requirementsDialog, setRequirementsDialog] = useState<RequirementsDialogState | null>(null)
+  // #1722 — other viewers of the record see "Kim is approving" while this dialog is open.
+  useRecordSignalWhile(collection, item, 'transition', !!pendingTransition || !!requirementsDialog)
   const trySetPending = async (txId: string) => {
     if (pendingTransition === txId) {
       setPendingTransition(null)

@@ -27,6 +27,7 @@ export {
 export { type AiPlanChangeRow, AiPlanChanges } from './components/ai/AiPlanChanges'
 export { AiPlansView } from './components/ai/AiPlansView'
 export { AiStepList } from './components/ai/AiStepList'
+export { AskPanel } from './components/ai/AskPanel'
 export {
   type AnswerFormat,
   type AnswerRows,
@@ -36,6 +37,17 @@ export {
   listOf,
   rowsOfBlock
 } from './components/ai/answer-formats'
+export {
+  ASK_OPEN_EVENT,
+  ASK_RECORD_MIME,
+  AskContextProvider,
+  type AskPageContext,
+  type AskRecordRef,
+  openAskPanel,
+  useAskHost,
+  useAskRecordDrag,
+  usePublishAskContext
+} from './components/ai/ask-context'
 export { DataGuideCard } from './components/ai/DataGuideCard'
 export { type ExplainAnswer, ExplainButton, ExplainCard } from './components/ai/ExplainButton'
 export { GlossaryLabel, GlossaryMark } from './components/ai/GlossaryText'
@@ -68,6 +80,7 @@ export {
   useAvailableBulkActions,
   useBuiltinGate
 } from './components/bulk/BulkActionButtons'
+export { BulkRowMark } from './components/bulk/BulkRowMark'
 export type { PushItemAction, PushRunOutcome } from './components/bulk/PushBulkButtons'
 export { PushBulkButtons, PushResultList } from './components/bulk/PushBulkButtons'
 export type { CacheInfo, CustomQueryEnvelope } from './components/CacheStamp'
@@ -105,6 +118,7 @@ export * from './components/chat/chat-core'
 export { canOpenChatRoom, openChatRoom, registerRoomOpener } from './components/chat/chat-core'
 export { CommandCenterView } from './components/command-center/CommandCenterView'
 export * from './components/DataTable'
+export { DndMark, DoNotDisturbRow, useDndActive } from './components/DoNotDisturb'
 export type { DelegationConsoleViewProps } from './components/delegation/DelegationConsoleView'
 export { DelegationConsoleView } from './components/delegation/DelegationConsoleView'
 export { EmptyState } from './components/EmptyState'
@@ -231,9 +245,16 @@ export { QuickPicker, useQuickPickerStepDefs } from './components/item-edit/Quic
 export type { QuickPickerDialogProps } from './components/item-edit/QuickPickerDialog'
 export { QuickPickerDialog, useQuickPickerSteps } from './components/item-edit/QuickPickerDialog'
 export { RecordChatActions } from './components/item-edit/RecordChatActions'
+export {
+  RecordOutboxBanner,
+  RecordOutboxHost,
+  useRecordOutbox,
+  useRecordOutboxEntry
+} from './components/item-edit/RecordOutbox'
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
+export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'
 export { LiveRowMark } from './components/LiveRowMark'
@@ -250,8 +271,20 @@ export {
   InboundCallersView,
   ReplayBlock
 } from './components/monitoring/ApiRequestLog'
+export {
+  AskTheLogs,
+  type LogFilter as AskLogFilter,
+  logFilterChips,
+  lookBackHours,
+  toRequestLogFilters
+} from './components/monitoring/AskTheLogs'
 export { CallerChangesSection } from './components/monitoring/CallerChanges'
 export { InactiveUserLinksView } from './components/monitoring/InactiveUserLinksView'
+export {
+  IncidentBanner,
+  type IncidentNow,
+  incidentThreadPath
+} from './components/monitoring/IncidentBanner'
 export { PartnerDependenciesPanel } from './components/monitoring/PartnerDependencies'
 export {
   type MiniMapSummary,
@@ -461,6 +494,7 @@ export {
   startAutofillRun,
   useAutofillRuns
 } from './lib/autofill-runs'
+export * from './lib/bulk-progress'
 export * from './lib/catalog-item-open'
 export {
   buildClientCrashBody,
@@ -479,6 +513,7 @@ export {
 export * from './lib/commands'
 export { buildCopyAs, conditionsToFilter, graphqlLiteral, graphqlSelection } from './lib/copy-as'
 export { useAfterIdle } from './lib/defer'
+export { breaksThroughDnd, type DndPref, dndUntil, isDndActive } from './lib/dnd'
 export {
   deleteDraft,
   draftHasContent,
@@ -511,6 +546,7 @@ export { IDLE_AFTER_MS, idleState, onIdleChange, trackActivity } from './lib/idl
 export type { ChipSubmission, IntegrationChipSummary } from './lib/integration-chip'
 export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
+export * from './lib/jobs-tray'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
 export * from './lib/live'
@@ -551,6 +587,22 @@ export {
   pageContextHeaders,
   pagePattern
 } from './lib/page-context'
+export {
+  applySignal,
+  expirePeers,
+  type RecordSignalKind,
+  SIGNAL_BEAT_MS,
+  SIGNAL_TTL_MS,
+  type SignalPeers,
+  signalSentence,
+  type TopicPresence,
+  useMyUserId,
+  useRecordSignalPeers,
+  useRecordSignalSender,
+  useRecordSignalWhile,
+  useTopicPresence,
+  whoText
+} from './lib/presence-signals'
 export { type StuckState, stuckText } from './lib/presence-state'
 export * from './lib/query-stats'
 export * from './lib/queue-grouping'
@@ -564,7 +616,26 @@ export {
   useOptionalRealtime,
   useRealtimeStatus
 } from './lib/realtime'
-export { useRecordTabs } from './lib/record-tabs'
+export {
+  bindRecordOutbox,
+  clearRecordOutbox,
+  clearRecordOutboxFor,
+  disableRecordOutbox,
+  discardRecordOutbox,
+  isOfflineSaveError,
+  midairCollisionOf,
+  RECORD_OUTBOX_TTL_MS,
+  type RecordOutboxEntry,
+  retryRecordOutbox
+} from './lib/record-outbox'
+export {
+  focusPopoutOpener,
+  isRecordPopout,
+  openRecordPopout,
+  POPOUT_PARAM,
+  recordPopoutHref
+} from './lib/record-popout'
+export { announceRecordTabs, useRecordTabs, useRecordTabsSignal } from './lib/record-tabs'
 export {
   captureReplayClip,
   clipEndOffset,
@@ -639,8 +710,10 @@ export {
   serverNow,
   setServerClockOffset
 } from './lib/server-clock'
+export * from './lib/socket-realtime'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
+export { configureTabSound, pickSoundTab, shouldPlayHere } from './lib/tab-sound'
 export {
   BRAND_ACCENT,
   DEFAULT_THEME_ACCENTS,
@@ -663,6 +736,12 @@ export {
 } from './lib/use-my-scopes'
 export { useOnlineUsers } from './lib/use-online-users'
 export { pageAtPayload, usePageAt } from './lib/use-page-at'
+export {
+  announceLocalPrefs,
+  configureUserSync,
+  type UserSyncOptions,
+  useUserSync
+} from './lib/user-sync'
 export * from './lib/utils'
 export { setNumberFormat, setTimeDisplay } from './lib/utils'
 export { applyValidationRule } from './lib/validation-rules'

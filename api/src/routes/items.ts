@@ -39,6 +39,7 @@ import {
   upsertInfoOf
 } from '../services/items.js'
 import { startJobRun } from '../services/job-runs.js'
+import { openBulkRowProgress } from '../services/live-progress.js'
 import { can } from '../services/permissions.js'
 import {
   coerceBool,
@@ -369,14 +370,29 @@ export async function itemsRoutes(app: FastifyInstance) {
     if (!(await builtinAllowed(collection, 'delete', req)))
       return reply.code(403).send({ error: 'Bulk delete is not available to you here' })
     let deleted = 0
+    let delFailed = 0
+    let delReason: string | null = null
+    const rp = openBulkRowProgress(
+      (req.query as Record<string, string>).progress,
+      req.user?.id,
+      () => ({
+        ok: deleted,
+        failed: delFailed,
+        reason: delReason
+      })
+    )
     for (const id of ids) {
+      rp.next(id)
       try {
         await deleteOne(req.user!, collection, id, req, req.workspaceId ?? undefined)
         deleted++
-      } catch {
+      } catch (err) {
         // skip permission/not-found errors per item
+        delFailed++
+        delReason = err instanceof Error ? err.message : 'Not deleted'
       }
     }
+    rp.end()
     return reply.send({ deleted })
   })
 
@@ -391,8 +407,21 @@ export async function itemsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'data object required' })
     let updated = 0
     let skipped = 0
+    let upFailed = 0
+    let upReason: string | null = null
+    const rp = openBulkRowProgress(
+      (req.query as Record<string, string>).progress,
+      req.user?.id,
+      () => ({
+        ok: updated,
+        failed: upFailed,
+        skipped,
+        reason: upReason
+      })
+    )
     const fields = Object.keys(data).filter((k) => !k.startsWith('_'))
     for (const id of ids) {
+      rp.next(id)
       try {
         // A record already holding every value gets no write and no change
         // reason on its history — the note belongs to the ones that moved.
@@ -408,10 +437,13 @@ export async function itemsRoutes(app: FastifyInstance) {
         }
         await updateOne(req.user!, collection, id, data, req, req.workspaceId ?? undefined)
         updated++
-      } catch {
+      } catch (err) {
         // skip permission/not-found errors per item
+        upFailed++
+        upReason = err instanceof Error ? err.message : 'Not updated'
       }
     }
+    rp.end()
     return reply.send({ updated, skipped })
   })
 
@@ -446,7 +478,22 @@ export async function itemsRoutes(app: FastifyInstance) {
     let succeeded = 0
     let failed = 0
     const errors: Array<{ item: string; error: string }> = []
+    let seenErrors = 0
+    const rp = openBulkRowProgress(
+      (req.query as Record<string, string>).progress,
+      req.user?.id,
+      () => {
+        const fresh = errors.length > seenErrors
+        seenErrors = errors.length
+        return {
+          ok: succeeded,
+          failed,
+          reason: fresh ? errors[errors.length - 1].error : 'Not applicable to this record'
+        }
+      }
+    )
     for (const item of ids) {
+      rp.next(item)
       try {
         // Per record: update permission + the caller can see it. A record
         // outside the caller's scope fails like a missing one.
@@ -548,6 +595,7 @@ export async function itemsRoutes(app: FastifyInstance) {
         failed++
       }
     }
+    rp.end()
     return reply.send({ succeeded, failed, errors })
   })
 

@@ -33,6 +33,7 @@ import { useItemEditAuth, useNivaroClient } from '../context'
 import { del, get, patch, post, put } from '../lib/commands'
 import { playNotificationSound } from '../lib/notification-sound'
 import { BRAND_ACCENT, DEFAULT_THEME_ACCENTS, parseThemeAccents } from '../lib/theme-accents'
+import { announceLocalPrefs } from '../lib/user-sync'
 import { cn, setDisplayTimezone } from '../lib/utils'
 import { activeCustomStatus, CustomStatusEditor } from './CustomStatusEditor'
 import { AiHistoryCard, AiMemoryCard } from './profile/AiMemoryCard'
@@ -298,13 +299,19 @@ export function NotificationRulesCard() {
   const save = useMutation({
     mutationFn: (next: Record<string, unknown>) =>
       client.request(patch('/users/me/preferences', { notification_prefs: next })),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+      announceLocalPrefs(['notification_prefs'])
+    }
   })
   // Direct pref writes for the sprint's flat keys (#179/#366/#400).
   const saveRaw = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       client.request(patch('/users/me/preferences', body)),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+    onSuccess: (_d, body) => {
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+      announceLocalPrefs(Object.keys(body))
+    }
   })
   // #2407 — replay last week through the sender's delivery decision with the
   // rules about to be saved; shown next to the save as "before -> after".
@@ -348,7 +355,7 @@ export function NotificationRulesCard() {
     const next = { ...catSounds }
     if (v === 'default') delete next[cat]
     else next[cat] = v
-    if (v !== 'default') playNotificationSound(v)
+    if (v !== 'default') playNotificationSound(v, { preview: true })
     saveRaw.mutate({ notification_sounds: Object.keys(next).length ? next : null })
   }
   // #2367 — a monthly nudge from the person's own analytics, with an undo.
@@ -576,7 +583,7 @@ export function NotificationRulesCard() {
               { value: 'chime', label: 'Chime' }
             ]}
             onChange={(v: string) => {
-              playNotificationSound(v)
+              playNotificationSound(v, { preview: true })
               saveRaw.mutate({ notification_sound: v })
             }}
           />
@@ -2373,10 +2380,12 @@ export function DisplayPrefsCard() {
   const save = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
       client.request(patch('/users/me/preferences', body)),
-    onSuccess: () => {
+    onSuccess: (_d, body) => {
       void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+      // Every open tab and device applies it now (user-sync), this one included.
+      announceLocalPrefs(Object.keys(body))
       void import('sonner').then(({ toast }) =>
-        toast.success('Saved — takes effect on the next page load')
+        toast.success('Saved — applied on all your open tabs and devices')
       )
     }
   })

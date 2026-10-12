@@ -64,7 +64,13 @@ export type ConversationAccess = 'owner' | 'shared' | 'room'
  *  - explain_access, explain_person_access, who_can_act, explain_owners
  *    (they describe the asker's or a person's access — not for others);
  *  - search_docs (a replay would record a docs miss against the reader);
- *  - traffic_snapshot (administrators only).
+ *  - traffic_snapshot (administrators only);
+ *  - config_lookup (administrators only), my_team (the asker's own reports),
+ *    report_data (the asker's view of a report under the filters on their
+ *    screen) — answers about one person's position, not for others;
+ *  - page_context (#1835): not a tool but a trace entry the chat route adds
+ *    when the page's record, list, report or documents rode the question —
+ *    that context never replays, so such an answer stays its author's.
  */
 export const REPLAYABLE_TOOLS = new Set([
   'list_collections',

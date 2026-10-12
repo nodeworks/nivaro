@@ -68,7 +68,13 @@ export function useRecordPresence(collection: string | undefined, item: string |
 
     // This socket is the one inside the record room (and the user room): hand
     // the live-record notices to the shared hooks (lib/live.ts useLiveEvent).
-    const relayed = ['record:integrity', 'record:automation', 'owners:changed', 'access:changed']
+    const relayed = [
+      'record:integrity',
+      'record:automation',
+      'owners:changed',
+      'access:changed',
+      'record:signal'
+    ]
     for (const ev of relayed) socket.on(ev, (payload: unknown) => relayLiveEvent(ev, payload))
 
     socket.on(
@@ -93,6 +99,16 @@ export function useRecordPresence(collection: string | undefined, item: string |
       if (d?.name) socket.emit('record:uploading', { name: d.name, state: d.state })
     }
     window.addEventListener('nvr:upload-state', onLocalUpload)
+    // Signals (a note being written, a transition dialog open — lib/presence-signals.ts) leave
+    // through this socket too: it, not the feed socket, sits in the record room.
+    const onSignalOut = (e: Event) => {
+      const d = (e as CustomEvent).detail as
+        | { collection?: string; item?: string; kind?: string; state?: string }
+        | undefined
+      if (d?.collection === collection && String(d.item) === String(item) && d.kind)
+        socket.emit('record:signal', { collection, item, kind: d.kind, state: d.state })
+    }
+    window.addEventListener('nvr:record-signal-out', onSignalOut)
     socket.on('record:uploading', (payload: unknown) => {
       window.dispatchEvent(new CustomEvent('nvr:record-uploading', { detail: payload }))
     })
@@ -176,6 +192,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
 
     return () => {
       window.removeEventListener('nvr:upload-state', onLocalUpload)
+      window.removeEventListener('nvr:record-signal-out', onSignalOut)
       disposed = true
       window.removeEventListener('nvr:cell-editing', onCellEditing)
       window.removeEventListener('nvr:row-editing', onRowEditing)

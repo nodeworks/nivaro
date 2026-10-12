@@ -43,6 +43,8 @@ export interface PlanChangeReport {
 }
 
 interface Access {
+  /** Labels are read as the viewer too (ai-link-labels.ts). */
+  viewer: User
   fields: (collection: string) => Promise<(f: string) => boolean>
   visible: (collection: string, ids: string[]) => Promise<Set<string>>
 }
@@ -51,6 +53,7 @@ interface Access {
 function accessFor(viewer: User): Access {
   const fieldCache = new Map<string, (f: string) => boolean>()
   return {
+    viewer,
     async fields(collection) {
       const hit = fieldCache.get(collection)
       if (hit) return hit
@@ -91,7 +94,7 @@ async function plannedRows(
       })) as { data?: Array<Record<string, unknown>> }
       current = new Map((res.data ?? []).map((r) => [String(r.id), r]))
     }
-    const labels = await labelsFor(collection, [...current.keys()])
+    const labels = await labelsFor(collection, [...current.keys()], viewer)
     const rows: PlanChangeRow[] = []
     for (const id of ids) {
       const row = current.get(id)
@@ -171,7 +174,7 @@ async function madeRows(
   for (const [c, ids] of byCollection) {
     const visible = await access.visible(c, ids)
     seen.set(c, visible)
-    labels.set(c, await labelsFor(c, [...visible]))
+    labels.set(c, await labelsFor(c, [...visible], access.viewer))
   }
   const rows: PlanChangeRow[] = []
   for (const r of made.records) {

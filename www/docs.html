@@ -224,6 +224,7 @@
           <a class="docs-nav-item" data-section="sdk-forms" href="#sdk-forms">Form Schema</a>
           <a class="docs-nav-item" data-section="sdk-react" href="#sdk-react">React (@nivaro/react)</a>
           <a class="docs-nav-item" data-section="sdk-react-layout" href="#sdk-react-layout">React — Layout Hooks</a>
+          <a class="docs-nav-item" data-section="sdk-react-live" href="#sdk-react-live">React — Live Data</a>
           <a class="docs-nav-item" data-section="sdk-notifications" href="#sdk-notifications">Notifications</a>
           <a class="docs-nav-item" data-section="sdk-files" href="#sdk-files">Files &amp; Upload</a>
           <a class="docs-nav-item" data-section="sdk-tokens" href="#sdk-tokens">Token Management</a>
@@ -569,6 +570,7 @@
           <a class="docs-nav-item" data-section="db-health" href="#db-health">DB &amp; Runtime Health</a>
           <a class="docs-nav-item" data-section="db-tuning" href="#db-tuning">Database Tuning</a>
           <a class="docs-nav-item" data-section="ops-console" href="#ops-console">Ops Console</a>
+          <a class="docs-nav-item" data-section="ops-assistant" href="#ops-assistant">Ops Assistant</a>
           <a class="docs-nav-item" data-section="deploys-versions" href="#deploys-versions">Deploys &amp; Versions</a>
           <a class="docs-nav-item" data-section="instance-overrides" href="#instance-overrides">Per-Instance Settings</a>
           <a class="docs-nav-item" data-section="mail-harness" href="#mail-harness">Mail Templates &amp; Test Harness</a>
@@ -5199,6 +5201,11 @@ function AutoForm() {
           </table></div>
           <div class="doc-note">All layout hooks read the same <code class="doc-code">form</code> object returned by <code class="doc-code">useNivaroForm</code>. They do not create extra network requests — schema and layout data are fetched once by the hook and shared.</div>
           <!-- /SYNC:sdk-react-layout -->
+        </div>
+
+        <div class="doc-section" id="s-sdk-react-live" data-toc='[]'>
+          <!-- SYNC:sdk-react-live -->
+          <!-- /SYNC:sdk-react-live -->
         </div>
 
         <!-- SDK additional sections -->
@@ -17011,6 +17018,12 @@ PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_esti
             <li>Heap snapshot — captures a V8 heap snapshot of this replica and downloads it for analysis in Chrome DevTools. The file lives in the process’s temp directory, so download it right away — a restart discards it.</li>
           </ul>
           <!-- /SYNC:ops-console -->
+        </div>
+
+        <div class="doc-section" id="s-ops-assistant" data-toc='[{"id":"ops-assistant","label":"Ops assistant"}]'>
+          <!-- SYNC:ops-assistant -->
+          <h1 class="doc-h1" id="ops-assistant">Ops assistant</h1>
+          <!-- /SYNC:ops-assistant -->
         </div>
 
         <div class="doc-section" id="s-deploys-versions" data-toc='[{"id":"deploys-versions","label":"Deploys and Versions"},{"id":"deploys-gate","label":"The post-deploy gate"},{"id":"deploys-stage-timing","label":"Release stage timing"},{"id":"deploys-env-presence","label":"Environment variables across environments"},{"id":"deploys-tab-versions","label":"Open tabs by version"},{"id":"deploys-readiness","label":"Readiness checks for the deploy shape"},{"id":"deploys-config-changes","label":"Configuration changes on the incident timeline"},{"id":"deploys-dev-rows","label":"Development traffic in the shared request log"}]'>
