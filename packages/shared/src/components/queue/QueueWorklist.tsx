@@ -57,7 +57,7 @@ import { del, get, patch, post, put } from '../../lib/commands'
 import { evaluateExpression } from '../../lib/expression'
 import { deliverLive, releaseLiveOwner } from '../../lib/focus-mode'
 import { type ColumnFormatConfig, formatMultiValue, formatValue } from '../../lib/format-value'
-import { LIVE_ASPECTS } from '../../lib/live'
+import { expandCoalesced, LIVE_ASPECTS } from '../../lib/live'
 import { lockLabel, useRowChanges, useRowLocksByCollection } from '../../lib/live-list'
 import { OPEN_IN_TABS_CAP, openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { isOwnWrite } from '../../lib/own-writes'
@@ -87,6 +87,7 @@ import { INTEGRATIONS_FILTER_OPTIONS, IntegrationDots } from '../integrations/In
 import { IntegrationsFilterPill } from '../integrations/IntegrationsFilterPill'
 import { readQueueReturn, writeQueueReturn } from '../item-edit/QueueReturnChip'
 import { LiveRowMark } from '../LiveRowMark'
+import { RealtimeStaleMark } from '../RealtimeStatusBanner'
 import { RecordDrilldownSheet } from '../RecordDrilldownSheet'
 import { RowHighlightLegend } from '../RowHighlightLegend'
 import { TickerNumber } from '../TickerNumber'
@@ -903,7 +904,11 @@ export function QueueWorklist({
       let refresh = false
       let pill = 0
       let stats = false
-      for (const ev of evs) {
+      // A coalesced burst (#1681): one event per listed record (or one bulk '*').
+      const flat = evs.flatMap((e) =>
+        e ? (expandCoalesced(e as never) as unknown as LiveEv[]) : [e]
+      )
+      for (const ev of flat) {
         const fields = ev?.changed_fields
         const key = ev?.collection != null ? `${ev.collection}:${String(ev.item)}` : null
         const visible = key != null && visibleKeysRef.current.has(key)
@@ -3480,6 +3485,7 @@ export function QueueWorklist({
               }
             />
           )}
+          <RealtimeStaleMark className='h-8' />
           <FocusModeToggle />
           {pendingUpdates > 0 && (
             <button

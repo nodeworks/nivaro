@@ -5,15 +5,27 @@ export { AiAnalyticsView } from './components/ai/AiAnalyticsView'
 export { AiFeedbackButtons } from './components/ai/AiFeedbackButtons'
 export { AiHistorySwitch, useAiHistoryOff } from './components/ai/AiHistorySwitch'
 export { AiKnowledgeView } from './components/ai/AiKnowledgeView'
-export { AiMarkdown, type AiMarkdownBlock, parseAiMarkdown } from './components/ai/AiMarkdown'
+export {
+  AiMarkdown,
+  type AiMarkdownBlock,
+  type ChartPointHandler,
+  parseAiMarkdown
+} from './components/ai/AiMarkdown'
+export {
+  type AiMemorySuggestion,
+  AiMemorySuggestions
+} from './components/ai/AiMemorySuggestions'
 export {
   type AiPlan,
   AiPlanCard,
+  type AiPlanImpact,
   type AiPlanStatus,
   type AiPlanStep,
   type AiPlanStepState,
   type AiPlanSubscribe
 } from './components/ai/AiPlanCard'
+export { type AiPlanChangeRow, AiPlanChanges } from './components/ai/AiPlanChanges'
+export { AiPlansView } from './components/ai/AiPlansView'
 export { AiStepList } from './components/ai/AiStepList'
 export {
   type AnswerFormat,
@@ -362,6 +374,7 @@ export { QueueKanbanBoard } from './components/queue/QueueKanbanBoard'
 export type { QueueRealtimeAdapter, QueueWorklistProps } from './components/queue/QueueWorklist'
 export { QueueWorklist } from './components/queue/QueueWorklist'
 export { QueueWorkloadView } from './components/queue/QueueWorkloadView'
+export { RealtimeStaleMark, RealtimeStatusBanner } from './components/RealtimeStatusBanner'
 export { RecentRecordsRail } from './components/RecentRecordsRail'
 export { RecordDrilldownSheet } from './components/RecordDrilldownSheet'
 export {
@@ -413,6 +426,19 @@ export { useFileHealth } from './hooks/useFileHealth'
 export * from './hooks/useFormSchema'
 export * from './hooks/useNivaroForm'
 export * from './hooks/useRelationOptions'
+export {
+  type DrillSource,
+  defaultQuestionFor,
+  drillSourceFor,
+  type LiveSource,
+  liveSourcesFor,
+  type PanelTraceEntry,
+  parseSlash,
+  SLASH_COMMANDS,
+  type SlashCommand,
+  slashMatches,
+  stripFollowUps
+} from './lib/ai-panel'
 export { type AiStreamStep, applyStepStatus } from './lib/ai-steps'
 export {
   type ApiVersionInfo,
@@ -536,7 +562,11 @@ export {
   type CollectionUpdateEvent,
   type RealtimeAdapter,
   RealtimeContext,
-  useOptionalRealtime
+  type RealtimeStatus,
+  updateItemIds,
+  updateTouches,
+  useOptionalRealtime,
+  useRealtimeStatus
 } from './lib/realtime'
 export { useRecordTabs } from './lib/record-tabs'
 export {
@@ -606,6 +636,13 @@ export { rumRouteChange, startRum } from './lib/rum'
 export type { RunTransitionRequest } from './lib/run-transition'
 export { RUN_TRANSITION_EVENT, requestTransitionRun } from './lib/run-transition'
 export { captureMaskedScreenshot, maskInputsIn } from './lib/screenshot'
+export {
+  type ClockSample,
+  measureClockOffset,
+  serverClockOffset,
+  serverNow,
+  setServerClockOffset
+} from './lib/server-clock'
 export * from './lib/summary-mode'
 export * from './lib/tab-attention'
 export {

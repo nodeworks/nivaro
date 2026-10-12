@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 const API_URL = typeof window !== 'undefined' ? window.location.origin : 'http://localhost:3055'
 
 import { useAuth } from '@/lib/auth'
+import { SOCKET_TRANSPORT_OPTIONS } from '@/lib/socket-transport'
 
 /**
  * Record presence v2 — who's viewing this record and which field they're
@@ -37,7 +38,7 @@ export function useRecordPresence(collection: string | undefined, item: string |
     if (!collection || !item || item === 'new') return
 
     const socket = io(API_URL, {
-      transports: ['websocket'],
+      ...SOCKET_TRANSPORT_OPTIONS,
       withCredentials: true,
       reconnectionDelay: 1500 + Math.floor(Math.random() * 2500),
       reconnectionDelayMax: 15_000,

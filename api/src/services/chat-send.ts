@@ -8,6 +8,7 @@ import { linkTo } from './app-links.js'
 import { canSeeRoom, channels, generalChannel, parseRoom } from './chat.js'
 import { recordChatSend, recordChatSendFailure } from './chat-health.js'
 import { parseTimeRefs, type TimeRef } from './chat-time-refs.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * The one way a chat message is posted (#927–#989).
@@ -392,7 +393,7 @@ async function postInner(
 
   // Live delivery: the room, plus both DM participants' own rooms (the
   // recipient of a brand-new DM has not joined a room they don't know of).
-  app.io?.to(`chat:${room}`).emit('chat:message', row)
+  app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', row)
   if (parsedRoom.kind === 'dm') {
     for (const p of parsedRoom.participants ?? []) app.io?.to(`user:${p}`).emit('chat:message', row)
   }
@@ -743,7 +744,7 @@ async function outOfOfficeReply(app: FastifyInstance, room: string, peer: string
       })
       .returning('id')
     const autoId = typeof ins === 'object' && ins !== null ? (ins as { id: number }).id : ins
-    app.io?.to(`chat:${room}`).emit('chat:message', {
+    app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', {
       id: autoId,
       room,
       message: autoText,

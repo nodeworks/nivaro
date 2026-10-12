@@ -13,6 +13,7 @@ import { can } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -420,8 +421,9 @@ export async function commentsRoutes(app: FastifyInstance) {
       announceRecordAspect(body.collection, body.item, '$comments')
       // Live comments (#280): co-viewers' threads update the moment this
       // lands — record-room broadcast, clients invalidate the comments query.
+      // Cloud: the record room of this request's tenant (tenant-rooms.ts).
       app.io
-        ?.to(`record:${body.collection}:${body.item}`)
+        ?.to(tenantScopedRoom(`record:${body.collection}:${body.item}`))
         .emit('record:comment', { collection: body.collection, item: body.item, user: userId })
 
       // Resolve and persist mentions. "@owners" expands to the record's
@@ -511,18 +513,8 @@ export async function commentsRoutes(app: FastifyInstance) {
         sendTeamsNotification({ title: subject, text: message }).catch(() => {})
       }
 
-      // Real-time broadcast to viewers of this record.
-      if (app.io) {
-        const room = `collection:${body.collection}:${body.item}`
-        app.io.to(room).emit('comment:created', {
-          id,
-          collection: body.collection,
-          item: body.item,
-          user: userId,
-          text: body.text,
-          created_at: now
-        })
-      }
+      // (No comment-text broadcast here: the record room's `record:comment` above — ids only —
+      // is how co-viewers learn of a new comment; they read it through the comments route.)
 
       const row = (await db('nivaro_comments').where({ id }).first()) as CommentRow
       await logActivity({

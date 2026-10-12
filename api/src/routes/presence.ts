@@ -7,9 +7,22 @@ import { resolveDisplayValue } from '../services/display-value.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
 import { can } from '../services/permissions.js'
 import { presenceRowIdle, stuckLabel, stuckMinutes } from '../services/presence-stuck.js'
+import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
 const KEY_PREFIX = 'presence:session:'
+
+/**
+ * Cloud: one Redis holds every tenant's presence sessions, so keys and the admin room carry
+ * the tenant (tenant-rooms.ts, `t:<tenant>:`); self-hosted names are unchanged. Every caller
+ * runs in its request's tenant context; the sweep walks tenants itself.
+ */
+export function sessionKeyPrefix(tenant = currentTenantKey()): string {
+  return tenantScopedRoom(KEY_PREFIX, tenant)
+}
+export function adminRoom(tenant = currentTenantKey()): string {
+  return tenantScopedRoom('presence:admin', tenant)
+}
 
 // Defaults used when DB columns are null/missing
 const DEFAULT_SESSION_TTL = 90
@@ -59,11 +72,20 @@ function sanitizeId(id: string): string {
   return id.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64)
 }
 
-async function getActiveSessions(app: FastifyInstance): Promise<PresenceSession[]> {
+async function getActiveSessions(
+  app: FastifyInstance,
+  tenant = currentTenantKey()
+): Promise<PresenceSession[]> {
   const sessions: PresenceSession[] = []
   let cursor = '0'
   do {
-    const [next, keys] = await app.redis.scan(cursor, 'MATCH', `${KEY_PREFIX}*`, 'COUNT', 100)
+    const [next, keys] = await app.redis.scan(
+      cursor,
+      'MATCH',
+      `${sessionKeyPrefix(tenant)}*`,
+      'COUNT',
+      100
+    )
     cursor = next
     if (keys.length) {
       const values = await app.redis.mget(...(keys as string[]))
@@ -77,6 +99,22 @@ async function getActiveSessions(app: FastifyInstance): Promise<PresenceSession[
     }
   } while (cursor !== '0')
   return sessions.sort((a, b) => b.lastSeen.localeCompare(a.lastSeen))
+}
+
+/** Tenants with live presence sessions ('' self-hosted). */
+export async function sessionTenants(app: FastifyInstance): Promise<string[]> {
+  if (!process.env.CLOUD_META_DB_URL) return ['']
+  const tenants = new Set<string>()
+  let cursor = '0'
+  do {
+    const [next, keys] = await app.redis.scan(cursor, 'MATCH', `t:*:${KEY_PREFIX}*`, 'COUNT', 200)
+    cursor = next
+    for (const k of keys as string[]) {
+      const m = /^t:([^:]+):/.exec(k)
+      if (m) tenants.add(m[1])
+    }
+  } while (cursor !== '0')
+  return [...tenants]
 }
 
 export function buildScript(pingInterval = DEFAULT_PING_INTERVAL): string {
@@ -244,7 +282,7 @@ export async function presencePublicRoutes(app: FastifyInstance) {
       if (!app.redis) return reply.code(503).send({ error: 'Redis unavailable' })
       const body = req.body
       const sessionId = sanitizeId(body.sessionId)
-      const key = KEY_PREFIX + sessionId
+      const key = sessionKeyPrefix() + sessionId
 
       const existing = await app.redis.get(key)
       const firstSeen = existing
@@ -275,7 +313,7 @@ export async function presencePublicRoutes(app: FastifyInstance) {
 
       if (app.io) {
         const sessions = await getActiveSessions(app)
-        app.io.to('presence:admin').emit('presence:update', { sessions })
+        app.io.to(adminRoom()).emit('presence:update', { sessions })
       }
 
       return reply.code(204).send()
@@ -287,10 +325,10 @@ export async function presencePublicRoutes(app: FastifyInstance) {
     if (app.redis && req.body?.sessionId) {
       const sessionId = sanitizeId(req.body.sessionId)
       if (sessionId) {
-        await app.redis.del(KEY_PREFIX + sessionId)
+        await app.redis.del(sessionKeyPrefix() + sessionId)
         if (app.io) {
           const sessions = await getActiveSessions(app)
-          app.io.to('presence:admin').emit('presence:update', { sessions })
+          app.io.to(adminRoom()).emit('presence:update', { sessions })
         }
       }
     }
@@ -303,8 +341,12 @@ export async function presencePublicRoutes(app: FastifyInstance) {
     async function sweep() {
       try {
         const { sweep: ms } = await getPresenceCfg()
-        const sessions = await getActiveSessions(app)
-        app.io!.to('presence:admin').emit('presence:update', { sessions })
+        // The sweep runs outside any request: self-hosted one list; cloud one per tenant that
+        // has live sessions, each to its own admin room.
+        for (const tenant of await sessionTenants(app)) {
+          const sessions = await getActiveSessions(app, tenant)
+          app.io!.to(adminRoom(tenant)).emit('presence:update', { sessions })
+        }
         setTimeout(sweep, ms)
       } catch {
         setTimeout(sweep, DEFAULT_SWEEP_INTERVAL)
@@ -885,10 +927,10 @@ export async function presenceAdminRoutes(app: FastifyInstance) {
     async (req, reply) => {
       if (!app.redis) return reply.code(503).send({ error: 'Redis unavailable' })
       const sessionId = sanitizeId(req.params.sessionId)
-      await app.redis.del(KEY_PREFIX + sessionId)
+      await app.redis.del(sessionKeyPrefix() + sessionId)
       if (app.io) {
         const sessions = await getActiveSessions(app)
-        app.io.to('presence:admin').emit('presence:update', { sessions })
+        app.io.to(adminRoom()).emit('presence:update', { sessions })
       }
       return reply.code(204).send()
     }

@@ -32,6 +32,7 @@ import {
   upsertMembership
 } from '../services/chat-send.js'
 import { parseTimeRefs } from '../services/chat-time-refs.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 /**
  * Chat (`/api/chat`).
@@ -1642,7 +1643,7 @@ export async function chatRoutes(app: FastifyInstance) {
       updated_at: new Date()
     })
     app.io
-      ?.to(`record:${rec.collection}:${rec.id}`)
+      ?.to(tenantScopedRoom(`record:${rec.collection}:${rec.id}`))
       .emit('record:comment', { collection: rec.collection, item: rec.id, user: author })
     void logActivity({
       action: 'chat-to-notes',
@@ -1719,7 +1720,7 @@ export async function chatRoutes(app: FastifyInstance) {
    *  edit, delete). Rides the same chat:message event clients already
    *  invalidate on; the payload only needs the room. */
   function emitRoomTouch(room: string): void {
-    app.io?.to(`chat:${room}`).emit('chat:message', { room, touch: true })
+    app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', { room, touch: true })
   }
 }
 

@@ -32,6 +32,11 @@ export async function revokeSessions(
     pipe.setex(`${REVOKED_PREFIX}${sid}`, ttlSeconds, '1')
   }
   await pipe.exec()
+  // #1719 — the sockets those sessions opened close too, on every replica (Redis adapter).
+  // Lazy: the socket service pulls in permissions and chat, which this module must not.
+  void import('../services/socket-access.js')
+    .then((m) => m.endSessionSockets(sids, 'signed_out'))
+    .catch(() => {})
 }
 
 export function buildRedisStore(redis: Redis) {

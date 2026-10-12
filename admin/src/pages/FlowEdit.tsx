@@ -19,6 +19,7 @@ import {
   History,
   Mail,
   MessageSquare,
+  PencilLine,
   PlugZap,
   Plus,
   Radio,
@@ -29,7 +30,7 @@ import {
   Zap
 } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router'
+import { useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { FlowRunsPanel } from '@/components/flow-runs-panel'
 import { Badge } from '@/components/ui/badge'
@@ -68,6 +69,7 @@ const NOTIFY_CATEGORY_OPTIONS = [
 ]
 
 import { Textarea } from '@/components/ui/textarea'
+import { UserCombobox } from '@/components/user-combobox'
 import { api, exportFlow } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
 import { cn, formatRelative } from '@/lib/utils'
@@ -146,7 +148,8 @@ const OP_ICONS: Record<string, React.ElementType> = {
   'workflow-auto-sweep': GitBranch,
   'chat-post': MessageSquare,
   task: ClipboardCheck,
-  'refresh-pages': Radio
+  'refresh-pages': Radio,
+  'item-write': PencilLine
 }
 
 const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string }> = {
@@ -219,7 +222,57 @@ const OP_TYPE_CONFIG: Record<string, { cls: string; label: string; color: string
     cls: 'bg-sky-50 text-sky-700 border-sky-200 dark:bg-sky-900/20 dark:text-sky-400 dark:border-sky-800',
     label: 'Tell open pages',
     color: '#0284c7'
+  },
+  'item-write': {
+    cls: 'bg-lime-50 text-lime-700 border-lime-200 dark:bg-lime-900/20 dark:text-lime-400 dark:border-lime-800',
+    label: 'Write',
+    color: '#65a30d'
   }
+}
+
+/** A JSON object option edited as text; the option updates only while the text parses. */
+function JsonOptField({
+  value,
+  onChange,
+  placeholder,
+  rows = 4
+}: {
+  value: unknown
+  onChange: (v: Record<string, unknown> | undefined) => void
+  placeholder?: string
+  rows?: number
+}) {
+  const [text, setText] = useState(() =>
+    value && typeof value === 'object' ? JSON.stringify(value, null, 2) : ''
+  )
+  const [bad, setBad] = useState(false)
+  return (
+    <>
+      <Textarea
+        value={text}
+        onChange={(e) => {
+          setText(e.target.value)
+          if (!e.target.value.trim()) {
+            setBad(false)
+            onChange(undefined)
+            return
+          }
+          try {
+            const v = JSON.parse(e.target.value)
+            const ok = v && typeof v === 'object' && !Array.isArray(v)
+            setBad(!ok)
+            if (ok) onChange(v)
+          } catch {
+            setBad(true)
+          }
+        }}
+        placeholder={placeholder}
+        rows={rows}
+        className='font-mono text-[13px]'
+      />
+      {bad && <p className='text-[11px] text-red-500'>Not a JSON object yet — not saved.</p>}
+    </>
+  )
 }
 
 function OpTypeBadge({ type }: { type: string }) {
@@ -1378,6 +1431,87 @@ function EditOperationDialog({
                   </div>
                 </>
               )}
+              {op.type === 'item-write' && (
+                <>
+                  <div className='rounded-lg border border-lime-200 bg-lime-50 px-3 py-2 text-[11px] text-lime-800 dark:border-lime-800 dark:bg-lime-900/20 dark:text-lime-300'>
+                    <PencilLine className='mr-1 inline h-3 w-3' />
+                    Updates or creates records through the normal record rules (permissions,
+                    validation, hooks, history). It runs as whoever triggered the flow — the tester
+                    runs it as you. When nobody triggers it (a webhook, a schedule, a system event)
+                    it runs only as the Run as user below, and refuses without one. Updates take
+                    record ids (<code className='font-mono'>{'{{keys}}'}</code> on an event flow) or
+                    a filter, at most 200 records.
+                  </div>
+                  <div className='grid grid-cols-2 gap-3'>
+                    <div className='space-y-1.5'>
+                      <Label>Mode</Label>
+                      <SimpleSelect
+                        value={(optsState.mode as string) || 'update'}
+                        onChange={(v) => setOpt('mode', v)}
+                        options={[
+                          { value: 'update', label: 'Update records' },
+                          { value: 'create', label: 'Create a record' }
+                        ]}
+                      />
+                    </div>
+                    <div className='space-y-1.5'>
+                      <Label>
+                        Collection <span className='text-red-500'>*</span>
+                      </Label>
+                      <Input
+                        value={(optsState.collection as string) ?? ''}
+                        onChange={(e) => setOpt('collection', e.target.value)}
+                        placeholder='orders'
+                        className='font-mono text-[13px]'
+                      />
+                    </div>
+                  </div>
+                  <div className='space-y-1.5'>
+                    <Label>Run as (when nobody triggers it)</Label>
+                    <UserCombobox
+                      value={(optsState.run_as as string) || null}
+                      onChange={(v) => setOpt('run_as', v ?? undefined)}
+                      placeholder='Nobody — refuse to run'
+                      noneLabel='Nobody — refuse to run'
+                    />
+                    <p className='text-[11px] text-slate-400'>
+                      Never the flow's author by default: an anonymous webhook must not write with
+                      an administrator's rights.
+                    </p>
+                  </div>
+                  {(optsState.mode as string) !== 'create' && (
+                    <>
+                      <div className='space-y-1.5'>
+                        <Label>Record ids</Label>
+                        <Input
+                          value={(optsState.ids as string) ?? ''}
+                          onChange={(e) => setOpt('ids', e.target.value)}
+                          placeholder='{{keys}} or 12,15,19'
+                          className='font-mono text-[13px]'
+                        />
+                      </div>
+                      <div className='space-y-1.5'>
+                        <Label>…or a filter (used when no ids)</Label>
+                        <JsonOptField
+                          value={optsState.filter}
+                          onChange={(v) => setOpt('filter', v)}
+                          placeholder='{"status": {"_eq": "Open"}}'
+                        />
+                      </div>
+                    </>
+                  )}
+                  <div className='space-y-1.5'>
+                    <Label>
+                      Fields to write <span className='text-red-500'>*</span>
+                    </Label>
+                    <JsonOptField
+                      value={optsState.data}
+                      onChange={(v) => setOpt('data', v)}
+                      placeholder='{"status": "Closed"}'
+                    />
+                  </div>
+                </>
+              )}
               {op.type === 'task' && (
                 <>
                   <div className='rounded-lg border border-teal-200 bg-teal-50 px-3 py-2 text-[11px] text-teal-800 dark:border-teal-800 dark:bg-teal-900/20 dark:text-teal-300'>
@@ -2331,6 +2465,9 @@ function AddOperationDialog({
                     </SelectItem>
                     <SelectItem value='refresh-pages'>
                       Tell open pages — records changed, refresh forms, lists and queues
+                    </SelectItem>
+                    <SelectItem value='item-write'>
+                      Write Records — update or create records
                     </SelectItem>
                     {(registeredOpsForAdd ?? []).length > 0 && (
                       <>
@@ -3724,8 +3861,17 @@ function FlowReplaySection({ flowId }: { flowId: string }) {
   )
 }
 
-function FlowTesterSection({ flowId, trigger }: { flowId: string; trigger: string }) {
-  const [open, setOpen] = useState(false)
+function FlowTesterSection({
+  flowId,
+  trigger,
+  defaultOpen = false
+}: {
+  flowId: string
+  trigger: string
+  /** ?test=1 — a draft flow made from an AI plan opens straight in the tester. */
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
   const [payload, setPayload] = useState(() =>
     trigger === 'workflow-transition'
       ? JSON.stringify(
@@ -4173,6 +4319,7 @@ function FlowVersionsSection({ flowId }: { flowId: string }) {
 
 export function FlowEditPage() {
   const { id } = useParams<{ id: string }>()
+  const [searchParams] = useSearchParams()
   const navigate = useNavigate()
   const goBack = useGoBack('/flows')
   const queryClient = useQueryClient()
@@ -4600,7 +4747,13 @@ export function FlowEditPage() {
               )
             })()}
 
-            {id && <FlowTesterSection flowId={id} trigger={trigger} />}
+            {id && (
+              <FlowTesterSection
+                flowId={id}
+                trigger={trigger}
+                defaultOpen={searchParams.get('test') === '1'}
+              />
+            )}
             {id && trigger === 'event' && <FlowReplaySection flowId={id} />}
             {id && <FlowVersionsSection flowId={id} />}
             {id && <FlowRunsPanel flowId={id} />}
