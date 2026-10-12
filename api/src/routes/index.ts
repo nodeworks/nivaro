@@ -4,17 +4,24 @@ import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
+import { accessAnnouncement, announceAccessChanged } from '../services/record-events.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
 import { clearRowRuleCache } from '../services/row-rules-autofill.js'
 import { bustSectionLockCache } from '../services/section-locks.js'
 import { accessAuditsRoutes } from './access-audits.js'
 import { accessExplainRoutes } from './access-explain.js'
+import { accessInsightRoutes } from './access-insights.js'
 import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
 import { aiConversationRoutes } from './ai-conversations.js'
+import { aiDesignRoutes } from './ai-design.js'
+import { aiExplainRoutes } from './ai-explain.js'
+import { aiKnowledgeRoutes } from './ai-knowledge.js'
+import { aiPlanRoutes } from './ai-plans.js'
 import { aiSettingsRoutes } from './ai-settings.js'
+import { aiWatchRoutes } from './ai-watches.js'
 import { alertsRoutes } from './alerts.js'
 import { analyticsRoutes } from './analytics.js'
 import { announcementRoutes } from './announcements.js'
@@ -301,6 +308,13 @@ export async function registerRoutes(app: FastifyInstance) {
       }
     }
   })
+  // #1925: a write that may change who reads which records tells open record
+  // pages to re-check their own access (payload-free, coalesced).
+  app.addHook('onResponse', async (req, reply) => {
+    if (reply.statusCode >= 400) return
+    const who = accessAnnouncement(req)
+    if (who) announceAccessChanged(who === 'tenant' ? {} : who)
+  })
 
   await app.register(healthRoutes)
   await app.register(preflightRoutes)
@@ -317,6 +331,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(draftsRoutes, { prefix: '/drafts' })
   await app.register(lineageRoutes, { prefix: '/lineage' })
   await app.register(readinessRoutes, { prefix: '/readiness' })
+  await app.register(aiExplainRoutes, { prefix: '/ai-explain' })
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
   await app.register(announcementRoutes, { prefix: '/announcements' })
@@ -344,6 +359,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(authRoutes, { prefix: '/auth' })
   await app.register(aiRoutes, { prefix: '/ai' })
   await app.register(aiConversationRoutes, { prefix: '/ai/conversations' })
+  await app.register(aiWatchRoutes, { prefix: '/ai/watches' })
+  await app.register(aiPlanRoutes, { prefix: '/ai' })
+  await app.register(aiDesignRoutes, { prefix: '/ai-design' })
   await app.register(activityRoutes, { prefix: '/activity' })
   await app.register(cronRoutes, { prefix: '/cron' })
   await app.register(jobRunRoutes, { prefix: '/job-runs' })
@@ -399,6 +417,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(extensionsRoutes, { prefix: '/extensions' })
   await app.register(itemsRoutes, { prefix: '/items' })
   await app.register(accessExplainRoutes)
+  await app.register(accessInsightRoutes)
   await app.register(pickerNarrowingRoutes)
   await app.register(accessAuditsRoutes, { prefix: '/access-audits' })
   await app.register(settingsRoutes, { prefix: '/settings' })
@@ -563,6 +582,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(workflowsRoutes, { prefix: '/workflows' })
   await app.register(crossTriggersRoutes, { prefix: '/cross-triggers' })
   await app.register(aiSettingsRoutes, { prefix: '/ai-settings' })
+  await app.register(aiKnowledgeRoutes, { prefix: '/ai-knowledge' })
   await app.register(zapierRoutes, { prefix: '/zapier' })
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })

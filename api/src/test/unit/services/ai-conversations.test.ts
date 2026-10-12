@@ -102,6 +102,27 @@ describe('answerVisibleTo — the sharing rule (#1809)', () => {
     expect(replay).not.toHaveBeenCalled()
   })
 
+  it('tools from the merged features keep an answer private (default: not shareable)', async () => {
+    const replay = vi.fn(async () => ({ result: rowsA }))
+    const tools = [
+      'propose_plan',
+      'my_watches',
+      'past_state',
+      'search_docs',
+      'explain_owners',
+      'who_can_act',
+      'explain_person_access',
+      'explain_access',
+      'my_tasks',
+      'traffic_snapshot'
+    ]
+    for (const [i, tool] of tools.entries()) {
+      const trace = [{ tool, input: {}, summary: 'x', result_hash: hashToolResult(rowsA) }]
+      expect(await answerVisibleTo(bob, answer(trace, 900 + i), replay)).toBe(false)
+    }
+    expect(replay).not.toHaveBeenCalled()
+  })
+
   it('D7: a request spends at most its replay budget; the rest is withheld, not cached', async () => {
     const replay = vi.fn(async () => ({ result: rowsA }))
     const trace = [

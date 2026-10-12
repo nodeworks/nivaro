@@ -12,6 +12,7 @@ import { chainFields } from './chain-columns.js'
 import { requesterInsertFields, requesterSelectColumns } from './erp-requester-columns.js'
 import { resolveObligation } from './integration-obligations.js'
 import { classifyError } from './integration-remediation.js'
+import { announceSubmissionAspect } from './record-events.js'
 
 export type SubmissionStatus = 'submitted' | 'pending' | 'accepted' | 'rejected' | 'failed'
 
@@ -154,6 +155,9 @@ export async function applySendOutcome(opts: {
       updated_at: new Date(),
       ...extra
     })
+  // #1825: a send landing, failing or being acknowledged refreshes the
+  // record's Integrations chip for everyone viewing it.
+  void announceSubmissionAspect(opts.submissionId)
   if (attempted) {
     await recordAttempt({
       submission_id: opts.submissionId,

@@ -56,8 +56,15 @@ export type ConversationAccess = 'owner' | 'shared' | 'room'
 
 /**
  * The tools whose calls only READ, and so may be replayed as a viewer to
- * decide visibility. Never run_custom_query (arbitrary saved SQL re-run on
- * every view) or propose_action — an answer that used either stays private.
+ * decide visibility. Anything not listed keeps an answer private — the
+ * default for every new tool. Deliberately left out:
+ *  - run_custom_query (arbitrary saved SQL re-run on every view),
+ *    propose_action / propose_plan (they draft single-use actions);
+ *  - my_tasks, my_watches, past_state (the asker's own lists and watches);
+ *  - explain_access, explain_person_access, who_can_act, explain_owners
+ *    (they describe the asker's or a person's access — not for others);
+ *  - search_docs (a replay would record a docs miss against the reader);
+ *  - traffic_snapshot (administrators only).
  */
 export const REPLAYABLE_TOOLS = new Set([
   'list_collections',
@@ -321,6 +328,9 @@ export async function messagesForViewer(
     const proposals = own && visible ? parseJsonArray<Record<string, unknown>>(r.proposals) : []
     for (const p of proposals)
       if (typeof p.proposal_id === 'string') proposalIds.push(p.proposal_id)
+    // Plans (#1807) ride meta and, like proposals, belong to their asker.
+    const meta = visible ? parseJsonObject(r.meta) : {}
+    if (!own) delete meta.plans
     out.push({
       id: String(r.id),
       role: r.role,
@@ -333,7 +343,7 @@ export async function messagesForViewer(
       own,
       trace: visible ? parseJsonArray<ChatTraceEntry>(r.trace) : [],
       proposals,
-      meta: visible ? parseJsonObject(r.meta) : {}
+      meta
     })
   }
   const outcomes = await proposalOutcomes(proposalIds)

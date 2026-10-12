@@ -30,6 +30,12 @@ export interface DocSection {
   id: string
   label: string
   content: ContentNode[]
+  /**
+   * Who may read it through Ask AI's docs search (#1803). Unset = decided by
+   * the nav group: overview / user guide / collaboration are for everyone,
+   * every other group is admin material and is left out for non-admins.
+   */
+  audience?: 'all' | 'admin'
 }
 
 /**

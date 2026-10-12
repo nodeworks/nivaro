@@ -209,6 +209,21 @@ export async function buildServer() {
     app.addHook('onClose', async () => {
       await closeItemEvents()
     })
+    // Realtime event pipeline: journaled events cross replicas on a Redis
+    // stream (#1737); the durable journal (#1673) keeps the sequence ahead of
+    // a Redis that lost its keys. Both fail open — events still flow without.
+    {
+      const { initEventStream, closeEventStream } = await import('./services/event-stream.js')
+      await initEventStream(app.redis)
+      const { alignJournalSequence, flushJournal } = await import('./services/event-journal.js')
+      void alignJournalSequence()
+      const { flushRawWriteQueue } = await import('./services/raw-write-announcer.js')
+      app.addHook('onClose', async () => {
+        flushRawWriteQueue()
+        await flushJournal().catch(() => {})
+        await closeEventStream()
+      })
+    }
     const { setTransitionGuardRedis } = await import('./services/transition-guard.js')
     setTransitionGuardRedis(app.redis)
     // Idempotency keys: one store hook for the whole app (no-op without a claim).
@@ -1331,6 +1346,24 @@ export async function buildServer() {
       // so "remind me in a minute" lands within the minute. The request that
       // sets a near-term reminder also arms a timer (services/reminders.ts),
       // which is what delivers on a dev laptop where crons do not tick.
+      // Raw writers announce changes (#1875): drain the inbox procedures and
+      // scripts write to, and broadcast it. One process drains (scheduler
+      // lease); the broadcast reaches every replica through the stream.
+      app.cron.schedule(
+        'raw-write-announcements',
+        '*/5 * * * * *',
+        async () => {
+          const { drainRawWrites } = await import('./services/raw-write-announcer.js')
+          await drainRawWrites()
+        },
+        { quiet: true }
+      )
+      // Durable event journal (#1673): keep 24 hours.
+      app.cron.schedule('event-journal-prune', '17 */1 * * *', async () => {
+        const { pruneEventJournal } = await import('./services/event-journal-store.js')
+        await pruneEventJournal()
+      })
+
       app.cron.schedule(
         'chat-reminders',
         '*/20 * * * * *',
@@ -1754,6 +1787,22 @@ export async function buildServer() {
           if (r.findings > 0)
             app.log.info(`line-sla: ${r.findings} record(s) overdue, ${r.notified} notified`)
         })
+      }
+
+      // Watched numbers (#1892, #1987): re-read each due watch as its owner,
+      // alert on a crossing or an unusual move, and list them in the digest.
+      {
+        const { registerWatchDigest, runWatchChecks } = await import('./services/ai-watches.js')
+        registerWatchDigest()
+        app.cron.schedule(
+          'ai-watch-checks',
+          '10 * * * *',
+          async () => {
+            const r = await runWatchChecks(app)
+            if (r.checked) app.log.info(`ai-watches: ${r.checked} checked, ${r.alerts} alert(s)`)
+          },
+          { dryRun: async () => runWatchChecks(app, { dryRun: true }) }
+        )
       }
 
       // Tasks (#1007, #1016): due-tomorrow reminders + overdue escalation

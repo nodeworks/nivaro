@@ -311,6 +311,63 @@ export const obsIssueLog: DocSection = {
   ]
 }
 
+export const obsRealtimePipeline: DocSection = {
+  id: 'realtime-pipeline',
+  label: 'Realtime Event Pipeline',
+  content: [
+    { type: 'h1', id: 'realtime-pipeline', text: 'Realtime Event Pipeline' },
+    {
+      type: 'p',
+      text: 'When a record changes, open pages hear `collection:update` with the collection, the record id, the action and the NAMES of the fields written (never a value). This page covers how those events survive a sleeping laptop, a server that lost Redis for a moment, and writes that bypass the items service. Admin → Realtime → Event pipeline shows the counters and the delivery probe.'
+    },
+    { type: 'h2', id: 'realtime-pipeline-journal', text: 'Catching up after a long absence' },
+    {
+      type: 'p',
+      text: 'Every event carries a sequence number. A client that reconnects sends the last one it saw and receives what it missed. The fast journal in Redis keeps 15 minutes (5,000 events); every event is also written to `nivaro_event_journal` and kept 24 hours, so a laptop back from a night asleep replays the changes instead of reloading every list. Past 24 hours, or more than 500 events for the pages it has open, the client reloads as before.'
+    },
+    { type: 'h2', id: 'realtime-pipeline-stream', text: 'Across servers' },
+    {
+      type: 'p',
+      text: 'With several API servers, record-change events travel between them on a Redis stream (`nvr:ev:stream`), each server reading from its own position. A server that loses Redis briefly picks up where it stopped, so its users miss nothing. Other socket traffic (presence, chat, notifications) still uses the Socket.io adapter. `REALTIME_EVENT_STREAM=off` restores the adapter for record changes too.'
+    },
+    {
+      type: 'note',
+      text: 'During a rolling deploy from a build without the stream, users connected to an older server miss events from newer servers until that server is replaced; they then catch up from the journal on reconnect.'
+    },
+    { type: 'h2', id: 'realtime-pipeline-raw', text: 'Changes made outside the API' },
+    {
+      type: 'p',
+      text: 'Batch edits, imports run by a procedure, stored-rollup recalculations and extensions that run SQL announce the records they changed, so open pages refresh. A stored procedure or an outside script reports its changes by writing to the inbox table `nivaro_raw_writes`; the API reads it every 5 seconds and broadcasts each change with `source: "raw"`.'
+    },
+    {
+      type: 'pre',
+      code: `-- From a stored procedure (SQL Server): comma list of ids, or NULL for "records in this collection changed"
+EXEC nivaro_announce_writes @Collection = 'forecasts', @Ids = '101,102,103',
+  @Action = 'update', @Fields = 'status,amount', @Source = 'procedure:reforecast'
+
+-- Any database: insert rows directly (item NULL = collection-wide)
+INSERT INTO nivaro_raw_writes (collection, item, action, changed_fields, source)
+VALUES ('forecasts', '101', 'update', 'status', 'script:fix-lines')
+
+// From an extension
+await ctx.sql.announceWrites?.('forecasts', ids, { action: 'update', changed_fields: ['status'] })`
+    },
+    {
+      type: 'ul',
+      items: [
+        'More than 100 records of one collection in one go become a single event with `item: "*"` and `bulk: <count>`: lists show the "new changes" pill and open records refetch quietly.',
+        'Imports run by a procedure announce the collections listed in their "Recalculate rollups" setting.',
+        'Only names and ids are broadcast. Pages read the new values through /items, where permissions apply.'
+      ]
+    },
+    { type: 'h2', id: 'realtime-pipeline-probe', text: 'Delivery probe' },
+    {
+      type: 'p',
+      text: 'A Realtime delivery monitor (Monitors → New → Realtime delivery) runs every 5 minutes: a test connection inside the server joins a private room, a probe event goes out through the normal path (journal, durable table, stream) and the monitor records how long it took to arrive. Slower than the limit (default 2,000 ms), never arriving, or arriving without being journaled fails the check and raises an issue. "Run probe now" on the Realtime console runs the same check; the last 50 results from every server are kept.'
+    }
+  ]
+}
+
 export const obsTrafficMap: DocSection = {
   id: 'traffic-map',
   label: 'Traffic Map',

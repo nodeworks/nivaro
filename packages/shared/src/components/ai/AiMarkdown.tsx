@@ -13,9 +13,11 @@ import {
   YAxis
 } from 'recharts'
 import { useNavigation, useOptionalNivaroClient } from '../../context'
+import { type GlossaryTerm, glossarySegments, useGlossary } from '../../lib/glossary'
 import { cn } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
 import { type AnswerFormat, chartOf, formatsFor, listOf, rowsOfBlock } from './answer-formats'
+import { GlossaryMark, useGlossaryHref } from './GlossaryText'
 
 /**
  * Renders an assistant reply's markdown: headings, paragraphs, bullet and
@@ -176,12 +178,40 @@ const INLINE = /(\*\*[^*]+\*\*|`[^`]+`|\*[^*]+\*|\[[^\]]+\]\([^)]+\))/g
  * friendly id the host's entity-room registry knows becomes a link to the
  * record in THIS app (NavigationContext decides the URL).
  */
-export function renderInline(text: string, autolink = false): ReactNode[] {
+/**
+ * Glossary terms to mark in an answer (#1997): each term once, at its first
+ * occurrence (`once` is shared across the answer's blocks).
+ */
+export type InlineGlossary = {
+  terms: GlossaryTerm[]
+  once: Set<number>
+  href?: (t: GlossaryTerm) => string | null
+}
+
+export function renderInline(
+  text: string,
+  autolink = false,
+  glossary?: InlineGlossary
+): ReactNode[] {
   const out: ReactNode[] = []
   let last = 0
   let k = 0
-  const plain = (t: string): ReactNode =>
+  const linked = (t: string): ReactNode =>
     autolink ? <AutolinkedText key={k++} text={t} plain /> : t
+  const plain = (t: string): ReactNode => {
+    if (!glossary?.terms.length) return linked(t)
+    const segs = glossarySegments(t, glossary.terms, { once: glossary.once })
+    if (segs.length === 1 && !segs[0].term) return linked(t)
+    return segs.map((s) =>
+      s.term ? (
+        <GlossaryMark key={k++} term={s.term} href={glossary.href?.(s.term)}>
+          {s.text}
+        </GlossaryMark>
+      ) : (
+        linked(s.text)
+      )
+    )
+  }
   for (const m of text.matchAll(INLINE)) {
     const idx = m.index ?? 0
     if (idx > last) out.push(plain(text.slice(last, idx)))
@@ -439,12 +469,12 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
   )
 }
 
-function BlockView({ b, link }: { b: Block; link: boolean }) {
+function BlockView({ b, link, gl }: { b: Block; link: boolean; gl?: InlineGlossary }) {
   switch (b.kind) {
     case 'h':
       return (
         <p className={cn('font-semibold', b.level <= 2 ? 'text-[1.05em]' : '')}>
-          {renderInline(b.text, link)}
+          {renderInline(b.text, link, gl)}
         </p>
       )
     case 'ul':
@@ -452,7 +482,7 @@ function BlockView({ b, link }: { b: Block; link: boolean }) {
         <ul className='list-disc space-y-0.5 pl-5'>
           {b.items.map((it, j) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: static content
-            <li key={j}>{renderInline(it, link)}</li>
+            <li key={j}>{renderInline(it, link, gl)}</li>
           ))}
         </ul>
       )
@@ -461,7 +491,7 @@ function BlockView({ b, link }: { b: Block; link: boolean }) {
         <ol className='list-decimal space-y-0.5 pl-5'>
           {b.items.map((it, j) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: static content
-            <li key={j}>{renderInline(it, link)}</li>
+            <li key={j}>{renderInline(it, link, gl)}</li>
           ))}
         </ol>
       )
@@ -476,7 +506,7 @@ function BlockView({ b, link }: { b: Block; link: boolean }) {
     case 'chart':
       return <ChartBlock spec={b.spec} />
     default:
-      return <p>{renderInline(b.text, link)}</p>
+      return <p>{renderInline(b.text, link, gl)}</p>
   }
 }
 
@@ -487,7 +517,7 @@ const FORMAT_LABEL: Record<AnswerFormat, string> = { table: 'Table', chart: 'Cha
  * The other formats are drawn from the rows already in the answer — no new
  * question and no model call.
  */
-function SwitchableBlock({ b, link }: { b: Block; link: boolean }) {
+function SwitchableBlock({ b, link, gl }: { b: Block; link: boolean; gl?: InlineGlossary }) {
   const formats = useMemo(() => formatsFor(b), [b])
   const [format, setFormat] = useState<AnswerFormat>(formats[0])
   const shown = useMemo((): Block => {
@@ -499,7 +529,7 @@ function SwitchableBlock({ b, link }: { b: Block; link: boolean }) {
     const spec = chartOf(rows)
     return spec ? { kind: 'chart', spec } : b
   }, [b, format, formats])
-  if (formats.length < 2) return <BlockView b={b} link={link} />
+  if (formats.length < 2) return <BlockView b={b} link={link} gl={gl} />
   return (
     <div data-ai-switchable={format}>
       <fieldset className='mb-0.5 flex min-w-0 justify-end gap-0.5' aria-label='Show as'>
@@ -521,7 +551,7 @@ function SwitchableBlock({ b, link }: { b: Block; link: boolean }) {
           </button>
         ))}
       </fieldset>
-      <BlockView b={shown} link={link} />
+      <BlockView b={shown} link={link} gl={gl} />
     </div>
   )
 }
@@ -542,14 +572,18 @@ export function AiMarkdown({
   const blocks = useMemo(() => parseAiMarkdown(content), [content])
   const client = useOptionalNivaroClient()
   const link = autolink ?? client != null
+  const terms = useGlossary()
+  const href = useGlossaryHref()
+  // A fresh "once" set per render: each term is marked at its first use.
+  const gl: InlineGlossary | undefined = terms.length ? { terms, once: new Set(), href } : undefined
   return (
     <div data-ai-markdown className={cn('space-y-1.5 [&_strong]:font-semibold', className)}>
       {blocks.map((b, i) => {
         const key = `${b.kind}-${i}`
         return switchable && SWITCHABLE_KINDS.has(b.kind) ? (
-          <SwitchableBlock key={key} b={b} link={link} />
+          <SwitchableBlock key={key} b={b} link={link} gl={gl} />
         ) : (
-          <BlockView key={key} b={b} link={link} />
+          <BlockView key={key} b={b} link={link} gl={gl} />
         )
       })}
     </div>

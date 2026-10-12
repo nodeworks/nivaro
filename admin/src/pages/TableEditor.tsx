@@ -1,5 +1,7 @@
 import type { Modifier } from '@dnd-kit/core'
 import { SimpleSelect } from '@/components/ui/simple-select'
+import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
+import { LayoutReviewSection } from '@/components/ai-layout-review'
 import {
   closestCenter,
   DndContext,
@@ -70,7 +72,7 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
-import { seedQuickPickerSteps } from '@nivaro/shared'
+import { DataGuideCard, seedQuickPickerSteps } from '@nivaro/shared'
 import {
   createContext,
   type ReactNode,
@@ -4627,6 +4629,7 @@ function SettingsTab({
       <DependencyMapSection tableName={tableName} />
       <UrlAliasSection tableName={tableName} />
       <AiFeaturesCard tableName={tableName} />
+      <HelpTextDraftsSection tableName={tableName} />
     </div>
   )
 }
@@ -19869,6 +19872,7 @@ function LayoutsTab({
                         }
                       />
                       <LayoutVersionsSection layoutId={selected.id} />
+                      <LayoutReviewSection layoutId={selected.id} />
                       <PreviewAsRoleSection
                         tableName={tableName}
                         roles={roles}
@@ -26125,6 +26129,9 @@ export function TableEditorPage() {
                 onRefresh={() => refetch()}
                 onGoToLayouts={() => setTab('groups')}
               />
+            )}
+            {tab === 'settings' && isAdmin && !isSystem && table && (
+              <DataGuideCard collection={table} className='mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card' />
             )}
           </>
         )}

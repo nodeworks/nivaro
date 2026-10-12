@@ -849,9 +849,13 @@ export async function pipelinesRoutes(app: FastifyInstance) {
         .count('io.id as c')
         .first() as unknown as Promise<{ c: number } | undefined>
     ])
+    // #2012: each cluster also carries its reason in words + the dimension
+    // values no group names. Words are best-effort — never fail the advisor.
+    const { explainOwnerGapClusters } = await import('../services/owner-gap-explain.js')
+    const explained = await explainOwnerGapClusters(id, clusters).catch(() => clusters)
     return reply.send({
       data: {
-        clusters,
+        clusters: explained,
         dead_seats: {
           group_seats: deadRows.reduce((sum, r) => sum + Number(r.seats), 0),
           instance_seats: Number(instDead?.c ?? 0),

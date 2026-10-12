@@ -17,7 +17,14 @@ import { notifyUser } from './notification-channels.js'
 
 export interface MonitorRow {
   id: number
-  type: 'freshness' | 'deploy_regression' | 'synthetic' | 'journey' | 'ssl_cert' | 'traffic'
+  type:
+    | 'freshness'
+    | 'deploy_regression'
+    | 'synthetic'
+    | 'journey'
+    | 'ssl_cert'
+    | 'traffic'
+    | 'realtime'
   name: string
   config: string | null
   state: string | null
@@ -454,6 +461,21 @@ export async function evaluateMonitor(
       // #1124 — a Traffic Map entity's live figure against a threshold (this process's rings).
       const { evalTraffic } = await import('./traffic-monitor.js')
       result = await evalTraffic(cfg)
+    } else if (monitor.type === 'realtime') {
+      // #1682 — synthetic socket client: write-to-delivery time through the normal path.
+      if (!app) result = { status: 'unknown', detail: 'No app instance in this context' }
+      else {
+        const { runRealtimeProbe } = await import('./realtime-probe.js')
+        const r = await runRealtimeProbe(app, {
+          thresholdMs: Number(cfg.threshold_ms) || undefined,
+          timeoutMs: Number(cfg.timeout_ms) || undefined
+        })
+        result = {
+          status: r.ok ? 'ok' : r.skipped ? 'unknown' : 'failing',
+          detail: r.detail,
+          ...(r.delivery_ms != null ? { metric: r.delivery_ms } : {})
+        }
+      }
     } else {
       const r = await evalDeployRegression(cfg, state)
       result = r.result

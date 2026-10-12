@@ -2,6 +2,10 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   AiFeedbackButtons,
   AiMarkdown,
+  type AiPlan,
+  AiPlanCard,
+  type AiPlanSubscribe,
+  AiStepList,
   type AiStreamSubscribe,
   NavigationContext,
   NivaroProvider,
@@ -28,6 +32,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
+import { MyWatchesPanel, WatchThisNumber, watchableAggregate } from '@/components/ask-watches'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { ASK_HANDOFF_KEY } from '@/lib/ask-handoff'
@@ -62,6 +67,8 @@ interface ChatTurn {
   content: string
   trace?: TraceEntry[]
   proposals?: Proposal[]
+  /** Multi-step plans (#1807) — the card re-reads each from the server. */
+  plans?: AiPlan[]
   requestId?: string | null
   playbooksUsed?: number
   /** Served from the answer cache (#723) — when it was first answered. */
@@ -78,6 +85,7 @@ interface ChatBody {
   reply: string
   trace: TraceEntry[]
   proposals?: Proposal[]
+  plans?: AiPlan[]
   request_id?: string | null
   playbooks_used?: number
   cached?: boolean
@@ -142,6 +150,15 @@ const subscribeAi: AiStreamSubscribe = (event, handler) => {
   }
 }
 
+// Plan progress (#2007) rides the same socket: `ai:plan` to the user's room.
+const subscribePlan: AiPlanSubscribe = (event, handler) => {
+  const s = getSocket()
+  s.on(event, handler)
+  return () => {
+    s.off(event, handler)
+  }
+}
+
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
 const SUGGESTIONS = [
@@ -162,6 +179,7 @@ function toTurn(m: ServerMessage): ChatTurn {
     content: m.content,
     trace: m.trace,
     proposals: m.proposals,
+    plans: m.own && Array.isArray(m.meta.plans) ? (m.meta.plans as AiPlan[]) : undefined,
     requestId: typeof m.meta.request_id === 'string' ? m.meta.request_id : null,
     playbooksUsed: Number(m.meta.playbooks_used ?? 0),
     cachedAt: typeof m.meta.cached_at === 'string' ? m.meta.cached_at : null,
@@ -479,6 +497,7 @@ function AskPageInner() {
           content: data.reply,
           trace: data.trace,
           proposals: data.proposals,
+          plans: data.plans,
           requestId: data.request_id ?? null,
           playbooksUsed: data.playbooks_used ?? 0,
           cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null,
@@ -744,6 +763,8 @@ function AskPageInner() {
                 </div>
               )}
 
+              <MyWatchesPanel />
+
               {!notFound && turns.length === 0 && !conversationId && (
                 <div className='pt-16 text-center'>
                   <Sparkles className='mx-auto h-8 w-8 text-slate-300' />
@@ -899,6 +920,9 @@ function AskPageInner() {
                                 {t.proposals?.map((p) => (
                                   <ProposalCard key={p.proposal_id} proposal={p} />
                                 ))}
+                                {t.plans?.map((p) => (
+                                  <AiPlanCard key={p.plan_id} plan={p} subscribe={subscribePlan} />
+                                ))}
                                 {t.trace && t.trace.length > 0 && (
                                   <div className='mt-2 flex flex-wrap gap-1 border-t border-slate-100 pt-2 dark:border-border'>
                                     {t.trace.map((tr, ti) => (
@@ -914,6 +938,10 @@ function AskPageInner() {
                                     ))}
                                   </div>
                                 )}
+                                {(() => {
+                                  const agg = watchableAggregate(t.trace)
+                                  return agg ? <WatchThisNumber aggregate={agg} /> : null
+                                })()}
                                 <div className='mt-1.5 flex items-center justify-between gap-2'>
                                   <AiFeedbackButtons requestId={t.requestId} />
                                   <span className='flex items-center gap-2'>
@@ -960,6 +988,7 @@ function AskPageInner() {
               {send.active && (
                 <div className='flex justify-start' data-ask-streaming>
                   <div className='max-w-[85%] rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-[13.5px] text-slate-800 dark:border-border dark:bg-card dark:text-slate-200'>
+                    <AiStepList steps={send.steps} folded={!!send.text} />
                     {send.narration && (
                       <p
                         className='mb-1 text-[12px] italic text-slate-500 dark:text-slate-400'
@@ -970,20 +999,24 @@ function AskPageInner() {
                     )}
                     {send.text ? (
                       <AiMarkdown content={send.text} />
-                    ) : (
+                    ) : send.steps.some((st) => st.state === 'running') ? null : (
                       <div className='flex items-center gap-2 text-[13px] text-slate-400'>
                         <Loader2 className='h-3.5 w-3.5 animate-spin' />
-                        {send.status ?? 'Querying your data…'}
+                        {send.steps.length > 0
+                          ? 'Putting the answer together…'
+                          : (send.status ?? 'Querying your data…')}
                       </div>
                     )}
-                    {send.text && send.status && (
-                      <div
-                        className='mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400'
-                        data-ask-status
-                      >
-                        <Loader2 className='h-3 w-3 animate-spin' /> {send.status}
-                      </div>
-                    )}
+                    {send.text &&
+                      send.status &&
+                      send.steps.some((st) => st.state === 'running') && (
+                        <div
+                          className='mt-1.5 flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-slate-400'
+                          data-ask-status
+                        >
+                          <Loader2 className='h-3 w-3 animate-spin' /> {send.status}
+                        </div>
+                      )}
                   </div>
                 </div>
               )}

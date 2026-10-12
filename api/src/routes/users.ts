@@ -777,6 +777,35 @@ export async function usersRoutes(app: FastifyInstance) {
       }
       patch.notification_sound = value
     }
+    if ('notification_sounds' in body) {
+      // #2385 — per-category sound on top of the global one: {category:
+      // 'off'|'subtle'|'chime'}. A category with no entry follows the global.
+      const raw = body.notification_sounds
+      if (raw === null) patch.notification_sounds = null
+      else if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const out: Record<string, string> = {}
+        for (const cat of NOTIFY_CATEGORIES) {
+          const v = (raw as Record<string, unknown>)[cat]
+          if (v === undefined || v === null) continue
+          if (typeof v !== 'string' || !['off', 'subtle', 'chime'].includes(v))
+            return reply
+              .code(400)
+              .send({ error: "notification_sounds values must be 'off', 'subtle' or 'chime'" })
+          out[cat] = v
+        }
+        patch.notification_sounds = out
+      } else {
+        return reply.code(400).send({ error: 'notification_sounds must be an object or null' })
+      }
+    }
+    if ('notification_cleanup_days' in body) {
+      // #2406 — archive read notifications older than N days automatically.
+      const n = body.notification_cleanup_days
+      if (n === null) patch.notification_cleanup_days = null
+      else if (Number.isInteger(n) && (n as number) >= 7 && (n as number) <= 365)
+        patch.notification_cleanup_days = n
+      else return reply.code(400).send({ error: 'notification_cleanup_days must be 7–365 or null' })
+    }
     if ('notification_prefs' in body) {
       // Quiet hours + per-category channel matrix (see notification-channels).
       const raw = body.notification_prefs
@@ -1044,6 +1073,14 @@ export async function usersRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'traffic_digest must be true, false or null' })
       }
       patch.traffic_digest = v === true ? true : null
+    }
+    if ('ai_weekly_summary' in body) {
+      // #1868/#1908 — the Monday AI-written summaries in the daily summary (administrators; opt-in).
+      const v = body.ai_weekly_summary
+      if (v !== null && typeof v !== 'boolean') {
+        return reply.code(400).send({ error: 'ai_weekly_summary must be true, false or null' })
+      }
+      patch.ai_weekly_summary = v === true ? true : null
     }
     if ('traffic_pins' in body) {
       // #1125 — the Traffic Map watch list: entity keys (`<lane>/<entity>`), at most 40.

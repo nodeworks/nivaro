@@ -16,7 +16,8 @@ import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
-import { inSocketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import { inSocketTenant, socketTenant, socketTrafficStore } from '../services/socket-tenant.js'
+import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 let pagePresenceReader:
   | ((path: string) => Array<{ id: string; name: string; since: number }>)
@@ -434,20 +435,25 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Missed-event catch-up (#266): client sends its last-seen sequence after
     // (re)joining its rooms; we replay what it missed, or tell it honestly
     // that the window is gone and it should refetch.
-    socket.on('catchup', async (payload: { cursor?: number }) => {
-      const cursor = Number(payload?.cursor)
-      if (!Number.isFinite(cursor) || cursor < 0) return
-      try {
-        const { replaySince } = await import('../services/event-journal.js')
-        const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
-        const result = await replaySince(cursor, rooms)
-        if (result.full) socket.emit('catchup:full', {})
-        else socket.emit('catchup:events', { events: result.events })
-      } catch (err) {
-        app.log.debug({ err }, 'catchup failed')
-        socket.emit('catchup:full', {})
-      }
-    })
+    // Cloud: replay runs in the socket's tenant (its journal table), and the
+    // socket's rooms are tenant-prefixed, so only its tenant's events return.
+    socket.on(
+      'catchup',
+      inSocketTenant(socket, async (payload: { cursor?: number }) => {
+        const cursor = Number(payload?.cursor)
+        if (!Number.isFinite(cursor) || cursor < 0) return
+        try {
+          const { replaySince } = await import('../services/event-journal.js')
+          const rooms = new Set([...socket.rooms].filter((r) => r !== socket.id))
+          const result = await replaySince(cursor, rooms)
+          if (result.full) socket.emit('catchup:full', {})
+          else socket.emit('catchup:events', { events: result.events })
+        } catch (err) {
+          app.log.debug({ err }, 'catchup failed')
+          socket.emit('catchup:full', {})
+        }
+      })
+    )
 
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
     const watchGate = createWatchRoomGate()
@@ -492,6 +498,14 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Set once `auth` succeeds below; gates authenticated-only handlers
     // (e.g. collection:join) for the lifetime of this socket connection.
     let authenticatedUser: User | null = null
+    /** Cloud: an authenticated socket joins its tenant's `all` room, where
+     *  tenant-wide notices (owners:changed, access:changed — record-events.ts)
+     *  go instead of io.emit (TENANT_ALL_ROOM there). Self-hosted: nothing to join. */
+    const joinTenantAllRoom = async () => {
+      if (!process.env.CLOUD_META_DB_URL) return
+      const t = await socketTenant(socket).catch(() => null)
+      if (t) socket.join(tenantScopedRoom('all', t.tenantId || t.slug))
+    }
 
     // Authenticate the socket via the user's static token, or a short-lived
     // one-time WS token minted by GET /api/auth/ws-token (session-cookie users
@@ -575,6 +589,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
                 name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
               }
             socket.join(`user:${user.id}`)
+            void joinTenantAllRoom()
             socket.emit('auth:ok', { userId: user.id })
             void markOnline(user.id, socket.id)
           }
@@ -600,6 +615,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
                 name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
               }
             socket.join(`user:${user.id}`)
+            void joinTenantAllRoom()
             socket.emit('auth:ok', { userId: user.id })
             void markOnline(user.id, socket.id)
           }
@@ -618,6 +634,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
               name: [user.first_name, user.last_name].filter(Boolean).join(' ') || user.email
             }
           socket.join(`user:${user.id}`)
+          void joinTenantAllRoom()
           socket.emit('auth:ok', { userId: user.id })
         }
       } catch (err) {
@@ -687,24 +704,38 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
     registerReplayWatch(io, socket, () => authenticatedUser)
 
-    socket.on('collection:join', async (payload: { collection?: string }) => {
+    /** Cloud: collection rooms are per tenant (tenant-rooms.ts) — journaled
+     *  events from a tenant's context go to `t:<tenant>:collection:<c>`. A cloud
+     *  socket with no resolvable tenant joins nothing. Self-hosted: unchanged. */
+    const collectionRoom = async (collection: string): Promise<string | null> => {
+      if (!process.env.CLOUD_META_DB_URL) return `collection:${collection}`
+      const t = await socketTenant(socket)
+      return t ? tenantScopedRoom(`collection:${collection}`, t.tenantId || t.slug) : null
+    }
+    socket.on(
+      'collection:join',
+      inSocketTenant(socket, async (payload: { collection?: string }) => {
+        const collection = payload?.collection
+        if (typeof collection !== 'string' || collection.length === 0) return
+        const user = authenticatedUser
+        if (!user) return
+        try {
+          const allowed = await can(user, 'read', collection)
+          const room = allowed ? await collectionRoom(collection) : null
+          if (room) socket.join(room)
+        } catch (err) {
+          app.log.warn({ err, collection }, 'collection:join permission check failed')
+        }
+      })
+    )
+    socket.on('collection:leave', async (payload: { collection?: string }) => {
       const collection = payload?.collection
       if (typeof collection !== 'string' || collection.length === 0) return
-      const user = authenticatedUser
-      if (!user) return
-      try {
-        const allowed = await can(user, 'read', collection)
-        if (allowed) {
-          socket.join(`collection:${collection}`)
-        }
-      } catch (err) {
-        app.log.warn({ err, collection }, 'collection:join permission check failed')
-      }
-    })
-    socket.on('collection:leave', (payload: { collection?: string }) => {
-      const collection = payload?.collection
-      if (typeof collection === 'string' && collection.length > 0) {
-        socket.leave(`collection:${collection}`)
+      // Self-hosted: leave at once (no await), as before.
+      if (!process.env.CLOUD_META_DB_URL) socket.leave(`collection:${collection}`)
+      else {
+        const room = await collectionRoom(collection)
+        if (room) socket.leave(room)
       }
     })
     // ── Record presence v2 — viewer avatars + field editing indicators ──────
