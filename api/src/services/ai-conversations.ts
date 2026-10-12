@@ -345,12 +345,16 @@ export async function messagesForViewer(
     for (const p of proposals)
       if (typeof p.proposal_id === 'string') proposalIds.push(p.proposal_id)
     // Plans (#1807) ride meta and, like proposals, belong to their asker —
-    // so do memory offers (#1845) and a kept "remember that" note (#1804).
+    // so do memory offers (#1845), a kept "remember that" note (#1804), and
+    // the follow-up questions and choice pickers (#1834, #1937), which are
+    // built from the asker's own tool results.
     const meta = visible ? parseJsonObject(r.meta) : {}
     if (!own) {
       delete meta.plans
       delete meta.memory_suggestions
       delete meta.remembered
+      delete meta.followups
+      delete meta.choices
     }
     out.push({
       id: String(r.id),
