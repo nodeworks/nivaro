@@ -254,6 +254,31 @@ export async function userWithApiKey(user: User, keyId: number): Promise<User | 
 
 // ── Gates ──────────────────────────────────────────────────────────────────
 
+const COLLECTION_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+const knownTables = new Map<string, { ok: boolean; at: number }>()
+const KNOWN_TTL_MS = 5 * 60_000
+
+/**
+ * Is `name` a collection a socket may ask to watch? A plain identifier (a name with `:` would
+ * spell another room kind, `orders:5`) that is registered or is a real table (system tables
+ * such as user_presence are not all registered). Cached per name; the read gate still runs.
+ */
+export async function isKnownCollection(name: string): Promise<boolean> {
+  if (!COLLECTION_NAME.test(name) || name.length > 128) return false
+  const hit = knownTables.get(name)
+  if (hit && Date.now() - hit.at < KNOWN_TTL_MS) return hit.ok
+  let ok = false
+  try {
+    const { getCollection } = await import('./collections.js')
+    ok = !!(await getCollection(name)) || (await db.schema.hasTable(name))
+  } catch {
+    ok = false
+  }
+  if (knownTables.size > 2000) knownTables.clear()
+  knownTables.set(name, { ok, at: Date.now() })
+  return ok
+}
+
 const ADMIN_ROOMS = /^(watch:|replay:)|^(pulse|presence-map|presence:admin)$/
 
 async function roleIsAdmin(roleId: string | null | undefined): Promise<boolean> {

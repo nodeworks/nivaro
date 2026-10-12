@@ -18,6 +18,7 @@ import { can } from '../services/permissions.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import {
   canSeeRecordRoom,
+  isKnownCollection,
   masqRoom,
   parseWsTokenValue,
   RECHECK_EVENT,
@@ -400,19 +401,37 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   }
   // socketId → where in the admin that user is right now (presence map;
   // per-node like recordViewers — same accepted Redis-adapter limitation)
+  // Cloud: each entry carries its socket's tenant ('' self-hosted); every reader and every
+  // presence-map broadcast sees one tenant's people only.
   const pagePresence = new Map<
     string,
-    { user: { id: string; name: string }; path: string; since: number; app?: string | null }
+    {
+      user: { id: string; name: string }
+      path: string
+      since: number
+      app?: string | null
+      tenant: string
+    }
   >()
 
-  function presenceSnapshot() {
+  function presenceSnapshot(tenant: string) {
     return [...pagePresence.values()]
+      .filter((p) => p.tenant === tenant)
+      .map(({ tenant: _tenant, ...p }) => p)
   }
-  // #42 — who else is on this admin page right now (per replica).
+  /** The tenant's presence-map room, with that tenant's snapshot. */
+  function broadcastPresenceMap(tenant: string) {
+    io.to(tenantScopedRoom('presence-map', tenant)).emit(
+      'presence-map:update',
+      presenceSnapshot(tenant)
+    )
+  }
+  // #42 — who else is on this admin page right now (per replica; the caller's tenant).
   pagePresenceReader = (path: string) => {
+    const tenant = currentTenantKey()
     const seen = new Map<string, { id: string; name: string; since: number }>()
     for (const p of pagePresence.values()) {
-      if (p.path !== path) continue
+      if (p.path !== path || p.tenant !== tenant) continue
       const cur = seen.get(p.user.id)
       if (!cur || p.since < cur.since) seen.set(p.user.id, { ...p.user, since: p.since })
     }
@@ -420,8 +439,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   }
 
   pagePrefixReader = (prefixes: string[]) => {
+    const tenant = currentTenantKey()
     const ids = new Set<string>()
     for (const p of pagePresence.values()) {
+      if (p.tenant !== tenant) continue
       if (
         prefixes.some(
           (x) => p.path === x || p.path.startsWith(`${x}/`) || p.path.startsWith(`${x}?`)
@@ -511,6 +532,19 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         noteTenantSocket(tenantKey, 1, t.slug)
       })
     }
+
+    // Cloud: shared room names (chat, pulse, presence, watch) are per tenant (tenant-rooms.ts,
+    // `t:<tenant>:`). `scopedRoom` resolves the socket's tenant first (null = none: join
+    // nothing); `scopedRoomNow` is for leaves and broadcasts after a join resolved it.
+    const cloud = !!process.env.CLOUD_META_DB_URL
+    const scopedRoom = async (room: string): Promise<string | null> => {
+      if (!cloud) return room
+      const t = await socketTenant(socket)
+      return t ? tenantScopedRoom(room, String(t.tenantId || t.slug)) : null
+    }
+    const scopedRoomNow = (room: string): string =>
+      cloud ? tenantScopedRoom(room, String(socket.data.nvrTenantKey ?? '-')) : room
+    const tenantNow = (): string => (cloud ? String(socket.data.nvrTenantKey ?? '-') : '')
 
     // #1730 byte accounting + #1681 burst coalescing, at the one place every packet to this
     // socket passes: the client's writeToEngine (broadcasts and direct emits alike).
@@ -632,21 +666,23 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
 
     // Admin watch rooms (#271 jobs, #276 traffic, #279 monitors).
     const watchGate = createWatchRoomGate()
-    // Cloud: the Traffic Map room is per tenant (#1132); every other room keeps its name.
+    // Cloud: every watch room is per tenant. The Traffic Map keeps its store-keyed name
+    // (#1132, `watch:traffic-map:<store>`); the others are `t:<tenant>:watch:<room>`
+    // (tenant-rooms.ts), the name their emitters use from the tenant's context.
     const watchRoomName = async (room: string): Promise<string | null> => {
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) return `watch:${room}`
-      const store = await socketTrafficStore(socket)
-      return store ? `watch:traffic-map:${store}` : null
+      if (!cloud) return `watch:${room}`
+      if (room === 'traffic-map') {
+        const store = await socketTrafficStore(socket)
+        return store ? `watch:traffic-map:${store}` : null
+      }
+      return scopedRoom(`watch:${room}`)
     }
     const onAdminJoin = async (payload: { room?: string }) => {
       const room = payload?.room
       const user = authenticatedUser
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
       // Self-hosted: no await before the gate, so a quick join + leave keeps its order.
-      const name =
-        room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL
-          ? `watch:${room}`
-          : await watchRoomName(room)
+      const name = !cloud ? `watch:${room}` : await watchRoomName(room)
       if (!name) return
       await watchGate.join(
         room,
@@ -661,7 +697,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('admin:leave', (payload: { room?: string }) => {
       const room = payload?.room
       if (typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) {
+      if (!cloud) {
         watchGate.leave(room, () => socket.leave(`watch:${room}`))
         return
       }
@@ -855,11 +891,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             : null
           if (!role?.admin_access || authenticatedUser !== user) return
         }
-        socket.join(`presence:${roomId.slice(0, 200)}`)
+        const name = await scopedRoom(`presence:${roomId.slice(0, 200)}`)
+        if (name) socket.join(name)
       })
     )
     socket.on('presence:leave', (roomId: string) => {
-      socket.leave(`presence:${roomId}`)
+      if (typeof roomId === 'string') socket.leave(scopedRoomNow(`presence:${roomId}`))
     })
     // Requires an authenticated socket (via `auth` above) AND read access to
     // the specific collection — mirrors the `can(user, 'read', collection)`
@@ -869,21 +906,27 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     // Chat rooms are joined individually and gated by the SAME canSeeRoom the
     // REST routes use — a socket must not become a way to observe a room you
     // cannot read. Rejects silently, matching collection:join's posture.
-    socket.on('chat:join', async (payload: { room?: string }) => {
-      const room = payload?.room
-      if (typeof room !== 'string' || room.length === 0) return
-      const user = authenticatedUser
-      if (!user) return
-      try {
-        if (await canSeeRoom(user, room)) socket.join(`chat:${room}`)
-      } catch (err) {
-        app.log.warn({ err, room }, 'chat:join visibility check failed')
-      }
-    })
+    // Cloud: in the socket's tenant (its chat tables), into the tenant's room name.
+    socket.on(
+      'chat:join',
+      inSocketTenant(socket, async (payload: { room?: string }) => {
+        const room = payload?.room
+        if (typeof room !== 'string' || room.length === 0) return
+        const user = authenticatedUser
+        if (!user) return
+        try {
+          if (!(await canSeeRoom(user, room))) return
+          const name = await scopedRoom(`chat:${room}`)
+          if (name) socket.join(name)
+        } catch (err) {
+          app.log.warn({ err, room }, 'chat:join visibility check failed')
+        }
+      })
+    )
 
     socket.on('chat:leave', (payload: { room?: string }) => {
       const room = payload?.room
-      if (typeof room === 'string' && room) socket.leave(`chat:${room}`)
+      if (typeof room === 'string' && room) socket.leave(scopedRoomNow(`chat:${room}`))
     })
 
     // #1399 — watch a session replay together (admin-only replay:<key> rooms).
@@ -894,6 +937,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (typeof collection !== 'string' || collection.length === 0) return
       const user = authenticatedUser
       if (!user) return
+      // A real collection name only: `orders:5` would name another room kind.
+      if (!(await isKnownCollection(collection))) return
       try {
         const allowed = await can(user, 'read', collection)
         if (allowed) {
@@ -1023,17 +1068,22 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     )
 
     // Mission-control pulse — admin-only live activity stream
-    socket.on('pulse:join', async () => {
-      const user = authenticatedUser
-      if (!user?.role) return
-      try {
-        const role = await db('nivaro_roles').where({ id: user.role }).first()
-        if (role?.admin_access) socket.join('pulse')
-      } catch {
-        /* silent, same style as other joins */
-      }
-    })
-    socket.on('pulse:leave', () => socket.leave('pulse'))
+    socket.on(
+      'pulse:join',
+      inSocketTenant(socket, async () => {
+        const user = authenticatedUser
+        if (!user?.role) return
+        try {
+          const role = await db('nivaro_roles').where({ id: user.role }).first()
+          if (!role?.admin_access) return
+          const name = await scopedRoom('pulse')
+          if (name) socket.join(name)
+        } catch {
+          /* silent, same style as other joins */
+        }
+      })
+    )
+    socket.on('pulse:leave', () => socket.leave(scopedRoomNow('pulse')))
 
     // ── Presence map — who's on which admin page right now ──────────────────
     // #1391 — the portal (@nivaro/react usePageAt) pings too, labelled with its app.
@@ -1049,29 +1099,34 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         user: { id: user.id, name: displayName(user) },
         path,
         since: changed ? Date.now() : existing.since,
-        app: pageApp
+        app: pageApp,
+        tenant: tenantNow()
       })
       if (changed) {
         void closeJourneyRow(socket.id).then(() =>
           openJourneyRow(socket.id, user.id, path, pageApp)
         )
       }
-      io.to('presence-map').emit('presence-map:update', presenceSnapshot())
+      broadcastPresenceMap(tenantNow())
     })
-    socket.on('presence-map:join', async () => {
-      const user = authenticatedUser
-      if (!user?.role) return
-      try {
-        const role = await db('nivaro_roles').where({ id: user.role }).first()
-        if (role?.admin_access) {
-          socket.join('presence-map')
-          socket.emit('presence-map:update', presenceSnapshot())
+    socket.on(
+      'presence-map:join',
+      inSocketTenant(socket, async () => {
+        const user = authenticatedUser
+        if (!user?.role) return
+        try {
+          const role = await db('nivaro_roles').where({ id: user.role }).first()
+          if (!role?.admin_access) return
+          const name = await scopedRoom('presence-map')
+          if (!name) return
+          socket.join(name)
+          socket.emit('presence-map:update', presenceSnapshot(tenantNow()))
+        } catch {
+          /* silent */
         }
-      } catch {
-        /* silent */
-      }
-    })
-    socket.on('presence-map:leave', () => socket.leave('presence-map'))
+      })
+    )
+    socket.on('presence-map:leave', () => socket.leave(scopedRoomNow('presence-map')))
 
     // Field editing indicator — fan out inside the record room only.
     socket.on('field:focus', (payload: { field?: string; collection?: string; item?: unknown }) => {
@@ -1149,9 +1204,8 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
       leaveRecordRoom()
       void closeJourneyRow(socket.id)
-      if (pagePresence.delete(socket.id)) {
-        io.to('presence-map').emit('presence-map:update', presenceSnapshot())
-      }
+      const gone = pagePresence.get(socket.id)
+      if (gone && pagePresence.delete(socket.id)) broadcastPresenceMap(gone.tenant)
       app.log.debug({ socketId: socket.id }, 'Socket disconnected')
     })
   })

@@ -1720,7 +1720,7 @@ export async function chatRoutes(app: FastifyInstance) {
    *  edit, delete). Rides the same chat:message event clients already
    *  invalidate on; the payload only needs the room. */
   function emitRoomTouch(room: string): void {
-    app.io?.to(`chat:${room}`).emit('chat:message', { room, touch: true })
+    app.io?.to(tenantScopedRoom(`chat:${room}`)).emit('chat:message', { room, touch: true })
   }
 }
 

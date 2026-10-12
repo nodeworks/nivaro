@@ -9,6 +9,7 @@ import { callExternalApi } from './external-apis.js'
 import { resolveSweepItems } from './flow-sweep-items.js'
 import { renderMailTemplate, sendRawMail } from './mail.js'
 import { NOTIFY_CATEGORIES, NOTIFY_CATEGORY_LABELS, notifyUser } from './notification-channels.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 import { noteTrafficSourceRun, type TrafficSource, withTrafficSource } from './traffic-source.js'
 import { flowTriggerKey, noteFlowTrigger } from './traffic-taps/sources.js'
 import { detectDefaultBodyRejection } from './workflow-actions.js'
@@ -1652,13 +1653,15 @@ async function executeFlowInner(ctx: ExecutionContext, source?: TrafficSource): 
 // Zero cost unless someone has the room open (same posture as the traffic
 // feed): membership is checked before anything serializes.
 function emitWatch(room: string, event: string, payload: Record<string, unknown>): void {
+  // Cloud: the running tenant's watch room — named now, inside its context.
+  const name = tenantScopedRoom(`watch:${room}`)
   void import('./io-holder.js')
     .then(({ getIo }) => {
       const io = getIo()
       if (!io) return
-      const r = io.sockets?.adapter?.rooms?.get(`watch:${room}`)
+      const r = io.sockets?.adapter?.rooms?.get(name)
       if (!r || r.size === 0) return
-      io.to(`watch:${room}`).emit(event, { ...payload, at: new Date().toISOString() })
+      io.to(name).emit(event, { ...payload, at: new Date().toISOString() })
     })
     .catch(() => {})
 }

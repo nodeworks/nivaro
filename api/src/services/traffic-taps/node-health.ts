@@ -14,6 +14,8 @@
 import { monitorEventLoopDelay, PerformanceObserver } from 'node:perf_hooks'
 import { setJournalObserver } from '../event-journal.js'
 import { getIo } from '../io-holder.js'
+import { splitTenantRoom } from '../socket-transport.js'
+import { currentTenantKey } from '../tenant-rooms.js'
 import { RING_SECONDS } from '../traffic-ring.js'
 import { registerTrafficTap } from '../traffic-taps.js'
 
@@ -188,8 +190,15 @@ export function watchRooms(): Array<{ room: string; tabs: number }> {
   const rooms = io?.sockets?.adapter?.rooms
   if (!rooms) return []
   const out: Array<{ room: string; tabs: number }> = []
-  for (const [room, set] of rooms) {
-    if (room.startsWith('watch:')) out.push({ room: room.slice(6), tabs: set.size })
+  // Cloud: the caller's tenant's watch rooms only (`t:<tenant>:watch:<room>`, and the Traffic
+  // Map's `watch:traffic-map:t:<tenant>`).
+  const tenant = currentTenantKey()
+  for (const [scoped, set] of rooms) {
+    const { tenant: roomTenant, room } = splitTenantRoom(scoped)
+    if (!room.startsWith('watch:')) continue
+    const store = /^watch:traffic-map:t:(.+)$/.exec(room)
+    if (store ? store[1] !== tenant : roomTenant !== tenant) continue
+    out.push({ room: store ? 'traffic-map' : room.slice(6), tabs: set.size })
   }
   return out.sort((a, b) => b.tabs - a.tabs).slice(0, 20)
 }

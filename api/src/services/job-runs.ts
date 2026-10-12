@@ -5,6 +5,7 @@ import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
 import { getIo } from './io-holder.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * The one funnel for background-execution history. Wrap any cron/backfill/
@@ -87,7 +88,7 @@ export interface JobRunHandle {
  *  Jobs console's watch room. Fire-and-forget decoration. */
 function emitJobEvent(payload: Record<string, unknown>): void {
   try {
-    getIo()?.to('watch:jobs').emit('job:update', payload)
+    getIo()?.to(tenantScopedRoom('watch:jobs')).emit('job:update', payload)
   } catch {
     /* decoration */
   }

@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../../auth/session.js', () => ({ REVOKED_PREFIX: 'sess:revoked:' }))
 vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+vi.mock('../../../services/collections.js', () => ({
+  getCollection: vi.fn(async (n: string) => (n === 'orders' ? { collection: 'orders' } : undefined))
+}))
 vi.mock('../../../services/chat.js', () => ({ canSeeRoom: vi.fn(async () => true) }))
 vi.mock('../../../services/io-holder.js', () => ({ getIo: vi.fn(() => null) }))
 vi.mock('../../../services/permissions.js', () => ({ can: vi.fn(async () => true) }))
@@ -28,6 +31,7 @@ import {
   checkBind,
   encodeBoundToken,
   endRoomSockets,
+  isKnownCollection,
   masqRoom,
   parseWsTokenValue,
   RECHECK_EVENT,
@@ -444,5 +448,18 @@ describe('ending and rechecking across replicas', () => {
     requestAccessRecheck()
     vi.advanceTimersByTime(1500)
     expect(io.serverSideEmit).toHaveBeenCalledWith(RECHECK_EVENT, { all: true, userIds: ['ANA'] })
+  })
+})
+
+describe('collection:join names (isKnownCollection)', () => {
+  it('refuses a name that would spell another room kind, accepts real collections', async () => {
+    ;(db as unknown as { schema: unknown }).schema = {
+      hasTable: vi.fn(async (n: string) => n === 'user_presence')
+    }
+    expect(await isKnownCollection('orders:5')).toBe(false)
+    expect(await isKnownCollection('t:A:collection')).toBe(false)
+    expect(await isKnownCollection('orders')).toBe(true)
+    expect(await isKnownCollection('user_presence')).toBe(true)
+    expect(await isKnownCollection('nope')).toBe(false)
   })
 })

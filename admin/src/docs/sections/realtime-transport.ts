@@ -59,7 +59,7 @@ export const realtimeTransport: DocSection = {
     },
     {
       type: 'p',
-      text: "One process serves several tenants, so every live feed stays inside its tenant: record and item rooms are named `t:<tenant>:record:<collection>:<id>` (self-hosted names are unchanged), an SSE stream delivers only writes made in the tenant it was opened under, and GraphQL subscriptions (`itemMutated`, `workflowStateChanged`, `pipelineStateChanged`) listen on per-tenant topics — the tenant rides each event across replicas. A graphql-ws connection resolves its tenant from its host like a socket does and signs in against that tenant's database; one with no tenant hears nothing. Workflow and pipeline state subscriptions now also need read access to the collection."
+      text: "One process serves several tenants, so every live feed stays inside its tenant: record, item, chat, pulse, presence and watch rooms are named `t:<tenant>:<room>` (self-hosted names are unchanged; presence sessions are kept per tenant too), an SSE stream delivers only writes made in the tenant it was opened under, and GraphQL subscriptions (`itemMutated`, `workflowStateChanged`, `pipelineStateChanged`) listen on per-tenant topics — the tenant rides each event across replicas. A graphql-ws connection resolves its tenant from its host like a socket does and signs in against that tenant's database; one with no tenant hears nothing. Workflow and pipeline state subscriptions need read access to the record, and each subscriber receives the instance as they would read it (events carry ids only). A socket may only watch a real collection: `collection:join` refuses names such as `orders:5`."
     }
   ]
 }
