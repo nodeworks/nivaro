@@ -1,10 +1,3 @@
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@/components/ui/select'
 import { UserAvatar } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -17,12 +10,15 @@ import {
   Plus,
   Search,
   Shield,
+  Sparkles,
   Trash2,
   Users,
   X
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { toast } from 'sonner'
+import { RoleDesigner } from '@/components/ai-role-designer'
+import { RoleViewSuggestions } from '@/components/ai-role-views'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -36,6 +32,13 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { usePersistedTab } from '@/hooks/usePersistedTab'
 import { navCategories } from '@/layouts/AppLayout'
@@ -66,7 +69,7 @@ type Policy = {
   row_filter?: RowCondition[] | null
 }
 type Collection = { collection: string; display_name: string | null }
-type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare'
+type ActiveTab = 'permissions' | 'members' | 'ui' | 'simulate' | 'compare' | 'views'
 
 const ALL_NAV_ITEMS = navCategories.flatMap((cat) =>
   cat.items.map((item) => ({ category: cat.label, label: item.label, to: item.to }))
@@ -478,55 +481,68 @@ function PermissionsMatrix({
     if ((p.row_filter?.length ?? 0) > 0) filteredKeys.add(`${p.collection}:${p.action}`)
   }
 
-  const addPolicy = useMutation({
-    mutationFn: ({ collection, action }: { collection: string; action: string }) =>
-      api.post<{ data: Policy }>(`/roles/${roleId}/policies`, { collection, action }),
-    onMutate: async ({ collection, action }) => {
-      await queryClient.cancelQueries({ queryKey: ['role', roleId] })
-      const prev = queryClient.getQueryData<Role & { policies: Policy[] }>(['role', roleId])
-      if (prev) {
-        queryClient.setQueryData(['role', roleId], {
-          ...prev,
-          policies: [...prev.policies, { id: -Date.now(), role: roleId, collection, action }]
-        })
-      }
-      return { prev }
-    },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(['role', roleId], ctx.prev)
-      toast.error('Failed to add permission')
-    },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['role', roleId] })
+  // #1958: toggles are staged, not saved — the change is summarised in words
+  // ("Vendor would gain read on invoices (2.7M rows)…") before Save applies it.
+  // key `${collection}:${action}` → the desired grant.
+  const [pending, setPending] = useState<Map<string, boolean>>(() => new Map())
+  useEffect(() => {
+    void roleId
+    setPending(new Map())
+  }, [roleId])
+  const changes = useMemo(
+    () =>
+      [...pending].map(([key, grant]) => {
+        const i = key.lastIndexOf(':')
+        return { collection: key.slice(0, i), action: key.slice(i + 1), grant }
+      }),
+    [pending]
+  )
+  const { data: impact, isFetching: impactLoading } = useQuery({
+    queryKey: ['role-change-explain', roleId, changes],
+    enabled: changes.length > 0,
+    staleTime: 30_000,
+    queryFn: () =>
+      api
+        .post<{ data: { summary: string; members: number } }>(
+          `/access-insights/roles/${roleId}/explain-change`,
+          { changes }
+        )
+        .then((r) => r.data.data)
   })
 
-  const removePolicy = useMutation({
-    mutationFn: (policyId: number) => api.delete(`/roles/policies/${policyId}`),
-    onMutate: async (policyId) => {
-      await queryClient.cancelQueries({ queryKey: ['role', roleId] })
-      const prev = queryClient.getQueryData<Role & { policies: Policy[] }>(['role', roleId])
-      if (prev) {
-        queryClient.setQueryData(['role', roleId], {
-          ...prev,
-          policies: prev.policies.filter((p) => p.id !== policyId)
-        })
+  const saveChanges = useMutation({
+    mutationFn: async () => {
+      // One at a time, in order — the policy routes are per-row.
+      for (const c of changes) {
+        if (c.grant) {
+          await api.post(`/roles/${roleId}/policies`, {
+            collection: c.collection,
+            action: c.action
+          })
+        } else {
+          const id = policyMap.get(`${c.collection}:${c.action}`)
+          if (id !== undefined) await api.delete(`/roles/policies/${id}`)
+        }
       }
-      return { prev }
     },
-    onError: (_err, _vars, ctx) => {
-      if (ctx?.prev) queryClient.setQueryData(['role', roleId], ctx.prev)
-      toast.error('Failed to remove permission')
+    onSuccess: () => {
+      toast.success(`${changes.length} permission change${changes.length === 1 ? '' : 's'} saved`)
+      setPending(new Map())
     },
+    onError: () => toast.error('Some permission changes could not be saved'),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ['role', roleId] })
   })
 
   const handleToggle = (collection: string, action: Action, currentlyChecked: boolean) => {
     if (isAdmin) return
-    if (currentlyChecked) {
-      const id = policyMap.get(`${collection}:${action}`)
-      if (id !== undefined) removePolicy.mutate(id)
-    } else {
-      addPolicy.mutate({ collection, action })
-    }
+    const key = `${collection}:${action}`
+    const desired = !currentlyChecked
+    setPending((prev) => {
+      const next = new Map(prev)
+      if (desired === policyMap.has(key)) next.delete(key)
+      else next.set(key, desired)
+      return next
+    })
   }
 
   const q = search.toLowerCase().trim()
@@ -543,7 +559,7 @@ function PermissionsMatrix({
     ...filteredCollections.map((c) => ({ key: c.collection, displayName: c.display_name }))
   ]
   const visibleRows = q ? allRows.filter((r) => r.key !== '*') : allRows
-  const isBusy = addPolicy.isPending || removePolicy.isPending
+  const isBusy = saveChanges.isPending
 
   return (
     <div className='space-y-3'>
@@ -562,6 +578,41 @@ function PermissionsMatrix({
           <p className='text-[12px] text-slate-700 dark:text-foreground'>
             Admin roles have full access to all collections.
           </p>
+        </div>
+      )}
+      {changes.length > 0 && (
+        <div
+          data-role-change-impact
+          className='sticky top-0 z-10 space-y-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 dark:border-amber-500/30 dark:bg-[#2a2210]'
+        >
+          <p className='text-[12px] leading-relaxed text-slate-700 dark:text-slate-200'>
+            {impactLoading && !impact
+              ? 'Working out what this would change…'
+              : (impact?.summary ??
+                `${changes.length} unsaved change${changes.length === 1 ? '' : 's'}.`)}
+          </p>
+          <div className='flex items-center gap-2'>
+            <span className='text-[11px] text-slate-500'>
+              {changes.length} unsaved change{changes.length === 1 ? '' : 's'}
+            </span>
+            <Button
+              size='sm'
+              variant='ghost'
+              className='ml-auto h-7 px-2.5 text-[12px]'
+              disabled={saveChanges.isPending}
+              onClick={() => setPending(new Map())}
+            >
+              Discard
+            </Button>
+            <Button
+              size='sm'
+              className='h-7 bg-nvr-cyan px-3 text-[12px] text-white'
+              disabled={saveChanges.isPending}
+              onClick={() => saveChanges.mutate()}
+            >
+              {saveChanges.isPending ? 'Saving…' : 'Save changes'}
+            </Button>
+          </div>
         </div>
       )}
       <div className='rounded-xl border overflow-hidden dark:border-border'>
@@ -623,7 +674,9 @@ function PermissionsMatrix({
                       )}
                     </td>
                     {ACTIONS.map((action) => {
-                      const checked = isAdmin || policyMap.has(`${row.key}:${action}`)
+                      const key = `${row.key}:${action}`
+                      const staged = pending.get(key)
+                      const checked = isAdmin || (staged ?? policyMap.has(key))
                       const hasFilter = filteredKeys.has(`${row.key}:${action}`)
                       return (
                         <td key={action} className='px-3 py-1.5 text-center'>
@@ -633,7 +686,11 @@ function PermissionsMatrix({
                               checked={checked}
                               disabled={isAdmin || isBusy}
                               onChange={() => handleToggle(row.key, action, checked)}
-                              className='h-4 w-4 rounded accent-nvr-cyan cursor-pointer disabled:cursor-not-allowed disabled:opacity-60'
+                              className={cn(
+                                'h-4 w-4 rounded accent-nvr-cyan cursor-pointer disabled:cursor-not-allowed disabled:opacity-60',
+                                staged !== undefined &&
+                                  'outline outline-2 outline-offset-1 outline-amber-400'
+                              )}
                               aria-label={`${ACTION_TITLES[action]} on ${row.key}`}
                             />
                             {hasFilter && (
@@ -1051,27 +1108,31 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
 
       {/* Tabs */}
       <div className='shrink-0 flex border-b border-slate-100 bg-slate-50/50 dark:bg-muted/20 dark:border-border'>
-        {(['permissions', 'members', 'ui', 'simulate', 'compare'] as ActiveTab[]).map((tab) => (
-          <button
-            key={tab}
-            type='button'
-            onClick={() => setActiveTab(tab)}
-            className={cn(
-              'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
-              activeTab === tab
-                ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
-                : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
-            )}
-          >
-            {tab === 'ui'
-              ? 'UI Access'
-              : tab === 'simulate'
-                ? 'Simulator'
-                : tab === 'compare'
-                  ? 'Compare'
-                  : tab}
-          </button>
-        ))}
+        {(['permissions', 'members', 'ui', 'simulate', 'compare', 'views'] as ActiveTab[]).map(
+          (tab) => (
+            <button
+              key={tab}
+              type='button'
+              onClick={() => setActiveTab(tab)}
+              className={cn(
+                'px-5 py-2.5 text-[13px] font-medium capitalize transition-colors border-b-2 -mb-px',
+                activeTab === tab
+                  ? 'border-[#00ceff] text-nvr-navy bg-white dark:text-foreground dark:bg-card'
+                  : 'border-transparent text-slate-500 hover:text-slate-700 hover:bg-white/60 dark:hover:text-slate-300'
+              )}
+            >
+              {tab === 'ui'
+                ? 'UI Access'
+                : tab === 'simulate'
+                  ? 'Simulator'
+                  : tab === 'compare'
+                    ? 'Compare'
+                    : tab === 'views'
+                      ? 'Suggested views'
+                      : tab}
+            </button>
+          )
+        )}
       </div>
 
       {/* Tab content */}
@@ -1108,6 +1169,8 @@ function RoleDetail({ role, onDelete }: { role: Role; onDelete: () => void }) {
           />
         ) : activeTab === 'simulate' ? (
           <SimulatorTab roleId={role.id} collections={collections} />
+        ) : activeTab === 'views' ? (
+          <RoleViewSuggestions roleId={role.id} />
         ) : (
           <MembersTab roleId={role.id} />
         )}
@@ -1461,6 +1524,7 @@ export function RolesPage() {
   const queryClient = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [isCreating, setIsCreating] = useState(false)
+  const [isDesigning, setIsDesigning] = useState(false)
   const [search, setSearch] = useState('')
 
   const { data, isLoading } = useQuery({
@@ -1505,15 +1569,29 @@ export function RolesPage() {
               </span>
             )}
           </div>
-          <Button
-            size='sm'
-            onClick={() => {
-              setIsCreating(true)
-              setSelectedId(null)
-            }}
-          >
-            <Plus className='mr-1.5 h-3.5 w-3.5' /> New Role
-          </Button>
+          <div className='flex items-center gap-2'>
+            <Button
+              size='sm'
+              variant='outline'
+              onClick={() => {
+                setIsDesigning(true)
+                setIsCreating(false)
+                setSelectedId(null)
+              }}
+            >
+              <Sparkles className='mr-1.5 h-3.5 w-3.5 text-nvr-cyan' /> Design with AI
+            </Button>
+            <Button
+              size='sm'
+              onClick={() => {
+                setIsCreating(true)
+                setIsDesigning(false)
+                setSelectedId(null)
+              }}
+            >
+              <Plus className='mr-1.5 h-3.5 w-3.5' /> New Role
+            </Button>
+          </div>
         </div>
       </div>
 
@@ -1554,10 +1632,11 @@ export function RolesPage() {
                   <RoleListItem
                     key={role.id}
                     role={role}
-                    selected={!isCreating && selectedId === role.id}
+                    selected={!isCreating && !isDesigning && selectedId === role.id}
                     onClick={() => {
                       setSelectedId(role.id)
                       setIsCreating(false)
+                      setIsDesigning(false)
                     }}
                   />
                 ))}
@@ -1567,7 +1646,20 @@ export function RolesPage() {
         </aside>
 
         <div className='flex-1 overflow-hidden bg-slate-50 dark:bg-background'>
-          {isCreating ? (
+          {isDesigning ? (
+            <RoleDesigner
+              uiRoutes={ALL_NAV_ITEMS.map((i) => ({
+                path: i.to,
+                label: `${i.category} › ${i.label}`
+              }))}
+              onCreated={(id) => {
+                queryClient.invalidateQueries({ queryKey: ['roles'] })
+                setIsDesigning(false)
+                setSelectedId(id)
+              }}
+              onCancel={() => setIsDesigning(false)}
+            />
+          ) : isCreating ? (
             <CreateRolePanel
               onSave={(body) => createRole.mutate(body)}
               onCancel={() => setIsCreating(false)}

@@ -1486,6 +1486,206 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
   })
 
   // ─── POST /chat — ask-your-data tool-use loop ─────────────────────────────
+  // GET /ai/starters?page=&collection=&id= — starter questions fitted to the
+  // screen (#1887). Templates + the collection's data-guide examples; names
+  // only, never a value, and a record is named only when the asker can open it.
+  app.get<{ Querystring: { page?: string; collection?: string; id?: string } }>(
+    '/starters',
+    { preHandler: authenticate },
+    async (req) => {
+      const { startersFor } = await import('../services/ai-panel.js')
+      const q = req.query
+      return {
+        data: await startersFor(req.user!, {
+          page: q.page,
+          collection: q.collection,
+          id: q.id
+        })
+      }
+    }
+  )
+
+  // POST /ai/live-answer — re-run ONE aggregate behind a number/chart answer as
+  // the asker (#1996). Only the aggregate tool: a re-run never executes saved
+  // SQL, proposals or plans. Groups of a link column come back named, as the
+  // asker may read them.
+  const liveLast = new Map<string, number>()
+  app.post('/live-answer', { preHandler: authenticate }, async (req, reply) => {
+    const userId = String(req.user!.id)
+    const now = Date.now()
+    if (now - (liveLast.get(userId) ?? 0) < 1500) {
+      return reply.code(429).send({ error: 'Too many refreshes — try again in a moment' })
+    }
+    liveLast.set(userId, now)
+    if (liveLast.size > 5000) liveLast.clear()
+    const body = (req.body ?? {}) as { input?: Record<string, unknown> }
+    const i = body.input ?? {}
+    const input = {
+      collection: i.collection,
+      op: i.op,
+      field: i.field,
+      group_by: i.group_by,
+      filter: i.filter
+    }
+    try {
+      const { executeChatTool } = await import('../services/ai-chat.js')
+      const { linkLabels } = await import('../services/ai-panel.js')
+      const out = await executeChatTool(req.user!, 'aggregate', input)
+      let result = out.result as unknown
+      let note: string | null = null
+      if (
+        result &&
+        typeof result === 'object' &&
+        !Array.isArray(result) &&
+        'access_note' in result
+      ) {
+        const r = result as { access_note?: string; rows?: unknown }
+        note = r.access_note ?? null
+        result =
+          'rows' in r
+            ? r.rows
+            : (() => {
+                const { access_note: _a, ...rest } = r
+                return rest
+              })()
+      }
+      const groupBy = typeof input.group_by === 'string' ? input.group_by : null
+      if (groupBy) {
+        const rows = (Array.isArray(result) ? result : []) as Array<Record<string, unknown>>
+        const labels = await linkLabels(
+          req.user!,
+          String(input.collection),
+          groupBy,
+          rows.map((r) => r[groupBy])
+        )
+        return {
+          data: {
+            groups: rows.map((r) => ({
+              key: r[groupBy] == null ? null : String(r[groupBy]),
+              label:
+                r[groupBy] == null
+                  ? '(none)'
+                  : (labels.get(String(r[groupBy])) ?? String(r[groupBy])),
+              value: Number(r.value)
+            })),
+            note,
+            at: new Date().toISOString()
+          }
+        }
+      }
+      const row = (Array.isArray(result) ? result[0] : result) as { value?: unknown } | undefined
+      return {
+        data: {
+          value: row?.value == null ? null : Number(row.value),
+          note,
+          at: new Date().toISOString()
+        }
+      }
+    } catch (err) {
+      return reply
+        .code(400)
+        .send({ error: err instanceof Error ? err.message : 'Could not refresh' })
+    }
+  })
+
+  // POST /ai/chart-drill — the rows behind one bar/point/slice (#1943). The
+  // client sends the aggregate the chart came from plus the clicked label; the
+  // server re-runs the grouping as the asker, matches the label to a real
+  // group and reads the rows through the same guarded query path.
+  app.post('/chart-drill', { preHandler: authenticate }, async (req, reply) => {
+    const body = (req.body ?? {}) as {
+      collection?: string
+      group_by?: string
+      filter?: unknown
+      label?: string
+    }
+    const label = String(body.label ?? '').trim()
+    if (!body.collection || !body.group_by || !label) {
+      return reply.code(400).send({ error: 'collection, group_by and label are required' })
+    }
+    try {
+      const user = req.user!
+      const { executeChatTool, compileChatFilterFor } = await import('../services/ai-chat.js')
+      const { linkLabels } = await import('../services/ai-panel.js')
+      const unwrapRows = (r: unknown): unknown => {
+        if (r && typeof r === 'object' && !Array.isArray(r) && 'rows' in r) {
+          return (r as { rows: unknown }).rows
+        }
+        return r
+      }
+      const agg = await executeChatTool(user, 'aggregate', {
+        collection: body.collection,
+        op: 'count',
+        group_by: body.group_by,
+        filter: body.filter
+      })
+      const groups = (unwrapRows(agg.result) ?? []) as Array<Record<string, unknown>>
+      const labels = await linkLabels(
+        user,
+        body.collection,
+        body.group_by,
+        groups.map((g) => g[body.group_by as string])
+      )
+      const norm = (v: unknown) =>
+        String(v ?? '')
+          .replace(/[*_`]/g, '')
+          .trim()
+          .toLowerCase()
+      const want = norm(label)
+      const hit = groups.find((g) => {
+        const raw = g[body.group_by as string]
+        return norm(raw) === want || norm(labels.get(String(raw))) === want
+      })
+      if (!hit) return reply.code(404).send({ error: 'No matching group for that point' })
+      const raw = hit[body.group_by]
+      const base =
+        body.filter && typeof body.filter === 'object' && !Array.isArray(body.filter)
+          ? (body.filter as Record<string, unknown>)
+          : {}
+      const existing = (base[body.group_by] ?? {}) as Record<string, unknown>
+      const filter = {
+        ...base,
+        [body.group_by]: {
+          ...(typeof existing === 'object' ? existing : {}),
+          ...(raw == null ? { _null: true } : { _eq: raw })
+        }
+      }
+      const rowsOut = await executeChatTool(user, 'query_items', {
+        collection: body.collection,
+        filter,
+        limit: 25
+      })
+      const qr = unwrapRows(rowsOut.result) as { total?: number; rows?: unknown[] }
+      const total = Number(qr?.total ?? 0)
+      // Every id (capped) so "Open as list" lands on exactly these records.
+      let ids: string[] = []
+      if (total > 0 && total <= 500) {
+        const { readItems } = await import('../services/items.js')
+        const conds = await compileChatFilterFor(body.collection, filter)
+        const all = (await readItems(user, body.collection, { fields: ['id'], limit: 500 }, {
+          query: { conditions: JSON.stringify(conds) }
+        } as never)) as { data?: Array<{ id?: unknown }> }
+        ids = (all.data ?? []).map((r) => String(r.id))
+      }
+      return {
+        data: {
+          collection: body.collection,
+          group: {
+            value: raw == null ? null : String(raw),
+            label: labels.get(String(raw)) ?? null
+          },
+          total,
+          rows: qr?.rows ?? [],
+          list_path: ids.length ? `/collections/${body.collection}?ids=${ids.join(',')}` : null
+        }
+      }
+    } catch (err) {
+      return reply
+        .code(400)
+        .send({ error: err instanceof Error ? err.message : 'Could not open those rows' })
+    }
+  })
+
   app.post('/chat', { preHandler: authenticate }, async (req, reply) => {
     const { chatModel, answerCacheMinutes } = await getAiModelSettings()
     const settings = { model: chatModel }
@@ -1495,16 +1695,22 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         .code(503)
         .send({ error: 'AI features require ANTHROPIC_API_KEY to be configured' })
     }
-    const { messages, fresh } = req.body as {
+    const { messages, fresh, conversation_id, save, command } = req.body as {
+      /** #1884 — a slash command that shapes the answer (chart, table, explain, steps). */
+      command?: string
       messages?: Array<{ role: string; content: string }>
       fresh?: boolean
       /** #688 — deliver the answer as it is written (socket or SSE). */
       stream?: boolean
+      /** #1833 — continue this stored conversation (history comes from it). */
+      conversation_id?: string
+      /** #1833 — start a stored conversation with this question. */
+      save?: boolean
     }
     if (!Array.isArray(messages) || messages.length === 0) {
       return reply.code(400).send({ error: 'messages array is required' })
     }
-    const history = messages
+    let history = messages
       .filter((m) => (m.role === 'user' || m.role === 'assistant') && typeof m.content === 'string')
       .slice(-20)
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content.slice(0, 4000) }))
@@ -1512,14 +1718,75 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
       return reply.code(400).send({ error: 'last message must be from the user' })
     }
 
+    // #1833 / #1809 — a stored conversation: the history is the server's copy
+    // as THIS asker may read it (never what the client sent), and both turns
+    // are kept. Without conversation_id / save the route is unchanged.
+    const { openConversationTurn } = await import('../services/ai-conversation-turn.js')
+    // #1833 opt-out — read once: it also keeps the question out of playbooks.
+    const { aiHistoryOff } = await import('../services/ai-memory.js')
+    const historyOff = await aiHistoryOff(String(req.user!.id))
+    const turnOpen = await openConversationTurn(app, req.user!, {
+      conversationId: conversation_id,
+      save,
+      question: history[history.length - 1].content,
+      historyOff
+    })
+    if (turnOpen && 'error' in turnOpen) {
+      return reply.code(turnOpen.status).send({ error: turnOpen.error })
+    }
+    const turn = turnOpen
+    if (turn) {
+      // The stored history alternates user/assistant from a user turn, so an
+      // EVEN cut keeps the first message a question.
+      history = [...turn.history.slice(-18), history[history.length - 1]].map((m) => ({
+        role: m.role,
+        content: m.content.slice(0, 4000)
+      }))
+    }
+
+    // #1804 — "remember that …" is kept as a note, not sent to the model.
+    const { addMemoryNote, memoryPromptBlock, parseRememberCommand, readMemory } = await import(
+      '../services/ai-memory.js'
+    )
+    const rememberText = parseRememberCommand(history[history.length - 1].content)
+    if (rememberText) {
+      const { note, dropped, duplicate } = await addMemoryNote(String(req.user!.id), rememberText)
+      const body: Record<string, unknown> = {
+        reply: duplicate
+          ? `I already remember that: “${note.text}”.`
+          : `Got it — I'll remember: “${note.text}”.${dropped ? ` (To make room I forgot the oldest note: “${dropped.text}”.)` : ''} You can see and edit what I remember under Profile → Ask AI memory.`,
+        trace: [],
+        proposals: [],
+        remembered: note,
+        request_id: null,
+        playbooks_used: 0
+      }
+      if (turn) Object.assign(body, await turn.record(body))
+      return reply.send({ data: body })
+    }
+    const memoryNotes = await readMemory(String(req.user!.id)).catch(() => [])
+    const memoryBlock = memoryPromptBlock(memoryNotes)
+
     const { buildChatSystemPrompt } = await import('../services/ai-chat.js')
     // Playbooks: similar past questions + the tool plans that answered them,
     // offered as worked examples. Only the newest user turn is matched.
     const question = history[history.length - 1].content
+    const { commandDirective, parseAnswerCommand } = await import('../services/ai-panel.js')
+    const answerCommand = parseAnswerCommand(command)
+    if (answerCommand) {
+      // The directive rides the model's copy only; the stored question stays as typed.
+      const last = history[history.length - 1]
+      history = [
+        ...history.slice(0, -1),
+        { ...last, content: last.content + commandDirective(answerCommand) }
+      ]
+    }
     const playbooks = await retrievePlaybooks(question)
-    const system = await buildChatSystemPrompt(req.user!, {
-      playbooks: formatPlaybooksForPrompt(playbooks)
-    })
+    const system =
+      (await buildChatSystemPrompt(req.user!, {
+        playbooks: formatPlaybooksForPrompt(playbooks),
+        question
+      })) + memoryBlock
     const playbooksUsed = playbooks.length
     // `convo` below aliases `history` and grows per round — judge "standalone" now.
     const standalone = history.length === 1
@@ -1528,7 +1795,9 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
     const redis = (req.server as FastifyInstance & { redis?: import('ioredis').Redis }).redis
     const cacheKey =
       standalone && answerCacheMinutes > 0 && redis
-        ? `nvr:aichat:${req.user!.id}:${createHash('sha1').update(question.trim().toLowerCase().replace(/\s+/g, ' ')).digest('hex')}`
+        ? `nvr:aichat:${req.user!.id}:${createHash('sha1')
+            .update(`${answerCommand ?? ''}|${question.trim().toLowerCase().replace(/\s+/g, ' ')}`)
+            .digest('hex')}`
         : null
     const userId = String(req.user!.id)
     const user = req.user!
@@ -1557,7 +1826,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         // a cache miss is the normal path
       }
     }
-    if (cachedBody && !mode) return reply.send({ data: cachedBody })
+    if (cachedBody && !mode && !turn) return reply.send({ data: cachedBody })
 
     /** The whole answer: the loop, the playbook, the cache write, the body. */
     const answer = async (delivery: StreamDelivery | null): Promise<Record<string, unknown>> => {
@@ -1579,12 +1848,28 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             ? (text, round) => delivery.emit('ai:delta', { text, round })
             : undefined,
           onStatus: delivery
-            ? (st) => delivery.emit('ai:status', { text: st.text, round: st.round, tool: st.tool })
+            ? (st) =>
+                delivery.emit('ai:status', {
+                  text: st.text,
+                  round: st.round,
+                  tool: st.tool,
+                  ...(st.step != null ? { step: st.step } : {}),
+                  ...(st.done ? { done: true, result: st.result ?? '' } : {}),
+                  ...(st.failed ? { failed: true } : {})
+                })
             : undefined,
           shouldStop: stopper ? () => stopper.stopped() : undefined,
-          warn: (err, msg) => req.log.warn({ err }, msg)
+          warn: (err, msg) => req.log.warn({ err }, msg),
+          // #1845 — the model may offer "Remember this?"; nothing is saved
+          // until the asker clicks it (POST /ai/memory).
+          memorySuggestions: { existing: memoryNotes }
         })
-        const { trace, proposals } = result
+        const { trace, proposals, plans, choices } = result
+        const panel = await import('../services/ai-panel.js')
+        const offers =
+          result.memorySuggestions.length && !result.stopped
+            ? { memory_suggestions: result.memorySuggestions }
+            : {}
         await logActivity({
           action: 'ai-chat',
           user: user.id,
@@ -1598,23 +1883,34 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
         if (result.truncated) {
           return {
             reply:
-              result.text ||
+              panel.extractFollowUps(result.text).text ||
               `I used all ${MAX_ROUNDS} tool calls without reaching an answer — try a narrower question, or name the collection and fields you mean.`,
             trace,
             proposals,
+            plans,
             truncated: true,
             stopped: result.stopped || undefined,
             request_id: requestId,
-            playbooks_used: playbooksUsed
+            playbooks_used: playbooksUsed,
+            ...offers
           }
         }
-        // #1821 — an answer written by the fallback model says so
-        const text = result.text ? result.text + (takeFallbackNote(requestId) ?? '') : result.text
+        // #1834 — the follow-up questions ride the answer; split them off.
+        const split = panel.extractFollowUps(result.text)
+        const text = split.text ? split.text + (takeFallbackNote(requestId) ?? '') : split.text // #1821
+        const followups =
+          choices.length > 0 || result.stopped
+            ? []
+            : split.followups.length
+              ? split.followups
+              : panel.fallbackFollowUps(trace)
         // A standalone question (no earlier turns) answered with tool calls
         // becomes a playbook. Follow-ups ("and for 2025?") are skipped —
         // they mean nothing without the conversation. A stopped answer is
         // not one either: it was never finished.
-        if (standalone && trace.length > 0 && !result.stopped) {
+        // Someone who turned Ask AI history off keeps their question text out
+        // of the shared playbook store too.
+        if (standalone && trace.length > 0 && !result.stopped && !historyOff) {
           void recordPlaybook({
             userId: user.id,
             requestId,
@@ -1628,13 +1924,24 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
           reply: text,
           trace,
           proposals,
+          plans,
           request_id: requestId,
           playbooks_used: playbooksUsed
         }
+        if (choices.length > 0) payload.choices = choices
+        if (followups.length > 0) payload.followups = followups
         if (result.stopped) payload.stopped = true
         // An answer that proposes an ACTION is never cached — a proposal
-        // is single-use and expires; only plain answers repeat.
-        if (cacheKey && proposals.length === 0 && text && !result.stopped) {
+        // is single-use and expires; only plain answers repeat. Memory
+        // offers are added after the cache copy: a repeat never re-offers.
+        if (
+          cacheKey &&
+          proposals.length === 0 &&
+          plans.length === 0 &&
+          choices.length === 0 &&
+          text &&
+          !result.stopped
+        ) {
           void redis!
             .set(
               cacheKey,
@@ -1644,15 +1951,27 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
             )
             .catch(() => {})
         }
-        return payload
+        return Object.assign(payload, offers)
       } finally {
         stopper?.dispose()
       }
     }
 
+    /** The answer, kept in the stored conversation when there is one (#1833). */
+    const answerTurn = async (delivery: StreamDelivery | null) => {
+      try {
+        const payload = await answer(delivery)
+        if (turn) Object.assign(payload, await turn.record(payload))
+        return payload
+      } catch (err) {
+        if (turn) await turn.fail()
+        throw err
+      }
+    }
+
     if (!mode) {
       try {
-        return reply.send({ data: await answer(null) })
+        return reply.send({ data: await answerTurn(null) })
       } catch (err) {
         req.log.error({ err }, 'AI chat failed')
         return reply.code(502).send({ error: 'AI request failed' })
@@ -1661,7 +1980,7 @@ Respond with ONLY a JSON array (no prose): [{"severity":"error"|"warning"|"sugge
 
     const run = async (d: StreamDelivery) => {
       try {
-        d.done({ data: await answer(d) })
+        d.done({ data: await answerTurn(d) })
       } catch (err) {
         req.log.error({ err }, 'AI chat failed')
         d.error('AI request failed')

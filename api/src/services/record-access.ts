@@ -142,6 +142,26 @@ export async function visibleIds(gates: AccessGates, ids: string[]): Promise<Set
   })
 }
 
+/**
+ * How many rows of the collection pass every gate — one COUNT with the row
+ * filter and every routed scope applied (the person-access summary, #1959).
+ * Null when the count itself fails (a broken route must not read as zero).
+ */
+export async function countVisible(gates: AccessGates): Promise<number | null> {
+  if (!gates.bypass && (!gates.permitted || gates.strict)) return 0
+  try {
+    const q = db(gates.collection)
+    if (!gates.bypass) {
+      if (gates.rowFilter) applyRowFilter(q, gates.rowFilter as never, gates.user)
+      for (const g of gates.scopes) applyScope(q, gates.collection, g)
+    }
+    const row = (await q.count({ n: '*' }).first()) as { n: number | string } | undefined
+    return Number(row?.n ?? 0)
+  } catch {
+    return null
+  }
+}
+
 async function labelsFor(
   target: string,
   displayField: string,

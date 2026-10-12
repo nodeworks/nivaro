@@ -3,8 +3,7 @@ import type { AiSettingsRow } from './ai-client.js'
 import { costOf, featureFromRoute } from './ai-log.js'
 import { getIo } from './io-holder.js'
 import { currentTraceMeta } from './request-trace.js'
-import { currentStoreId } from './traffic-taps.js'
-import { watchRoomId } from './watch-rooms.js'
+import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * AI quality and cost controls — budgets (#1817), the provider failure
@@ -574,10 +573,10 @@ async function nameOf(userId: string): Promise<string> {
 export function emitAiCallLive(call: LiveAiCall): void {
   const io = getIo()
   if (!io) return
-  const cloud = !!process.env.CLOUD_META_DB_URL
-  // Cloud: the room is per tenant; outside a tenant request there is nowhere safe to send.
-  const room = watchRoomId('ai-calls', cloud ? currentStoreId() || null : null, cloud)
-  if (!room) return
+  // Cloud: the room is per tenant (t:<tenant>:watch:ai-calls), as the socket joins it.
+  // Cloud outside a tenant request has no safe room: skip rather than broadcast globally.
+  if (process.env.CLOUD_META_DB_URL && !currentTenantKey()) return
+  const room = tenantScopedRoom('watch:ai-calls')
   const watchers = io.sockets?.adapter?.rooms?.get(room)?.size ?? 0
   if (!watchers) return
   void (async () => {

@@ -34,6 +34,7 @@ import {
   softwarePlan,
   type VideoEncodePlan
 } from './help-video-encoder.js'
+import { announceHelpVideoChanged } from './help-video-live.js'
 import { musicForRender } from './help-video-music.js'
 import {
   buildPosterArgs,
@@ -499,6 +500,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
     // listable: discardFile parks it where the guard covers and the purge retries.
     for (const f of old) await discardFile(owner, f)
     await run.complete(`rendered ${Math.round(total / 1000)} s${encoderNote}`)
+    announceHelpVideoChanged(String(v.video_id), 'render')
     return 'ready'
   } catch (err) {
     if (abort.signal.aborted) {
@@ -508,6 +510,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
         .update({ render_status: 'failed', render_error: CANCELLED_REASON, render_progress: null })
         .catch(() => null)
       await run.complete('cancelled: the version plays with its edits applied live')
+      announceHelpVideoChanged(String(v.video_id), 'render')
       if (run.id !== null) {
         await db('nivaro_job_runs')
           .where('id', run.id)
@@ -524,6 +527,7 @@ async function renderClaimed(versionId: string, token: Date): Promise<Outcome> {
       })
       .catch(() => null)
     await run.fail(err)
+    announceHelpVideoChanged(String(v.video_id), 'render')
     return 'failed'
   } finally {
     clearInterval(watch)

@@ -1,6 +1,7 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   AlarmClock,
+  Archive,
   Bell,
   Check,
   CheckCheck,
@@ -10,11 +11,12 @@ import {
   ExternalLink,
   History,
   Search,
+  ShieldCheck,
   Trash2
 } from 'lucide-react'
 import { Fragment, useEffect, useState } from 'react'
 import { useNivaroClient } from '../../context'
-import { del, get, post } from '../../lib/commands'
+import { del, get, patch, post } from '../../lib/commands'
 import {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
@@ -26,6 +28,7 @@ import {
   resolveNotificationTargetFor,
   runNotificationTarget
 } from '../../lib/notification-target'
+import { openInTabs, openInTabsMessage } from '../../lib/open-in-tabs'
 import { cn, formatRelative } from '../../lib/utils'
 import { hasSnapshotView } from '../NotificationBell'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -52,7 +55,7 @@ import { NotificationDetailBits } from './NotificationDetailBits'
 
 const PAGE_SIZE = 25
 
-type StatusFilter = 'all' | 'inbox' | 'read' | 'snoozed' | 'sent'
+type StatusFilter = 'all' | 'inbox' | 'read' | 'snoozed' | 'archived' | 'sent'
 type LaneFilter = 'all' | 'critical' | 'needs_you' | 'fyi'
 
 /** One send the caller made (#64): the rows sharing a subject + minute,
@@ -66,8 +69,18 @@ interface SentGroup {
   category: string | null
   collection: string | null
   item: string | null
-  recipients: Array<{ id: string; name: string; read: boolean; read_at: string | null }>
+  recipients: Array<{
+    id: string
+    name: string
+    read: boolean
+    read_at: string | null
+    ack?: 'pending' | 'acked' | null
+    ack_at?: string | null
+  }>
   read_count: number
+  /** #2365 — the send asked for acknowledgement. */
+  ack_required?: boolean
+  ack_count?: number
   total: number
 }
 
@@ -77,6 +90,9 @@ interface NotificationRow {
   subject?: string | null
   message: string | null
   read?: boolean
+  archived?: boolean
+  /** #2365 — the sender asked for an explicit acknowledgement. */
+  ack?: { required: boolean; at: string | null; by: string | null } | null
   created_at?: string | null
   collection: string | null
   item: string | null
@@ -104,6 +120,7 @@ const STATUS_TABS: Array<{ key: StatusFilter; label: string }> = [
   { key: 'inbox', label: 'Unread' },
   { key: 'read', label: 'Read' },
   { key: 'snoozed', label: 'Snoozed' },
+  { key: 'archived', label: 'Archived' },
   { key: 'sent', label: 'Sent' }
 ]
 const LANE_TABS: Array<{ key: LaneFilter; label: string }> = [
@@ -181,6 +198,20 @@ export function NotificationCenterView({
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   // #1385 — the "as it was" sheet for one row.
   const [asItWas, setAsItWas] = useState<NotificationRow | null>(null)
+  // #2409 — multi-select + bulk actions; #2406 — clean-up panel.
+  const [selected, setSelected] = useState<Set<number>>(() => new Set())
+  const [selectAllMatching, setSelectAllMatching] = useState(false)
+  const [bulkSnoozeOpen, setBulkSnoozeOpen] = useState(false)
+  const [cleanOpen, setCleanOpen] = useState(false)
+  const [cleanDays, setCleanDays] = useState('30')
+
+  // A different view or page is a different selection.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on view change only
+  useEffect(() => {
+    setSelected(new Set())
+    setSelectAllMatching(false)
+    setBulkSnoozeOpen(false)
+  }, [status, lane, page, search, collectionFilter])
 
   useEffect(() => {
     const t = setTimeout(() => {
@@ -217,6 +248,7 @@ export function NotificationCenterView({
         .request<{
           data: NotificationRow[]
           bundles?: NotificationBundle<NotificationRow>[]
+          pinned?: NotificationRow[]
           total: number
         }>(
           get('/notifications', {
@@ -255,7 +287,10 @@ export function NotificationCenterView({
     staleTime: 300_000
   })
 
-  const notifications = data?.data ?? []
+  // #2365 — acknowledgement-required rows stay pinned until acknowledged.
+  const pinned = status === 'archived' || page > 1 ? [] : (data?.pinned ?? [])
+  const pinnedIds = new Set(pinned.map((n) => n.id))
+  const notifications = (data?.data ?? []).filter((n) => !pinnedIds.has(n.id))
   const bundles = data?.bundles ?? []
   const total = data?.total ?? 0
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
@@ -306,6 +341,70 @@ export function NotificationCenterView({
     },
     onError: () => onError?.('Failed to snooze')
   })
+  const ackMut = useMutation({
+    mutationFn: (id: number) => client.request(post(`/notifications/${id}/acknowledge`)),
+    onSuccess: () => {
+      invalidate()
+      onNotice?.('Acknowledged')
+    },
+    onError: () => onError?.('Failed to acknowledge')
+  })
+  const listFilter = () => ({
+    status: status === 'snoozed' || status === 'sent' ? 'all' : status,
+    snoozed: status === 'snoozed' ? 'true' : undefined,
+    lane: lane === 'all' ? undefined : lane,
+    search: search || undefined,
+    collection: collectionFilter || undefined
+  })
+  const bulkMut = useMutation({
+    mutationFn: (v: { action: 'read' | 'archive' | 'snooze'; until?: Date }) =>
+      client.request<{ data: { updated: number } }>(
+        post('/notifications/bulk-action', {
+          action: v.action,
+          until: v.until ? v.until.toISOString() : undefined,
+          ...(selectAllMatching ? { filter: listFilter() } : { ids: [...selected] })
+        })
+      ),
+    onSuccess: (r, v) => {
+      invalidate()
+      setSelected(new Set())
+      setSelectAllMatching(false)
+      setBulkSnoozeOpen(false)
+      const n = r.data?.updated ?? 0
+      onNotice?.(
+        `${n} notification${n === 1 ? '' : 's'} ${
+          v.action === 'read' ? 'marked read' : v.action === 'archive' ? 'archived' : 'snoozed'
+        }`
+      )
+    },
+    onError: () => onError?.('That bulk action failed')
+  })
+  const archiveReadMut = useMutation({
+    mutationFn: (days: number) =>
+      client.request<{ data: { updated: number } }>(post('/notifications/archive-read', { days })),
+    onSuccess: (r) => {
+      invalidate()
+      onNotice?.(`${r.data?.updated ?? 0} archived — find them under Archived`)
+    },
+    onError: () => onError?.('Clean-up failed')
+  })
+  const { data: myPrefs } = useQuery({
+    queryKey: ['nvr-profile-prefs'],
+    queryFn: () =>
+      client
+        .request<{ data: { preferences?: Record<string, unknown> | null } }>(get('/users/me'))
+        .then((r) => (r.data?.preferences ?? {}) as Record<string, unknown>),
+    enabled: cleanOpen
+  })
+  const autoCleanMut = useMutation({
+    mutationFn: (days: number | null) =>
+      client.request(patch('/users/me/preferences', { notification_cleanup_days: days })),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ['nvr-profile-prefs'] })
+      onNotice?.('Automatic clean-up saved')
+    },
+    onError: () => onError?.('Could not save the clean-up setting')
+  })
   const deleteMut = useMutation({
     mutationFn: (id: number) => client.request(del(`/notifications/${id}`)),
     onSuccess: () => {
@@ -326,6 +425,15 @@ export function NotificationCenterView({
 
   /** One inbox row: subject, message, chips, detail bits, inline actions,
    *  snooze and delete. `indent` = a row inside an expanded record bundle. */
+  const toggleSelected = (id: number) => {
+    setSelectAllMatching(false)
+    setSelected((s) => {
+      const next = new Set(s)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
   const renderRow = (n: NotificationRow, indent = false) => {
     const unread = !n.read
     const target = resolveNotificationTargetFor(n, routes)
@@ -338,6 +446,14 @@ export function NotificationCenterView({
         data-notification-row={n.id}
         data-nvr-lane-row={n.lane ?? ''}
       >
+        <input
+          type='checkbox'
+          checked={selected.has(n.id)}
+          onChange={() => toggleSelected(n.id)}
+          aria-label='Select notification'
+          data-notification-select={n.id}
+          className='mt-1.5 h-3.5 w-3.5 shrink-0'
+        />
         <span
           className={cn(
             'mt-2 h-2 w-2 shrink-0 rounded-full',
@@ -426,6 +542,27 @@ export function NotificationCenterView({
             onNavigate={onNavigate}
             className='mt-1'
           />
+          {n.ack?.required && (
+            <div className='mt-1.5' data-notification-ack={n.ack.at ? 'acked' : 'pending'}>
+              {n.ack.at ? (
+                <span className='inline-flex items-center gap-1 rounded-full bg-emerald-50 px-2 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'>
+                  <ShieldCheck className='h-3 w-3' />
+                  Acknowledged {formatRelative(n.ack.at)}
+                </span>
+              ) : (
+                <button
+                  type='button'
+                  disabled={ackMut.isPending}
+                  onClick={() => ackMut.mutate(n.id)}
+                  data-notification-acknowledge={n.id}
+                  className='inline-flex items-center gap-1 rounded-md bg-nvr-cyan px-2.5 py-1 text-[11.5px] font-medium text-white hover:opacity-90 disabled:opacity-50'
+                >
+                  <ShieldCheck className='h-3.5 w-3.5' />
+                  Acknowledge
+                </button>
+              )}
+            </div>
+          )}
           {n.actions && n.actions.length > 0 && (
             <NotificationActions
               actions={unread ? n.actions : n.actions.filter((a) => !!a.input)}
@@ -665,6 +802,8 @@ export function NotificationCenterView({
     )
   }
 
+  const visibleCount =
+    pinned.length + notifications.length + bundles.reduce((a, b) => a + b.rows.length, 0)
   const laneCount = (k: LaneFilter) =>
     k === 'all' ? null : (counts?.lanes?.[k as keyof NonNullable<typeof counts.lanes>] ?? null)
 
@@ -681,16 +820,76 @@ export function NotificationCenterView({
                 : ''}
             </p>
           </div>
-          <button
-            type='button'
-            onClick={() => markAllMut.mutate()}
-            disabled={markAllMut.isPending}
-            className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
-          >
-            <CheckCheck className='h-3.5 w-3.5' />
-            {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
-          </button>
+          <div className='flex items-center gap-2'>
+            <button
+              type='button'
+              onClick={() => setCleanOpen((o) => !o)}
+              data-notification-cleanup-toggle
+              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+            >
+              <Archive className='h-3.5 w-3.5' />
+              Clean up
+            </button>
+            <button
+              type='button'
+              onClick={() => markAllMut.mutate()}
+              disabled={markAllMut.isPending}
+              className='inline-flex h-8 items-center gap-1.5 rounded-md border border-slate-200 px-3 text-[12px] font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:text-foreground dark:hover:bg-muted'
+            >
+              <CheckCheck className='h-3.5 w-3.5' />
+              {markAllMut.isPending ? 'Marking…' : 'Mark all read'}
+            </button>
+          </div>
         </div>
+        {cleanOpen && (
+          <div
+            className='mt-3 space-y-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2.5 text-[12px] text-slate-600 dark:border-border dark:bg-muted/40 dark:text-muted-foreground'
+            data-notification-cleanup
+          >
+            <div className='flex flex-wrap items-center gap-2'>
+              Archive everything read and older than
+              <SimpleSelect
+                value={cleanDays}
+                onChange={setCleanDays}
+                ariaLabel='Older than'
+                className='h-7 w-auto rounded-md border-slate-200 bg-background px-2 text-[12px] dark:border-border'
+                options={[
+                  { value: '7', label: '7 days' },
+                  { value: '30', label: '30 days' },
+                  { value: '90', label: '90 days' },
+                  { value: '180', label: '180 days' }
+                ]}
+              />
+              <button
+                type='button'
+                disabled={archiveReadMut.isPending}
+                onClick={() => archiveReadMut.mutate(Number(cleanDays))}
+                data-notification-archive-read
+                className='h-7 rounded-md bg-slate-900 px-2.5 text-[11.5px] font-medium text-white hover:bg-slate-700 disabled:opacity-50 dark:bg-slate-100 dark:text-slate-900'
+              >
+                {archiveReadMut.isPending ? 'Archiving…' : 'Archive now'}
+              </button>
+            </div>
+            <div className='flex flex-wrap items-center gap-2'>
+              Or do it automatically — archive read notifications after
+              <SimpleSelect
+                value={String(myPrefs?.notification_cleanup_days ?? '')}
+                onChange={(v) => autoCleanMut.mutate(v ? Number(v) : null)}
+                ariaLabel='Automatic clean-up'
+                className='h-7 w-auto rounded-md border-slate-200 bg-background px-2 text-[12px] dark:border-border'
+                options={[
+                  { value: '', label: 'never' },
+                  { value: '30', label: '30 days' },
+                  { value: '90', label: '90 days' },
+                  { value: '180', label: '180 days' }
+                ]}
+              />
+              <span className='text-[11px] text-slate-400'>
+                Archived notifications are kept — open the Archived tab to search them.
+              </span>
+            </div>
+          </div>
+        )}
         {/* Lane strip — what the badge counts sits first */}
         <div className='mt-4 flex flex-wrap items-center gap-2'>
           <div className='flex items-center gap-1'>
@@ -783,6 +982,103 @@ export function NotificationCenterView({
         </div>
       </header>
 
+      {status !== 'sent' && selected.size > 0 && (
+        <div
+          className='flex shrink-0 flex-wrap items-center gap-2 border-b border-nvr-cyan/30 bg-nvr-cyan/5 px-8 py-2 text-[12px] text-slate-700 dark:text-slate-200'
+          data-notification-bulkbar
+        >
+          <span className='font-medium'>
+            {selectAllMatching ? `All ${total} matching` : `${selected.size} selected`}
+          </span>
+          {!selectAllMatching && selected.size >= visibleCount && total > visibleCount && (
+            <button
+              type='button'
+              onClick={() => setSelectAllMatching(true)}
+              data-notification-select-matching
+              className='text-nvr-navy underline decoration-dotted underline-offset-2 dark:text-nvr-cyan'
+            >
+              Select all {total} matching
+            </button>
+          )}
+          <span className='mx-1 h-4 w-px bg-slate-300 dark:bg-border' />
+          <button
+            type='button'
+            disabled={bulkMut.isPending}
+            onClick={() => bulkMut.mutate({ action: 'read' })}
+            data-notification-bulk='read'
+            className='inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-background px-2 text-[11.5px] font-medium hover:bg-slate-50 dark:border-border'
+          >
+            <Check className='h-3 w-3' /> Mark read
+          </button>
+          <div className='relative'>
+            <button
+              type='button'
+              disabled={bulkMut.isPending}
+              onClick={() => setBulkSnoozeOpen((o) => !o)}
+              data-notification-bulk='snooze'
+              className='inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-background px-2 text-[11.5px] font-medium hover:bg-slate-50 dark:border-border'
+            >
+              <AlarmClock className='h-3 w-3' /> Snooze
+            </button>
+            {bulkSnoozeOpen && (
+              <div className='absolute left-0 top-8 z-20 w-[180px] rounded-md border border-slate-200 bg-white py-1 shadow-lg dark:border-border dark:bg-card'>
+                {snoozePresets().map((pset) => (
+                  <button
+                    key={pset.label}
+                    type='button'
+                    onClick={() => bulkMut.mutate({ action: 'snooze', until: pset.until })}
+                    className='block w-full px-3 py-1.5 text-left text-[12px] text-slate-700 hover:bg-muted dark:text-foreground'
+                  >
+                    {pset.label}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {status !== 'archived' && (
+            <button
+              type='button'
+              disabled={bulkMut.isPending}
+              onClick={() => bulkMut.mutate({ action: 'archive' })}
+              data-notification-bulk='archive'
+              className='inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-background px-2 text-[11.5px] font-medium hover:bg-slate-50 dark:border-border'
+            >
+              <Archive className='h-3 w-3' /> Archive
+            </button>
+          )}
+          <button
+            type='button'
+            onClick={() => {
+              const urls: string[] = []
+              for (const n of [...pinned, ...notifications, ...bundles.flatMap((b) => b.rows)]) {
+                if (!selected.has(n.id)) continue
+                const t = resolveNotificationTargetFor(n, routes)
+                if (!t) continue
+                if (t.type === 'external') urls.push(t.url)
+                else if (t.type === 'path' && typeof window !== 'undefined')
+                  urls.push(`${window.location.origin}${t.path}`)
+              }
+              if (urls.length === 0) onNotice?.('None of the selected notifications opens a page')
+              else onNotice?.(openInTabsMessage(openInTabs(urls)))
+            }}
+            data-notification-bulk='tabs'
+            className='inline-flex h-7 items-center gap-1 rounded-md border border-slate-200 bg-background px-2 text-[11.5px] font-medium hover:bg-slate-50 dark:border-border'
+          >
+            <ExternalLink className='h-3 w-3' /> Open in tabs
+          </button>
+          <button
+            type='button'
+            onClick={() => {
+              setSelected(new Set())
+              setSelectAllMatching(false)
+            }}
+            className='ml-auto text-[11.5px] text-slate-500 underline decoration-dotted underline-offset-2'
+          >
+            Clear selection
+          </button>
+        </div>
+      )}
+
       <div className='flex-1 overflow-y-auto bg-slate-50 dark:bg-background'>
         {status === 'sent' ? (
           <div className='mx-8 my-6 space-y-3' data-nvr-sent>
@@ -841,6 +1137,14 @@ export function NotificationCenterView({
                       >
                         {g.read_count} of {g.total} read
                       </span>
+                      {g.ack_required && (
+                        <span
+                          className='shrink-0 rounded-full bg-sky-50 px-2 py-0.5 text-[10.5px] font-semibold tabular-nums text-sky-700 dark:bg-sky-400/10 dark:text-sky-300'
+                          data-nvr-sent-ack-count
+                        >
+                          {g.ack_count ?? 0} of {g.total} acknowledged
+                        </span>
+                      )}
                     </div>
                     {g.message && (
                       <p className='mt-0.5 line-clamp-2 text-[12px] text-slate-500'>
@@ -858,12 +1162,17 @@ export function NotificationCenterView({
                               : 'border-slate-200 bg-slate-50 text-slate-500 dark:border-border dark:bg-muted dark:text-slate-400'
                           )}
                           data-nvr-receipt={r.read ? 'read' : 'unread'}
+                          data-nvr-ack={r.ack ?? undefined}
                           data-tip={
-                            r.read && r.read_at
-                              ? `Read ${new Date(r.read_at).toLocaleString()}`
-                              : r.read
-                                ? 'Read'
-                                : 'Not read yet'
+                            r.ack === 'acked'
+                              ? `Acknowledged${r.ack_at ? ` ${new Date(r.ack_at).toLocaleString()}` : ''}`
+                              : r.ack === 'pending'
+                                ? 'Has not acknowledged yet'
+                                : r.read && r.read_at
+                                  ? `Read ${new Date(r.read_at).toLocaleString()}`
+                                  : r.read
+                                    ? 'Read'
+                                    : 'Not read yet'
                           }
                         >
                           <span
@@ -873,6 +1182,7 @@ export function NotificationCenterView({
                             )}
                           />
                           {r.name}
+                          {r.ack === 'acked' && <ShieldCheck className='h-3 w-3' />}
                         </span>
                       ))}
                     </div>
@@ -883,7 +1193,7 @@ export function NotificationCenterView({
           </div>
         ) : isLoading ? (
           <p className='px-8 py-10 text-[13px] text-slate-400'>Loading…</p>
-        ) : notifications.length === 0 && bundles.length === 0 ? (
+        ) : notifications.length === 0 && bundles.length === 0 && pinned.length === 0 ? (
           <div className='flex flex-col items-center justify-center py-24 text-center'>
             <Bell className='h-10 w-10 text-slate-200 dark:text-slate-700' />
             <p className='mt-3 text-[14px] font-medium text-slate-500'>You're all caught up</p>
@@ -893,6 +1203,16 @@ export function NotificationCenterView({
           </div>
         ) : (
           <div className='mx-8 my-6 divide-y divide-slate-100 overflow-hidden rounded-lg border border-slate-200 bg-white dark:divide-border dark:border-border dark:bg-card'>
+            {pinned.length > 0 && (
+              <div data-notification-pinned>
+                <div className='bg-amber-50 px-4 py-1 text-[10.5px] font-semibold uppercase tracking-wide text-amber-700 dark:bg-amber-400/10 dark:text-amber-300'>
+                  Needs your acknowledgement · {pinned.length}
+                </div>
+                {pinned.map((n) => (
+                  <Fragment key={`pin:${n.id}`}>{renderRow(n)}</Fragment>
+                ))}
+              </div>
+            )}
             {bundles.map(renderBundle)}
             {notifications.map((n, ni) => {
               const bucketOf = (ts: string | Date | null | undefined) => {

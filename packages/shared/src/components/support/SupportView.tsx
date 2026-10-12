@@ -3,6 +3,7 @@ import { LifeBuoy, Plus, Search } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, patch, post } from '../../lib/commands'
+import { useLiveOps } from '../../lib/live-ops'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { SupportRequestDialog } from './SupportRequestDialog'
@@ -40,6 +41,7 @@ export function SupportView({
   className?: string
 }) {
   const client = useNivaroClient()
+  const qc = useQueryClient()
   const auth = useItemEditAuth()
   const isAdmin = !!auth?.isAdmin
   const [tab, setTabState] = useState<Tab>('mine')
@@ -65,6 +67,13 @@ export function SupportView({
       client.request<{ data: SupportSummary }>(get('/support/summary')).then((r) => r.data)
   })
   const desk = !!summary?.desk
+  // Live: new tickets, claims, replies and status moves land for everyone with the desk open.
+  // The refetch goes through the permission-checked routes (a poke names nothing).
+  useLiveOps('support', () => {
+    void qc.invalidateQueries({ queryKey: ['support-tickets'] })
+    void qc.invalidateQueries({ queryKey: ['support-summary'] })
+    void qc.invalidateQueries({ queryKey: ['support-ticket'] })
+  })
   // A desk worker lands on the desk, everyone else on their own requests.
   const [defaulted, setDefaulted] = useState(false)
   useEffect(() => {

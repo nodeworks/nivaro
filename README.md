@@ -130,6 +130,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **App Blueprints** — export/install schema + workflows + layouts + queues + rules as one artifact
 - **Calendar & Gantt Views** — any collection with date fields gets month-grid and timeline views
 - **Ask Your Data** — permission-checked AI chat over your collections (aggregate, query, semantic search) with a visible tool trace
+- **Ask AI history & sharing** — every conversation kept per person (search, pins, resume, retention), personal "remember that…" notes, share with colleagues or post to chat (answers re-checked against each reader's access), branch from an edited question, CSV/Excel export re-run as you, Table · Chart · List format switch
 - **Scheduled Reports** — PDF snapshots of collections or queues emailed on a cron
 - **Pipeline Simulator** — dry-run any record: owners per state, transition availability with reasons, SLA arming
 - **Layout-Backed Public Forms** — multi-step public forms with sections, visibility rules, and select choices from your layouts
@@ -142,6 +143,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **Pipeline Flow Map & Replay** — Sankey of transition volumes (send-backs in red) and a time-lapse of backlog moving through states
 - **Wallboard & Pulse** — chrome-free TV dashboard rotating across queues, and a live activity stream with per-minute pulse
 - **Voice on Ask AI** — dictate questions and have answers read back
+- **AI Knowledge** — Ask AI answers "how do I…" from the in-app docs (quoted and linked), a shared glossary of business terms (hover definitions on labels and in answers), per-collection data guides, AI-drafted glossary/guide suggestions an admin accepts, and a docs-gaps report of what the docs could not answer
 - **Trash & Restore** — every deleted record is restorable for 30 days with its original id
 - **Time-Travel Restore** — scrub a slider through a record's history and restore to any point
 - **Record Merge** — dedupe wizard that repoints every inbound reference to the survivor

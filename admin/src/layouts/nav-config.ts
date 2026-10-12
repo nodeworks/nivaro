@@ -7,6 +7,7 @@ import {
   BarChart3,
   Bell,
   BellDot,
+  BookMarked,
   BookOpen,
   Braces,
   Building2,
@@ -15,6 +16,7 @@ import {
   CalendarRange,
   CheckSquare,
   Clapperboard,
+  ClipboardCheck,
   ClipboardList,
   Clock,
   Code2,
@@ -41,6 +43,7 @@ import {
   LayoutGrid,
   LifeBuoy,
   Link2,
+  ListChecks,
   ListFilter,
   ListOrdered,
   Mail,
@@ -139,6 +142,12 @@ export const navCategories: NavCategory[] = [
       { icon: LayoutGrid, label: 'Dashboards', to: '/dashboards', keywords: 'kpi widgets' },
       { icon: Radar, label: 'Command Center', to: '/command', keywords: 'map live' },
       { icon: Sparkles, label: 'Ask AI', to: '/ask', keywords: 'chat question assistant' },
+      {
+        icon: ListChecks,
+        label: 'AI Plans',
+        to: '/ai-plans',
+        keywords: 'ask ai plan history undo templates scheduled'
+      },
       { icon: MessagesSquare, label: 'Chat', to: '/chat', keywords: 'messages dm channels' },
       { icon: LifeBuoy, label: 'Support', to: '/support', keywords: 'help tickets request' },
       {
@@ -438,6 +447,13 @@ export const navCategories: NavCategory[] = [
       { icon: BarChart2, label: 'API Analytics', to: '/api-analytics', section: 'Usage' },
       { icon: Sparkles, label: 'AI Analytics', to: '/ai-analytics', section: 'Usage' },
       { icon: ShieldCheck, label: 'AI Quality', to: '/ai-quality', section: 'Usage' },
+      {
+        icon: BookMarked,
+        label: 'AI Knowledge',
+        to: '/ai-knowledge',
+        section: 'Usage',
+        keywords: 'glossary data guide docs gaps ask ai suggestions'
+      },
       { icon: MessagesSquare, label: 'Chat Analytics', to: '/chat-analytics', section: 'Usage' },
       {
         icon: Clapperboard,
@@ -639,6 +655,12 @@ export const navCategories: NavCategory[] = [
         label: 'Config Health',
         to: '/config-health',
         keywords: 'lint hygiene'
+      },
+      {
+        icon: ClipboardCheck,
+        label: 'Config Review',
+        to: '/config-review',
+        keywords: 'monthly cleanup tidy duplicate unused labels contradicting rules'
       },
       {
         icon: SearchCode,

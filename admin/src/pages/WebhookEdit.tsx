@@ -3,6 +3,7 @@ import { ArrowLeft, Check, ChevronsUpDown, Plus, RefreshCw, Trash2, Zap } from '
 import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
+import { ExplainButton } from '@/components/explain-button'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -896,6 +897,11 @@ export function WebhookEditPage() {
                         >
                           Use as test payload
                         </button>
+                        {!d.success && (
+                          <div className='w-full pl-4'>
+                            <ExplainButton kind='webhook-delivery' params={{ id: d.id }} />
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

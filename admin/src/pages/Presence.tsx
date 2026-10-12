@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Monitor, RefreshCw, Smartphone, Tablet, Trash2, Users, Wifi, WifiOff } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 import { PresenceLiveMap } from '@/components/presence-live-map'
 import { Badge } from '@/components/ui/badge'
@@ -15,6 +15,7 @@ import {
 } from '@/components/ui/table'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
+import { getSocket } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
 
 interface PresenceSession {
@@ -62,7 +63,6 @@ export function PresencePage() {
   const queryClient = useQueryClient()
   const [liveConnected, setLiveConnected] = useState(false)
   const [liveSessions, setLiveSessions] = useState<PresenceSession[] | null>(null)
-  const socketRef = useRef<{ disconnect(): void } | null>(null)
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ['presence-sessions'],
@@ -82,36 +82,29 @@ export function PresencePage() {
 
   const sessions = liveSessions ?? data?.data ?? []
 
+  // The shared authenticated socket: `presence:admin` is an admin-only room (session rows
+  // carry IPs and devices), so an anonymous connection is refused it.
   useEffect(() => {
-    let socket: {
-      emit(ev: string, ...args: unknown[]): void
-      on(ev: string, cb: (...args: unknown[]) => void): void
-      disconnect(): void
-    } | null = null
-
-    import('socket.io-client')
-      .then(({ io }) => {
-        socket = io(window.location.origin, {
-          transports: ['websocket'],
-          path: '/socket.io'
-        }) as typeof socket
-
-        socket?.on('connect', () => {
-          setLiveConnected(true)
-          socket?.emit('presence:join', 'admin')
-        })
-        socket?.on('disconnect', () => setLiveConnected(false))
-        socket?.on('presence:update', (payload: unknown) => {
-          const p = payload as { sessions: PresenceSession[] }
-          setLiveSessions(p.sessions)
-        })
-
-        socketRef.current = socket
-      })
-      .catch(() => {})
-
+    const socket = getSocket()
+    const join = () => socket.emit('presence:join', 'admin')
+    const onConnect = () => setLiveConnected(true)
+    const onDisconnect = () => setLiveConnected(false)
+    const onUpdate = (payload: unknown) => {
+      const p = payload as { sessions: PresenceSession[] }
+      setLiveSessions(p.sessions)
+    }
+    setLiveConnected(socket.connected)
+    if (socket.connected) join()
+    socket.on('auth:ok', join)
+    socket.on('connect', onConnect)
+    socket.on('disconnect', onDisconnect)
+    socket.on('presence:update', onUpdate)
     return () => {
-      socket?.disconnect()
+      socket.emit('presence:leave', 'admin')
+      socket.off('auth:ok', join)
+      socket.off('connect', onConnect)
+      socket.off('disconnect', onDisconnect)
+      socket.off('presence:update', onUpdate)
       setLiveConnected(false)
     }
   }, [])
