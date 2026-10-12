@@ -65,6 +65,10 @@ export const configReviewDocs: DocSection = {
         '**Unopened views**: saved views nobody opened in N days (default 90). Default and subscribed views are left out. Opens are recorded from the view pills (one row per person and view per hour), and the check waits until opens have been recorded for the whole window.'
       ]
     },
+    {
+      type: 'p',
+      text: 'The thresholds sit in the page header (drafts and tasks 1–24 months, views 30–365 days). Changing them affects the next Run review now; **Save as defaults** stores them for the monthly run and for the page (activity-logged). Anything unsaved or out of range falls back to 3 months, 3 months and 90 days.'
+    },
     { type: 'h2', id: 'config-review-labels', text: 'Labels — one concept, several labels' },
     {
       type: 'p',
@@ -77,7 +81,7 @@ export const configReviewDocs: DocSection = {
     },
     {
       type: 'note',
-      text: 'API: `GET /api/config-review?family=review|cleanup|label&status=open|fixed|dismissed`, `POST /api/config-review/run` (202; the page polls `running`), `GET /api/config-review/:id/preview?label=`, `POST /api/config-review/:id/apply`, `POST /api/config-review/:id/undo`, `POST /api/config-review/:id/dismiss`. The preview returns the exact target `ids` and a `hash`; apply must send both back, re-plans from the rows as they are now, answers 409 when the hash differs and touches only targets that are in both. Fixed findings stay listed for 30 days.'
+      text: 'API: `GET /api/config-review?family=review|cleanup|label&status=open|fixed|dismissed`, `POST /api/config-review/run` (202; the page polls `running`), `GET /api/config-review/:id/preview?label=`, `POST /api/config-review/:id/apply`, `POST /api/config-review/:id/undo`, `POST /api/config-review/:id/dismiss`, `GET|PUT /api/config-review/settings` (`{cleanup: {draftMonths, taskMonths, viewDays}}`, 400 out of bounds). The preview returns the exact target `ids` and a `hash`; apply must send both back, re-plans from the rows as they are now, answers 409 when the hash differs and touches only targets that are in both. Fixed findings stay listed for 30 days.'
     }
   ]
 }

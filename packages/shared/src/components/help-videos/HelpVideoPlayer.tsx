@@ -11,6 +11,7 @@ import {
   useState
 } from 'react'
 import { useApiFetchConfig, useNivaroClient } from '../../context'
+import { useLiveEvent } from '../../lib/live'
 import { fetchHelpVideo, helpVideoApi, helpVideoKeys, useCardBrand } from './api'
 import { CardLayer } from './CardLayer'
 import { CursorLayer } from './CursorLayer'
@@ -143,17 +144,50 @@ function PlayerInner({
   const [fresh, setFresh] = useState<HelpVideoDto | null>(null)
   const [failure, setFailure] = useState<null | 'processing' | 'error'>(null)
   const retried = useRef(false)
+  // The video this player shows. A host refetch hands over a new `video`; while
+  // someone is watching, that copy is not swapped in under them (a new file would
+  // restart the picture): a NEWER VERSION waits behind the "newer version"
+  // banner, a same-version refresh waits until the player needs it (a failed or
+  // still-processing load takes it at once).
+  const [pinned, setPinned] = useState(video)
+  const pinnedRef = useRef(pinned)
+  pinnedRef.current = pinned
+  const [newer, setNewer] = useState<HelpVideoDto | null>(null)
+  const startedRef = useRef(false)
+  const failureRef = useRef(failure)
+  failureRef.current = failure
+  /** A video that was "getting ready" starts by itself when it becomes playable (#1880). */
+  const [playWhenReady, setPlayWhenReady] = useState(false)
+  /** Bumped to remount the <video> when a newer version replaces the one playing. */
+  const [videoGen, setVideoGen] = useState(0)
+  const switchAt = useRef<number | null>(null)
   // A new `video` prop (the host refetched: fresh tickets, maybe a finished
   // render) supersedes the refreshed copy and any earlier load failure. The
   // one-retry flag is NOT reset here: our own refresh updates a host that
   // reads useHelpVideo(id), and resetting would turn a broken stream into an
   // endless refresh loop. Only a successful load (onLoadedData) re-arms it.
-  // biome-ignore lint/correctness/useExhaustiveDependencies: runs on purpose when `video` changes
   useEffect(() => {
+    if (startedRef.current && !isAuthorView(video)) {
+      const was = pinnedRef.current.published?.id
+      const now = video.published?.id
+      if (was && now && was !== now) {
+        setNewer(video)
+        return
+      }
+      if (!failureRef.current) {
+        // Only the viewer's own progress moves under a playing file.
+        setPinned((p) =>
+          p.my_progress === video.my_progress ? p : { ...p, my_progress: video.my_progress }
+        )
+        return
+      }
+    }
+    setPinned(video)
+    setNewer(null)
     setFresh(null)
     setFailure(null)
   }, [video])
-  const dto = fresh && fresh.id === video.id ? fresh : video
+  const dto = fresh && fresh.id === video.id ? fresh : pinned
 
   const author = isAuthorView(dto)
   const live = useDraft || (mode === 'live' && author)
@@ -186,6 +220,7 @@ function PlayerInner({
   const [srcMs, setSrcMs] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [started, setStarted] = useState(false)
+  startedRef.current = started
   const [userRate, setUserRate] = useState(1)
   const [captions, setCaptions] = useState(true)
   const [captionStyle, setCaptionStyle] = useCaptionStyle(edits ? captionLookOf(edits) : undefined)
@@ -546,10 +581,14 @@ function PlayerInner({
     const v = videoEl
     if (!v || resumed.current || useDraft) return
     const at =
-      startAtMs ?? (dto.my_progress && !dto.my_progress.completed ? dto.my_progress.position_ms : 0)
+      switchAt.current ??
+      startAtMs ??
+      (dto.my_progress && !dto.my_progress.completed ? dto.my_progress.position_ms : 0)
     const onMeta = () => {
       resumed.current = true
-      if (startAtMs != null || at > 5000) seekEdited(at)
+      const switched = switchAt.current != null
+      switchAt.current = null
+      if (switched || startAtMs != null || at > 5000) seekEdited(at)
       if (!rendered && edits?.segments[0] && v.currentTime * 1000 < edits.segments[0].start_ms) {
         // Straight to the first kept frame (an intro card stays up meanwhile).
         v.currentTime = edits.segments[0].start_ms / 1000
@@ -718,6 +757,67 @@ function PlayerInner({
     }
   }, [refresh, reload])
 
+  // ── Live: "getting ready" ends by itself, and a newer version is offered ────
+  // `help-video:changed` (a render landed, a version was published) says THAT this
+  // video moved; the player asks the server what it looks like to this viewer.
+  // Authors (editor, live mode) are fed by their host's own query instead.
+  const dtoRef = useRef(dto)
+  dtoRef.current = dto
+  useLiveEvent(
+    'help-video:changed',
+    async () => {
+      let next: HelpVideoDto
+      try {
+        next = await qc.fetchQuery({
+          queryKey: helpVideoKeys.one(video.id),
+          queryFn: () => fetchHelpVideo(client, video.id),
+          staleTime: 0
+        })
+      } catch {
+        return
+      }
+      const cur = dtoRef.current
+      const was = cur.published?.id
+      const now = next.published?.id
+      if (startedRef.current && was && now && was !== now) {
+        setNewer(next)
+        return
+      }
+      const waiting = failureRef.current === 'processing' || viewerMustWait(cur)
+      // Someone is mid-watch on a working file: leave it alone.
+      if (startedRef.current && !waiting && !failureRef.current) return
+      if (waiting && !viewerMustWait(next)) setPlayWhenReady(true)
+      setFresh(next)
+      if (failureRef.current === 'processing' && !viewerMustWait(next)) reload(next)
+    },
+    {
+      debounceMs: 400,
+      includeOwn: true,
+      enabled: !live,
+      match: (p) => String(p?.video_id ?? '').toLowerCase() === video.id.toLowerCase()
+    }
+  )
+
+  /** Move to the newer version at the same spot in the recording (source time),
+   *  or its start when the new cut dropped that moment. */
+  const switchToNewer = () => {
+    const n = newer
+    if (!n) return
+    const nextEdits = n.published?.edits
+    const at = nextEdits ? sourceToEdited(nextEdits, overlaySrcMs) : null
+    switchAt.current = at ?? 0
+    resumed.current = false
+    retried.current = false
+    if (isPlaying) setPlayWhenReady(true)
+    setCard(null)
+    setHold(null)
+    setPinned(n)
+    setFresh(null)
+    setFailure(null)
+    setNewer(null)
+    setVideoGen((g) => g + 1)
+  }
+
   // The recording's own size: annotations are laid out at render size.
   const natural =
     videoEl?.videoWidth && videoEl.videoHeight
@@ -772,6 +872,30 @@ function PlayerInner({
       className={`flex flex-col overflow-hidden rounded-lg border border-slate-200 bg-white dark:border-border dark:bg-card ${className ?? ''}`}
       data-hv-player={video.id}
     >
+      {newer && (
+        <div
+          role='status'
+          data-hv-newer-version
+          className='flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-nvr-cyan/30 bg-nvr-cyan/10 px-3 py-1.5 text-[12.5px] text-slate-800 dark:text-foreground'
+        >
+          <span className='font-medium'>A newer version of this video is available.</span>
+          <button
+            type='button'
+            onClick={switchToNewer}
+            className='inline-flex h-7 items-center rounded-md bg-nvr-cyan px-2.5 text-[12px] font-semibold text-nvr-navy transition-colors duration-150 hover:bg-nvr-cyan-dark focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan focus-visible:ring-offset-1 motion-reduce:transition-none'
+            data-hv-switch-version
+          >
+            Switch to it
+          </button>
+          <button
+            type='button'
+            onClick={() => setNewer(null)}
+            className='text-[12px] text-slate-600 underline-offset-2 hover:underline dark:text-muted-foreground'
+          >
+            Keep watching this one
+          </button>
+        </div>
+      )}
       {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useAriaPropsSupportedByRole: the stage is role=application with a label and key handler exactly when it is playable; otherwise it has neither */}
       <div
         ref={boxRef}
@@ -808,11 +932,12 @@ function PlayerInner({
             >
               {/* biome-ignore lint/a11y/useMediaCaption: captions are drawn by OverlayLayer from the edits */}
               <video
+                key={videoGen}
                 ref={setVideoEl}
                 src={src ?? undefined}
                 poster={poster}
                 // With an intro card up, the card's clock starts first (see above).
-                autoPlay={autoPlay && !(liveEdits && lead > 0)}
+                autoPlay={(autoPlay || playWhenReady) && !(liveEdits && lead > 0)}
                 playsInline
                 preload='metadata'
                 crossOrigin='use-credentials'
@@ -848,6 +973,7 @@ function PlayerInner({
                 onLoadedData={() => {
                   // A good load re-arms the one fresh-URL retry for a later expiry.
                   retried.current = false
+                  if (playWhenReady) setPlayWhenReady(false)
                 }}
                 onError={() => void onMediaError()}
                 onDurationChange={(e) =>

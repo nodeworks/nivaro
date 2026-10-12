@@ -18,6 +18,41 @@ export const aiConversationsDocs: DocSection = {
         'Settings → AI Features → Ask AI conversation history: how many days an untouched conversation is kept (blank = 180, 0 = forever). The nightly retention job prunes the rest, except conversations any participant has pinned.'
       ]
     },
+    { type: 'h2', id: 'ai-conversations-opt-out', text: 'Don’t save my questions' },
+    {
+      type: 'p',
+      text: 'Each person can turn Ask AI history off — Profile → Ask AI history, or the switch at the top of the History list on the Ask page. From then on nothing they ask is stored as a conversation: answers still work live (the thread lives in the open page only), but there is no History entry, and Share, Post to chat, Branch, export and saved plan cards are unavailable because they need a saved conversation. A saved conversation opened while history is off is read-only. Turning it on offers a separate “Also delete my saved conversations” — it deletes only the conversations that person started (with their shares to other people); conversations others shared with them stay.'
+    },
+    {
+      type: 'table',
+      head: ['Still kept while history is off', 'What and for how long'],
+      rows: [
+        [
+          'Ask AI memory notes',
+          'Only the notes the person explicitly saved; they edit or delete them on Profile.'
+        ],
+        [
+          'Thumbs up/down',
+          'Only when the person chooses to give one: the rating and any comment they type, kept in the AI feedback table.'
+        ],
+        [
+          'AI call log (administrators)',
+          'One row per model call with tokens, cost, latency and capped copies of the request and response — which include the question — pruned after 30 days. Visible to administrators in AI analytics. Unchanged by this switch.'
+        ],
+        [
+          'Activity log',
+          'An `ai-chat` entry per question with the number of tool calls — no question text.'
+        ],
+        [
+          'Answer cache',
+          'The same standalone question by the same person answers from a per-person Redis cache for the configured window (default 15 minutes), then expires.'
+        ],
+        [
+          'Not kept',
+          'The conversation itself, and the shared playbook of worked examples (a question asked with history off never becomes one).'
+        ]
+      ]
+    },
     { type: 'h2', id: 'ai-conversations-memory', text: 'Ask AI memory' },
     {
       type: 'p',
@@ -25,7 +60,7 @@ export const aiConversationsDocs: DocSection = {
     },
     {
       type: 'p',
-      text: 'Remember this? When a question shows a lasting preference (“by my zone I mean Zone 3”, “show amounts in thousands”), Ask AI may offer a note under its answer. Nothing is kept unless you click Remember; “Not now” hides the offer. Offers are only ever shown to the person who asked — never to someone a conversation is shared with — and are never offered for one-off facts, record values or other people. At most two per answer, none once your memory is full (a click on a full list is refused instead of dropping an older note).'
+      text: 'Remember this? When a question shows a lasting preference (“by my zone I mean Zone 3”, “show amounts in thousands”), Ask AI may offer a note under its answer. Nothing is kept unless you click Remember; “Not now” hides the offer. Offers are only ever shown to the person who asked — never to someone a conversation is shared with — and are never offered for one-off facts, record values, other people or anything that reads as an instruction to Ask AI (“call…”, “ignore…”, “always run…”). The offer says plainly that the note is added to every future question. With Ask AI history off, offers still appear and Remember keeps only the note. At most two per answer, none once your memory is full (a click on a full list is refused instead of dropping an older note).'
     },
     {
       type: 'p',
@@ -97,6 +132,10 @@ export const aiConversationsDocs: DocSection = {
           'Rename (owner) or pin (each person their own).'
         ],
         ['DELETE /api/ai/conversations/:id', 'Owner: delete. Shared: remove from my list.'],
+        [
+          'DELETE /api/ai/conversations/mine',
+          'Delete every conversation the caller started (with its shares). PATCH /api/users/me/preferences { ai_history_off: true | null } is the opt-out; with it on, `save` is ignored and `conversation_id` answers 409.'
+        ],
         [
           'POST /api/ai/conversations/:id/shares { user_ids }',
           'Owner shares with people (notifies them).'

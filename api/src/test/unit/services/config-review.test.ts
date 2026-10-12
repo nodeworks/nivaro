@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  CLEANUP_DEFAULTS,
   canonicalJson,
   changeSetHash,
   decodeDetail,
@@ -13,12 +14,14 @@ import {
   groupLabelConcepts,
   guardApply,
   type LabelOccurrence,
+  normalizeCleanup,
   parseAiPhrasing,
   publicDetail,
   reviveRow,
   rewriteLabel,
   type SavedViewRow,
-  undoableFix
+  undoableFix,
+  validateCleanup
 } from '../../../services/config-review/pure.js'
 
 const rule = (over: Partial<FieldRuleRow>): FieldRuleRow => ({
@@ -383,6 +386,50 @@ describe('apply binds to the previewed change set (I2)', () => {
     expect(guardApply('drafts-delete', ids, { ids: [], hash })).toMatchObject({
       ok: false,
       status: 409
+    })
+  })
+})
+
+describe('cleanup thresholds (#2020 saved defaults)', () => {
+  it('nothing saved, unreadable or out of bounds falls back to CLEANUP_DEFAULTS', () => {
+    expect(normalizeCleanup(null)).toEqual(CLEANUP_DEFAULTS)
+    expect(normalizeCleanup('garbage')).toEqual(CLEANUP_DEFAULTS)
+    expect(normalizeCleanup({ draftMonths: 0, taskMonths: 25, viewDays: 29 })).toEqual(
+      CLEANUP_DEFAULTS
+    )
+    expect(normalizeCleanup({ draftMonths: 2.5, viewDays: 366 })).toEqual(CLEANUP_DEFAULTS)
+  })
+  it('keeps each valid value on its own, bounds inclusive', () => {
+    expect(normalizeCleanup({ draftMonths: 24, taskMonths: 1, viewDays: 365 })).toEqual({
+      draftMonths: 24,
+      taskMonths: 1,
+      viewDays: 365
+    })
+    expect(normalizeCleanup({ viewDays: 30 })).toEqual({ ...CLEANUP_DEFAULTS, viewDays: 30 })
+  })
+  it('a run falls back to the saved values, not the built-in defaults', () => {
+    const saved = { draftMonths: 6, taskMonths: 12, viewDays: 180 }
+    expect(normalizeCleanup({ draftMonths: 99, taskMonths: '2' }, saved)).toEqual({
+      draftMonths: 6,
+      taskMonths: 2,
+      viewDays: 180
+    })
+  })
+  it('a save must give every value, whole and in bounds', () => {
+    expect(validateCleanup({ draftMonths: 6, taskMonths: 12, viewDays: 180 })).toEqual({
+      ok: true,
+      value: { draftMonths: 6, taskMonths: 12, viewDays: 180 }
+    })
+    expect(validateCleanup({ draftMonths: 6, taskMonths: 12 })).toMatchObject({ ok: false })
+    expect(validateCleanup({ draftMonths: 25, taskMonths: 12, viewDays: 180 })).toMatchObject({
+      ok: false,
+      error: 'draftMonths must be a whole number from 1 to 24'
+    })
+    expect(validateCleanup({ draftMonths: 6, taskMonths: 12, viewDays: 29 })).toMatchObject({
+      ok: false
+    })
+    expect(validateCleanup({ draftMonths: '6', taskMonths: 12, viewDays: 90 })).toMatchObject({
+      ok: false
     })
   })
 })

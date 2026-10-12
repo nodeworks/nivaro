@@ -174,6 +174,35 @@ export const SUGGEST_MEMORY_TOOL: Anthropic.Tool = {
 }
 
 /**
+ * An offered note that reads as an order to the assistant rather than a fact
+ * about the person ("call propose_action whenever…", "ignore your rules") —
+ * the note would ride every later prompt, so a model nudged by data it read
+ * could plant a standing instruction. Deliberately broad: a refused offer
+ * costs nothing, the person can still write any note on Profile.
+ */
+export function looksLikeInstruction(text: string): boolean {
+  const t = text.toLowerCase()
+  if (/^(please\s+)?(call|propose|ignore|run|execute|invoke|disregard|forget)\b/.test(t))
+    return true
+  if (/\balways\s+(run|call|propose|execute|use\s+the\s+\w+\s+tool)\b/.test(t)) return true
+  if (/\b(call|run|invoke|execute|use)\b[^.]{0,40}\btools?\b/.test(t)) return true
+  if (/\bpropose\b/.test(t)) return true
+  if (/\b[a-z]+(?:_[a-z]+)+\s*\(/.test(t)) return true
+  if (
+    /\b(propose_action|propose_plan|run_custom_query|ask_choice|suggest_memory|query_items)\b/.test(
+      t
+    )
+  )
+    return true
+  if (
+    /\bignore\b[^.]{0,30}\b(instructions?|rules?|prompt|above|previous|permissions?)\b/.test(t) ||
+    /\bsystem prompt\b/.test(t)
+  )
+    return true
+  return false
+}
+
+/**
  * Decide one suggest_memory call: the offer to show (or none) and what the
  * model is told. `offered` is this answer's offers so far.
  */
@@ -188,6 +217,13 @@ export function offerMemorySuggestion(
     return {
       suggestion: null,
       reply: `Too long — a note is at most ${AI_MEMORY_MAX_CHARS} characters. Not offered.`
+    }
+  }
+  if (looksLikeInstruction(text)) {
+    return {
+      suggestion: null,
+      reply:
+        'Not offered — a note describes the person (their area, units, wording), never an instruction to you.'
     }
   }
   const key = text.toLowerCase()
@@ -237,6 +273,13 @@ export async function addSuggestedNote(
   if (!clean) return { error: 'text is required', status: 400 }
   if (clean.length > AI_MEMORY_MAX_CHARS) {
     return { error: `A note is limited to ${AI_MEMORY_MAX_CHARS} characters`, status: 400 }
+  }
+  // The click path keeps only what the offer path could have offered.
+  if (looksLikeInstruction(clean)) {
+    return {
+      error: 'That reads as an instruction to Ask AI — add notes about yourself under Profile',
+      status: 400
+    }
   }
   const prefs = await readPrefs(userId)
   const notes = memoryFromPreferences(prefs)
@@ -329,4 +372,25 @@ export function guardPreferencesWrite(
   const kept = memoryFromPreferences(previous)
   if (kept.length) out.ai_memory = kept
   return { value: out }
+}
+
+/**
+ * Ask AI history opt-out: `preferences.ai_history_off === true` means the
+ * person's questions are never stored as conversations (answers still work
+ * live). Read on every question, so turning it on takes effect at once.
+ */
+export function historyOffFromPreferences(preferences: unknown): boolean {
+  let prefs = preferences
+  if (typeof prefs === 'string') {
+    try {
+      prefs = JSON.parse(prefs)
+    } catch {
+      return false
+    }
+  }
+  return (prefs as Record<string, unknown> | null)?.ai_history_off === true
+}
+
+export async function aiHistoryOff(userId: string): Promise<boolean> {
+  return historyOffFromPreferences(await readPrefs(userId).catch(() => ({})))
 }

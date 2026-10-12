@@ -10,6 +10,7 @@ const who = vi.hoisted(() => ({ id: '', admin: false }))
 const store = vi.hoisted(() => ({
   users: new Map<string, { id: string; preferences: string | null }>(),
   updates: [] as Array<{ id: string; preferences: string }>,
+  tables: [] as string[],
   activity: [] as Array<Record<string, unknown>>
 }))
 
@@ -34,7 +35,8 @@ vi.mock('../../../services/activity.js', () => ({
   })
 }))
 vi.mock('../../../db/index.js', () => ({
-  db: (_table: string) => {
+  db: (table: string) => {
+    store.tables.push(table)
     let id = ''
     const b = {
       where: (w: { id: string }) => {
@@ -75,6 +77,7 @@ const memoryOf = (id: string) =>
 beforeEach(() => {
   store.users.clear()
   store.updates.length = 0
+  store.tables.length = 0
   store.activity.length = 0
   store.users.set(ADMIN, { id: ADMIN, preferences: null })
   store.users.set(PERSON, { id: PERSON, preferences: JSON.stringify({ ai_memory: notes }) })
@@ -92,6 +95,8 @@ describe('POST /ai/memory — the "Remember this?" click (#1845)', () => {
     expect(r.statusCode).toBe(200)
     expect(store.updates.map((u) => u.id)).toEqual([PERSON])
     expect(memoryOf(PERSON).map((n) => n.text)).toContain('By my zone I mean Zone 3')
+    // Only the note — no conversation (history off or on), no other table.
+    expect(new Set(store.tables)).toEqual(new Set(['nivaro_users']))
   })
 
   it('an admin’s click lands in the admin’s memory, never someone else’s', async () => {

@@ -2,12 +2,14 @@
 import { act, createElement } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { applyHeldLiveNow, resetFocusModeForTests, setFocusMode } from './focus-mode'
 import {
   batchTouches,
   type LiveBatch,
   type LiveEvent,
   relayLiveEvent,
   toLiveBatch,
+  useLiveCollection,
   useLiveRecord,
   useLiveRecordEvent
 } from './live'
@@ -178,6 +180,51 @@ describe('useLiveRecord', () => {
     }
     act(() => root.render(createElement(Probe)))
     expect(seen).toHaveLength(0)
+  })
+})
+
+describe('useLiveCollection focusable (focus mode)', () => {
+  it('holds a focusable list feed while focus mode is on and applies it as one batch', () => {
+    const { rt, push } = fakeAdapter()
+    const batches: LiveBatch[] = []
+    function Probe() {
+      useLiveCollection('workflows', (b) => batches.push(b), { focusable: true })
+      return null
+    }
+    act(() =>
+      root.render(createElement(RealtimeContext.Provider, { value: rt }, createElement(Probe)))
+    )
+    setFocusMode(true, 3)
+    act(() => {
+      push({ collection: 'workflows', item: '1', changed_fields: ['title'] })
+      vi.advanceTimersByTime(300)
+      push({ collection: 'workflows', item: '2', changed_fields: ['title'] })
+      vi.advanceTimersByTime(300)
+    })
+    expect(batches).toHaveLength(0)
+    act(() => applyHeldLiveNow())
+    expect(batches).toHaveLength(1)
+    expect(batches[0].ids).toEqual(['1', '2'])
+    resetFocusModeForTests()
+  })
+
+  it('a non-focusable subscriber (the record page) is never held', () => {
+    const { rt, push } = fakeAdapter()
+    const batches: LiveBatch[] = []
+    function Probe() {
+      useLiveCollection('workflows', (b) => batches.push(b))
+      return null
+    }
+    act(() =>
+      root.render(createElement(RealtimeContext.Provider, { value: rt }, createElement(Probe)))
+    )
+    setFocusMode(true)
+    act(() => {
+      push({ collection: 'workflows', item: '1', changed_fields: ['title'] })
+      vi.advanceTimersByTime(300)
+    })
+    expect(batches).toHaveLength(1)
+    resetFocusModeForTests()
   })
 })
 
