@@ -304,6 +304,9 @@ const ApiAnalyticsPage = lazy(() =>
 const ChatAnalyticsPage = lazy(() =>
   import('@/pages/ChatAnalytics').then((m) => ({ default: m.ChatAnalyticsPage }))
 )
+const AiQualityPage = lazy(() =>
+  import('@/pages/AiQuality').then((m) => ({ default: m.AiQualityPage }))
+)
 const AiAnalyticsPage = lazy(() =>
   import('@/pages/AiAnalytics').then((m) => ({ default: m.AiAnalyticsPage }))
 )
@@ -645,6 +648,7 @@ export default function App() {
                   <Route path='p/:slug' element={<PageViewPage />} />
                   <Route path='api-analytics' element={<ApiAnalyticsPage />} />
                   <Route path='ai-analytics' element={<AiAnalyticsPage />} />
+                  <Route path='ai-quality' element={<AiQualityPage />} />
                   <Route path='ai-knowledge' element={<AiKnowledgePage />} />
                   <Route path='ai-plans' element={<AiPlansPage />} />
                   <Route path='chat-analytics' element={<ChatAnalyticsPage />} />

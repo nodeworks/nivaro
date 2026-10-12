@@ -446,6 +446,7 @@ export const navCategories: NavCategory[] = [
       },
       { icon: BarChart2, label: 'API Analytics', to: '/api-analytics', section: 'Usage' },
       { icon: Sparkles, label: 'AI Analytics', to: '/ai-analytics', section: 'Usage' },
+      { icon: ShieldCheck, label: 'AI Quality', to: '/ai-quality', section: 'Usage' },
       {
         icon: BookMarked,
         label: 'AI Knowledge',

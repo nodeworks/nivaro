@@ -347,7 +347,8 @@ const WATCH_ROOMS = new Set([
   'conformance',
   'imports',
   // #2016 — incident mode on/off (payload-free; the banner re-reads the admin route)
-  'ops'
+  'ops',
+  'ai-calls'
 ])
 
 /**

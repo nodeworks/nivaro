@@ -3,6 +3,13 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { loggedCreate, loggedStream } from './ai-log.js'
 import {
+  AiUnavailableError,
+  applyBudget,
+  isProviderFailure,
+  noteFallbackUsed,
+  qualityFromSettings
+} from './ai-quality.js'
+import {
   type AiMessageStream,
   type AiStreamEvent,
   abortError,
@@ -772,8 +779,90 @@ export async function getAiClient(opts?: {
   /** false = no fallback to the chat/default model when the gateway refuses
    *  the pinned one (#761). Default: fall back. */
   fallback?: boolean
+  /** false = skip the budget check and the failure fallback (#1817, #1821):
+   *  the provider health probe and the fallback client itself. Default: guard. */
+  guard?: boolean
 }): Promise<Anthropic | null> {
   const s = (await settingsRow()) ?? {}
+  if (opts?.guard === false) return buildAiClient(s, opts)
+  // #1817 — budgets are off until an admin sets them. Past a cap the call
+  // switches to the cheaper model named on it, or stops with a clear message.
+  const quality = qualityFromSettings(s)
+  let model = opts?.model
+  if (quality.budgets.enabled) model = (await applyBudget(quality, model)).model
+  const client = await buildAiClient(s, { ...opts, model })
+  if (!client) return null
+  return guardClient(client, quality.fallback_model, model ?? null)
+}
+
+/** #1821 — a provider failure retries once on the configured fallback model
+ *  (same provider, never a different one), and names the fallback on the
+ *  answer; with none set the caller gets "AI is unavailable", not a raw error. */
+function guardClient(
+  client: Anthropic,
+  fallbackModel: string | null,
+  model: string | null
+): Anthropic {
+  type Run<A extends unknown[]> = (c: Anthropic) => (...a: A) => Promise<unknown>
+  const wrap = <A extends [MessageParams, ...unknown[]]>(run: Run<A>) => {
+    return async (...args: A): Promise<unknown> => {
+      try {
+        return await run(client)(...args)
+      } catch (err) {
+        if (!isProviderFailure(err)) throw err
+        const first = args[0]?.model ?? model ?? ''
+        if (fallbackModel && fallbackModel !== first) {
+          const fb = await getAiClient({ model: fallbackModel, fallback: false, guard: false })
+          if (fb) {
+            try {
+              const out = await run(fb)(
+                ...([{ ...args[0], model: fallbackModel }, ...args.slice(1)] as A)
+              )
+              noteFallbackUsed(first, fallbackModel)
+              // biome-ignore lint/suspicious/noConsole: a fallback must be visible in the server log
+              console.warn(
+                `[ai] provider failed (${String((err as Error)?.message).slice(0, 120)}) — answered by fallback model "${fallbackModel}"`
+              )
+              return out
+            } catch (err2) {
+              if (!isProviderFailure(err2)) throw err2
+              throw new AiUnavailableError(String((err2 as Error)?.message ?? '').slice(0, 80))
+            }
+          }
+        }
+        throw new AiUnavailableError(String((err as Error)?.message ?? '').slice(0, 80))
+      }
+    }
+  }
+  const create = wrap<[MessageParams]>(
+    (c) => (p) => (c.messages.create as (p: MessageParams) => Promise<unknown>).call(c.messages, p)
+  )
+  const hasStream =
+    typeof (client.messages as unknown as AiClient['messages']).createStream === 'function'
+  const createStream = wrap<[MessageParams, StreamOptions?]>(
+    (c) => (p, o) => (c.messages as unknown as AiClient['messages']).createStream(p, o)
+  )
+  const messages = new Proxy(client.messages, {
+    get(t, p) {
+      if (p === 'create') return create
+      if (p === 'createStream' && hasStream) return createStream
+      const v = Reflect.get(t, p, t)
+      return typeof v === 'function' ? v.bind(t) : v
+    }
+  })
+  return new Proxy(client, {
+    get(t, p) {
+      if (p === 'messages') return messages
+      const v = Reflect.get(t, p, t)
+      return typeof v === 'function' ? v.bind(t) : v
+    }
+  })
+}
+
+async function buildAiClient(
+  s: AiSettingsRow,
+  opts?: { model?: string | null; fallback?: boolean }
+): Promise<Anthropic | null> {
   const caching = cachingOn(s)
   if (s.ai_provider === 'gateway') {
     const api = gatewayFromSettings(s)
