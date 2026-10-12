@@ -58,3 +58,17 @@ export function playNotificationSound(kind: NotificationSound | string | null | 
     /* never let a chirp break the app */
   }
 }
+
+/** #2385 — the sound for one category: its own choice if the person made one,
+ *  otherwise the global `notification_sound`. */
+export function soundForCategory(
+  prefs: { notification_sound?: unknown; notification_sounds?: unknown } | null | undefined,
+  category: string | null | undefined
+): string {
+  const per = prefs?.notification_sounds
+  if (category && per && typeof per === 'object') {
+    const v = (per as Record<string, unknown>)[category]
+    if (v === 'off' || v === 'subtle' || v === 'chime') return v
+  }
+  return typeof prefs?.notification_sound === 'string' ? prefs.notification_sound : 'off'
+}

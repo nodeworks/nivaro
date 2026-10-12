@@ -451,6 +451,7 @@ async function runNotification(op: FlowOperation, data: FlowData, ctx: Execution
       item: linkCollection ? linkItem : null,
       ...(category ? { category } : {}),
       always_inbox: opts.always_inbox !== false,
+      ...(opts.ack_required === true ? { ack_required: true } : {}),
       channels: { inapp: true, email: false }
     })
     ctx.log.info({ flowId: ctx.flowId, key: op.key, recipient }, 'Notification sent')

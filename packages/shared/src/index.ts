@@ -454,7 +454,11 @@ export { integrationChipSummary } from './lib/integration-chip'
 export { dotsForRecord } from './lib/integration-dots'
 export { extSlotKey, getLayoutSlot, registerLayoutSlot } from './lib/layout-slots'
 export { createLeaderSocket, type LeaderSocketHandle } from './lib/leader-socket'
-export { type NotificationSound, playNotificationSound } from './lib/notification-sound'
+export {
+  type NotificationSound,
+  playNotificationSound,
+  soundForCategory
+} from './lib/notification-sound'
 export {
   type NotificationActionSpec,
   type NotificationDeliveryRecord,
