@@ -246,10 +246,20 @@ async function postInner(
     if (prior) return { ...toRow(prior), duplicate: true }
   }
 
+  // Thread and quote targets load as the sender may see them: an assistant
+  // ops post does not exist for a sender who is not an administrator
+  // (services/ops-room-guard.ts). A platform line (no user) sees everything.
+  const { loadVisibleMessage } = await import('./ops-room-guard.js')
+  const senderMaySeeOps = async () => {
+    if (!user) return true
+    const { isActiveAdmin } = await import('./ops-assistant.js')
+    return isActiveAdmin(String(user.id))
+  }
+
   // Thread replies always hang off the root, never off another reply.
   let parentId: number | null = null
   if (input.parentId != null && cols.has('parent_id')) {
-    const parent = await loadMessage(Number(input.parentId))
+    const parent = await loadVisibleMessage(Number(input.parentId), await senderMaySeeOps())
     if (!parent || String(parent.room) !== room) {
       throw new ChatSendError(400, 'That thread is not in this conversation')
     }
@@ -260,7 +270,7 @@ async function postInner(
   }
   let quoteId: number | null = null
   if (input.quoteId != null && cols.has('quote_id')) {
-    const quoted = await loadMessage(Number(input.quoteId))
+    const quoted = await loadVisibleMessage(Number(input.quoteId), await senderMaySeeOps())
     if (!quoted || String(quoted.room) !== room) {
       throw new ChatSendError(400, 'You can only quote a message from this conversation')
     }
