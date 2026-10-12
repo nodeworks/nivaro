@@ -50,6 +50,12 @@ export interface PersonProfile {
     last_seen: string | null
     /** #1394 — admins and the person's manager only. */
     stuck?: { minutes: number; label: string | null } | null
+    /** #1982 — "appear away". */
+    away?: boolean
+    /** #2114 — notifications held (do not disturb). */
+    dnd?: boolean
+    /** #1982 — false: the viewer's scopes keep this person off the Online list. */
+    visible?: boolean
   }
   teams: Array<{ id: number; name: string; slug: string | null; member_count: number }>
   seats: Array<{
@@ -94,7 +100,9 @@ export function usePersonProfile(userId: string | null | undefined) {
         )
         .then((r) => r.data),
     enabled: !!userId,
-    staleTime: 30_000
+    staleTime: 30_000,
+    // A slow safety net under the live presence:changed refresh.
+    refetchInterval: 120_000
   })
 }
 

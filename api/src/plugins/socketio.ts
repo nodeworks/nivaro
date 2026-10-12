@@ -16,9 +16,20 @@ import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { opsRoom, opsTopicGate } from '../services/ops-live.js'
 import { parsePageAt } from '../services/page-at.js'
 import { can } from '../services/permissions.js'
+import {
+  addTopicViewer,
+  cleanSignalState,
+  isPresenceTopic,
+  RECORD_SIGNAL_KINDS,
+  removeSocketFromTopics,
+  removeTopicViewer,
+  TOPIC_SIGNAL_KINDS,
+  topicViewers
+} from '../services/presence-topics.js'
 import { emitToTenant } from '../services/record-events.js'
 import { registerReplayWatch } from '../services/replay-watch.js'
 import {
+  canJoinTicketTopic,
   canSeeRecordRoom,
   isKnownCollection,
   masqRoom,
@@ -1036,6 +1047,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       const t = await socketTenant(socket)
       return t ? opsRoom(topic, t.tenantId || t.slug) : null
     }
+    const displayName = (u: User) =>
+      [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
+    const broadcastTopicViewers = (topic: string, room: string) => {
+      io.to(room).emit('ops:changed', { topic, viewers: topicViewers(room), at: Date.now() })
+    }
     socket.on(
       'ops:join',
       inSocketTenant(socket, async (payload: { topic?: string }) => {
@@ -1051,9 +1067,18 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
               if (spec.gate === 'auth') return true
               if (!user.role) return false
               const role = await db('nivaro_roles').where({ id: user.role }).first()
-              return !!role?.admin_access
+              const isAdmin = !!role?.admin_access
+              if (spec.gate === 'ticket')
+                return await canJoinTicketTopic(user, Number(spec.topic.split(':')[1]), isAdmin)
+              return isAdmin
             },
-            () => socket.join(room)
+            () => {
+              socket.join(room)
+              if (isPresenceTopic(spec.topic)) {
+                addTopicViewer(room, socket.id, { id: user.id, name: displayName(user) })
+                broadcastTopicViewers(spec.topic, room)
+              }
+            }
           )
         } catch (err) {
           app.log.warn({ err, topic: spec.topic }, 'ops:join check failed')
@@ -1063,15 +1088,38 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('ops:leave', (payload: { topic?: string }) => {
       const spec = opsTopicGate(payload?.topic)
       if (!spec) return
+      const leaveTopic = (room: string) => {
+        socket.leave(room)
+        if (removeTopicViewer(room, socket.id)) broadcastTopicViewers(spec.topic, room)
+      }
       if (!process.env.CLOUD_META_DB_URL) {
         // Self-hosted: no await, so a quick join + leave keeps its order.
-        watchGate.leave(`ops:${spec.topic}`, () => socket.leave(opsRoom(spec.topic, '')))
+        watchGate.leave(`ops:${spec.topic}`, () => leaveTopic(opsRoom(spec.topic, '')))
         return
       }
       void opsRoomOf(spec.topic).then((room) => {
-        if (room) watchGate.leave(`ops:${spec.topic}`, () => socket.leave(room))
+        if (room) watchGate.leave(`ops:${spec.topic}`, () => leaveTopic(room))
       })
     })
+    // Who is on a ticket or issue page (names only), and who is replying. The sender must
+    // already sit in the topic's room, so a signal reaches only people who passed its gate.
+    socket.on(
+      'ops:signal',
+      inSocketTenant(socket, async (payload: { topic?: string; kind?: string; state?: string }) => {
+        const spec = opsTopicGate(payload?.topic)
+        const user = authenticatedUser
+        const state = cleanSignalState(payload?.state)
+        if (!spec || !user || !state || !isPresenceTopic(spec.topic)) return
+        if (!TOPIC_SIGNAL_KINDS.has(String(payload?.kind))) return
+        const room = await opsRoomOf(spec.topic)
+        if (!room || !socket.rooms.has(room)) return
+        socket.to(room).emit('ops:changed', {
+          topic: spec.topic,
+          signal: { kind: payload.kind, state, user: { id: user.id, name: displayName(user) } },
+          at: Date.now()
+        })
+      })
+    )
     // ── Record presence v2 — viewer avatars + field editing indicators ──────
     // Room per record; viewer lists live in a module-level map (single-node
     // fidelity — with the Redis adapter, cross-node lists degrade gracefully
@@ -1089,8 +1137,6 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     let recordTenant = ''
     const recordRoom = (collection: string, item: unknown) =>
       tenantScopedRoom(`record:${collection}:${String(item)}`, recordTenant)
-    const displayName = (u: User) =>
-      [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
     /** The room an event targets: the named record when the socket is in it,
      *  else the last joined room. Null = not in any record room. */
     const roomFor = (payload?: { collection?: string; item?: unknown }): string | null => {
@@ -1139,19 +1185,42 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     }
 
     // Comment typing (#263): "X is writing a note…" relayed to co-viewers of
-    // the same record. Ephemeral — no persistence, room members only.
+    // the same record. Ephemeral — no persistence, room members only. The name is the
+    // signed-in person's own, never the client's claim. Older clients send this; newer ones
+    // send `record:signal` kind 'note', which the same relay serves.
+    socket.on('comment:typing', (payload: { collection?: string; item?: string }) => {
+      const { collection, item } = payload ?? {}
+      if (!collection || !item || !authenticatedUser) return
+      // Only a co-viewer may say they are typing: the sender must sit in the record's room.
+      const room = recordRoom(collection, item)
+      if (!joinedRecordRooms.has(room)) return
+      const name = displayName(authenticatedUser).slice(0, 80)
+      socket.to(room).emit('record:comment-typing', { collection, item, user_name: name })
+      socket.to(room).emit('record:signal', {
+        collection,
+        item: String(item),
+        kind: 'note',
+        state: 'start',
+        user: { id: authenticatedUser.id, name }
+      })
+    })
+    // Signals on a record (a note being written #1721, a transition dialog open #1722):
+    // names only, to sockets already admitted to the record's room by the read gate.
     socket.on(
-      'comment:typing',
-      (payload: { collection?: string; item?: string; user_name?: string }) => {
-        const { collection, item, user_name } = payload ?? {}
-        if (!collection || !item || !authenticatedUser) return
-        // Only a co-viewer may say they are typing: the sender must sit in the record's room.
+      'record:signal',
+      (payload: { collection?: string; item?: unknown; kind?: string; state?: string }) => {
+        const { collection, item } = payload ?? {}
+        const state = cleanSignalState(payload?.state)
+        if (!collection || item == null || !authenticatedUser || !state) return
+        if (!RECORD_SIGNAL_KINDS.has(String(payload?.kind))) return
         const room = recordRoom(collection, item)
         if (!joinedRecordRooms.has(room)) return
-        socket.to(room).emit('record:comment-typing', {
+        socket.to(room).emit('record:signal', {
           collection,
-          item,
-          user_name: String(user_name ?? '').slice(0, 80)
+          item: String(item),
+          kind: payload.kind,
+          state,
+          user: { id: authenticatedUser.id, name: displayName(authenticatedUser).slice(0, 80) }
         })
       }
     )
@@ -1312,7 +1381,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       },
       leaveRoom: (room) => {
         if (joinedRecordRooms.has(room)) leaveOneRoom(room)
-        else socket.leave(room)
+        else {
+          socket.leave(room)
+          if (removeTopicViewer(room, socket.id))
+            io.to(room).emit('ops:changed', {
+              topic: splitTenantRoom(room).room.slice(4),
+              viewers: topicViewers(room),
+              at: Date.now()
+            })
+        }
       }
     }
     socket.data.nvrAccess = accessHooks
@@ -1325,6 +1402,10 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       socketMeta.delete(socket.id)
       if (authenticatedUser) void markOffline(authenticatedUser.id, socket.id)
       leaveRecordRoom()
+      for (const room of removeSocketFromTopics(socket.id)) {
+        const topic = splitTenantRoom(room).room.slice(4)
+        io.to(room).emit('ops:changed', { topic, viewers: topicViewers(room), at: Date.now() })
+      }
       void closeJourneyRow(socket.id)
       const gone = pagePresence.get(socket.id)
       if (gone && pagePresence.delete(socket.id)) broadcastPresenceMap(gone.tenant)

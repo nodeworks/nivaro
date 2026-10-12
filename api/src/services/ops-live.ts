@@ -28,7 +28,8 @@ export type OpsTopic =
   | 'broadcasts'
   | 'my-work'
 
-export type OpsGate = 'admin' | 'auth'
+/** 'ticket' — the person must be able to see that support ticket (canSeeTicket). */
+export type OpsGate = 'admin' | 'auth' | 'ticket'
 
 const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   readiness: 'admin',
@@ -40,8 +41,16 @@ const TOPIC_GATES: Record<OpsTopic, OpsGate> = {
   'my-work': 'auth'
 }
 
-/** Topics with a per-id room: `issue:<id>` streams occurrences (names a person → admin). */
-const ID_TOPICS: Record<string, OpsGate> = { issue: 'admin' }
+/**
+ * Topics with a per-id room: `issue:<id>` streams occurrences (names a person → admin);
+ * `ticket:<id>` and `issue-view:<id>` carry who is looking at / replying to one ticket or
+ * issue (services/presence-topics.ts) — a ticket's room only admits people who can see it.
+ */
+const ID_TOPICS: Record<string, OpsGate> = {
+  issue: 'admin',
+  ticket: 'ticket',
+  'issue-view': 'auth'
+}
 
 /** A client-supplied topic string → its room suffix and gate, or null when not a real topic. */
 export function opsTopicGate(raw: unknown): { topic: string; gate: OpsGate } | null {

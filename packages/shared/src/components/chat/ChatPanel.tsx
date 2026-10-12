@@ -48,6 +48,7 @@ import { type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
+import { DoNotDisturbRow } from '../DoNotDisturb'
 import { FilePreviewLightbox, type PreviewFile } from '../FilePreviewLightbox'
 import { UserChip } from '../item-edit/GroupSection'
 import { UserAvatar } from '../UserAvatar'
@@ -114,8 +115,8 @@ import {
   useUserSearch
 } from './chat-core'
 import { useRecordFileTargets, useRoomRecord } from './chat-hooks'
-import { PollCard } from './PollCard'
 import { FormattedMessage, LinkPreviews, type TokenRenderer } from './MessageFormat'
+import { PollCard } from './PollCard'
 import {
   ChannelIntro,
   JumpToDate,
@@ -4468,6 +4469,7 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
               }
             />
             <ChatAppearAwayRow />
+            <DoNotDisturbRow />
             {users.length > 0 && (
               <div className='mb-1.5 flex items-center gap-1.5 px-1'>
                 <span className='text-[11px] text-slate-400'>Group by</span>

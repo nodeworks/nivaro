@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { onOwnersChanged } from '../db/owner-signal.js'
-import { presenceOverrideAway, stuckForViewer } from './presence-stuck.js'
+import { dndActive, presenceOverrideAway, stuckForViewer } from './presence-stuck.js'
 import { listScopeDimensions, resolveScopeLabelsForUsers } from './user-scopes.js'
 
 /**
@@ -63,6 +63,12 @@ export interface PersonProfile {
     /** #1394 — at the keyboard, same route, nothing saved for 10+ minutes.
      *  Admins and the person's manager only; null otherwise. */
     stuck?: { minutes: number; label: string | null } | null
+    /** #1982 — the person chose "appear away" (reads as away whatever they are doing). */
+    away?: boolean
+    /** #2114 — notifications are held (do not disturb). Only for people shown as online. */
+    dnd?: boolean
+    /** #1982 — false when the viewer's scopes keep this person off the chat Online list. */
+    visible?: boolean
   }
   teams: Array<{ id: number; name: string; slug: string | null; member_count: number }>
   seats: Array<{
@@ -382,6 +388,20 @@ export async function buildUserProfile(
       ? Math.max(0, Math.round((Date.now() - lastActive.getTime()) / 60_000))
       : null
 
+  // #1982 — the chat Online list's rule: a person restricted to other zones/regions does not
+  // see people outside their own scopes, so neither does the people page show their presence.
+  let presenceVisible = isSelf || viewer.isAdmin
+  if (!presenceVisible) {
+    try {
+      const { visibleToViewer } = await import('../routes/presence.js')
+      presenceVisible = (await visibleToViewer({ id: viewer.id }, false, [id])).has(
+        id.toUpperCase()
+      )
+    } catch {
+      presenceVisible = false
+    }
+  }
+
   const cs = prefs.custom_status as
     | { text?: string; emoji?: string | null; expires_at?: string | null }
     | undefined
@@ -471,17 +491,22 @@ export async function buildUserProfile(
     timezone: isSelf || viewer.isAdmin ? ((prefs.timezone as string | null) ?? null) : null,
     last_access: iso(u.last_access),
     created_at: iso(u.created_at),
-    presence: {
-      online,
-      idle_minutes: idleMinutes,
-      last_seen: lastSeen?.toISOString() ?? null,
-      stuck: await stuckForViewer(
-        { id, manager_id: (u.manager_id as string | null) ?? null },
-        presenceRow,
-        viewer,
-        { online, away: presenceOverrideAway(prefs) }
-      ).catch(() => null)
-    },
+    presence: !presenceVisible
+      ? { online: false, idle_minutes: null, last_seen: null, stuck: null, visible: false }
+      : {
+          online,
+          visible: true,
+          away: online && presenceOverrideAway(prefs),
+          dnd: online && dndActive(prefs),
+          idle_minutes: idleMinutes,
+          last_seen: lastSeen?.toISOString() ?? null,
+          stuck: await stuckForViewer(
+            { id, manager_id: (u.manager_id as string | null) ?? null },
+            presenceRow,
+            viewer,
+            { online, away: presenceOverrideAway(prefs) }
+          ).catch(() => null)
+        },
     teams: (teamRows as Array<Record<string, unknown>>).map((t) => ({
       id: Number(t.id),
       name: String(t.name ?? ''),

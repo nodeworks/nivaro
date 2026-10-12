@@ -6,6 +6,7 @@ import { emitNotification } from '../plugins/socketio.js'
 import { logActivity } from '../services/activity.js'
 import { ensureAutoWatch } from '../services/auto-watch.js'
 import { findRecordInstance } from '../services/branch-instances.js'
+import { mentionReceipts, receiptKey } from '../services/mention-receipts.js'
 import { sendTeamsNotification } from '../services/microsoft.js'
 import { notifyUser } from '../services/notification-channels.js'
 import { renderNotificationTemplate } from '../services/notification-templates.js'
@@ -13,6 +14,7 @@ import { can } from '../services/permissions.js'
 import { resolveStateOwners } from '../services/pipeline-engine.js'
 import { announceRecordAspect } from '../services/record-events.js'
 import { loadRecordNotes } from '../services/record-notes.js'
+import { canSeeRecordRoom } from '../services/socket-access.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -221,6 +223,21 @@ export async function commentsRoutes(app: FastifyInstance) {
       reactionsByComment.set(r.comment, list)
     }
 
+    // Read receipts (#2117): who has opened the record or read the mention since it was
+    // written. Only for a reader who can open this very record (row filter and scopes too).
+    const receipts =
+      mentions.length > 0 && (await canSeeRecordRoom(req.user!, collection, item, !!req.isAdmin))
+        ? await mentionReceipts(
+            collection,
+            item,
+            mentions.map((m) => ({
+              comment: m.comment,
+              user: m.user,
+              at: comments.find((c) => c.id === m.comment)?.created_at ?? new Date()
+            }))
+          )
+        : new Map<string, string>()
+
     const data = comments.map((c) => ({
       id: c.id,
       collection: c.collection,
@@ -240,7 +257,8 @@ export async function commentsRoutes(app: FastifyInstance) {
         id: m.user,
         first_name: m.first_name,
         last_name: m.last_name,
-        email: m.email
+        email: m.email,
+        seen_at: receipts.get(receiptKey(c.id, m.user)) ?? null
       })),
       reactions: reactionsByComment.get(c.id) ?? []
     }))
