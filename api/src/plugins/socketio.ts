@@ -250,7 +250,15 @@ export function getRecordViewerSnapshot(): Array<{
 
 // Watch rooms admins may join via admin:join (traffic feed, job progress,
 // monitor flips). Allowlisted — a socket can't invent a privileged room name.
-const WATCH_ROOMS = new Set(['traffic', 'jobs', 'monitors', 'firehose', 'flows', 'traffic-map'])
+const WATCH_ROOMS = new Set([
+  'traffic',
+  'jobs',
+  'monitors',
+  'firehose',
+  'flows',
+  'traffic-map',
+  'imports'
+])
 
 /**
  * Per-socket join/leave ordering for watch rooms. `admin:join` awaits a role lookup while
@@ -460,6 +468,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     const watchGate = createWatchRoomGate()
     // Cloud: the Traffic Map room is per tenant (#1132); every other room keeps its name.
     const watchRoomName = async (room: string): Promise<string | null> => {
+      // Cloud: the staged-import room is per tenant (the emitter uses tenantScopedRoom too).
+      if (room === 'imports' && process.env.CLOUD_META_DB_URL) {
+        const t = await socketTenant(socket).catch(() => null)
+        return t ? tenantScopedRoom('watch:imports', t.tenantId || t.slug) : null
+      }
       if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) return `watch:${room}`
       const store = await socketTrafficStore(socket)
       return store ? `watch:traffic-map:${store}` : null
@@ -470,7 +483,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       if (!user?.role || typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
       // Self-hosted: no await before the gate, so a quick join + leave keeps its order.
       const name =
-        room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL
+        !process.env.CLOUD_META_DB_URL || (room !== 'traffic-map' && room !== 'imports')
           ? `watch:${room}`
           : await watchRoomName(room)
       if (!name) return
@@ -487,7 +500,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.on('admin:leave', (payload: { room?: string }) => {
       const room = payload?.room
       if (typeof room !== 'string' || !WATCH_ROOMS.has(room)) return
-      if (room !== 'traffic-map' || !process.env.CLOUD_META_DB_URL) {
+      if (!process.env.CLOUD_META_DB_URL || (room !== 'traffic-map' && room !== 'imports')) {
         watchGate.leave(room, () => socket.leave(`watch:${room}`))
         return
       }

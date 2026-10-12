@@ -318,7 +318,9 @@ export function ImportConsole({
                 ? 'Importing the rows'
                 : e.stage === 'completed'
                   ? 'Completed'
-                  : (e.error ?? 'Failed')
+                  : typeof e.error === 'string' && e.error
+                    ? e.error
+                    : 'Failed'
       }))
       refreshRef.current()
     })

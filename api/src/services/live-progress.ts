@@ -1,4 +1,5 @@
 import { getIo } from './io-holder.js'
+import { tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * Progress for the person who started something (Jobs tray, bulk rows, import
@@ -103,5 +104,28 @@ export function openBulkRowProgress(
       flush(null)
       emitToUser(userId, 'bulk:rows', { progress, rows: [], running: null, finished: true })
     }
+  }
+}
+
+/**
+ * A staged import run's stage change (`import:progress`). Goes to the run starter's own room and
+ * the tenant's admin watch room (`watch:imports`, joined only by administrators) — never to every
+ * socket. The broadcast carries stage and counts only: a failure says `error: true`, and the
+ * message stays behind the authenticated run routes.
+ */
+export function emitImportProgress(
+  creatorId: string | null | undefined,
+  payload: { id: number | string; stage: string; [k: string]: unknown }
+): void {
+  const { error, ...rest } = payload
+  const safe = error ? { ...rest, error: true } : rest
+  try {
+    const io = getIo()
+    if (!io) return
+    let target = io.to(tenantScopedRoom('watch:imports'))
+    if (creatorId) target = target.to(`user:${creatorId}`)
+    target.emit('import:progress', safe)
+  } catch {
+    /* decoration */
   }
 }

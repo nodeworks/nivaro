@@ -140,6 +140,7 @@ const leaderWatchRefs = new Map<string, number>()
 const RELAYED_EVENTS = new Set([
   'collection:update',
   'job:update',
+  'import:progress',
   'monitor:status',
   'traffic:request',
   'traffic-map:frame',
