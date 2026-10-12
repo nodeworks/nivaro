@@ -72,6 +72,7 @@ import {
   RealtimeContext,
   RealtimeStatusBanner
 } from '@nivaro/shared'
+import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
 import { CommandPalette } from '@/components/command-palette'
 import { NotificationBell } from '@/components/notification-bell'
@@ -1019,7 +1020,9 @@ function HelpVideoHost({ children }: { children: ReactNode }) {
           helpVideosPath: '/help-videos'
         }}
       >
-        <HelpVideoRecordingProvider>{children}</HelpVideoRecordingProvider>
+        <HelpVideoRecordingProvider>
+          <AskPanelHost>{children}</AskPanelHost>
+        </HelpVideoRecordingProvider>
       </NavigationContext.Provider>
     </NivaroProvider>
   )

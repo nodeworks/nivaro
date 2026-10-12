@@ -6,7 +6,8 @@ import {
   ItemEditAuthContext,
   ItemEditForm,
   NavigationContext,
-  NivaroProvider
+  NivaroProvider,
+  usePublishAskContext
 } from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
@@ -44,6 +45,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch'
 import { api, type CMSField } from '@/lib/api'
 import { useAuth } from '@/lib/auth'
+import { renderDisplayTemplate } from '@/lib/relations'
 import { useRecordPresence } from '@/lib/use-record-presence'
 import { cn, titleCase } from '@/lib/utils'
 
@@ -444,6 +446,26 @@ export function ItemEditPage() {
     queryFn: () => api.get(`/items/${collection}/${id}`).then((r) => r.data.data),
     enabled: !!collection && !!id && !isNew
   })
+
+  // #1835 — Ask AI on this page means this record (ids only; the server
+  // reads it again as the asker). The label is for the chip.
+  usePublishAskContext(
+    collection && id && !isNew
+      ? {
+          record: {
+            collection,
+            id,
+            label:
+              (itemData
+                ? renderDisplayTemplate(
+                    colMeta?.display_template,
+                    itemData as Record<string, unknown>
+                  )
+                : '') || `${colMeta?.display_name || collection} ${id}`
+          }
+        }
+      : null
+  )
 
   const { data: treeConfig } = useQuery({
     queryKey: ['tree-config', collection],

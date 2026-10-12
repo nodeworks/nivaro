@@ -49,6 +49,15 @@ function ShortcutRow({
   )
 }
 
+/** Fixed keys (not rebindable): the Ask AI panel (#1933) and the command palette. */
+const FIXED_SHORTCUTS: Array<{ label: string; keys: string[] }> = [
+  { label: 'Open the command palette', keys: ['⌘', 'K'] },
+  { label: 'Open Ask AI on this page', keys: ['⌘', 'J'] },
+  { label: 'Ask AI: edit the last question (empty box)', keys: ['↑'] },
+  { label: 'Ask AI: stop the answer', keys: ['Esc'] },
+  { label: 'Ask AI: ask the last question again', keys: ['⌘', '↵'] }
+]
+
 /**
  * Mounts the global keyboard shortcut listener and the "?" shortcuts overlay.
  * Render once inside the router (AppLayout).
@@ -135,6 +144,22 @@ export function KeyboardShortcuts() {
                   onStartRebind={() => setRebindingId(s.id)}
                 />
               ))}
+            </div>
+          ))}
+        </div>
+        <div className='grid grid-cols-2 gap-x-6 gap-y-0.5 border-t border-slate-100 pt-2 dark:border-border'>
+          {FIXED_SHORTCUTS.map((f) => (
+            <div
+              key={f.label}
+              data-shortcut-fixed
+              className='flex items-center justify-between gap-3 px-2 py-1.5'
+            >
+              <span className='text-[12.5px] text-slate-700 dark:text-slate-300'>{f.label}</span>
+              <span className='flex shrink-0 items-center gap-1'>
+                {f.keys.map((k) => (
+                  <Kbd key={k}>{k}</Kbd>
+                ))}
+              </span>
             </div>
           ))}
         </div>
