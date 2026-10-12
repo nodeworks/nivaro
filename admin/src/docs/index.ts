@@ -8,6 +8,7 @@ export * from './sections/ai-conversations.js'
 export * from './sections/ai-design.js'
 export * from './sections/ai-explain.js'
 export * from './sections/ai-knowledge.js'
+export * from './sections/ai-panel.js'
 export * from './sections/assist-ops.js'
 export * from './sections/attributes.js'
 export * from './sections/bulk-actions.js'
@@ -31,6 +32,7 @@ export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
 export * from './sections/live-ops.js'
 export * from './sections/live-records.js'
+export * from './sections/live-lists.js'
 export * from './sections/low-code.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
@@ -70,6 +72,7 @@ import { aiConversationsDocs } from './sections/ai-conversations.js'
 import { aiDesignDocs } from './sections/ai-design.js'
 import { aiExplainGuide } from './sections/ai-explain.js'
 import { aiKnowledgeDocs } from './sections/ai-knowledge.js'
+import { aiPanelDocs } from './sections/ai-panel.js'
 import {
   adminI18nDocs,
   aiChatDocs,
@@ -243,7 +246,8 @@ import {
   wallboardPulseDocs,
   webPushDocs
 } from './sections/live-ops.js'
-import { collabLiveRecords } from './sections/live-records.js'
+import { collabLiveLists } from './sections/live-lists.js'
+import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -616,6 +620,7 @@ export const navSections: NavGroup[] = [
     items: [
       aiChatDocs,
       aiConversationsDocs,
+      aiPanelDocs,
       aiKnowledgeDocs,
       aiActionsDocs,
       aiPlansDocs,
@@ -798,6 +803,8 @@ export const navSections: NavGroup[] = [
       collabChat,
       collabItemLocking,
       collabLiveRecords,
+      collabLiveLists,
+      collabLiveOps,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,

@@ -1,14 +1,24 @@
 import { createNivaro } from '@nivaro/sdk'
 import {
   AiFeedbackButtons,
+  AiHistorySwitch,
   AiMarkdown,
   type AiPlan,
   AiPlanCard,
   type AiPlanSubscribe,
   AiStepList,
   type AiStreamSubscribe,
+  type DrillSource,
+  defaultQuestionFor,
+  drillSourceFor,
+  liveSourcesFor,
   NavigationContext,
   NivaroProvider,
+  parseSlash,
+  type SlashCommand,
+  slashMatches,
+  stripFollowUps,
+  useAiHistoryOff,
   useAiStream
 } from '@nivaro/shared'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -40,6 +50,15 @@ import { useAuth } from '@/lib/auth'
 import { getSocket } from '@/lib/socket'
 import { cn, formatRelative } from '@/lib/utils'
 import { ASK_LIST_KEY, AskHistory } from './ask/AskHistory'
+import {
+  type AskChoice,
+  ChartDrillSheet,
+  ChoiceCard,
+  FollowUps,
+  LiveAnswer,
+  SlashMenu,
+  StarterQuestions
+} from './ask/AskPanelParts'
 import { PostToChatMenu, ShareMenu, type ShareRow } from './ask/AskShare'
 
 interface TraceEntry {
@@ -79,6 +98,10 @@ interface ChatTurn {
   author?: { id: string; name: string } | null
   /** False = an answer given with someone else's access that this reader may not see. */
   visible?: boolean
+  /** Clarifying question with inline options (#1937). */
+  choices?: AskChoice[]
+  /** Suggested next questions (#1834). */
+  followups?: string[]
 }
 
 interface ChatBody {
@@ -95,6 +118,8 @@ interface ChatBody {
   conversation_id?: string
   /** #1804 — a "remember that …" note was kept instead of asking. */
   remembered?: { id: string; text: string }
+  choices?: AskChoice[]
+  followups?: string[]
 }
 
 interface ServerMessage {
@@ -161,12 +186,6 @@ const subscribePlan: AiPlanSubscribe = (event, handler) => {
 
 const sharedClient = createNivaro(typeof window !== 'undefined' ? window.location.origin : '')
 
-const SUGGESTIONS = [
-  'How many records are in each collection?',
-  'What changed in the last 7 days?',
-  'Show the 5 most recent workflows and their states'
-]
-
 const detailKey = (id: string | null) => ['ask-conversation', id] as const
 
 const fetchDetail = (id: string) =>
@@ -180,6 +199,9 @@ function toTurn(m: ServerMessage): ChatTurn {
     trace: m.trace,
     proposals: m.proposals,
     plans: m.own && Array.isArray(m.meta.plans) ? (m.meta.plans as AiPlan[]) : undefined,
+    choices: m.own && Array.isArray(m.meta.choices) ? (m.meta.choices as AskChoice[]) : undefined,
+    followups:
+      m.own && Array.isArray(m.meta.followups) ? (m.meta.followups as string[]) : undefined,
     requestId: typeof m.meta.request_id === 'string' ? m.meta.request_id : null,
     playbooksUsed: Number(m.meta.playbooks_used ?? 0),
     cachedAt: typeof m.meta.cached_at === 'string' ? m.meta.cached_at : null,
@@ -311,6 +333,35 @@ function ProposalCard({ proposal }: { proposal: Proposal }) {
 }
 
 /** CSV / Excel of the rows behind an answer (#1841) — the query re-runs as you. */
+/** Download an answer's rows (#1841); errors surface as a toast. Also behind /export (#1884). */
+async function downloadAnswer(conversationId: string, messageId: string, format: 'csv' | 'xlsx') {
+  try {
+    const r = await api.get(`/ai/conversations/${conversationId}/messages/${messageId}/export`, {
+      params: { format },
+      responseType: 'blob'
+    })
+    const disposition = String(r.headers['content-disposition'] ?? '')
+    const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `ask-ai-answer.${format}`
+    const url = URL.createObjectURL(r.data as Blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = name
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(url), 1000)
+  } catch (err) {
+    let msg = 'Export failed'
+    const data = (err as { response?: { data?: unknown } })?.response?.data
+    if (data instanceof Blob) {
+      try {
+        msg = (JSON.parse(await data.text()) as { error?: string }).error ?? msg
+      } catch {
+        // keep the generic message
+      }
+    }
+    toast.error(msg)
+  }
+}
+
 function ExportButtons({
   conversationId,
   messageId
@@ -322,29 +373,7 @@ function ExportButtons({
   async function download(format: 'csv' | 'xlsx') {
     setBusy(format)
     try {
-      const r = await api.get(`/ai/conversations/${conversationId}/messages/${messageId}/export`, {
-        params: { format },
-        responseType: 'blob'
-      })
-      const disposition = String(r.headers['content-disposition'] ?? '')
-      const name = /filename="([^"]+)"/.exec(disposition)?.[1] ?? `ask-ai-answer.${format}`
-      const url = URL.createObjectURL(r.data as Blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = name
-      a.click()
-      setTimeout(() => URL.revokeObjectURL(url), 1000)
-    } catch (err) {
-      let msg = 'Export failed'
-      const data = (err as { response?: { data?: unknown } })?.response?.data
-      if (data instanceof Blob) {
-        try {
-          msg = (JSON.parse(await data.text()) as { error?: string }).error ?? msg
-        } catch {
-          // keep the generic message
-        }
-      }
-      toast.error(msg)
+      await downloadAnswer(conversationId, messageId, format)
     } finally {
       setBusy(null)
     }
@@ -382,6 +411,9 @@ function AskPageInner() {
   const conversationId = searchParams.get('conversation')
   const [historyOpen, setHistoryOpen] = useState(false)
   const [editing, setEditing] = useState<{ id: string; text: string } | null>(null)
+  // "Don't save my questions" (#1833): no stored conversation — the page
+  // keeps the thread locally and sends it whole, like before history existed.
+  const historyOff = useAiHistoryOff()
 
   const { data: detail, error: detailError } = useQuery({
     queryKey: detailKey(conversationId),
@@ -397,6 +429,15 @@ function AskPageInner() {
     (detail.conversation.access !== 'owner' ||
       detail.shares.length > 0 ||
       detail.messages.some((m) => m.author && !isMine(m.author.id)))
+
+  // Live answers (#1996): the newest two number/chart answers keep themselves current.
+  const liveTurns = new Set<number>()
+  for (let i = turns.length - 1; i >= 0 && liveTurns.size < 2; i--) {
+    const t = turns[i]
+    if (t.role === 'assistant' && t.visible !== false && liveSourcesFor(t.trace).length > 0) {
+      liveTurns.add(i)
+    }
+  }
 
   function openConversation(id: string | null) {
     setPending([])
@@ -498,6 +539,8 @@ function AskPageInner() {
           trace: data.trace,
           proposals: data.proposals,
           plans: data.plans,
+          choices: data.choices,
+          followups: data.followups,
           requestId: data.request_id ?? null,
           playbooksUsed: data.playbooks_used ?? 0,
           cachedAt: data.cached ? (data.cached_at ?? new Date().toISOString()) : null,
@@ -539,12 +582,27 @@ function AskPageInner() {
     submit(question)
   }
 
-  function submit(text?: string, opts: { conversationId?: string | null } = {}) {
+  function submit(
+    text?: string,
+    opts: { conversationId?: string | null; command?: SlashCommand['name'] } = {}
+  ) {
     const content = (text ?? input).trim()
     if (!content || send.active) return
     const target = opts.conversationId !== undefined ? opts.conversationId : conversationId
+    if (historyOff && target) return
+    const local = pending
     setPending((prev) => [...prev, { role: 'user', content, author: null, visible: true }])
     setInput('')
+    if (historyOff) {
+      void send.start({
+        messages: [...local, { role: 'user' as const, content }].map((t) => ({
+          role: t.role,
+          content: t.content
+        })),
+        fresh: freshRef.current
+      })
+      return
+    }
     // A stored thread sends only the new question — the server rebuilds the
     // history from the turns THIS person may read (#1809).
     void send.start(
@@ -552,11 +610,77 @@ function AskPageInner() {
         ? {
             messages: [{ role: 'user', content }],
             conversation_id: target,
-            fresh: freshRef.current
+            fresh: freshRef.current,
+            ...(opts.command ? { command: opts.command } : {})
           }
-        : { messages: [{ role: 'user', content }], save: true, fresh: freshRef.current }
+        : {
+            messages: [{ role: 'user', content }],
+            save: true,
+            fresh: freshRef.current,
+            ...(opts.command ? { command: opts.command } : {})
+          }
     )
   }
+
+  // ── Slash commands (#1884) ────────────────────────────────────────────────
+  const [slashIndex, setSlashIndex] = useState(0)
+  const slashList = slashMatches(input)
+
+  /** The last answer of this thread whose rows can be exported. */
+  function lastExportable(): { conversationId: string; messageId: string } | null {
+    if (!conversationId) return null
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const t = turns[i]
+      if (
+        t.role === 'assistant' &&
+        t.id &&
+        t.visible !== false &&
+        (t.trace ?? []).some(
+          (tr) => EXPORTABLE_TOOLS.has(tr.tool) && !tr.summary?.startsWith('error:')
+        )
+      ) {
+        return { conversationId, messageId: t.id }
+      }
+    }
+    return null
+  }
+
+  function submitInput() {
+    const slash = parseSlash(input)
+    if (!slash) {
+      submit()
+      return
+    }
+    if (slash.command.name === 'export') {
+      const target = lastExportable()
+      setInput('')
+      if (!target) {
+        toast.message('Nothing to export yet — ask a question that reads records first')
+        return
+      }
+      void downloadAnswer(
+        target.conversationId,
+        target.messageId,
+        slash.rest.toLowerCase().startsWith('x') ? 'xlsx' : 'csv'
+      )
+      return
+    }
+    if (!slash.rest && turns.length === 0) {
+      toast.message(`/${slash.command.name} shapes an answer — add a question after it`)
+      return
+    }
+    submit(slash.rest || defaultQuestionFor(slash.command.name), {
+      command: slash.command.name
+    })
+  }
+
+  function pickSlash(c: SlashCommand) {
+    setInput(`/${c.name} `)
+    setSlashIndex(0)
+  }
+
+  // Chart drill (#1943): the rows behind a clicked bar, point or slice.
+  const [drill, setDrill] = useState<{ source: DrillSource; label: string } | null>(null)
 
   /** Edit an earlier question and continue as a branch (#1883); the original stays. */
   async function branchFrom(messageId: string, question: string) {
@@ -679,6 +803,7 @@ function AskPageInner() {
             )}
             {detail?.conversation.access === 'owner' && (
               <ShareMenu
+                disabled={historyOff}
                 conversationId={detail.conversation.id}
                 shares={detail.shares}
                 detailKey={detailKey(detail.conversation.id)}
@@ -686,6 +811,7 @@ function AskPageInner() {
             )}
             {detail?.conversation.access === 'owner' && (
               <PostToChatMenu
+                disabled={historyOff}
                 conversationId={detail.conversation.id}
                 detailKey={detailKey(detail.conversation.id)}
               />
@@ -706,6 +832,15 @@ function AskPageInner() {
             historyOpen ? 'flex' : 'hidden md:flex'
           )}
         >
+          <div className='shrink-0 border-b border-slate-200 p-3 dark:border-border'>
+            <AiHistorySwitch
+              compact
+              onDeleted={() => {
+                void qc.invalidateQueries({ queryKey: ASK_LIST_KEY })
+                if (detail?.conversation.access === 'owner') openConversation(null)
+              }}
+            />
+          </div>
           <AskHistory
             activeId={conversationId}
             onOpen={(id) => openConversation(id)}
@@ -771,18 +906,12 @@ function AskPageInner() {
                   <p className='mt-3 text-[14px] font-medium text-slate-600 dark:text-slate-300'>
                     Ask anything about your data
                   </p>
-                  <div className='mx-auto mt-4 flex max-w-md flex-col gap-2'>
-                    {SUGGESTIONS.map((s) => (
-                      <button
-                        key={s}
-                        type='button'
-                        onClick={() => submit(s)}
-                        className='rounded-lg border border-slate-200 bg-white px-3 py-2 text-left text-[13px] text-slate-600 transition-colors hover:border-[#00ceff] dark:border-border dark:bg-card dark:text-slate-300'
-                      >
-                        {s}
-                      </button>
-                    ))}
-                  </div>
+                  <StarterQuestions
+                    page={searchParams.get('page') ?? '/ask'}
+                    collection={searchParams.get('collection') ?? undefined}
+                    id={searchParams.get('record') ?? undefined}
+                    onPick={(q) => submit(q)}
+                  />
                   <p className='mt-4 text-[11.5px] text-slate-400'>
                     Say “remember that …” to keep a note for every answer.
                   </p>
@@ -916,7 +1045,29 @@ function AskPageInner() {
                                     Stopped — this is what had arrived.
                                   </div>
                                 )}
-                                <AiMarkdown content={t.content} switchable />
+                                <AiMarkdown
+                                  content={t.content}
+                                  switchable
+                                  onChartPoint={
+                                    drillSourceFor(t.trace ?? [], 0)
+                                      ? (label, spec) => {
+                                          const source = drillSourceFor(
+                                            t.trace ?? [],
+                                            spec.data.length
+                                          )
+                                          if (source) setDrill({ source, label })
+                                        }
+                                      : undefined
+                                  }
+                                />
+                                {t.choices?.map((c) => (
+                                  <ChoiceCard
+                                    key={c.question}
+                                    choice={c}
+                                    disabled={send.active || i !== turns.length - 1}
+                                    onPick={(sendText) => submit(sendText)}
+                                  />
+                                ))}
                                 {t.proposals?.map((p) => (
                                   <ProposalCard key={p.proposal_id} proposal={p} />
                                 ))}
@@ -942,6 +1093,15 @@ function AskPageInner() {
                                   const agg = watchableAggregate(t.trace)
                                   return agg ? <WatchThisNumber aggregate={agg} /> : null
                                 })()}
+                                {liveTurns.has(i) && (
+                                  <LiveAnswer sources={liveSourcesFor(t.trace)} />
+                                )}
+                                {i === turns.length - 1 && !send.active && (
+                                  <FollowUps
+                                    questions={t.followups ?? []}
+                                    onPick={(q) => submit(q)}
+                                  />
+                                )}
                                 <div className='mt-1.5 flex items-center justify-between gap-2'>
                                   <AiFeedbackButtons requestId={t.requestId} />
                                   <span className='flex items-center gap-2'>
@@ -968,17 +1128,21 @@ function AskPageInner() {
                             <span className='whitespace-pre-wrap'>{t.content}</span>
                           )}
                         </div>
-                        {t.role === 'user' && t.id && conversationId && !send.active && (
-                          <button
-                            type='button'
-                            onClick={() => setEditing({ id: t.id as string, text: t.content })}
-                            className='invisible mt-2 rounded p-1 text-slate-400 hover:text-slate-700 group-hover:visible dark:hover:text-slate-200'
-                            data-tip='Edit and continue as a branch'
-                            data-ask-branch
-                          >
-                            <Pencil className='h-3 w-3' />
-                          </button>
-                        )}
+                        {t.role === 'user' &&
+                          t.id &&
+                          conversationId &&
+                          !send.active &&
+                          !historyOff && (
+                            <button
+                              type='button'
+                              onClick={() => setEditing({ id: t.id as string, text: t.content })}
+                              className='invisible mt-2 rounded p-1 text-slate-400 hover:text-slate-700 group-hover:visible dark:hover:text-slate-200'
+                              data-tip='Edit and continue as a branch'
+                              data-ask-branch
+                            >
+                              <Pencil className='h-3 w-3' />
+                            </button>
+                          )}
                       </div>
                     )}
                   </div>
@@ -998,7 +1162,7 @@ function AskPageInner() {
                       </p>
                     )}
                     {send.text ? (
-                      <AiMarkdown content={send.text} />
+                      <AiMarkdown content={stripFollowUps(send.text)} />
                     ) : send.steps.some((st) => st.state === 'running') ? null : (
                       <div className='flex items-center gap-2 text-[13px] text-slate-400'>
                         <Loader2 className='h-3.5 w-3.5 animate-spin' />
@@ -1024,22 +1188,41 @@ function AskPageInner() {
           </div>
 
           <div className='shrink-0 border-t border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
+            <SlashMenu matches={slashList} index={slashIndex} onPick={pickSlash} />
             <div className='mx-auto flex w-full max-w-3xl items-end gap-2'>
               <textarea
                 value={input}
-                onChange={(e) => setInput(e.target.value)}
+                onChange={(e) => {
+                  setInput(e.target.value)
+                  setSlashIndex(0)
+                }}
                 onKeyDown={(e) => {
+                  if (slashList.length > 0) {
+                    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                      e.preventDefault()
+                      const n = slashList.length
+                      setSlashIndex((i) => (e.key === 'ArrowDown' ? (i + 1) % n : (i - 1 + n) % n))
+                      return
+                    }
+                    if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                      e.preventDefault()
+                      pickSlash(slashList[Math.min(slashIndex, slashList.length - 1)])
+                      return
+                    }
+                  }
                   if (e.key === 'Enter' && !e.shiftKey) {
                     e.preventDefault()
-                    submit()
+                    submitInput()
                   }
                 }}
                 rows={1}
-                disabled={notFound}
+                disabled={notFound || (historyOff && !!conversationId)}
                 placeholder={
-                  othersInThread
-                    ? 'Ask a follow-up — it runs with your access'
-                    : 'e.g. How many workflows are waiting on manager approval?'
+                  historyOff && conversationId
+                    ? 'Your history is off — questions can’t be added to a saved conversation. Start a new chat.'
+                    : othersInThread
+                      ? 'Ask a follow-up — it runs with your access'
+                      : 'e.g. How many workflows are waiting on manager approval?'
                 }
                 className='max-h-32 flex-1 resize-none rounded-lg border border-slate-200 px-3 py-2 text-[13px] focus:outline-none focus:ring-1 focus:ring-[#00ceff] dark:border-border dark:bg-background'
               />
@@ -1082,8 +1265,10 @@ function AskPageInner() {
               ) : (
                 <Button
                   size='sm'
-                  disabled={!input.trim() || send.active || notFound}
-                  onClick={() => submit()}
+                  disabled={
+                    !input.trim() || send.active || notFound || (historyOff && !!conversationId)
+                  }
+                  onClick={() => submitInput()}
                 >
                   <Send className='h-3.5 w-3.5' />
                 </Button>
@@ -1092,6 +1277,7 @@ function AskPageInner() {
           </div>
         </div>
       </div>
+      <ChartDrillSheet target={drill} onClose={() => setDrill(null)} />
     </div>
   )
 }

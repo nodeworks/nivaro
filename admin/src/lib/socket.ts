@@ -336,6 +336,10 @@ const leaderWatchRefs = new Map<string, number>()
 const RELAYED_EVENTS = new Set([
   'collection:update',
   'job:update',
+  'job:log',
+  'conformance:progress',
+  'help-video:changed',
+  'help-video:question',
   'monitor:status',
   'traffic:request',
   'traffic-map:frame',
@@ -469,6 +473,9 @@ export const adminRealtime: RealtimeAdapter = {
     return () => {
       statusListeners.delete(cb)
     }
+  },
+  joinWatch(room) {
+    return joinWatchRoom(room)
   }
 }
 

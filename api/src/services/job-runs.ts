@@ -4,8 +4,8 @@ import { errorText } from '../lib/db-refusal.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import { instanceKey } from './instance-key.js'
 import { INSTANCE_ID } from './instance-roster.js'
-import { getIo } from './io-holder.js'
-import { tenantScopedRoom } from './tenant-rooms.js'
+import { getApp, getIo } from './io-holder.js'
+import { currentTenantKey, tenantScopedRoom } from './tenant-rooms.js'
 
 /**
  * The one funnel for background-execution history. Wrap any cron/backfill/
@@ -80,15 +80,108 @@ export interface JobRunHandle {
   /** DB row id, null when the insert failed (bookkeeping degraded). */
   id: number | null
   progress(blob: Record<string, unknown>): void
+  /** One line in the run's live log (an open run shows it as it is written). */
+  log(line: string, level?: JobLogLevel): void
   complete(outcome?: string): Promise<void>
   fail(err: unknown): Promise<void>
 }
 
 /** Live job progress (#271): every lifecycle change lands on the Background
  *  Jobs console's watch room. Fire-and-forget decoration. */
-function emitJobEvent(payload: Record<string, unknown>): void {
+export type JobLogLevel = 'info' | 'warn' | 'error'
+
+export interface JobLogLine {
+  seq: number
+  at: string
+  level: JobLogLevel
+  line: string
+}
+
+const LOG_KEEP = 300
+const LOG_TTL_SECONDS = 24 * 60 * 60
+const LOG_LINE_MAX = 500
+/** run id → its recent lines on THIS node (the Redis list is the cross-node copy). */
+const logMemory = new Map<string, { at: number; seq: number; lines: JobLogLine[] }>()
+
+const logKey = (id: number, tenant: string = currentTenantKey()) => `${tenant || '-'}:${id}`
+
+/** Append a line to a run's log and tell the Background Jobs room. Best-effort. */
+function appendJobLog(
+  id: number | null,
+  line: string,
+  level: JobLogLevel = 'info',
+  tenant: string = currentTenantKey()
+): void {
+  if (id == null) return
   try {
-    getIo()?.to(tenantScopedRoom('watch:jobs')).emit('job:update', payload)
+    const key = logKey(id, tenant)
+    let slot = logMemory.get(key)
+    if (!slot) {
+      slot = { at: Date.now(), seq: 0, lines: [] }
+      logMemory.set(key, slot)
+      if (logMemory.size > 200) {
+        const oldest = [...logMemory.entries()].sort((a, b) => a[1].at - b[1].at)[0]
+        if (oldest) logMemory.delete(oldest[0])
+      }
+    }
+    slot.at = Date.now()
+    const entry: JobLogLine = {
+      seq: ++slot.seq,
+      at: new Date().toISOString(),
+      level,
+      line: line.slice(0, LOG_LINE_MAX)
+    }
+    slot.lines.push(entry)
+    if (slot.lines.length > LOG_KEEP) slot.lines.splice(0, slot.lines.length - LOG_KEEP)
+    const redis = getApp()?.redis as import('ioredis').Redis | undefined
+    if (redis) {
+      const rkey = `nvr:joblog:${key}`
+      void redis
+        .multi()
+        .rpush(rkey, JSON.stringify(entry))
+        .ltrim(rkey, -LOG_KEEP, -1)
+        .expire(rkey, LOG_TTL_SECONDS)
+        .exec()
+        .catch(() => {})
+    }
+    emitJobEvent({ id, kind: 'log', log: entry }, 'job:log', tenant)
+  } catch {
+    /* decoration */
+  }
+}
+
+/** The recent log of a run: Redis (every node's lines) when it holds some, else this node's memory. */
+export async function readJobLog(id: number, after = 0): Promise<JobLogLine[]> {
+  const key = logKey(id)
+  const redis = getApp()?.redis as import('ioredis').Redis | undefined
+  if (redis) {
+    try {
+      const raw = await redis.lrange(`nvr:joblog:${key}`, 0, -1)
+      if (raw.length > 0) {
+        return raw.map((r) => JSON.parse(r) as JobLogLine).filter((l) => l.seq > after)
+      }
+    } catch {
+      /* fall through to memory */
+    }
+  }
+  return (logMemory.get(key)?.lines ?? []).filter((l) => l.seq > after)
+}
+
+/** "done 25, total 100" for one progress blob (scalar values only). */
+function progressLine(blob: Record<string, unknown>): string {
+  return Object.entries(blob)
+    .filter(([, v]) => ['string', 'number', 'boolean'].includes(typeof v))
+    .map(([k, v]) => `${k} ${v}`)
+    .join(', ')
+}
+
+function emitJobEvent(
+  payload: Record<string, unknown>,
+  event = 'job:update',
+  tenant: string = currentTenantKey()
+): void {
+  try {
+    getIo()?.to(tenantScopedRoom('watch:jobs', tenant)).emit(event, payload)
   } catch {
     /* decoration */
   }
@@ -112,6 +205,9 @@ export async function startJobRun(
   }
 ): Promise<JobRunHandle> {
   const startedAt = new Date()
+  // The run's own tenant: later log lines (cron callbacks, timers) key by it, not by whoever is current.
+  const tenant = currentTenantKey()
+  const emitRun = (payload: Record<string, unknown>) => emitJobEvent(payload, 'job:update', tenant)
   let id: number | null = null
   try {
     const origin = await originFields(jobId, opts?.trigger, opts?.leaseHolder)
@@ -136,7 +232,8 @@ export async function startJobRun(
   } catch {
     // degraded bookkeeping — the job itself proceeds
   }
-  emitJobEvent({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
+  emitRun({ id, kind, job_id: jobId, status: 'running', started_at: startedAt.toISOString() })
+  appendJobLog(id, `Started${opts?.label ? `: ${opts.label}` : ''}`, 'info', tenant)
 
   const finish = async (patch: Record<string, unknown>) => {
     if (id == null) return
@@ -153,6 +250,8 @@ export async function startJobRun(
     }
   }
 
+  // Progress calls arrive per chunk (sometimes many a second): the log keeps one line per 2 s.
+  let lastProgressLine = 0
   return {
     id,
     progress(blob) {
@@ -161,13 +260,23 @@ export async function startJobRun(
         .where('id', id)
         .update({ progress: JSON.stringify(blob).slice(0, 4000) })
         .catch(() => {})
-      emitJobEvent({ id, kind, job_id: jobId, status: 'running', progress: blob })
+      emitRun({ id, kind, job_id: jobId, status: 'running', progress: blob })
+      if (Date.now() - lastProgressLine >= 2000) {
+        lastProgressLine = Date.now()
+        const text = progressLine(blob)
+        if (text) appendJobLog(id, `Progress: ${text}`, 'info', tenant)
+      }
+    },
+    log(line, level = 'info') {
+      appendJobLog(id, line, level, tenant)
     },
     complete: async (outcome) => {
       await finish({ status: 'completed', outcome: outcome?.slice(0, 2000) ?? null })
-      emitJobEvent({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
+      appendJobLog(id, `Completed${outcome ? `: ${outcome}` : ''}`, 'info', tenant)
+      emitRun({ id, kind, job_id: jobId, status: 'completed', outcome: outcome ?? null })
     },
     fail: async (err) => {
+      appendJobLog(id, `Failed: ${errorText(err, 300)}`, 'error', tenant)
       await finish({
         status: 'error',
         error:
@@ -176,7 +285,7 @@ export async function startJobRun(
             4000
           )
       })
-      emitJobEvent({
+      emitRun({
         id,
         kind,
         job_id: jobId,

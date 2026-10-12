@@ -65,6 +65,12 @@ export interface RealtimeAdapter {
   status?(): RealtimeStatus
   /** Optional (#1725): called on every state change. Returns unsubscribe. */
   onStatus?(cb: (s: RealtimeStatus) => void): () => void
+  /**
+   * Join an admin-only server room (`jobs`, `conformance`…) so its events reach `on`.
+   * Returns leave. Optional: a host without it simply never receives those events,
+   * and the component keeps polling.
+   */
+  joinWatch?(room: string): () => void
 }
 
 export const RealtimeContext = createContext<RealtimeAdapter | null>(null)
