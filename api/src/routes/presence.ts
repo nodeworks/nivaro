@@ -3,9 +3,7 @@ import { adminBaseUrl } from '../admin-base.js'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
-import { resolveDisplayValue } from '../services/display-value.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
-import { can } from '../services/permissions.js'
 import { presenceRowIdle, stuckLabel, stuckMinutes } from '../services/presence-stuck.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
@@ -380,6 +378,25 @@ function titleCase(s: string): string {
 }
 
 /**
+ * The page text for a presence row. A record page reads "Requests › REQ-1234" when the viewer
+ * could read that record, and just "Requests" when not — never the raw id. Other routes read
+ * as their first segment ("Sla Rules"), with the rest of the path dropped.
+ */
+export function presencePageLabel(
+  path: string | null | undefined,
+  labels: Map<string, string>
+): string | null {
+  if (!path) return null
+  const m = /^\/(?:records|collections)\/([A-Za-z0-9_]+)(?:\/([^/?#]+))?/.exec(path)
+  if (m) {
+    const label = m[2] ? labels.get(`${m[1]}:${m[2]}`) : undefined
+    return label ? `${titleCase(m[1])} › ${label}` : titleCase(m[1])
+  }
+  const first = path.split('?')[0].split('/').filter(Boolean)[0]
+  return first ? titleCase(first.replace(/[-_]/g, ' ')) : 'Home'
+}
+
+/**
  * "Requests › REQ-1234", not "Requests › 98765".
  *
  * The label has to come from the server: rendering a record's display template
@@ -406,35 +423,27 @@ export async function resolveRecordLabels(
   }
   if (wanted.size === 0) return out
 
-  for (const [collection, ids] of wanted) {
-    try {
-      // current_path is written by the CLIENT, so the collectionname in it is
-      // untrusted input. Two gates before any row is read: it must be a
-      // REGISTERED collection (not an arbitrary table someone names), and this
-      // viewer must be allowed to read it — otherwise a person could park a
-      // path on a table they cannot see and read labels back out of it.
-      const meta = (await db('nivaro_collections')
-        .where({ collection })
-        .first('display_template')) as { display_template?: string | null } | undefined
-      if (!meta) continue
-      if (!(await can(viewer, 'read', collection))) continue
-      const rows = (await db(collection)
-        .whereIn('id', [...ids])
-        .limit(200)) as Array<Record<string, unknown>>
-      for (const row of rows) {
-        const label = meta?.display_template
-          ? String(resolveDisplayValue(row, meta.display_template) ?? '').trim()
-          : ''
-        const fallback = ['workflow_id', 'name', 'title', 'label', 'inventory_request_id']
-          .map((f) => row[f])
-          .find((v) => v != null && String(v).trim() !== '')
-        const text = label || (fallback != null ? String(fallback) : '')
-        if (text) out.set(`${collection}:${String(row.id)}`, text)
-      }
-    } catch {
-      // A collection that cannot be read just keeps its raw id.
-    }
+  // Labels come through the caller's own read (role, row filter, User Scopes, field access):
+  // only ids the viewer could read get a label. A record they cannot read is not named, and
+  // callers show the collection title alone.
+  const registered = new Set<string>()
+  for (const collection of wanted.keys()) {
+    // current_path is written by the CLIENT, so the collection name in it is untrusted.
+    // It must be a REGISTERED collection, not an arbitrary table someone names.
+    const meta = await db('nivaro_collections')
+      .where({ collection })
+      .first('collection')
+      .catch(() => undefined)
+    if (meta) registered.add(collection)
   }
+  const byTarget = new Map<string, Set<string>>()
+  for (const [collection, ids] of wanted)
+    if (registered.has(collection)) byTarget.set(collection, ids)
+  const { linkLabelsAsUser } = await import('../services/ai-link-labels.js')
+  const labels = await linkLabelsAsUser(viewer, byTarget).catch(
+    () => ({}) as Record<string, string>
+  )
+  for (const [k, v] of Object.entries(labels)) out.set(k, v)
   return out
 }
 
@@ -683,13 +692,7 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
       visibleRows.map((r) => (r.current_path as string | null) ?? null),
       req.user!
     )
-    const pageLabel = (path: string | null | undefined): string | null => {
-      if (!path) return null
-      const m = /^\/(?:records|collections)\/([A-Za-z0-9_]+)\/([^/?#]+)/.exec(path)
-      if (!m) return null
-      const label = recordLabels.get(`${m[1]}:${m[2]}`)
-      return label ? `${titleCase(m[1])} › ${label}` : null
-    }
+    const pageLabel = (path: string | null | undefined) => presencePageLabel(path, recordLabels)
 
     // #1394 — stuck: at the keyboard, same route, nothing saved for ten
     // minutes. Shown to admins and to the person's own manager only: it reads
@@ -736,7 +739,9 @@ export async function presenceOnlineRoutes(app: FastifyInstance) {
           user_id: r.user_id,
           display_name: r.display_name,
           role_name: r.role_name,
-          current_path: r.current_path,
+          // The raw route can carry a record id the viewer may not read; everyone gets `page`
+          // (labelled only through their own read access). Administrators keep the route.
+          current_path: req.isAdmin ? r.current_path : undefined,
           last_seen: r.last_seen,
           // Reported by the client: the heartbeat alone cannot tell a person
           // at their desk from a tab left open. Older rows (written before the

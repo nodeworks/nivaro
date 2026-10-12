@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAuth } from '../middleware/authenticate.js'
+import { announceMentionSeen } from '../services/mention-receipts.js'
 import { can } from '../services/permissions.js'
 
 function parseJson(val: unknown): Record<string, unknown> | null {
@@ -313,6 +314,9 @@ export async function recordViewRoutes(app: FastifyInstance) {
         }
       }
       await roll()
+      // Mention read receipts (#2117): if this open is what makes a mention of this person
+      // "seen", the thread of everyone viewing the record refreshes its marks.
+      void announceMentionSeen(collection, String(id), userId, existing?.last_viewed_at ?? null)
 
       if (!since || !recap) return reply.send({ data: null })
       if (recap.field_changes === 0 && recap.comments === 0 && recap.transitions === 0) {

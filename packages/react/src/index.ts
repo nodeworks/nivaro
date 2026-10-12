@@ -79,6 +79,7 @@ export type {
 // field-interface registry, and the utility components/hooks below.
 // Record form & grids batch (2026-09-30): people-only user pickers (#732)
 // and the plan grid host slot (#842).
+// Presence, do not disturb and cross-tab sync (a host mounts useUserSync once in its shell)
 export {
   ACTIVE_USER_OPTION_FILTER,
   AccessDeniedPanel,
@@ -161,6 +162,8 @@ export {
   choiceLabel,
   clipEndOffset,
   conditionsToFilter,
+  configureTabSound,
+  configureUserSync,
   createGatedClient,
   createLeaderSocket,
   createSocketRealtime,
@@ -173,7 +176,9 @@ export {
   type DelegationConsoleViewProps,
   DeliveryChips,
   DisplayPrefsCard,
+  DndMark,
   DocumentAutofillButton,
+  DoNotDisturbRow,
   DrilldownContext,
   DrilldownViewsContext,
   decodePrefill,
@@ -474,6 +479,7 @@ export {
   setRecordingSelf,
   setServerClockOffset,
   setTimeDisplay,
+  signalSentence,
   splitMessageTokens,
   startApiVersionWatch,
   startAutofillRun,
@@ -521,6 +527,7 @@ export {
   useCurrentHelpVideoPage,
   useDebounced,
   useDeleteMessage,
+  useDndActive,
   useDrilldown,
   useDrilldownViews,
   useEditMessage,
@@ -559,6 +566,8 @@ export {
   useQuickPickerSteps,
   useRealtimeStatus,
   useRecordIntegrationActivity,
+  useRecordSignalPeers,
+  useRecordSignalWhile,
   useRefreshSignals,
   useRequiredVideos,
   useRoomMembership,
@@ -573,9 +582,11 @@ export {
   useSubscriptionMutations,
   useTogglePin,
   useToggleReaction,
+  useTopicPresence,
   useTypingIndicator,
   useUnreadChirp,
   useUserSearch,
+  useUserSync,
   type VideoEdits,
   validateExpression,
   viewAs,

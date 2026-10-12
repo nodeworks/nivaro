@@ -52,6 +52,13 @@ export function presenceOverrideAway(prefs: Record<string, unknown>): boolean {
   return !(po.until && new Date(po.until).getTime() < Date.now())
 }
 
+/** Do not disturb (preferences.dnd, #2114): on until `until`, or until switched off. */
+export function dndActive(prefs: Record<string, unknown>, now = Date.now()): boolean {
+  const d = prefs.dnd as { until?: string | null } | null | undefined
+  if (!d || typeof d !== 'object') return false
+  return !(d.until && new Date(d.until).getTime() <= now)
+}
+
 export const STUCK_INPUT_MS = 5 * 60_000
 export const STUCK_AFTER_MS = 10 * 60_000
 

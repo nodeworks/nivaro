@@ -252,7 +252,7 @@ import {
   webPushDocs
 } from './sections/live-ops.js'
 import { collabLiveProgress } from './sections/live-progress.js'
-import { collabLiveOps, collabLiveRecords } from './sections/live-records.js'
+import { collabLiveOps, collabLiveRecords, collabPresence } from './sections/live-records.js'
 import {
   lowCodeFormulaBuilder,
   lowCodePageBuilder,
@@ -817,6 +817,7 @@ export const navSections: NavGroup[] = [
       collabOfflinePopout,
       collabLiveLists,
       collabLiveOps,
+      collabPresence,
       collabNotificationsCenter,
       collabUserActivityFeed,
       collabKeyboardShortcuts,

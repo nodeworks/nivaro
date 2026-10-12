@@ -34,6 +34,18 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     return () => mq.removeEventListener('change', handler)
   }, [])
 
+  // Another tab of this browser changed the theme (#2434): follow it at once. `storage` fires
+  // in every OTHER tab of the origin when 'nivaro-theme' is written, so no loop.
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key !== 'nivaro-theme') return
+      const v = e.newValue
+      setThemeState(v === 'light' || v === 'dark' || v === 'system' ? v : 'system')
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [])
+
   const resolvedTheme: 'light' | 'dark' =
     theme === 'system' ? (systemDark ? 'dark' : 'light') : theme
 

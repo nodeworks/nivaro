@@ -3,6 +3,7 @@ import { Loader2, Paperclip, PlayCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useApiFetchConfig, useItemNavigation, useNavigation, useNivaroClient } from '../../context'
 import { get, patch, post } from '../../lib/commands'
+import { signalSentence, useTopicPresence } from '../../lib/presence-signals'
 import { replayHref } from '../../lib/replay-capture'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
@@ -61,6 +62,8 @@ export function TicketDetailSheet({
   const nav = useNavigation()
   const [reply, setReply] = useState('')
   const [err, setErr] = useState<string | null>(null)
+  // #1882 / #2026 — who else has this ticket open, and who is writing a reply.
+  const presence = useTopicPresence(ticketId != null ? `ticket:${ticketId}` : null)
 
   const { data: t, isLoading } = useQuery({
     queryKey: ['support-ticket', ticketId],
@@ -105,6 +108,7 @@ export function TicketDetailSheet({
       client.request(post(`/support/tickets/${ticketId}/comments`, { text: reply.trim() })),
     onSuccess: () => {
       setReply('')
+      presence.signalReplying(false)
       refresh()
     },
     onError
@@ -158,6 +162,18 @@ export function TicketDetailSheet({
                   <span className='text-slate-500 dark:text-muted-foreground'>General Support</span>
                 )}
               </div>
+              {presence.viewers.length > 0 && (
+                <p
+                  className='mt-1 flex items-center gap-1.5 text-[11.5px] text-sky-700 dark:text-sky-300'
+                  data-ticket-viewing
+                >
+                  <span className='h-1.5 w-1.5 shrink-0 rounded-full bg-sky-400' />
+                  {signalSentence(
+                    presence.viewers.map((v) => v.name),
+                    'looking at this'
+                  )}
+                </p>
+              )}
             </SheetHeader>
 
             <div className='flex-1 space-y-5 overflow-y-auto px-5 py-4'>
@@ -334,11 +350,23 @@ export function TicketDetailSheet({
                     <textarea
                       data-ticket-reply
                       value={reply}
-                      onChange={(e) => setReply(e.target.value)}
+                      onChange={(e) => {
+                        setReply(e.target.value)
+                        presence.signalReplying(!!e.target.value.trim())
+                      }}
                       rows={3}
                       placeholder='Write a reply'
                       className='w-full rounded-md border border-slate-200 bg-white px-3 py-2 text-[12.5px] text-slate-900 outline-none focus:border-nvr-cyan dark:border-border dark:bg-background dark:text-slate-100'
                     />
+                    {presence.replying.length > 0 && (
+                      <p
+                        className='mt-1 flex items-center gap-1.5 text-[11.5px] italic text-slate-400'
+                        data-ticket-replying
+                      >
+                        <span className='h-1.5 w-1.5 animate-pulse rounded-full bg-nvr-cyan' />
+                        {signalSentence(presence.replying, 'replying')}…
+                      </p>
+                    )}
                     <div className='mt-1.5 flex items-center justify-end gap-2'>
                       {t.can.cancel && !t.can.work && (
                         <button
