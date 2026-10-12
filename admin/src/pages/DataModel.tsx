@@ -31,6 +31,7 @@ import {
 import { useState } from 'react'
 import { useNavigate } from 'react-router'
 import { toast } from 'sonner'
+import { ExplainButton } from '@/components/explain-button'
 import { TreePicker } from '@/components/tree-picker'
 import { Button } from '@/components/ui/button'
 import { CollectionDesigner } from '@/components/collection-designer'
@@ -1068,6 +1069,9 @@ export function DataModelPage() {
             </Button>
             <CollectionDesigner open={designerOpen} onClose={() => setDesignerOpen(false)} />
           </div>
+        </div>
+        <div className='mt-2'>
+          <ExplainButton kind='data-model' params={{}} label='Describe the data model' />
         </div>
       </div>
 

@@ -26,6 +26,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Textarea } from '@/components/ui/textarea'
+import { ExplainButton } from '@/components/explain-button'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
 
@@ -328,6 +329,7 @@ function IssueDetail({ issue, users }: { issue: Issue; users: CmsUser[] }) {
           </span>
         </Link>
       )}
+      <ExplainButton kind='issue' params={{ id: issue.id }} label='Explain this issue' />
       {full?.details && (
         <pre className='max-h-56 overflow-auto whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 font-mono text-[11px] text-slate-600 dark:border-border dark:bg-card dark:text-slate-300'>
           {full.details}

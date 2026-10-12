@@ -25,6 +25,7 @@ export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
 export * from './sections/live-ops.js'
 export * from './sections/low-code.js'
+export * from './sections/ai-explain.js'
 export * from './sections/monitoring.js'
 export * from './sections/observability.js'
 export * from './sections/ops-observability.js'
@@ -254,6 +255,7 @@ import {
   submissionFormsApiDoc,
   submissionFormsGuide
 } from './sections/monitoring.js'
+import { aiExplainGuide } from './sections/ai-explain.js'
 import {
   obsApiAnalytics,
   obsDataQuality,
@@ -633,7 +635,8 @@ export const navSections: NavGroup[] = [
       anomalyDetection,
       smtpConfig,
       smsConfig,
-      digestEmails
+      digestEmails,
+      aiExplainGuide
     ]
   },
   {

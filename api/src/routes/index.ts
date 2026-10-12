@@ -211,6 +211,7 @@ import { teamMiscRoutes, teamUserRoutes } from './team.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
+import { aiExplainRoutes } from './ai-explain.js'
 import { traceRoutes } from './traces.js'
 import { trafficMapRoutes } from './traffic-map.js'
 import { trashRoutes } from './trash.js'
@@ -316,6 +317,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(draftsRoutes, { prefix: '/drafts' })
   await app.register(lineageRoutes, { prefix: '/lineage' })
   await app.register(readinessRoutes, { prefix: '/readiness' })
+  await app.register(aiExplainRoutes, { prefix: '/ai-explain' })
   await app.register(configConformanceRoutes, { prefix: '/config-conformance' })
   await app.register(configConformanceRecordRoutes, { prefix: '/config-conformance' })
   await app.register(announcementRoutes, { prefix: '/announcements' })

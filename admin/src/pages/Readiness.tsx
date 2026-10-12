@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import { AlertTriangle, CheckCircle2, CircleSlash, RefreshCw, XCircle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { ExplainButton } from '@/components/explain-button'
+import { WeeklySummaryToggle } from '@/components/weekly-summary-toggle'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -111,6 +113,7 @@ export default function Readiness() {
             </p>
           </div>
           <div className='flex items-center gap-3'>
+            <WeeklySummaryToggle />
             {dataUpdatedAt > 0 && (
               <span className='text-[11.5px] text-slate-400'>
                 checked {new Date(dataUpdatedAt).toLocaleTimeString()}
@@ -196,6 +199,15 @@ export default function Readiness() {
                             <p className='mt-0.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
                               {c.detail}
                             </p>
+                          )}
+                          {(c.status === 'warn' || c.status === 'fail') && (
+                            <div className='mt-2'>
+                              <ExplainButton
+                                kind='readiness'
+                                params={{ id: c.id }}
+                                label='How to fix this'
+                              />
+                            </div>
                           )}
                           {c.description && (
                             <p className='mt-0.5 text-[11.5px] leading-snug text-slate-400'>
