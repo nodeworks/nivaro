@@ -298,11 +298,32 @@ export async function addendumsRoutes(app: FastifyInstance) {
         }
       }
     }
+    const { compileAccessGates, visibleIds } = await import('../services/record-access.js')
     for (const l of Object.values(out)) {
       if (!(await can(req.user!, 'read', l.collection))) {
         l.before = []
         l.after = []
         continue
+      }
+      // Row level too: snapshot and base rows are raw reads, so a line the
+      // reader's row filter / User Scopes hide (or one that no longer exists
+      // to be checked) is dropped. A proposed row with no id is the author's
+      // own text, already on the addendum.
+      const gates = await compileAccessGates(req.user!, l.collection, {
+        actingAdmin: !!req.isAdmin
+      })
+      if (!gates.bypass) {
+        const ids = [...l.before, ...l.after]
+          .map((r) => r.id)
+          .filter((v) => v !== null && v !== undefined && v !== '')
+          .map(String)
+        const visible = await visibleIds(gates, [...new Set(ids)])
+        const keep = (r: Record<string, unknown>) =>
+          r.id === null || r.id === undefined || r.id === '' || visible.has(String(r.id))
+        l.before = l.before.filter(
+          (r) => r.id !== null && r.id !== undefined && visible.has(String(r.id))
+        )
+        l.after = l.after.filter(keep)
       }
       const allowed = await getAllowedFields(req.user!, 'read', l.collection)
       l.before = projectRows(l.before, allowed)

@@ -305,13 +305,19 @@ export async function applyAddendumApproval(
             const prior = parseJsonSafe(existing.revert_snapshot) as {
               base?: Record<string, import('./addendum-lines.js').LineSet>
             } | null
+            const author = existing.created_by
+              ? ((await db('nivaro_users').where({ id: existing.created_by }).first()) as
+                  | User
+                  | undefined)
+              : undefined
             const r = await applyAddendumLines(
               approver,
               parentCollection,
               parentId,
               data,
               allowedKeys,
-              prior?.base ?? null
+              prior?.base ?? null,
+              author ?? null
             )
             lineChangesApplied += r.applied
             lineChangesFailed += r.failed

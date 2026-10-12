@@ -1471,7 +1471,7 @@ export const contentOpsAddendums: DocSection = {
     { type: 'h3', text: 'Proposed lines on approval' },
     {
       type: 'p',
-      text: "The create form pre-fills the record's current child rows, so an addendum's proposed lines are the whole set. Approval writes the difference through the items service as the approver (revisions, hooks and stored rollups all fire): rows without an id are created, changed cells are patched, rows the proposal dropped are removed. What the author changed is read against the lines as they were when the draft was made, never against the lines at approval time, so a later import that moved a figure is not overwritten by a stale pre-filled value; a line removed after the draft is never re-created, and a record past the 1,000-row pre-fill cap never loses rows. Approval keeps a before → after picture of the lines, which an admin Revert uses to undo the change (created rows removed, cells restored, removed rows re-created)."
+      text: "The create form pre-fills the record's current child rows, so an addendum's proposed lines are the whole set. Approval writes the difference through the items service as the approver (revisions, hooks and stored rollups all fire): rows without an id are created, changed cells are patched, rows the proposal dropped are removed. What the author changed is read against the lines as they were when the draft was made, never against the lines at approval time, so a later import that moved a figure is not overwritten by a stale pre-filled value; a line removed after the draft is never re-created, and a record past the 1,000-row pre-fill cap never loses rows. A proposal never does more to the lines than its author could: each create, change and removal is capped by the author's own permissions on the line collection, and anything beyond them is reported as not applied. Approval keeps a before → after picture of the lines, which an admin Revert uses to undo the change (created rows removed, cells restored, removed rows re-created)."
     },
     {
       type: 'p',
@@ -1490,7 +1490,7 @@ export const contentOpsAddendums: DocSection = {
         [
           'GET',
           '/api/addendums/:id/lines',
-          'Child rows per O2M field, before → after: the approval snapshot for an approved / reverted addendum, else the lines when the draft was made → the proposed rows. Needs read access to the parent record; columns limited to what you may read.'
+          'Child rows per O2M field, before → after: the approval snapshot for an approved / reverted addendum, else the lines when the draft was made → the proposed rows. Needs read access to the parent record; lines limited to those your row filter and User Scopes allow, columns to what you may read.'
         ],
         [
           'POST',
