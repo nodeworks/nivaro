@@ -57,6 +57,8 @@ type ActiveRoom = {
   label: string
   channel?: ChannelMeta | null
   anchor?: ChatAnchor
+  /** ?thread= — root message of a thread to open with the room. */
+  thread?: number
 }
 
 function OnlineList({ onOpenDm }: { onOpenDm: (u: ChatOnlineUser) => void }) {
@@ -392,12 +394,13 @@ function ChatWorkspace() {
       return
     }
     const known = rooms.find((r) => r.room === key)
+    const thread = Number(searchParams.get('thread')) || undefined
     if (known) {
       appliedRef.current = true
-      setActive({ room: known.room, label: known.label, channel: known.channel })
+      setActive({ room: known.room, label: known.label, channel: known.channel, thread })
     } else if (rooms.length > 0) {
       appliedRef.current = true
-      setActive({ room: key, label: cfg.roomLabel?.(key) ?? key.toUpperCase() })
+      setActive({ room: key, label: cfg.roomLabel?.(key) ?? key.toUpperCase(), thread })
     }
   }, [rooms, searchParams, active, cfg])
 
@@ -405,6 +408,7 @@ function ChatWorkspace() {
     setSettingsOpen(false)
     setActive(next)
     searchParams.set('room', next.room)
+    searchParams.delete('thread')
     setSearchParams(searchParams, { replace: true })
   }
 
@@ -503,10 +507,12 @@ function ChatWorkspace() {
               onBack={() => {
                 setActive(null)
                 searchParams.delete('room')
+                searchParams.delete('thread')
                 setSearchParams(searchParams, { replace: true })
               }}
               onOpenSettings={active.channel ? () => setSettingsOpen(true) : undefined}
               anchor={active.anchor ?? null}
+              openThread={active.thread ?? null}
             />
           ) : view ? (
             <ChatSideView
