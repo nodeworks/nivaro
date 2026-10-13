@@ -139,6 +139,7 @@ import { useOptionalRealtime } from '../../lib/realtime'
 import { useRecordReader } from '../../lib/record-loader'
 import type { RuleProvenance } from '../../lib/rule-provenance'
 import { cn, formatRelative, titleCase } from '../../lib/utils'
+import { formulaInputsChanged } from '../../lib/write-formula'
 import { ImportFromFileButton } from '../import/ImportFromFileButton'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
 import { useAddendumO2M, useAddendumView } from './AddendumFieldContext'
@@ -2757,14 +2758,35 @@ export function InlineTableField({
     [cols]
   )
 
-  function applyComputedFields(draft: Record<string, unknown>): Record<string, unknown> {
+  /** Write-computed columns over a row (line amount = price × quantity).
+   *  An EXISTING row keeps its stored value until one of the formula's inputs
+   *  differs from the saved row — a legacy line whose amount is not
+   *  price × quantity (371349: 1 × $1 lines holding $13,665) reads and saves
+   *  as stored, like the server (lib/write-formula.ts on both sides; Rob,
+   *  2026-10-12, reinstating 9a713028). The base defaults to the saved row
+   *  with the same id; pass one to compare against another row, or `null` to
+   *  always derive. A row with no saved twin (new / pending) always derives. */
+  function applyComputedFields(
+    draft: Record<string, unknown>,
+    base?: Record<string, unknown> | null
+  ): Record<string, unknown> {
     if (!computedWriteCols.length) return draft
+    const saved = base === undefined ? savedRowFor(draft.id) : base
     const next = { ...draft }
     for (const cf of computedWriteCols) {
-      const result = evalClientFormula(cf.computed_formula as string, next)
+      const formula = cf.computed_formula as string
+      if (saved && !formulaInputsChanged(formula, next, saved)) continue
+      const result = evalClientFormula(formula, next)
       if (result !== null) next[cf.field] = result
     }
     return next
+  }
+  /** The saved row behind an id (undefined for new / pending rows). */
+  function savedRowFor(id: unknown): Record<string, unknown> | undefined {
+    if (id === null || id === undefined || id === '') return undefined
+    const key = String(id)
+    if (key.startsWith('pending:') || key === 'new') return undefined
+    return rows.find((r) => String(r.id) === key) as Record<string, unknown> | undefined
   }
 
   const SPECIAL_GROUP_KEYS = new Set(['__apply_values__', '__create_with_defaults__'])
@@ -2884,7 +2906,12 @@ export function InlineTableField({
     if (activeView === 'original') return effectiveRowsForRollup
     const entry = addendumO2MEntries.find((e) => e.addendumId === activeView)
     if (!entry) return effectiveRowsForRollup
-    return entry.rows.map((r) => applyComputedFields({ ...r } as Record<string, unknown>))
+    return entry.rows.map((r) =>
+      applyComputedFields(
+        { ...r } as Record<string, unknown>,
+        entry.baseRows ? (r as Record<string, unknown>) : undefined
+      )
+    )
     // biome-ignore lint/correctness/useExhaustiveDependencies: applyComputedFields is a stable closure over field config
   }, [activeView, addendumO2MEntries, effectiveRowsForRollup])
 
@@ -8699,7 +8726,10 @@ export function InlineTableField({
                     </tr>
                   )
                 const removedTrs = removedRows.map((rawRow, ri) => {
-                  const row = applyComputedFields({ ...rawRow } as Record<string, unknown>)
+                  const row = applyComputedFields(
+                    { ...rawRow } as Record<string, unknown>,
+                    rawRow as Record<string, unknown>
+                  )
                   return (
                     <tr
                       key={`removed-${String(rawRow.id ?? ri)}`}
@@ -8741,16 +8771,23 @@ export function InlineTableField({
                   // approve a figure the save then recalculates to something else.
                   // Proposed rows are stored WITHOUT their relation-path
                   // columns (PO #, Qty Billed …) — those resolve by row id.
-                  const row = applyComputedFields({
-                    ...rawRow,
-                    ...(rawRow.id != null ? (resolvedPathRows?.[String(rawRow.id)] ?? {}) : {})
-                  } as Record<string, unknown>)
+                  const row = applyComputedFields(
+                    {
+                      ...rawRow,
+                      ...(rawRow.id != null ? (resolvedPathRows?.[String(rawRow.id)] ?? {}) : {})
+                    } as Record<string, unknown>,
+                    // A settled snapshot row IS what was stored — never re-derive it.
+                    entry.baseRows ? (rawRow as Record<string, unknown>) : undefined
+                  )
                   const rawOrig =
                     row.id != null
                       ? baseList.find((r) => String(r.id) === String(row.id))
                       : undefined
                   const origRow = rawOrig
-                    ? applyComputedFields({ ...rawOrig } as Record<string, unknown>)
+                    ? applyComputedFields(
+                        { ...rawOrig } as Record<string, unknown>,
+                        rawOrig as Record<string, unknown>
+                      )
                     : undefined
                   const isNewRow = !origRow
                   const changedFields = new Set(
