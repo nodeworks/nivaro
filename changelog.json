@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-10-12T23:23:01.454Z",
+  "generated_at": "2026-10-13T00:34:41.571Z",
   "releases": [
+    {
+      "version": "0.2.43",
+      "tag": "v0.2.43",
+      "date": "2026-10-12T20:34:27-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "a skipped write-computed field never takes the caller's value",
+              "hash": "2d7184e5"
+            },
+            {
+              "section": "Fixed",
+              "scope": "lines",
+              "text": "stored amount holds until price or quantity changes",
+              "hash": "c39dda7e"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "b0527ab9"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.2.42",
       "tag": "v0.2.42",
-      "date": "2026-10-12T19:22:48-04:00",
+      "date": "2026-10-12T19:23:01-04:00",
       "sections": [
         {
           "label": "Fixed",
