@@ -956,6 +956,10 @@ export async function applyWriteComputedFields(
       opts?.previous &&
       !shouldRecomputeWriteField(f.computed_formula as string, payload, opts.previous)
     ) {
+      // The STORED value holds — never a caller-supplied one. A write-computed
+      // column is not directly writable; before this rule the formula always
+      // overwrote what the caller sent, so drop it rather than let it land.
+      delete payload[f.field]
       continue
     }
     // Only write to payload when computed_store=true.

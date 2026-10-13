@@ -503,6 +503,12 @@ export async function batchUpdate(
     }
     const landed: Ready[] = []
     for (const [key, list] of groups) {
+      // Nothing left to write (e.g. only a write-computed column was sent and
+      // its inputs did not change) — the row stands as stored: a no-op.
+      if (!key) {
+        landed.push(...list)
+        continue
+      }
       const cols = key.split(',')
       const per = Math.max(1, Math.floor(PARAM_BUDGET / (cols.length + 1)))
       const tuple = `(CAST(? AS ${idType.sql}), ${cols
