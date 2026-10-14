@@ -28,12 +28,6 @@ import {
 } from '../item-edit/O2MStagingContext'
 import type { CMSField, CMSRelation } from '../item-edit/types'
 import { Button } from '../ui/button'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger
-} from '../ui/dropdown-menu'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '../ui/sheet'
@@ -375,26 +369,15 @@ interface WfInstance {
   completed_at: string | null
 }
 
-function AddendumWorkflowPanel({
-  addendumId,
-  onRefresh
-}: {
-  addendumId: string
-  onRefresh: () => void
-}) {
+// State only — the addendum's transitions live in the record's PipelinePanel
+// at the top of the form (it drives the addendum shown in Viewing).
+function AddendumWorkflowPanel({ addendumId }: { addendumId: string }) {
   const client = useNivaroClient()
-  const qc = useQueryClient()
-  const [pending, setPending] = useState<string | null>(null)
-  const [comment, setComment] = useState('')
-
-  const instanceKey = ['pipeline-instance', 'nivaro_addendums', addendumId]
 
   const { data: pd, isLoading } = useQuery<{
     instance: WfInstance | null
-    available_transitions: WfTransition[]
-    states: WfState[]
   } | null>({
-    queryKey: instanceKey,
+    queryKey: ['pipeline-instance', 'nivaro_addendums', addendumId],
     queryFn: () =>
       client
         .request<{
@@ -408,50 +391,12 @@ function AddendumWorkflowPanel({
     staleTime: 10_000
   })
 
-  const transitionMut = useMutation({
-    mutationFn: ({ transitionId, note }: { transitionId: string; note?: string }) =>
-      client.request(
-        post(`/workflows/instance/${pd?.instance?.id}/transition`, {
-          transition_id: transitionId,
-          comment: note
-        })
-      ),
-    onSuccess: () => {
-      setPending(null)
-      setComment('')
-      qc.invalidateQueries({ queryKey: instanceKey })
-      onRefresh()
-      toast.success('Workflow advanced')
-    },
-    onError: (e: unknown) => {
-      const msg = (e as { response?: { data?: { error?: string } } })?.response?.data?.error
-      toast.error(msg ?? 'Transition failed')
-    }
-  })
-
   if (isLoading) return <Skeleton className='h-8 w-full' />
   if (!pd?.instance)
     return <p className='text-[12px] text-slate-400 italic'>No workflow instance found.</p>
 
-  const { instance, available_transitions: transitions, states = [] } = pd
+  const { instance } = pd
   const state = instance.current_state_obj
-  const pendingTx = transitions.find((t) => t.id === pending)
-  const stateById = new Map(states.map((s) => [s.id, s]))
-
-  // Group by tx.label (same as PipelinePanel) — transitions with same label collapse into one dropdown
-  const groups = new Map<string, WfTransition[]>()
-  for (const tx of transitions) {
-    const existing = groups.get(tx.label) ?? []
-    existing.push(tx)
-    groups.set(tx.label, existing)
-  }
-
-  function txColorStyle(tx: WfTransition, isActive: boolean) {
-    if (!tx.color) return undefined
-    return isActive
-      ? { backgroundColor: tx.color, borderColor: tx.color, color: '#fff' }
-      : { borderColor: tx.color, color: tx.color }
-  }
 
   return (
     <div className='space-y-3'>
@@ -468,113 +413,6 @@ function AddendumWorkflowPanel({
           >
             {state.label}
           </span>
-        </div>
-      )}
-
-      {transitions.length > 0 && !instance.completed_at && (
-        <div className='flex flex-wrap gap-1.5'>
-          {[...groups.entries()].map(([label, txs]) => {
-            const representativeColor = txs[0].color
-            const isActive = txs.some((tx) => tx.id === pending)
-            if (txs.length === 1) {
-              const tx = txs[0]
-              return (
-                <button
-                  key={label}
-                  type='button'
-                  onClick={() => setPending(pending === tx.id ? null : tx.id)}
-                  className={cn(
-                    'inline-flex items-center rounded-full px-3 py-1 text-[11px] font-medium transition-colors border',
-                    isActive
-                      ? 'bg-nvr-cyan border-nvr-cyan text-white'
-                      : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
-                  )}
-                  style={txColorStyle(tx, isActive)}
-                >
-                  {label}
-                </button>
-              )
-            }
-            return (
-              <DropdownMenu key={label}>
-                <DropdownMenuTrigger asChild>
-                  <button
-                    type='button'
-                    className={cn(
-                      'inline-flex items-center gap-1 rounded-full px-3 py-1 text-[11px] font-medium transition-colors border',
-                      isActive
-                        ? 'bg-nvr-cyan border-nvr-cyan text-white'
-                        : 'bg-white hover:bg-slate-50 border-slate-200 text-slate-700'
-                    )}
-                    style={
-                      representativeColor && !isActive
-                        ? { borderColor: representativeColor, color: representativeColor }
-                        : undefined
-                    }
-                  >
-                    {label}
-                    <ChevronDown className='h-3 w-3' />
-                  </button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align='start'>
-                  {txs.map((tx) => {
-                    const targetState = stateById.get(tx.to_state)
-                    return (
-                      <DropdownMenuItem key={tx.id} onSelect={() => setPending(tx.id)}>
-                        {tx.color && (
-                          <span
-                            className='mr-2 inline-block h-2 w-2 shrink-0 rounded-full'
-                            style={{ backgroundColor: tx.color }}
-                          />
-                        )}
-                        {targetState?.label ?? tx.to_state}
-                      </DropdownMenuItem>
-                    )
-                  })}
-                </DropdownMenuContent>
-              </DropdownMenu>
-            )
-          })}
-        </div>
-      )}
-
-      {pending && pendingTx && (
-        <div className='rounded-md border border-slate-200 bg-slate-50 p-2.5 space-y-2'>
-          <p className='text-[11px] text-slate-500'>
-            Confirm: <strong>{pendingTx.label}</strong>
-          </p>
-          <input
-            type='text'
-            value={comment}
-            onChange={(e) => setComment(e.target.value)}
-            placeholder='Add a comment (optional)'
-            className='w-full rounded-md border border-slate-200 bg-white px-2.5 py-1 text-[12px] placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
-          />
-          <div className='flex justify-end gap-2'>
-            <Button
-              type='button'
-              size='sm'
-              variant='ghost'
-              className='h-6 text-[11px]'
-              onClick={() => {
-                setPending(null)
-                setComment('')
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              type='button'
-              size='sm'
-              className='h-6 text-[11px]'
-              disabled={transitionMut.isPending}
-              onClick={() =>
-                transitionMut.mutate({ transitionId: pending, note: comment.trim() || undefined })
-              }
-            >
-              Confirm
-            </Button>
-          </div>
         </div>
       )}
 
@@ -1775,7 +1613,7 @@ function AddendumCard({
               <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
                 Workflow
               </p>
-              <AddendumWorkflowPanel addendumId={addendum.id} onRefresh={onRefresh} />
+              <AddendumWorkflowPanel addendumId={addendum.id} />
               {isAdmin && (
                 <div className='mt-2 flex items-center justify-end gap-2'>
                   {addendum.status === 'approved' ? (
