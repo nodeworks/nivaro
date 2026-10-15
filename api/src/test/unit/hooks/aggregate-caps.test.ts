@@ -257,6 +257,29 @@ describe('evaluateSumCapRule', () => {
     ).resolves.toBeUndefined()
   })
 
+  it('passes a total that is over the cap only by float noise', async () => {
+    const { chain } = collectionChain([{ v: null }])
+    const relChain = onceChain({ one_collection: 'workflow_lines' })
+    const parentChain = onceChain({ amount: '10854.96' })
+
+    vi.mocked(db).mockImplementation((table: unknown) => {
+      if (table === 'allocations') return chain as never
+      if (table === 'nivaro_relations') return relChain as never
+      if (table === 'workflow_lines') return parentChain as never
+      throw new Error(`unexpected table ${String(table)}`)
+    })
+
+    await expect(
+      evaluateSumCapRule(
+        rule(),
+        ctx({
+          action: 'create',
+          payload: { workflow_line: 'wl1', allocated_amount: 10854.960000000001 }
+        })
+      )
+    ).resolves.toBeUndefined()
+  })
+
   it('block severity throws CapValidationError with the violations shape', async () => {
     const { chain } = collectionChain([{ v: '90' }])
     const relChain = onceChain({ one_collection: 'workflow_lines' })
