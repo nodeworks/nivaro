@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-13T00:34:41.571Z",
+  "generated_at": "2026-10-15T14:21:47.396Z",
   "releases": [
+    {
+      "version": "0.2.44",
+      "tag": "v0.2.44",
+      "date": "2026-10-15T10:21:31-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "no transition buttons on the expanded addendum card",
+              "hash": "b5109830"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": "publish",
+              "text": "strip api/extensions/efp-ops from the public mirror",
+              "hash": "505edc5c"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.43",
       "tag": "v0.2.43",
-      "date": "2026-10-12T20:34:27-04:00",
+      "date": "2026-10-12T20:34:41-04:00",
       "sections": [
         {
           "label": "Fixed",
