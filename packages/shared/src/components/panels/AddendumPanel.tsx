@@ -35,6 +35,7 @@ import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
 import { AddendumCompare } from './AddendumCompare'
 import { AddendumLinesDiff } from './AddendumLinesDiff'
+import { resolveAddendumAmounts } from './addendum-summary'
 
 interface AddendumLayout {
   id: number
@@ -894,7 +895,7 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
       {addendum.description && (
         <div className='mt-2.5'>
           <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
-            Reason
+            Justification
           </p>
           {/^\s*</.test(addendum.description) ? (
             <div
@@ -1044,7 +1045,11 @@ function AddendumCard({
   const proposedData = addendum.data ?? {}
 
   // For each O2M field in the proposed data, find its relation and fetch original rows
-  const o2mFields = configuredFields.filter((a) => Array.isArray(proposedData[a.field]))
+  // Keyed off the proposal itself, not the configured field list: a line alias
+  // the form config no longer names still has its changes to show.
+  const o2mFields = Object.keys(proposedData)
+    .filter((k) => Array.isArray(proposedData[k]))
+    .map((k) => configuredFields.find((a) => a.field === k) ?? ({ field: k } as LayoutAssignment))
   const o2mRelations = o2mFields
     .map((a) => {
       const rel = relations.find(
@@ -1388,6 +1393,26 @@ function AddendumCard({
     // biome-ignore lint/correctness/useExhaustiveDependencies: helpers are stable per render
   }, [addendum.cost_impact, currentRecord, scalarChanged, proposedData])
 
+  // Live previous → new for a pending addendum: first changed money field, else
+  // the recalculated rollup, against the record's current value.
+  const liveAmounts = useMemo(() => {
+    if (!currentRecord) return null
+    const cands = [
+      ...scalarChanged
+        .filter((a) => isCurrencyField(a.field))
+        .map((a) => [a.field, Number(proposedData[a.field])] as const),
+      ...[...derivedRollupValues.entries()]
+    ]
+    for (const [field, next] of cands) {
+      const cur = currentRecord[field]
+      if (cur == null || cur === '' || Number.isNaN(Number(cur)) || Number.isNaN(next)) continue
+      return { previous: Number(cur), next }
+    }
+    return null
+    // biome-ignore lint/correctness/useExhaustiveDependencies: helpers are stable per render
+  }, [currentRecord, scalarChanged, proposedData, derivedRollupValues])
+  const amounts = resolveAddendumAmounts(addendum, liveAmounts)
+
   return (
     <div
       className={cn(
@@ -1442,6 +1467,40 @@ function AddendumCard({
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border'>
           <AddendumDetails addendum={addendum} />
+          {/* Legacy/imported addendums (no field changes) keep their own Amount row below. */}
+          {!(changeCount === 0 && (addendum.previous_amount != null || addendum.new_amount != null)) &&
+            (amounts.previous != null || amounts.next != null || amounts.change != null) && (
+            <div className='grid grid-cols-3 gap-3 px-4 pt-3'>
+              {[
+                ['Previous amount', amounts.previous],
+                ['New amount', amounts.next],
+                ['Change amount', amounts.change]
+              ].map(([label, v]) => (
+                <div key={label as string}>
+                  <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+                    {label as string}
+                  </p>
+                  <p
+                    className={cn(
+                      'mt-0.5 text-[12.5px] tabular-nums text-slate-700 dark:text-slate-200',
+                      label === 'Change amount' &&
+                        v != null &&
+                        v !== 0 &&
+                        ((v as number) > 0
+                          ? 'font-semibold text-emerald-600 dark:text-emerald-400'
+                          : 'font-semibold text-red-600 dark:text-red-400')
+                    )}
+                  >
+                    {v == null
+                      ? '—'
+                      : label === 'Change amount' && v !== 0
+                        ? `${(v as number) > 0 ? '+' : '−'}${usd.format(Math.abs(v as number))}`
+                        : usd.format(v as number)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          )}
           {(changeCount > 0 || addendum.previous_amount != null || addendum.new_amount != null) && (
             <div className='px-4 py-3'>
               <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
@@ -1522,34 +1581,30 @@ function AddendumCard({
                     const curNum =
                       cur != null && cur !== '' && !Number.isNaN(Number(cur)) ? Number(cur) : null
                     const delta = curNum != null ? proposed - curNum : null
-                    displayVal = (
-                      <span className='inline-flex flex-wrap items-baseline gap-1.5'>
-                        {curNum != null && curNum !== proposed && (
-                          <>
-                            <span className='tabular-nums text-slate-400 line-through dark:text-slate-500'>
-                              {fmtNum(a.field, curNum)}
-                            </span>
-                            <span className='text-slate-400'>→</span>
-                          </>
-                        )}
+                    const signed = (d: number) =>
+                      `${d > 0 ? '+' : '−'}${fmtNum(a.field, Math.abs(d))}`
+                    displayVal =
+                      curNum != null && curNum !== proposed ? (
+                        <span className='flex flex-col gap-0.5 tabular-nums'>
+                          <span>Previous: {fmtNum(a.field, curNum)}</span>
+                          <span>
+                            New: <span className='font-semibold'>{fmtNum(a.field, proposed)}</span>
+                          </span>
+                          <span
+                            className={
+                              delta! > 0
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-red-600 dark:text-red-400'
+                            }
+                          >
+                            Change amount: {signed(delta!)}
+                          </span>
+                        </span>
+                      ) : (
                         <span className='tabular-nums font-semibold'>
                           {fmtNum(a.field, proposed)}
                         </span>
-                        {delta != null && delta !== 0 && (
-                          <span
-                            className={cn(
-                              'rounded-full px-1.5 py-px text-[10px] font-medium tabular-nums',
-                              delta > 0
-                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
-                                : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
-                            )}
-                          >
-                            {delta > 0 ? '+' : '−'}
-                            {fmtNum(a.field, Math.abs(delta))}
-                          </span>
-                        )}
-                      </span>
-                    )
+                      )
                   } else {
                     displayVal = String(rawVal)
                   }
@@ -1582,7 +1637,9 @@ function AddendumCard({
                   ))}
                 {o2mRelations.map(({ field, rel }) => {
                   const proposedRows = proposedData[field]
-                  const orig = originalO2MMap[field]
+                  const qi = o2mRelations.findIndex((x) => x.field === field)
+                  // A failed/empty load diffs against no rows; only wait while loading.
+                  const orig = originalO2MMap[field] ?? (o2mOriginalQueries[qi]?.isLoading ? null : [])
                   if (
                     settled ||
                     !Array.isArray(proposedRows) ||
