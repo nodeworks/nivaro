@@ -37,6 +37,7 @@ STRIP_PATHS=(
   api/src/scripts/repoint-file-fks.ts
   api/src/scripts/fix-junction-fields.ts
   api/src/scripts/sync-project-types.sql
+  api/extensions/efp-ops
   .gitlab-ci.yml
   PRODUCT.md
   DESIGN.md
