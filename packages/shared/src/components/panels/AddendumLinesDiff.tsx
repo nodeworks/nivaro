@@ -330,8 +330,8 @@ export function AddendumLinesDiff({
   const total = diff.added.length + diff.changed.length + diff.removed.length
   if (total === 0)
     return (
-      <p className='text-[11.5px] text-slate-500 dark:text-slate-400'>
-        {label}: {proposed.length} {proposed.length === 1 ? 'line' : 'lines'} — no changes
+      <p className='text-[12px] text-slate-500 dark:text-slate-400'>
+        {proposed.length} {proposed.length === 1 ? 'line' : 'lines'}, no changes
       </p>
     )
   const parts: string[] = []
@@ -350,69 +350,94 @@ export function AddendumLinesDiff({
       kind === 'removed' && 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
     )
 
+  // Changed lines read as one table: a row per line, a column per field any
+  // line moves. Untouched cells stay blank so the edits stand out.
+  const changedCols = [...new Set(diff.changed.flatMap((c) => c.cells.map((x) => x.field)))]
+  const th = 'py-1.5 pr-5 text-left text-[11px] font-medium text-slate-500 dark:text-slate-400'
+  const td = 'py-1.5 pr-5 align-baseline whitespace-nowrap'
+
   return (
-    <div className='rounded-md border border-slate-200 dark:border-border'>
+    <div className='min-w-0'>
       <button
         type='button'
         onClick={() => setOpen((v) => !v)}
-        className='flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[11.5px] hover:bg-muted/60'
+        className='inline-flex items-center gap-1.5 rounded text-[12px] text-slate-700 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-200'
         aria-expanded={open}
+        aria-label={`${open ? 'Hide' : 'Show'} ${label} changes`}
       >
+        <span>{parts.join(' · ')}</span>
         <ChevronDown
           className={cn(
-            'h-3 w-3 shrink-0 text-slate-400 transition-transform',
+            'h-3.5 w-3.5 shrink-0 text-slate-400 transition-transform duration-150 motion-reduce:transition-none',
             !open && '-rotate-90'
           )}
           aria-hidden='true'
         />
-        <span className='font-medium text-foreground'>{label}</span>
-        <span className='text-slate-500 dark:text-slate-400'>{parts.join(' · ')}</span>
       </button>
-      {open && (
-        <ol className='space-y-2.5 border-t border-slate-100 px-2.5 py-2 dark:border-border'>
-          {diff.changed.map((c) => (
-            <li key={`c-${String(c.row.id)}`}>
-              <div className='flex flex-wrap items-baseline gap-x-1.5 text-[11.5px]'>
-                <span className={pill('changed')}>changed</span>
-                <span className='font-medium text-foreground'>{rowName(c.before)}</span>
-                {rowIdentity(c.before) && (
-                  <span className='truncate text-slate-500'>— {rowIdentity(c.before)}</span>
-                )}
-              </div>
-              <dl className={dl}>
-                {c.cells.map((cell) => {
-                  const from = fmt(cell.field, cell.before)
-                  const to = fmt(cell.field, cell.after)
-                  return (
-                    <Fragment key={cell.field}>
-                      <dt className='truncate text-slate-500 dark:text-slate-400'>
-                        {labelFor(cell.field)}
-                      </dt>
-                      <dd className='flex min-w-0 flex-wrap items-baseline gap-x-1.5 rounded bg-amber-50 px-1 dark:bg-amber-500/10'>
-                        <span
-                          className={cn(
-                            'text-slate-400 line-through decoration-slate-300 dark:decoration-slate-600',
-                            from.mono && 'tabular-nums'
-                          )}
-                        >
-                          {from.text}
-                        </span>
-                        <span
-                          className={cn('font-medium text-foreground', to.mono && 'tabular-nums')}
-                        >
-                          <span className='mr-1 font-normal text-slate-400' aria-hidden='true'>
+      {open && diff.changed.length > 0 && (
+        <div className='mt-1.5 overflow-x-auto'>
+          <table className='border-collapse text-[12px]'>
+            <thead>
+              <tr className='border-b border-slate-200 dark:border-border'>
+                <th className={th}>Line</th>
+                {changedCols.map((f) => (
+                  <th key={f} className={cn(th, 'whitespace-nowrap')}>
+                    {labelFor(f)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {diff.changed.map((c) => (
+                <tr
+                  key={`c-${String(c.row.id)}`}
+                  className='border-b border-slate-100 last:border-0 dark:border-border/60'
+                >
+                  <td className={td}>
+                    <span className='font-medium text-foreground'>{rowName(c.before)}</span>
+                    {rowIdentity(c.before) && (
+                      <span className='ml-1.5 inline-block max-w-[180px] truncate align-bottom text-slate-500 dark:text-slate-400'>
+                        {rowIdentity(c.before)}
+                      </span>
+                    )}
+                  </td>
+                  {changedCols.map((f) => {
+                    const cell = c.cells.find((x) => x.field === f)
+                    if (!cell) return <td key={f} className={td} />
+                    const from = fmt(cell.field, cell.before)
+                    const to = fmt(cell.field, cell.after)
+                    return (
+                      <td key={f} className={td}>
+                        <span className='inline-flex items-baseline gap-x-1.5'>
+                          <span
+                            className={cn(
+                              'text-slate-400 line-through decoration-slate-300 dark:text-slate-500 dark:decoration-slate-600',
+                              from.mono && 'tabular-nums'
+                            )}
+                          >
+                            {from.text}
+                          </span>
+                          <span className='text-slate-400' aria-hidden='true'>
                             →
                           </span>
-                          {to.text}
+                          <span
+                            className={cn('font-medium text-foreground', to.mono && 'tabular-nums')}
+                          >
+                            {to.text}
+                          </span>
+                          {deltaPill(cell.field, cell.before, cell.after)}
                         </span>
-                        {deltaPill(cell.field, cell.before, cell.after)}
-                      </dd>
-                    </Fragment>
-                  )
-                })}
-              </dl>
-            </li>
-          ))}
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {open && (diff.added.length > 0 || diff.removed.length > 0) && (
+        <ol className='mt-2.5 space-y-2.5'>
           {diff.added.map((r, i) => (
             <li key={`a-${String(r.id ?? i)}`}>
               <div className='flex flex-wrap items-baseline gap-x-1.5 text-[11.5px]'>
