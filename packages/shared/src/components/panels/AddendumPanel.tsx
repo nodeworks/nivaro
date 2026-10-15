@@ -1,6 +1,15 @@
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, FileDiff, Loader2, Paperclip, Upload } from 'lucide-react'
-import { memo, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import {
+  Fragment,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { toast } from 'sonner'
 import { useItemEditAuth, useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -35,7 +44,7 @@ import { Skeleton } from '../ui/skeleton'
 import { Textarea } from '../ui/textarea'
 import { AddendumCompare } from './AddendumCompare'
 import { AddendumLinesDiff } from './AddendumLinesDiff'
-import { resolveAddendumAmounts } from './addendum-summary'
+import { type AddendumAmounts, resolveAddendumAmounts } from './addendum-summary'
 
 interface AddendumLayout {
   id: number
@@ -92,7 +101,7 @@ function costImpactChip(v: number | null | undefined) {
   return (
     <span
       className={cn(
-        'inline-flex items-center rounded-full px-2 py-0.5 font-mono text-[11px] font-medium tabular-nums',
+        'inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium tabular-nums',
         n > 0
           ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
           : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
@@ -103,6 +112,54 @@ function costImpactChip(v: number | null | undefined) {
     </span>
   )
 }
+
+/** Previous / New / Change for the addendum's money figure, as one meta strip. */
+function AmountSummary({ amounts }: { amounts: AddendumAmounts }) {
+  const { previous, next, change } = amounts
+  const moved = change != null && change !== 0
+  const cells: Array<{ label: string; value: ReactNode; className: string }> = [
+    {
+      label: 'Previous',
+      value: previous == null ? '—' : usd.format(previous),
+      className: 'text-slate-500 dark:text-slate-400'
+    },
+    {
+      label: 'New',
+      value: next == null ? '—' : usd.format(next),
+      className: 'font-semibold text-foreground'
+    },
+    {
+      label: 'Change',
+      value:
+        change == null
+          ? '—'
+          : moved
+            ? `${change > 0 ? '+' : '−'}${usd.format(Math.abs(change))}`
+            : 'No change',
+      className: !moved
+        ? 'text-slate-500 dark:text-slate-400'
+        : change > 0
+          ? 'font-semibold text-emerald-600 dark:text-emerald-400'
+          : 'font-semibold text-red-600 dark:text-red-400'
+    }
+  ]
+  return (
+    <div className='flex flex-wrap items-start gap-x-8 gap-y-2'>
+      {cells.map((c) => (
+        <div key={c.label} className='min-w-0'>
+          <p className={cn('text-[13px] leading-5 tabular-nums', c.className)}>{c.value}</p>
+          <p className='text-[11px] leading-4 text-slate-400 dark:text-slate-500'>{c.label}</p>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** Label / value list shared by every block of an expanded addendum. */
+const DETAIL_DL =
+  'grid grid-cols-1 items-baseline text-[12.5px] sm:grid-cols-[140px_minmax(0,1fr)] sm:gap-x-6 sm:gap-y-2.5'
+const DETAIL_DT = 'text-[12px] text-slate-500 dark:text-slate-400'
+const DETAIL_DD = 'mb-2.5 min-w-0 text-slate-700 sm:mb-0 dark:text-slate-200'
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -862,56 +919,43 @@ function AddendumDetails({ addendum }: { addendum: Addendum }) {
   if (addendum.created_at)
     cells.push({
       label: 'Created',
-      value: [fmtDate(addendum.created_at), createdBy && `by ${createdBy}`]
-        .filter(Boolean)
-        .join(' ')
+      value: [fmtDate(addendum.created_at), createdBy].filter(Boolean).join(' · ')
     })
   if (addendum.status === 'approved' && (addendum.approved_at || approvedBy))
     cells.push({
       label: 'Approved',
-      value: [fmtDate(addendum.approved_at), approvedBy && `by ${approvedBy}`]
-        .filter(Boolean)
-        .join(' ')
+      value: [fmtDate(addendum.approved_at), approvedBy].filter(Boolean).join(' · ')
     })
 
-  if (cells.length === 0 && !addendum.description) return null
+  if (cells.length === 0 && !addendum.description && !addendum.attachments?.length) return null
   return (
-    <div className='px-4 py-3'>
-      {cells.length > 0 && (
-        <div className='flex flex-wrap gap-1.5'>
-          {cells.map((c) => (
-            <div
-              key={c.label}
-              className='min-w-[130px] rounded-lg border border-slate-200 bg-white px-3 py-2 dark:border-border dark:bg-card'
-            >
-              <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
-                {c.label}
-              </p>
-              <p className='mt-0.5 text-[12.5px] text-slate-700 dark:text-slate-200'>{c.value}</p>
-            </div>
-          ))}
-        </div>
-      )}
+    <dl className={cn(DETAIL_DL, 'px-4 py-3.5')}>
+      {cells.map((c) => (
+        <Fragment key={c.label}>
+          <dt className={DETAIL_DT}>{c.label}</dt>
+          <dd className={DETAIL_DD}>{c.value}</dd>
+        </Fragment>
+      ))}
       {addendum.description && (
-        <div className='mt-2.5'>
-          <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
-            Justification
-          </p>
-          {/^\s*</.test(addendum.description) ? (
-            <div
-              className='nvr-addendum-reason text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300 [&_a]:text-nvr-cyan [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:mb-1 [&_ul]:list-disc'
-              // biome-ignore lint/security/noDangerouslySetInnerHtml: internal rich-text (Tiptap/converted legacy HTML), same trust level as the rich_text editor rendering it
-              dangerouslySetInnerHTML={{ __html: sanitizeHtml(addendum.description) }}
-            />
-          ) : (
-            <p className='whitespace-pre-wrap text-[12.5px] leading-relaxed text-slate-600 dark:text-slate-300'>
-              {addendum.description}
-            </p>
-          )}
-        </div>
+        <>
+          <dt className={DETAIL_DT}>Justification</dt>
+          <dd className={DETAIL_DD}>
+            {/^\s*</.test(addendum.description) ? (
+              <div
+                className='nvr-addendum-reason max-w-[75ch] leading-relaxed [&_a]:text-nvr-cyan [&_a]:underline [&_li]:ml-4 [&_ol]:list-decimal [&_p]:mb-1 [&_ul]:list-disc'
+                // biome-ignore lint/security/noDangerouslySetInnerHtml: internal rich-text (Tiptap/converted legacy HTML), same trust level as the rich_text editor rendering it
+                dangerouslySetInnerHTML={{ __html: sanitizeHtml(addendum.description) }}
+              />
+            ) : (
+              <p className='max-w-[75ch] whitespace-pre-wrap leading-relaxed'>
+                {addendum.description}
+              </p>
+            )}
+          </dd>
+        </>
       )}
       <AddendumAttachments ids={addendum.attachments} />
-    </div>
+    </dl>
   )
 }
 
@@ -959,12 +1003,15 @@ function AddendumAttachments({ ids }: { ids: string[] | null }) {
   })
   if (fileIds.length === 0) return null
   return (
-    <div className='mt-2.5'>
-      <p className='mb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
-        Attachments
-      </p>
-      <div className='flex flex-wrap gap-1.5'>
+    <>
+      <dt className={DETAIL_DT}>Attachments</dt>
+      <dd className={cn(DETAIL_DD, 'flex flex-wrap gap-x-4 gap-y-1')}>
         {preview && <FilePreviewLightbox file={preview} onClose={() => setPreview(null)} />}
+        {metas.length === 0 && (
+          <span className='text-slate-400 dark:text-slate-500'>
+            {fileIds.length} {fileIds.length === 1 ? 'file' : 'files'}…
+          </span>
+        )}
         {metas.map((m) => (
           <button
             key={m.id}
@@ -978,7 +1025,7 @@ function AddendumAttachments({ ids }: { ids: string[] | null }) {
                 size: m.size
               })
             }
-            className='inline-flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-[11.5px] text-slate-700 transition-colors hover:border-nvr-cyan hover:text-nvr-navy dark:border-border dark:bg-muted/40 dark:text-slate-300 dark:hover:text-nvr-cyan'
+            className='inline-flex min-w-0 items-center gap-1.5 rounded text-slate-700 underline-offset-2 transition-colors hover:text-nvr-cyan hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/40 dark:text-slate-200'
           >
             {m.missing && (
               <span
@@ -989,13 +1036,13 @@ function AddendumAttachments({ ids }: { ids: string[] | null }) {
               </span>
             )}
             <Paperclip className='h-3 w-3 shrink-0 text-slate-400' />
-            <span className='max-w-[220px] truncate'>
+            <span className='max-w-[320px] truncate'>
               {m.filename ?? `File ${m.id.slice(0, 8)}…`}
             </span>
           </button>
         ))}
-      </div>
-    </div>
+      </dd>
+    </>
   )
 }
 
@@ -1350,7 +1397,12 @@ function AddendumCard({
       value: proposedData[a.field]
     })),
     ...derivedRollupFields.flatMap((f) =>
-      derivedRollupValues.has(f.field)
+      derivedRollupValues.has(f.field) &&
+      !(
+        currentRecord &&
+        currentRecord[f.field] != null &&
+        Number(currentRecord[f.field]) === derivedRollupValues.get(f.field)
+      )
         ? [
             {
               field: f.field,
@@ -1393,25 +1445,32 @@ function AddendumCard({
     // biome-ignore lint/correctness/useExhaustiveDependencies: helpers are stable per render
   }, [addendum.cost_impact, currentRecord, scalarChanged, proposedData])
 
-  // Live previous → new for a pending addendum: first changed money field, else
-  // the recalculated rollup, against the record's current value.
+  // Live previous → new for a pending addendum: first money field the proposal
+  // moves (a changed column, else a recalculated rollup), against the record's
+  // current value. `field` is the row the Amount summary stands in for.
   const liveAmounts = useMemo(() => {
     if (!currentRecord) return null
     const cands = [
-      ...scalarChanged
-        .filter((a) => isCurrencyField(a.field))
-        .map((a) => [a.field, Number(proposedData[a.field])] as const),
+      ...scalarChanged.map((a) => [a.field, Number(proposedData[a.field])] as const),
       ...[...derivedRollupValues.entries()]
-    ]
-    for (const [field, next] of cands) {
+    ].flatMap(([field, next]) => {
       const cur = currentRecord[field]
-      if (cur == null || cur === '' || Number.isNaN(Number(cur)) || Number.isNaN(next)) continue
-      return { previous: Number(cur), next }
-    }
-    return null
+      if (!isCurrencyField(field) || cur == null || cur === '') return []
+      if (Number.isNaN(Number(cur)) || Number.isNaN(next)) return []
+      return [{ field, previous: Number(cur), next }]
+    })
+    return cands.find((c) => c.previous !== c.next) ?? cands[0] ?? null
     // biome-ignore lint/correctness/useExhaustiveDependencies: helpers are stable per render
   }, [currentRecord, scalarChanged, proposedData, derivedRollupValues])
   const amounts = resolveAddendumAmounts(addendum, liveAmounts)
+  const hasAmounts = amounts.previous != null || amounts.next != null || amounts.change != null
+  // The summary IS that field's row — listing it again would show it twice.
+  const amountField = hasAmounts ? (liveAmounts?.field ?? null) : null
+  const amountLabel = amountField
+    ? (changeEntries.find((e) => e.field === amountField)?.label_override ??
+      fieldMap[amountField]?.label ??
+      titleCase(amountField))
+    : 'Amount'
 
   return (
     <div
@@ -1448,7 +1507,7 @@ function AddendumCard({
             )}
             {costImpactChip(addendum.cost_impact) ?? costImpactChip(barDelta)}
           </div>
-          {addendum.description && (
+          {addendum.description && !expanded && (
             <p className='mt-0.5 text-[12px] text-slate-500 dark:text-slate-400 line-clamp-1'>
               {stripTags(addendum.description)}
             </p>
@@ -1467,112 +1526,31 @@ function AddendumCard({
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border'>
           <AddendumDetails addendum={addendum} />
-          {/* Legacy/imported addendums (no field changes) keep their own Amount row below. */}
-          {!(changeCount === 0 && (addendum.previous_amount != null || addendum.new_amount != null)) &&
-            (amounts.previous != null || amounts.next != null || amounts.change != null) && (
-            <div className='grid grid-cols-3 gap-3 px-4 pt-3'>
-              {[
-                ['Previous amount', amounts.previous],
-                ['New amount', amounts.next],
-                ['Change amount', amounts.change]
-              ].map(([label, v]) => (
-                <div key={label as string}>
-                  <p className='text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
-                    {label as string}
-                  </p>
-                  <p
-                    className={cn(
-                      'mt-0.5 text-[12.5px] tabular-nums text-slate-700 dark:text-slate-200',
-                      label === 'Change amount' &&
-                        v != null &&
-                        v !== 0 &&
-                        ((v as number) > 0
-                          ? 'font-semibold text-emerald-600 dark:text-emerald-400'
-                          : 'font-semibold text-red-600 dark:text-red-400')
-                    )}
-                  >
-                    {v == null
-                      ? '—'
-                      : label === 'Change amount' && v !== 0
-                        ? `${(v as number) > 0 ? '+' : '−'}${usd.format(Math.abs(v as number))}`
-                        : usd.format(v as number)}
-                  </p>
-                </div>
-              ))}
-            </div>
-          )}
-          {(changeCount > 0 || addendum.previous_amount != null || addendum.new_amount != null) && (
-            <div className='px-4 py-3'>
-              <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+          {(changeCount > 0 || hasAmounts) && (
+            <section className='border-t border-slate-100 px-4 py-3.5 dark:border-border'>
+              <h4 className='mb-3 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
                 {settled ? 'Changes' : 'Proposed changes'}
-              </p>
-              <div className='space-y-1.5'>
-                {changeCount === 0 &&
-                  (addendum.previous_amount != null || addendum.new_amount != null) &&
-                  (() => {
-                    const prev =
-                      addendum.previous_amount != null ? Number(addendum.previous_amount) : null
-                    const next = addendum.new_amount != null ? Number(addendum.new_amount) : null
-                    const delta = prev != null && next != null ? next - prev : null
-                    return (
-                      <div className='flex items-baseline gap-2 text-[12px]'>
-                        <span className='min-w-[80px] shrink-0 text-slate-500 dark:text-slate-400'>
-                          Amount
-                        </span>
-                        <span className='font-mono text-[11px] text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-muted/50 rounded px-1.5 py-0.5'>
-                          <span className='inline-flex flex-wrap items-baseline gap-1.5'>
-                            {prev != null && prev !== next && (
-                              <>
-                                <span className='tabular-nums text-slate-400 line-through dark:text-slate-500'>
-                                  {usd.format(prev)}
-                                </span>
-                                <span className='text-slate-400'>→</span>
-                              </>
-                            )}
-                            <span className='tabular-nums font-semibold'>
-                              {next != null ? usd.format(next) : '—'}
-                            </span>
-                            {delta != null && delta !== 0 && (
-                              <span
-                                className={cn(
-                                  'rounded-full px-1.5 py-px text-[10px] font-medium tabular-nums',
-                                  delta > 0
-                                    ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
-                                    : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
-                                )}
-                              >
-                                {delta > 0 ? '+' : '−'}
-                                {usd.format(Math.abs(delta))}
-                              </span>
-                            )}
-                          </span>
-                        </span>
-                      </div>
-                    )
-                  })()}
+              </h4>
+              <dl className={DETAIL_DL}>
+                {hasAmounts && (
+                  <>
+                    <dt className={DETAIL_DT}>{amountLabel}</dt>
+                    <dd className={DETAIL_DD}>
+                      <AmountSummary amounts={amounts} />
+                    </dd>
+                  </>
+                )}
                 {changeEntries.map((a) => {
                   const rawVal = a.value
+                  if (a.field === amountField) return null
+                  // Lines get their own line-by-line block below — the summary
+                  // row would only repeat its heading.
+                  if (Array.isArray(rawVal) && originalO2MMap[a.field]) return null
                   let displayVal: ReactNode
                   if (rawVal == null) {
                     displayVal = '—'
                   } else if (Array.isArray(rawVal)) {
-                    const origArr = originalO2MMap[a.field]
-                    if (!origArr) displayVal = `${rawVal.length} rows`
-                    else {
-                      const changed = rawVal.filter((row: Record<string, unknown>) => {
-                        const orig = origArr.find(
-                          (o: Record<string, unknown>) => String(o.id) === String(row.id)
-                        )
-                        if (!orig) return true
-                        return Object.keys(row).some(
-                          (k) => k !== 'id' && String(row[k] ?? '') !== String(orig[k] ?? '')
-                        )
-                      }).length
-                      displayVal =
-                        changed === 0
-                          ? 'no changes'
-                          : `${changed} of ${rawVal.length} rows modified`
-                    }
+                    displayVal = `${rawVal.length} row${rawVal.length === 1 ? '' : 's'}`
                   } else if (typeof rawVal === 'object') {
                     displayVal = JSON.stringify(rawVal).slice(0, 60)
                   } else if (isNumericField(a.field, rawVal)) {
@@ -1580,66 +1558,72 @@ function AddendumCard({
                     const cur = currentRecord?.[a.field]
                     const curNum =
                       cur != null && cur !== '' && !Number.isNaN(Number(cur)) ? Number(cur) : null
-                    const delta = curNum != null ? proposed - curNum : null
-                    const signed = (d: number) =>
-                      `${d > 0 ? '+' : '−'}${fmtNum(a.field, Math.abs(d))}`
-                    displayVal =
-                      curNum != null && curNum !== proposed ? (
-                        <span className='flex flex-col gap-0.5 tabular-nums'>
-                          <span>Previous: {fmtNum(a.field, curNum)}</span>
-                          <span>
-                            New: <span className='font-semibold'>{fmtNum(a.field, proposed)}</span>
+                    const delta = curNum != null ? proposed - curNum : 0
+                    displayVal = (
+                      <span className='inline-flex flex-wrap items-baseline gap-x-1.5 tabular-nums'>
+                        {curNum != null && curNum !== proposed && (
+                          <span className='text-slate-400 line-through decoration-slate-300 dark:text-slate-500 dark:decoration-slate-600'>
+                            {fmtNum(a.field, curNum)}
                           </span>
-                          <span
-                            className={
-                              delta! > 0
-                                ? 'text-emerald-600 dark:text-emerald-400'
-                                : 'text-red-600 dark:text-red-400'
-                            }
-                          >
-                            Change amount: {signed(delta!)}
-                          </span>
-                        </span>
-                      ) : (
-                        <span className='tabular-nums font-semibold'>
+                        )}
+                        <span className='font-medium text-foreground'>
+                          {curNum != null && curNum !== proposed && (
+                            <span className='mr-1 font-normal text-slate-400' aria-hidden='true'>
+                              →
+                            </span>
+                          )}
                           {fmtNum(a.field, proposed)}
                         </span>
-                      )
+                        {delta !== 0 && (
+                          <span
+                            className={cn(
+                              'rounded-full px-1.5 py-px text-[10px] font-medium',
+                              delta > 0
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+                                : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
+                            )}
+                          >
+                            {delta > 0 ? '+' : '−'}
+                            {fmtNum(a.field, Math.abs(delta))}
+                          </span>
+                        )}
+                      </span>
+                    )
                   } else {
                     displayVal = String(rawVal)
                   }
-                  // Lines get their own line-by-line block below — the summary
-                  // row would only repeat its heading.
-                  if (Array.isArray(rawVal) && originalO2MMap[a.field]) return null
                   return (
-                    <div key={a.field} className='flex items-baseline gap-2 text-[12px]'>
-                      <span className='min-w-[80px] shrink-0 text-slate-500 dark:text-slate-400'>
+                    <Fragment key={a.field}>
+                      <dt className={DETAIL_DT}>
                         {a.label_override ?? fieldMap[a.field]?.label ?? titleCase(a.field)}
-                      </span>
-                      <span className='font-mono text-[11px] text-slate-700 dark:text-slate-300 bg-slate-50 dark:bg-muted/50 rounded px-1.5 py-0.5 break-all'>
-                        {displayVal}
-                      </span>
-                    </div>
+                      </dt>
+                      <dd className={cn(DETAIL_DD, 'break-words')}>{displayVal}</dd>
+                    </Fragment>
                   )
                 })}
                 {settled &&
                   Object.entries(appliedLines ?? {}).map(([alias, l]) => (
-                    <AddendumLinesDiff
-                      key={`applied-${alias}`}
-                      client={client}
-                      childCollection={l.collection}
-                      fkField={l.fk}
-                      proposed={l.after}
-                      original={l.before}
-                      ignoreMissing
-                      label={fieldMap[alias]?.label ?? titleCase(alias)}
-                    />
+                    <Fragment key={`applied-${alias}`}>
+                      <dt className={DETAIL_DT}>{fieldMap[alias]?.label ?? titleCase(alias)}</dt>
+                      <dd className={DETAIL_DD}>
+                        <AddendumLinesDiff
+                          client={client}
+                          childCollection={l.collection}
+                          fkField={l.fk}
+                          proposed={l.after}
+                          original={l.before}
+                          ignoreMissing
+                          label={fieldMap[alias]?.label ?? titleCase(alias)}
+                        />
+                      </dd>
+                    </Fragment>
                   ))}
                 {o2mRelations.map(({ field, rel }) => {
                   const proposedRows = proposedData[field]
                   const qi = o2mRelations.findIndex((x) => x.field === field)
                   // A failed/empty load diffs against no rows; only wait while loading.
-                  const orig = originalO2MMap[field] ?? (o2mOriginalQueries[qi]?.isLoading ? null : [])
+                  const orig =
+                    originalO2MMap[field] ?? (o2mOriginalQueries[qi]?.isLoading ? null : [])
                   if (
                     settled ||
                     !Array.isArray(proposedRows) ||
@@ -1649,27 +1633,32 @@ function AddendumCard({
                   )
                     return null
                   const a = configuredFields.find((x) => x.field === field)
+                  const label = a?.label_override ?? fieldMap[field]?.label ?? titleCase(field)
                   return (
-                    <AddendumLinesDiff
-                      key={`lines-${field}`}
-                      client={client}
-                      childCollection={rel.many_collection}
-                      fkField={rel.many_field}
-                      proposed={proposedRows as Record<string, unknown>[]}
-                      original={orig}
-                      label={a?.label_override ?? fieldMap[field]?.label ?? titleCase(field)}
-                    />
+                    <Fragment key={`lines-${field}`}>
+                      <dt className={DETAIL_DT}>{label}</dt>
+                      <dd className={DETAIL_DD}>
+                        <AddendumLinesDiff
+                          client={client}
+                          childCollection={rel.many_collection}
+                          fkField={rel.many_field}
+                          proposed={proposedRows as Record<string, unknown>[]}
+                          original={orig}
+                          label={label}
+                        />
+                      </dd>
+                    </Fragment>
                   )
                 })}
-              </div>
-            </div>
+              </dl>
+            </section>
           )}
 
           {addendum.workflow_template_id && (
-            <div className='border-t border-slate-100 dark:border-border px-4 py-3'>
-              <p className='mb-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500'>
+            <div className='border-t border-slate-100 dark:border-border px-4 py-3.5'>
+              <h4 className='mb-3 text-[12.5px] font-semibold text-slate-800 dark:text-slate-100'>
                 Workflow
-              </p>
+              </h4>
               <AddendumWorkflowPanel addendumId={addendum.id} />
               {isAdmin && (
                 <div className='mt-2 flex items-center justify-end gap-2'>
