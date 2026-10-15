@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-15T14:21:47.396Z",
+  "generated_at": "2026-10-15T17:33:16.747Z",
   "releases": [
+    {
+      "version": "0.2.45",
+      "tag": "v0.2.45",
+      "date": "2026-10-15T13:32:33-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "aggregate-caps",
+              "text": "half-cent tolerance on sum_cap",
+              "hash": "a12b9fe2"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.44",
       "tag": "v0.2.44",
-      "date": "2026-10-15T10:21:31-04:00",
+      "date": "2026-10-15T10:21:47-04:00",
       "sections": [
         {
           "label": "Fixed",
