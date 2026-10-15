@@ -208,7 +208,10 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   if (capRaw == null) return
   const cap = Number(capRaw)
 
-  if (total <= cap) return
+  // Half-cent tolerance, same as the client twin (InlineTableField sum_cap):
+  // a client that adds line amounts in JS sends float noise (10854.960000000001
+  // against a cap of 10854.96) that must not read as over the cap.
+  if (total <= cap + 0.005) return
   // A group that is ALREADY over the cap (legacy data, a lowered cap) must
   // stay editable: a write that does not raise the group total — lowering a
   // row, or a no-op re-save — passes. Only a write that pushes the total
@@ -216,7 +219,8 @@ export async function evaluateSumCapRule(rule: SumCapRule, ctx: HookContext): Pr
   const before = existingSum + Number(currentRow?.[rule.sum_field] ?? 0)
   if (currentId != null && total <= before + 0.005) return
 
-  const explanation = `${rule.message} (${total} exceeds cap of ${cap})`
+  const round2 = (n: number) => Math.round(n * 100) / 100
+  const explanation = `${rule.message} (${round2(total)} exceeds cap of ${round2(cap)})`
 
   if (rule.severity === 'block') {
     throw new CapValidationError([{ rule: 'sum_cap', field: rule.sum_field, explanation }])
