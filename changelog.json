@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-15T17:33:16.747Z",
+  "generated_at": "2026-10-15T18:09:57.041Z",
   "releases": [
+    {
+      "version": "0.2.46",
+      "tag": "v0.2.46",
+      "date": "2026-10-15T14:09:44-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "keep legacy addendum cards on their own Amount row",
+              "hash": "ba1114f3"
+            },
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "show previous/new/change amount and justification on in-progress cards",
+              "hash": "0531f6e4"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.45",
       "tag": "v0.2.45",
-      "date": "2026-10-15T13:32:33-04:00",
+      "date": "2026-10-15T13:33:16-04:00",
       "sections": [
         {
           "label": "Fixed",
