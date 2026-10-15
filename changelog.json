@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-15T18:09:57.041Z",
+  "generated_at": "2026-10-15T18:44:46.819Z",
   "releases": [
+    {
+      "version": "0.2.47",
+      "tag": "v0.2.47",
+      "date": "2026-10-15T14:44:32-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "addendums",
+              "text": "show the amount once and calm the expanded card",
+              "hash": "c4861b34"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.46",
       "tag": "v0.2.46",
-      "date": "2026-10-15T14:09:44-04:00",
+      "date": "2026-10-15T14:09:57-04:00",
       "sections": [
         {
           "label": "Fixed",
