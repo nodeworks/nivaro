@@ -1467,7 +1467,9 @@ function AddendumCard({
       {expanded && (
         <div className='border-t border-slate-100 dark:border-border'>
           <AddendumDetails addendum={addendum} />
-          {(amounts.previous != null || amounts.next != null || amounts.change != null) && (
+          {/* Legacy/imported addendums (no field changes) keep their own Amount row below. */}
+          {!(changeCount === 0 && (addendum.previous_amount != null || addendum.new_amount != null)) &&
+            (amounts.previous != null || amounts.next != null || amounts.change != null) && (
             <div className='grid grid-cols-3 gap-3 px-4 pt-3'>
               {[
                 ['Previous amount', amounts.previous],
