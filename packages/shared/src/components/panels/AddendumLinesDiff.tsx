@@ -62,6 +62,25 @@ const visibleKey = (k: string, fkField: string) =>
   !k.startsWith('__') &&
   !k.includes('.')
 
+const MONEY_NAME = /amount|cost|price|total|budget|spend/i
+
+// Signed money change of one line cell (after − before), or null when the cell
+// is not a money column or either side is not a number. A missing side is 0.
+export function lineCellDelta(
+  field: string,
+  currency: boolean,
+  before: unknown,
+  after: unknown
+): number | null {
+  if (!currency && !MONEY_NAME.test(field)) return null
+  const num = (v: unknown) => (isEmpty(v) ? 0 : Number(v))
+  const a = num(before)
+  const b = num(after)
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null
+  const d = Math.round((b - a) * 100) / 100
+  return d === 0 ? null : d
+}
+
 /** Rows an addendum adds / changes / removes against the record's current rows. */
 export function diffAddendumLines(
   proposed: Row[],
@@ -262,6 +281,28 @@ export function AddendumLinesDiff({
     }
     return { text: s.length > 80 ? `${s.slice(0, 80)}…` : s }
   }
+  const deltaPill = (field: string, before: unknown, after: unknown) => {
+    const opts = parseOpts(fieldByName.get(field))
+    const d = lineCellDelta(field, opts.format === 'currency', before, after)
+    if (d == null) return null
+    return (
+      <span
+        className={cn(
+          'rounded-full px-1.5 py-px text-[10px] font-medium tabular-nums',
+          d > 0
+            ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-500/10 dark:text-emerald-400'
+            : 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400'
+        )}
+        title='Change amount'
+      >
+        {d > 0 ? '+' : '−'}
+        {Math.abs(d).toLocaleString('en-US', {
+          style: 'currency',
+          currency: (opts.currency as string) || 'USD'
+        })}
+      </span>
+    )
+  }
   const rowName = (r: Row) => {
     const n = orderKey ? r[orderKey] : undefined
     if (!isEmpty(n)) return `Line ${String(n)}`
@@ -347,7 +388,7 @@ export function AddendumLinesDiff({
                       <dt className='truncate text-slate-500 dark:text-slate-400'>
                         {labelFor(cell.field)}
                       </dt>
-                      <dd className='flex min-w-0 flex-wrap items-baseline gap-x-1.5'>
+                      <dd className='flex min-w-0 flex-wrap items-baseline gap-x-1.5 rounded bg-amber-50 px-1 dark:bg-amber-500/10'>
                         <span
                           className={cn(
                             'text-slate-400 line-through decoration-slate-300 dark:decoration-slate-600',
@@ -364,6 +405,7 @@ export function AddendumLinesDiff({
                           </span>
                           {to.text}
                         </span>
+                        {deltaPill(cell.field, cell.before, cell.after)}
                       </dd>
                     </Fragment>
                   )
@@ -390,8 +432,14 @@ export function AddendumLinesDiff({
                         <dt className='truncate text-slate-500 dark:text-slate-400'>
                           {labelFor(k)}
                         </dt>
-                        <dd className={cn('text-foreground', v.mono && 'tabular-nums')}>
+                        <dd
+                          className={cn(
+                            'flex flex-wrap items-baseline gap-x-1.5 text-foreground',
+                            v.mono && 'tabular-nums'
+                          )}
+                        >
                           {v.text}
+                          {deltaPill(k, null, r[k])}
                         </dd>
                       </Fragment>
                     )
@@ -418,11 +466,14 @@ export function AddendumLinesDiff({
                         <dt className='truncate'>{labelFor(k)}</dt>
                         <dd
                           className={cn(
-                            'line-through decoration-slate-300 dark:decoration-slate-600',
+                            'flex flex-wrap items-baseline gap-x-1.5',
                             v.mono && 'tabular-nums'
                           )}
                         >
-                          {v.text}
+                          <span className='line-through decoration-slate-300 dark:decoration-slate-600'>
+                            {v.text}
+                          </span>
+                          {deltaPill(k, r[k], null)}
                         </dd>
                       </Fragment>
                     )
