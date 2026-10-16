@@ -9520,21 +9520,6 @@ export function ItemEditForm({
                                             onJump={jumpToField}
                                           />
                                         )}
-                                        {showItemActions && !isNew && (
-                                          <ItemActionButtons
-                                            collection={collection}
-                                            itemId={String(itemId)}
-                                          />
-                                        )}
-                                        {/* Admin-defined no-code actions (#39) — always
-                                        mounted; renders nothing when none exist. */}
-                                        {!isNew && itemId && (
-                                          <CustomActionButtons
-                                            collection={collection}
-                                            itemId={String(itemId)}
-                                            draft={draft}
-                                          />
-                                        )}
                                         {/* Secondary tools — one "More" menu; the rows are the same
                                           components (dialogs, sheets, confirms unchanged). */}
                                         {!isNew && itemId && (
@@ -10075,6 +10060,24 @@ export function ItemEditForm({
                                             document.body
                                           )}
                                       </HeaderTools>
+                                      {/* Record actions stay inline beside Save, never in the
+                                        folded ⋯ panel: on a narrower screen Push to Fusion was
+                                        only reachable behind an unlabeled ⋯ and read as gone. */}
+                                      {showItemActions && !isNew && (
+                                        <ItemActionButtons
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                        />
+                                      )}
+                                      {/* Admin-defined no-code actions (#39) — always
+                                        mounted; renders nothing when none exist. */}
+                                      {!isNew && itemId && (
+                                        <CustomActionButtons
+                                          collection={collection}
+                                          itemId={String(itemId)}
+                                          draft={draft}
+                                        />
+                                      )}
                                       {!!activeLayoutData?.layout?.changes_tray && !readMode && (
                                         <ChangesTray
                                           items={changeItems}
