@@ -1,5 +1,6 @@
-import { getFields } from './collections.js'
 import { validatorRegistry } from '../extensions/validators.js'
+import { getFields } from './collections.js'
+import { daysFromToday } from './liquid-dates.js'
 
 /**
  * Server-side enforcement of `nivaro_fields.validation_rules`.
@@ -55,15 +56,9 @@ function isEmptyVal(v: unknown): boolean {
   return v === null || v === undefined || v === '' || (Array.isArray(v) && v.length === 0)
 }
 
-function calendarDaysFromToday(raw: unknown): number | null {
-  if (raw === null || raw === undefined || raw === '') return null
-  const d = new Date(String(raw))
-  if (Number.isNaN(d.getTime())) return null
-  const today = new Date()
-  const a = Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
-  const b = Date.UTC(today.getFullYear(), today.getMonth(), today.getDate())
-  return Math.round((a - b) / 86_400_000)
-}
+// Days are counted in the instance zone (Eastern by default), never the
+// container's UTC — a 9 PM Eastern save no longer counts as tomorrow.
+const calendarDaysFromToday = (raw: unknown): number | null => daysFromToday(raw)
 
 /** One rule against one value. Returns the error message, or null. */
 function conditionMatches(other: unknown, op: string, cmp: unknown): boolean {

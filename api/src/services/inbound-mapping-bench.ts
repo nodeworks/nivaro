@@ -1,6 +1,7 @@
 import { Liquid } from 'liquidjs'
 import type { ImportIssue } from './import-templates.js'
 import type { ImportHeaderRule, ImportLineConfig } from './import-templates-config.js'
+import { useZonedDates } from './liquid-dates.js'
 import { registerPayloadFilters } from './workflow-actions.js'
 
 // ─── Inbound mapping bench (#624 fixtures, #824 children, #825 responses) ───
@@ -260,6 +261,7 @@ export function outcomeOf(out: {
 
 const engine = new Liquid({ strictFilters: false, strictVariables: false })
 registerPayloadFilters(engine)
+useZonedDates(engine)
 
 /** Why a template does not parse, or null. */
 export function templateProblem(template: string | null | undefined): string | null {

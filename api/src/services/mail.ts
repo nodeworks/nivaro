@@ -5,6 +5,7 @@ import nodemailer from 'nodemailer'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { chainFields } from './chain-columns.js'
+import { useZonedDates } from './liquid-dates.js'
 import {
   applySenderName,
   brandContextFor,
@@ -30,8 +31,9 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url))
 const CORE_TEMPLATE_ROOT = join(__dirname, '../../templates/mail')
 let templateRoots: string[] = [CORE_TEMPLATE_ROOT]
 
+// Dates format in the instance zone, never the container's UTC (liquid-dates.ts).
 function buildEngine(): Liquid {
-  return new Liquid({ root: [...templateRoots], extname: '.liquid' })
+  return useZonedDates(new Liquid({ root: [...templateRoots], extname: '.liquid' }))
 }
 
 let engine = buildEngine()
