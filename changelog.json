@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-15T18:44:46.819Z",
+  "generated_at": "2026-10-16T21:08:31.751Z",
   "releases": [
+    {
+      "version": "0.2.48",
+      "tag": "v0.2.48",
+      "date": "2026-10-16T17:08:17-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "item-edit",
+              "text": "keep record actions inline instead of in the folded tools menu",
+              "hash": "88205188"
+            },
+            {
+              "section": "Fixed",
+              "scope": "dates",
+              "text": "format and count days in the instance timezone, not UTC",
+              "hash": "704fd161"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.47",
       "tag": "v0.2.47",
-      "date": "2026-10-15T14:44:32-04:00",
+      "date": "2026-10-15T14:44:46-04:00",
       "sections": [
         {
           "label": "Fixed",
