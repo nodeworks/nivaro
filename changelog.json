@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-16T21:08:31.751Z",
+  "generated_at": "2026-10-16T22:23:06.245Z",
   "releases": [
+    {
+      "version": "0.2.49",
+      "tag": "v0.2.49",
+      "date": "2026-10-16T18:22:51-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Chat Online list: give each person's current page its own line so it is never cut off (#2)",
+              "hash": "9b04b24c"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.48",
       "tag": "v0.2.48",
-      "date": "2026-10-16T17:08:17-04:00",
+      "date": "2026-10-16T17:08:31-04:00",
       "sections": [
         {
           "label": "Fixed",
