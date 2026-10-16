@@ -701,7 +701,8 @@ export async function generatePdfFromLayout(params: {
     const tmpl = await db('nivaro_pdf_templates').where({ id: layout.pdf_template_id }).first()
     if (tmpl?.template) {
       const { Liquid } = await import('liquidjs')
-      const engine = new Liquid()
+      const { useZonedDates } = await import('./liquid-dates.js')
+      const engine = useZonedDates(new Liquid())
       html = await engine.parseAndRender(tmpl.template as string, {
         cover_title: data.coverTitle,
         cover_subtitle: data.coverSubtitle,

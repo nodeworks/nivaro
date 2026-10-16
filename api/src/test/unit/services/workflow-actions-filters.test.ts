@@ -7,14 +7,17 @@ vi.mock('../../../services/integration-remediation.js', () => ({
   classifyError: vi.fn(() => 'unknown')
 }))
 
+import { dayInZone, useZonedDates } from '../../../services/liquid-dates.js'
 import {
-  registerPayloadFilters,
   addCalendarDays,
-  calendarDay
+  calendarDay,
+  registerPayloadFilters
 } from '../../../services/workflow-actions.js'
 
+// The db mock throws on the settings read, so the instance zone is the Eastern fallback.
 const engine = new Liquid({ strictFilters: false, strictVariables: false })
 registerPayloadFilters(engine)
+useZonedDates(engine)
 const render = (tpl: string, scope: Record<string, unknown> = {}) =>
   engine.parseAndRender(tpl, scope)
 
@@ -65,6 +68,39 @@ describe('calendar days', () => {
     expect(calendarDay(evening)).toBe('2026-09-27')
     expect(calendarDay('not a date')).toBeNull()
   })
+
+  it('counts days in the zone it is given, whatever the process zone', () => {
+    // 9:30 PM EDT on Sep 27 is already Sep 28 in UTC.
+    const lateEvening = new Date('2026-09-28T01:30:00Z')
+    const ET = 'America/New_York'
+    expect(calendarDay(undefined, lateEvening, ET)).toBe('2026-09-27')
+    expect(calendarDay(lateEvening, new Date(), ET)).toBe('2026-09-27')
+    expect(calendarDay('2026-09-28T01:30:00.000Z', new Date(), ET)).toBe('2026-09-27')
+    // Calendar dates keep their day: date-only, UTC midnight (SQL `date`), naive.
+    expect(calendarDay('2026-10-16', new Date(), ET)).toBe('2026-10-16')
+    expect(calendarDay(new Date(Date.UTC(2026, 9, 16)), new Date(), ET)).toBe('2026-10-16')
+    expect(calendarDay('2026-10-16T00:00:00', new Date(), ET)).toBe('2026-10-16')
+    expect(calendarDay('2026-10-16 23:30:00', new Date(), ET)).toBe('2026-10-16')
+  })
+})
+
+describe('payload day filters count Eastern days', () => {
+  it('add_days / iso_date / at_least_days_out read an evening timestamp as its Eastern day', async () => {
+    const v = '2026-09-28T01:30:00.000Z' // Sep 27, 9:30 PM EDT
+    expect(await render('{{ v | add_days: 1 }}', { v })).toBe('2026-09-28')
+    expect(await render('{{ v | iso_date }}', { v })).toBe('2026-09-27')
+    expect(await render('{{ v | at_least_days_out: 0 }}', { v: '2099-01-01T01:30:00Z' })).toBe(
+      '2098-12-31'
+    )
+  })
+
+  it('iso_date keeps a SQL date and renders nothing for nothing', async () => {
+    expect(await render('{{ v | iso_date }}', { v: new Date(Date.UTC(2026, 9, 16)) })).toBe(
+      '2026-10-16'
+    )
+    expect(await render('{{ v | iso_date }}', { v: '' })).toBe('')
+    expect(await render('{{ v | iso_date }}', { v: 'junk' })).toBe('')
+  })
 })
 
 describe('payload template filters — the pre-existing set still registers', () => {
@@ -74,12 +110,9 @@ describe('payload template filters — the pre-existing set still registers', ()
   })
 
   it('add_days on a missing variable counts from today', async () => {
-    // Sixty days on the calendar from today's date here, whatever the hour
-    // and whether or not a daylight-saving change falls in between.
-    const now = new Date()
-    const iso = new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate() + 60))
-      .toISOString()
-      .slice(0, 10)
+    // Sixty days on the calendar from today's Eastern date, whatever the hour,
+    // the process zone, or a daylight-saving change in between.
+    const iso = addCalendarDays(dayInZone(new Date(), 'America/New_York'), 60)
     expect(await render('{{ missing | add_days: 60 }}')).toBe(iso)
     // The idiom for "today + N" in a template: LiquidJS's `nil` literal hands a
     // filter an internal Nil object (not null), so `{{ nil | add_days: 60 }}`

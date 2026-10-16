@@ -9,8 +9,9 @@
  */
 import { Liquid } from 'liquidjs'
 import PDFDocument from 'pdfkit'
+import { useZonedDates } from './liquid-dates.js'
 
-const engine = new Liquid()
+const engine = useZonedDates(new Liquid())
 
 // ─── Markup parsing ──────────────────────────────────────────────────────────
 
