@@ -20,6 +20,7 @@ import {
   Info,
   Lock,
   LogOut,
+  MapPin,
   MessageCircle,
   MessageSquareReply,
   NotebookPen,
@@ -4611,39 +4612,75 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                               </span>
                             )
                           })()}
-                          <span className='block truncate text-[11px] text-slate-400'>
-                            {(() => {
-                              const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
-                              // Instance config decides which parts appear and in
-                              // what order; the live page comes from the presence
-                              // heartbeat, so it tracks people as they navigate.
-                              const parts = presenceExtras.fields
-                                .map((f) => {
-                                  if (f === 'role') return humanLabel(x?.role_name ?? u.role_name)
-                                  if (f === 'scopes') return (x?.scopes ?? []).join(', ') || null
-                                  if (f === 'page') {
-                                    // The server renders a record's display template
-                                    // ("Orders › AB26-12345"); prettyPath can only
-                                    // reach the raw id, so it is the fallback.
-                                    const page =
-                                      (x as { page?: string | null })?.page ??
-                                      (u as { page?: string | null }).page ??
-                                      prettyPath(x?.current_path ?? u.current_path)
-                                    const app =
-                                      (x as { app?: string | null })?.app ??
-                                      (u as { app?: string | null }).app
-                                    // Only unusual places are worth naming; the
-                                    // ordinary frontend sends no app at all.
-                                    return app
-                                      ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim()
-                                      : page
-                                  }
-                                  return null
-                                })
-                                .filter(Boolean)
-                              return parts.join(' · ') || 'Online'
-                            })()}
-                          </span>
+                          {(() => {
+                            const x = presenceExtras.byUser.get(String(u.user_id).toUpperCase())
+                            // Instance config decides which parts appear and in
+                            // what order; the live page comes from the presence
+                            // heartbeat, so it tracks people as they navigate.
+                            // The page gets its own line so a long zone list can
+                            // never push it into the ellipsis.
+                            const meta: string[] = []
+                            let pageText: string | null = null
+                            for (const f of presenceExtras.fields) {
+                              if (f === 'role') {
+                                const r = humanLabel(x?.role_name ?? u.role_name)
+                                if (r) meta.push(r)
+                              } else if (f === 'scopes') {
+                                const sc = (x?.scopes ?? []).join(', ')
+                                if (sc) meta.push(sc)
+                              } else if (f === 'page') {
+                                // The server renders a record's display template
+                                // ("Orders › AB26-12345"); prettyPath can only
+                                // reach the raw id, so it is the fallback.
+                                const page =
+                                  (x as { page?: string | null })?.page ??
+                                  (u as { page?: string | null }).page ??
+                                  prettyPath(x?.current_path ?? u.current_path)
+                                const app =
+                                  (x as { app?: string | null })?.app ??
+                                  (u as { app?: string | null }).app
+                                // Only unusual places are worth naming; the
+                                // ordinary frontend sends no app at all.
+                                pageText =
+                                  (app
+                                    ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim()
+                                    : page) || null
+                              }
+                            }
+                            const metaText = meta.join(' · ')
+                            if (!metaText && !pageText) {
+                              return (
+                                <span className='block truncate text-[11px] text-slate-400'>
+                                  Online
+                                </span>
+                              )
+                            }
+                            return (
+                              <>
+                                {metaText && (
+                                  <span
+                                    className='block truncate text-[11px] text-slate-400'
+                                    data-chat-online-meta
+                                    title={metaText}
+                                  >
+                                    {metaText}
+                                  </span>
+                                )}
+                                {pageText && (
+                                  <span
+                                    className='flex items-start gap-1 text-[11px] text-slate-500 dark:text-slate-300'
+                                    data-chat-online-page
+                                    title={pageText}
+                                  >
+                                    <MapPin className='mt-[2px] h-3 w-3 shrink-0 text-slate-400' />
+                                    <span className='line-clamp-2 min-w-0 break-words'>
+                                      {pageText}
+                                    </span>
+                                  </span>
+                                )}
+                              </>
+                            )
+                          })()}
                         </span>
                         {(() => {
                           // Admin-only: jump straight into this person's live session
