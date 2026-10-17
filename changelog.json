@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-17T20:05:19.223Z",
+  "generated_at": "2026-10-17T23:21:30.825Z",
   "releases": [
+    {
+      "version": "0.2.51",
+      "tag": "v0.2.51",
+      "date": "2026-10-17T19:21:13-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "items",
+              "text": "_or/_and under an M2O filter the related record",
+              "hash": "f5c78980"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "docs update",
+              "hash": "4f82c87e"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.50",
       "tag": "v0.2.50",
-      "date": "2026-10-17T16:05:03-04:00",
+      "date": "2026-10-17T16:05:19-04:00",
       "sections": [
         {
           "label": "Other",
