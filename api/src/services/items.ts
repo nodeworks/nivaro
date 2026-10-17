@@ -1811,6 +1811,13 @@ function assertOps(
 
 const FILTER_DEPTH = 8
 
+/** An M2O value made only of comparison operators (`{_eq: 5}`) compares the FK
+ *  column. `_and`/`_or` filter the RELATED record (`{_or: [{state: …}, …]}`),
+ *  so their presence makes it a nested filter. */
+function isOperatorOnly(nested: Record<string, unknown>): boolean {
+  return Object.keys(nested).every((k) => k.startsWith('_') && k !== '_and' && k !== '_or')
+}
+
 /**
  * Walk a filter the way applyFilters will and refuse what it cannot compile:
  * a nested key under a field that links to nothing, an operator that does not
@@ -1862,7 +1869,7 @@ async function assertFilterCompiles(
     const m2o = findM2ORelation(key, collection, rels)
     if (m2o && isObject) {
       const nested = value as Record<string, unknown>
-      if (Object.keys(nested).every((k) => k.startsWith('_'))) {
+      if (isOperatorOnly(nested)) {
         assertOps(nested, collection, key, path)
       } else {
         const target = m2o.rel.one_collection as string
@@ -2069,9 +2076,8 @@ function applyFilters(
       const relatedCollection = rel.one_collection as string
       const nestedFilter = value as Record<string, unknown>
 
-      // Check if all keys are operator keys (start with _) → filter on the FK column itself
-      const allOperators = Object.keys(nestedFilter).every((k) => k.startsWith('_'))
-      if (allOperators) {
+      // Only operator keys → filter on the FK column itself
+      if (isOperatorOnly(nestedFilter)) {
         // Treat as scalar filter on the FK column
         for (const [op, val] of Object.entries(nestedFilter)) {
           applyOneFilterOp(q, `${collection}.${fkField}`, op, val)
