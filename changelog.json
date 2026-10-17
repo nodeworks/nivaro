@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-16T22:23:06.245Z",
+  "generated_at": "2026-10-17T20:05:19.223Z",
   "releases": [
+    {
+      "version": "0.2.50",
+      "tag": "v0.2.50",
+      "date": "2026-10-17T16:05:03-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Idea board: post, find similar, vote, admin status/merge/link, notify voters (#3)",
+              "hash": "49795463"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.49",
       "tag": "v0.2.49",
-      "date": "2026-10-16T18:22:51-04:00",
+      "date": "2026-10-16T18:23:06-04:00",
       "sections": [
         {
           "label": "Other",
