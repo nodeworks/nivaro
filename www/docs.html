@@ -507,6 +507,7 @@
           <a class="docs-nav-item" data-section="message-actions" href="#message-actions">Slack / Teams Message Actions</a>
           <a class="docs-nav-item" data-section="help-videos" href="#help-videos">Help Videos</a>
           <a class="docs-nav-item" data-section="help-videos-api" href="#help-videos-api">Help Videos API</a>
+          <a class="docs-nav-item" data-section="ideas" href="#ideas">Idea Board</a>
         </div>
       </div>
 
@@ -15666,6 +15667,40 @@ POST /api/message-actions/callback
           <p class="doc-p">Find free music asks Openverse (api.openverse.org) from the server; the browser never talks to it. Set HELP_VIDEO_OPENVERSE=off on an instance without internet access or where outside downloads are not allowed. Anonymous searches are rate-limited by Openverse; OPENVERSE_CLIENT_ID and OPENVERSE_CLIENT_SECRET (registered at api.openverse.org) raise the limit.</p>
           <div class="doc-note doc-warn">Video streams straight from local or network-mounted storage. On an S3 or Azure storage driver every byte-range request reads the whole stored object into memory before sending the requested slice, and storing a finished recording or render reads the whole file too — fine for short tutorials, but a 30-minute recording can mean a gigabyte of memory per seek. Keep help videos on local or network storage, or keep them short, until remote drivers gain ranged reads.</div>
           <!-- /SYNC:help-videos-api -->
+        </div>
+        <div class="doc-section" id="s-ideas" data-toc='[{"id":"ideas","label":"Idea board"},{"id":"ideas-suggest","label":"Suggest a feature"},{"id":"ideas-vote","label":"Voting"},{"id":"ideas-admin","label":"Managing ideas (admins)"}]'>
+          <!-- SYNC:ideas -->
+          <h1 class="doc-h1" id="ideas">Idea board</h1>
+          <p class="doc-p">The idea board collects feature requests from everyone who signs in. Each idea is a record of the <code class="doc-code">ideas</code> collection, so it works in queues, reports, dashboards and Ask AI like any other collection, and its edits show in activity and revisions.</p>
+          <h2 class="doc-h2" id="ideas-suggest">Suggest a feature</h2>
+          <p class="doc-p">**Suggest a feature** (in the Home panel, next to Support and Videos) opens a short form. As you type a title, ideas that look similar appear underneath (matched by meaning when an embedding model is set up, otherwise by words), each with a **Vote** button. Vote for an existing idea instead of filing a duplicate; if none fits, add a description and **Submit idea**. Your vote is added to a new idea automatically.</p>
+          <h2 class="doc-h2" id="ideas-vote">Voting</h2>
+          <p class="doc-p">**Ideas** (same panel) lists every open idea, most-voted first, with a status filter. Click the vote button to vote or take your vote back — one vote per person per idea. When an admin changes an idea’s status, everyone who voted for it gets an in-app notification with the new status and the admin’s note.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Status</th><th>Meaning</th></tr></thead>
+            <tbody><tr><tr><td>Under review</td><td>New, not decided yet (every idea starts here)</td></tr>
+              <tr><td>Planned</td><td>Accepted and scheduled</td></tr>
+              <tr><td>Built</td><td>Shipped</td></tr>
+              <tr><td>Declined</td><td>Not going to happen — the note says why</td></tr></tr></tbody>
+          </table></div>
+          <h2 class="doc-h2" id="ideas-admin">Managing ideas (admins)</h2>
+          <ul class="doc-ul">
+            <li>**Status** — pick a status, write a note for voters and **Save status and notify voters**. Every change is kept in the idea’s status history.</li>
+            <li>**Merge** — find the idea to keep and **Merge**. Votes move to it (someone who voted for both still counts once), the merged idea is kept but hidden from the board and from similar results, and its voters are told where their vote went.</li>
+            <li>**Link to a backlog record** — pick a collection and a record. The link is an ordinary related-record link (<code class="doc-code">relates to</code>), so it shows on the idea and on the record’s Related records panel.</li>
+          </ul>
+          <div class="doc-note">Every role that existed when the idea board was installed can read and add ideas. Grant **read** and **create** on <code class="doc-code">ideas</code> to roles you add later.</div>
+          <h3 class="doc-h3">API</h3>
+          <pre class="doc-pre"><code>GET    /api/ideas?status=planned          list (not merged), with your vote state
+GET    /api/ideas/similar?q=export%20queue  ranked matches, merged ideas excluded
+GET    /api/ideas/:id                      idea, status history, merges, links
+POST   /api/ideas                          { title, description }  → creator's vote added
+POST   /api/ideas/:id/vote                 vote (a second vote changes nothing)
+DELETE /api/ideas/:id/vote                 take the vote back
+PATCH  /api/ideas/:id/status               admin: { status, note } → voters notified
+POST   /api/ideas/:id/merge                admin: { into } → votes moved, source kept
+POST   /api/ideas/:id/link                 admin: { collection, id } → 'relates to' link</code></pre>
+          <!-- /SYNC:ideas -->
         </div>
 
         <!-- ════ ADMIN UX & SEARCH ════ -->

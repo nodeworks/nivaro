@@ -109,6 +109,7 @@ import { healthRoutes } from './health.js'
 import { helpVideoAdminRoutes } from './help-video-admin.js'
 import { helpVideoMediaRoutes, helpVideosRoutes } from './help-videos.js'
 import { hierarchyRoutes } from './hierarchy.js'
+import { ideasRoutes } from './ideas.js'
 import { importTemplatesRoutes } from './import-templates.js'
 import { importsRoutes } from './imports.js'
 import { inactiveUserLinkRoutes } from './inactive-user-links.js'
@@ -482,6 +483,7 @@ export async function registerRoutes(app: FastifyInstance) {
   // Stream / captions / poster: no authenticate hook — a signed ?st= ticket
   // authorises them, since <video>/<track>/<img> cannot send a bearer token.
   await app.register(helpVideoMediaRoutes, { prefix: '/help-videos' })
+  await app.register(ideasRoutes, { prefix: '/ideas' })
   await app.register(flowsRoutes, { prefix: '/flows' })
   await app.register(webhookFlowRoute, { prefix: '/flows' })
   // Static /flows/registered-* routes — no extra prefix; registerRoutes is

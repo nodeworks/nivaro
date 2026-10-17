@@ -42,6 +42,7 @@ import {
   Layers,
   LayoutGrid,
   LifeBuoy,
+  Lightbulb,
   Link2,
   ListChecks,
   ListFilter,
@@ -49,6 +50,7 @@ import {
   Mail,
   MailCheck,
   Megaphone,
+  MessageSquarePlus,
   MessagesSquare,
   MonitorPlay,
   Network,
@@ -155,7 +157,14 @@ export const navCategories: NavCategory[] = [
         label: 'Videos',
         to: '/help-videos',
         keywords: 'help tutorial training how to demo'
-      }
+      },
+      {
+        icon: MessageSquarePlus,
+        label: 'Suggest a feature',
+        to: '/ideas?suggest=1',
+        keywords: 'idea feature request feedback vote'
+      },
+      { icon: Lightbulb, label: 'Ideas', to: '/ideas', keywords: 'feature requests vote roadmap' }
     ]
   },
   {
