@@ -161,6 +161,10 @@ const DataIntegrityPage = lazy(() => import('@/pages/DataIntegrity'))
 const AnnouncementsPage = lazy(() => import('@/pages/Announcements'))
 const MyWorkPage = lazy(() => import('@/pages/MyWork').then((m) => ({ default: m.MyWorkPage })))
 const SupportPage = lazy(() => import('@/pages/Support').then((m) => ({ default: m.SupportPage })))
+const IdeasPage = lazy(() => import('@/pages/Ideas').then((m) => ({ default: m.IdeasPage })))
+const IdeaDetailPage = lazy(() =>
+  import('@/pages/IdeaDetail').then((m) => ({ default: m.IdeaDetailPage }))
+)
 const HelpVideosPage = lazy(() =>
   import('@/pages/HelpVideos').then((m) => ({ default: m.HelpVideosPage }))
 )
@@ -564,6 +568,8 @@ export default function App() {
                   <Route path='my-work' element={<MyWorkPage />} />
                   <Route path='support' element={<SupportPage />} />
                   <Route path='help-videos' element={<HelpVideosPage />} />
+                  <Route path='ideas' element={<IdeasPage />} />
+                  <Route path='ideas/:id' element={<IdeaDetailPage />} />
                   <Route path='integration-health' element={<IntegrationHealthPage />} />
                   <Route
                     path='integration-events'

@@ -7,6 +7,7 @@
 const loaders: Record<string, () => Promise<unknown>> = {
   '/': () => import('@/pages/Dashboard'),
   '/my-work': () => import('@/pages/MyWork'),
+  '/ideas': () => import('@/pages/Ideas'),
   '/collections': () => import('@/pages/Collections'),
   '/users': () => import('@/pages/Users'),
   '/roles': () => import('@/pages/Roles'),
