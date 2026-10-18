@@ -9,6 +9,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../ui/popover'
 import {
   type ChatMessage,
   type ChatOnlineUser,
+  chatRoomTypesQuery,
   dmPeer,
   getMentionQuery,
   useChatBotName,
@@ -19,6 +20,7 @@ import {
   useUserSearch
 } from './chat-core'
 import { useRoomInfo, useScheduledMessages } from './chat-hooks'
+import { tsvToTable } from './MessageFormat'
 import {
   type BuiltinSlash,
   filterSlash,
@@ -28,7 +30,6 @@ import {
   slashQuery,
   useChatCommands
 } from './SlashCommands'
-import { tsvToTable } from './MessageFormat'
 
 /**
  * The chat composer, shared by a room and a thread pane.
@@ -235,22 +236,7 @@ export const ChatComposer = forwardRef<
   }, [mentionQuery, info, dmPeers, cfg.onlineUsers, searched, botName, isChannel, me])
 
   // ── # record picker (#934) ────────────────────────────────────────────────
-  const { data: roomTypes } = useQuery({
-    queryKey: ['nvr-chat-room-types'],
-    queryFn: () =>
-      client
-        .request<{
-          data: Array<{
-            prefix: string
-            collection: string
-            match_field: string
-            is_active: boolean
-            label: string | null
-          }>
-        }>(get('/chat/room-types'))
-        .then((r) => (r.data ?? []).filter((t) => t.is_active)),
-    staleTime: 5 * 60_000
-  })
+  const { data: roomTypes } = useQuery(chatRoomTypesQuery(client))
   const { data: recordHits = [] } = useQuery({
     queryKey: ['nvr-chat-record-pick', recordQ],
     queryFn: async () => {

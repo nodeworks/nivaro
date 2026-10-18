@@ -150,16 +150,28 @@ function useRecheckOnRecordWrites(collection: string, itemId: string) {
   const qc = useQueryClient()
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null
+    const isOurs = (key: readonly unknown[] | undefined) => {
+      const head = key?.[0]
+      return (
+        (head === 'item' && key?.[1] === collection && String(key?.[2]) === String(itemId)) ||
+        (typeof head === 'string' && head.startsWith('o2m-rows') && String(key?.[3]) === itemId) ||
+        (head === 'erp-submissions' && key?.[1] === collection && String(key?.[2]) === itemId)
+      )
+    }
+    // A refetch that brought back the SAME data (react-query keeps the old
+    // reference when nothing changed) is not a write — re-checking on it
+    // re-sent the preflight/outbound reads on every record-page refetch wave.
+    const seen = new Map<string, unknown>()
+    for (const q of qc.getQueryCache().getAll())
+      if (isOurs(q.queryKey)) seen.set(q.queryHash, q.state.data)
     const unsub = qc.getQueryCache().subscribe((ev) => {
       if (ev.type !== 'updated' || ev.action?.type !== 'success') return
+      if (!isOurs(ev.query.queryKey)) return
+      const had = seen.has(ev.query.queryHash)
+      const prev = seen.get(ev.query.queryHash)
+      seen.set(ev.query.queryHash, ev.query.state.data)
       if (ev.query.state.dataUpdateCount <= 1) return
-      const key = ev.query.queryKey
-      const head = key?.[0]
-      const ours =
-        (head === 'item' && key[1] === collection && String(key[2]) === String(itemId)) ||
-        (typeof head === 'string' && head.startsWith('o2m-rows') && String(key[3]) === itemId) ||
-        (head === 'erp-submissions' && key[1] === collection && String(key[2]) === itemId)
-      if (!ours) return
+      if (had && prev === ev.query.state.data) return
       if (timer) clearTimeout(timer)
       timer = setTimeout(() => {
         void qc.invalidateQueries({ queryKey: ['push-preflight', collection, itemId] })

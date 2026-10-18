@@ -981,6 +981,11 @@ export const apiCollections: DocSection = {
       rows: [
         ['GET', '/api/collections', 'List all registered collections with field counts.'],
         ['GET', '/api/collections/:name', 'Single collection metadata + its fields array.'],
+        [
+          'GET',
+          '/api/collections?names=a,b,c',
+          'Batched metadata: up to 50 table-shaped names → { data: { <name>: <same body as GET /:name> }, missing: [names not registered], errors: { <name>: message } }. 400 on a bad name or too many. The shared client batches GET /collections/:name reads made within ~10 ms through it automatically.'
+        ],
         ['POST', '/api/collections', 'Register a new collection from existing table.'],
         ['PATCH', '/api/collections/:name', 'Update collection settings (label, icon, etc).'],
         [

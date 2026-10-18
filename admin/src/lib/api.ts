@@ -1,3 +1,4 @@
+import { forgetSettledReads } from '@nivaro/shared'
 import axios from 'axios'
 import { getCloudPlugins, getExtensionPlugins } from '@/extensions/store'
 import { readMasquerade } from './masquerade'
@@ -24,8 +25,15 @@ api.interceptors.request.use((config) => {
 })
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    // Shared components reuse configuration answers for a few seconds
+    // (request-gate settled reads); a write made through axios — the admin's
+    // schema and layout editors — must not be shadowed by one.
+    if ((res.config.method ?? 'get').toLowerCase() !== 'get') forgetSettledReads()
+    return res
+  },
   (err) => {
+    if ((err.config?.method ?? 'get').toLowerCase() !== 'get') forgetSettledReads()
     const status = err.response?.status
 
     // DB outage posture (#329): the server answers fast 503s while the

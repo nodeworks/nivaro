@@ -1652,6 +1652,7 @@ INNGEST_SIGNING_KEY_DOCKER=abcdef...   # 64-char hex, used by docker-compose</co
               <tbody>
                 <tr><td><span class="method method-get">GET</span></td><td><code class="doc-code">/api/collections</code></td><td>List all collections for the current workspace</td></tr>
                 <tr><td><span class="method method-get">GET</span></td><td><code class="doc-code">/api/collections/:name</code></td><td>Get a single collection with its fields and relations</td></tr>
+                <tr><td><span class="method method-get">GET</span></td><td><code class="doc-code">/api/collections?names=a,b,c</code></td><td>Batched metadata for up to 50 collections in one call: <code class="doc-code">{ data: { name: … }, missing, errors }</code>, each entry the same body as the single read</td></tr>
                 <tr><td><span class="method method-post">POST</span></td><td><code class="doc-code">/api/collections</code></td><td>Register a new collection</td></tr>
                 <tr><td><span class="method method-patch">PATCH</span></td><td><code class="doc-code">/api/collections/:name</code></td><td>Update collection metadata</td></tr>
                 <tr><td><span class="method method-delete">DELETE</span></td><td><code class="doc-code">/api/collections/:name</code></td><td>Unregister a collection (does not drop the table)</td></tr>
@@ -2891,6 +2892,7 @@ Authorization: Bearer &lt;token&gt;
             <thead><tr><th>Method</th><th>Path</th><th>Description</th></tr></thead>
             <tbody><tr><tr><td>GET</td><td>/api/collections</td><td>List all registered collections with field counts.</td></tr>
               <tr><td>GET</td><td>/api/collections/:name</td><td>Single collection metadata + its fields array.</td></tr>
+              <tr><td>GET</td><td>/api/collections?names=a,b,c</td><td>Batched metadata: up to 50 table-shaped names → { data: { &lt;name&gt;: &lt;same body as GET /:name&gt; }, missing: [names not registered], errors: { &lt;name&gt;: message } }. 400 on a bad name or too many. The shared client batches GET /collections/:name reads made within ~10 ms through it automatically.</td></tr>
               <tr><td>POST</td><td>/api/collections</td><td>Register a new collection from existing table.</td></tr>
               <tr><td>PATCH</td><td>/api/collections/:name</td><td>Update collection settings (label, icon, etc).</td></tr>
               <tr><td>DELETE</td><td>/api/collections/:name</td><td>Unregister collection from the CMS (table is not dropped).</td></tr>

@@ -1,4 +1,4 @@
-import { readItems } from '@nivaro/sdk'
+import { type NivaroClient, readItems } from '@nivaro/sdk'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -1147,12 +1147,34 @@ export function useMarkRoomRead() {
 
 // ── Entity-room record link ──────────────────────────────────────────────────
 
-interface ChatRoomType {
-  id: number
+/** One registered entity-room type, as `GET /chat/room-types` lists it. */
+export interface ChatRoomTypeRow {
+  id?: number
   prefix: string
   collection: string
   match_field: string
   is_active: boolean
+  label?: string | null
+}
+
+export const CHAT_ROOM_TYPES_KEY = ['nvr-chat-room-types'] as const
+
+/**
+ * THE room-type registry read — the ACTIVE types, one cache entry for every
+ * reader (record links in text, the composer's # picker, room cards, the
+ * record header's chat button). Readers that each wrote their own queryFn —
+ * one under its own key — fetched the list twice per record page. Hosts
+ * reading the registry themselves should use this too (efp-new's tab strip).
+ */
+export function chatRoomTypesQuery(client: Pick<NivaroClient, 'request'>) {
+  return {
+    queryKey: CHAT_ROOM_TYPES_KEY,
+    queryFn: async (): Promise<ChatRoomTypeRow[]> => {
+      const res = await client.request(get<{ data?: ChatRoomTypeRow[] }>('/chat/room-types'))
+      return (res?.data ?? []).filter((t) => t.is_active)
+    },
+    staleTime: 5 * 60_000
+  }
 }
 
 /**
@@ -1172,17 +1194,7 @@ export function useEntityRoomLink(room: string | null): string | null {
   const isEntity =
     !!room && !!prefix && !!token && room !== cfg.globalRoom && prefix !== 'dm' && prefix !== 'ch'
 
-  const { data: types } = useQuery({
-    queryKey: ['nvr-chat-room-types'],
-    queryFn: async () => {
-      const res = (await client.request(get<{ data: ChatRoomType[] }>('/chat/room-types'))) as {
-        data: ChatRoomType[]
-      }
-      return res.data ?? []
-    },
-    enabled: isEntity,
-    staleTime: 5 * 60_000
-  })
+  const { data: types } = useQuery({ ...chatRoomTypesQuery(client), enabled: isEntity })
   const type = isEntity ? types?.find((t) => t.is_active && t.prefix === prefix) : undefined
 
   const { data: recordId } = useQuery({
@@ -1596,17 +1608,7 @@ export interface RecordRoomType {
  *  header's chat button, so a list and a record form ask once between them. */
 export function useRecordRoomTypes(enabled = true): RecordRoomType[] | undefined {
   const client = useNivaroClient()
-  const { data } = useQuery({
-    queryKey: ['nvr-chat-room-types'],
-    queryFn: async () => {
-      const res = (await client.request(get<{ data: RecordRoomType[] }>('/chat/room-types'))) as {
-        data: RecordRoomType[]
-      }
-      return (res.data ?? []).filter((t) => t.is_active)
-    },
-    enabled,
-    staleTime: 5 * 60_000
-  })
+  const { data } = useQuery({ ...chatRoomTypesQuery(client), enabled })
   return data
 }
 

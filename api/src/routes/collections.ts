@@ -116,11 +116,143 @@ async function synthesizeFields(collection: string): Promise<CMSField[]> {
   }
 }
 
+const parseJsonText = (v: string | null | undefined): unknown => {
+  if (!v) return null
+  try {
+    return JSON.parse(v)
+  } catch {
+    return null
+  }
+}
+
+const parseJsonList = (v: string | null | undefined): string[] | null => {
+  const parsed = parseJsonText(v)
+  return Array.isArray(parsed) ? parsed.filter((f) => typeof f === 'string') : null
+}
+
+/**
+ * One collection's metadata exactly as `GET /collections/:collection` sends it
+ * (its `data`), or null when the collection is not registered. The single read
+ * and the batched read (`GET /collections?names=`) both answer through this, so
+ * the two can never drift in shape or in what they expose.
+ */
+export async function collectionMetaPayload(
+  collection: string
+): Promise<Record<string, unknown> | null> {
+  const col = await svc.getCollection(collection)
+  if (!col) return null
+  const [metaFields, relations] = await Promise.all([
+    svc.getFields(collection),
+    svc.getRelations(collection)
+  ])
+  const baseFields = metaFields.length > 0 ? metaFields : await synthesizeFields(collection)
+  // Calculated fields that compile to SQL can be filtered and sorted; the
+  // list UI reads this flag instead of guessing from the formula.
+  const { sqlFilterableVirtualFields } = await import('../services/items.js')
+  const sqlFields = new Map(
+    (await sqlFilterableVirtualFields(collection).catch(() => [])).map((f) => [f.field, f.kind])
+  )
+  const fields =
+    sqlFields.size === 0
+      ? baseFields
+      : baseFields.map((f) =>
+          sqlFields.has(f.field)
+            ? { ...f, sql_filterable: true, sql_kind: sqlFields.get(f.field) }
+            : f
+        )
+  const c = col as CMSCollection & {
+    browser_config?: string | null
+    change_reason_config?: string | null
+    empty_state?: string | null
+    read_mode_toggle?: unknown
+    summary_mode_rules?: string | null
+    delete_guard?: string | null
+    url_alias_fields?: string | null
+    upsert_keys?: string | null
+  }
+  return {
+    ...col,
+    fields,
+    relations,
+    // browser_config / change_reason_config / empty_state / delete_guard are
+    // JSON text — parsed for consumers (CollectionBrowserView et al.).
+    browser_config: parseJsonText(c.browser_config),
+    change_reason_config: parseJsonText(c.change_reason_config),
+    empty_state: parseJsonText(c.empty_state),
+    // Migration 306 — bit column, always a boolean on the wire (an image
+    // whose DB predates the column reads undefined → false).
+    read_mode_toggle: !!c.read_mode_toggle,
+    // Migration 310 — Summary Mode rules (role × state → mode); always the
+    // normalized object on the wire (null/invalid → {default:'edit', rules:[]}).
+    summary_mode_rules: parseSummaryModeRules(c.summary_mode_rules),
+    delete_guard: parseJsonText(c.delete_guard),
+    url_alias_fields: parseJsonList(c.url_alias_fields),
+    upsert_keys: parseJsonList(c.upsert_keys)
+  }
+}
+
+/** Most collections one batched metadata read may name (the client's chunk size). */
+export const COLLECTION_BATCH_LIMIT = 50
+/** A collection name the batched read accepts — a table name, nothing else. */
+const COLLECTION_NAME_RE = /^[A-Za-z_][A-Za-z0-9_-]{0,127}$/
+
+/**
+ * `?names=a,b,c` → the distinct names, or a reason the list is refused.
+ * Every name must look like a table name and there may be at most
+ * COLLECTION_BATCH_LIMIT of them.
+ */
+export function parseCollectionNames(raw: unknown): { names: string[] } | { error: string } {
+  if (typeof raw !== 'string') return { error: 'names must be a comma-separated list' }
+  const names = [
+    ...new Set(
+      raw
+        .split(',')
+        .map((n) => n.trim())
+        .filter(Boolean)
+    )
+  ]
+  if (names.length === 0) return { error: 'names is empty' }
+  if (names.length > COLLECTION_BATCH_LIMIT)
+    return { error: `At most ${COLLECTION_BATCH_LIMIT} names per request` }
+  const bad = names.find((n) => !COLLECTION_NAME_RE.test(n))
+  if (bad !== undefined) return { error: `Invalid collection name: ${bad.slice(0, 80)}` }
+  return { names }
+}
+
 export async function collectionsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', resolveWorkspace)
 
-  app.get<{ Querystring: { tables_only?: string } }>('/', async (req, reply) => {
+  app.get<{ Querystring: { tables_only?: string; names?: string } }>('/', async (req, reply) => {
+    // Batched metadata read: `?names=a,b,c` answers what `GET /:collection`
+    // would for each name, in one round trip (a record page touches 40+
+    // collections). Same plugin hooks (authenticate + resolveWorkspace) and
+    // the same payload builder as the single read, so nothing is visible
+    // here that the single read would not show. `data` is an OBJECT keyed by
+    // name — the plain list answers an array, which is how a client tells an
+    // older server (no batch support) apart. Unregistered names go to
+    // `missing` (the single read's 404); a name whose read failed goes to
+    // `errors` without failing the rest.
+    if (req.query.names !== undefined) {
+      const parsed = parseCollectionNames(req.query.names)
+      if ('error' in parsed) return reply.code(400).send({ error: parsed.error })
+      const data: Record<string, Record<string, unknown>> = {}
+      const missing: string[] = []
+      const errors: Record<string, string> = {}
+      await Promise.all(
+        parsed.names.map(async (name) => {
+          try {
+            const meta = await collectionMetaPayload(name)
+            if (meta) data[name] = meta
+            else missing.push(name)
+          } catch (err) {
+            req.log.warn({ err, collection: name }, 'batched collection metadata read failed')
+            errors[name] = 'Internal Server Error'
+          }
+        })
+      )
+      return reply.send({ data, missing, errors })
+    }
     const tablesOnly = req.query.tables_only === 'true'
     if (tablesOnly) {
       const data = await svc.listTableCollections()
@@ -132,98 +264,9 @@ export async function collectionsRoutes(app: FastifyInstance) {
 
   app.get('/:collection', async (req, reply) => {
     const { collection } = req.params as { collection: string }
-    const col = await svc.getCollection(collection)
-    if (!col) return reply.code(404).send({ error: 'Not found' })
-    const [metaFields, relations] = await Promise.all([
-      svc.getFields(collection),
-      svc.getRelations(collection)
-    ])
-    const baseFields = metaFields.length > 0 ? metaFields : await synthesizeFields(collection)
-    // Calculated fields that compile to SQL can be filtered and sorted; the
-    // list UI reads this flag instead of guessing from the formula.
-    const { sqlFilterableVirtualFields } = await import('../services/items.js')
-    const sqlFields = new Map(
-      (await sqlFilterableVirtualFields(collection).catch(() => [])).map((f) => [f.field, f.kind])
-    )
-    const fields =
-      sqlFields.size === 0
-        ? baseFields
-        : baseFields.map((f) =>
-            sqlFields.has(f.field)
-              ? { ...f, sql_filterable: true, sql_kind: sqlFields.get(f.field) }
-              : f
-          )
-    const parseJsonList = (v: string | null | undefined): string[] | null => {
-      if (!v) return null
-      try {
-        const parsed = JSON.parse(v)
-        return Array.isArray(parsed) ? parsed.filter((f) => typeof f === 'string') : null
-      } catch {
-        return null
-      }
-    }
-    // browser_config is JSON text — parse for consumers (CollectionBrowserView).
-    const raw = (col as { browser_config?: string | null }).browser_config
-    let browserConfig: unknown = null
-    if (raw) {
-      try {
-        browserConfig = JSON.parse(raw)
-      } catch {
-        browserConfig = null
-      }
-    }
-    // change_reason_config is JSON text too — same parse-for-consumers treatment
-    const rawCr = (col as { change_reason_config?: string | null }).change_reason_config
-    let changeReasonConfig: unknown = null
-    if (rawCr) {
-      try {
-        changeReasonConfig = JSON.parse(rawCr)
-      } catch {
-        changeReasonConfig = null
-      }
-    }
-    // empty_state is JSON text ({title?, message?, cta_label?, cta_url?}) —
-    // parse for consumers, same treatment as browser_config.
-    const rawEs = (col as { empty_state?: string | null }).empty_state
-    let emptyState: unknown = null
-    if (rawEs) {
-      try {
-        emptyState = JSON.parse(rawEs)
-      } catch {
-        emptyState = null
-      }
-    }
-    return reply.send({
-      data: {
-        ...col,
-        fields,
-        relations,
-        browser_config: browserConfig,
-        change_reason_config: changeReasonConfig,
-        empty_state: emptyState,
-        // Migration 306 — bit column, always a boolean on the wire (an image
-        // whose DB predates the column reads undefined → false).
-        read_mode_toggle: !!(col as { read_mode_toggle?: unknown }).read_mode_toggle,
-        // Migration 310 — Summary Mode rules (role × state → mode); always the
-        // normalized object on the wire (null/invalid → {default:'edit', rules:[]}).
-        summary_mode_rules: parseSummaryModeRules(
-          (col as { summary_mode_rules?: string | null }).summary_mode_rules
-        ),
-        delete_guard: (() => {
-          const rawDg = (col as { delete_guard?: string | null }).delete_guard
-          if (!rawDg) return null
-          try {
-            return JSON.parse(rawDg)
-          } catch {
-            return null
-          }
-        })(),
-        url_alias_fields: parseJsonList(
-          (col as { url_alias_fields?: string | null }).url_alias_fields
-        ),
-        upsert_keys: parseJsonList((col as { upsert_keys?: string | null }).upsert_keys)
-      }
-    })
+    const data = await collectionMetaPayload(collection)
+    if (!data) return reply.code(404).send({ error: 'Not found' })
+    return reply.send({ data })
   })
 
   app.post('/', async (req, reply) => {
