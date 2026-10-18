@@ -233,7 +233,9 @@ const SOURCE_KIND_TEXT: Record<string, string> = {
   cron: 'scheduled job',
   flow: 'flow',
   import: 'staged imports',
-  socket: 'socket.io events'
+  socket: 'socket.io events',
+  stream: 'stream events',
+  mcp: 'MCP calls'
 }
 function downSub(id: string, kind = 'partner'): string {
   if (id === 'db') return 'reads and writes'
@@ -243,6 +245,8 @@ function downSub(id: string, kind = 'partner'): string {
   if (kind === 'ai') return 'AI calls'
   if (kind === 'webhook') return 'webhook deliveries'
   if (kind === 'partner') return 'partner calls'
+  if (kind === 'media') return 'video and replay requests'
+  if (kind === 'search') return 'searches'
   return 'calls'
 }
 

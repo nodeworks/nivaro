@@ -384,7 +384,13 @@ function SocketEvents({
 register(inspectorPanels, {
   id: 'topology-source',
   order: 5,
-  applies: (sel) => sel.kind === 'caller' && sel.id.includes(':') && sel.id !== OTHER_SOURCES,
+  // stream:* and mcp:* sources have their own panels (features/realtime-nodes)
+  applies: (sel) =>
+    sel.kind === 'caller' &&
+    sel.id.includes(':') &&
+    sel.id !== OTHER_SOURCES &&
+    !sel.id.startsWith('stream:') &&
+    sel.id !== 'mcp:clients',
   Component: SourcePanel
 })
 

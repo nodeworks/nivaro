@@ -28,6 +28,7 @@ import {
   recheckStreamIdentity,
   redeemStreamTicket
 } from '../services/stream-ticket.js'
+import { openStream } from '../services/traffic-taps/realtime.js'
 import type { User } from '../types.js'
 import { graphqlSseRoutes } from './graphql-sse.js'
 
@@ -279,11 +280,16 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
 
     wss.handleUpgrade(req, socket, head, (client) => {
       const extra: WsExtra = { socket: client, request: req as WsExtra['request'] }
+      // Traffic Map (#2155): the connection and what it sends are counted as a stream.
+      const stream = openStream('graphql-ws')
       const closed = wsServer.opened(
         {
           protocol: client.protocol,
           send: async (data) => {
-            if (client.readyState === WebSocket.OPEN) client.send(data)
+            if (client.readyState === WebSocket.OPEN) {
+              stream.write(Buffer.byteLength(data), true)
+              client.send(data)
+            }
           },
           close: (code, reason) => client.close(code, reason),
           onMessage: (cb) => client.on('message', (data: Buffer | string) => cb(data.toString()))
@@ -291,6 +297,7 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
         extra
       )
       client.once('close', (code: number, reason: Buffer) => {
+        stream.close()
         if (extra.nvrWatch) clearInterval(extra.nvrWatch)
         void closed(code, reason?.toString() ?? '')
       })

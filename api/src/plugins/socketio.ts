@@ -80,6 +80,14 @@ export function usersOnPathPrefix(prefixes: string[]): string[] {
 }
 
 import { noteSocket } from '../services/traffic-map.js'
+import {
+  noteRoomBroadcast,
+  noteRoomDelivery,
+  noteSocketApp,
+  noteSocketClose,
+  noteSocketOpen,
+  noteSocketTransport
+} from '../services/traffic-taps/realtime.js'
 import type { User } from '../types.js'
 
 declare module 'fastify' {
@@ -439,6 +447,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     adapter.apply = (opts, cb) => {
       const prev = broadcastRoom
       broadcastRoom = roomsLabel(opts?.rooms)
+      noteRoomBroadcast(broadcastRoom)
       try {
         return origApply(opts, cb)
       } finally {
@@ -565,7 +574,16 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
     socket.conn?.on?.('upgrade', (t: { name?: string }) => {
       const meta = socketMeta.get(socket.id)
       if (meta) meta.transport = t?.name ?? meta.transport
+      noteSocketTransport(socket.id, t?.name)
     })
+    // Traffic Map (#2263): what the server can see of this connection, for the long-polling list.
+    noteSocketOpen(
+      socket.id,
+      socket.handshake?.headers as Record<string, unknown> | undefined,
+      socket.handshake?.address,
+      socket.conn?.transport?.name
+    )
+    socket.once('disconnect', () => noteSocketClose(socket.id))
 
     // #1732 — which tenant this socket belongs to (cloud), for per-tenant counters.
     let tenantKey: string | null = null
@@ -625,6 +643,11 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         sizeOf(encoded),
         tenantKey
       )
+      noteRoomDelivery(
+        `collection:${String(payload.collection ?? '')}`,
+        'collection:update',
+        sizeOf(encoded)
+      )
       if (isInspected(socket.id))
         noteInspected(
           socket.id,
@@ -647,10 +670,12 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
             }
           }
           recordOutbound(eventNameOf(p) ?? `packet:${p[0] ?? '?'}`, room, sizeOf(p), tenantKey)
+          noteRoomDelivery(room, eventNameOf(p) ?? `packet:${p[0] ?? '?'}`, sizeOf(p))
           if (isInspected(socket.id))
             noteInspected(socket.id, eventNameOf(p) ?? `packet:${p[0] ?? '?'}`, room, sizeOf(p))
         } else {
           recordOutbound('binary', room, sizeOf(p), tenantKey)
+          noteRoomDelivery(room, 'binary', sizeOf(p))
           if (isInspected(socket.id)) noteInspected(socket.id, 'binary', room, sizeOf(p))
         }
         origWrite(p, opts)
@@ -688,6 +713,7 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
         if (!meta) return
         if (typeof payload?.reconnects === 'number') meta.reconnects = payload.reconnects
         if (typeof payload?.app === 'string') meta.app = payload.app.slice(0, 50)
+        noteSocketApp(socket.id, payload?.app)
         // #1681 — opt-in: only a client that understands merged messages gets them, so an older
         // client (a portal on a pinned package) keeps one message per change.
         if (

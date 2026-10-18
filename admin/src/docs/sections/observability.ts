@@ -897,6 +897,27 @@ export const obsTrafficMapPlatform: DocSection = {
       type: 'p',
       text: 'Each API process counts its own traffic. While anyone watches the map, every process publishes its frames through the cache and the page merges them, so the map shows the whole deployment. When more than one process is sending, a Nodes control appears: all nodes combined (the default) or one process. Snapshots can be taken of every node or one. When nobody watches, nothing is published. In-flight requests, slow requests and the event loop stay per process.'
     },
+    {
+      type: 'h2',
+      id: 'traffic-map-realtime-nodes',
+      text: 'Live connections, media, search and MCP'
+    },
+    {
+      type: 'p',
+      text: 'These nodes cover traffic that never shows up as an ordinary request. Their figures come from the API process you are connected to, and none of them is available in cloud mode.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Sockets node: select the Sockets lane or the Browser sockets source. Adapter lag is the time from a record event being written on another replica to this one delivering it; the node gets a badge when the average passes `ADAPTER_LAG_WARN_MS` (500 ms) or doubles against the minutes before. Replica clocks that disagree show up as lag.',
+        'Busiest rooms ranks socket rooms by members or by events per minute. Click a record, collection or watch room to see who is in it and its recent events. Rooms that name a person or a private conversation (user and chat rooms except General) are folded into one row per kind and show counts only.',
+        'Connection problems lists failed and downgraded socket connections reported by the browsers, grouped by network (the /24 of the address), browser and app, so a corporate proxy or an extension that breaks live updates shows up as one row. It also lists the sockets on long-polling right now. Reports are kept in memory for 24 hours and each person can send six a minute.',
+        'Streams: every open Server-Sent Events stream (GraphQL subscriptions, the record event feed, saved views, the admin change feed) and graphql-ws subscription is a source feeding the Sockets lane, with connections open now, events sent and bytes. Heartbeats count toward bytes, not events.',
+        'Media node: help-video streams and session-replay uploads, with bandwidth (the size each response or upload declares), people active in the last minute and failures.',
+        'Search node: omnisearch, cross-collection, meaning and settings search, and the search box of a collection list, with their database time and the slowest queries.',
+        'MCP clients: calls through the MCP server appear as the AI assistants source, with the tools used, the API keys that signed in and recent errors. The MCP server sends `x-nivaro-app: mcp` and `x-nivaro-mcp-tool` on every call; update `@nivaro/mcp` to see tool names.'
+      ]
+    },
     { type: 'h2', id: 'traffic-map-cloud', text: 'Cloud mode' },
     {
       type: 'p',

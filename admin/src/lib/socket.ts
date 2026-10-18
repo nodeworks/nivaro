@@ -133,6 +133,23 @@ let sseMode = false
 let sse: EventSource | null = null
 let sseKey = ''
 let socketFailures = 0
+
+// Traffic Map (#2263): tell the server when live updates fail or fall back, so a network or
+// browser that keeps breaking them stands out. At most once per kind per ten minutes; best effort.
+const reportedAt: Record<string, number> = {}
+function reportConnection(kind: 'failed' | 'downgraded', transport: string, reason: string) {
+  const key = `${kind}:${transport}`
+  const now = Date.now()
+  if (now - (reportedAt[key] ?? 0) < 600_000) return
+  reportedAt[key] = now
+  try {
+    void api
+      .post('/connection-reports', { kind, transport, reason, app: 'admin' })
+      .catch(() => undefined)
+  } catch {
+    /* best effort */
+  }
+}
 let leaderDeliver: ((event: string, payload: unknown) => void) | null = null
 
 function closeSse() {
@@ -185,6 +202,7 @@ async function considerSseFallback() {
     .catch(() => false)
   // The API is down, not blocked: the socket's own reconnect handles that.
   if (!reachable || sseMode || socket?.connected) return
+  reportConnection('downgraded', 'sse', 'socket-blocked')
   sseMode = true
   syncSse()
 }
@@ -224,8 +242,13 @@ export function getSocket(): Socket {
       if (token) socket?.emit('auth', { token })
     })
   })
-  socket.on('connect_error', () => {
+  socket.on('connect_error', (err?: Error) => {
     if (sessionEnded) return
+    reportConnection(
+      'failed',
+      socket?.io.engine?.transport?.name ?? 'unknown',
+      err?.message ?? 'connect_error'
+    )
     if (!sseMode) setStatus({ state: 'reconnecting', refreshed: null })
     void considerSseFallback()
   })
@@ -247,6 +270,7 @@ export function getSocket(): Socket {
     const transportName = () =>
       (engine?.transport?.name as RealtimeStatus['transport'] | undefined) ?? null
     engine?.once('upgrade', () => setStatus({ transport: transportName() }))
+    if (transportName() === 'polling') reportConnection('downgraded', 'polling', 'polling-fallback')
     // #1048 — the same build signal every request carries (x-nivaro-client).
     socket?.emit('client:hello', {
       reconnects: Math.max(0, reconnects),

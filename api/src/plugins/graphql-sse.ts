@@ -28,6 +28,7 @@ import {
   redeemStreamTicket
 } from '../services/stream-ticket.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
+import { trackSse } from '../services/traffic-taps/realtime.js'
 import type { User } from '../types.js'
 import type { WsContext } from './graphql.js'
 
@@ -320,6 +321,7 @@ export async function graphqlSseRoutes(app: FastifyInstance, deps: StreamDeps): 
       connection: 'keep-alive',
       'x-accel-buffering': 'no'
     })
+    trackSse(raw, 'graphql-sse')
     raw.write(': connected\n\n')
 
     let closed = false

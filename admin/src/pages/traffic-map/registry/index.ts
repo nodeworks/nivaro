@@ -57,6 +57,7 @@ import '../features/inspect-actions'
 import '../features/partners'
 import '../features/integrations'
 import '../features/people-ux'
+import '../features/realtime-nodes'
 
 export {
   type CanvasLayer,
