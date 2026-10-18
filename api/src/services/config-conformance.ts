@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { integrityChangedFor } from '../lib/integrity-notify.js'
 import { selectInChunks } from './db-batch.js'
 import { RowRuleLookupCache } from './field-rules.js'
 import {
@@ -1908,6 +1909,14 @@ export async function storeRecordResult(
   const payload = JSON.stringify(
     findings.map((f) => ({ field: f.field, rule: f.rule, message: f.message.slice(0, 1000) }))
   )
+  // The on-load live check runs on every open; telling the record's viewers
+  // (the opener included) to re-read an unchanged result only refetched it.
+  const previous =
+    source === 'live'
+      ? ((await db('nivaro_record_integrity')
+          .where({ collection, item_id: String(id) })
+          .first('findings')) as { findings?: string | null } | undefined)
+      : undefined
   const updated = await db('nivaro_record_integrity')
     .where({ collection, item_id: String(id) })
     .update({ findings: payload, checked_at: now, source })
@@ -1923,7 +1932,8 @@ export async function storeRecordResult(
   }
   // #1829: viewers of the record refresh the integrity banner + field marks now
   // (a notice only — they read the stored result through the gated route).
-  if (source !== 'sweep') emitRecordEvent(collection, id, 'record:integrity')
+  if (integrityChangedFor(source, previous?.findings, payload))
+    emitRecordEvent(collection, id, 'record:integrity')
   const run = (await db('nivaro_conformance_runs')
     .where({ collection, status: 'completed' })
     .orderBy('id', 'desc')

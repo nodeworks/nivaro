@@ -1871,7 +1871,11 @@ export function AddendumPanel({
     queryFn: () =>
       client
         .request<{ data: Addendum[] }>(get(`/addendums/${collection}/${item}`))
-        .then((r) => r.data ?? [])
+        .then((r) => r.data ?? []),
+    // The form reads this key first (staleTime 30 s); with none here the panel,
+    // mounting just after, counted that answer stale and fetched it again.
+    // Live sync and the panel's own writes invalidate it.
+    staleTime: 30_000
   })
 
   // Resolve the addendum layout: use provided ID or fall back to first addendum-type layout

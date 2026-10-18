@@ -1146,8 +1146,12 @@ export function WidgetSlot({
 
   // Auto-include scalar item draft fields so toggle/field-update actions work
   // without requiring explicit input bindings for every field. Explicit bindings override.
+  // Dotted keys are relation-path DISPLAY values (resolve-paths), never columns:
+  // they land a moment after the record and re-rendered every widget once per
+  // open. A widget that needs one binds it explicitly.
   const draftScalars: Record<string, unknown> = {}
   for (const [k, v] of Object.entries(itemDraft)) {
+    if (k.includes('.')) continue
     if (v == null || typeof v !== 'object') draftScalars[k] = v
   }
   const inputs = { ...draftScalars, ...resolveInputs(inputBindings, itemDraft) }

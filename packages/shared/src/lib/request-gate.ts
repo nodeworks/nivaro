@@ -340,8 +340,10 @@ function collectionMetaBatcher(client: NivaroClient) {
  * server.
  */
 export const SETTLED_READ_MS = 3000
+// `/users/me` too: the form (role), chat (preferences) and presence (id) each
+// read it under their own key and shape, a few hundred ms apart on one load.
 const SETTLED_READ_PATHS =
-  /^\/(collections\/[A-Za-z_][A-Za-z0-9_-]*|field-config\/[A-Za-z_][A-Za-z0-9_-]*|collection-layouts(\/active|\/summary\/[A-Za-z_][A-Za-z0-9_-]*)?|chat\/room-types)$/
+  /^\/(collections\/[A-Za-z_][A-Za-z0-9_-]*|field-config\/[A-Za-z_][A-Za-z0-9_-]*|collection-layouts(\/active|\/summary\/[A-Za-z_][A-Za-z0-9_-]*)?|chat\/room-types|users\/me)$/
 
 /**
  * Writes a record page makes all the time that can never change

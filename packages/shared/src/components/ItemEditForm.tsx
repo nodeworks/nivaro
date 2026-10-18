@@ -1522,6 +1522,10 @@ export function ItemEditForm({
   // whose stored draft has not been looked at yet, or a clean form would
   // delete the draft it is about to be offered.
   const [recoveryCheckedKey, setRecoveryCheckedKey] = useState<string | null>(null)
+  // Whether this person may hold a SERVER copy of the draft: one was found by
+  // the recovery check or put since. A clean form only deletes the server copy
+  // then — it used to send DELETE /drafts on every draft change of a clean open.
+  const serverDraftRef = useRef(false)
   const [justSaved, setJustSaved] = useState(false)
 
   // Cross-field writes from structured interfaces (range/date-range end
@@ -2641,6 +2645,7 @@ export function ItemEditForm({
           .catch(() => null)
       : Promise.resolve(null)
     void Promise.all([loadDraft(recoveryKey), serverDraft]).then(([local, remote]) => {
+      if (remote) serverDraftRef.current = true
       if (cancelled) return
       setRecoveryCheckedKey(recoveryKey)
       const stored =
@@ -2679,10 +2684,12 @@ export function ItemEditForm({
     const t = setTimeout(() => {
       if (!isDirty) {
         void deleteDraft(recoveryKey)
-        if (authUserId)
+        if (authUserId && serverDraftRef.current) {
+          serverDraftRef.current = false
           void client
             .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
             .catch(() => {})
+        }
         return
       }
       const base = initialDataRef.current
@@ -2720,14 +2727,17 @@ export function ItemEditForm({
       }
       if (!draftHasContent(stored)) {
         void deleteDraft(recoveryKey)
-        if (authUserId)
+        if (authUserId && serverDraftRef.current) {
+          serverDraftRef.current = false
           void client
             .request(del(`/drafts/${collection}/${isNew ? 'new' : String(itemId)}`))
             .catch(() => {})
+        }
         return
       }
       void saveDraft(stored)
       // #24 — mirror to the server so the draft follows the person.
+      if (authUserId) serverDraftRef.current = true
       if (authUserId)
         void client
           .request(
@@ -3747,9 +3757,13 @@ export function ItemEditForm({
       ),
     [relations, collection]
   )
+  // The counts read the grid's own cache entry (InlineTableField / SummaryPanel:
+  // same key, request and row shape) and select the length — a separate
+  // 'o2m-count' key fetched the identical rows a second time on every open,
+  // and nothing ever refreshed it after a line write.
   const o2mQueryResults = useQueries({
     queries: o2mRelations.map((r) => ({
-      queryKey: ['o2m-count', r.many_collection, r.many_field, itemId],
+      queryKey: ['o2m-rows', r.many_collection, r.many_field, itemId, ''],
       queryFn: () =>
         client
           .request<{ data: Record<string, unknown>[] }>(
@@ -3758,7 +3772,8 @@ export function ItemEditForm({
               limit: 200
             })
           )
-          .then((res) => res.data?.length ?? 0),
+          .then((res) => res.data ?? []),
+      select: (rows: Record<string, unknown>[]) => rows.length,
       enabled: !!itemId && !isNew,
       staleTime: 30_000
     }))
