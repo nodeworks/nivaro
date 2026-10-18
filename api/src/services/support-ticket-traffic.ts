@@ -7,6 +7,7 @@
  * and the route that serves it is for people who work the desk, never the requester.
  */
 import { db } from '../db/index.js'
+import { pathTemplate } from './traffic-entities.js'
 
 /** Minutes either side of the moment the ticket was raised. */
 export const AROUND_MIN = 30
@@ -46,14 +47,13 @@ export interface TicketTraffic {
   rum: boolean
 }
 
-/** `/api/items/orders/3F2504E0-...` becomes `/api/items/orders/:id`; the query string goes. */
+/**
+ * `/api/items/orders/3F2504E0-...` becomes `/api/items/orders/:id`; the query string goes. The
+ * desk is not all administrators, so ids, token-like segments (share and public-link tokens are
+ * working credentials) and emails are all folded, by the map's own route template rule.
+ */
 export function foldPath(raw: string): string {
-  const p = String(raw ?? '').split('?')[0]
-  return p
-    .split('/')
-    .map((seg) => (/^[0-9a-f]{8}-[0-9a-f]{4}-/i.test(seg) || /^\d+$/.test(seg) ? ':id' : seg))
-    .join('/')
-    .slice(0, 160)
+  return pathTemplate(String(raw ?? '').split('?')[0]).slice(0, 160)
 }
 
 /** Pure: summarise the rows of one window. */
@@ -92,14 +92,15 @@ export function summariseTicketTraffic(
   for (const r of rum) {
     const at = new Date(r.created_at).getTime()
     if (!Number.isFinite(at) || at < from || at > to) continue
-    const p = pages.get(r.route) ?? { n: 0, sum: 0, k: 0, worst: 0 }
+    const route = foldPath(r.route)
+    const p = pages.get(route) ?? { n: 0, sum: 0, k: 0, worst: 0 }
     p.n++
     if (r.duration_ms != null && Number.isFinite(Number(r.duration_ms))) {
       p.sum += Number(r.duration_ms)
       p.k++
       p.worst = Math.max(p.worst, Number(r.duration_ms))
     }
-    pages.set(r.route, p)
+    pages.set(route, p)
   }
   return {
     moment,

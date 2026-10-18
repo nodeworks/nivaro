@@ -249,7 +249,7 @@ export function newVsExperienced(
 /** `Chrome 126`, `Safari 17`, `Edge 126`, `Firefox 127`; a bot or unknown agent is 'Other'. */
 export function parseBrowser(ua: string | null | undefined): { browser: string; os: string } {
   const s = String(ua ?? '')
-  const ver = (re: RegExp) => re.exec(s)?.[1]?.split('.')[0]
+  const ver = (re: RegExp) => re.exec(s)?.[1]?.split('.')[0]?.slice(0, 4)
   let browser = 'Other'
   const edge = ver(/Edg(?:e|A|iOS)?\/(\d+)/)
   const opera = ver(/OPR\/(\d+)/)

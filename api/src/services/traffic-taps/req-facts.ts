@@ -48,9 +48,11 @@ export function headerOf(r: ReqLike | null, name: string): string | null {
   return typeof v === 'string' ? v : null
 }
 
-/** First x-forwarded-for hop, else the socket peer (same rule as the request log). */
+/**
+ * The caller's address as Fastify resolved it through TRUST_PROXY. Never the raw
+ * x-forwarded-for header: its leftmost entry is whatever the client sent, so the session and
+ * place detectors built on this would be defeated by one forged header.
+ */
 export function clientIpOf(r: ReqLike | null): string | null {
-  const fwd = headerOf(r, 'x-forwarded-for')
-  const first = (fwd ?? '').split(',')[0].trim()
-  return (first || r?.ip || null)?.slice(0, 64) ?? null
+  return r?.ip ? r.ip.slice(0, 64) : null
 }

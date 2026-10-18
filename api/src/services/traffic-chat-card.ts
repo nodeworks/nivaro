@@ -20,7 +20,7 @@ export const MAX_LIVE_CARDS = 10
 export const READINGS_CAP = 24
 
 export type CardKind = 'entity' | 'down'
-export type FreezeReason = 'manual' | 'recovered' | 'expired' | 'deleted' | 'restart'
+export type FreezeReason = 'manual' | 'recovered' | 'expired' | 'deleted' | 'restart' | 'access'
 
 export interface Reading {
   label: string
@@ -73,7 +73,8 @@ const FREEZE_WORDS: Record<FreezeReason, string> = {
   recovered: 'incident over, no errors for a while',
   expired: 'stopped refreshing after two hours',
   deleted: 'message deleted',
-  restart: 'the server restarted'
+  restart: 'the server restarted',
+  access: 'the person who posted it can no longer see this room'
 }
 
 /** The message text for a card's current state. */
@@ -134,6 +135,11 @@ export interface CardIo {
   read(kind: CardKind, node: string): Reading | null
   /** Rewrite the chat message; false when the message is gone. */
   write(message: number, text: string): Promise<boolean>
+  /**
+   * Whether the poster may still write into the card's room. Checked every refresh, so a card
+   * stops (frozen, last text kept) once its admin loses the room or the account.
+   */
+  mayPost?(card: Card): Promise<boolean>
 }
 
 /** Start refreshing a freshly posted card. Throws when MAX_LIVE_CARDS are already live. */
@@ -152,6 +158,11 @@ async function tick(message: number, io: CardIo): Promise<void> {
   const card = st.cards.get(message)
   if (!card || card.status !== 'live') return stopTimer(message)
   const now = Date.now()
+  if (io.mayPost && !(await io.mayPost(card).catch(() => false))) {
+    freezeCard(card, 'access', now)
+    stopTimer(message)
+    return
+  }
   const reason = stepCard(card, io.read(card.kind, card.node), now)
   if (reason) freezeCard(card, reason, now)
   const ok = await io.write(message, renderCard(card)).catch(() => true)

@@ -251,3 +251,16 @@ describe('chat card (#2277)', () => {
     expect(c.last).toMatchObject({ req: 0, error: 0, label: 'orders (items)' })
   })
 })
+
+describe('ticket traffic paths shown to the desk', () => {
+  it('folds ids, share tokens and emails', () => {
+    expect(foldPath('/api/items/orders/3F2504E0-4F89-11D3-9A0C-0305E82C3301?x=1')).toBe(
+      '/api/items/orders/:id'
+    )
+    expect(foldPath('/api/session-replay-shares/view/a8Fk29xQpL0zR7mN')).toBe(
+      '/api/session-replay-shares/view/:id'
+    )
+    expect(foldPath('/api/directory/users/jane.doe%40example.com')).toBe('/api/directory/users/:id')
+    expect(foldPath('/share/k3Jd8sLq0Pz1Xc9V')).toBe('/share/:id')
+  })
+})

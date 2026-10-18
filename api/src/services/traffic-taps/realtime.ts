@@ -556,7 +556,19 @@ export function noteConnectionReport(
     if (!cur) {
       if (reports.size >= REPORT_CAP) {
         for (const [k, v] of reports) if (at - v.lastAt > REPORT_TTL_MS) reports.delete(k)
-        if (reports.size >= REPORT_CAP) return
+        // Still full: the least recently seen group makes room, so one reporter cycling made-up
+        // slugs can push out stale groups but never lock new ones out for a day.
+        if (reports.size >= REPORT_CAP) {
+          let oldest: string | null = null
+          let oldestAt = Number.POSITIVE_INFINITY
+          for (const [k, v] of reports) {
+            if (v.lastAt < oldestAt) {
+              oldestAt = v.lastAt
+              oldest = k
+            }
+          }
+          if (oldest) reports.delete(oldest)
+        }
       }
       cur = { ...g, n: 0, people: new Set(), firstAt: at, lastAt: at }
       reports.set(key, cur)

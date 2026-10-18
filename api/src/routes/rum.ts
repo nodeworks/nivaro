@@ -40,7 +40,13 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
         app: typeof e.app === 'string' ? e.app.slice(0, 100) : null,
         user: req.user?.id ?? null,
         created_at: new Date(),
-        ...(device ? { browser: device.browser, os: device.os, screen: screenClass(e.vw) } : {})
+        ...(device
+          ? {
+              browser: device.browser.slice(0, 40),
+              os: device.os.slice(0, 30),
+              screen: screenClass(e.vw)
+            }
+          : {})
       }))
     if (rows.length > 0)
       await db('nivaro_rum_events')

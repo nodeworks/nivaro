@@ -36,9 +36,8 @@ export async function connectionReportRoutes(app: FastifyInstance): Promise<void
         report,
         who,
         String(req.headers['user-agent'] ?? ''),
-        String(req.headers['x-forwarded-for'] ?? '')
-          .split(',')[0]
-          ?.trim() || req.ip
+        // TRUST_PROXY-resolved; the raw x-forwarded-for header is client-controlled
+        req.ip
       )
     }
     return reply.code(204).send()

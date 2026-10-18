@@ -19,6 +19,7 @@ import type { FastifyInstance } from 'fastify'
 import { adminBaseUrl } from '../../admin-base.js'
 import { db } from '../../db/index.js'
 import { logActivity } from '../../services/activity.js'
+import { canSeeRoom } from '../../services/chat.js'
 import { ChatSendError, postChatMessage } from '../../services/chat-send.js'
 import { INSTANCE_ID, listInstances } from '../../services/instance-roster.js'
 import { tenantScopedRoom } from '../../services/tenant-rooms.js'
@@ -43,6 +44,7 @@ import { editLockLens } from '../../services/traffic-edit-locks.js'
 import type { TrafficSnapshot } from '../../services/traffic-map.js'
 import { roleOf, splitByRole } from '../../services/traffic-role-split.js'
 import { currentStoreId } from '../../services/traffic-taps.js'
+import { getUser } from '../../services/users.js'
 import { LOCK_TTL_MS } from '../item-locks.js'
 import { localSnapshot } from './cluster.js'
 
@@ -91,6 +93,11 @@ export async function integrationsRoutes(app: FastifyInstance): Promise<void> {
   // ── #2277 chat cards ───────────────────────────────────────────────────────
   const io: CardIo = {
     read: readNode,
+    async mayPost(card) {
+      const user = await getUser(card.by)
+      if (!user || user.status !== 'active') return false
+      return canSeeRoom(user, card.room)
+    },
     async write(message, text) {
       const row = (await db('chat_messages').where({ id: message }).first('room', 'deleted_at')) as
         | { room: string; deleted_at: unknown }
