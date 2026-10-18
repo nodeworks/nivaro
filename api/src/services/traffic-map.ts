@@ -25,6 +25,15 @@ import {
   type TrafficLane
 } from './traffic-entities.js'
 import {
+  keepEvent,
+  type MapMemoryFacts,
+  measureThisFrame,
+  noteFrameCost,
+  noteRequestCost,
+  noteSocketBytes,
+  overheadTick
+} from './traffic-overhead.js'
+import {
   bumpMinute,
   type CountRing,
   type MinuteSeries,
@@ -388,6 +397,7 @@ export function pushTrafficEvent(ev: TrafficEventWire): void {
   }
 }
 function pushEvent(ev: TrafficEventWire): void {
+  if (!keepEvent(ev.kind === 'error')) return // #2178: sampled out above the request-rate threshold
   const st = S()
   const pendingEvents = st.pendingEvents
   pendingEvents.push(ev)
@@ -593,7 +603,11 @@ function noStore(): boolean {
 export function noteRequest(ev: TrafficRequestEvent & { errorCode?: string | null }): void {
   const sid = storeForRequest(ev.req)
   if (sid === NO_STORE) return
-  withTrafficStore(sid, () => recordRequest(ev))
+  const t0 = process.hrtime.bigint()
+  withTrafficStore(sid, () => {
+    recordRequest(ev)
+    noteRequestCost(t0) // #2178: what the map spent on this request
+  })
 }
 function recordRequest(ev: TrafficRequestEvent & { errorCode?: string | null }): void {
   try {
@@ -1301,6 +1315,22 @@ export function buildSnapshot(
   return snap
 }
 
+/**
+ * A rough size of what the map holds for the current store (#2178): the per-second rings plus an
+ * allowance for the per-minute keyed series. An estimate, labelled as one on the page.
+ */
+export function estimateMapBytes(): MapMemoryFacts {
+  const ring = RING_SECONDS * SLOTS * 4 + LAT_SAMPLES * 4
+  const series = 2048 // one MinuteSeries (keyed per-minute counters), allowance
+  let bytes = 0
+  for (const e of entities.values()) {
+    bytes += ring + (e.routes.size + e.callers.size + e.downs.size) * series
+    bytes += (e.errors.length + e.writes.length) * 200
+  }
+  bytes += (callers.size + downs.size) * ring
+  return { entities: entities.size, callers: callers.size, downs: downs.size, bytes }
+}
+
 /** Caller keys of requests (keys / people / cron / anon) — noteSource ids are left out. */
 export function seenCallerKeys(): CallerKey[] {
   return [...callers.keys()].filter((k) => !sourceMeta.has(k))
@@ -1434,6 +1464,7 @@ export function startTrafficMapEmitter(
       let watchedAny = false
       for (const id of ids) {
         withTrafficStore(id, () => {
+          overheadTick(sec) // #2178: re-judge the request rate (event sampling)
           const local = io?.sockets?.adapter?.rooms?.get(trafficRoomFor(id))?.size ?? 0
           if (local > 0) cluster?.announce(id)
           const remote = cluster?.watched(id) ?? false
@@ -1445,9 +1476,16 @@ export function startTrafficMapEmitter(
           // Emit every completed second we have not sent (timer drift can skip one); cap the
           // catch-up at 5 s, then skip ahead.
           for (let s = Math.max(nextFrameSec, sec - 5); s <= sec - 1; s++) {
+            const t0 = process.hrtime.bigint()
             const frame = buildFrame(s, { sockets: io.engine?.clientsCount ?? 0, journalSeq })
             if (opts.node) frame.node = opts.node
-            if (local > 0) (io.local ?? io).to(trafficRoomFor(id)).emit(TRAFFIC_MAP_EVENT, frame)
+            noteFrameCost(s, Number((process.hrtime.bigint() - t0) / 1000n))
+            if (local > 0) {
+              ;(io.local ?? io).to(trafficRoomFor(id)).emit(TRAFFIC_MAP_EVENT, frame)
+              // size measured on every 4th frame and scaled — a stringify per frame would cost
+              // as much as the emit it is measuring
+              if (measureThisFrame()) noteSocketBytes(s, JSON.stringify(frame).length * local)
+            }
             if (remote) cluster?.publish(id, frame)
           }
         })

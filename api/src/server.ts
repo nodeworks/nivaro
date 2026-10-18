@@ -826,6 +826,23 @@ export async function buildServer() {
             'Posts incident-thread updates in the ops chat channel: opens a thread for a new critical issue, reports new errors and recoveries under open threads, and closes alert threads after 30 quiet minutes.'
         }
       )
+      // Traffic Map chores (#2173/#2177): a snapshot just after each day's busiest minute, one
+      // every N hours when an admin set a schedule, and pruning of snapshots / notebooks by the
+      // retention settings. Self-hosted only; reads the map's own in-memory peak.
+      app.cron.schedule(
+        'traffic-map-snapshots',
+        '*/5 * * * *',
+        async () => {
+          const { runSnapshotSchedule } = await import('./services/traffic-snapshot-schedule.js')
+          const r = await runSnapshotSchedule()
+          if (r.peak || r.schedule) app.log.info({ run: r }, '[traffic-map-snapshots] captured')
+        },
+        {
+          idempotent: 'safe',
+          description:
+            'Every 5 minutes — takes a Traffic Map snapshot just after the day\'s busiest minute (and every N hours when a schedule is set on the map), then removes snapshots, scheduled snapshots and investigation notebooks older than the retention set on the map. Self-hosted only.'
+        }
+      )
       // Session replay heatmaps (#1364): fold settled recordings into
       // per-route click / scroll aggregates (no person in them). Bounded per
       // run with a high-water mark, so a backlog drains over several nights.

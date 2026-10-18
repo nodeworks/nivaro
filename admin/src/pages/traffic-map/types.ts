@@ -170,6 +170,8 @@ export interface TrafficSnapshot {
   sources?: Array<{ id: string; label: string; kind: string; req: number; error: number }>
   /** Server tap figures, by tap id. */
   ext?: Record<string, unknown>
+  /** #2242: the environment a stored snapshot was taken in (absent on live and older ones). */
+  environment?: { name: string; tier: string }
 }
 export type TrafficSource = NonNullable<TrafficSnapshot['sources']>[number]
 export interface TrafficCatalog {

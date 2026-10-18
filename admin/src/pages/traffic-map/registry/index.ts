@@ -58,6 +58,9 @@ import '../features/partners'
 import '../features/integrations'
 import '../features/people-ux'
 import '../features/realtime-nodes'
+import '../features/map-settings'
+import '../features/snapshot-compare'
+import '../features/node-about'
 
 export {
   type CanvasLayer,
