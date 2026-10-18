@@ -22,12 +22,13 @@ import type { FastifyInstance } from 'fastify'
  * What never compresses:
  *   - a reply that already has a Content-Encoding, a 206, or a Content-Range
  *     (the plugin's own rules);
- *   - already-compressed / binary types (images except svg, audio, video, zip,
- *     gzip, tar, octet-stream, pdf) — mime-db marks them not compressible;
+ *   - binary types: mime-db marks images (except svg), audio, video, zip, gzip,
+ *     tar and pdf not compressible; the plugin DOES treat octet-stream as
+ *     compressible, so the guard below skips it explicitly;
  *   - anything the guard below flags: Accept-Ranges (ranged file/media
  *     streams — compressing would break byte offsets), text/event-stream (SSE
  *     must flush per event), and a request that sent x-no-compression;
- *   - routes that set `config: { compress: false }` (file/media/backup/
+ *   - routes that set the route option `compress: false` (file/media/backup/
  *     heap-snapshot/tar downloads).
  * SSE routes that hijack the reply never reach onSend at all.
  */
@@ -41,7 +42,7 @@ export function shouldSkipCompression(headers: {
   if (headers.acceptRanges !== undefined && headers.acceptRanges !== 'none') return true
   if (headers.contentRange !== undefined) return true
   const type = String(headers.contentType ?? '').toLowerCase()
-  return type.startsWith('text/event-stream')
+  return type.startsWith('text/event-stream') || type.startsWith('application/octet-stream')
 }
 
 export async function registerCompression(app: FastifyInstance) {

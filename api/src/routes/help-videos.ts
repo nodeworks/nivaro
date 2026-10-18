@@ -940,20 +940,24 @@ export async function helpVideosRoutes(app: FastifyInstance) {
     })
     return reply.code(201).send({ data: music })
   })
-  app.get('/:id/music/:musicId', { preHandler: requireAuthor }, async (req, reply) => {
-    const { id, musicId } = req.params as { id: string; musicId: string }
-    const { video } = await loadVideoForUser(req, id)
-    const row = await videoMusicRow(String(video.id), musicId)
-    const file = row?.file_id ? await getFile(String(row.file_id)) : undefined
-    if (!file?.filename_disk) {
-      return reply.code(404).send({ error: 'Music not found', code: 'HELP_VIDEO_NOT_FOUND' })
+  app.get(
+    '/:id/music/:musicId',
+    { preHandler: requireAuthor, compress: false },
+    async (req, reply) => {
+      const { id, musicId } = req.params as { id: string; musicId: string }
+      const { video } = await loadVideoForUser(req, id)
+      const row = await videoMusicRow(String(video.id), musicId)
+      const file = row?.file_id ? await getFile(String(row.file_id)) : undefined
+      if (!file?.filename_disk) {
+        return reply.code(404).send({ error: 'Music not found', code: 'HELP_VIDEO_NOT_FOUND' })
+      }
+      reply.header('Cache-Control', 'private, max-age=3600')
+      return sendStoredObject(reply, file.filename_disk, {
+        rangeHeader: req.headers.range,
+        contentType: 'audio/mp4'
+      })
     }
-    reply.header('Cache-Control', 'private, max-age=3600')
-    return sendStoredObject(reply, file.filename_disk, {
-      rangeHeader: req.headers.range,
-      contentType: 'audio/mp4'
-    })
-  })
+  )
   app.delete('/:id/music/:musicId', { preHandler: requireAuthor }, async (req, reply) => {
     const { id, musicId } = req.params as { id: string; musicId: string }
     const { video } = await loadVideoForUser(req, id)
@@ -1216,7 +1220,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
 
   // The thumbnail sprite sheet (#1560) of the ticket's version: frames of the
   // ORIGINAL recording (nothing blurred or cut), so authors only.
-  app.get('/:id/sprite', async (req, reply) => {
+  app.get('/:id/sprite', { compress: false }, async (req, reply) => {
     const { version, author } = await resolve(req)
     if (!author)
       return reply.code(404).send({ error: 'Video not found', code: 'HELP_VIDEO_NOT_FOUND' })
@@ -1231,7 +1235,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
   // the published version; one cut from the draft is 404 like the draft
   // itself. `download=1` saves it. Each fetch (not each resumed range) is an
   // activity row — data egress, like /:id/download.
-  app.get('/:id/clips/:clipId', async (req, reply) => {
+  app.get('/:id/clips/:clipId', { compress: false }, async (req, reply) => {
     const { video, author, userId } = await resolve(req, { needVersion: false })
     const { clipId } = req.params as { clipId: string }
     const q = req.query as { download?: string }

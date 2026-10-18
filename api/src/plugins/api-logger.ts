@@ -282,6 +282,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       const g = (req as unknown as { __nvrGql?: GraphQLStampLike }).__nvrGql
       if (g) internalDispatchStamps.set(headers[INTERNAL_DISPATCH_HEADER] as string, g)
     }
+    // Logical (uncompressed) body size: compression runs after this hook.
     ;(req as unknown as { __nvrBytes?: number | null }).__nvrBytes =
       typeof payload === 'string'
         ? Buffer.byteLength(payload)

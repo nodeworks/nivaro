@@ -42,6 +42,9 @@ async function build() {
     return reply.header('Content-Type', 'text/event-stream').send('data: x\n\n'.repeat(500))
   })
   app.get('/opt-out', { compress: false }, async () => big)
+  app.get('/octet', async (_req, reply) => {
+    return reply.header('Content-Type', 'application/octet-stream').send(Buffer.alloc(5000, 1))
+  })
   app.get('/png', async (_req, reply) => {
     return reply.header('Content-Type', 'image/png').send(Buffer.alloc(5000, 1))
   })
@@ -93,7 +96,7 @@ describe('response compression (#2437)', () => {
 
   it('does not compress binary types or routes that opt out', async () => {
     const { app } = await build()
-    for (const url of ['/png', '/opt-out']) {
+    for (const url of ['/png', '/octet', '/opt-out']) {
       const res = await app.inject({ url, headers: { 'accept-encoding': 'br' } })
       expect(res.headers['content-encoding'], url).toBeUndefined()
     }
