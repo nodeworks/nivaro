@@ -128,6 +128,15 @@ export const dbHealthDocs: DocSection = {
       type: 'p',
       text: 'A cached figure also carries its staleness in business terms. Each query names — or has inferred from its SQL and the procedure it EXECs — the tables whose newest write decides whether the figure is still true; the stamp reads "invoices changed 4m ago — newer than this figure" (amber) or "· current" beside "Updated 3m ago". Declare the sources on the query as `[{"table": "invoices", "column": "changed"}]` when the inference picks the wrong tables.'
     },
+    { type: 'h3', text: 'Shared runs and the heavy-read gate' },
+    {
+      type: 'p',
+      text: 'When several viewers ask the same custom query with the same parameters at the same moment, and the answer is not cached, the query runs once and every caller gets that result. This also applies at a cache TTL of 0, where nothing is kept after the run ends. Each caller is checked for access on its own, and the cache key already carries their User Scope values, so a run is only shared between callers who would get the same answer. A failed run is not reused. Widget renders and the owner-load report work the same way. The Cache health card counts shared answers as `shared_runs`.'
+    },
+    {
+      type: 'p',
+      text: 'The expensive reads also go through a per-process gate: custom-query and widget runs that miss the cache, live (non-materialized) queue worklists, and owner load. Cache hits and cheap routes do not. By default the gate allows a third of `DB_POOL_MAX` at once (at least 4; set `HEAVY_READ_CONCURRENCY` to change it) and 4 per person (`HEAVY_READ_PER_USER`). Further requests wait in arrival order. A request that has waited `HEAVY_READ_MAX_WAIT_MS` (30 s) runs anyway, so the gate never turns slowness into an error. A request that waited sends `Server-Timing: gate;dur=<ms>`, and one that used a shared run sends `flight;desc="shared"`. `GET /api/health/detailed` → `read_gate` shows the current state and counts since boot: active, queued, waits, timeouts, aborts and shared runs.'
+      },
     { type: 'h2', id: 'cache-warm', text: 'Cache warm after boot and before business hours' },
     {
       type: 'p',

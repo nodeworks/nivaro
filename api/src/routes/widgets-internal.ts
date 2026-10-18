@@ -6,8 +6,9 @@ import { logActivity } from '../services/activity.js'
 import { applyScopeParams } from '../services/custom-query-scope.js'
 import { cachedDefinition } from '../services/definition-cache.js'
 import { can } from '../services/permissions.js'
-import { recordCacheOutcome } from '../services/query-cache-stats.js'
+import { recordCacheOutcome, recordSharedRun } from '../services/query-cache-stats.js'
 import { queryFreshness } from '../services/query-freshness.js'
+import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import {
   type DateRange,
   type EntityFilter,
@@ -221,7 +222,11 @@ async function renderWidget(
   user: User | undefined,
   isAdmin: boolean,
   redis?: FastifyInstance['redis'],
-  refresh = false
+  refresh = false,
+  gate: {
+    signal?: AbortSignal
+    onGate?: (info: { waitedMs: number; shared: boolean }) => void
+  } = {}
 ) {
   const config = (parseJson(widget.config) ?? {}) as Record<string, unknown>
   const type = widget.widget_type as string
@@ -548,6 +553,17 @@ async function renderWidget(
       return { awaiting, rows: [] }
     }
 
+    // User Scopes on raw SQL: the query's scope params for this caller, as the
+    // execute route applies them — BEFORE the SQL text is built and before the
+    // cache key, so the statement that runs and the key it is cached under both
+    // carry the caller's scope values.
+    await applyScopeParams(
+      (cq as { scope_params?: string | null }).scope_params ?? null,
+      params,
+      user?.id,
+      isAdmin
+    )
+
     // Use execSqlBatch directly — Knex MSSQL's execSql wraps in sp_executesql
     // which swallows stored procedure result sets. Full literal substitution is
     // safe for MSSQL: strings use '' quoting (backslash is not special).
@@ -577,14 +593,6 @@ async function renderWidget(
     // Scope injection is what keeps sharing-by-accident safe regardless: the
     // route mixes a restricted caller's scope values INTO the params before
     // keying, so a scoped result can never land under an unscoped key.
-    // User Scopes on raw SQL: the query's scope params for this caller, as the execute route
-    // applies them — and before the cache key, so scoped and unscoped results never share one.
-    await applyScopeParams(
-      (cq as { scope_params?: string | null }).scope_params ?? null,
-      params,
-      user?.id,
-      isAdmin
-    )
     const cacheKey = `cq:${cq.slug}:${JSON.stringify(params)}`
     const cacheTtl = Number(cq.cache_ttl ?? 0)
     let cachedRows: unknown[] | null = null
@@ -624,7 +632,6 @@ async function renderWidget(
       }
     }
 
-    const execStarted = Date.now()
     // biome-ignore lint/suspicious/noExplicitAny: internal Knex/tedious plumbing
     const knexClient = (db as any).client
     const Driver = knexClient._driver() as {
@@ -675,20 +682,39 @@ async function renderWidget(
         await knexClient.releaseConnection(conn)
       }
     }
-    const rows: unknown[] = cachedRows ?? (await runQuery())
-    if (!cachedRows) {
-      const cachedAt = new Date().toISOString()
-      recordCacheOutcome(cq.slug, cacheTtl > 0 ? (refresh ? 'bypass' : 'miss') : 'uncached', {
-        execMs: Date.now() - execStarted,
-        cacheTtl
-      })
-      if (cacheTtl > 0 && redis) {
-        try {
-          await redis.setex(cacheKey, cacheTtl, JSON.stringify({ cached_at: cachedAt, rows }))
-        } catch {
-          /* a cache write must never fail a render */
-        }
-      }
+    // #2452 — concurrent misses on the same final key (scope values included)
+    // share ONE run, cache_ttl 0 too, and the run holds a heavy-read slot.
+    // Every caller passed this widget's access checks above on its own.
+    let rows: unknown[]
+    if (cachedRows) rows = cachedRows
+    else {
+      const out = await sharedGatedRead(
+        `widget|${cacheKey}`,
+        user?.id,
+        async () => {
+          // Timed inside the slot: the gate wait is not execution time.
+          const execStarted = Date.now()
+          const ran = await runQuery()
+          const at = new Date().toISOString()
+          recordCacheOutcome(cq.slug, cacheTtl > 0 ? (refresh ? 'bypass' : 'miss') : 'uncached', {
+            execMs: Date.now() - execStarted,
+            cacheTtl
+          })
+          if (cacheTtl > 0 && redis) {
+            try {
+              await redis.setex(cacheKey, cacheTtl, JSON.stringify({ cached_at: at, rows: ran }))
+            } catch {
+              /* a cache write must never fail a render */
+            }
+          }
+          return { rows: ran, cachedAt: at }
+        },
+        { signal: gate.signal, label: `widget:${String(widget.id)}` }
+      )
+      if (out.shared) recordSharedRun(cq.slug)
+      gate.onGate?.(out)
+      rows = out.value.rows
+      const cachedAt = out.value.cachedAt
       if (cacheTtl > 0) {
         const fresh = await queryFreshness(cq).catch(() => null)
         cacheInfo = {
@@ -1028,7 +1054,8 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
         req.user,
         req.isAdmin ?? false,
         app.redis,
-        (req.body as { refresh?: boolean })?.refresh === true
+        (req.body as { refresh?: boolean })?.refresh === true,
+        { signal: clientGoneSignal(reply.raw), onGate: (info) => gateServerTiming(reply, info) }
       )
       if ((data as { cache?: { cached?: boolean } } | null)?.cache?.cached) markCacheHit(req)
       return reply.send({ data })

@@ -19,6 +19,7 @@ import {
   validateAggregates,
   validateColumnFormats
 } from '../services/queues.js'
+import { clientGoneSignal, gateServerTiming } from '../services/read-gate.js'
 import { broadcastCollectionUpdate } from '../services/realtime.js'
 
 // Format-only validation for extra_fields entries used as SQL column identifiers in
@@ -1339,7 +1340,11 @@ export async function queuesRoutes(app: FastifyInstance) {
       filters: parsedFilters,
       withUnseen: true,
       group,
-      ...(paginationRequested ? { page, limit } : {})
+      ...(paginationRequested ? { page, limit } : {}),
+      readGate: {
+        signal: clientGoneSignal(reply.raw),
+        onWait: (ms) => gateServerTiming(reply, { waitedMs: ms })
+      }
     })
     // #502: an empty view says WHY — nothing yours vs filtered out vs a
     // source this role cannot read looked identical before.

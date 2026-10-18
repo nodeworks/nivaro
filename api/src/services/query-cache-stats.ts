@@ -22,6 +22,8 @@ interface SlugStats {
   misses: number
   bypasses: number
   uncached_runs: number
+  /** #2452 — answered by riding a concurrent caller's in-flight run. */
+  shared_runs: number
   exec_count: number
   exec_ms_total: number
   exec_ms_max: number
@@ -45,6 +47,7 @@ export function recordCacheOutcome(
     misses: 0,
     bypasses: 0,
     uncached_runs: 0,
+    shared_runs: 0,
     exec_count: 0,
     exec_ms_total: 0,
     exec_ms_max: 0,
@@ -67,6 +70,13 @@ export function recordCacheOutcome(
   s.last_run_at = new Date().toISOString()
   s.last_outcome = outcome
   stats.set(slug, s)
+}
+
+/** #2452 — a caller joined another caller's in-flight run (single-flight):
+ *  no SQL ran for it, and it is not a cache hit either. */
+export function recordSharedRun(slug: string): void {
+  const s = stats.get(slug)
+  if (s) s.shared_runs++
 }
 
 /**

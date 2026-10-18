@@ -16,12 +16,17 @@ import {
 } from '../services/custom-query-exec.js'
 import { capturedPlanFor, rememberCapturedPlan } from '../services/custom-query-plans.js'
 import { applyScopeParams } from '../services/custom-query-scope.js'
-import { recordCacheOutcome, recordQueryError } from '../services/query-cache-stats.js'
+import {
+  recordCacheOutcome,
+  recordQueryError,
+  recordSharedRun
+} from '../services/query-cache-stats.js'
 import {
   bustFreshnessInference,
   parseFreshnessSources,
   queryFreshness
 } from '../services/query-freshness.js'
+import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { markSpan } from '../services/request-trace.js'
 import { markCacheHit } from '../services/traffic-map.js'
@@ -828,39 +833,62 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         }
       }
 
+      // #2452 — concurrent misses that resolve to the same final key (scope
+      // values included) share ONE run, cache_ttl 0 too (deduped while in
+      // flight, nothing kept), and that run holds a heavy-read slot. Access was
+      // checked above for THIS caller; only the SQL and its cache write are shared.
       let rows: unknown[]
-      const execStarted = Date.now()
+      let cachedAt: string
       try {
-        // Literal-substitution + raw tedious batch — see services/custom-query-exec.ts
-        rows = await execCustomQuerySql(query.sql_text, finalParams)
+        const out = await sharedGatedRead(
+          cacheKey,
+          req.user?.id,
+          async () => {
+            const execStarted = Date.now()
+            let ran: unknown[]
+            try {
+              // Literal-substitution + raw tedious batch — see services/custom-query-exec.ts
+              ran = await execCustomQuerySql(query.sql_text, finalParams)
+            } catch (err) {
+              recordQueryError(slug, err instanceof Error ? err.message : 'Query execution failed')
+              throw err
+            }
+            // #90 — a slow run captures its plan right after (fire-and-forget), so
+            // the editor can explain it without re-running the query.
+            const execMs = Date.now() - execStarted
+            if (execMs >= SLOW_PLAN_MS)
+              captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
+            recordCacheOutcome(
+              slug,
+              query.cache_ttl > 0 ? (wantsRefresh ? 'bypass' : 'miss') : 'uncached',
+              { execMs, cacheTtl: query.cache_ttl }
+            )
+            // Cache the result, stamped so a viewer can be told how old it is.
+            const at = new Date().toISOString()
+            if (query.cache_ttl > 0 && app.redis) {
+              try {
+                await app.redis.setex(
+                  cacheKey,
+                  query.cache_ttl,
+                  JSON.stringify({ cached_at: at, rows: ran })
+                )
+              } catch (err) {
+                app.log.warn({ err }, 'Custom query cache write failed')
+              }
+            }
+            return { rows: ran, cachedAt: at }
+          },
+          { signal: clientGoneSignal(reply.raw), label: `cq:${slug}` }
+        )
+        rows = out.value.rows
+        cachedAt = out.value.cachedAt
+        if (out.shared) recordSharedRun(slug)
+        gateServerTiming(reply, out)
       } catch (err) {
+        if ((err as Error)?.name === 'AbortError')
+          return reply.code(499).send({ error: 'Client closed request' })
         const message = err instanceof Error ? err.message : 'Query execution failed'
-        recordQueryError(slug, message)
         return reply.code(400).send({ error: message })
-      }
-      // #90 — a slow run captures its plan right after (fire-and-forget), so
-      // the editor can explain it without re-running the query.
-      const execMs = Date.now() - execStarted
-      if (execMs >= SLOW_PLAN_MS)
-        captureSlowPlan(Number(query.id), query.sql_text, finalParams, execMs)
-      recordCacheOutcome(
-        slug,
-        query.cache_ttl > 0 ? (wantsRefresh ? 'bypass' : 'miss') : 'uncached',
-        { execMs, cacheTtl: query.cache_ttl }
-      )
-
-      // Cache the result, stamped so a viewer can be told how old it is.
-      const cachedAt = new Date().toISOString()
-      if (query.cache_ttl > 0 && app.redis) {
-        try {
-          await app.redis.setex(
-            cacheKey,
-            query.cache_ttl,
-            JSON.stringify({ cached_at: cachedAt, rows })
-          )
-        } catch (err) {
-          app.log.warn({ err }, 'Custom query cache write failed')
-        }
       }
 
       // Dashboards and page widgets re-execute on every refresh; one row per

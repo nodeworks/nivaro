@@ -8,6 +8,7 @@ import { requireAdmin } from '../middleware/authenticate.js'
 import { bootState } from '../services/boot-phases.js'
 import { requestDevRestart } from '../services/dev-extension-watch.js'
 import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
+import { readGateStats } from '../services/read-gate.js'
 import {
   DB_BUDGET_MS,
   judgeReady,
@@ -16,6 +17,7 @@ import {
   timedCheck
 } from '../services/ready-probe.js'
 import { instanceKey } from '../services/settings-overrides.js'
+import { singleFlightStats } from '../services/single-flight.js'
 import { NIVARO_REACT_VERSION, NIVARO_VERSION } from '../version.js'
 import { checkExtensions, checkMigrations } from './preflight.js'
 
@@ -231,6 +233,8 @@ export async function healthRoutes(app: FastifyInstance) {
         redis: { ok: redisOk, latency_ms: redisLatency },
         migrations,
         sockets: { connections },
+        // #2452 — heavy-read gate + single-flight, since boot, this replica.
+        read_gate: { ...readGateStats(), single_flight: singleFlightStats() },
         // Redis degradation map (#330): what each consumer does when Redis is
         // gone. 'open' = the feature degrades but requests keep working;
         // 'closed' = the feature genuinely stops. Audited posture, served
