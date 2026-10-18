@@ -64,6 +64,7 @@ import '../features/node-about'
 import '../features/security'
 import '../features/http-cache'
 import '../features/export-image'
+import '../features/history'
 
 export {
   type CanvasLayer,
