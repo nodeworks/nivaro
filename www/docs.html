@@ -16379,10 +16379,10 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <!-- /SYNC:api-analytics -->
         </div>
 
-        <div class="doc-section" id="s-traffic-map" data-toc='[{"id":"traffic-map","label":"Traffic Map"},{"id":"traffic-map-reading","label":"Reading the map"},{"id":"traffic-map-columns","label":"The three columns"},{"id":"traffic-map-marks","label":"Edges, dots and badges"},{"id":"traffic-map-controls","label":"Narrowing the view"},{"id":"traffic-map-rewind","label":"Rewinding"},{"id":"traffic-map-sources","label":"Where the numbers come from"},{"id":"traffic-map-limits","label":"Limits"}]'>
+        <div class="doc-section" id="s-traffic-map" data-toc='[{"id":"traffic-map","label":"Traffic Map"},{"id":"traffic-map-reading","label":"Reading the map"},{"id":"traffic-map-columns","label":"The three columns"},{"id":"traffic-map-marks","label":"Edges, dots and badges"},{"id":"traffic-map-controls","label":"Narrowing the view"},{"id":"traffic-map-rewind","label":"Rewinding"},{"id":"traffic-map-baselines","label":"Normal for this hour"},{"id":"traffic-map-sources","label":"Where the numbers come from"},{"id":"traffic-map-limits","label":"Limits"}]'>
           <!-- SYNC:traffic-map -->
           <h1 class="doc-h1" id="traffic-map">Traffic Map</h1>
-          <p class="doc-p">The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API: who is calling, what they reach, and where the work goes next. Callers sit on the left, API lanes in the middle, data stores and outside services on the right. Edge width is requests per second, moving dots are individual requests coloured by kind, a row pulses when it is written to and flashes red on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the dots off.</p>
+          <p class="doc-p">The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API: who is calling, what they reach, and where the work goes next. Callers sit on the left, API lanes in the middle, data stores and outside services on the right. Edge width is requests per second (or bytes, time or errors), moving dots are individual requests coloured by kind, a row pulses when it is written to and flashes red on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the dots off.</p>
           <p class="doc-p">This page covers reading the map. The next three pages cover finding the cause of a spike, acting from a node, and sharing, capacity and running it across several API processes.</p>
           <h2 class="doc-h2" id="traffic-map-reading">Reading the map</h2>
           <h3 class="doc-h3" id="traffic-map-columns">The three columns</h3>
@@ -16394,12 +16394,13 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <h3 class="doc-h3" id="traffic-map-marks">Edges, dots and badges</h3>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>You see</th><th>It means</th></tr></thead>
-            <tbody><tr><tr><td>A thicker edge</td><td>More requests per second. In the Flow header, Thickness switches between square root, log and linear, and Rates on edges prints the requests per second on each edge.</td></tr>
+            <tbody><tr><tr><td>A thicker edge</td><td>More requests per second, by default. In the Flow header, Edges show switches what thickness means: Requests, Bytes (response bytes per second), Time (total time per second, how much waiting an edge holds) or Errors (failed requests per second; failed partner calls on downstream edges). The legend and the numbers on edges follow the choice. Thickness switches between square root, log and linear, and Rates on edges prints each edge’s figure.</td></tr>
               <tr><td>A highlighted path</td><td>The selected node’s traffic. Selecting a caller traces its whole path (caller → lane → entity → downstream) and fades everything else until you clear it.</td></tr>
               <tr><td>A dashed amber edge</td><td>Someone acting as someone else: a masquerade or a simulated API key. The inspector names both people.</td></tr>
               <tr><td>A dashed red edge</td><td>A retry storm: one caller repeating the same failing request.</td></tr>
               <tr><td>A dashed violet edge with an r value</td><td>An inferred link: two entities that keep rising together. Turn these on with Inferred links in the toolbar.</td></tr>
               <tr><td>Coloured partner edges</td><td>Why partner calls fail: transient, rate limited, auth, not found or validation.</td></tr>
+              <tr><td>A faint hairline edge</td><td>Traffic that weighs nothing in the chosen measure, such as an edge with no errors while Edges show is on Errors. It keeps the map’s shape.</td></tr>
               <tr><td>Moving dots</td><td>Requests, coloured by kind: read, create, update, delete, error.</td></tr>
               <tr><td>A ring pulse / a red flash</td><td>The row was written to / the row or lane had an error.</td></tr>
               <tr><td>A green arc on a row</td><td>Its cache hit ratio (custom queries and widgets).</td></tr>
@@ -16413,6 +16414,7 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
             <li>Ask in words: type a sentence such as "only writes by integrations to forecasts in the last 5 minutes" and press Turn into filters. One small AI call picks from what the map already shows; every value is checked again before it is applied. A kind of caller ("integrations") becomes a removable caller-group chip. Needs an AI provider (Settings → AI Features).</li>
             <li>Zoom with + and − in the Flow header, or Ctrl and the scroll wheel. Zoomed out shows lanes only; zoomed in shows each entity’s busiest route and every caller’s own edges. Escape clears a traced path.</li>
             <li>Group callers by app collapses callers into the admin app, your other front ends, integrations, and cron &amp; sources; select a group to expand it and select it again to fold it. Callers that send no app header are grouped by account kind.</li>
+            <li>All nodes draws every caller, source, entity (up to the 40 a lane keeps) and downstream node instead of only the busiest in each column. A map that tall scrolls inside its box, and only the part in view is drawn.</li>
             <li>Pin an entity (the pin in the inspector or the star in Hot entities) to keep it on your watch list across reloads. Pinned only narrows the live events and Hot entities to your pins. Up to 40 pins.</li>
             <li>Workspace chips appear when more than one workspace has traffic. Picking one redraws every figure on the page for that workspace.</li>
             <li>The Conflicts lens (on by default) outlines entities whose writes collided: stale edits, repeated transitions, record locks.</li>
@@ -16420,6 +16422,16 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           </ul>
           <h3 class="doc-h3" id="traffic-map-rewind">Rewinding</h3>
           <p class="doc-p">Pause turns the window into a timeline you can drag back through the last 15 minutes, so someone who arrives after a blip can still see it. Live returns to the present. With the 15-minute window selected there is nothing earlier to show; pick 1 or 5 minutes to rewind.</p>
+          <h2 class="doc-h2" id="traffic-map-baselines">Normal for this hour</h2>
+          <p class="doc-p">The map learns what is normal for every node, caller, caller-to-node edge and partner at each hour of the week, from hourly roll-ups of the request log (deployed instances only). The normal for 14:00 on a Tuesday comes from the same weekday at 13:00, 14:00 and 15:00 over the last four weeks: the median, and a range two spreads either side. The request log keeps 14 days, so the third and fourth weeks build up as the hourly job (traffic-baselines-rollup) rolls hours up; roll-ups are kept in Redis for 29 days.</p>
+          <ul class="doc-ul">
+            <li>Node colour: an entity dot turns amber when its errors or latency are two spreads above its own normal and red at four. Until a normal is learned the old rule applies (red over 5% errors). A request surge gets a "3.1× usual" pill; callers and partners get a pill when they fail more than usual.</li>
+            <li>Sparkline band: the inspector draws the node’s normal range behind its live line, and its "Normal for this hour" section shows requests, errors and p95 against their usual range.</li>
+            <li>Health score: every entity gets one figure from 0 to 100. Errors take up to 40 points (worse when above normal), latency against its normal up to 30, saturation (database pool, event loop) up to 20 and open findings such as N+1 or retry storms up to 20. Hover the score for the breakdown. Hot entities has a Health column and can be ordered by Least healthy or narrowed to nodes below 80.</li>
+            <li>What changed: when a node’s errors or latency rise past normal, the inspector finds the minute the rise began and compares the 15 minutes before with the minutes since. Callers, routes, screens, response sizes and client builds are ranked by their share of the rise, with any deploy, restart or config write just before it. This API process’s traffic only.</li>
+            <li>Busy hours: "Show when it is busy" in the inspector draws a weekday × hour heatmap of requests, errors or p95 over the last four weeks, in your time zone.</li>
+            <li>Summary: the Summary button turns the page into a plain view for non-technical readers: requests, errors, the slowest area, partners down and people active over the last 15 minutes, each green, amber or red against its normal, with one sentence on anything not green. The address carries ?view=summary, so the link can be shared with other administrators.</li>
+          </ul>
           <h2 class="doc-h2" id="traffic-map-sources">Where the numbers come from</h2>
           <ul class="doc-ul">
             <li>Requests: every response is classified into a lane and an entity and counted into a 15-minute, per-second ring in memory. Route templates replace id-shaped and token-like segments with :id, so no record id or access token reaches the map.</li>
@@ -16433,12 +16445,14 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <ul class="doc-ul">
             <li>A lane holds at most 40 entities (the rest fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame. Idle rings are swept after 15 minutes.</li>
             <li>Frames are built only while someone has the page open (or a node is asked for them); nothing is written to the database on the request path.</li>
+            <li>Big maps: from about 800 nodes and edges the map is drawn with WebGL (the footer says so); text, badges and plug-in layers stay on the regular canvas over it, and hover, click, keyboard and the tooltip work the same. A browser without WebGL keeps the regular canvas. From 300 nodes and edges the layout and edge routes are worked out in a background worker so frames never stall scrolling or hover. A link can force one renderer with <code class="doc-code">renderer=gl</code> or <code class="doc-code">renderer=2d</code>.</li>
+            <li>Edge weights (bytes, time, errors) are counted per edge in per-minute buckets, at most 2,000 edges each way, like the map’s own counters.</li>
             <li>When more than one API process serves traffic, see "Several API processes" on the Share &amp; Scale page.</li>
           </ul>
           <!-- /SYNC:traffic-map -->
         </div>
 
-        <div class="doc-section" id="s-traffic-map-investigate" data-toc='[{"id":"traffic-map-investigate","label":"Traffic Map: Finding a Cause"},{"id":"traffic-map-who","label":"Who is driving it"},{"id":"traffic-map-why-slow","label":"Why it is slow"},{"id":"traffic-map-why-failing","label":"Why it is failing"},{"id":"traffic-map-sources-panels","label":"Jobs, flows, partners and services"},{"id":"traffic-map-ai","label":"Explain with AI"},{"id":"traffic-map-stack","label":"Investigating from an event"},{"id":"traffic-map-stack-kinds","label":"What you can open"},{"id":"traffic-map-stack-moving","label":"Moving between things"},{"id":"traffic-map-stack-limits","label":"Limits"}]'>
+        <div class="doc-section" id="s-traffic-map-investigate" data-toc='[{"id":"traffic-map-investigate","label":"Traffic Map: Finding a Cause"},{"id":"traffic-map-who","label":"Who is driving it"},{"id":"traffic-map-durations","label":"Durations by route"},{"id":"traffic-map-why-slow","label":"Why it is slow"},{"id":"traffic-map-why-failing","label":"Why it is failing"},{"id":"traffic-map-sources-panels","label":"Jobs, flows, partners and services"},{"id":"traffic-map-ai","label":"Explain with AI"},{"id":"traffic-map-stack","label":"Investigating from an event"},{"id":"traffic-map-stack-kinds","label":"What you can open"},{"id":"traffic-map-stack-moving","label":"Moving between things"},{"id":"traffic-map-stack-limits","label":"Limits"}]'>
           <!-- SYNC:traffic-map-investigate -->
           <h1 class="doc-h1" id="traffic-map-investigate">Traffic Map: Finding a Cause</h1>
           <p class="doc-p">Select any node and the inspector opens beside the map, at the canvas height, scrolling inside. What it shows depends on the kind of node. Start with the figures and the sparkline, then work down the panels below.</p>
@@ -16451,6 +16465,11 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
             <li>Acting as someone: requests made while an admin masqueraded, named as "admin as person", so they never read as that person’s own traffic.</li>
             <li>By workspace: the entity’s requests per workspace, on instances with more than one.</li>
             <li>Moves with: entities that keep rising and falling with this one over the last 15 minutes, and which usually moves first.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-durations">Durations by route</h2>
+          <ul class="doc-ul">
+            <li>Durations by route in the inspector shows one route’s request durations over 1 hour to 7 days as a histogram. When the requests fall into two groups (a fast path and a slow one) it says so, with each group’s share and typical time, because a single p95 then describes only the slow group.</li>
+            <li>Below it, What the slow requests have in common compares the slow requests (the route’s slowest tenth) with the rest by their query string: limits over 1,000, a filter on a field, a date range of more than a year, every field (*), a search. Each is ranked by how much of the slowness it explains. Masked values are never shown.</li>
           </ul>
           <h2 class="doc-h2" id="traffic-map-why-slow">Why it is slow</h2>
           <div class="doc-table-wrap"><table class="doc-table">
@@ -16545,7 +16564,7 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <!-- /SYNC:traffic-map-investigate -->
         </div>
 
-        <div class="doc-section" id="s-traffic-map-act" data-toc='[{"id":"traffic-map-act","label":"Traffic Map: Acting from a Node"},{"id":"traffic-map-links","label":"Going to the source"},{"id":"traffic-map-actions","label":"Actions"},{"id":"traffic-map-breakers","label":"Circuit breakers"},{"id":"traffic-map-inflight","label":"In-flight requests"},{"id":"traffic-map-stack-actions","label":"Acting from a drill-down"}]'>
+        <div class="doc-section" id="s-traffic-map-act" data-toc='[{"id":"traffic-map-act","label":"Traffic Map: Acting from a Node"},{"id":"traffic-map-links","label":"Going to the source"},{"id":"traffic-map-chat-card","label":"Share a node to chat"},{"id":"traffic-map-actions","label":"Actions"},{"id":"traffic-map-breakers","label":"Circuit breakers"},{"id":"traffic-map-inflight","label":"In-flight requests"},{"id":"traffic-map-stack-actions","label":"Acting from a drill-down"},{"id":"traffic-map-blast-radius","label":"Blast radius"},{"id":"traffic-map-tell-affected","label":"Telling the people affected"},{"id":"traffic-map-debug-window","label":"Debugging a node for a while"},{"id":"traffic-map-temp-cache","label":"A temporary cache on a hot collection"}]'>
           <!-- SYNC:traffic-map-act -->
           <h1 class="doc-h1" id="traffic-map-act">Traffic Map: Acting from a Node</h1>
           <p class="doc-p">Everything that changes something asks for two clicks and writes an activity row, through the same routes the rest of the admin uses.</p>
@@ -16556,11 +16575,14 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
             <li>A caller opens Inbound calls filtered to it; a person opens their profile. An entity opens where it is configured; a partner opens its external API.</li>
             <li>Runbook links appear on a node when an Environments component’s notes name one, or when an extension declares one.</li>
           </ul>
+          <h2 class="doc-h2" id="traffic-map-chat-card">Share a node to chat</h2>
+          <p class="doc-p">Share to chat on an entity or node posts its live figure and a block-character sparkline to a channel you can see. The message rewrites itself about every 30 seconds, without a new notification. It freezes with its last values when you freeze it, when a node that had errors has had none for about three minutes, after two hours, or if the message is deleted. Up to 10 cards can be live at once; a server restart stops the refreshing and leaves the last values in place. Posting and freezing write an activity row.</p>
           <h2 class="doc-h2" id="traffic-map-actions">Actions</h2>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Action</th><th>Where</th><th>What it does</th></tr></thead>
             <tbody><tr><tr><td>Retry / Send now</td><td>Partner node</td><td>Retry re-sends a failed push with its stored payload; Send now sends a missing message (only when remediation is switched on under Settings → Integrations).</td></tr>
-              <tr><td>Tell me when…</td><td>Any entity</td><td>Creates a <code class="doc-code">traffic</code> monitor prefilled with the entity, metric (errors or requests per minute, p95, error rate), threshold and window. You are notified when it starts failing, like any ops monitor. Each API process judges its own traffic.</td></tr>
+              <tr><td>Tell me when…</td><td>Any entity</td><td>Creates a <code class="doc-code">traffic</code> monitor prefilled with the entity, metric (errors or requests per minute, p95, error rate), threshold and window. You are notified when it starts failing, like any ops monitor. Each API process judges its own traffic. The alert can cover all the node’s traffic, one caller’s traffic into it, or its calls to one partner (an edge). While the form is open it replays the alert over the last two weeks of the request log and lists each time it would have fired, so you can set the threshold before saving. Partner edges cannot be replayed (the log does not say which route made a partner call).</td></tr>
+              <tr><td>Deploy now?</td><td>The page header (also on the Release card under Environments)</td><td>Compares the last 15 minutes of requests with the normal for this hour, and checks for heavy jobs, background jobs and imports running and open incidents. It says Deploy now, or Wait with the reason and the quietest hour ahead. Fixed rules, no AI call.</td></tr>
               <tr><td>Caller controls</td><td>Caller node</td><td>For an API key: set its calls-per-minute limit or revoke it. For a person or integration account: suspend it.</td></tr>
               <tr><td>Pause</td><td>Job, flow or partner node</td><td>Pauses a scheduled job, switches a flow off, or switches a partner’s external API to mock answers on this instance. Each switches back the same way.</td></tr>
               <tr><td>Fire a probe</td><td>Entity</td><td>Sends one safe read at the entity as you, so it lights up end to end as a live smoke check.</td></tr>
@@ -16588,10 +16610,25 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
               <tr><td>Export</td><td>Copy as Markdown or Download Markdown writes every level’s key facts, each with its own ?inspect= link, for a bug report or a ticket. Download HAR writes the request levels on the stack as a HAR 1.2 file for a browser or proxy tool; a stack with no request has nothing to export that way. Levels that were never loaded say so in the export.</td></tr>
               <tr><td>Capture the next N</td><td>Capture next… in the toolbar holds the next requests matching a route (GET /api/items/workflows/:id), a caller (k12, u&lt;user id&gt;) or an entity (items/workflows): up to 50 of them, for 1 to 15 minutes, with their full traces and request bodies even when they are fast. A capture level opens at once and fills in; Stop ends it early. Bodies are masked, held in memory only and dropped when the time runs out. Admins only, and every capture writes an activity row.</td></tr></tr></tbody>
           </table></div>
+          <h2 class="doc-h2" id="traffic-map-blast-radius">Blast radius</h2>
+          <p class="doc-p">On an endpoint or a partner node, Show what depends on this works out what would break if it failed, from the last 7 days of traffic: how many people used it, the screens they had open, the flows and scheduled jobs that called it or wrote its records, the partners calling it and the partners its records are pushed to. For a partner it lists the flows with a step calling it, who triggers its calls and the collections whose records go to it. It is read-only and is kept for 5 minutes.</p>
+          <div class="doc-note">The request log has no screen column, so a screen is the page each person last opened before the call (within 30 minutes). The panel shows how many calls could be matched that way.</div>
+          <h2 class="doc-h2" id="traffic-map-tell-affected">Telling the people affected</h2>
+          <p class="doc-p">From the blast radius, Tell affected people… opens a short message, already written, that you edit before sending. It goes through Broadcasts to the people who used this node or one of its screens in the last hour (the server works the list out; you never send to yourself). It arrives in their inbox, and as a banner for 4 hours unless you untick it. Two clicks; it writes an activity row. More than 2,000 people: send it from Broadcasts instead.</p>
+          <h2 class="doc-h2" id="traffic-map-debug-window">Debugging a node for a while</h2>
+          <p class="doc-p">On an endpoint, an API key or a person, the Debug window panel switches on debugging for 5, 15, 30 or 60 minutes: every request touching it logs at debug level (read them in the Ops Console log, filtered on debug) and keeps its full trace, however fast. The kept traces are listed in the panel and open like any trace. It ends on its own, or with Stop now. Start and end are written to the Ops Console incident timeline. Every server honours it; traces are kept by the server that served the request.</p>
+          <h2 class="doc-h2" id="traffic-map-temp-cache">A temporary cache on a hot collection</h2>
+          <p class="doc-p">On a collection’s node, Temporary cache answers the same read by the same caller from server memory for a few seconds (10 s to 2 min) while you deal with a spike, for up to 15 minutes. The live hit rate shows in the panel and a cached pill marks the node. It covers list reads, single records, aggregates and distinct values of ordinary collections, never system tables.</p>
+          <ul class="doc-ul">
+            <li>Never shared: an answer is kept for one caller (person, role, API key, workspace and View as all count) and given only to that caller. Signed-out requests are never cached.</li>
+            <li>A write to the collection, or to a collection related to it, drops its answers at once on every server. A read that goes through relations is dropped by any write.</li>
+            <li>Changes made outside the app (stored procedures, recalculated rollups) can show late by up to the seconds you chose.</li>
+            <li>A caller sending Cache-Control: no-cache always gets a fresh answer. Responses carry x-nivaro-temp-cache: hit or miss.</li>
+          </ul>
           <!-- /SYNC:traffic-map-act -->
         </div>
 
-        <div class="doc-section" id="s-traffic-map-lenses" data-toc='[{"id":"traffic-map-lenses","label":"Traffic Map: Database, People and Platform"},{"id":"traffic-map-db","label":"The database node"},{"id":"traffic-map-people","label":"People and callers"},{"id":"traffic-map-platform-lenses","label":"Platform"}]'>
+        <div class="doc-section" id="s-traffic-map-lenses" data-toc='[{"id":"traffic-map-lenses","label":"Traffic Map: Database, People and Platform"},{"id":"traffic-map-db","label":"The database node"},{"id":"traffic-map-people","label":"People and callers"},{"id":"traffic-map-platform-lenses","label":"Platform"},{"id":"traffic-map-security","label":"Security"},{"id":"traffic-map-partner-shapes","label":"Partners and API shape"},{"id":"traffic-map-other-features","label":"The map beside other features"},{"id":"traffic-map-people-experience","label":"People and experience"}]'>
           <!-- SYNC:traffic-map-lenses -->
           <h1 class="doc-h1" id="traffic-map-lenses">Traffic Map: Database, People and Platform</h1>
           <p class="doc-p">Lenses for three questions the main map leaves open: what the database is waiting on, who is doing what, and which part of the platform carries the load.</p>
@@ -16620,32 +16657,114 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
             <li>Nested resolver time: on a GraphQL operation, the time spent per nested field path (to-one, to-many, many-to-many, linked records) and per access check, summed over every row a list resolved. Measured only while the map is open.</li>
             <li>Dead letters: failed flow runs, and webhook deliveries that failed in the last day with nothing successful since, gather in one node with Retry and Discard on each item or on everything listed. Discarding keeps the run in the flow history; webhook deliveries can be retried but not discarded.</li>
             <li>Cloud operators: <code class="doc-code">GET /admin/traffic-tenants?window=300</code> (the provisioning path, cloud mode only) with the <code class="doc-code">x-provision-secret</code> header ranks the tenants this process served by database time, then requests, then errors.</li>
+            <li>HTTP caching (More → HTTP caching): every GET route in the window with its share of 304 Not Modified answers (browser cache hits the server revalidated), conditional requests, repeats (the same caller fetching the same URL again within a minute) and the cache headers it sent. Routes a browser could cache (static content, or high repeats) that send no Cache-Control, ETag or Last-Modified are flagged first. Report only: no header is changed.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-security">Security</h2>
+          <p class="doc-p">Badges on caller nodes, a Security section in the caller’s inspector and a Security panel (More → Security). Addresses and browsers are only shown to admins on this page; they are never sent on the live feed or kept in saved snapshots.</p>
+          <ul class="doc-ul">
+            <li>Places: requests by country and region from the caller’s address, looked up on the server in an offline MaxMind database. Set <code class="doc-code">TRAFFIC_GEOIP_DB</code> to a GeoLite2 Country or City <code class="doc-code">.mmdb</code> file to turn it on; addresses are never sent anywhere. A caller’s places are learned in its first 15 minutes; a place first seen after that gets a "new place" badge for an hour. Not-signed-in traffic is never flagged.</li>
+            <li>Scripted sessions: a person’s browser session that makes calls at a steady machine pace or in a fixed repeating loop from outside the app (the call carries no Nivaro app header, as from a browser extension or a script reusing the cookie), or whose client names a scripting tool such as curl. The panel shows the pattern and links to the person. The app’s own polling never flags.</li>
+            <li>One session from two places: the same session going back and forth between two networks within five minutes, a possible copied cookie. Both addresses and browsers are shown. When the two sides use different browsers or countries, active admins get an in-app notification (once per person every 6 hours; never the person themselves; deployed instances only). Private addresses and the ranges in <code class="doc-code">TRAFFIC_KNOWN_PROXIES</code> (comma-separated CIDRs of shared gateways and VPN exits) are left out, and masquerade and View-as are not sessions.</li>
+            <li>Wrong environment: calls whose Referer or Origin is another environment’s frontend or admin from the Environments registry, API keys this instance does not know (usually minted on another environment), and keys named for another environment.</li>
+            <li>Bad data by caller: records whose after-write Data Integrity check found problems in the last 7 days, credited to the caller whose write came just before the check, with the rules broken and example records.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-partner-shapes">Partners and API shape</h2>
+          <ul class="doc-ul">
+            <li>Against what was agreed: set a response time (95th percentile, in ms) and an availability (percent) under External APIs → the partner → Agreed service levels. Select the partner node for the month so far, the share of judged hours that stayed inside both figures, and a 24-hour strip with the breached hours in red. An hour needs 3 or more calls to be judged. A call counts as available unless it is a 5xx or never arrived. Figures come from the outbound log, which is kept for 31 days.</li>
+            <li>Payload shape: on a partner node, which fields it started sending, stopped sending or changed the type of. The usual shape is learned per endpoint from the JSON bodies the outbound recorder still holds (the last 24 hours), and the newest calls are compared with it. It needs 20 bodies per endpoint. Field names and types only, never values.</li>
+            <li>Inbound mapping outcomes: on an inbound mapping’s node, payloads accepted (every entry written), partly accepted and rejected, with the top rejection reasons. Numbers and ids in a reason are folded together so the same cause counts once.</li>
+            <li>Query cost: on a GraphQL operation, its depth, average selections, time in nested resolvers and whole-request time, the callers sending it, and its place among the most expensive operations. Resolver time is measured only while the map is open.</li>
+            <li>Fields requested: on a collection, which fields callers ask for with <code class="doc-code">fields=</code> on REST list reads, how often, and who asks. <code class="doc-code">*</code> and a missing <code class="doc-code">fields</code> count together as "every column". Use it beside the filter and sort shapes when choosing an index or trimming a payload.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-other-features">The map beside other features</h2>
+          <ul class="doc-ul">
+            <li>Edit locks: a panel of records whose edit lock has been held 15 minutes or more, or that someone is waiting for. Each row names the holder, how long the lock has been held, how long since the holder’s browser last checked in (idle), the people waiting in order, and links to the record.</li>
+            <li>Web and workers: when processes report a role (<code class="doc-code">NIVARO_ROLE</code> on the instance roster), a panel groups requests, errors, p95, background calls and pool use by role. It says so when background jobs ran on the web processes and none on the workers. A process with no role counts as "unset"; the panel stays hidden until at least one has a role.</li>
+            <li>Business activity: per-minute counts of records created, workflow transitions, approvals decided, imports finished and partner pushes accepted, drawn beside the API’s own requests per minute for the last 15 minutes. When one of them falls to under 40% of its earlier rate while API traffic holds, the panel says so, so a quiet business is not mistaken for a quiet API. Counts only: no record values.</li>
+            <li>Traffic on a support ticket: people who work a ticket see their requester’s requests, errors and pages for 30 minutes either side of the moment it was raised, with a link to that moment on the map (administrators only). The requester never sees it, and opening it leaves an activity row.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-people-experience">People and experience</h2>
+          <p class="doc-p">One panel on the Traffic Map page, People and experience, with a switch between ten lenses. Each reads real browser timings, the request log, journeys, notifications or the AI call log, and shows the worst rows first. A request is given a page by the visit the person had open when it arrived, so a person with two tabs open is attributed to the most recent page.</p>
+          <ul class="doc-ul">
+            <li>New people: calls per visit, p95, error rate and browser time for people in their first 7 days against everyone else, per page, with how much slower the first-week experience is.</li>
+            <li>Browsers: per page, the p75 load and route time by browser, system and screen size class (phone, tablet, laptop, desktop, wide), flagging a value 1.5 times slower than the rest of the page. Only the class of the screen is stored, never the exact size. Timings from before this version carry no browser.</li>
+            <li>Errors by person (admin only): people ranked by browser errors and failed calls, with the pages and the error text, so support can reach out first.</li>
+            <li>Network or server: for each page, the median load split into the wait for the first byte (network), the slowest call the page waited on (server) and the rest (browser). It is an estimate.</li>
+            <li>Apdex: satisfied up to the target, tolerating up to four times it, frustrated beyond. Defaults are 1 s for pages and 0.5 s for calls (<code class="doc-code">TRAFFIC_APDEX_PAGE_MS</code>, <code class="doc-code">TRAFFIC_APDEX_REQUEST_MS</code>), adjustable on the lens. Per page or per person, with the weekly scores beside the totals. The log keeps 14 days, so a trend has two or three weekly points.</li>
+            <li>Sign-in: the path through sign-in as a funnel per method (Microsoft, SAML, password, token): login page, provider redirect, callback and first page, with failures and the p50 and p95 time between steps. Calls are tied together by address and browser.</li>
+            <li>Screen flow: moves between screens as a flow diagram per app, heaviest first, with the calls each move costs in the destination screen’s first five seconds.</li>
+            <li>Notification load: people who received 10 or more notifications in an hour (<code class="doc-code">TRAFFIC_NOTIFY_FLOOD_PER_HOUR</code>), with the hours, the channels, categories and senders responsible.</li>
+            <li>AI spend: AI cost by screen, from the AI call log and the page the caller had open, and the same top screens on the AI provider node.</li>
+            <li>Business heat: single-record reads and writes by the User Scope dimension value the record belongs to (a zone, a region, a project type), so one region’s month-end shows as that region. It counts only while the page is open, keeps no record values, and does not attribute list reads. Not available in cloud mode.</li>
           </ul>
           <!-- /SYNC:traffic-map-lenses -->
         </div>
 
-        <div class="doc-section" id="s-traffic-map-platform" data-toc='[{"id":"traffic-map-platform","label":"Traffic Map: Sharing, Capacity and Scale"},{"id":"traffic-map-sharing","label":"Sharing and comparing"},{"id":"traffic-map-capacity","label":"Capacity and health"},{"id":"traffic-map-nodes","label":"Several API processes"},{"id":"traffic-map-cloud","label":"Cloud mode"},{"id":"traffic-map-replay","label":"Load replay (development only)"},{"id":"traffic-map-extending","label":"Extending the map"},{"id":"traffic-map-config","label":"Settings"}]'>
+        <div class="doc-section" id="s-traffic-map-platform" data-toc='[{"id":"traffic-map-platform","label":"Traffic Map: Sharing, Capacity and Scale"},{"id":"traffic-map-sharing","label":"Sharing and comparing"},{"id":"traffic-map-data","label":"Map data, schedules and cost"},{"id":"traffic-map-capacity","label":"Capacity and health"},{"id":"traffic-map-back-office","label":"Back-office nodes and badges"},{"id":"traffic-map-history","label":"History: time-lapse, jobs and search"},{"id":"traffic-map-nodes","label":"Several API processes"},{"id":"traffic-map-realtime-nodes","label":"Live connections, media, search and MCP"},{"id":"traffic-map-cloud","label":"Cloud mode"},{"id":"traffic-map-replay","label":"Load replay (development only)"},{"id":"traffic-map-extending","label":"Extending the map"},{"id":"traffic-map-ext-lenses","label":"Lenses from an extension"},{"id":"traffic-map-config","label":"Settings"}]'>
           <!-- SYNC:traffic-map-platform -->
           <h1 class="doc-h1" id="traffic-map-platform">Traffic Map: Sharing, Capacity and Scale</h1>
           <h2 class="doc-h2" id="traffic-map-sharing">Sharing and comparing</h2>
           <ul class="doc-ul">
-            <li>Copy view link copies a link that opens exactly this view: filters, selection, lenses, workspace, zoom and the rewind position.</li>
+            <li>Copy view link copies a link that opens exactly this view: filters, selection, lenses, workspace, zoom, what edges show, All nodes and the rewind position.</li>
             <li>Share freezes the current window into a stored snapshot that opens read-only from a link (/traffic-map?snapshot=…). Add a note and it also appears on the Ops Console incident timeline. Snapshots keep the labels the map showed, and you can scrub through the frozen window.</li>
             <li>Record keeps a rolling recording of the canvas in your browser. Download the last 30 seconds as a video, or attach it to a new issue. Nothing leaves the browser until you do.</li>
+            <li>Image saves the whole flow map (not only the part scrolled into view) as a PNG or SVG for an incident write-up or a change request. The time window, the filters and view choices, the environment (project, host, API instance and environment name) and a legend are printed on it, in the colours of your current theme. It is made in your browser; nothing is uploaded. A very tall map is too big for a PNG; download the SVG instead.</li>
             <li>Compare shows two windows of this deployment side by side from the request log (morning against afternoon, this hour against the same hour last week), or this deployment against another API registered under Environments, fetched live with that component’s token.</li>
             <li>Daily summary adds a traffic section to your daily summary email: busiest callers, new callers, error hot spots and integrations that went quiet. It is off until you turn it on.</li>
             <li>A compact traffic card sits on the Command Center admin rail.</li>
+            <li>Compare snapshots (a panel under the map) puts two stored snapshots side by side: requests a minute, error share and p95 for every node, and requests a minute for every edge (caller to node, node to what it calls). Windows of different lengths still compare because the figures are per minute. "A a week earlier" picks the snapshot closest to a week before the second one, for this Monday against last Monday.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-data">Map data, schedules and cost</h2>
+          <p class="doc-p">Map data (in the map header) is one card for what the map keeps and what it costs. Peak and scheduled snapshots are kept for 30 days by default; shared snapshots and investigation notebooks are kept until deleted. Set a number of days for any of them and the oldest are removed automatically; each line shows how many are kept and roughly how much room they take. Recordings of the map are saved to your computer or attached to an issue, so the map keeps none.</p>
+          <ul class="doc-ul">
+            <li>Snapshots taken by themselves: a snapshot a few minutes after each day’s busiest minute (on by default, replacing the earlier one the same day), and optionally one every 1 to 24 hours. They are marked as peak or scheduled, stay out of the Share list, and show up in Compare snapshots. Self-hosted instances only.</li>
+            <li>Environment band: a coloured band across the top of the map names the environment (production, staging, development), taken from the Environments registry when this instance is listed there and from NIVARO_INSTANCE otherwise. Snapshots print the environment they were taken in, so two open maps are not confused.</li>
+            <li>What this is: the top of the inspector says in a sentence what the selected node is. It comes from a collection’s note, a custom query’s, flow’s or partner’s description, a background job’s description or an extension’s declared node; the system nodes have a built-in line. Edit it to write your own; "Use the automatic text" brings the original back.</li>
+            <li>Map cost: the strip tile and Map data show the map’s own CPU (recording requests and building frames), an estimate of its memory, bytes sent to browsers and over the Redis relay. Above the request rate you set (default 300 requests a second, <code class="doc-code">TRAFFIC_SAMPLE_ABOVE_RPS</code>; 0 never samples) the ticker shows 1 event in N and says so. Counts, errors and the canvas stay exact.</li>
+            <li>Incident timeline: in Ops Console each event shows a small picture of the map from the nearest stored snapshot within the hour. Click it to open the full snapshot.</li>
           </ul>
           <h2 class="doc-h2" id="traffic-map-capacity">Capacity and health</h2>
           <ul class="doc-ul">
             <li>Headroom: the current request rate against a ceiling, either the best sustained minute this instance has carried over the last week or a fixed value you set (<code class="doc-code">TRAFFIC_CAPACITY_RPS</code>), with connection-pool use beside it. It reads "at 30% of what it can carry".</li>
             <li>Projection: the next 15 minutes from the recent trend and how the same time of day usually moves, for example "past the pool limit in 8 minutes at this rate".</li>
+            <li>What if…: beside the headroom figure, try more or less traffic (+50%), another replica or moving a scheduled job to another hour, and see the projected requests per replica, headroom, pool use and event-loop lag. The projection scales today’s cost per request; it is a guide, not a load test, and changes nothing.</li>
             <li>Event loop: event-loop delay and garbage-collection pauses beside the request rate. A slow node with fast SQL is CPU-bound.</li>
             <li>Realtime: event-journal lag and how many tabs watch each live view, linking to /realtime.</li>
             <li>Fan-out: the screens whose page loads fire the most calls.</li>
           </ul>
+          <h2 class="doc-h2" id="traffic-map-back-office">Back-office nodes and badges</h2>
+          <ul class="doc-ul">
+            <li>Memory after GC: the memory the API process still holds right after a major garbage collection, with a trend line beside the event loop. If it climbs steadily it turns amber and says how fast it grows and how long until the limit. It needs about five minutes of collections to judge.</li>
+            <li>Storage: each file storage backend you use (local disk, S3, Azure Blob) is its own node, with the reads, writes, deletes and existence checks it served, the bytes moved, how long the backend took (not the request around it) and what failed. A missing file is counted as missing, not as a failure.</li>
+            <li>Database server: the database node also shows what the server itself is short of, from its own views every 15 seconds while the map is open: CPU, disk and log waits, queries waiting for memory, and tempdb use. SQL Server only; if the login cannot read server state the panel says so.</li>
+            <li>Work queues: the staged import queue, the extension event outbox, webhook retries and flow runs still going appear as nodes while something waits, with the number waiting, the age of the oldest, how fast the queue drains and whether the backlog is growing.</li>
+            <li>Missed runs: a job node gets a "missed a run" badge when the cron miss detector found it did not run when expected; its panel shows the expected time and the last run. Instances that do not run scheduled jobs show none.</li>
+            <li>Import size: the import worker node shows each run’s file size and rows, and says when a slower run was only a bigger file.</li>
+            <li>Bulk actions: a running bulk action appears as a node with records per second, how many were refused and who started it. It goes away when the run finishes.</li>
+            <li>Tuning: a collection or query node with a pending Database tuning proposal gets a "tuning idea" badge; its panel lists the proposals with the saving each promises and links to Database tuning. A statement shape lists the proposals for the tables it touches.</li>
+          </ul>
+          <h2 class="doc-h2" id="traffic-map-history">History: time-lapse, jobs and search</h2>
+          <p class="doc-p">The History panel under the map loads nothing until you pick a view.</p>
+          <ul class="doc-ul">
+            <li>Time-lapse plays the last 24 hours or 7 days at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.</li>
+            <li>Under the request curve: people online (from the 5-minute socket samples, where scheduled jobs run) and people making requests, so more people can be told apart from more work per person.</li>
+            <li>Jobs against peaks draws each scheduled job at its usual start and length over a typical day. A job in the peak gets the quietest start of the same length as a cron expression to copy, and what moving it would do to the pool.</li>
+            <li>Search answers "when did this caller last call this route", "when did this error first appear" and "busiest hour for this node or partner", over the last day to month. Every field is optional and matched exactly; each answer opens its moment on the map.</li>
+          </ul>
+          <p class="doc-p">Without minute history the time-lapse reads hourly (or 5-minute) groups from the request log, which keeps about 14 days and knows nodes but not callers or partners. Turn on minute history in the panel header to keep every minute per node and per edge (requests, errors, p50 and p95, bytes) for 30 days, or a retention you choose. Every API process counts its own minutes and the instance that runs scheduled jobs writes them once a minute; old minutes are deleted every hour. It is off by default and not available in cloud mode.</p>
           <h2 class="doc-h2" id="traffic-map-nodes">Several API processes</h2>
           <p class="doc-p">Each API process counts its own traffic. While anyone watches the map, every process publishes its frames through the cache and the page merges them, so the map shows the whole deployment. When more than one process is sending, a Nodes control appears: all nodes combined (the default) or one process. Snapshots can be taken of every node or one. When nobody watches, nothing is published. In-flight requests, slow requests and the event loop stay per process.</p>
+          <h2 class="doc-h2" id="traffic-map-realtime-nodes">Live connections, media, search and MCP</h2>
+          <p class="doc-p">These nodes cover traffic that never shows up as an ordinary request. Their figures come from the API process you are connected to, and none of them is available in cloud mode.</p>
+          <ul class="doc-ul">
+            <li>Sockets node: select the Sockets lane or the Browser sockets source. Adapter lag is the time from a record event being written on another replica to this one delivering it; the node gets a badge when the average passes <code class="doc-code">ADAPTER_LAG_WARN_MS</code> (500 ms) or doubles against the minutes before. Replica clocks that disagree show up as lag.</li>
+            <li>Busiest rooms ranks socket rooms by members or by events per minute. Click a record, collection or watch room to see who is in it and its recent events. Rooms that name a person or a private conversation (user and chat rooms except General) are folded into one row per kind and show counts only.</li>
+            <li>Connection problems lists failed and downgraded socket connections reported by the browsers, grouped by network (the /24 of the address), browser and app, so a corporate proxy or an extension that breaks live updates shows up as one row. It also lists the sockets on long-polling right now. Reports are kept in memory for 24 hours and each person can send six a minute.</li>
+            <li>Streams: every open Server-Sent Events stream (GraphQL subscriptions, the record event feed, saved views, the admin change feed) and graphql-ws subscription is a source feeding the Sockets lane, with connections open now, events sent and bytes. Heartbeats count toward bytes, not events.</li>
+            <li>Media node: help-video streams and session-replay uploads, with bandwidth (the size each response or upload declares), people active in the last minute and failures.</li>
+            <li>Search node: omnisearch, cross-collection, meaning and settings search, and the search box of a collection list, with their database time and the slowest queries.</li>
+            <li>MCP clients: calls through the MCP server appear as the AI assistants source, with the tools used, the API keys that signed in and recent errors. The MCP server sends <code class="doc-code">x-nivaro-app: mcp</code> and <code class="doc-code">x-nivaro-mcp-tool</code> on every call; update <code class="doc-code">@nivaro/mcp</code> to see tool names.</li>
+          </ul>
           <h2 class="doc-h2" id="traffic-map-cloud">Cloud mode</h2>
           <p class="doc-p">In cloud mode (one process serving many tenants) every tenant has its own counts, and an admin sees only their own tenant’s traffic. The map, the inspector history, snapshots, Compare windows and the node merge are tenant-scoped. The panels that read process-wide state (in-flight requests, slow traces, capacity, breakers, probes and similar) are not available there.</p>
           <h2 class="doc-h2" id="traffic-map-replay">Load replay (development only)</h2>
@@ -16662,11 +16781,28 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
   // or match: (call) =&gt; call.apiName === 'Warehouse API' &amp;&amp; call.path?.startsWith('/orders')
 })</code></pre>
           <p class="doc-p">A front end of your own can send the same headers the admin app sends, so its calls appear under their screens and page loads: <code class="doc-code">x-nivaro-app</code> (which front end), <code class="doc-code">x-nivaro-page</code> (the screen’s route pattern, never ids) and <code class="doc-code">x-nivaro-load</code> (one id per page load).</p>
+          <h3 class="doc-h3" id="traffic-map-ext-lenses">Lenses from an extension</h3>
+          <p class="doc-p">An extension can add its own lens: a chip beside the other lenses that, while on, puts a pill on the nodes it names and adds a panel to their inspector. The map asks for the data every 15 seconds while the lens is on; <code class="doc-code">read</code> runs on the server and has 5 seconds to answer. Only text, counts, a tone and links to pages inside the app are shown, so no extension code runs in the admin.</p>
+          <pre class="doc-pre"><code>ctx.traffic.registerLens({
+  id: 'late-orders',                  // unique within the extension
+  label: 'Late orders',
+  description: 'Orders the warehouse has not confirmed',
+  inspectorPanel: { title: 'Warehouse' },   // false = no panel; nodeBadge: false = no pills
+  read: async ({ window }) =&gt; ({
+    badges: [{ node: 'items/orders', text: '4 late', tone: 'warn' }],
+    panels: [{ node: 'items/orders', rows: [
+      { label: 'Late', value: 4, tone: 'warn', href: '/collections/orders?late=1' }
+    ] }]
+  })
+})</code></pre>
           <h2 class="doc-h2" id="traffic-map-config">Settings</h2>
+          <p class="doc-p">More → Detector settings switches each detector on or off and sets its thresholds: fan-out, N+1, duplicate requests, retry storms, near timeout and correlated spikes. The settings are saved for this environment (its instance key), so a laptop and staging sharing one database keep their own; every server of it picks a change up within a minute. Saving takes two clicks and writes an activity row. The environment variables below are the defaults the card starts from.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Setting</th><th>Default</th><th>What it changes</th></tr></thead>
-            <tbody><tr><tr><td><code class="doc-code">TRAFFIC_N_PLUS_ONE_TRIPS</code></td><td>40</td><td>Average round trips per request before an entity gets the N+1 badge.</td></tr>
+            <tbody><tr><tr><td><code class="doc-code">TRAFFIC_SAMPLE_ABOVE_RPS</code></td><td>300</td><td>Requests per second above which the ticker shows 1 event in N. 0 never samples. The Map data card on the map overrides it.</td></tr>
+              <tr><td><code class="doc-code">TRAFFIC_N_PLUS_ONE_TRIPS</code></td><td>40</td><td>Average round trips per request before an entity gets the N+1 badge.</td></tr>
               <tr><td><code class="doc-code">TRAFFIC_FANOUT_LIMIT</code></td><td>60</td><td>Calls in one page load before a screen is flagged for fan-out.</td></tr>
+              <tr><td><code class="doc-code">TRAFFIC_PROXY_TIMEOUT_MS</code></td><td>60000</td><td>The proxy read timeout the near-timeout detector judges whole requests against.</td></tr>
               <tr><td><code class="doc-code">TRAFFIC_CAPACITY_RPS</code></td><td>unset</td><td>A fixed request-per-second ceiling for the headroom gauge. Unset = the best sustained minute from the request log.</td></tr>
               <tr><td><code class="doc-code">TRACE_SLOW_MS</code></td><td>1000</td><td>Requests slower than this are kept for the Slow requests panel.</td></tr></tr></tbody>
           </table></div>
@@ -16676,8 +16812,28 @@ GET  /api/traffic-map/catalog                      → labels for entities, call
 GET  /api/traffic-map/entity/:lane/:entity?hours=  → history, issues and slow traces
 GET  /api/traffic-map/entity-detail?key=           → every inspector panel's figures
 POST /api/traffic-map/snapshots                    → freeze a shareable snapshot
+GET  /api/traffic-map/snapshots?kind=manual|auto|all → stored snapshots
+GET  /api/traffic-map/snapshots/compare?a=&amp;b=      → two snapshots, node by node and edge by edge
+GET  /api/traffic-map/snapshots/near?at=&amp;at=       → the map at the moment of each timeline event
+GET|PATCH /api/traffic-map/map-settings            → retention, schedule, sampling threshold
+GET|PUT /api/traffic-map/node-info                 → what a node is (and an admin's own text)
+GET  /api/traffic-map/environment                  → the band: name and tier
+GET  /api/traffic-map/overhead                     → the map's own cost
 GET  /api/traffic-map/compare/windows?…            → two windows from the request log
 GET|POST|DELETE /api/traffic-map/breakers          → circuit breakers
+GET  /api/traffic-map/history/timelapse?range=24h|7d → playback frames, people, markers
+GET  /api/traffic-map/history/search?kind=…        → last hit, first error, busiest hour
+GET  /api/traffic-map/history/route-latency?key=&amp;route=&amp;hours= → duration histogram
+GET  /api/traffic-map/history/slow-params?key=&amp;route=&amp;hours=   → parameters of slow requests
+GET  /api/traffic-map/history/jobs                 → scheduled jobs against the day's traffic
+GET  /api/traffic-map/capacity/what-if?traffic_pct=&amp;add_replicas=&amp;job=&amp;to_minute=
+GET|PUT /api/traffic-map/history/settings          → minute history on/off, retention
+GET  /api/traffic-map/blast-radius?node=           → what depends on a node (7 days)
+POST /api/traffic-map/tell-affected                → broadcast to the people affected
+GET|POST /api/traffic-map/debug-windows            → debug windows (DELETE /:id stops one)
+GET|POST /api/traffic-map/temp-caches              → temporary caches (DELETE /:id stops one)
+GET|PUT  /api/traffic-map/detectors                → detector settings for this environment
+GET  /api/traffic-map/ext-lenses[/:key?window=]    → extension lenses and their data
 socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched</code></pre>
           <!-- /SYNC:traffic-map-platform -->
         </div>
