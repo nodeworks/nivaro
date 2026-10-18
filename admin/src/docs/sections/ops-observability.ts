@@ -128,6 +128,11 @@ export const dbHealthDocs: DocSection = {
       type: 'p',
       text: 'A cached figure also carries its staleness in business terms. Each query names — or has inferred from its SQL and the procedure it EXECs — the tables whose newest write decides whether the figure is still true; the stamp reads "invoices changed 4m ago — newer than this figure" (amber) or "· current" beside "Updated 3m ago". Declare the sources on the query as `[{"table": "invoices", "column": "changed"}]` when the inference picks the wrong tables.'
     },
+    { type: 'h2', id: 'cache-warm', text: 'Cache warm after boot and before business hours' },
+    {
+      type: 'p',
+      text: 'A nightly database rebuild leaves the first dashboard of the day on a cold database and an empty query cache. The cache-warm job (weekdays 06:30, and about 20 seconds after a boot) pre-runs the custom queries opened most in the last 7 days — up to 25, plus every query flagged "Warm daily" — with their default parameters and up to 3 of their most-used parameter sets, as an unrestricted caller, and stores each result under the cache key every unrestricted viewer reads. A query with no cache TTL still runs, which warms the database, and its rows are dropped. Viewers whose User Scopes restrict a query are not warmed. The boot warm runs once per cluster per version; the run stops starting queries when its time budget (`CACHE_WARM_BUDGET_MS`, 4 minutes) is spent. `CACHE_WARM=off` turns it off; `on` forces it on a process that does not tick scheduled jobs. Ops Console lists it as `cache-warm`, with Run now and Dry run.'
+    },
     { type: 'h3', text: 'Pool pressure' },
     {
       type: 'p',
