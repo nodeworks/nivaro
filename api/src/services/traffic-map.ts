@@ -511,7 +511,7 @@ function applyRequest(
   caller: CallerKey,
   route: string,
   code: string | null
-): { e: EntityState; event?: TrafficEventWire } | null {
+): { e: EntityState; event?: TrafficEventWire; downs: string[] } | null {
   if (isStale(Math.floor(ev.at / 1000))) return null
   const sec = secOf(ev.at)
   const e = getEntity(c.lane, c.entity)
@@ -577,7 +577,7 @@ function applyRequest(
     }
     pushEvent(event)
   }
-  return { e, event }
+  return { e, event, downs: downIds }
 }
 
 /**
@@ -630,7 +630,7 @@ function recordRequest(ev: TrafficRequestEvent & { errorCode?: string | null }):
     const code = ev.status >= 400 ? errorCode(ev.errorCode) : null
     const applied = applyRequest(c, ev, caller, route, code)
     if (applied) {
-      const { e, event } = applied
+      const { e, event, downs } = applied
       const ctx = {
         ev,
         lane: e.lane,
@@ -642,6 +642,7 @@ function recordRequest(ev: TrafficRequestEvent & { errorCode?: string | null }):
         isError: ev.status >= 400,
         code,
         sec: secOf(ev.at),
+        downs,
         event
       }
       eachTap((t) => t.onRequest?.(ctx))

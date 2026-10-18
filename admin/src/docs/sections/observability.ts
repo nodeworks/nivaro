@@ -375,7 +375,7 @@ export const obsTrafficMap: DocSection = {
     { type: 'h1', id: 'traffic-map', text: 'Traffic Map' },
     {
       type: 'p',
-      text: 'The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API: who is calling, what they reach, and where the work goes next. Callers sit on the left, API lanes in the middle, data stores and outside services on the right. Edge width is requests per second, moving dots are individual requests coloured by kind, a row pulses when it is written to and flashes red on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the dots off.'
+      text: 'The /traffic-map page (Monitoring → Operations, beside Realtime) is a live flow map of the API: who is calling, what they reach, and where the work goes next. Callers sit on the left, API lanes in the middle, data stores and outside services on the right. Edge width is requests per second (or bytes, time or errors), moving dots are individual requests coloured by kind, a row pulses when it is written to and flashes red on an error. Admins only. Colours follow light and dark mode, and reduced motion turns the dots off.'
     },
     {
       type: 'p',
@@ -398,7 +398,7 @@ export const obsTrafficMap: DocSection = {
       rows: [
         [
           'A thicker edge',
-          'More requests per second. In the Flow header, Thickness switches between square root, log and linear, and Rates on edges prints the requests per second on each edge.'
+          'More requests per second, by default. In the Flow header, Edges show switches what thickness means: Requests, Bytes (response bytes per second), Time (total time per second, how much waiting an edge holds) or Errors (failed requests per second; failed partner calls on downstream edges). The legend and the numbers on edges follow the choice. Thickness switches between square root, log and linear, and Rates on edges prints each edge’s figure.'
         ],
         [
           'A highlighted path',
@@ -416,6 +416,10 @@ export const obsTrafficMap: DocSection = {
         [
           'Coloured partner edges',
           'Why partner calls fail: transient, rate limited, auth, not found or validation.'
+        ],
+        [
+          'A faint hairline edge',
+          'Traffic that weighs nothing in the chosen measure, such as an edge with no errors while Edges show is on Errors. It keeps the map’s shape.'
         ],
         ['Moving dots', 'Requests, coloured by kind: read, create, update, delete, error.'],
         ['A ring pulse / a red flash', 'The row was written to / the row or lane had an error.'],
@@ -442,6 +446,7 @@ export const obsTrafficMap: DocSection = {
         'Ask in words: type a sentence such as "only writes by integrations to forecasts in the last 5 minutes" and press Turn into filters. One small AI call picks from what the map already shows; every value is checked again before it is applied. A kind of caller ("integrations") becomes a removable caller-group chip. Needs an AI provider (Settings → AI Features).',
         'Zoom with + and − in the Flow header, or Ctrl and the scroll wheel. Zoomed out shows lanes only; zoomed in shows each entity’s busiest route and every caller’s own edges. Escape clears a traced path.',
         'Group callers by app collapses callers into the admin app, your other front ends, integrations, and cron & sources; select a group to expand it and select it again to fold it. Callers that send no app header are grouped by account kind.',
+        'All nodes draws every caller, source, entity (up to the 40 a lane keeps) and downstream node instead of only the busiest in each column. A map that tall scrolls inside its box, and only the part in view is drawn.',
         'Pin an entity (the pin in the inspector or the star in Hot entities) to keep it on your watch list across reloads. Pinned only narrows the live events and Hot entities to your pins. Up to 40 pins.',
         'Workspace chips appear when more than one workspace has traffic. Picking one redraws every figure on the page for that workspace.',
         'The Conflicts lens (on by default) outlines entities whose writes collided: stale edits, repeated transitions, record locks.',
@@ -471,6 +476,8 @@ export const obsTrafficMap: DocSection = {
       items: [
         'A lane holds at most 40 entities (the rest fold into "other …"), an entity keeps 20 keys, 200 events are buffered and at most 40 are sent per frame. Idle rings are swept after 15 minutes.',
         'Frames are built only while someone has the page open (or a node is asked for them); nothing is written to the database on the request path.',
+        'Big maps: from about 800 nodes and edges the map is drawn with WebGL (the footer says so); text, badges and plug-in layers stay on the regular canvas over it, and hover, click, keyboard and the tooltip work the same. A browser without WebGL keeps the regular canvas. From 300 nodes and edges the layout and edge routes are worked out in a background worker so frames never stall scrolling or hover. A link can force one renderer with `renderer=gl` or `renderer=2d`.',
+        'Edge weights (bytes, time, errors) are counted per edge in per-minute buckets, at most 2,000 edges each way, like the map’s own counters.',
         'When more than one API process serves traffic, see "Several API processes" on the Share & Scale page.'
       ]
     }
@@ -859,9 +866,10 @@ export const obsTrafficMapPlatform: DocSection = {
     {
       type: 'ul',
       items: [
-        'Copy view link copies a link that opens exactly this view: filters, selection, lenses, workspace, zoom and the rewind position.',
+        'Copy view link copies a link that opens exactly this view: filters, selection, lenses, workspace, zoom, what edges show, All nodes and the rewind position.',
         'Share freezes the current window into a stored snapshot that opens read-only from a link (/traffic-map?snapshot=…). Add a note and it also appears on the Ops Console incident timeline. Snapshots keep the labels the map showed, and you can scrub through the frozen window.',
         'Record keeps a rolling recording of the canvas in your browser. Download the last 30 seconds as a video, or attach it to a new issue. Nothing leaves the browser until you do.',
+        'Image saves the whole flow map (not only the part scrolled into view) as a PNG or SVG for an incident write-up or a change request. The time window, the filters and view choices, the environment (project, host, API instance and environment name) and a legend are printed on it, in the colours of your current theme. It is made in your browser; nothing is uploaded. A very tall map is too big for a PNG; download the SVG instead.',
         'Compare shows two windows of this deployment side by side from the request log (morning against afternoon, this hour against the same hour last week), or this deployment against another API registered under Environments, fetched live with that component’s token.',
         'Daily summary adds a traffic section to your daily summary email: busiest callers, new callers, error hot spots and integrations that went quiet. It is off until you turn it on.',
         'A compact traffic card sits on the Command Center admin rail.',

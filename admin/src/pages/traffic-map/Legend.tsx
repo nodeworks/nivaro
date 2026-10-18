@@ -4,6 +4,7 @@
 import { HelpCircle, X } from 'lucide-react'
 import { type ReactNode, useEffect, useRef, useState, useSyncExternalStore } from 'react'
 import { cn } from '@/lib/utils'
+import { useCanvasView, WEIGHT_MEANS } from './canvasView'
 
 const SEEN_KEY = 'nvr_tm_legend_seen'
 let open = false
@@ -92,6 +93,7 @@ export function LegendButton() {
 /** The guide itself, over the map card. Opens by itself on the first visit. */
 export function LegendGuide({ ready }: { ready: boolean }) {
   const isOpen = useLegendOpen()
+  const { weight } = useCanvasView()
   const [first, setFirst] = useState(false)
   const closeRef = useRef<HTMLButtonElement>(null)
   useEffect(() => {
@@ -170,7 +172,9 @@ export function LegendGuide({ ready }: { ready: boolean }) {
         <section>
           <h4 className='text-[12.5px] font-semibold'>Edges</h4>
           <ul className='mt-1.5 grid gap-1.5 text-[var(--tm-fg-2)]'>
-            <Swatch label='Traffic: thicker means more requests per second (switch to log or linear in the Flow header).'>
+            <Swatch
+              label={`Traffic: thicker means more ${WEIGHT_MEANS[weight]}. “Edges show” in the Flow header switches between requests, bytes, time and errors; Thickness switches to log or linear.`}
+            >
               {line('var(--tm-edge)', undefined, 4)}
             </Swatch>
             <Swatch label='The selected node’s traffic. Selecting a caller traces its whole path and fades the rest.'>

@@ -63,6 +63,7 @@ import '../features/snapshot-compare'
 import '../features/node-about'
 import '../features/security'
 import '../features/http-cache'
+import '../features/export-image'
 
 export {
   type CanvasLayer,

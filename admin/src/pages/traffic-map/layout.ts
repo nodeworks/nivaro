@@ -38,7 +38,7 @@ const STACK_GAP = 8
 /** Room for the "Sources" caption above the source nodes. */
 const SOURCES_HEAD = 20
 
-export function computeLayout(input: {
+export interface LayoutInput {
   width: number
   callers: string[]
   /** Source nodes (group C, #1105/#1106/#1143/#1104), placed under the callers. */
@@ -48,7 +48,9 @@ export function computeLayout(input: {
   downs: string[]
   /** #1161: 0 = lanes only (no entity rows), 1 = entities, 2 = entities with routes. */
   zoom?: 0 | 1 | 2
-}): MapLayout {
+}
+
+export function computeLayout(input: LayoutInput): MapLayout {
   const zoom = input.zoom ?? 1
   const rowH = zoom === 2 ? ROW_H_DETAIL : ROW_H
   const W = Number.isFinite(input.width) ? Math.max(MIN_W, Math.floor(input.width)) : MIN_W
@@ -146,6 +148,81 @@ export function bezierPoint(
   const x = u ** 3 * a.x + 3 * u * u * t * mx + 3 * u * t * t * mx + t ** 3 * b.x
   const y = u ** 3 * a.y + 3 * u * u * t * a.y + 3 * u * t * t * b.y + t ** 3 * b.y
   return { x, y }
+}
+
+// ── #2278 edge routing ──────────────────────────────────────────────────────
+/** `in` = caller → lane, `ent` = caller → entity row (zoomed in), `out` = lane → down node. */
+export type EdgeDir = 'in' | 'ent' | 'out'
+export interface RouteRequest {
+  /** [from, to] per edge, in the order the renderer will ask for them. */
+  in: Array<[string, string]>
+  ent: Array<[string, string]>
+  out: Array<[string, string]>
+}
+/**
+ * Every edge's curve flattened into a polyline: `SEGS + 1` points (x, y) per edge, packed into
+ * one buffer (so a worker can hand it over without copying). `index` maps `dir|from>to` to the
+ * edge's slot; an edge whose end is not laid out has no slot.
+ */
+export interface EdgeRoutes {
+  segs: number
+  points: Float32Array
+  index: Map<string, number>
+}
+export const ROUTE_SEGS = 16
+export const routeKey = (dir: EdgeDir, from: string, to: string) => `${dir}|${from}>${to}`
+
+/** The two ends of an edge on the layout (the same anchors the 2D canvas strokes), or null. */
+export function edgeEnds(
+  l: MapLayout,
+  dir: EdgeDir,
+  from: string,
+  to: string
+): [{ x: number; y: number }, { x: number; y: number }] | null {
+  if (dir === 'out') {
+    const ln = l.lanes[from]
+    const dn = l.downs[to]
+    return ln && dn
+      ? [
+          { x: ln.x + ln.w, y: ln.y + 11 },
+          { x: dn.x, y: dn.y + dn.h / 2 }
+        ]
+      : null
+  }
+  const c = l.callers[from]
+  if (!c) return null
+  const a = { x: c.x + c.w, y: c.y + c.h / 2 }
+  if (dir === 'ent') {
+    const er = l.ents[to]
+    return er ? [a, { x: er.x, y: er.y + er.h / 2 }] : null
+  }
+  const ln = l.lanes[to]
+  return ln ? [a, { x: ln.x, y: ln.y + 11 }] : null
+}
+
+/** Flatten every requested edge's bezier (pure: runs in the layout worker or inline). */
+export function routeEdges(l: MapLayout, req: RouteRequest, segs = ROUTE_SEGS): EdgeRoutes {
+  const index = new Map<string, number>()
+  const ends: Array<[{ x: number; y: number }, { x: number; y: number }]> = []
+  for (const dir of ['in', 'ent', 'out'] as const)
+    for (const [from, to] of req[dir]) {
+      const key = routeKey(dir, from, to)
+      if (index.has(key)) continue
+      const e = edgeEnds(l, dir, from, to)
+      if (!e) continue
+      index.set(key, ends.length)
+      ends.push(e)
+    }
+  const per = (segs + 1) * 2
+  const points = new Float32Array(ends.length * per)
+  ends.forEach(([a, b], i) => {
+    for (let k = 0; k <= segs; k++) {
+      const p = bezierPoint(a, b, k / segs)
+      points[i * per + k * 2] = p.x
+      points[i * per + k * 2 + 1] = p.y
+    }
+  })
+  return { segs, points, index }
 }
 
 /** Returns 0 for rps <= 0: the canvas must skip zero-width edges rather than stroke them. */
