@@ -43,6 +43,7 @@ import { registerMissedCronProbe } from './services/cron-misses.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
+import { adminAssetCacheControl } from './lib/static-cache.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
 import { purgeExpiredTrash } from './services/trash.js'
 import { NIVARO_VERSION } from './version.js'
@@ -540,9 +541,14 @@ export async function buildServer() {
       prefix: '/',
       // scripts/precompress-dist.mjs writes .br/.gz beside each asset at build
       preCompressed: true,
-      // a cache must key the .br/.gz/raw variants apart
-      setHeaders: (res) => {
+      // Cache-Control is ours (#2438): vite's hashed files under /assets never change, so a
+      // browser keeps them a year without asking; everything else (index.html, the service
+      // worker, icons) is revalidated on every load so a release is picked up at once.
+      cacheControl: false,
+      setHeaders: (res, path) => {
+        // a cache must key the .br/.gz/raw variants apart
         res.setHeader('Vary', 'Accept-Encoding')
+        res.setHeader('Cache-Control', adminAssetCacheControl(path))
       }
     })
     app.setNotFoundHandler((req, reply) => {
