@@ -5,6 +5,7 @@ import { register } from '../registry/registry'
 import { stripTiles } from '../registry/stripTiles'
 import { Sparkline } from '../Sparkline'
 import { KIND_ORDER, LANE_ORDER } from '../types'
+import { WhatIfButton } from './history/WhatIf'
 import { fmtLag, inMapOnly, isObj, LINK, StripCell, useTmRoute } from './ops-common'
 
 /**
@@ -195,14 +196,18 @@ export function HeadroomTile() {
       testId='tm-strip-headroom'
       className='min-[1280px]:col-span-2'
     >
-      <span className='truncate tabular-nums' title={c ? ceilingTitle(c) : undefined}>
-        {!c
-          ? '—'
-          : c.ceiling.rps == null
-            ? c.ceiling.measuring
-              ? 'Measuring the busiest minute from the request log…'
-              : 'No ceiling yet'
-            : `${fmtRate(c.now_rps)} of ${fmtRate(c.ceiling.rps)} req/s · pool ${c.pool.used}/${c.pool.max || '—'}${c.pool.saturated_pct ? `, full ${c.pool.saturated_pct}%` : ''}`}
+      <span className='flex min-w-0 items-center justify-between gap-2'>
+        <span className='truncate tabular-nums' title={c ? ceilingTitle(c) : undefined}>
+          {!c
+            ? '—'
+            : c.ceiling.rps == null
+              ? c.ceiling.measuring
+                ? 'Measuring the busiest minute from the request log…'
+                : 'No ceiling yet'
+              : `${fmtRate(c.now_rps)} of ${fmtRate(c.ceiling.rps)} req/s · pool ${c.pool.used}/${c.pool.max || '—'}${c.pool.saturated_pct ? `, full ${c.pool.saturated_pct}%` : ''}`}
+        </span>
+        {/* #2151 what-if capacity (features/history) */}
+        <WhatIfButton />
       </span>
       <span className='flex min-w-0 items-center gap-2'>
         <span

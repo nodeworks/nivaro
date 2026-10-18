@@ -5,6 +5,7 @@ import { compareRoutes } from './compare.js'
 import { dbLensesRoutes } from './db-lenses.js'
 import { deepMeasurementRoutes } from './deep-measurement.js'
 import { digestRoutes } from './digest.js'
+import { historyRoutes } from './history.js'
 import { inspectActionsRoutes } from './inspect-actions.js'
 import { inspectBackgroundRoutes } from './inspect-background.js'
 import { inspectCoreRoutes } from './inspect-core.js'
@@ -57,7 +58,8 @@ const FEATURES: FastifyPluginAsync[] = [
   inspectBackgroundRoutes,
   inspectEntitiesRoutes,
   inspectNavRoutes,
-  inspectActionsRoutes
+  inspectActionsRoutes,
+  historyRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {

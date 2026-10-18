@@ -502,6 +502,14 @@ export const obsTrafficMapInvestigate: DocSection = {
         'Moves with: entities that keep rising and falling with this one over the last 15 minutes, and which usually moves first.'
       ]
     },
+    { type: 'h2', id: 'traffic-map-durations', text: 'Durations by route' },
+    {
+      type: 'ul',
+      items: [
+        'Durations by route in the inspector shows one route’s request durations over 1 hour to 7 days as a histogram. When the requests fall into two groups (a fast path and a slow one) it says so, with each group’s share and typical time, because a single p95 then describes only the slow group.',
+        'Below it, What the slow requests have in common compares the slow requests (the route’s slowest tenth) with the rest by their query string: limits over 1,000, a filter on a field, a date range of more than a year, every field (*), a search. Each is ranked by how much of the slowness it explains. Masked values are never shown.'
+      ]
+    },
     { type: 'h2', id: 'traffic-map-why-slow', text: 'Why it is slow' },
     {
       type: 'table',
@@ -868,10 +876,29 @@ export const obsTrafficMapPlatform: DocSection = {
       items: [
         'Headroom: the current request rate against a ceiling, either the best sustained minute this instance has carried over the last week or a fixed value you set (`TRAFFIC_CAPACITY_RPS`), with connection-pool use beside it. It reads "at 30% of what it can carry".',
         'Projection: the next 15 minutes from the recent trend and how the same time of day usually moves, for example "past the pool limit in 8 minutes at this rate".',
+        'What if…: beside the headroom figure, try more or less traffic (+50%), another replica or moving a scheduled job to another hour, and see the projected requests per replica, headroom, pool use and event-loop lag. The projection scales today’s cost per request; it is a guide, not a load test, and changes nothing.',
         'Event loop: event-loop delay and garbage-collection pauses beside the request rate. A slow node with fast SQL is CPU-bound.',
         'Realtime: event-journal lag and how many tabs watch each live view, linking to /realtime.',
         'Fan-out: the screens whose page loads fire the most calls.'
       ]
+    },
+    { type: 'h2', id: 'traffic-map-history', text: 'History: time-lapse, jobs and search' },
+    {
+      type: 'p',
+      text: 'The History panel under the map loads nothing until you pick a view.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Time-lapse plays the last 24 hours or 7 days at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.',
+        'Under the request curve: people online (from the 5-minute socket samples, where scheduled jobs run) and people making requests, so more people can be told apart from more work per person.',
+        'Jobs against peaks draws each scheduled job at its usual start and length over a typical day. A job in the peak gets the quietest start of the same length as a cron expression to copy, and what moving it would do to the pool.',
+        'Search answers "when did this caller last call this route", "when did this error first appear" and "busiest hour for this node or partner", over the last day to month. Every field is optional and matched exactly; each answer opens its moment on the map.'
+      ]
+    },
+    {
+      type: 'p',
+      text: 'Without minute history the time-lapse reads hourly (or 5-minute) groups from the request log, which keeps about 14 days and knows nodes but not callers or partners. Turn on minute history in the panel header to keep every minute per node and per edge (requests, errors, p50 and p95, bytes) for 30 days, or a retention you choose. Every API process counts its own minutes and the instance that runs scheduled jobs writes them once a minute; old minutes are deleted nightly. It is off by default and not available in cloud mode.'
     },
     { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
     {
@@ -949,6 +976,13 @@ GET  /api/traffic-map/entity-detail?key=           → every inspector panel's f
 POST /api/traffic-map/snapshots                    → freeze a shareable snapshot
 GET  /api/traffic-map/compare/windows?…            → two windows from the request log
 GET|POST|DELETE /api/traffic-map/breakers          → circuit breakers
+GET  /api/traffic-map/history/timelapse?range=24h|7d → playback frames, people, markers
+GET  /api/traffic-map/history/search?kind=…        → last hit, first error, busiest hour
+GET  /api/traffic-map/history/route-latency?key=&route=&hours= → duration histogram
+GET  /api/traffic-map/history/slow-params?key=&route=&hours=   → parameters of slow requests
+GET  /api/traffic-map/history/jobs                 → scheduled jobs against the day's traffic
+GET  /api/traffic-map/capacity/what-if?traffic_pct=&add_replicas=&job=&to_minute=
+GET|PUT /api/traffic-map/history/settings          → minute history on/off, retention
 socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched`
     }
   ]

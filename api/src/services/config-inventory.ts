@@ -228,6 +228,7 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_help_video_ratings',
   'nivaro_help_video_release_videos',
   'nivaro_traffic_snapshots',
+  'nivaro_traffic_minutes', // #2228 optional per-minute Traffic Map history (migration 448)
   'nivaro_traffic_investigations',
   'nivaro_tuning_proposals',
   'nivaro_tuning_param_sets',

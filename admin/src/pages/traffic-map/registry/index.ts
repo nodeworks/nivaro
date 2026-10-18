@@ -53,6 +53,7 @@ import '../features/inspect-background'
 import '../features/inspect-entities'
 import '../features/inspect-nav'
 import '../features/inspect-actions'
+import '../features/history'
 
 export {
   type CanvasLayer,
