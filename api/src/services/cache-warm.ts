@@ -46,6 +46,7 @@ export const CACHE_WARM_TOP_SLUGS = 25
 export const CACHE_WARM_PARAM_SETS = 3
 /** One query's request timeout — passed to tedious, so a timed-out warm really ends. */
 export const CACHE_WARM_QUERY_TIMEOUT_MS = 90_000
+export const CACHE_WARM_DAILY_TIMEOUT_MS = 120_000
 /** A usage-ranked run leaves a key cached more recently than this alone. */
 export const CACHE_WARM_FRESH_MS = 60 * 60 * 1000
 /** Never more than this many queries in flight. */
@@ -441,8 +442,12 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
       try {
         // The timeout reaches tedious: a warm that runs out really ends and
         // hands its connection back.
+        // warm_daily keeps the 120 s every viewer's miss gets — a flagged
+        // procedure that needs it must not start failing at 06:00.
         const rows = await deps.exec(q.sql_text, finalParams, {
-          timeoutMs: Math.max(1, Math.min(CACHE_WARM_QUERY_TIMEOUT_MS, remaining))
+          timeoutMs: daily
+            ? CACHE_WARM_DAILY_TIMEOUT_MS
+            : Math.max(1, Math.min(CACHE_WARM_QUERY_TIMEOUT_MS, remaining))
         })
         if (ttl > 0 && opts.redis) {
           await opts.redis.setex(key, ttl, customQueryCacheValue(rows, new Date(deps.now())))

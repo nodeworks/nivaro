@@ -214,7 +214,7 @@ describe('runCacheWarm', () => {
     })
     const exec = vi.fn(async (_sql: string, _p: unknown, o: { timeoutMs: number }) => {
       clock += 600_000
-      expect(o.timeoutMs).toBe(90_000)
+      expect(o.timeoutMs).toBe(120_000)
       return [{ n: 2 }]
     })
     const s = await runCacheWarm({
