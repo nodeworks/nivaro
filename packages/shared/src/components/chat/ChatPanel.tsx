@@ -48,6 +48,7 @@ import { get, patch as patchCmd, post } from '../../lib/commands'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
 import { type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
+import { userCardQuery } from '../../lib/user-cards'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
 import { CustomStatusEditor } from '../CustomStatusEditor'
 import { DoNotDisturbRow } from '../DoNotDisturb'
@@ -1021,13 +1022,7 @@ export function ChatRoomView({
   const labelIsKey =
     !labelProp.trim() || labelProp.toLowerCase() === room.toLowerCase() || /^dm:/i.test(labelProp)
   const { data: labelPeerCard } = useQuery({
-    queryKey: ['user-card', labelPeer],
-    queryFn: () =>
-      client
-        .request<{
-          data: { first_name: string | null; last_name: string | null; email: string } | null
-        }>(get(`/users/${labelPeer}/card`))
-        .then((r) => r.data ?? null),
+    ...userCardQuery(client, labelPeer),
     enabled: !!labelPeer && labelIsKey,
     staleTime: 120_000
   })

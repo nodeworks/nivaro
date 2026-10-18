@@ -1658,6 +1658,9 @@ function OwnProfile({
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ['nvr-profile-user'] })
       void qc.invalidateQueries({ queryKey: ['nvr-profile-card'] })
+      // The photo shows everywhere through the person's card / avatar entries.
+      void qc.invalidateQueries({ queryKey: ['user-card'] })
+      void qc.invalidateQueries({ queryKey: ['user-avatar'] })
     }
   })
 

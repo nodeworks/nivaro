@@ -1,13 +1,20 @@
 import { useQuery } from '@tanstack/react-query'
 import type { CSSProperties, ReactNode } from 'react'
-import { useApiFetchConfig } from '../context'
+import { useApiFetchConfig, useOptionalNivaroClient } from '../context'
+import { userCardQuery } from '../lib/user-cards'
 import { DEMO_USER, useIsRecordingSelf } from './help-videos/recorder/cleanRecording'
+
+function photoUri(uri: unknown): string | null {
+  return typeof uri === 'string' && uri.startsWith('data:image/') ? uri : null
+}
 
 /**
  * Real profile photo (Microsoft Graph, captured at login) with the caller's
- * initials disc as the fallback. The photo arrives as a small data URI from
- * GET /users/:id/avatar — react-query caches it per user for the session, so
- * an owner stack showing the same person twenty times costs one request.
+ * initials disc as the fallback. The photo is a small data URI on the
+ * person's card, read through the batched card loader (lib/user-cards) — so
+ * a list of twenty people costs one request, and react-query keeps it per
+ * user. Without a Nivaro client (no provider) it falls back to
+ * GET /users/:id/avatar.
  *
  * The FALLBACK is the caller's own styled disc: every site already has its
  * exact colors/ring/size, and this component must never change how a user
@@ -32,10 +39,20 @@ export function UserAvatar({
   alt?: string
 }) {
   const { apiBase, authHeaders, credentials } = useApiFetchConfig()
+  const client = useOptionalNivaroClient()
   const demo = useIsRecordingSelf(userId)
-  const { data: avatar } = useQuery<string | null>({
+  // With a client the photo rides the person's card (the same ['user-card']
+  // entry the chip beside it reads), so a list's avatars and chips are ONE
+  // batched POST /users/cards — and someone without a photo costs nothing.
+  const { data: card } = useQuery({
+    ...userCardQuery(client, userId),
+    enabled: !!client && !!userId,
+    staleTime: 30 * 60_000,
+    retry: false
+  })
+  const { data: fetched } = useQuery<string | null>({
     queryKey: ['user-avatar', userId],
-    enabled: !!userId,
+    enabled: !client && !!userId,
     staleTime: 30 * 60_000,
     gcTime: 60 * 60_000,
     retry: false,
@@ -48,10 +65,10 @@ export function UserAvatar({
       const body = (await res.json().catch(() => null)) as {
         data?: { avatar?: string | null }
       } | null
-      const uri = body?.data?.avatar ?? null
-      return typeof uri === 'string' && uri.startsWith('data:image/') ? uri : null
+      return photoUri(body?.data?.avatar)
     }
   })
+  const avatar = client ? photoUri(card?.avatar) : (fetched ?? null)
 
   if (demo) {
     const px = typeof style?.width === 'number' ? style.width : null
