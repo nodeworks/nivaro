@@ -4,6 +4,9 @@
 /api/
 /examples/
 /tests/
-/scripts/
+# The admin build runs scripts/precompress-dist.mjs (0.2.52): exclude the folder's contents,
+# not the folder, or the file cannot be re-included.
+/scripts/*
+!/scripts/precompress-dist.mjs
 *.test.ts
 *.spec.ts
