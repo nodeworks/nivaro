@@ -18,6 +18,7 @@ import {
   normalizeScreenPath,
   screenKey
 } from '../traffic-client-facts.js'
+import { detectorKnob, detectorOn } from '../traffic-detectors.js'
 import { LoadCallBuffer } from '../traffic-inspect/nav-load-buffer.js'
 import { currentTrafficSec } from '../traffic-map.js'
 import { MinuteCounter, registerTrafficTap, type TapRequestCtx, tapState } from '../traffic-taps.js'
@@ -25,7 +26,8 @@ import { MinuteCounter, registerTrafficTap, type TapRequestCtx, tapState } from 
 export const TAP_ID = 'screens'
 /** Distinct screens kept at once (then `__other__`). */
 export const SCREEN_CAP = 60
-/** A load that fires more calls than this is flagged. */
+/** A load that fires more calls than this is flagged — the default; the map's detector settings
+ *  (#2223) may change it per instance (`detectorKnob('fanout', 'limit')`). */
 export const FANOUT_LIMIT = Math.max(5, Number(process.env.TRAFFIC_FANOUT_LIMIT) || 60)
 /** A load with no call for this long is finished. */
 export const LOAD_IDLE_S = 15
@@ -206,6 +208,8 @@ export interface ScreenRow {
 }
 export interface ScreensReport {
   limit: number
+  /** The fan-out detector is on (detector settings, #2223). */
+  enabled?: boolean
   window_s: number
   screens: ScreenRow[]
   /** Screens whose worst load in the window passed the limit, worst first. */
@@ -254,7 +258,7 @@ export function screensReport(windowS: number, sec = currentTrafficSec()): Scree
       loads: s.loads.sum(screen, windowS, sec),
       avg: Math.round(avg * 10) / 10,
       max,
-      over_limit: max > FANOUT_LIMIT,
+      over_limit: detectorOn('fanout') && max > detectorKnob('fanout', 'limit'),
       worst,
       callers: callerRows
         .filter(([k]) => k.endsWith(`|${screen}`))
@@ -263,7 +267,8 @@ export function screensReport(windowS: number, sec = currentTrafficSec()): Scree
     })
   }
   return {
-    limit: FANOUT_LIMIT,
+    limit: detectorKnob('fanout', 'limit'),
+    enabled: detectorOn('fanout'),
     window_s: windowS,
     screens: rows,
     offenders: rows

@@ -9,6 +9,7 @@
  * entity: { n, routes: [{ route, n }], pairs: [{ at, route, caller, gap_ms }] } (window).
  */
 import { createHash } from 'node:crypto'
+import { detectorKnob, detectorOn } from '../traffic-detectors.js'
 import { MinuteCounter, OTHER_KEY } from '../traffic-ring.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
 import { queryOf, reqOf } from './req-facts.js'
@@ -50,14 +51,21 @@ export function requestHash(method: string, path: string, query: string): string
   return createHash('sha1').update(`${method} ${path}?${q}`).digest('base64').slice(0, 16)
 }
 
+/** The duplicate window in force (detector settings #2223; DUP_WINDOW_MS is the default). */
+function dupWindowMs(): number {
+  return detectorKnob('duplicates', 'window_ms')
+}
+
 function prune(m: Map<string, number>, now: number): void {
-  for (const [h, t] of m) if (now - t > DUP_WINDOW_MS) m.delete(h)
+  const w = dupWindowMs()
+  for (const [h, t] of m) if (now - t > w) m.delete(h)
 }
 
 const tap: TrafficTap = {
   id: DUPLICATES_TAP,
   onRequest(c) {
     if (c.ev.method !== 'GET' || c.kind !== 'read' || c.caller === OTHER_KEY) return
+    if (!detectorOn('duplicates')) return
     const st = state()
     const start = c.ev.at - Math.max(0, c.ev.latencyMs)
     const hash = requestHash('GET', c.ev.path, queryOf(reqOf(c.ev)))
@@ -79,7 +87,7 @@ const tap: TrafficTap = {
     if (m.size > PER_CALLER) m.delete(m.keys().next().value as string)
     if (prev === undefined) return
     const gap = Math.abs(start - prev)
-    if (gap > DUP_WINDOW_MS) return
+    if (gap > dupWindowMs()) return
     let ent = st.entities.get(c.entityKey)
     if (!ent) {
       ent = { routes: new MinuteCounter(), pairs: [] }

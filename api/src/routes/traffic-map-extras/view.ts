@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify'
 import { getAiClient, getAiModelSettings } from '../../services/ai-client.js'
 import { getIo } from '../../services/io-holder.js'
 import { correlate, POINTS, TOP_N } from '../../services/traffic-correlation.js'
+import { detectorKnob, detectorOn } from '../../services/traffic-detectors.js'
 import { entityRequestSeries } from '../../services/traffic-map.js'
 import { attachTrafficPresence } from '../../services/traffic-map-presence.js'
 import {
@@ -43,8 +44,18 @@ export async function trafficViewRoutes(app: FastifyInstance): Promise<void> {
       return { data: corrCache.value }
     // 5-second buckets at 15 minutes; the shorter windows keep at least 12 buckets
     const points = Math.max(12, Math.round((POINTS * win) / 900))
+    // Detector settings (#2223): off = no pairs; thresholds per instance.
+    if (!detectorOn('correlations'))
+      return { data: { window_s: win, compared: 0, pairs: [], disabled: true } }
     const rows = entityRequestSeries(win, points, TOP_N)
-    const value = { window_s: win, compared: rows.length, pairs: correlate(rows) }
+    const value = {
+      window_s: win,
+      compared: rows.length,
+      pairs: correlate(rows, {
+        minR: detectorKnob('correlations', 'min_r_pct') / 100,
+        minCo: detectorKnob('correlations', 'min_co_spikes')
+      })
+    }
     corrCache = { at: Date.now(), win, value }
     return { data: value }
   })

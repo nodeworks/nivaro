@@ -634,8 +634,13 @@ export async function announcementRoutes(app: FastifyInstance): Promise<void> {
       const roles = parseJsonSafe<string[]>(r.roles)
       const aud = parseJsonSafe<Audience>(r.audience) ?? {}
       if (aud.user_ids?.length && aud.user_ids.map(String).includes(userId)) return true
-      if (roles && !roles.some((x) => x.toLowerCase() === userRole)) return false
       const groups = normalizeGroups(aud)
+      // An audience of named people only (no roles, no groups) is exactly those people — the
+      // same rule the send path applies (resolveAudienceUsers). Without it such a banner showed
+      // to everyone (found with the Traffic Map's "Tell affected people", #2274).
+      if (aud.user_ids?.length && !roles?.length && !aud.roles?.length && groups.length === 0)
+        return false
+      if (roles && !roles.some((x) => x.toLowerCase() === userRole)) return false
       if (groups.length > 0) {
         // A group admits the viewer when every condition passes; a viewer
         // UNRESTRICTED on a dimension passes that condition (they can see the

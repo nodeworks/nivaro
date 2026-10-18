@@ -25,6 +25,7 @@ import { rateLimitPlugin } from './plugins/rate-limit.js'
 import { redisPlugin } from './plugins/redis.js'
 import { requestTracePlugin } from './plugins/request-trace.js'
 import { socketioPlugin } from './plugins/socketio.js'
+import { trafficActionsPlugin } from './plugins/traffic-actions.js'
 import { adminProvisionRoutes } from './routes/admin/provision.js'
 import { adminTrafficTenantRoutes } from './routes/admin/traffic-tenants.js'
 import { loadScheduledFlows } from './routes/flows.js'
@@ -160,6 +161,8 @@ export async function buildServer() {
   await app.register(chainPlugin)
   await app.register(requestTracePlugin)
   await app.register(rateLimitPlugin)
+  // Traffic Map debug windows + temporary caches (#2215 / #2273) — timed rules every replica honours.
+  await app.register(trafficActionsPlugin)
   // Ahead of the request log, so the log keeps the answer the caller received.
   app.addHook('onSend', async (req, reply, payload) => {
     const body = scopeRefusalBody(req, reply.statusCode, payload)

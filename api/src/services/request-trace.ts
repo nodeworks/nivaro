@@ -817,8 +817,28 @@ export function listTraces(limit = 50): TraceRecord[] {
   return buffer.slice(-limit).reverse()
 }
 
+const traceFallbacks = new Map<string, (id: string) => TraceRecord | null>()
+
+/**
+ * A second place a kept trace may live once the ring let it go (Traffic Map debug windows, #2215,
+ * keep their own copies). Same id replaces.
+ */
+export function setTraceFallback(id: string, fn: (traceId: string) => TraceRecord | null): void {
+  traceFallbacks.set(id, fn)
+}
+
 export function getTrace(id: string): TraceRecord | null {
-  return buffer.find((t) => t.id === id) ?? null
+  const hit = buffer.find((t) => t.id === id)
+  if (hit) return hit
+  for (const fn of traceFallbacks.values()) {
+    try {
+      const t = fn(id)
+      if (t) return t
+    } catch {
+      /* a fallback never breaks a read */
+    }
+  }
+  return null
 }
 
 export function clearTraces(): void {

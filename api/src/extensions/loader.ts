@@ -86,6 +86,7 @@ import {
   declareHelpVideoPage,
   registerHelpVideoStarter
 } from '../services/help-video-starters.js'
+import { registerExtensionLens } from '../services/traffic-actions/ext-lenses.js'
 import { registerTrafficNode, type TrafficNodeDef } from '../services/traffic-taps/nodes.js'
 export type Extension = ExtensionDefinition
 
@@ -934,6 +935,19 @@ export function registrationMembers(
         registerEventSource(def)
       }
     },
+    // #2229: a Traffic Map lens — badges + an inspector panel the map draws from `read`'s data.
+    // A malformed lens is logged and skipped, never a throw out of register().
+    traffic: {
+      registerLens: (def) => {
+        note('traffic')
+        try {
+          const key = registerExtensionLens(extId, def)
+          own('traffic_lenses', `${def.id} · ${def.label} (${key})`)
+        } catch (err) {
+          console.warn(`[extensions] ${extId}: traffic lens skipped —`, (err as Error).message)
+        }
+      }
+    },
     integrity: {
       registerCheck: (check) => {
         note('integrity')
@@ -1164,6 +1178,7 @@ async function loadExtension(
     | 'flows'
     | 'events'
     | 'chatBot'
+    | 'traffic'
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
@@ -1389,6 +1404,7 @@ export async function loadExtensions(
     | 'flows'
     | 'events'
     | 'chatBot'
+    | 'traffic'
     | 'digest'
     | 'approvalBrief'
     | 'readiness'
@@ -1531,6 +1547,7 @@ export async function loadCloudExtensions(
     | 'flows'
     | 'events'
     | 'chatBot'
+    | 'traffic'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'
@@ -1721,6 +1738,7 @@ export async function scanNewExtensions(
     | 'flows'
     | 'events'
     | 'chatBot'
+    | 'traffic'
     | 'bulkActions'
     | 'itemActions'
     | 'notificationChannels'

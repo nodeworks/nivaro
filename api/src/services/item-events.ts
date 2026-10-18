@@ -34,7 +34,28 @@ const NODE = randomUUID()
 let pub: Redis | null = null
 let sub: Redis | null = null
 
-function deliver(ev: ItemEvent): void {
+const listeners = new Set<(ev: ItemEvent, remote: boolean) => void>()
+
+/**
+ * Hear every record event — this process's own writes and those relayed from other replicas
+ * (`remote`). Listeners run synchronously and must be cheap; a throw is swallowed. Returns
+ * unsubscribe. (The Traffic Map's temporary cache busts on it, #2273.)
+ */
+export function onItemEvent(fn: (ev: ItemEvent, remote: boolean) => void): () => void {
+  listeners.add(fn)
+  return () => {
+    listeners.delete(fn)
+  }
+}
+
+function deliver(ev: ItemEvent, remote = false): void {
+  for (const fn of listeners) {
+    try {
+      fn(ev, remote)
+    } catch {
+      /* a listener never affects delivery */
+    }
+  }
   const { tenant = '', ...event } = ev
   const payload = {
     itemMutated: { ...event, seq: event.seq == null ? null : String(event.seq), data: null }
@@ -73,7 +94,7 @@ export async function initItemEvents(redis: Redis): Promise<void> {
       try {
         const msg = JSON.parse(raw) as { node: string; ev: ItemEvent }
         if (msg.node === NODE) return
-        deliver(msg.ev)
+        deliver(msg.ev, true)
       } catch {
         /* malformed message */
       }

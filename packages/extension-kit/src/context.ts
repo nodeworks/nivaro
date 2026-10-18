@@ -42,7 +42,12 @@ import type {
   TuningObserverDef,
   ValidatorDef
 } from './registrations.js'
-import type { IntegrationSignal, SignalActionHandler, TrafficNodeDef } from './signals.js'
+import type {
+  IntegrationSignal,
+  SignalActionHandler,
+  TrafficLensDef,
+  TrafficNodeDef
+} from './signals.js'
 
 export type ExtensionSettingValue = string | number | boolean | null
 
@@ -304,6 +309,10 @@ export interface ExtensionContext {
     registerEventSource(def: EventSourceDef): void
     /** A downstream node on the Traffic Map for the partner calls it matches (#1114). */
     registerTrafficNode(def: TrafficNodeDef): void
+  }
+  traffic: {
+    /** A Traffic Map lens: node badges + an inspector panel from data `read` returns (#2229). */
+    registerLens(def: TrafficLensDef): void
   }
   integrity: {
     /** A Data Integrity check the sweep, the record banner and Fix run. */
