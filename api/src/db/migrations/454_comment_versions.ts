@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { utcNow } from '../dialect.js'
 
 /**
  * Migration 454 — comment edit history.
@@ -28,7 +29,7 @@ export async function up(knex: Knex): Promise<void> {
       t.integer('version').notNullable()
       t.text('text').notNullable()
       t.uuid('user').nullable()
-      t.timestamp('created_at').notNullable().defaultTo(knex.fn.now())
+      t.timestamp('created_at').notNullable().defaultTo(utcNow(knex))
       t.unique(['comment', 'version'])
     })
   }
