@@ -44,7 +44,10 @@ import { defaultFilters, laneOf, TrafficModel } from './model'
 // Feature registrations (registry/index.ts) run before the page renders.
 import './registry'
 import { RewindBar } from './RewindBar'
+import { hotRowsTransformed, transformHotRows } from './registry/hotColumns'
 import { PagePanels } from './registry/pagePanels'
+import { useActivePageView } from './registry/pageViews'
+import { FeatureBoundary } from './registry/registry'
 import { ToolbarItems, toolbarItemsIn } from './registry/toolbarItems'
 import { viewParams } from './registry/viewParams'
 import { type StripData, SummaryStrip } from './SummaryStrip'
@@ -558,6 +561,8 @@ export default function TrafficMap() {
 
   const m = modelRef.current
   const win = filters.win
+  // #2244: a plain whole-page view (the executive summary) replaces the technical body
+  const pageView = useActivePageView()
   const ef = useMemo<Filters>(
     () => (wsFocus ? { ...filters, workspace: wsFocus } : filters),
     [filters, wsFocus]
@@ -620,12 +625,17 @@ export default function TrafficMap() {
       users,
       peak: Math.max(peak.current, m.sockets)
     }
+    // #2144: a registered sort/filter (health) ranks the whole list before it is cut to 12
+    const transformed = hotRowsTransformed()
     const hot = pinFilter
-      ? m
-          .hot(win, ef, 100000)
-          .filter((r) => pinFilter.has(r.key))
-          .slice(0, 12)
-      : m.hot(win, ef, 12)
+      ? transformHotRows(
+          m.hot(win, ef, 100000).filter((r) => pinFilter.has(r.key)),
+          m,
+          win
+        ).slice(0, 12)
+      : transformed
+        ? transformHotRows(m.hot(win, ef, 100000), m, win).slice(0, 12)
+        : m.hot(win, ef, 12)
     return { strip, hot, events: visibleEvents }
   }, [m, ready, win, ef, catalog, users, tick, pinFilter])
 
@@ -757,7 +767,10 @@ export default function TrafficMap() {
             </div>
           </div>
           <div
-            className='mt-3 flex flex-wrap items-center gap-x-2 gap-y-2'
+            className={cn(
+              'mt-3 flex flex-wrap items-center gap-x-2 gap-y-2',
+              pageView && '!hidden'
+            )}
             role='toolbar'
             aria-label='Filters'
           >
@@ -924,6 +937,14 @@ export default function TrafficMap() {
             </div>
             <PagePanels />
           </div>
+          {/* #2244: a plain whole-page view (the executive summary) covers the technical body */}
+          {pageView && (
+            <div className='absolute inset-0 z-20 overflow-auto bg-[var(--tm-bg)] p-6 text-[var(--tm-fg)]'>
+              <FeatureBoundary id={pageView.id}>
+                <pageView.Component />
+              </FeatureBoundary>
+            </div>
+          )}
           <InspectHost />
         </div>
       </div>

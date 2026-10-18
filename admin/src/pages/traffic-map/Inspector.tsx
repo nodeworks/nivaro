@@ -17,6 +17,7 @@ import type { TrafficModel } from './model'
 import { downKindOf, downLabel } from './nodeKinds'
 import { InspectorActions } from './registry/inspectorActions'
 import { InspectorPanels } from './registry/inspectorPanels'
+import { useSparkBand } from './registry/sparkBands'
 import { Sparkline } from './Sparkline'
 import type {
   DownHistory,
@@ -696,6 +697,12 @@ export function Inspector({
   const liveRange = tm?.ready
     ? { from: (tm.model.now - tm.win) * 1000, to: tm.model.now * 1000 }
     : undefined
+  // #2145: the node's normal range behind its live line
+  const band = useSparkBand(
+    sel?.kind === 'entity' ? { kind: 'entity', id: sel.id, caller: d.focusCaller } : null,
+    tm?.win ?? 60,
+    d.series.length
+  )
   const kindsMax = Math.max(1, ...d.kinds)
   const facts: Array<[string, string, boolean, string?]> = [
     ['Requests/s', fmtRate(d.rps), false],
@@ -738,7 +745,12 @@ export function Inspector({
             <>
               <Facts facts={facts} />
               <div className='px-3.5 pb-1 pt-3'>
-                <Sparkline data={d.series} range={liveRange} className='block h-11 w-full' />
+                <Sparkline
+                  data={d.series}
+                  range={liveRange}
+                  band={band}
+                  className='block h-11 w-full'
+                />
               </div>
               <Section title='Kinds in window'>
                 <div className='grid gap-1.5'>

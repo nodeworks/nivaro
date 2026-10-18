@@ -58,6 +58,34 @@ export function badgeFor(
 }
 
 /**
+ * Node tones (#2145): the colour of an entity node's dot — how far it is from its own normal.
+ * `normal` = judged and fine (the dot stays plain); a MapTokens key colours it; null = not judged
+ * (the map's fixed rule applies). The first provider that answers wins; called once per tick.
+ */
+export type NodeToneValue = keyof MapTokens | 'normal'
+export interface NodeTone extends Registered {
+  tone(nodeId: string, model: TrafficModel, win: number): NodeToneValue | null
+}
+
+export const nodeTones: NodeTone[] = []
+
+export function nodeToneFor(
+  nodeId: string,
+  model: TrafficModel,
+  win: number
+): NodeToneValue | null {
+  for (const t of byOrder(nodeTones)) {
+    try {
+      const v = t.tone(nodeId, model, win)
+      if (v) return v
+    } catch {
+      /* a broken provider leaves the node to the fixed rule */
+    }
+  }
+  return null
+}
+
+/**
  * Edge styles (#1112): recolour a base edge — e.g. a partner edge by why its calls fail. The
  * first provider that returns a style wins; `tone` names a MapTokens colour so light/dark follow
  * the theme, `dash` dashes the stroke. Called once per edge per paint: keep it cheap.

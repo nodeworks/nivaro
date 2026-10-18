@@ -4,6 +4,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { api } from '@/lib/api'
 import { cn, formatRelative } from '@/lib/utils'
+import { DeployCheckSummary } from '@/pages/traffic-map/features/baselines/deploy-check'
 
 const STAGES = [
   'preflight',
@@ -282,6 +283,14 @@ export function ReleaseCard() {
             Release
           </Button>
         </div>
+      </div>
+
+      {/* #2221: load against normal, jobs, imports and incidents — deploy now or wait */}
+      <div
+        className='traffic-map mt-3 rounded-lg border border-slate-200 px-3 py-2 dark:border-border'
+        data-release-deploy-check
+      >
+        <DeployCheckSummary />
       </div>
 
       {plan && (
