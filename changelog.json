@@ -1,10 +1,110 @@
 {
-  "generated_at": "2026-10-17T23:21:30.825Z",
+  "generated_at": "2026-10-18T16:34:05.788Z",
   "releases": [
+    {
+      "version": "0.2.52",
+      "tag": "v0.2.52",
+      "date": "2026-10-18T12:33:51-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "cache",
+              "text": "warm query caches after boot and before business hours (#2445)",
+              "hash": "e694b932"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "api",
+              "text": "over-share waiters never leave read-gate slots idle (#2452)",
+              "hash": "7b9aea3c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cache",
+              "text": "warm_daily queries keep the 120 s query timeout (#2445)",
+              "hash": "c6a3db3c"
+            },
+            {
+              "section": "Fixed",
+              "scope": "cache",
+              "text": "cache warm review fixes (#2445)",
+              "hash": "18133359"
+            },
+            {
+              "section": "Fixed",
+              "scope": "widgets",
+              "text": "apply User Scopes before building widget SQL",
+              "hash": "1f0337c4"
+            },
+            {
+              "section": "Fixed",
+              "scope": null,
+              "text": "never compress octet-stream; opt out remaining media routes (#2437)",
+              "hash": "1c55f39a"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": "api",
+              "text": "read gate per tenant, work-conserving, any-participant start (#2452)",
+              "hash": "47567c8c"
+            },
+            {
+              "section": "Performance",
+              "scope": "api",
+              "text": "single-flight + heavy-read gate for dashboard bursts (#2452)",
+              "hash": "e3ee4b4b"
+            },
+            {
+              "section": "Performance",
+              "scope": "admin",
+              "text": "split stable vendor code into long-lived chunks (#2451)",
+              "hash": "4156ae42"
+            },
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "compress API responses and pre-compress the admin build (#2437)",
+              "hash": "74d72217"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "heavy-read gate is per tenant and work-conserving (#2452)",
+              "hash": "39f07fac"
+            },
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "fix indentation from the ops docs merge",
+              "hash": "ea7a5e5b"
+            }
+          ]
+        }
+      ],
+      "count": 12
+    },
     {
       "version": "0.2.51",
       "tag": "v0.2.51",
-      "date": "2026-10-17T19:21:13-04:00",
+      "date": "2026-10-17T19:21:30-04:00",
       "sections": [
         {
           "label": "Fixed",
