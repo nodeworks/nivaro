@@ -228,7 +228,7 @@ export function announceAccessChanged(opts: { userId?: string } = {}): void {
 
 /** Write routes whose success may change who can read which records. */
 export const ACCESS_ROUTES =
-  /^\/api\/(roles|user-scopes|scope-dimensions|tree-permissions|access-requests\/[^/?]+\/resolve|users\/(bulk|me\/scopes|[^/?]+\/copy-access)|users\/(?!me\b)[^/?]+(?:[?]|$))/
+  /^\/api\/(roles|user-scopes|scope-dimensions|tree-permissions|access-requests\/[^/?]+\/resolve|users\/(bulk|me\/scopes|[^/?]+\/copy-access)|users\/(?!me\b|cards(?:[?]|$))[^/?]+(?:[?]|$))/
 /** The one access write a non-administrator makes: picking their own scope. */
 const SELF_ACCESS_ROUTES = /^\/api\/users\/me\/scopes\b/
 

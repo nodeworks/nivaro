@@ -260,8 +260,9 @@ export async function registerRoutes(app: FastifyInstance) {
       url.startsWith('/api/auth') ||
       url.startsWith('/api/settings') ||
       url.startsWith('/api/rum') ||
-      // A batch of reads (#1304) is a POST only because it carries a body.
-      url.startsWith('/api/items/batch-read')
+      // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
+      url.startsWith('/api/items/batch-read') ||
+      url.startsWith('/api/users/cards')
     )
       return
     const { maintenanceState, MAINTENANCE_EXPLAINER, MAINTENANCE_DEFAULT_MESSAGE } = await import(

@@ -130,7 +130,9 @@ export async function usersRoutes(app: FastifyInstance) {
         | undefined
       const avatar = !row || row.is_redacted ? null : (row.avatar ?? null)
       const etag = avatarEtag(avatar)
-      reply.header('cache-control', 'private, max-age=1800')
+      // A photo is kept 30 min; "no photo" is revalidated every time (a 304 via the ETag), so
+      // an upload shows at once even on hosts without a client.
+      reply.header('cache-control', avatar ? 'private, max-age=1800' : 'private, no-cache')
       reply.header('etag', etag)
       const inm = req.headers['if-none-match']
       if (typeof inm === 'string' && inm.split(',').some((t) => t.trim() === etag)) {

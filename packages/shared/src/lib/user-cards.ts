@@ -104,7 +104,9 @@ async function runChunk(
       return
     } catch (err) {
       const s = statusOf(err)
-      if (s !== 404 && s !== 405) {
+      // 404/405: a server without the route; 403/503: a sandbox key or a maintenance freeze on
+      // a server that does not exempt it — single GETs still answer there.
+      if (s !== 404 && s !== 405 && s !== 403 && s !== 503) {
         for (const e of entries) for (const w of e.waiters) w.reject(err)
         return
       }

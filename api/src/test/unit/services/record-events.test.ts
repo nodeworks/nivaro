@@ -243,6 +243,11 @@ describe('accessAnnouncement (F2)', () => {
     expect(accessAnnouncement(req('PATCH', '/api/users/u2', true))).toBe('tenant')
   })
 
+  it('an administrator’s batched people-card read announces nothing', () => {
+    expect(accessAnnouncement(req('POST', '/api/users/cards', true))).toBeNull()
+    expect(accessAnnouncement(req('PATCH', '/api/users/u1', true))).toBe('tenant')
+  })
+
   it('a non-admin PATCH of their own user row announces nothing', () => {
     expect(accessAnnouncement(req('PATCH', '/api/users/u1'))).toBeNull()
     expect(accessAnnouncement(req('POST', '/api/users/bulk'))).toBeNull()

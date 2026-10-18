@@ -207,11 +207,12 @@ describe('GET /users/:id/avatar caching', () => {
     expect(changed.headers.etag).not.toBe(etag)
   })
 
-  it('caches "no photo" too and never serves a redacted photo', async () => {
+  it('revalidates "no photo" (so an upload shows at once) and never serves a redacted photo', async () => {
     store.avatars.set(R, { avatar: 'data:image/jpeg;base64,SECRET', is_redacted: true })
     const a = await app()
     const r = await a.inject({ method: 'GET', url: `/api/users/${R}/avatar` })
     expect(r.json()).toEqual({ data: { avatar: null } })
-    expect(r.headers['cache-control']).toBe('private, max-age=1800')
+    expect(r.headers['cache-control']).toBe('private, no-cache')
+    expect(r.headers.etag).toBeTruthy()
   })
 })

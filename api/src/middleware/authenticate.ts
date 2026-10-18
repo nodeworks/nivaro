@@ -281,7 +281,11 @@ async function applyApiKey(
     // The items API and GraphQL rehearse a sandbox key's writes. Every other
     // route would store them, so a sandbox key may only read there.
     const path = (req.url ?? '').split('?')[0]
-    const rehearsed = /^\/api\/items(\/|$)/.test(path) || /^(\/api)?\/graphql\/?$/.test(path)
+    const rehearsed =
+      /^\/api\/items(\/|$)/.test(path) ||
+      /^(\/api)?\/graphql\/?$/.test(path) ||
+      // a read that is a POST only because it carries a body
+      path === '/api/users/cards'
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && !rehearsed) {
       throw httpError(
         403,
