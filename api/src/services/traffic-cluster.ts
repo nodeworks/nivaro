@@ -21,6 +21,7 @@ import {
   type TrafficSnapshot,
   trafficRoomFor
 } from './traffic-map.js'
+import { noteRedisBytes } from './traffic-overhead.js'
 import { withTrafficStore } from './traffic-taps.js'
 
 export const ANNOUNCE_EVERY_MS = 2000
@@ -160,12 +161,15 @@ export async function startTrafficCluster(
   const channel = `${process.env.REDIS_CHANNEL_PREFIX ?? ''}nvr:traffic-map`
   const sub = redis.duplicate()
   const send = (m: ClusterMessage) => {
-    redis.publish(channel, JSON.stringify(m)).catch(() => {})
+    const raw = JSON.stringify(m)
+    noteRedisBytes((m as { store?: string }).store, raw.length) // #2178 relay traffic
+    redis.publish(channel, raw).catch(() => {})
   }
   const r = new TrafficClusterRelay(opts.node, send, opts.io, opts.snapshotOf, opts.peers)
   sub.on('message', (ch: string, raw: string) => {
     if (ch !== channel) return
     try {
+      noteRedisBytes(undefined, raw.length)
       r.receive(JSON.parse(raw) as ClusterMessage)
     } catch {
       /* a malformed message never affects the map */

@@ -16,6 +16,7 @@ import { cn } from '@/lib/utils'
 import { TrafficMapContext, type TrafficMapContextValue } from './context'
 import { callerLabel, EventTicker, KIND_VAR } from './EventTicker'
 import { useStore } from './features/b1-shared'
+import { EnvironmentBand } from './features/env-band'
 import { nodeFeed } from './features/node-merge'
 import { usePinFilter } from './features/pins'
 import {
@@ -686,6 +687,7 @@ export default function TrafficMap() {
   return (
     <TrafficMapContext.Provider value={ctx}>
       <div className='traffic-map flex min-h-0 flex-1 flex-col text-[13px]'>
+        <EnvironmentBand frozen={frozen} loadingFrozen={!!frozenId && !frozen} />
         <header className='shrink-0 border-b border-slate-200 bg-white px-6 pb-3 pt-4 dark:border-border dark:bg-card'>
           <div className='flex flex-wrap items-center justify-between gap-x-6 gap-y-2'>
             <div className='flex min-w-0 flex-1 items-center gap-2.5'>

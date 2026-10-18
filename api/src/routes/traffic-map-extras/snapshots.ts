@@ -2,12 +2,18 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../../db/index.js'
-import { getRealtimeStats } from '../../plugins/socketio.js'
 import { logActivity } from '../../services/activity.js'
 import { INSTANCE_ID } from '../../services/instance-roster.js'
 import { trafficClusterRelay } from '../../services/traffic-cluster.js'
 import { buildSnapshot, type TrafficSnapshot } from '../../services/traffic-map.js'
 import { mergeSnapshots } from '../../services/traffic-merge.js'
+import {
+  KIND_LIKE,
+  kindOf,
+  type SnapshotKind,
+  socketCounts,
+  withEnvironment
+} from '../../services/traffic-snapshots.js'
 import { currentStoreId } from '../../services/traffic-taps.js'
 
 /**
@@ -24,17 +30,6 @@ const NOTE_MAX = 2000
 const JSON_MAX = 256 * 1024
 const LIST_LIMIT = 30
 const ID_RE = /^[0-9a-f-]{36}$/i
-
-function socketCounts(): { sockets: number; users: number } {
-  const stats = getRealtimeStats()
-  const users = new Set<string>()
-  for (const s of stats.sockets) {
-    const u = s.user as { id?: string } | string | null
-    const id = typeof u === 'string' ? u : u?.id
-    if (id) users.add(id)
-  }
-  return { sockets: stats.sockets.length, users: users.size }
-}
 
 /** A small JSON value from the client (filters, selection, labels), or null when too big / bad. */
 export function clientJson(v: unknown, max = JSON_MAX): string | null {
@@ -125,7 +120,7 @@ export async function snapshotRoutes(app: FastifyInstance): Promise<void> {
       instance: snap.instance,
       filters: clientJson(b.filters, 8 * 1024),
       selection: clientJson(b.selection, 2 * 1024),
-      snapshot: JSON.stringify(snap),
+      snapshot: JSON.stringify(await withEnvironment(snap)), // #2242 the band prints on snapshots
       catalog: clientJson(b.catalog),
       created_by: req.user?.id ?? null,
       created_at: new Date()
@@ -143,12 +138,36 @@ export async function snapshotRoutes(app: FastifyInstance): Promise<void> {
     return reply.code(201).send({ data: { id, name, url: `/traffic-map?snapshot=${id}` } })
   })
 
-  app.get('/snapshots', opts, async () => {
+  /**
+   * `kind` narrows the list: `manual` (default — what people shared), `auto` (the peak and
+   * scheduled snapshots the server took), or `all`. `limit` up to 100.
+   */
+  app.get<{ Querystring: { kind?: string; limit?: string } }>('/snapshots', opts, async (req) => {
+    const kind = req.query.kind === 'auto' || req.query.kind === 'all' ? req.query.kind : 'manual'
+    const limit = Math.min(100, Math.max(1, Math.floor(Number(req.query.limit)) || LIST_LIMIT))
     const rows = (await db(`${TABLE} as s`)
       .leftJoin('nivaro_users as u', 'u.id', 's.created_by')
       .where('s.store', currentStoreId())
+      .modify((q) => {
+        if (kind === 'auto')
+          q.where((w) =>
+            w
+              .where('s.filters', 'like', KIND_LIKE.peak)
+              .orWhere('s.filters', 'like', KIND_LIKE.schedule)
+          )
+        else if (kind === 'manual')
+          q.where((w) =>
+            w
+              .whereNull('s.filters')
+              .orWhere((n) =>
+                n
+                  .where('s.filters', 'not like', KIND_LIKE.peak)
+                  .andWhere('s.filters', 'not like', KIND_LIKE.schedule)
+              )
+          )
+      })
       .orderBy('s.created_at', 'desc')
-      .limit(LIST_LIMIT)
+      .limit(limit)
       .select(
         's.id',
         's.name',
@@ -158,6 +177,7 @@ export async function snapshotRoutes(app: FastifyInstance): Promise<void> {
         's.node',
         's.created_at',
         's.created_by',
+        's.filters',
         'u.first_name',
         'u.last_name',
         'u.email'
@@ -170,6 +190,7 @@ export async function snapshotRoutes(app: FastifyInstance): Promise<void> {
         window_s: r.window_s,
         scope: r.scope,
         node: r.node ?? null,
+        kind: kindOf(r.filters) as SnapshotKind,
         created_at: new Date(r.created_at as string).toISOString(),
         created_by: r.created_by ?? null,
         created_by_name:

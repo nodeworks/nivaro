@@ -9,6 +9,7 @@ import {
   IncidentModeCard,
   LogRuleSuggestionsCard
 } from '@/components/ops-assistant-panels'
+import { MapThumbLink, useMapThumbs } from '@/components/traffic-map-thumb'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -181,6 +182,9 @@ export function OpsConsolePage() {
         .then((r) => r.data.data),
     enabled: false
   })
+
+  // #2181: the map at the moment of each event (nearest stored snapshot within the hour)
+  const mapThumbs = useMapThumbs((incidents?.events ?? []).map((e) => e.at))
 
   const [ruleName, setRuleName] = useState('')
   const [rulePattern, setRulePattern] = useState('')
@@ -553,6 +557,7 @@ export function OpsConsolePage() {
                         {e.label}
                       </span>
                     )}
+                    <MapThumbLink t={mapThumbs.get(e.at)} />
                   </div>
                 ))}
               </div>

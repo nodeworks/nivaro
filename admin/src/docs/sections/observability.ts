@@ -859,7 +859,23 @@ export const obsTrafficMapPlatform: DocSection = {
         'Record keeps a rolling recording of the canvas in your browser. Download the last 30 seconds as a video, or attach it to a new issue. Nothing leaves the browser until you do.',
         'Compare shows two windows of this deployment side by side from the request log (morning against afternoon, this hour against the same hour last week), or this deployment against another API registered under Environments, fetched live with that component’s token.',
         'Daily summary adds a traffic section to your daily summary email: busiest callers, new callers, error hot spots and integrations that went quiet. It is off until you turn it on.',
-        'A compact traffic card sits on the Command Center admin rail.'
+        'A compact traffic card sits on the Command Center admin rail.',
+        'Compare snapshots (a panel under the map) puts two stored snapshots side by side: requests a minute, error share and p95 for every node, and requests a minute for every edge (caller to node, node to what it calls). Windows of different lengths still compare because the figures are per minute. "A a week earlier" picks the snapshot closest to a week before the second one, for this Monday against last Monday.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-data', text: 'Map data, schedules and cost' },
+    {
+      type: 'p',
+      text: 'Map data (in the map header) is one card for what the map keeps and what it costs. Peak and scheduled snapshots are kept for 30 days by default; shared snapshots and investigation notebooks are kept until deleted. Set a number of days for any of them and the oldest are removed automatically; each line shows how many are kept and roughly how much room they take. Recordings of the map are saved to your computer or attached to an issue, so the map keeps none.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Snapshots taken by themselves: a snapshot a few minutes after each day’s busiest minute (on by default, replacing the earlier one the same day), and optionally one every 1 to 24 hours. They are marked as peak or scheduled, stay out of the Share list, and show up in Compare snapshots. Self-hosted instances only.',
+        'Environment band: a coloured band across the top of the map names the environment (production, staging, development), taken from the Environments registry when this instance is listed there and from NIVARO_INSTANCE otherwise. Snapshots print the environment they were taken in, so two open maps are not confused.',
+        'What this is: the top of the inspector says in a sentence what the selected node is. It comes from a collection’s note, a custom query’s, flow’s or partner’s description, a background job’s description or an extension’s declared node; the system nodes have a built-in line. Edit it to write your own; "Use the automatic text" brings the original back.',
+        'Map cost: the strip tile and Map data show the map’s own CPU (recording requests and building frames), an estimate of its memory, bytes sent to browsers and over the Redis relay. Above the request rate you set (default 300 requests a second, `TRAFFIC_SAMPLE_ABOVE_RPS`; 0 never samples) the ticker shows 1 event in N and says so. Counts, errors and the canvas stay exact.',
+        'Incident timeline: in Ops Console each event shows a small picture of the map from the nearest stored snapshot within the hour. Click it to open the full snapshot.'
       ]
     },
     { type: 'h2', id: 'traffic-map-capacity', text: 'Capacity and health' },
@@ -918,6 +934,11 @@ export const obsTrafficMapPlatform: DocSection = {
       head: ['Setting', 'Default', 'What it changes'],
       rows: [
         [
+          '`TRAFFIC_SAMPLE_ABOVE_RPS`',
+          '300',
+          'Requests per second above which the ticker shows 1 event in N. 0 never samples. The Map data card on the map overrides it.'
+        ],
+        [
           '`TRAFFIC_N_PLUS_ONE_TRIPS`',
           '40',
           'Average round trips per request before an entity gets the N+1 badge.'
@@ -947,6 +968,13 @@ GET  /api/traffic-map/catalog                      → labels for entities, call
 GET  /api/traffic-map/entity/:lane/:entity?hours=  → history, issues and slow traces
 GET  /api/traffic-map/entity-detail?key=           → every inspector panel's figures
 POST /api/traffic-map/snapshots                    → freeze a shareable snapshot
+GET  /api/traffic-map/snapshots?kind=manual|auto|all → stored snapshots
+GET  /api/traffic-map/snapshots/compare?a=&b=      → two snapshots, node by node and edge by edge
+GET  /api/traffic-map/snapshots/near?at=&at=       → the map at the moment of each timeline event
+GET|PATCH /api/traffic-map/map-settings            → retention, schedule, sampling threshold
+GET|PUT /api/traffic-map/node-info                 → what a node is (and an admin's own text)
+GET  /api/traffic-map/environment                  → the band: name and tier
+GET  /api/traffic-map/overhead                     → the map's own cost
 GET  /api/traffic-map/compare/windows?…            → two windows from the request log
 GET|POST|DELETE /api/traffic-map/breakers          → circuit breakers
 socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched`

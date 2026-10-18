@@ -53,6 +53,9 @@ import '../features/inspect-background'
 import '../features/inspect-entities'
 import '../features/inspect-nav'
 import '../features/inspect-actions'
+import '../features/map-settings'
+import '../features/snapshot-compare'
+import '../features/node-about'
 
 export {
   type CanvasLayer,

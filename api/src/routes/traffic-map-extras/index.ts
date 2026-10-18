@@ -13,6 +13,7 @@ import { inspectNavRoutes } from './inspect-nav.js'
 import { inspectRecordRoutes } from './inspect-record.js'
 import { inspectRequestRoutes } from './inspect-request.js'
 import { inspectorActionRoutes } from './inspector-actions.js'
+import { mapDataRoutes } from './map-data.js'
 import { trafficOpsRoutes } from './ops.js'
 import { peopleLensesRoutes } from './people-lenses.js'
 import { platformRoutes } from './platform.js'
@@ -57,7 +58,8 @@ const FEATURES: FastifyPluginAsync[] = [
   inspectBackgroundRoutes,
   inspectEntitiesRoutes,
   inspectNavRoutes,
-  inspectActionsRoutes
+  inspectActionsRoutes,
+  mapDataRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {
