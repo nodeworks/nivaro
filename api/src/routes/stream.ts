@@ -2,6 +2,7 @@ import type { ServerResponse } from 'node:http'
 import type { FastifyInstance } from 'fastify'
 import { hooks } from '../hooks/registry.js'
 import { requireAdmin } from '../middleware/authenticate.js'
+import { trackSse } from '../services/traffic-taps/realtime.js'
 
 /**
  * Server-Sent Events stream of item mutations (admin only).
@@ -60,6 +61,7 @@ export async function streamRoutes(app: FastifyInstance) {
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no'
     })
+    trackSse(res, 'admin-sse')
     res.write('retry: 5000\n\n')
     res.write(': connected\n\n')
 

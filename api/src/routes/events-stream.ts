@@ -9,6 +9,7 @@ import {
   redeemStreamTicket
 } from '../services/stream-ticket.js'
 import { currentTenantKey } from '../services/tenant-rooms.js'
+import { trackSse } from '../services/traffic-taps/realtime.js'
 
 // ─── SSE event stream (#602) ─────────────────────────────────────────────────
 // GET /events/stream — server-sent events of collection changes, fed by the
@@ -94,6 +95,7 @@ export async function eventsStreamRoutes(app: FastifyInstance) {
       connection: 'keep-alive',
       'x-accel-buffering': 'no'
     })
+    trackSse(raw, 'events-sse')
     raw.write(': connected\n\n')
 
     let closed = false

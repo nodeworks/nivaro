@@ -17,7 +17,6 @@ import { accessRequestRoutes } from './access-requests.js'
 import { activityRoutes } from './activity.js'
 import { addendumsRoutes } from './addendums.js'
 import { aiRoutes } from './ai.js'
-import { aiQualityRoutes } from './ai-quality.js'
 import { aiAskContextRoutes } from './ai-ask-context.js'
 import { aiConversationRoutes } from './ai-conversations.js'
 import { aiDesignRoutes } from './ai-design.js'
@@ -25,6 +24,7 @@ import { aiExplainRoutes } from './ai-explain.js'
 import { aiKnowledgeRoutes } from './ai-knowledge.js'
 import { aiMemoryAdminRoutes, aiMemoryRoutes } from './ai-memory.js'
 import { aiPlanRoutes } from './ai-plans.js'
+import { aiQualityRoutes } from './ai-quality.js'
 import { aiSettingsRoutes } from './ai-settings.js'
 import { aiWatchRoutes } from './ai-watches.js'
 import { alertsRoutes } from './alerts.js'
@@ -60,6 +60,7 @@ import { configHealthRoutes } from './config-health.js'
 import { configReviewRoutes } from './config-review.js'
 import { configSearchRoutes } from './config-search.js'
 import { configSeedRoutes } from './config-seeds.js'
+import { connectionReportRoutes } from './connection-reports.js'
 import { contentExportRoutes } from './content-export.js'
 import { coverageGapsRoutes } from './coverage-gaps.js'
 import { cronRoutes } from './cron.js'
@@ -417,6 +418,8 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(monitorRoutes, { prefix: '/monitors' })
   await app.register(integrationContractRoutes, { prefix: '/integration-contracts' })
   await app.register(rumRoutes, { prefix: '/rum' })
+  // #2263 — browsers report a failed / downgraded live-update connection (Traffic Map)
+  await app.register(connectionReportRoutes, { prefix: '/connection-reports' })
   await app.register(indexAdvisorRoutes, { prefix: '/index-advisor' })
   await app.register(dbTuningRoutes, { prefix: '/db-tuning' })
   await app.register(securityRoutes, { prefix: '/security' })

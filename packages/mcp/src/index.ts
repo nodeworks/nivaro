@@ -14,6 +14,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { createNivaro, type NivaroClient } from '@nivaro/sdk'
+import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerResources } from './resources.js'
 import { registerAccountTools } from './tools/account.js'
 import { registerCollectionTools } from './tools/collections.js'
@@ -64,7 +65,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
       if (!options.token) {
         throw new Error('A Nivaro token is required (NIVARO_TOKEN or --token).')
       }
-      return createNivaro(url, { token: options.token, fetch: options.fetch })
+      return createNivaro(url, { token: options.token, fetch: identifyingFetch(options.fetch) })
     })()
 
   const server = new McpServer(
@@ -80,6 +81,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
     }
   )
 
+  tagToolCalls(server)
   registerAccountTools(server, client)
   registerCollectionTools(server, client)
   registerItemTools(server, client)

@@ -3,6 +3,7 @@ import type { Redis } from 'ioredis'
 import type { JournalEntry } from './event-journal.js'
 import { getIo } from './io-holder.js'
 import { notifyJournalListeners } from './journal-listeners.js'
+import { noteAdapterLag } from './traffic-taps/realtime.js'
 
 /**
  * Cross-replica realtime events on a Redis stream (#1737).
@@ -150,7 +151,11 @@ function deliver(d: DecodedStreamEntry): void {
   const payload = entry.seq == null ? entry.payload : { ...entry.payload, _seq: entry.seq }
   io.local.to(entry.room).emit(entry.event, payload)
   stats.delivered++
-  if (d.at) stats.lastDeliveryLagMs = Math.max(0, Date.now() - d.at)
+  if (d.at) {
+    stats.lastDeliveryLagMs = Math.max(0, Date.now() - d.at)
+    // Traffic Map (#2266): only entries another replica wrote say anything about the hop.
+    if (d.node !== NODE) noteAdapterLag(stats.lastDeliveryLagMs)
+  }
 }
 
 type XReadReply = Array<[string, Array<[string, string[]]>]> | null
