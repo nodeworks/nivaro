@@ -15,7 +15,7 @@
  * Leaf module: no import from db/index.ts (which imports this).
  */
 import type { Knex } from 'knex'
-// Leaf too (node modules only) — read for who made a configuration write (#1053).
+// Leaf too (no db import) — read for who made a configuration write (#1053).
 import { currentTraceMeta } from '../services/request-trace.js'
 
 const TABLE = 'nivaro_cache_epochs'
@@ -245,9 +245,27 @@ async function bump(name: string): Promise<number | null> {
   }
 }
 
+const writeListeners = new Set<() => void>()
+
+/** Hear this process's configuration writes as the driver sees them (before the statement runs;
+ *  cheap and synchronous — a throw is swallowed). Fires whether or not the epoch is enabled. */
+export function onConfigWrite(fn: () => void): () => void {
+  writeListeners.add(fn)
+  return () => {
+    writeListeners.delete(fn)
+  }
+}
+
 /** Called for every configuration write the driver sees. First write moves
  *  the number at once; a run of writes moves it again when the run ends. */
 export function noteConfigWrite(sql?: string): void {
+  for (const fn of writeListeners) {
+    try {
+      fn()
+    } catch {
+      /* a listener never affects the write */
+    }
+  }
   if (!ENABLED || !knexRef) return
   if (sql) {
     lastStatement = sql.replace(/\s+/g, ' ').slice(0, 160)

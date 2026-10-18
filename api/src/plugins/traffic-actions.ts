@@ -1,8 +1,12 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
-import { onItemEvent } from '../services/item-events.js'
+import { onConfigWrite } from '../db/config-epoch.js'
+import { onOwnersChanged } from '../db/owner-signal.js'
+import { registerCache } from '../services/cache-registry.js'
+import { onCollectionTouched, onItemEvent } from '../services/item-events.js'
 import { debugOnRequest, wireDebugWindows } from '../services/traffic-actions/debug-window.js'
 import {
+  bustAllTempCache,
   noteCollectionChanged,
   setTempCacheRedis,
   wireTempCache
@@ -24,9 +28,22 @@ export const trafficActionsPlugin = fp(async (app: FastifyInstance) => {
   wireTempCache()
   // This process's own writes bust synchronously in broadcastCollectionUpdate; these are the
   // writes other replicas made.
-  const off = onItemEvent((ev, remote) => {
-    if (remote) noteCollectionChanged(ev.collection, ev.tenant ?? '')
-  })
+  const off = [
+    onItemEvent((ev, remote) => {
+      if (remote) noteCollectionChanged(ev.collection, ev.tenant ?? '')
+    }),
+    onCollectionTouched((collection, tenant) => noteCollectionChanged(collection, tenant)),
+    // Access changes are raw system-table writes no record event names: a configuration write
+    // here (policies, roles, User Scopes, tree permissions…) or an owner-seat write busts every
+    // entry; another process's configuration write reaches bustAllCaches through the epoch.
+    onConfigWrite(bustAllTempCache),
+    onOwnersChanged(bustAllTempCache)
+  ]
+  registerCache(
+    'traffic-temp-cache',
+    'Traffic Map temporary caches — answers kept per caller while one is on',
+    bustAllTempCache
+  )
   // A size check per request while no debug window is open.
   app.addHook('onRequest', (req, _reply, done) => {
     try {
@@ -37,7 +54,7 @@ export const trafficActionsPlugin = fp(async (app: FastifyInstance) => {
     done()
   })
   app.addHook('onClose', async () => {
-    off()
+    for (const fn of off) fn()
     stopTimedRules()
   })
 })

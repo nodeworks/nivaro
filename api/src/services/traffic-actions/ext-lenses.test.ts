@@ -7,7 +7,8 @@ import {
   registerExtensionLens,
   resetExtensionLenses,
   safeHref,
-  sanitizeLensData
+  sanitizeLensData,
+  unregisterExtensionLenses
 } from './ext-lenses.js'
 
 afterEach(() => resetExtensionLenses())
@@ -119,5 +120,43 @@ describe('kit testing stub', () => {
     const ctx = createTestContext()
     ctx.traffic.registerLens({ id: 'x', label: 'X', read: () => ({}) })
     expect(ctx.registered.trafficLenses.map((l) => l.id)).toEqual(['x'])
+  })
+})
+
+describe('lifecycle', () => {
+  it('joins a read already in flight for the same lens and window', async () => {
+    let calls = 0
+    const releases: Array<(v: never) => void> = []
+    registerExtensionLens('wh', {
+      id: 'poll',
+      label: 'Poll',
+      read: () => {
+        calls++
+        return new Promise((r) => {
+          releases.push(r)
+        })
+      }
+    })
+    const a = readExtensionLens('wh:poll', 60)
+    const b = readExtensionLens('wh:poll', 60)
+    const c = readExtensionLens('wh:poll', 300)
+    expect(a).toBe(b)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toBe(2)
+    for (const r of releases) r({ summary: 'ok' } as never)
+    await expect(a).resolves.toMatchObject({ summary: 'ok' })
+    await c
+    const d = readExtensionLens('wh:poll', 60)
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toBe(3) // settled flights are not reused
+    for (const r of releases) r({} as never)
+    await d
+  })
+
+  it('forgets an extension’s lenses when it is unloaded', () => {
+    registerExtensionLens('wh', { id: 'a', label: 'A', read: () => ({}) })
+    registerExtensionLens('other', { id: 'b', label: 'B', read: () => ({}) })
+    unregisterExtensionLenses('wh')
+    expect(listExtensionLenses().map((l) => l.key)).toEqual(['other:b'])
   })
 })

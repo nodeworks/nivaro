@@ -766,16 +766,29 @@ export function parseScreens(raw: unknown): Array<{ app: string | null; route: s
   return out
 }
 
+/** The asked-for screens that the node's blast radius really lists (pure; the rest dropped). */
+export function knownScreens(
+  asked: Array<{ app: string | null; route: string }>,
+  known: Array<{ app: string | null; route: string }>
+): Array<{ app: string | null; route: string }> {
+  const labels = new Set(known.map((k) => screenLabel(k.app, k.route)))
+  return asked.filter((s) => labels.has(screenLabel(s.app, s.route)))
+}
+
 /**
  * People affected right now: who called the node in the last hour, plus who opened one of the
- * affected screens in the last hour. Only active, unredacted accounts; never `exclude` (the
- * sender). Ids only — the caller resolves names.
+ * affected screens in the last hour. The screens come from the page, so only those the node's own
+ * blast radius (worked out here, cached) lists count. Only active, unredacted accounts; never
+ * `exclude` (the sender). Ids only — the caller resolves names.
  */
 export async function affectedPeople(
   node: BlastNode,
-  screens: Array<{ app: string | null; route: string }>,
+  asked: Array<{ app: string | null; route: string }>,
   exclude: string | null
 ): Promise<string[]> {
+  const screens = asked.length
+    ? knownScreens(asked, (await blastRadius(node).catch(() => null))?.screens ?? [])
+    : []
   const since = new Date(Date.now() - AFFECTED_WINDOW_MS)
   const ids = new Set<string>()
   if (node.kind === 'entity') {

@@ -5,6 +5,7 @@ vi.mock('../activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
 
 import {
   callerKeyOf,
+  DEBUG_MAX_LIVE,
   debugOnRequest,
   debugTargetKind,
   startDebugWindow,
@@ -116,5 +117,17 @@ describe('starting', () => {
     await expect(startDebugWindow({ target: 'items/orders', user })).rejects.toMatchObject({
       code: 'DEBUG_UNAVAILABLE'
     })
+  })
+})
+
+describe('live cap', () => {
+  it('refuses a window past the cap with a 409 the page shows', async () => {
+    setTimedRulesForTest(
+      Array.from({ length: DEBUG_MAX_LIVE }, (_, i) => rule(`items/c${i}`)),
+      {} as never
+    )
+    await expect(
+      startDebugWindow({ target: 'items/orders', user: { id: 'u' } })
+    ).rejects.toMatchObject({ code: 'DEBUG_LIMIT', status: 409 })
   })
 })

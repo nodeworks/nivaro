@@ -160,14 +160,28 @@ export class LensError extends Error {
   }
 }
 
+/** One `read` in flight per (lens, window): a polling map joins it instead of stacking calls. */
+const inflight = new Map<string, Promise<SafeLensData>>()
+
 /** Run one lens's `read` (bounded by READ_TIMEOUT_MS) and sanitize its answer. */
-export async function readExtensionLens(
+export function readExtensionLens(
   key: string,
   windowS: number,
   timeoutMs = READ_TIMEOUT_MS
 ): Promise<SafeLensData> {
   const l = lenses.get(key)
-  if (!l) throw new LensError('No such lens', 404, 'LENS_NOT_FOUND')
+  if (!l) return Promise.reject(new LensError('No such lens', 404, 'LENS_NOT_FOUND'))
+  const flight = `${key}|${windowS}`
+  const running = inflight.get(flight)
+  if (running) return running
+  const p = runLens(l, windowS, timeoutMs).finally(() => {
+    if (inflight.get(flight) === p) inflight.delete(flight)
+  })
+  inflight.set(flight, p)
+  return p
+}
+
+async function runLens(l: Registered, windowS: number, timeoutMs: number): Promise<SafeLensData> {
   let timer: NodeJS.Timeout | null = null
   try {
     const raw = await Promise.race([
@@ -192,4 +206,5 @@ export async function readExtensionLens(
 /** Test hook. */
 export function resetExtensionLenses(): void {
   lenses.clear()
+  inflight.clear()
 }

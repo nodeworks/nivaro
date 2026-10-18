@@ -86,7 +86,10 @@ import {
   declareHelpVideoPage,
   registerHelpVideoStarter
 } from '../services/help-video-starters.js'
-import { registerExtensionLens } from '../services/traffic-actions/ext-lenses.js'
+import {
+  registerExtensionLens,
+  unregisterExtensionLenses
+} from '../services/traffic-actions/ext-lenses.js'
 import { registerTrafficNode, type TrafficNodeDef } from '../services/traffic-taps/nodes.js'
 export type Extension = ExtensionDefinition
 
@@ -1253,6 +1256,7 @@ async function loadExtension(
     const extId = ext.id
     extensionRoutes.delete(extId)
     clearHelpVideoRegistrations(extId)
+    unregisterExtensionLenses(extId)
     void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(extId))
 
     // Capability manifest (#660): the ctx members register() touches are noted
@@ -1713,6 +1717,7 @@ export function removeExtension(id: string): boolean {
 
   extensionRegistry.delete(id)
   hooks.removeExtensionHooks(id)
+  unregisterExtensionLenses(id)
   void import('../services/chat-commands.js').then((m) => m.unregisterChatCommands(id))
 
   const config = readConfig()

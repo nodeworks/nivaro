@@ -4,6 +4,7 @@ import {
   attributeScreens,
   flowsCallingApi,
   flowsOnCollection,
+  knownScreens,
   parseBlastNode,
   parseScreens,
   prefilledMessage,
@@ -133,5 +134,29 @@ describe('telling people', () => {
     ])
     expect(m.subject).toContain('orders')
     expect(m.message).toContain('/a')
+  })
+})
+
+describe('knownScreens', () => {
+  it('keeps only the screens the server-side blast radius lists', () => {
+    const known = [
+      { app: 'admin', route: '/collections/:c' },
+      { app: null, route: '/plain' }
+    ]
+    expect(
+      knownScreens(
+        [
+          { app: 'admin', route: '/collections/:c' },
+          { app: 'portal', route: '/collections/:c' },
+          { app: null, route: '/plain' },
+          { app: null, route: '/everyone' }
+        ],
+        known
+      )
+    ).toEqual([
+      { app: 'admin', route: '/collections/:c' },
+      { app: null, route: '/plain' }
+    ])
+    expect(knownScreens([{ app: null, route: '/plain' }], [])).toEqual([])
   })
 })

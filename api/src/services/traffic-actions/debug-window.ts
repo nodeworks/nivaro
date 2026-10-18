@@ -40,6 +40,8 @@ export const DEBUG_MAX_MIN = 60
 export const DEBUG_TRACE_CAP = 200
 /** Windows whose traces this process holds (ended ones stay readable until pushed out). */
 const WINDOWS_KEPT = 8
+/** Debug windows open at once (every node). */
+export const DEBUG_MAX_LIVE = 10
 const ENTITY_RE = /^[a-z]+\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,119}$/
 const CALLER_RE = /^(k\d{1,12}|u[0-9A-F-]{36})$/
 
@@ -296,9 +298,15 @@ export async function startDebugWindow(opts: {
       'DEBUG_UNAVAILABLE',
       503
     )
-  const existing = activeRules('debug').find((r) => r.target === opts.target)
-  if (existing)
+  const open = activeRules('debug')
+  if (open.some((r) => r.target === opts.target))
     throw new DebugWindowError('A debug window is already open on this node', 'DEBUG_OPEN', 409)
+  if (open.length >= DEBUG_MAX_LIVE)
+    throw new DebugWindowError(
+      `${DEBUG_MAX_LIVE} debug windows are already open — close one first`,
+      'DEBUG_LIMIT',
+      409
+    )
   const now = Date.now()
   const u = opts.user
   const rule: TimedRule = {

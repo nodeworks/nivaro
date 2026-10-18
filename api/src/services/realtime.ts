@@ -1,8 +1,8 @@
 import type { Server as SocketIOServer } from 'socket.io'
 import { journaledEmit } from './event-journal.js'
-import { publishItemEvent } from './item-events.js'
+import { publishCollectionTouched, publishItemEvent } from './item-events.js'
 import { publishSseEvent } from './sse-hub.js'
-import { noteCollectionChanged } from './traffic-actions/temp-cache.js'
+import { noteCollectionChanged, tempCacheActive } from './traffic-actions/temp-cache.js'
 import { noteWrite } from './traffic-map.js'
 import { currentTrafficSource } from './traffic-source.js'
 
@@ -75,5 +75,9 @@ export function broadcastCollectionUpdate(
       (r) => publishItemEvent(r.seq == null ? ev : { ...ev, seq: r.seq }),
       () => publishItemEvent(ev)
     )
+  } else if (tempCacheActive()) {
+    // #2273 — no itemMutated event (a record aspect, a raw write): other replicas' temporary
+    // caches still have to hear it. Only while a cache is on; subscriptions see nothing new.
+    publishCollectionTouched(collection)
   }
 }

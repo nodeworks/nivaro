@@ -14,11 +14,17 @@
  *  - Writes bust it: any write to the collection, or to a collection related to it (one hop, both
  *    directions, junctions included), invalidates its entries on this process at once (the write
  *    path is synchronous) and on every other replica when the record event reaches it. A query
- *    that traverses relations (a `.` or `$` anywhere in its parameters) is invalidated by ANY write.
- *    The epoch is captured BEFORE the read runs, so a write during the read discards the answer.
- *  - Only a 200 JSON string/Buffer without Set-Cookie is kept; `Cache-Control: no-cache` from the
- *    caller always bypasses. Entries live ≤ entry seconds (default 30, max 300), ≤ 256 KB each,
- *    ≤ 32 MB per process; when the rule ends its entries go.
+ *    that traverses relations (a `.` or `$` anywhere in its parameters, a nested filter, `deep`)
+ *    is invalidated by ANY write. The epoch is captured BEFORE the read runs, so a write during
+ *    the read discards the answer.
+ *  - Access changes bust EVERY entry: a configuration write (policies, roles, User Scopes, tree
+ *    permissions… — the driver seam's config epoch, here and on other processes), an owner-seat
+ *    write (owner signal), a record event on a system table, a cache-console bust.
+ *  - Only a 200 JSON string/Buffer is kept, and only when the one cookie it sets is the rolling
+ *    session's (never kept: a hit passes through the session's own onSend, which sets it again);
+ *    `Cache-Control: no-cache` from the caller always bypasses. Entries live ≤ entry seconds
+ *    (default 30, max 300), ≤ 256 KB each, ≤ 32 MB per process; when the rule ends its entries go.
+ *    At most MAX_LIVE caches are on at once.
  * Not seen by the bust: raw SQL writes outside the items service (procedures, rollup recalcs) —
  * those can be stale for at most the entry seconds. The admin is told so before switching it on.
  *
@@ -27,6 +33,7 @@
  * the live hit rate covers every replica. With no rule on, the request path is a size check.
  */
 import { createHash, randomUUID } from 'node:crypto'
+import { SESSION_COOKIE } from '../../auth/session.js'
 import { logActivity } from '../activity.js'
 import { currentStoreId, DEFAULT_STORE, tenantStoreId } from '../traffic-taps.js'
 import {
@@ -47,6 +54,10 @@ export const ENTRY_MAX_BYTES = 256 * 1024
 export const TOTAL_MAX_BYTES = 32 * 1024 * 1024
 export const CACHE_HEADER = 'x-nivaro-temp-cache'
 export const STATS_PREFIX = 'nvr:tm:cache:stats:'
+/** Temporary caches on at once (every collection). */
+export const MAX_LIVE = 10
+/** A bust for an access change is repeated this long after it, for the write to have landed. */
+const TRAILING_BUST_MS = 3000
 
 /** Read routes whose answer depends only on (caller, path params, query, collection data). */
 export const CACHEABLE_ROUTES = new Set([
@@ -59,6 +70,7 @@ export const CACHEABLE_ROUTES = new Set([
 const COLLECTION_RE = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/
 /** Never cached: system tables (credential stripping, directory columns) and route-only tables. */
 const NEVER = /^(nivaro_|directus_|chat_messages$|chat_last_read$)/i
+const SYSTEM_TABLE = /^(nivaro_|directus_)/i
 
 /** `items/<collection>` a temporary cache may be switched on for; null when it may not. */
 export function cacheableCollection(target: string): string | null {
@@ -69,9 +81,15 @@ export function cacheableCollection(target: string): string | null {
 
 export interface CacheIdentitySource {
   authMethod?: string
-  user?: { id?: string | null; role?: string | null } | null
+  user?: {
+    id?: string | null
+    role?: string | null
+    api_key_scope_restrictions?: unknown
+    api_key_sandbox?: boolean
+  } | null
   isAdmin?: boolean
   apiKeyId?: number | null
+  apiKeyScopes?: unknown
   apiKeySimulatedId?: number | null
   masqueradeAdminId?: string | null
   workspaceId?: string | null
@@ -81,6 +99,19 @@ export interface CacheIdentitySource {
 export function identityKey(r: CacheIdentitySource): string | null {
   const uid = r.user?.id
   if (!uid) return null
+  // An API key's scopes are read fresh on every request: an edit to them changes the key at once.
+  const keyScope =
+    r.apiKeyScopes != null || r.user?.api_key_scope_restrictions != null || r.user?.api_key_sandbox
+      ? createHash('sha1')
+          .update(
+            JSON.stringify([
+              r.apiKeyScopes ?? null,
+              r.user?.api_key_scope_restrictions ?? null,
+              !!r.user?.api_key_sandbox
+            ])
+          )
+          .digest('hex')
+      : ''
   return [
     `a=${r.authMethod ?? ''}`,
     `u=${String(uid).toUpperCase()}`,
@@ -89,7 +120,8 @@ export function identityKey(r: CacheIdentitySource): string | null {
     `k=${r.apiKeyId ?? ''}`,
     `s=${r.apiKeySimulatedId ?? ''}`,
     `m=${r.masqueradeAdminId ?? ''}`,
-    `w=${r.workspaceId ?? ''}`
+    `w=${r.workspaceId ?? ''}`,
+    `p=${keyScope}`
   ].join('|')
 }
 
@@ -109,9 +141,46 @@ export function normalizeQuery(q: unknown): string {
   return JSON.stringify(sortDeep(q ?? {}))
 }
 
+const LOGICAL = new Set(['_and', '_or', '_not'])
+const QUANTIFIERS = new Set(['_some', '_none'])
+
+/** A filter that reaches through a relation: a field whose condition names another field
+ *  (`{"tags":{"name":{"_eq":"x"}}}`) or a quantifier (`_some` / `_none`). */
+function filterIsRelational(node: unknown, depth = 0): boolean {
+  if (depth > 32 || !node || typeof node !== 'object') return false
+  if (Array.isArray(node)) return node.some((n) => filterIsRelational(n, depth + 1))
+  for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+    if (LOGICAL.has(k)) {
+      if (filterIsRelational(v, depth + 1)) return true
+      continue
+    }
+    if (k.startsWith('_') || !v || typeof v !== 'object' || Array.isArray(v)) continue
+    for (const ck of Object.keys(v as Record<string, unknown>))
+      if (QUANTIFIERS.has(ck) || !ck.startsWith('_')) return true
+  }
+  return false
+}
+
 /** A query that reads through relations depends on other collections' data. */
 export function isRelational(normalizedQuery: string): boolean {
-  return normalizedQuery.includes('.') || normalizedQuery.includes('$')
+  if (normalizedQuery.includes('.') || normalizedQuery.includes('$')) return true
+  let q: Record<string, unknown>
+  try {
+    q = JSON.parse(normalizedQuery) as Record<string, unknown>
+  } catch {
+    return true // unreadable: assume the widest dependency
+  }
+  if (!q || typeof q !== 'object') return false
+  if (q.deep != null || q.alias != null) return true
+  let filter = q.filter
+  if (typeof filter === 'string') {
+    try {
+      filter = JSON.parse(filter)
+    } catch {
+      return false // the route refuses it
+    }
+  }
+  return filterIsRelational(filter)
 }
 
 export function cacheKey(parts: {
@@ -138,9 +207,12 @@ interface Entry {
 }
 const entries = new Map<string, Entry>()
 let totalBytes = 0
-/** `<store>|<collection>` → epoch; `<store>|*` → any-write epoch. */
+/** `<store>|<collection>` → epoch; `<store>|*` → any-write epoch; ALL → access epoch (every
+ *  entry depends on it). */
 const epochs = new Map<string, number>()
 const local = new Map<string, { hit: number; miss: number; bypass: number; stored: number }>()
+const ALL = '#all'
+let trailing: NodeJS.Timeout | null = null
 
 function epochOf(k: string): number {
   return epochs.get(k) ?? 0
@@ -189,16 +261,49 @@ function count(rule: TimedRule, field: 'hit' | 'miss' | 'bypass' | 'stored'): vo
  */
 export function noteCollectionChanged(collection: string, tenant?: string): void {
   if (activeRules('cache').length === 0 && entries.size === 0) return
+  // A system table (a role, a scope, an owner seat, a share…) may change who sees what.
+  if (SYSTEM_TABLE.test(collection)) {
+    bumpAll()
+    return
+  }
   const store = tenant ? tenantStoreId(tenant) : tenant === '' ? DEFAULT_STORE : currentStoreId()
   const s = store || DEFAULT_STORE
   epochs.set(`${s}|${collection}`, epochOf(`${s}|${collection}`) + 1)
   epochs.set(`${s}|*`, epochOf(`${s}|*`) + 1)
   if (epochs.size > 5000) {
-    // Forgetting epochs would make old entries match again: they go with them.
+    // Forgetting epochs would make old entries match again: they go with them, and the access
+    // epoch (kept, then moved) discards every read still in flight.
+    const all = epochOf(ALL)
     epochs.clear()
     entries.clear()
     totalBytes = 0
+    epochs.set(ALL, all + 1)
   }
+}
+
+function bumpAll(): void {
+  epochs.set(ALL, epochOf(ALL) + 1)
+}
+
+/**
+ * Who may see what may have changed (a policy, role, User Scope, tree permission or owner seat —
+ * writes that never reach the record events): every entry goes, now and again once the write has
+ * landed (a read that raced it is not kept either).
+ */
+export function bustAllTempCache(): void {
+  if (activeRules('cache').length === 0 && entries.size === 0) return
+  bumpAll()
+  if (trailing) return
+  trailing = setTimeout(() => {
+    trailing = null
+    bumpAll()
+  }, TRAILING_BUST_MS)
+  trailing.unref?.()
+}
+
+/** True while any temporary cache is on (other replicas relay record events only then). */
+export function tempCacheActive(): boolean {
+  return activeRules('cache').length > 0
 }
 
 // Entries of rules that ended go with them.
@@ -242,12 +347,16 @@ export function ruleFor(req: ReqLike, rules = activeRules('cache')): TimedRule |
 
 /** The epochs an answer to this request depends on (the collection, its relations, or any). */
 export function depsFor(store: string, rule: TimedRule, query: string): Array<[string, number]> {
-  if (isRelational(query)) return [[`${store}|*`, epochOf(`${store}|*`)]]
+  const all: [string, number] = [ALL, epochOf(ALL)]
+  if (isRelational(query)) return [all, [`${store}|*`, epochOf(`${store}|*`)]]
   const cols = [
     rule.target.slice('items/'.length),
     ...((rule.opts?.related as string[] | undefined) ?? []).filter((c) => COLLECTION_RE.test(c))
   ]
-  return [...new Set(cols)].map((c) => [`${store}|${c}`, epochOf(`${store}|${c}`)])
+  return [
+    all,
+    ...[...new Set(cols)].map((c): [string, number] => [`${store}|${c}`, epochOf(`${store}|${c}`)])
+  ]
 }
 
 function noCache(headers: Record<string, unknown>): boolean {
@@ -303,6 +412,16 @@ function lookupEntry(req: ReqLike, reply: ReplyLike, now: number): boolean {
   return false
 }
 
+/**
+ * A Set-Cookie that only renews the session (`rolling: true` re-sends it on every response) says
+ * nothing the identity in the key does not; any other cookie makes the answer unkeepable.
+ */
+export function onlySessionCookie(header: unknown): boolean {
+  if (header == null || header === '') return true
+  const list = Array.isArray(header) ? header : [header]
+  return list.every((c) => String(c).trimStart().startsWith(`${SESSION_COOKIE}=`))
+}
+
 /** onSend on the items routes: keep a fresh 200 JSON answer under the key noted at lookup. */
 export function tempCacheStore(req: object, reply: ReplyLike, payload: unknown, now = Date.now()) {
   try {
@@ -317,7 +436,8 @@ function keepEntry(req: object, reply: ReplyLike, payload: unknown, now: number)
   if (!p) return
   ;(req as Record<symbol, Pending | undefined>)[PENDING] = undefined
   if (reply.statusCode !== 200) return
-  if (reply.getHeader('set-cookie')) return
+  // The cookie itself is never kept: only the body and its content type are.
+  if (!onlySessionCookie(reply.getHeader('set-cookie'))) return
   const ct = String(reply.getHeader('content-type') ?? '')
   if (!ct.toLowerCase().includes('application/json')) return
   if (typeof payload !== 'string' && !Buffer.isBuffer(payload)) return
@@ -382,20 +502,32 @@ export class TempCacheError extends Error {
   }
 }
 
-/** Collections one hop from `collection` (either side of a relation, junction legs included). */
+/**
+ * Collections one hop from `collection` (either side of a relation, junction legs included), plus
+ * the far side of each M2M / M2A through its junction (the junction's other leg).
+ */
 export function relatedCollections(
   collection: string,
   relations: Array<{
     many_collection: string
     one_collection: string | null
     one_allowed_collections?: string[] | null
+    junction_field?: string | null
   }>
 ): string[] {
   const out = new Set<string>()
+  const junctions = new Set<string>()
   for (const r of relations) {
     const sides = [r.many_collection, r.one_collection, ...(r.one_allowed_collections ?? [])]
     if (!sides.includes(collection)) continue
     for (const c of sides) if (c && c !== collection) out.add(c)
+    if (r.junction_field && r.one_collection === collection && r.many_collection !== collection)
+      junctions.add(r.many_collection)
+  }
+  for (const r of relations) {
+    if (!junctions.has(r.many_collection)) continue
+    for (const c of [r.one_collection, ...(r.one_allowed_collections ?? [])])
+      if (c && c !== collection) out.add(c)
   }
   return [...out].slice(0, 200)
 }
@@ -432,8 +564,15 @@ export async function startTempCache(opts: {
       'CACHE_UNAVAILABLE',
       503
     )
-  if (activeRules('cache').some((r) => r.target === opts.target))
+  const on = activeRules('cache')
+  if (on.some((r) => r.target === opts.target))
     throw new TempCacheError('A temporary cache is already on for this collection', 'CACHE_ON', 409)
+  if (on.length >= MAX_LIVE)
+    throw new TempCacheError(
+      `${MAX_LIVE} temporary caches are already on — switch one off first`,
+      'CACHE_LIMIT',
+      409
+    )
   const load =
     opts.loadRelations ?? (async (c: string) => (await import('../collections.js')).getRelations(c))
   const related = relatedCollections(collection, await load(collection))
@@ -538,6 +677,8 @@ export async function tempCaches() {
 
 /** Test hook. */
 export function resetTempCache(): void {
+  if (trailing) clearTimeout(trailing)
+  trailing = null
   entries.clear()
   totalBytes = 0
   epochs.clear()

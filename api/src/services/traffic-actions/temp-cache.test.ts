@@ -5,13 +5,16 @@ vi.mock('../activity.js', () => ({ logActivity: vi.fn(async () => 1) }))
 
 import { withTrafficStore } from '../traffic-taps.js'
 import {
+  bustAllTempCache,
   CACHE_HEADER,
   cacheableCollection,
   cacheKey,
   identityKey,
   isRelational,
+  MAX_LIVE,
   normalizeQuery,
   noteCollectionChanged,
+  onlySessionCookie,
   relatedCollections,
   resetTempCache,
   ruleFor,
@@ -316,5 +319,113 @@ describe('switching it on', () => {
     await expect(startTempCache({ target: 'items/orders', user })).rejects.toMatchObject({
       code: 'CACHE_UNAVAILABLE'
     })
+  })
+})
+
+describe('review fixes', () => {
+  function keep(q: ReturnType<typeof req>, cookie?: string | string[]) {
+    const rep = reply()
+    tempCacheLookup(q as never, rep as never)
+    rep.header('content-type', 'application/json')
+    if (cookie) (rep.headers as Record<string, unknown>)['set-cookie'] = cookie
+    tempCacheStore(q, rep as never, '{"data":[1]}')
+    return rep
+  }
+
+  it('keeps an answer whose only cookie renews the rolling session, never the cookie', () => {
+    expect(onlySessionCookie(undefined)).toBe(true)
+    expect(onlySessionCookie('nivaro_session=abc; Path=/; HttpOnly')).toBe(true)
+    expect(onlySessionCookie(['nivaro_session=abc', 'other=1'])).toBe(false)
+    expect(onlySessionCookie('nivaro_sessionx=1')).toBe(false)
+    keep(req(), 'nivaro_session=abc.sig; Path=/; HttpOnly; SameSite=Lax')
+    expect(tempCacheSize().entries).toBe(1)
+    const { hit, rep } = roundTrip(req())
+    expect(hit).toBe(true)
+    expect(rep.headers['set-cookie']).toBeUndefined()
+    resetTempCache()
+    keep(req(), ['nivaro_session=abc', 'theme=dark'])
+    expect(tempCacheSize().entries).toBe(0)
+  })
+
+  it('an access change busts every entry, relational or not, and a read that raced it', () => {
+    roundTrip(req())
+    roundTrip(req({ query: { fields: 'id,customer.name' } }))
+    expect(roundTrip(req()).hit).toBe(true)
+    bustAllTempCache()
+    expect(roundTrip(req()).hit).toBe(false)
+    expect(roundTrip(req({ query: { fields: 'id,customer.name' } })).hit).toBe(false)
+    const q = req({ query: { limit: '5' } })
+    const rep = reply()
+    tempCacheLookup(q as never, rep as never)
+    bustAllTempCache() // a policy edit lands while the read runs
+    rep.header('content-type', 'application/json')
+    tempCacheStore(q, rep as never, '{}')
+    expect(roundTrip(req({ query: { limit: '5' } })).hit).toBe(false)
+  })
+
+  it('a record event on a system table busts every entry', () => {
+    roundTrip(req())
+    noteCollectionChanged('nivaro_user_scopes')
+    expect(roundTrip(req()).hit).toBe(false)
+    roundTrip(req())
+    noteCollectionChanged('directus_permissions')
+    expect(roundTrip(req()).hit).toBe(false)
+  })
+
+  it('an API key scope edit gives the caller a new key', () => {
+    const base = { authMethod: 'api_key', apiKeyId: 7, user: { id: ALICE, role: 'r' } }
+    const a = identityKey({ ...base, apiKeyScopes: [{ collection: 'orders', actions: ['read'] }] })
+    const b = identityKey({ ...base, apiKeyScopes: [{ collection: 'x', actions: ['read'] }] })
+    const c = identityKey({
+      ...base,
+      user: { ...base.user, api_key_scope_restrictions: [{ dimension: 'd', values: [1] }] }
+    })
+    expect(new Set([a, b, c, identityKey(base)]).size).toBe(4)
+  })
+
+  it('treats nested filters, quantifiers and deep as relational', () => {
+    const rel = (query: Record<string, unknown>) => isRelational(normalizeQuery(query))
+    expect(rel({ filter: JSON.stringify({ tags: { name: { _eq: 'x' } } }) })).toBe(true)
+    expect(
+      rel({ filter: JSON.stringify({ _and: [{ lines: { _some: { qty: { _gt: 1 } } } }] }) })
+    ).toBe(true)
+    expect(rel({ deep: '{}' })).toBe(true)
+    expect(rel({ filter: JSON.stringify({ status: { _eq: 'open' }, id: { _in: [1, 2] } }) })).toBe(
+      false
+    )
+    expect(rel({ filter: JSON.stringify({ _or: [{ status: { _null: true } }] }) })).toBe(false)
+    // a nested-filter read is busted by a write to the far collection
+    const q = req({ query: { filter: JSON.stringify({ tags: { name: { _eq: 'x' } } }) } })
+    roundTrip(q)
+    expect(roundTrip(q).hit).toBe(true)
+    noteCollectionChanged('tags')
+    expect(roundTrip(q).hit).toBe(false)
+  })
+
+  it('includes the far side of an M2M (and M2A) through its junction', () => {
+    expect(
+      relatedCollections('orders', [
+        { many_collection: 'orders_tags', one_collection: 'orders', junction_field: 'tags_id' },
+        { many_collection: 'orders_tags', one_collection: 'tags', junction_field: 'orders_id' },
+        { many_collection: 'orders_items', one_collection: 'orders', junction_field: 'item' },
+        {
+          many_collection: 'orders_items',
+          one_collection: null,
+          one_allowed_collections: ['pages', 'posts'],
+          junction_field: 'orders_id'
+        },
+        { many_collection: 'tags', one_collection: 'colours' }
+      ]).sort()
+    ).toEqual(['orders_items', 'orders_tags', 'pages', 'posts', 'tags'])
+  })
+
+  it('refuses a cache past the live cap', async () => {
+    const live = Array.from({ length: MAX_LIVE }, (_, i) =>
+      rule({ id: `r${i}`, target: `items/c${i}` })
+    )
+    setTimedRulesForTest(live, {} as never)
+    await expect(
+      startTempCache({ target: 'items/orders', user: { id: ALICE }, loadRelations: async () => [] })
+    ).rejects.toMatchObject({ code: 'CACHE_LIMIT', status: 409 })
   })
 })

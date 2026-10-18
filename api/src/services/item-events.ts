@@ -48,6 +48,27 @@ export function onItemEvent(fn: (ev: ItemEvent, remote: boolean) => void): () =>
   }
 }
 
+const touchListeners = new Set<(collection: string, tenant: string) => void>()
+
+/**
+ * Hear "a record in this collection changed" from OTHER replicas for the broadcasts that carry no
+ * action (record aspects like `$state` / `$lock`, raw bulk writes) — those are never itemMutated
+ * events, so subscriptions do not see them. Returns unsubscribe. (#2273's temporary cache.)
+ */
+export function onCollectionTouched(fn: (collection: string, tenant: string) => void): () => void {
+  touchListeners.add(fn)
+  return () => {
+    touchListeners.delete(fn)
+  }
+}
+
+/** Tell other replicas a record in `collection` changed (no itemMutated event). */
+export function publishCollectionTouched(collection: string): void {
+  if (!pub) return
+  const touched = { collection, tenant: currentTenantKey() }
+  pub.publish(CHANNEL, JSON.stringify({ node: NODE, touched })).catch(() => {})
+}
+
 function deliver(ev: ItemEvent, remote = false): void {
   for (const fn of listeners) {
     try {
@@ -92,9 +113,26 @@ export async function initItemEvents(redis: Redis): Promise<void> {
     await conn.subscribe(CHANNEL)
     conn.on('message', (_channel, raw) => {
       try {
-        const msg = JSON.parse(raw) as { node: string; ev: ItemEvent }
+        const msg = JSON.parse(raw) as {
+          node: string
+          ev?: ItemEvent
+          touched?: { collection?: unknown; tenant?: unknown }
+        }
         if (msg.node === NODE) return
-        deliver(msg.ev, true)
+        if (msg.touched) {
+          const c = msg.touched.collection
+          if (typeof c !== 'string') return
+          const tenant = typeof msg.touched.tenant === 'string' ? msg.touched.tenant : ''
+          for (const fn of touchListeners) {
+            try {
+              fn(c, tenant)
+            } catch {
+              /* a listener never affects delivery */
+            }
+          }
+          return
+        }
+        if (msg.ev) deliver(msg.ev, true)
       } catch {
         /* malformed message */
       }

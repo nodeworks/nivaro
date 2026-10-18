@@ -72,11 +72,14 @@ export function buildRedisStore(redis: Redis) {
   }
 }
 
+/** The session cookie's name (the Traffic Map's temporary cache recognises it, #2273). */
+export const SESSION_COOKIE = 'nivaro_session'
+
 export async function registerSession(app: FastifyInstance) {
   await app.register(fastifyCookie)
   await app.register(fastifySession, {
     secret: config.SESSION_SECRET,
-    cookieName: 'nivaro_session',
+    cookieName: SESSION_COOKIE,
     cookie: {
       secure: config.COOKIE_SECURE,
       httpOnly: true,

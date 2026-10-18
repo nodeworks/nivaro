@@ -1,5 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
+// Leaf (one constant list, no db import).
+import { SECRET_COLUMN_NAMES } from './system-collections.js'
 
 /**
  * Per-request phase timing.
@@ -422,6 +424,23 @@ function wideTableOf(sql: string): string | null {
   return wideTables.has(t) ? t : null
 }
 
+/**
+ * A statement that names a credential column (`where static_token = @p0`, `set smtp_pass = @p1`)
+ * may carry the credential as a bound value: its bindings are never kept, so no trace (slow
+ * traces, debug windows, `GET /traces/:id`) can hand a token back.
+ */
+const CREDENTIAL_SQL_RE = new RegExp(
+  `\\b(?:${[...SECRET_COLUMN_NAMES, 'key_hash', 'token_hash', 'signing_secret', 'client_secret'].join('|')})\\b|\\w*(?:secret|password|passwd)|\\w_(?:pass|token|api_key)\\b`,
+  'i'
+)
+export const REDACTED_BINDING = '[redacted]'
+
+/** Exported for tests: the bindings a trace may keep for this statement. */
+export function keptBindings(sql: string, bindings: unknown[]): unknown[] {
+  const kept = bindings.slice(0, 40)
+  return CREDENTIAL_SQL_RE.test(sql) ? kept.map(() => REDACTED_BINDING) : kept
+}
+
 interface KnexQueryEvent {
   __knexQueryUid?: string
   sql?: string
@@ -470,7 +489,7 @@ export function attachQueryTracing(client: {
     const sql = started.sql.length > SQL_CAP ? `${started.sql.slice(0, SQL_CAP)}…` : started.sql
     ctx.statements.push({
       sql,
-      bindings: started.bindings.slice(0, 40),
+      bindings: keptBindings(started.sql, started.bindings),
       ms,
       at: started.start - ctx.start,
       wideTable: wideTableOf(started.sql)
