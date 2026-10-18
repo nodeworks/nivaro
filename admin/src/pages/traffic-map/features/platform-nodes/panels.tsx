@@ -18,7 +18,7 @@ import type { Selection } from '../../types'
 import { snapExt } from '../b1-shared'
 import { latestFrameValue, useDbLens } from '../db-lenses/shared'
 import type { StatementDetail } from '../inspect-request/api'
-import { LINK, SafeLink } from '../shared'
+import { LINK, ReadEmpty, SafeLink } from '../shared'
 import {
   bulkOf,
   type DbServerSample,
@@ -138,13 +138,13 @@ function StoragePanel({ sel }: { sel: Selection }) {
 // ── #2265 database server resources ───────────────────────────────────────────
 function DbServerPanel() {
   const { model } = useTrafficMap()
-  const { data, loading } = useDbLens<DbServerSample>('server', { every: 15_000 })
+  const { data, loading, error } = useDbLens<DbServerSample>('server', { every: 15_000 })
   const s = data ?? latestFrameValue<DbServerSample>(model, 'db-server', 60)
   return (
     <Section title='Database server resources'>
       <div className='grid gap-2' data-tm-db-server={s?.level ?? 'none'}>
-        {!s && loading ? (
-          <Empty>Reading the server's own counters…</Empty>
+        {!s && (loading || error) ? (
+          <ReadEmpty loading={loading} error={error} />
         ) : !s ? (
           <Empty>No server figures yet.</Empty>
         ) : !s.available ? (

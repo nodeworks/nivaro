@@ -12,7 +12,7 @@ import { Bar, Empty, Section } from '../../Inspector'
 import { inspectorPanels } from '../../registry/inspectorPanels'
 import { register } from '../../registry/registry'
 import type { Selection } from '../../types'
-import { entityOf, errorOf, LINK, useEntityDetail } from '../shared'
+import { entityOf, errorOf, LINK, ReadEmpty, useEntityDetail } from '../shared'
 import {
   breachText,
   driftHeadline,
@@ -104,9 +104,9 @@ function PartnerContractPanel({ sel }: { sel: Selection }) {
   return (
     <Section title='Against what was agreed'>
       {q.isLoading ? (
-        <Empty>Reading this month's calls…</Empty>
+        <ReadEmpty loading />
       ) : q.isError ? (
-        <Empty>The agreed figures could not be read: {errorOf(q.error)}</Empty>
+        <ReadEmpty error errorText={`The agreed figures could not be read: ${errorOf(q.error)}`} />
       ) : !d?.targets ? (
         <Empty>
           No response time or availability is agreed for this partner. Set them on the{' '}
@@ -196,7 +196,7 @@ function PathList({
           className='flex min-w-0 items-baseline gap-2 font-mono text-[11px]'
           data-tm-drift-path={r.path}
         >
-          <span className='min-w-0 truncate' title={r.path}>
+          <span className='min-w-0 truncate' data-tip={r.path}>
             {r.path}
           </span>
           {detail === false ? null : (
@@ -220,7 +220,7 @@ function ShapeCard({ g }: { g: ShapeGroup }) {
         <span className='shrink-0 text-[11px] text-[var(--tm-muted)]'>
           {g.side === 'request' ? 'We send' : 'They send'}
         </span>
-        <span className='min-w-0 truncate font-mono text-[11px]' title={g.endpoint}>
+        <span className='min-w-0 truncate font-mono text-[11px]' data-tip={g.endpoint}>
           {g.endpoint}
         </span>
       </span>
@@ -266,9 +266,9 @@ function PayloadDriftPanel({ sel }: { sel: Selection }) {
   return (
     <Section title='Payload shape'>
       {q.isLoading ? (
-        <Empty>Reading recorded bodies…</Empty>
+        <ReadEmpty loading />
       ) : q.isError ? (
-        <Empty>Bodies could not be read: {errorOf(q.error)}</Empty>
+        <ReadEmpty error errorText={`Bodies could not be read: ${errorOf(q.error)}`} />
       ) : !d?.available || d.groups.length === 0 ? (
         <Empty>
           No JSON bodies recorded for this partner in the last {d?.bodies_hours ?? 24} hours. Bodies
@@ -301,7 +301,7 @@ register(inspectorPanels, {
 function InboundOutcomesPanel({ sel }: { sel: Selection }) {
   const { win } = useTrafficMap()
   const e = entityOf(sel)
-  const { data, loading } = useEntityDetail<InboundOutcomes>(
+  const { data, loading, error } = useEntityDetail<InboundOutcomes>(
     e?.key ?? null,
     'inbound-outcomes',
     win
@@ -309,8 +309,8 @@ function InboundOutcomesPanel({ sel }: { sel: Selection }) {
   const total = data ? data.payloads.accepted + data.payloads.partial + data.payloads.rejected : 0
   return (
     <Section title='What the mapping did with payloads'>
-      {loading ? (
-        <Empty>Reading outcomes…</Empty>
+      {loading || error ? (
+        <ReadEmpty loading={loading} error={error} />
       ) : !data || total === 0 ? (
         <Empty>No payload reached this mapping in this window.</Empty>
       ) : (
@@ -372,7 +372,7 @@ register(inspectorPanels, {
 function CostPanel({ sel }: { sel: Selection }) {
   const { win, catalog, setSelection } = useTrafficMap()
   const e = entityOf(sel)
-  const { data, loading } = useEntityDetail<GraphqlCost>(e?.key ?? null, 'graphql-cost', win)
+  const { data, loading, error } = useEntityDetail<GraphqlCost>(e?.key ?? null, 'graphql-cost', win)
   const ranking = useQuery({
     queryKey: ['traffic-map', 'graphql-cost', win],
     queryFn: async () =>
@@ -386,8 +386,8 @@ function CostPanel({ sel }: { sel: Selection }) {
   })
   return (
     <Section title='Query cost'>
-      {loading ? (
-        <Empty>Reading cost…</Empty>
+      {loading || error ? (
+        <ReadEmpty loading={loading} error={error} />
       ) : !data ? (
         <Empty>No call to this operation in this window.</Empty>
       ) : (
@@ -475,12 +475,12 @@ register(inspectorPanels, {
 function RestFieldsPanel({ sel }: { sel: Selection }) {
   const { win, catalog } = useTrafficMap()
   const e = entityOf(sel)
-  const { data, loading } = useEntityDetail<RestFields>(e?.key ?? null, 'rest-fields', win)
+  const { data, loading, error } = useEntityDetail<RestFields>(e?.key ?? null, 'rest-fields', win)
   const max = data?.fields[0]?.n ?? 0
   return (
     <Section title='Fields requested'>
-      {loading ? (
-        <Empty>Reading field requests…</Empty>
+      {loading || error ? (
+        <ReadEmpty loading={loading} error={error} />
       ) : !data || data.fields.length === 0 ? (
         <Empty>No list read of this collection in this window.</Empty>
       ) : (

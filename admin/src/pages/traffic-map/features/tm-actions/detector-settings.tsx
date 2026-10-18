@@ -16,8 +16,8 @@ import { pagePanels } from '../../registry/pagePanels'
 import { register } from '../../registry/registry'
 import { toolbarItems } from '../../registry/toolbarItems'
 import { createStore, inPage, useStore } from '../b1-shared'
-import { apiError, TwoClickButton } from '../ops-common'
-import { BTN, INPUT } from '../shared'
+import { apiError } from '../ops-common'
+import { BTN, INPUT, ReadEmpty } from '../shared'
 
 export interface DetectorKnob {
   key: string
@@ -181,13 +181,15 @@ function DetectorSettingsPanel() {
               Undo changes
             </button>
           ) : null}
-          <TwoClickButton
+          <button
+            type='button'
             id='tm-detectors-save'
-            label='Save'
-            armedLabel='Click again to save'
+            className={BTN}
             disabled={!dirty || !valid || busy}
-            onConfirm={() => void save()}
-          />
+            onClick={() => void save()}
+          >
+            {busy ? 'Saving…' : 'Save'}
+          </button>
           <button
             type='button'
             className={BTN}
@@ -204,7 +206,7 @@ function DetectorSettingsPanel() {
         </div>
       ) : !d ? (
         <div className='px-3.5 py-3'>
-          <Empty>The settings could not be read.</Empty>
+          <ReadEmpty error errorText='The settings could not be read.' />
         </div>
       ) : (
         <ul className='grid gap-px bg-[var(--tm-line-2)] min-[900px]:grid-cols-2'>

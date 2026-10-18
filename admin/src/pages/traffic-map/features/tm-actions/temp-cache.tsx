@@ -17,6 +17,7 @@ import type { Selection } from '../../types'
 import { inPage } from '../b1-shared'
 import { untilPhrase } from '../breaker'
 import { apiError, TwoClickButton } from '../ops-common'
+import { ReadEmpty } from '../shared'
 import { cacheTargetOf, Segmented, type TempCache, useTempCaches } from './shared'
 
 const MINUTES: Array<[number, string]> = [
@@ -109,8 +110,8 @@ function TempCachePanel({ sel }: { sel: Selection; d: InspectorData }) {
   }
   return (
     <Section title='Temporary cache'>
-      {q.isLoading ? (
-        <Empty>Reading…</Empty>
+      {q.isLoading || q.isError ? (
+        <ReadEmpty loading={q.isLoading} error={q.isError} />
       ) : open ? (
         <OpenCache c={open} />
       ) : q.data && !q.data.available ? (
@@ -142,7 +143,7 @@ function TempCachePanel({ sel }: { sel: Selection; d: InspectorData }) {
               id='tm-cache-start'
               label={`Cache reads for ${minutes} min`}
               armedLabel='Click again to switch it on'
-              disabled={busy}
+              busy={busy}
               onConfirm={() => void start()}
             />
           </div>

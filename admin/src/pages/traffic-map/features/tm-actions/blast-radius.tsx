@@ -193,7 +193,8 @@ function TellAffected({ node, data }: { node: string; data: BlastRadius }) {
           id='tm-tell-send'
           label={a?.count ? `Send to ${fmtCount(a.count)}` : 'Send'}
           armedLabel='Click again to send now'
-          disabled={!a?.count || a.over_limit || !message.trim() || send.isPending}
+          busy={send.isPending}
+          disabled={!a?.count || a.over_limit || !message.trim()}
           onConfirm={() => send.mutate()}
         />
         <button type='button' className={BTN} onClick={() => setOpen(false)}>
@@ -239,7 +240,7 @@ function BlastRadiusPanel({ sel }: { sel: Selection; d: InspectorData }) {
           </div>
         </div>
       ) : q.isLoading ? (
-        <Empty>Reading 7 days of traffic…</Empty>
+        <Empty>Loading…</Empty>
       ) : q.isError || !b ? (
         <Note tone='error'>{apiError(q.error)}</Note>
       ) : (

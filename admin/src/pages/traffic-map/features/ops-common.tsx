@@ -1,8 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { type ComponentType, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
+import { type ComponentType, type ReactNode, useContext } from 'react'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { TrafficMapContext } from '../context'
+import { ConfirmButton } from './shared'
 
 /**
  * Shared bits for the ops / health / capacity features (group E): a polling read of a Traffic Map
@@ -129,13 +130,14 @@ export function PanelCard({
 }
 
 /**
- * A button that needs a second click within 4 s to act (the first click arms it and changes its
- * label). Blur or Escape disarms.
+ * The shared two-click confirm (ConfirmButton) under the ops panels' prop names: the first click
+ * arms it ("Click again to …"), the second within 4 s acts; `busy` stops a second fire.
  */
 export function TwoClickButton({
   label,
   armedLabel,
   onConfirm,
+  busy,
   disabled,
   danger,
   id,
@@ -144,47 +146,23 @@ export function TwoClickButton({
   label: string
   armedLabel: string
   onConfirm: () => void
+  busy?: boolean
   disabled?: boolean
   danger?: boolean
   id?: string
   className?: string
 }) {
-  const [armed, setArmed] = useState(false)
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current)
-    },
-    []
-  )
-  const disarm = () => {
-    if (timer.current) clearTimeout(timer.current)
-    setArmed(false)
-  }
   return (
-    <button
-      type='button'
-      id={id}
+    <ConfirmButton
+      label={label}
+      confirmLabel={armedLabel}
+      onConfirm={onConfirm}
+      busy={busy}
       disabled={disabled}
-      data-armed={armed ? 'true' : 'false'}
-      className={cn(danger || armed ? BTN_DANGER : BTN, className)}
-      onBlur={disarm}
-      onKeyDown={(e) => {
-        if (e.key === 'Escape') disarm()
-      }}
-      onClick={() => {
-        if (!armed) {
-          setArmed(true)
-          if (timer.current) clearTimeout(timer.current)
-          timer.current = setTimeout(() => setArmed(false), 4000)
-          return
-        }
-        disarm()
-        onConfirm()
-      }}
-    >
-      {armed ? armedLabel : label}
-    </button>
+      danger={danger}
+      id={id}
+      className={className}
+    />
   )
 }
 

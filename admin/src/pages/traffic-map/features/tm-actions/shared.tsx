@@ -1,57 +1,14 @@
 /**
- * Pieces the node actions share (#2152 #2274 #2215 #2273 #2223 #2229): a small segmented picker,
- * the timed-action list every panel reads, and the node checks.
+ * Pieces the node actions share (#2152 #2274 #2215 #2273 #2223 #2229): the timed-action list
+ * every panel reads and the node checks (Segmented now lives in ../shared).
  */
 import { useQuery } from '@tanstack/react-query'
 import { useContext } from 'react'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
 import { TrafficMapContext } from '../../context'
 import type { Selection } from '../../types'
 
-const SEG =
-  'px-2 py-[3px] text-[11.5px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'
-
-export function Segmented<T extends string | number>({
-  label,
-  value,
-  options,
-  onChange,
-  id
-}: {
-  label: string
-  value: T
-  options: Array<[T, string]>
-  onChange: (v: T) => void
-  id?: string
-}) {
-  return (
-    <fieldset
-      id={id}
-      className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
-      aria-label={label}
-    >
-      {options.map(([v, text], i) => (
-        <button
-          key={String(v)}
-          type='button'
-          aria-pressed={value === v}
-          data-tm-seg={String(v)}
-          onClick={() => onChange(v)}
-          className={cn(
-            SEG,
-            i > 0 && 'border-l border-[var(--tm-line)]',
-            value === v
-              ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
-              : 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
-          )}
-        >
-          {text}
-        </button>
-      ))}
-    </fieldset>
-  )
-}
+export { Segmented } from '../shared'
 
 /** `items/orders` → its parts; null for anything else. */
 export function entityParts(sel: Selection): { lane: string; entity: string } | null {

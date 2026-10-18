@@ -4,12 +4,11 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useTrafficMap } from '../context'
 import { fmtCount } from '../EventTicker'
-import { Empty } from '../Inspector'
 import { pagePanels } from '../registry/pagePanels'
 import { register } from '../registry/registry'
 import { toolbarItems } from '../registry/toolbarItems'
 import { createStore, inPage, TAG, useStore } from './b1-shared'
-import { BTN } from './shared'
+import { BTN, ReadEmpty } from './shared'
 import { useFrozenSnapshotId } from './snapshots'
 
 /**
@@ -108,13 +107,11 @@ function HttpCachePanel() {
           Close
         </button>
       </div>
-      {q.isLoading ? (
+      {!d?.routes.length ? (
         <div className='px-3.5 py-3'>
-          <Empty>Loading…</Empty>
-        </div>
-      ) : !d?.routes.length ? (
-        <div className='px-3.5 py-3'>
-          <Empty>No GET requests in this window.</Empty>
+          <ReadEmpty loading={q.isLoading} error={q.isError}>
+            No GET requests in this window.
+          </ReadEmpty>
         </div>
       ) : (
         <div className='max-h-[420px] overflow-auto'>

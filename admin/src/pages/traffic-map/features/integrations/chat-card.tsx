@@ -84,7 +84,7 @@ function ChatCard({ sel }: { sel: Selection; d: InspectorData }) {
         <ConfirmButton
           id='tm-chat-card-freeze'
           label='Freeze chat card'
-          confirmLabel='Freeze it?'
+          confirmLabel='Click again to freeze'
           busy={freeze.isPending}
           onConfirm={() => freeze.mutate(mine.message)}
         />
@@ -113,7 +113,7 @@ function ChatCard({ sel }: { sel: Selection; d: InspectorData }) {
             <ConfirmButton
               id='tm-chat-card-post'
               label='Post card'
-              confirmLabel='Post to channel?'
+              confirmLabel='Click again to post'
               disabled={!room}
               busy={post.isPending}
               onConfirm={() => post.mutate()}

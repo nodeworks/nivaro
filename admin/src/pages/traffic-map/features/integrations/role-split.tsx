@@ -34,7 +34,12 @@ function RoleSplitPanel() {
     <PanelCard
       id='tm-role-split'
       title='Web and workers'
-      hint={`${data.answered} process${data.answered === 1 ? '' : 'es'} answering, by NIVARO_ROLE`}
+      hint={
+        <>
+          {data.answered} process{data.answered === 1 ? '' : 'es'} answering, by{' '}
+          <code className='font-mono text-[11px]'>NIVARO_ROLE</code>
+        </>
+      }
     >
       <div data-tm-role-split={data.groups.length} className='overflow-x-auto'>
         <table className='w-full text-[12px]'>

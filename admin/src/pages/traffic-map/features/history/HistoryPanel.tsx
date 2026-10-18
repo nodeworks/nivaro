@@ -76,8 +76,10 @@ function MinuteHistorySwitch() {
       <TwoClickButton
         id='tm-minute-toggle'
         label={s.enabled ? 'Turn off' : 'Turn on'}
-        armedLabel={s.enabled ? 'Stop recording?' : 'Record every minute?'}
-        disabled={save.isPending}
+        armedLabel={
+          s.enabled ? 'Click again to stop recording' : 'Click again to record every minute'
+        }
+        busy={save.isPending}
         onConfirm={() => save.mutate({ enabled: !s.enabled })}
       />
       {save.isError && <Note tone='error'>{errorOf(save.error)}</Note>}

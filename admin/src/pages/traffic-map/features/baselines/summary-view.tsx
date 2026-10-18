@@ -8,6 +8,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { LayoutDashboard, Waypoints } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { useTrafficMap } from '../../context'
@@ -17,6 +18,7 @@ import { register } from '../../registry/registry'
 import { toolbarItems } from '../../registry/toolbarItems'
 import { viewParams } from '../../registry/viewParams'
 import { LANE_LABEL, type Lane, type TrafficCatalog } from '../../types'
+import { BTN } from '../shared'
 
 type Tone = 'green' | 'amber' | 'red'
 interface Tile {
@@ -73,6 +75,7 @@ const TONE_VAR: Record<Tone, string> = {
   amber: 'var(--tm-update)',
   red: 'var(--tm-error)'
 }
+const SKELETON = 'bg-[var(--tm-skeleton)] motion-reduce:animate-none'
 const TONE_WORD: Record<Tone, string> = { green: 'Normal', amber: 'Watch', red: 'Act' }
 
 function tz(): string {
@@ -144,13 +147,24 @@ function SummaryView() {
         ) : q.isError ? (
           <p className='text-[13px] text-[var(--tm-error-ink)]'>The summary could not be loaded.</p>
         ) : (
-          <div
-            aria-hidden='true'
-            className='h-10 animate-pulse rounded bg-[var(--tm-skeleton)] motion-reduce:animate-none'
-          />
+          <Skeleton aria-hidden='true' className={cn('h-10', SKELETON)} />
         )}
       </div>
       <div className='grid gap-3.5 min-[700px]:grid-cols-2 min-[1200px]:grid-cols-5'>
+        {!s && !q.isError
+          ? Object.keys(TITLE).map((id) => (
+              <div
+                key={id}
+                aria-hidden='true'
+                data-tm-summary-placeholder=''
+                className='grid content-start gap-2 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)] px-4 py-3.5'
+              >
+                <Skeleton className={cn('h-3.5 w-24', SKELETON)} />
+                <Skeleton className={cn('h-6 w-16', SKELETON)} />
+                <Skeleton className={cn('h-3 w-32', SKELETON)} />
+              </div>
+            ))
+          : null}
         {(s?.tiles ?? []).map((t) => (
           <article
             key={t.id}
@@ -203,10 +217,8 @@ function SummaryToggle() {
       onClick={() => setSummaryView(!v)}
       data-tip={v ? 'Back to the live map' : 'A plain summary for non-technical readers'}
       className={cn(
-        'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
-        v
-          ? 'border-[color-mix(in_srgb,var(--tm-accent)_55%,var(--tm-line))] bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
-          : 'border-[var(--tm-line)] bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
+        BTN,
+        v && 'border-[var(--tm-accent)] bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
       )}
     >
       {v ? (

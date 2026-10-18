@@ -84,7 +84,8 @@ function KillSql({ row, onDone }: { row: InflightRow; onDone: () => void }) {
         id={`tm-kill-${row.id}`}
         label='End its SQL'
         armedLabel='Click again to KILL the session'
-        disabled={busy || !reason.trim()}
+        busy={busy}
+        disabled={!reason.trim()}
         onConfirm={() => void run()}
       />
     </div>

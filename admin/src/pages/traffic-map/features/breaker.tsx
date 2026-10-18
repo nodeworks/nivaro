@@ -244,7 +244,8 @@ export function BreakerSection({ sel }: { sel: Selection }) {
               danger
               label={mode === 'refuse' ? 'Refuse requests' : 'Apply the limit'}
               armedLabel='Click again to open the breaker'
-              disabled={busy || !valid}
+              busy={busy}
+              disabled={!valid}
               onConfirm={() => void submit()}
             />
           </div>

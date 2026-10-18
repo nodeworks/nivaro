@@ -566,7 +566,7 @@ export function ExternalApiEditPage() {
         <div className='space-y-1.5'>
           <Label>Agreed service levels</Label>
           <div className='flex flex-wrap items-end gap-4'>
-            <label className='flex flex-col gap-1.5 text-[12px] text-slate-500'>
+            <label className='flex flex-col gap-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
               Response time p95 (ms)
               <Input
                 type='number'
@@ -578,7 +578,7 @@ export function ExternalApiEditPage() {
                 placeholder='800'
               />
             </label>
-            <label className='flex flex-col gap-1.5 text-[12px] text-slate-500'>
+            <label className='flex flex-col gap-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
               Availability (%)
               <Input
                 type='number'
@@ -592,7 +592,7 @@ export function ExternalApiEditPage() {
               />
             </label>
           </div>
-          <p className='text-[12px] text-slate-400'>
+          <p className='text-[12px] text-slate-400 dark:text-muted-foreground'>
             What the partner committed to. The Traffic Map marks the hours its calls fell outside
             these and shows the month's attainment. Leave both blank for none.
           </p>

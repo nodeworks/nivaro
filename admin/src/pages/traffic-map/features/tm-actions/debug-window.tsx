@@ -16,7 +16,7 @@ import type { Selection } from '../../types'
 import { inPage } from '../b1-shared'
 import { untilPhrase } from '../breaker'
 import { apiError, TwoClickButton } from '../ops-common'
-import { LINK, SafeLink } from '../shared'
+import { LINK, ReadEmpty, SafeLink } from '../shared'
 import { type DebugWindow, debugTargetOf, Segmented, useDebugWindows } from './shared'
 
 const MINUTES: Array<[number, string]> = [
@@ -126,8 +126,8 @@ function DebugWindowPanel({ sel }: { sel: Selection; d: InspectorData }) {
   }
   return (
     <Section title='Debug window'>
-      {q.isLoading ? (
-        <Empty>Reading…</Empty>
+      {q.isLoading || q.isError ? (
+        <ReadEmpty loading={q.isLoading} error={q.isError} />
       ) : open ? (
         <OpenWindow w={open} />
       ) : q.data && !q.data.available ? (
@@ -146,7 +146,7 @@ function DebugWindowPanel({ sel }: { sel: Selection; d: InspectorData }) {
               id='tm-debug-start'
               label={`Debug for ${MINUTES.find((m) => m[0] === minutes)?.[1] ?? `${minutes} min`}`}
               armedLabel='Click again to start'
-              disabled={busy}
+              busy={busy}
               onConfirm={() => void start()}
             />
           </div>

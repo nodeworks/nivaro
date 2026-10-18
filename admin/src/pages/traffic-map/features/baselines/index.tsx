@@ -180,7 +180,7 @@ function NormalPanel({ sel, d }: { sel: Selection; d: InspectorData }) {
     <Section title='Normal for this hour'>
       <div className='grid gap-1.5' data-tm-baseline=''>
         {!b ? (
-          <Empty>Loading what is normal…</Empty>
+          <Empty>Loading…</Empty>
         ) : !bands ? (
           <Empty>
             {b.learning

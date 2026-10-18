@@ -8,11 +8,11 @@ import { useState } from 'react'
 import { api } from '@/lib/api'
 import { fmtMs } from '../../EventTicker'
 import type { InspectorData } from '../../Inspector'
-import { Empty, Section } from '../../Inspector'
+import { Section } from '../../Inspector'
 import { inspectorPanels } from '../../registry/inspectorPanels'
 import { register } from '../../registry/registry'
 import type { Selection } from '../../types'
-import { BTN } from '../shared'
+import { BTN, ReadEmpty, Segmented } from '../shared'
 import { fmtNum } from './ui'
 
 type HeatMetric = 'req' | 'errors' | 'p95'
@@ -128,36 +128,19 @@ function HeatmapPanel({ sel }: { sel: Selection; d: InspectorData }) {
         </button>
       ) : (
         <div className='grid gap-2'>
-          <fieldset
-            className='inline-flex w-fit overflow-hidden rounded-md border border-[var(--tm-line)]'
-            aria-label='Heatmap figure'
-          >
-            {METRICS.map((m, i) => (
-              <button
-                key={m.v}
-                type='button'
-                aria-pressed={metric === m.v}
-                data-tm-heat-metric={m.v}
-                onClick={() => setMetric(m.v)}
-                className={`px-2 py-[2px] text-[11.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan ${
-                  i > 0 ? 'border-l border-[var(--tm-line)]' : ''
-                } ${
-                  metric === m.v
-                    ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
-                    : 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
-                }`}
-              >
-                {m.label}
-              </button>
-            ))}
-          </fieldset>
+          <Segmented
+            label='Heatmap figure'
+            value={metric}
+            options={METRICS.map((m): [HeatMetric, string] => [m.v, m.label])}
+            onChange={setMetric}
+          />
           {q.isLoading ? (
             <div
               aria-hidden='true'
               className='h-24 animate-pulse rounded bg-[var(--tm-skeleton)] motion-reduce:animate-none'
             />
           ) : q.isError || !q.data ? (
-            <Empty>Could not read the hourly history.</Empty>
+            <ReadEmpty error errorText='Could not read the hourly history.' />
           ) : (
             <>
               <Grid data={q.data} metric={metric} />

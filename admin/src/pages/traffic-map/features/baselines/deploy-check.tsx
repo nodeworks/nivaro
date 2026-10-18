@@ -11,6 +11,7 @@ import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
 import { register } from '../../registry/registry'
 import { toolbarItems } from '../../registry/toolbarItems'
+import { BTN } from '../shared'
 import type { Level } from './score'
 import { fmtNum, LEVEL_TEXT, ToneChip } from './ui'
 
@@ -109,10 +110,7 @@ function DeployCheckButton() {
           type='button'
           id='tm-deploy-check'
           data-tip={q.data?.sentence ?? 'Is now a good time to deploy?'}
-          className={cn(
-            'inline-flex h-7 items-center gap-1.5 rounded-md border px-2.5 text-[12px] font-medium transition-colors duration-150 ease-out focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
-            'border-[var(--tm-line)] bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
-          )}
+          className={BTN}
         >
           <Rocket className='h-3.5 w-3.5' aria-hidden='true' />
           Deploy now?

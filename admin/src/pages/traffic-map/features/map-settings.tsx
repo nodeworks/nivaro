@@ -134,7 +134,7 @@ function UsageLine({ row }: { row: UsageRow | undefined }) {
 
 function Fig({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
-    <div className='min-w-0 bg-[var(--tm-card)] px-2.5 py-1.5' title={hint}>
+    <div className='min-w-0 bg-[var(--tm-card)] px-2.5 py-1.5' data-tip={hint}>
       <div className='text-[11.5px] text-[var(--tm-muted)]'>{label}</div>
       <div className='truncate text-[13px] font-medium tabular-nums'>{value}</div>
     </div>
@@ -233,11 +233,7 @@ export function MapSettings() {
         <button
           type='button'
           id='tm-map-settings'
-          className={cn(
-            BTN,
-            'px-2.5 py-[3px] text-[12px]',
-            o?.sampling.on && 'border-[var(--tm-update)] text-[var(--tm-update)]'
-          )}
+          className={cn(BTN, o?.sampling.on && 'border-[var(--tm-update)] text-[var(--tm-update)]')}
           aria-haspopup='dialog'
           data-tip='Retention, scheduled snapshots and what the map costs'
         >
@@ -247,7 +243,7 @@ export function MapSettings() {
       </PopoverTrigger>
       <PopoverContent
         align='end'
-        className='traffic-map max-h-[80vh] w-[460px] overflow-y-auto border-[var(--tm-line)] bg-[var(--tm-card)] p-0 text-[var(--tm-fg)]'
+        className='traffic-map max-h-[80vh] w-[460px] max-w-[calc(100vw-32px)] overflow-y-auto border-[var(--tm-line)] bg-[var(--tm-card)] p-0 text-[var(--tm-fg)]'
         data-tm-map-settings=''
       >
         <div className='border-b border-[var(--tm-line-2)] px-3.5 py-2.5'>
@@ -432,7 +428,7 @@ export function MapSettings() {
   )
 }
 
-register(toolbarItems, { id: 'map-settings', order: 95, slot: 'actions', Component: MapSettings })
+register(toolbarItems, { id: 'map-settings', order: 95, slot: 'menu', Component: MapSettings })
 
 /** The strip tile: the map's CPU share and whether the ticker is being sampled. */
 export function MapCostTile() {

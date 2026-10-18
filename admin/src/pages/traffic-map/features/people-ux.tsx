@@ -1,10 +1,12 @@
 import { type ReactNode, useState } from 'react'
+import { cn } from '@/lib/utils'
 import { fmtCount, fmtMs } from '../EventTicker'
 import { Empty, Section } from '../Inspector'
 import { inspectorPanels } from '../registry/inspectorPanels'
 import { pagePanels } from '../registry/pagePanels'
 import { register } from '../registry/registry'
 import { BTN, INPUT, inMapOnly, PanelCard, useTmRoute } from './ops-common'
+import { Segmented } from './shared'
 
 /**
  * People and real-user experience lenses (#2190 #2191 #2194 #2202 #2250 #2251 #2149 #2258 #2163
@@ -52,8 +54,24 @@ const MONO = 'font-mono text-[11px]'
 function Scroll({ children }: { children: ReactNode }) {
   return <div className='max-h-[380px] overflow-auto'>{children}</div>
 }
-function Note({ children }: { children: ReactNode }) {
-  return <p className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]'>{children}</p>
+function Note({ children, error }: { children: ReactNode; error?: boolean }) {
+  return (
+    <p
+      role={error ? 'alert' : undefined}
+      className={cn(
+        'px-3.5 py-3 text-[12px]',
+        error ? 'text-[var(--tm-error-ink)]' : 'text-[var(--tm-muted)]'
+      )}
+    >
+      {children}
+    </p>
+  )
+}
+/** A lens with no data yet: loading, a failed read, or nothing at all. */
+function ReadState({ loading, error }: { loading: boolean; error: boolean }) {
+  if (loading) return <Note>Loading…</Note>
+  if (error) return <Note error>Could not be read.</Note>
+  return <Note>Nothing to show.</Note>
 }
 function Head({ cols }: { cols: Array<[string, boolean?]> }) {
   return (
@@ -91,11 +109,11 @@ interface Cohort {
   rum_p75: number | null
 }
 function NewPeople({ hours }: { hours: number }) {
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     new_people: number
     rows: Array<{ screen: string; new: Cohort; experienced: Cohort; slower_by: number | null }>
   }>(['ux', 'new', hours], `/people-ux/new-vs-experienced?hours=${hours}`, 120_000)
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  if (!data) return <ReadState loading={loading} error={error} />
   if (data.rows.length === 0)
     return <Note>No page visits by people in their first week in this window.</Note>
   return (
@@ -148,7 +166,7 @@ function NewPeople({ hours }: { hours: number }) {
 
 // ── #2191 ────────────────────────────────────────────────────────────────────
 function Devices({ hours }: { hours: number }) {
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     migrated: boolean
     samples: number
     with_device: number
@@ -163,7 +181,7 @@ function Devices({ hours }: { hours: number }) {
       outlier: boolean
     }>
   }>(['ux', 'devices', hours], `/people-ux/devices?hours=${hours}`, 120_000)
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  if (!data) return <ReadState loading={loading} error={error} />
   if (data.rows.length === 0)
     return (
       <Note>
@@ -209,7 +227,7 @@ function Devices({ hours }: { hours: number }) {
 
 // ── #2194 ────────────────────────────────────────────────────────────────────
 function ErrorPeople({ hours }: { hours: number }) {
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     rows: Array<{
       user: string
       name: string
@@ -222,7 +240,7 @@ function ErrorPeople({ hours }: { hours: number }) {
       last_at: string
     }>
   }>(['ux', 'errors', hours], `/people-ux/error-people?hours=${hours}`, 60_000)
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  if (!data) return <ReadState loading={loading} error={error} />
   if (data.rows.length === 0) return <Note>Nobody hit an error in this window.</Note>
   return (
     <Scroll>
@@ -268,7 +286,7 @@ function ErrorPeople({ hours }: { hours: number }) {
 
 // ── #2202 ────────────────────────────────────────────────────────────────────
 function Split({ hours }: { hours: number }) {
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     rows: Array<{
       screen_id: string
       kind: string
@@ -280,7 +298,7 @@ function Split({ hours }: { hours: number }) {
       verdict: string
     }>
   }>(['ux', 'split', hours], `/people-ux/network-server?hours=${hours}`, 120_000)
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  if (!data) return <ReadState loading={loading} error={error} />
   if (data.rows.length === 0) return <Note>No browser timings in this window.</Note>
   return (
     <>
@@ -343,7 +361,7 @@ function Apdex({ hours }: { hours: number }) {
   const [by, setBy] = useState<'page' | 'person'>('page')
   const [t, setT] = useState(readTargets)
   const [draft, setDraft] = useState({ page: String(t.page), request: String(t.request) })
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     page_target_ms: number
     request_target_ms: number
     rows: Array<{
@@ -373,17 +391,15 @@ function Apdex({ hours }: { hours: number }) {
   return (
     <>
       <div className='flex flex-wrap items-center gap-2 px-3.5 pt-2 text-[12px]'>
-        {(['page', 'person'] as const).map((b) => (
-          <button
-            key={b}
-            type='button'
-            className={BTN}
-            aria-pressed={by === b}
-            onClick={() => setBy(b)}
-          >
-            {by === b ? '● ' : ''}Per {b}
-          </button>
-        ))}
+        <Segmented
+          label='Group by'
+          value={by}
+          options={[
+            ['page', 'Per page'],
+            ['person', 'Per person']
+          ]}
+          onChange={setBy}
+        />
         <label className='flex items-center gap-1 text-[var(--tm-muted)]'>
           Page target (ms)
           <input
@@ -408,7 +424,7 @@ function Apdex({ hours }: { hours: number }) {
         </label>
       </div>
       {!data ? (
-        <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+        <ReadState loading={loading} error={error} />
       ) : data.rows.length === 0 ? (
         <Note>Not enough timings yet.</Note>
       ) : (
@@ -459,7 +475,7 @@ const METHOD_LABEL: Record<string, string> = {
   token: 'Token'
 }
 function SignIn({ hours }: { hours: number }) {
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     funnels: Array<{
       method: string
       attempts: number
@@ -474,7 +490,7 @@ function SignIn({ hours }: { hours: number }) {
       }>
     }>
   }>(['ux', 'signin', hours], `/people-ux/signin-funnel?hours=${hours}`, 120_000)
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  if (!data) return <ReadState loading={loading} error={error} />
   if (data.funnels.length === 0) return <Note>No sign-ins in this window.</Note>
   return (
     <div className='grid gap-3 px-3.5 py-3 min-[900px]:grid-cols-2' data-tm-ux='signin'>
@@ -598,28 +614,22 @@ function FlowDiagram({ edges }: { edges: Edge[] }) {
 }
 function Flow({ hours }: { hours: number }) {
   const [app, setApp] = useState<string>('')
-  const { data, loading } = useTmRoute<{ apps: string[]; edges: Edge[] }>(
+  const { data, loading, error } = useTmRoute<{ apps: string[]; edges: Edge[] }>(
     ['ux', 'flow', hours, app],
     `/people-ux/flow?hours=${hours}${app ? `&app=${encodeURIComponent(app)}` : ''}`,
     120_000
   )
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  if (!data) return <ReadState loading={loading} error={error} />
   return (
     <>
       {data.apps.length > 1 ? (
         <div className='flex flex-wrap gap-1.5 px-3.5 pt-2'>
-          {['', ...data.apps].map((a) => (
-            <button
-              key={a || 'all'}
-              type='button'
-              className={BTN}
-              aria-pressed={app === a}
-              onClick={() => setApp(a)}
-            >
-              {app === a ? '● ' : ''}
-              {a || 'All apps'}
-            </button>
-          ))}
+          <Segmented
+            label='App'
+            value={app}
+            options={['', ...data.apps].map((a): [string, string] => [a, a || 'All apps'])}
+            onChange={setApp}
+          />
         </div>
       ) : null}
       {data.edges.length === 0 ? (
@@ -680,7 +690,7 @@ function Spark({ values }: { values: number[] }) {
 }
 function Notify({ hours }: { hours: number }) {
   const h = Math.min(hours, 72)
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     threshold: number
     total: number
     rows: Array<{
@@ -695,7 +705,7 @@ function Notify({ hours }: { hours: number }) {
       senders: Array<{ name: string; n: number }>
     }>
   }>(['ux', 'notify', h], `/people-ux/notification-pressure?hours=${h}`, 120_000)
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  if (!data) return <ReadState loading={loading} error={error} />
   if (data.rows.length === 0)
     return (
       <Note>
@@ -786,12 +796,12 @@ function AiTable({ rows }: { rows: AiRow[] }) {
   )
 }
 function AiSpend({ hours }: { hours: number }) {
-  const { data, loading } = useTmRoute<{ total_cost: number; total_calls: number; rows: AiRow[] }>(
-    ['ux', 'ai', hours],
-    `/people-ux/ai-cost?hours=${hours}`,
-    120_000
-  )
-  if (!data) return <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+  const { data, loading, error } = useTmRoute<{
+    total_cost: number
+    total_calls: number
+    rows: AiRow[]
+  }>(['ux', 'ai', hours], `/people-ux/ai-cost?hours=${hours}`, 120_000)
+  if (!data) return <ReadState loading={loading} error={error} />
   if (data.rows.length === 0) return <Note>No AI calls in this window.</Note>
   return (
     <>
@@ -807,7 +817,7 @@ function AiSpend({ hours }: { hours: number }) {
 // ── #2207 ────────────────────────────────────────────────────────────────────
 function Heat() {
   const [win, setWin] = useState(300)
-  const { data, loading } = useTmRoute<{
+  const { data, loading, error } = useTmRoute<{
     dropped: number
     attributed: number
     rows: Array<{ dimension: string; id: string; label: string; reads: number; writes: number }>
@@ -816,25 +826,19 @@ function Heat() {
   return (
     <>
       <div className='flex flex-wrap items-center gap-1.5 px-3.5 pt-2'>
-        {[60, 300, 900].map((w) => (
-          <button
-            key={w}
-            type='button'
-            className={BTN}
-            aria-pressed={win === w}
-            onClick={() => setWin(w)}
-          >
-            {win === w ? '● ' : ''}
-            {w / 60} min
-          </button>
-        ))}
+        <Segmented
+          label='Window'
+          value={win}
+          options={[60, 300, 900].map((w): [number, string] => [w, `${w / 60} min`])}
+          onChange={setWin}
+        />
         <span className='text-[11.5px] text-[var(--tm-muted)]'>
           Single-record reads and writes, by the dimension value the record belongs to. Counted
           while this page is open.
         </span>
       </div>
       {!data ? (
-        <Note>{loading ? 'Reading…' : 'Nothing to show.'}</Note>
+        <ReadState loading={loading} error={error} />
       ) : data.rows.length === 0 ? (
         <Note>
           No attributed traffic yet. It fills as records are opened or saved while this page is
@@ -892,19 +896,13 @@ function PeopleUxPanel() {
         hint={cur.hint}
         actions={
           lens === 'heat' ? undefined : (
-            <div className='flex shrink-0 gap-1.5'>
-              {RANGES.map((r) => (
-                <button
-                  key={r.hours}
-                  type='button'
-                  className={BTN}
-                  aria-pressed={hours === r.hours}
-                  onClick={() => setHours(r.hours)}
-                >
-                  {hours === r.hours ? '● ' : ''}
-                  {r.label}
-                </button>
-              ))}
+            <div className='flex shrink-0'>
+              <Segmented
+                label='Range'
+                value={hours}
+                options={RANGES.map((r): [number, string] => [r.hours, r.label])}
+                onChange={setHours}
+              />
             </div>
           )
         }
@@ -920,7 +918,10 @@ function PeopleUxPanel() {
               type='button'
               role='tab'
               aria-selected={lens === l.id}
-              className={`${BTN} ${lens === l.id ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]' : ''}`}
+              className={cn(
+                BTN,
+                lens === l.id && 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
+              )}
               onClick={() => setLens(l.id)}
             >
               {l.label}
@@ -944,7 +945,7 @@ function PeopleUxPanel() {
 
 /** The AI provider node: which screens drive its spend (#2163). */
 function AiScreens() {
-  const { data, loading } = useTmRoute<{ rows: AiRow[] }>(
+  const { data, loading, error } = useTmRoute<{ rows: AiRow[] }>(
     ['ux', 'ai-node'],
     '/people-ux/ai-cost?hours=168',
     120_000
@@ -953,7 +954,9 @@ function AiScreens() {
   return (
     <Section title='Screens driving AI spend (7 days)'>
       {rows.length === 0 ? (
-        <Empty>{loading ? 'Reading…' : 'No AI calls in the last 7 days.'}</Empty>
+        <Empty>
+          {loading ? 'Loading…' : error ? 'Could not be read.' : 'No AI calls in the last 7 days.'}
+        </Empty>
       ) : (
         <ul className='grid gap-1 text-[12px]' data-tm-ai-screens=''>
           {rows.map((r) => (

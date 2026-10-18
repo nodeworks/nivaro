@@ -36,7 +36,7 @@ function MoveProjection({ job }: { job: JobSlot }) {
       )?.data?.data ?? null) as WhatIfBody | null,
     staleTime: 60_000
   })
-  if (q.isLoading) return <span className='text-[var(--tm-muted)]'>Projecting…</span>
+  if (q.isLoading) return <span className='text-[var(--tm-muted)]'>Loading…</span>
   if (q.isError) return <span className='text-[var(--tm-error-ink)]'>{errorOf(q.error)}</span>
   const j = q.data?.job
   if (!j) return null

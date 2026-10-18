@@ -1,8 +1,7 @@
 // Traffic Map — inspector panels and badges for the long-lived connection, media, search and MCP
 // nodes: the Sockets node (adapter lag, busiest rooms, connection problems, streams), each stream
 // source, the Media and Search nodes and the MCP clients source.
-import { type ReactNode, useEffect, useState } from 'react'
-import { cn } from '@/lib/utils'
+import { useEffect, useState } from 'react'
 import { useTrafficMap } from '../../context'
 import { fmtCount, fmtMs } from '../../EventTicker'
 import { Bar, Empty, Section } from '../../Inspector'
@@ -13,6 +12,7 @@ import { register } from '../../registry/registry'
 import { toolbarItems } from '../../registry/toolbarItems'
 import type { Selection } from '../../types'
 import { fmtBytes } from '../b1-shared'
+import { Figs, ReadEmpty, Segmented } from '../shared'
 import {
   type AdapterLagData,
   badgeFigures,
@@ -40,30 +40,6 @@ import {
 setDownLabel(MEDIA_NODE, 'Media')
 setDownLabel(SEARCH_NODE, 'Search')
 
-const BTN =
-  'rounded-md border border-[var(--tm-line)] px-2 py-[3px] text-[11.5px] font-medium leading-tight text-[var(--tm-fg-2)] transition-colors duration-150 hover:bg-[var(--tm-accent-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-const BTN_ON = 'border-[var(--tm-accent)] bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
-
-function Figures({ items }: { items: Array<[string, ReactNode, boolean?]> }) {
-  return (
-    <dl className='grid grid-cols-3 gap-x-3 gap-y-2'>
-      {items.map(([k, v, bad]) => (
-        <div key={k} className='min-w-0'>
-          <dt className='truncate text-[11.5px] text-[var(--tm-muted)]'>{k}</dt>
-          <dd
-            className={cn(
-              'text-[13.5px] font-semibold tabular-nums',
-              bad && 'text-[var(--tm-error-ink)]'
-            )}
-          >
-            {v}
-          </dd>
-        </div>
-      ))}
-    </dl>
-  )
-}
-
 const note = 'mt-2 text-[11.5px] text-[var(--tm-muted)]'
 const rate = (n: number): string => (n < 10 ? n.toFixed(1) : Math.round(n).toLocaleString())
 const spanText = (win: number): string => `${Math.max(1, Math.round(win / 60))} min`
@@ -86,7 +62,7 @@ function LagBars({ lag }: { lag: AdapterLagData }) {
         <i
           key={m.min}
           className='block flex-1 rounded-[1px]'
-          title={
+          data-tip={
             m.n ? `${lagText(m.avg_ms)} average, ${lagText(m.max_ms)} worst (${m.n})` : 'no samples'
           }
           style={{
@@ -106,7 +82,7 @@ function AdapterLagSection() {
     <Section title='Adapter lag'>
       {lag && lag.total > 0 ? (
         <div data-tm-adapter-lag={lag.level}>
-          <Figures
+          <Figs
             items={[
               ['Last 3 min', lagText(lag.recent_avg_ms), lag.level === 'error'],
               ['Worst', lagText(lag.recent_max_ms)],
@@ -131,11 +107,10 @@ function AdapterLagSection() {
           </p>
         </div>
       ) : (
-        <Empty>
-          {q.isLoading
-            ? 'Loading…'
-            : 'No events relayed from another replica yet: a single replica, or nothing written elsewhere.'}
-        </Empty>
+        <ReadEmpty loading={q.isLoading} error={q.isError}>
+          No events relayed from another replica yet: a single replica, or nothing written
+          elsewhere.
+        </ReadEmpty>
       )}
     </Section>
   )
@@ -152,7 +127,7 @@ function StreamsSection() {
       {any ? (
         <div className='grid gap-2' data-tm-streams=''>
           {rows.map((r) => (
-            <div key={r.kind} className='min-w-0 text-[12px]' title={r.hint}>
+            <div key={r.kind} className='min-w-0 text-[12px]' data-tip={r.hint}>
               <div className='flex items-baseline justify-between gap-2'>
                 <span className='min-w-0 truncate'>{r.label}</span>
                 <span className='tabular-nums text-[var(--tm-fg-2)]'>{fmtCount(r.open)} open</span>
@@ -164,7 +139,9 @@ function StreamsSection() {
           ))}
         </div>
       ) : (
-        <Empty>No stream is open or sending on this server.</Empty>
+        <ReadEmpty loading={q.isLoading} error={q.isError}>
+          No stream is open or sending on this server.
+        </ReadEmpty>
       )}
     </Section>
   )
@@ -178,7 +155,7 @@ function StreamPanel({ sel }: { sel: Selection }) {
     <Section title={`Connections in the last ${spanText(win)}`}>
       {row ? (
         <>
-          <Figures
+          <Figs
             items={[
               ['Open now', fmtCount(row.open)],
               ['Peak open', fmtCount(row.peak)],
@@ -194,7 +171,9 @@ function StreamPanel({ sel }: { sel: Selection }) {
           </p>
         </>
       ) : (
-        <Empty>{q.isLoading ? 'Loading…' : 'Nothing on this stream kind yet.'}</Empty>
+        <ReadEmpty loading={q.isLoading} error={q.isError}>
+          Nothing on this stream kind yet.
+        </ReadEmpty>
       )}
     </Section>
   )
@@ -280,7 +259,7 @@ function RoomLine({
   return (
     <div>
       {row.hidden ? (
-        <div title='Rooms that name people or private conversations show a kind and counts only'>
+        <div data-tip='Rooms that name people or private conversations show a kind and counts only'>
           <Bar label={label} n={n} max={max} mono={false} />
           <p className='text-[11px] text-[var(--tm-muted)]'>{meta} · private, counts only</p>
         </div>
@@ -315,19 +294,17 @@ function RoomsSection() {
   const max = Math.max(1, ...rows.map((r) => (by === 'events' ? r.deliveries_pm : r.members)))
   return (
     <Section title={`Busiest rooms (${spanText(win)})`}>
-      <fieldset className='mb-2 flex gap-1.5' aria-label='Rank rooms by'>
-        {(['events', 'members'] as const).map((k) => (
-          <button
-            key={k}
-            type='button'
-            aria-pressed={by === k}
-            onClick={() => setBy(k)}
-            className={cn(BTN, by === k && BTN_ON)}
-          >
-            {k === 'events' ? 'Events per minute' : 'Members'}
-          </button>
-        ))}
-      </fieldset>
+      <div className='mb-2'>
+        <Segmented
+          label='Rank rooms by'
+          value={by}
+          options={[
+            ['events', 'Events per minute'],
+            ['members', 'Members']
+          ]}
+          onChange={setBy}
+        />
+      </div>
       {rows.length ? (
         <div className='grid gap-2' data-tm-rooms=''>
           {rows.map((r) => (
@@ -346,7 +323,9 @@ function RoomsSection() {
           </p>
         </div>
       ) : (
-        <Empty>{q.isLoading ? 'Loading…' : 'No room has members or traffic yet.'}</Empty>
+        <ReadEmpty loading={q.isLoading} error={q.isError}>
+          No room has members or traffic yet.
+        </ReadEmpty>
       )}
     </Section>
   )
@@ -385,7 +364,7 @@ function FailuresSection() {
     <Section title='Connection problems (last 24 h)'>
       {d && (d.total > 0 || (polling?.total ?? 0) > 0) ? (
         <div className='grid gap-3' data-tm-connection-failures=''>
-          <Figures
+          <Figs
             items={[
               ['Failed', fmtCount(d.failed), d.failed > 0],
               ['Fell back to polling', fmtCount(d.downgraded)],
@@ -407,7 +386,9 @@ function FailuresSection() {
           </p>
         </div>
       ) : (
-        <Empty>{q.isLoading ? 'Loading…' : 'No failed or downgraded connection reported.'}</Empty>
+        <ReadEmpty loading={q.isLoading} error={q.isError}>
+          No failed or downgraded connection reported.
+        </ReadEmpty>
       )}
     </Section>
   )
@@ -448,7 +429,7 @@ function MediaPanel() {
   const row = (title: string, who: string, r: NonNullable<typeof d>['video']) => (
     <Section title={`${title} (${spanText(win)})`}>
       {r.requests > 0 || r.active > 0 ? (
-        <Figures
+        <Figs
           items={[
             [who, fmtCount(r.active)],
             ['Requests', fmtCount(r.requests)],
@@ -465,7 +446,11 @@ function MediaPanel() {
   )
   if (!d)
     return (
-      <Section title='Media'>{<Empty>{q.isLoading ? 'Loading…' : 'No figures.'}</Empty>}</Section>
+      <Section title='Media'>
+        <ReadEmpty loading={q.isLoading} error={q.isError}>
+          No figures.
+        </ReadEmpty>
+      </Section>
     )
   return (
     <div data-tm-media=''>
@@ -498,7 +483,7 @@ function SearchPanel() {
       <Section title={`Searches (${spanText(win)})`}>
         {d && d.total.requests > 0 ? (
           <>
-            <Figures
+            <Figs
               items={[
                 ['Searches', fmtCount(d.total.requests)],
                 ['Database time', fmtMs(d.total.db_ms)],
@@ -510,7 +495,7 @@ function SearchPanel() {
               {d.by_kind.map((k) => (
                 <div
                   key={k.kind}
-                  title={`${fmtCount(k.requests)} searches, ${k.avg_ms != null ? fmtMs(k.avg_ms) : '—'} each`}
+                  data-tip={`${fmtCount(k.requests)} searches, ${k.avg_ms != null ? fmtMs(k.avg_ms) : '—'} each`}
                 >
                   <Bar label={k.label} n={k.db_ms} max={d.by_kind[0].db_ms} mono={false} />
                 </div>
@@ -519,7 +504,9 @@ function SearchPanel() {
             </div>
           </>
         ) : (
-          <Empty>{q.isLoading ? 'Loading…' : 'No search ran in this window.'}</Empty>
+          <ReadEmpty loading={q.isLoading} error={q.isError}>
+            No search ran in this window.
+          </ReadEmpty>
         )}
       </Section>
       {d && d.slowest.length > 0 && (
@@ -565,7 +552,7 @@ function McpPanel() {
     <div data-tm-mcp=''>
       <Section title={`Calls from AI assistants (${spanText(win)})`}>
         {d && d.calls > 0 ? (
-          <Figures
+          <Figs
             items={[
               ['Calls', fmtCount(d.calls)],
               ['Errors', fmtCount(d.errors), d.errors > 0],
@@ -573,7 +560,9 @@ function McpPanel() {
             ]}
           />
         ) : (
-          <Empty>{q.isLoading ? 'Loading…' : 'No MCP call in this window.'}</Empty>
+          <ReadEmpty loading={q.isLoading} error={q.isError}>
+            No MCP call in this window.
+          </ReadEmpty>
         )}
       </Section>
       {d && d.tools.length > 0 && (

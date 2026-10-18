@@ -14,7 +14,7 @@ import { toolbarItems } from '../registry/toolbarItems'
 import type { Selection } from '../types'
 import { ago, createStore, inPage, TAG, useStore } from './b1-shared'
 import { usePeopleNames } from './people-names'
-import { BTN, LINK, SafeLink } from './shared'
+import { BTN, LINK, Note, SafeLink } from './shared'
 import { useFrozenSnapshotId } from './snapshots'
 
 /**
@@ -236,9 +236,15 @@ function GeoSection({ geo }: { geo: CallerSecurity['geo'] }) {
     return (
       <Section title='Places'>
         <p className='text-[11.5px] text-[var(--tm-muted)]' data-tm-security-geo='off'>
-          {geo.status.configured
-            ? `The geo database could not be read${geo.status.error ? ` (${geo.status.error})` : ''}.`
-            : 'Off. To see where callers call from, set TRAFFIC_GEOIP_DB on the API server to a GeoLite2 Country or City .mmdb file. Addresses are looked up on the server only.'}
+          {geo.status.configured ? (
+            `The geo database could not be read${geo.status.error ? ` (${geo.status.error})` : ''}.`
+          ) : (
+            <>
+              Off. To see where callers call from, set{' '}
+              <code className={MONO}>TRAFFIC_GEOIP_DB</code> on the API server to a GeoLite2 Country
+              or City .mmdb file. Addresses are looked up on the server only.
+            </>
+          )}
         </p>
       </Section>
     )
@@ -502,6 +508,8 @@ function SecurityPanel() {
           <h3 className={H3}>Flagged sessions</h3>
           {sessions.isLoading ? (
             <Empty>Loading…</Empty>
+          ) : sessions.isError ? (
+            <Note tone='error'>Could not be read.</Note>
           ) : !sessions.data?.sessions.length ? (
             <Empty>No session looks scripted or shared in the last 30 minutes.</Empty>
           ) : (
@@ -519,13 +527,15 @@ function SecurityPanel() {
             {sessions.data?.known_proxies
               ? ` and ${sessions.data.known_proxies} known proxy ranges`
               : ''}{' '}
-            are left out; TRAFFIC_KNOWN_PROXIES lists shared gateways.
+            are left out; <code className={MONO}>TRAFFIC_KNOWN_PROXIES</code> lists shared gateways.
           </p>
         </div>
         <div className='min-w-0'>
           <h3 className={H3}>Wrong environment</h3>
           {mis.isLoading ? (
             <Empty>Loading…</Empty>
+          ) : mis.isError ? (
+            <Note tone='error'>Could not be read.</Note>
           ) : !mis.data?.findings.length ? (
             <Empty>
               {mis.data?.registry.configured === false
@@ -553,6 +563,8 @@ function SecurityPanel() {
           <h3 className={H3}>Bad data by caller</h3>
           {bad.isLoading ? (
             <Empty>Loading…</Empty>
+          ) : bad.isError ? (
+            <Note tone='error'>Could not be read.</Note>
           ) : !bad.data?.callers.length ? (
             <Empty>No after-write integrity findings in the last 7 days.</Empty>
           ) : (

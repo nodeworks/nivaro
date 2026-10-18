@@ -119,4 +119,4 @@ function ExportImage() {
   )
 }
 
-register(toolbarItems, { id: 'export-image', order: 72, slot: 'actions', Component: ExportImage })
+register(toolbarItems, { id: 'export-image', order: 72, slot: 'menu', Component: ExportImage })

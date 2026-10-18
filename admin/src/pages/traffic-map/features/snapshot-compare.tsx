@@ -7,7 +7,7 @@ import { fmtMs, fmtRate } from '../EventTicker'
 import { pagePanels } from '../registry/pagePanels'
 import { register } from '../registry/registry'
 import { inMapOnly, PanelCard } from './ops-common'
-import { BTN } from './shared'
+import { BTN, Segmented } from './shared'
 
 /**
  * #2174 — two stored snapshots side by side: the difference per node and per edge (requests a
@@ -123,7 +123,7 @@ function SideCard({ s, tag }: { s: Side; tag: 'A' | 'B' }) {
   const mins = Math.max(1, s.window_s / 60)
   return (
     <div className='min-w-0 bg-[var(--tm-card)] px-3.5 py-2 text-[12px]'>
-      <div className='truncate font-medium' title={s.name}>
+      <div className='truncate font-medium' data-tip={s.name}>
         {tag}: {s.name}
       </div>
       <div className='text-[var(--tm-muted)]'>
@@ -258,28 +258,17 @@ export function SnapshotComparePanel() {
                 <SideCard s={d.a} tag='A' />
                 <SideCard s={d.b} tag='B' />
               </div>
-              <fieldset
-                className='mx-3.5 mt-2 inline-flex overflow-hidden rounded-md border border-[var(--tm-line)]'
-                aria-label='Compare by'
-              >
-                {(['nodes', 'edges'] as const).map((v, i) => (
-                  <button
-                    key={v}
-                    type='button'
-                    aria-pressed={view === v}
-                    onClick={() => setView(v)}
-                    className={cn(
-                      'px-2.5 py-[3px] text-[12px] font-medium',
-                      i > 0 && 'border-l border-[var(--tm-line)]',
-                      view === v
-                        ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
-                        : 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
-                    )}
-                  >
-                    {v === 'nodes' ? 'Nodes' : 'Edges'}
-                  </button>
-                ))}
-              </fieldset>
+              <div className='mx-3.5 mt-2'>
+                <Segmented
+                  label='Compare by'
+                  value={view}
+                  options={[
+                    ['nodes', 'Nodes'],
+                    ['edges', 'Edges']
+                  ]}
+                  onChange={setView}
+                />
+              </div>
               <div className='mt-1.5 max-h-[320px] overflow-auto'>
                 {view === 'nodes' ? (
                   <table className='w-full border-collapse text-[12px] tabular-nums'>
@@ -312,7 +301,7 @@ export function SnapshotComparePanel() {
                           className='border-b border-[var(--tm-line-2)] last:border-0'
                           data-tm-diff-node={n.key}
                         >
-                          <td className={cn(TD, 'max-w-[240px] truncate')} title={n.key}>
+                          <td className={cn(TD, 'max-w-[240px] truncate')} data-tip={n.key}>
                             {n.label}
                             {n.only === 'a' && <Only>only in A</Only>}
                             {n.only === 'b' && <Only>only in B</Only>}
@@ -370,7 +359,7 @@ export function SnapshotComparePanel() {
                           className='border-b border-[var(--tm-line-2)] last:border-0'
                           data-tm-diff-edge={e.key}
                         >
-                          <td className={cn(TD, 'max-w-[300px] truncate')} title={e.label}>
+                          <td className={cn(TD, 'max-w-[300px] truncate')} data-tip={e.label}>
                             {e.label}
                             {e.only === 'a' && <Only>only in A</Only>}
                             {e.only === 'b' && <Only>only in B</Only>}

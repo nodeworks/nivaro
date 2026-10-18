@@ -1,6 +1,7 @@
 /**
  * Plumbing the group A inspector features share: the entity-detail read (one request for every
- * tap's detail), a two-click confirm button, and the button / link classes on the tm tokens.
+ * tap's detail), a two-click confirm button, a segmented picker, and the button / link classes on
+ * the tm tokens.
  */
 import { useQuery } from '@tanstack/react-query'
 import { type ReactNode, useEffect, useRef, useState } from 'react'
@@ -64,8 +65,9 @@ export function useEntityDetail<T = unknown>(
 }
 
 /**
- * Two-click confirm: the first press arms it ("Revoke key?"), the second within 4 s runs it.
- * Blur or the timeout disarms. Never one click for anything that changes state.
+ * Two-click confirm: the first press arms it (label "Click again to <verb>"), the second within
+ * 4 s runs it. Blur, Escape or the timeout disarms; `busy` disables it while the action runs so
+ * it can never fire twice. Never one click for anything that changes state.
  */
 export function ConfirmButton({
   label,
@@ -74,7 +76,8 @@ export function ConfirmButton({
   busy,
   danger,
   disabled,
-  id
+  id,
+  className
 }: {
   label: ReactNode
   confirmLabel: ReactNode
@@ -83,6 +86,7 @@ export function ConfirmButton({
   danger?: boolean
   disabled?: boolean
   id?: string
+  className?: string
 }) {
   const [armed, setArmed] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -92,13 +96,21 @@ export function ConfirmButton({
     },
     []
   )
+  const disarm = () => {
+    if (timer.current) clearTimeout(timer.current)
+    setArmed(false)
+  }
   return (
     <button
       type='button'
       id={id}
       data-tm-confirm={armed ? 'armed' : 'idle'}
+      aria-busy={busy || undefined}
       disabled={disabled || busy}
-      onBlur={() => setArmed(false)}
+      onBlur={disarm}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') disarm()
+      }}
       onClick={() => {
         if (!armed) {
           setArmed(true)
@@ -106,13 +118,119 @@ export function ConfirmButton({
           timer.current = setTimeout(() => setArmed(false), 4000)
           return
         }
-        setArmed(false)
+        disarm()
         onConfirm()
       }}
-      className={cn(armed || danger ? BTN_DANGER : BTN, armed && 'ring-1 ring-[var(--tm-error)]')}
+      className={cn(
+        armed || danger ? BTN_DANGER : BTN,
+        armed && 'ring-1 ring-[var(--tm-error)]',
+        className
+      )}
     >
       {busy ? 'Working…' : armed ? confirmLabel : label}
     </button>
+  )
+}
+
+const SEG =
+  'px-2 py-[3px] text-[11.5px] font-medium leading-tight transition-colors duration-150 ease-out focus-visible:relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'
+
+/** A small segmented picker: one pressed option, accent wash on the pressed one. */
+export function Segmented<T extends string | number>({
+  label,
+  value,
+  options,
+  onChange,
+  id
+}: {
+  label: string
+  value: T
+  options: Array<[T, string]>
+  onChange: (v: T) => void
+  id?: string
+}) {
+  return (
+    <fieldset
+      id={id}
+      className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
+      aria-label={label}
+    >
+      {options.map(([v, text], i) => (
+        <button
+          key={String(v)}
+          type='button'
+          aria-pressed={value === v}
+          data-tm-seg={String(v)}
+          onClick={() => onChange(v)}
+          className={cn(
+            SEG,
+            i > 0 && 'border-l border-[var(--tm-line)]',
+            value === v
+              ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
+              : 'bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
+          )}
+        >
+          {text}
+        </button>
+      ))}
+    </fieldset>
+  )
+}
+
+/**
+ * The line a read shows while it has nothing to list: "Loading…", then an error-toned "Could not
+ * be read." when the request failed (never the all-clear text), else the panel's own empty text.
+ */
+export function ReadEmpty({
+  loading,
+  error,
+  errorText = 'Could not be read.',
+  children
+}: {
+  loading?: boolean
+  error?: boolean
+  errorText?: ReactNode
+  children?: ReactNode
+}) {
+  const failed = !loading && !!error
+  return (
+    <p
+      role={failed ? 'alert' : undefined}
+      data-tm-read={loading ? 'loading' : failed ? 'error' : 'empty'}
+      className={cn(
+        'text-[12px]',
+        failed ? 'text-[var(--tm-error-ink)]' : 'text-[var(--tm-muted)]'
+      )}
+    >
+      {loading ? 'Loading…' : failed ? errorText : children}
+    </p>
+  )
+}
+
+/** A row of label / value figures in the inspector's own look (values truncate, never wrap). */
+export function Figs({
+  items,
+  cols = 3
+}: {
+  items: Array<[string, ReactNode, boolean?]>
+  cols?: 2 | 3
+}) {
+  return (
+    <dl className={cn('grid gap-x-3 gap-y-2', cols === 2 ? 'grid-cols-2' : 'grid-cols-3')}>
+      {items.map(([k, v, bad]) => (
+        <div key={k} className='min-w-0'>
+          <dt className='truncate text-[11.5px] text-[var(--tm-muted)]'>{k}</dt>
+          <dd
+            className={cn(
+              'truncate text-[13.5px] font-semibold tabular-nums',
+              bad && 'text-[var(--tm-error-ink)]'
+            )}
+          >
+            {v}
+          </dd>
+        </div>
+      ))}
+    </dl>
   )
 }
 

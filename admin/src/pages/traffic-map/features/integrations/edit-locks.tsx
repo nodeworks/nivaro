@@ -8,6 +8,7 @@ import { fmtCount } from '../../EventTicker'
 import { pagePanels } from '../../registry/pagePanels'
 import { register } from '../../registry/registry'
 import { inMapOnly, LINK, PanelCard, useTmRoute } from '../ops-common'
+import { ReadEmpty } from '../shared'
 import { fmtSpan } from './logic'
 
 interface LockRow {
@@ -30,7 +31,7 @@ interface LockLens {
 const IDLE_WARN_MS = 90_000
 
 function EditLocksPanel() {
-  const { data, loading } = useTmRoute<LockLens>(['edit-locks'], '/edit-locks', 15_000)
+  const { data, loading, error } = useTmRoute<LockLens>(['edit-locks'], '/edit-locks', 15_000)
   const rows = data?.rows ?? []
   return (
     <PanelCard
@@ -43,8 +44,10 @@ function EditLocksPanel() {
       }
     >
       <div data-tm-edit-locks={rows.length}>
-        {loading && !data ? (
-          <p className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]'>Reading edit locks…</p>
+        {!data && (loading || error) ? (
+          <div className='px-3.5 py-3'>
+            <ReadEmpty loading={loading} error={error} />
+          </div>
         ) : rows.length === 0 ? (
           <p className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]'>
             No lock is held for long or wanted by someone else right now.
@@ -83,7 +86,7 @@ function EditLocksPanel() {
                     idle {fmtSpan(r.idle_ms)}
                   </span>
                   {r.note ? (
-                    <span className='min-w-0 truncate text-[var(--tm-muted)]' title={r.note}>
+                    <span className='min-w-0 truncate text-[var(--tm-muted)]' data-tip={r.note}>
                       “{r.note}”
                     </span>
                   ) : null}
