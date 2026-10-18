@@ -239,8 +239,11 @@ export async function collectionsRoutes(app: FastifyInstance) {
       const data: Record<string, Record<string, unknown>> = {}
       const missing: string[] = []
       const errors: Record<string, string> = {}
-      await Promise.all(
-        parsed.names.map(async (name) => {
+      // At most 8 metadata reads at once: a cold cache must not turn one request into 50
+      // concurrent ones on the pool.
+      const queue = [...parsed.names]
+      const worker = async () => {
+        for (let name = queue.shift(); name !== undefined; name = queue.shift()) {
           try {
             const meta = await collectionMetaPayload(name)
             if (meta) data[name] = meta
@@ -249,8 +252,9 @@ export async function collectionsRoutes(app: FastifyInstance) {
             req.log.warn({ err, collection: name }, 'batched collection metadata read failed')
             errors[name] = 'Internal Server Error'
           }
-        })
-      )
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(8, queue.length) }, worker))
       return reply.send({ data, missing, errors })
     }
     const tablesOnly = req.query.tables_only === 'true'

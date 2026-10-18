@@ -8,8 +8,10 @@ import { noteOwnWriteFromCommand } from './own-writes'
  * HTTP request. A record page mounts a dozen components that each ask for
  * the same collection metadata under their own query key (different cache
  * SHAPES, so the keys cannot merge); the wire request can. Only concurrent
- * calls coalesce — a repeat after the first resolves is a fresh request, so a
- * read that follows a write is never served a pre-write body. Followers get
+ * calls coalesce. A repeat after the first resolves is a fresh request too,
+ * except the configuration reads `isSettledRead` names, reused for
+ * SETTLED_READ_MS until any write (or `forgetSettledReads()`) drops them — so
+ * a read that follows a write is never served a pre-write body. Followers get
  * a structured clone: consumers sort/mutate response arrays in place.
  *
  * `createGatedClient` — a client whose reads WAIT while its gate is closed.
@@ -271,6 +273,11 @@ function collectionMetaBatcher(client: NivaroClient) {
       // An older server refuses the param outright — stop asking it.
       const status = (err as { status?: number })?.status
       if (status === 400 || status === 404 || status === 405) supported = false
+      // A busy or failing server: re-sending every name alone would only add load to it.
+      else if (status === 429 || (status !== undefined && status >= 500)) {
+        for (const p of group) p.reject(err)
+        return
+      }
       body = undefined
     }
     const data = body?.data
@@ -354,7 +361,11 @@ function cannotChangeConfig(c: AnyCommand): boolean {
 /** Whether a GET command's answer may be reused for SETTLED_READ_MS. */
 export function isSettledRead(command: unknown): boolean {
   const c = command as AnyCommand
-  return isRead(c) && SETTLED_READ_PATHS.test(c._path ?? '')
+  if (!isRead(c) || !SETTLED_READ_PATHS.test(c._path ?? '')) return false
+  // `collection-layouts/active?item=` picks the layout from the record's values, which a
+  // record save (never a config write) can change — that answer is record data.
+  const params = c._params as Record<string, unknown> | undefined
+  return !(params && params.item != null && /^\/collection-layouts\/active$/.test(c._path ?? ''))
 }
 
 /** Moves on every write (any client in this page) — an answer is reused only within its epoch. */
@@ -380,12 +391,17 @@ export function withGetCoalescing(
   const batch = opts.batchReads ? readBatcher(client) : null
   const metaBatch = opts.batchCollections === false ? null : collectionMetaBatcher(client)
   const settled = new Map<string, SettledEntry>()
+  let settledFor = settledEpoch
   const settle = (key: string, epoch: number, value: unknown) => {
     // An answer that was in flight across a write is not kept.
     if (epoch !== settledEpoch) return
+    // A write since the last answer made every kept one useless: free them.
+    if (settledFor !== settledEpoch) {
+      settled.clear()
+      settledFor = settledEpoch
+    }
     const now = Date.now()
-    if (settled.size >= 200)
-      for (const [k, e] of settled) if (now - e.at >= SETTLED_READ_MS) settled.delete(k)
+    for (const [k, e] of settled) if (now - e.at >= SETTLED_READ_MS) settled.delete(k)
     settled.set(key, { at: now, epoch, value })
   }
   const request = <T>(command: Command<T>): Promise<T> => {

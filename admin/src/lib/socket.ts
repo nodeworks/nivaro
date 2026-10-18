@@ -2,6 +2,7 @@ import {
   type ClockSample,
   type CollectionUpdateEvent,
   createLeaderSocket,
+  forgetSettledReads,
   measureClockOffset,
   type RealtimeAdapter,
   type RealtimeStatus,
@@ -262,6 +263,7 @@ export function getSocket(): Socket {
   // #1720 — the server took rooms away after a permission change: what this tab shows may
   // include things the person can no longer see, so every cached read is fetched again.
   socket.on('access:changed', (p: { rooms_left?: string[] }) => {
+    forgetSettledReads()
     if (!p?.rooms_left?.length) return
     window.dispatchEvent(new CustomEvent('nvr:access-changed', { detail: p }))
   })
@@ -335,6 +337,8 @@ export function getSocket(): Socket {
   // Config hot-push (#268): schema/layout edits broadcast — open forms
   // re-resolve their field-config/layout queries in place.
   socket.on('config:update', (p: { surface?: string; collection?: string }) => {
+    // the refetch this triggers must reach the server, not the 3 s settled answer
+    forgetSettledReads()
     window.dispatchEvent(new CustomEvent('nvr:config-update', { detail: p ?? {} }))
   })
   // Notices for the signed-in person or the whole tenant (payload-free or ids only): handed to

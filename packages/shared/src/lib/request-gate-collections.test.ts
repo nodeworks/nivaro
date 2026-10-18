@@ -330,3 +330,24 @@ describe('settled configuration reads', () => {
     expect(wire(calls).filter((w) => w.startsWith('GET'))).toHaveLength(2)
   })
 })
+
+describe('review fixes (2026-10-18)', () => {
+  it('never settles a layout picked from a record (collection-layouts/active?item=)', () => {
+    expect(isSettledRead(get('/collection-layouts/active', { collection: 'w' }))).toBe(true)
+    expect(isSettledRead(get('/collection-layouts/active', { collection: 'w', item: 5 }))).toBe(
+      false
+    )
+  })
+
+  it('a batch the server refuses with 429/5xx rejects its callers instead of fanning out', async () => {
+    const busy = Object.assign(new Error('busy'), { status: 429 })
+    const { client, calls } = fakeClient((c) => (c._path === '/collections' ? busy : { data: 1 }))
+    const c = withGetCoalescing(client)
+    const r = await Promise.allSettled([
+      c.request(get('/collections/a')),
+      c.request(get('/collections/b'))
+    ])
+    expect(r.map((x) => x.status)).toEqual(['rejected', 'rejected'])
+    expect(calls).toHaveLength(1)
+  })
+})

@@ -1,4 +1,5 @@
 import type { CollectionUpdateEvent, RealtimeAdapter, RealtimeStatus } from './realtime'
+import { forgetSettledReads } from './request-gate'
 
 /**
  * A RealtimeAdapter over one Socket.io connection the HOST already holds (#2027, #1751) — what a
@@ -198,10 +199,13 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
       )
     })
     s.on('access:changed', (p: { rooms_left?: string[] }) => {
+      forgetSettledReads()
       if (p?.rooms_left?.length && windowOn('accessChanged'))
         dispatch(WINDOW_EVENT_NAMES.accessChanged, p)
     })
     s.on('config:update', (p: unknown) => {
+      // Someone changed configuration: the refetch this triggers must reach the server.
+      forgetSettledReads()
       if (windowOn('configUpdate')) dispatch(WINDOW_EVENT_NAMES.configUpdate, p ?? {})
     })
     s.on('client:force-refresh', (p: unknown) => {
