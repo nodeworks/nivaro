@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { getAiClient, getAiModelSettings } from '../services/ai-client.js'
+import { clientGoneSignal, gateServerTiming, sharedGatedRead } from '../services/read-gate.js'
 import { aggregateThroughput, parseThroughputParams } from '../services/throughput.js'
 
 export async function throughputRoutes(app: FastifyInstance) {
@@ -14,8 +15,16 @@ export async function throughputRoutes(app: FastifyInstance) {
     if (collection && (!/^[A-Za-z0-9_]+$/.test(collection) || /^nivaro_/i.test(collection)))
       return reply.code(400).send({ error: 'Invalid collection' })
     const { buildOwnerLoadReport } = await import('../services/owner-load.js')
-    const report = await buildOwnerLoadReport({ collection: collection || null })
-    return reply.send({ data: report })
+    // #2452 — viewer-independent (admins only), so concurrent asks share one
+    // build, and the build holds a heavy-read slot.
+    const out = await sharedGatedRead(
+      `owner-load|${collection}`,
+      req.user?.id,
+      () => buildOwnerLoadReport({ collection: collection || null }),
+      { signal: clientGoneSignal(reply.raw), label: 'owner-load' }
+    )
+    gateServerTiming(reply, out)
+    return reply.send({ data: out.value })
   })
 
   // GET /reports/throughput?collection=&from=&to=&bucket=&user=
