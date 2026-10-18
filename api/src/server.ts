@@ -1536,59 +1536,53 @@ export async function buildServer() {
         { dryRun: missedCrons }
       )
 
-      // #41 — pre-run the heavy custom queries flagged warm_daily.
-      const warmTargets = async () =>
-        (await db('nivaro_custom_queries')
-          .where({ enabled: true, warm_daily: true })
-          .select('slug', 'name', 'cache_ttl')) as Array<{
-          slug: string
-          name: string
-          cache_ttl: number
-        }>
+      // #41 — pre-run the heavy custom queries flagged warm_daily. Same
+      // service (so the same cq: key and {cached_at, rows} value) as the
+      // #2445 cache warm below; this used to write a bare row array.
       app.cron.schedule(
         'query-cache-warmers',
         '0 6 * * *',
         async () => {
-          const { runCustomQueryBySlug } = await import('./services/custom-query-exec.js')
-          for (const q of await warmTargets()) {
-            const t0 = Date.now()
-            try {
-              const rows = await runCustomQueryBySlug(q.slug, {})
-              if (q.cache_ttl > 0 && app.redis) {
-                // Same key the execute route reads for a default-param call.
-                const { buildFinalParams } = await import('./services/custom-query-exec.js')
-                const row = (await db('nivaro_custom_queries')
-                  .where({ slug: q.slug })
-                  .first('params')) as { params: string | null } | undefined
-                let defs: Array<{
-                  name: string
-                  type: string
-                  required?: boolean
-                  default?: unknown
-                }> = []
-                try {
-                  defs = row?.params ? JSON.parse(row.params) : []
-                } catch {
-                  defs = []
-                }
-                const finalParams = buildFinalParams(defs as never, {})
-                await app.redis.setex(
-                  `cq:${q.slug}:${JSON.stringify(finalParams)}`,
-                  q.cache_ttl,
-                  JSON.stringify(rows)
-                )
-              }
-              app.log.info({ slug: q.slug, rows: rows.length, ms: Date.now() - t0 }, 'query warmed')
-            } catch (err) {
-              app.log.warn({ err, slug: q.slug }, 'query warmer failed')
-            }
-          }
+          const { runCacheWarm } = await import('./services/cache-warm.js')
+          await runCacheWarm({
+            redis: app.redis,
+            only: 'warm_daily',
+            log: (summary, line) => app.log.info(summary, line)
+          })
         },
         {
           heavy: true,
-          dryRun: async () => ({
-            would_run: (await warmTargets()).map((q) => `${q.name} (${q.slug})`)
+          dryRun: async () => {
+            const { planCacheWarm } = await import('./services/cache-warm.js')
+            return planCacheWarm({ only: 'warm_daily' })
+          }
+        }
+      )
+
+      // #2445 — before business hours, pre-run the custom queries people
+      // actually opened in the last 7 days (default + top recorded param sets)
+      // as an unrestricted caller, plus the owner-load report: after the
+      // nightly rebuild the first dashboard met a cold buffer pool (>10 s).
+      app.cron.schedule(
+        'cache-warm',
+        '30 6 * * 1-5',
+        async () => {
+          const m = await import('./services/cache-warm.js')
+          if (m.cacheWarmMode() === 'off') return
+          await m.runCacheWarm({
+            redis: app.redis,
+            log: (summary, line) => app.log.info(summary, line)
           })
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            'Pre-runs the most-used custom queries (default + top param sets) as an unrestricted caller and fills their shared cache keys, plus the owner-load report, so the first dashboard of the day meets a warm database. Reads only; CACHE_WARM=off disables it.',
+          dryRun: async () => {
+            const { planCacheWarm } = await import('./services/cache-warm.js')
+            return planCacheWarm()
+          }
         }
       )
 
@@ -1715,6 +1709,30 @@ export async function buildServer() {
         },
         { background: true }
       ).catch(() => {})
+      // #2445 — query caches and the buffer pool behind them, once per cluster
+      // per version (nvr:warm:<version>), a while after listen so it never
+      // competes with the boot's first requests. Never a readiness check.
+      // Metadata warms on every process.
+      setTimeout(() => {
+        void import('./services/cache-warm.js')
+          .then(async (m) => {
+            if (!m.cacheWarmAllowed()) return
+            await bootPhase('Warm metadata', () => m.warmMetadata(), { background: true })
+            const { NIVARO_VERSION } = await import('./version.js')
+            const { INSTANCE_ID } = await import('./services/instance-roster.js')
+            if (!(await m.takeBootWarm(app.redis, NIVARO_VERSION, INSTANCE_ID))) return
+            await bootPhase(
+              'Warm query caches',
+              () =>
+                m.runCacheWarm({
+                  redis: app.redis,
+                  log: (summary, line) => app.log.info(summary, line)
+                }),
+              { background: true }
+            )
+          })
+          .catch((err) => app.log.warn({ err }, 'cache warm failed'))
+      }, 20_000).unref()
 
       // Nightly config-conformance runs for scheduled collections, with a
       // regression note when a collection's issue count grew since last run.
