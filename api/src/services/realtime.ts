@@ -2,6 +2,7 @@ import type { Server as SocketIOServer } from 'socket.io'
 import { journaledEmit } from './event-journal.js'
 import { publishItemEvent } from './item-events.js'
 import { publishSseEvent } from './sse-hub.js'
+import { noteCollectionChanged } from './traffic-actions/temp-cache.js'
 import { noteWrite } from './traffic-map.js'
 import { currentTrafficSource } from './traffic-source.js'
 
@@ -31,6 +32,9 @@ export function broadcastCollectionUpdate(
   }
 ): void {
   void io // kept for signature compat — journaledEmit resolves io globally
+  // #2273 — a Traffic Map temporary cache on this collection (or one related to it) drops its
+  // answers now, before anyone can read the old ones (other replicas hear the record event).
+  noteCollectionChanged(collection)
   if (extra?.action) {
     noteWrite({
       collection,

@@ -46,6 +46,19 @@ function envOverrides(): Record<string, unknown> | null {
   return envParsed ?? null
 }
 
+/**
+ * Keys in an instance's override row that are NOT settings columns: per-instance JSON a feature
+ * owns (Traffic Map detector settings, #2223). Never overlaid onto a settings row, never shown or
+ * written by Settings → Instance (which keeps them when it saves).
+ */
+export const INSTANCE_RESERVED_KEYS = ['traffic_detectors'] as const
+
+export function withoutReservedKeys(map: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...map }
+  for (const k of INSTANCE_RESERVED_KEYS) delete out[k]
+  return out
+}
+
 // ── DB layer (30s cache; busted by the instance-overrides route) ────────────
 let dbCache: { at: number; map: Record<string, unknown> | null } | null = null
 
@@ -62,7 +75,7 @@ export async function getInstanceOverrides(): Promise<Record<string, unknown> | 
       .first('data')) as { data?: string | null } | undefined
     if (row?.data) {
       const obj = JSON.parse(row.data)
-      if (obj && typeof obj === 'object' && !Array.isArray(obj)) map = obj
+      if (obj && typeof obj === 'object' && !Array.isArray(obj)) map = withoutReservedKeys(obj)
     }
   } catch {
     // Table absent mid-migration / DB not ready — the shared row carries on.

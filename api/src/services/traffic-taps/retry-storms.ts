@@ -9,6 +9,7 @@
  * snapshot: { storms: Storm[] } active in the window, busiest first.
  */
 
+import { detectorKnob, detectorOn } from '../traffic-detectors.js'
 import { pushTrafficEvent } from '../traffic-map.js'
 import { OTHER_KEY, SecondRing } from '../traffic-ring.js'
 import { registerTrafficTap, tapState } from '../traffic-taps.js'
@@ -59,14 +60,21 @@ function stormOf(r: Row, n: number): Storm {
   }
 }
 
+/** The storm threshold in force (detector settings #2223; STORM_PER_MIN is the default). */
+function perMin(): number {
+  return detectorKnob('retry_storms', 'per_min')
+}
+
 /** Active storms at `sec` (rolling minute over the threshold). */
 export function activeStorms(sec: number, windowS = 60): Storm[] {
   const out: Storm[] = []
+  if (!detectorOn('retry_storms')) return out
+  const limit = perMin()
   for (const r of state().rows.values()) {
     if (!r.since) continue
     const n = r.ring.sum(60, sec)[0]
-    if (n > STORM_PER_MIN) out.push(stormOf(r, n))
-    else if (sec - r.since >= windowS && n <= STORM_PER_MIN) r.since = 0
+    if (n > limit) out.push(stormOf(r, n))
+    else if (sec - r.since >= windowS && n <= limit) r.since = 0
   }
   return out.sort((a, b) => b.n - a.n)
 }
@@ -75,6 +83,7 @@ registerTrafficTap({
   id: RETRY_STORMS_TAP,
   onRequest(c) {
     if (!c.isError || c.caller === OTHER_KEY || c.caller === 'anon') return
+    if (!detectorOn('retry_storms')) return
     const st = state()
     const key = `${c.caller}|${c.route}|${c.ev.status}|${c.code ?? ''}`
     let r = st.rows.get(key)
@@ -104,7 +113,8 @@ registerTrafficTap({
     }
     r.ring.bump(c.sec)
     const n = r.ring.sum(60, c.sec)[0]
-    if (n <= STORM_PER_MIN) return
+    const limit = perMin()
+    if (n <= limit) return
     if (!r.since) r.since = c.sec
     if (c.event) c.event.tags = [...(c.event.tags ?? []), 'retry storm']
     if (c.sec - r.alertedSec < REALERT_S) return
@@ -119,7 +129,7 @@ registerTrafficTap({
       status: c.ev.status,
       code: c.code,
       tags: ['retry storm'],
-      extra: { storm: true, n, per_min: STORM_PER_MIN }
+      extra: { storm: true, n, per_min: limit }
     })
   },
   frame(sec) {

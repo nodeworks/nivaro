@@ -882,6 +882,39 @@ export const obsTrafficMapAct: DocSection = {
           'Capture next… in the toolbar holds the next requests matching a route (GET /api/items/workflows/:id), a caller (k12, u<user id>) or an entity (items/workflows): up to 50 of them, for 1 to 15 minutes, with their full traces and request bodies even when they are fast. A capture level opens at once and fills in; Stop ends it early. Bodies are masked, held in memory only and dropped when the time runs out. Admins only, and every capture writes an activity row.'
         ]
       ]
+    },
+    { type: 'h2', id: 'traffic-map-blast-radius', text: 'Blast radius' },
+    {
+      type: 'p',
+      text: 'On an endpoint or a partner node, Show what depends on this works out what would break if it failed, from the last 7 days of traffic: how many people used it, the screens they had open, the flows and scheduled jobs that called it or wrote its records, the partners calling it and the partners its records are pushed to. For a partner it lists the flows with a step calling it, who triggers its calls and the collections whose records go to it. It is read-only and is kept for 5 minutes.'
+    },
+    {
+      type: 'note',
+      text: 'The request log has no screen column, so a screen is the page each person last opened before the call (within 30 minutes). The panel shows how many calls could be matched that way.'
+    },
+    { type: 'h2', id: 'traffic-map-tell-affected', text: 'Telling the people affected' },
+    {
+      type: 'p',
+      text: 'From the blast radius, Tell affected people… opens a short message, already written, that you edit before sending. It goes through Broadcasts to the people who used this node or one of its screens in the last hour (the server works the list out; you never send to yourself). It arrives in their inbox, and as a banner for 4 hours unless you untick it. Two clicks; it writes an activity row. More than 2,000 people: send it from Broadcasts instead.'
+    },
+    { type: 'h2', id: 'traffic-map-debug-window', text: 'Debugging a node for a while' },
+    {
+      type: 'p',
+      text: 'On an endpoint, an API key or a person, the Debug window panel switches on debugging for 5, 15, 30 or 60 minutes: every request touching it logs at debug level (read them in the Ops Console log, filtered on debug) and keeps its full trace, however fast. The kept traces are listed in the panel and open like any trace. It ends on its own, or with Stop now. Start and end are written to the Ops Console incident timeline. Every server honours it; traces are kept by the server that served the request.'
+    },
+    { type: 'h2', id: 'traffic-map-temp-cache', text: 'A temporary cache on a hot collection' },
+    {
+      type: 'p',
+      text: 'On a collection’s node, Temporary cache answers the same read by the same caller from server memory for a few seconds (10 s to 2 min) while you deal with a spike, for up to 15 minutes. The live hit rate shows in the panel and a cached pill marks the node. It covers list reads, single records, aggregates and distinct values of ordinary collections, never system tables.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Never shared: an answer is kept for one caller (person, role, API key, workspace and View as all count) and given only to that caller. Signed-out requests are never cached.',
+        'A write to the collection, or to a collection related to it, drops its answers at once on every server. A read that goes through relations is dropped by any write.',
+        'Changes made outside the app (stored procedures, recalculated rollups) can show late by up to the seconds you chose.',
+        'A caller sending Cache-Control: no-cache always gets a fresh answer. Responses carry x-nivaro-temp-cache: hit or miss.'
+      ]
     }
   ]
 }
@@ -1024,7 +1057,31 @@ export const obsTrafficMapPlatform: DocSection = {
       type: 'p',
       text: 'A front end of your own can send the same headers the admin app sends, so its calls appear under their screens and page loads: `x-nivaro-app` (which front end), `x-nivaro-page` (the screen’s route pattern, never ids) and `x-nivaro-load` (one id per page load).'
     },
+    { type: 'h3', id: 'traffic-map-ext-lenses', text: 'Lenses from an extension' },
+    {
+      type: 'p',
+      text: 'An extension can add its own lens: a chip beside the other lenses that, while on, puts a pill on the nodes it names and adds a panel to their inspector. The map asks for the data every 15 seconds while the lens is on; `read` runs on the server and has 5 seconds to answer. Only text, counts, a tone and links to pages inside the app are shown, so no extension code runs in the admin.'
+    },
+    {
+      type: 'pre',
+      code: `ctx.traffic.registerLens({
+  id: 'late-orders',                  // unique within the extension
+  label: 'Late orders',
+  description: 'Orders the warehouse has not confirmed',
+  inspectorPanel: { title: 'Warehouse' },   // false = no panel; nodeBadge: false = no pills
+  read: async ({ window }) => ({
+    badges: [{ node: 'items/orders', text: '4 late', tone: 'warn' }],
+    panels: [{ node: 'items/orders', rows: [
+      { label: 'Late', value: 4, tone: 'warn', href: '/collections/orders?late=1' }
+    ] }]
+  })
+})`
+    },
     { type: 'h2', id: 'traffic-map-config', text: 'Settings' },
+    {
+      type: 'p',
+      text: 'More → Detector settings switches each detector on or off and sets its thresholds: fan-out, N+1, duplicate requests, retry storms, near timeout and correlated spikes. The settings are saved for this environment (its instance key), so a laptop and staging sharing one database keep their own; every server of it picks a change up within a minute. Saving takes two clicks and writes an activity row. The environment variables below are the defaults the card starts from.'
+    },
     {
       type: 'table',
       head: ['Setting', 'Default', 'What it changes'],
@@ -1043,6 +1100,11 @@ export const obsTrafficMapPlatform: DocSection = {
           '`TRAFFIC_FANOUT_LIMIT`',
           '60',
           'Calls in one page load before a screen is flagged for fan-out.'
+        ],
+        [
+          '`TRAFFIC_PROXY_TIMEOUT_MS`',
+          '60000',
+          'The proxy read timeout the near-timeout detector judges whole requests against.'
         ],
         [
           '`TRAFFIC_CAPACITY_RPS`',
@@ -1080,6 +1142,12 @@ GET  /api/traffic-map/history/slow-params?key=&route=&hours=   → parameters of
 GET  /api/traffic-map/history/jobs                 → scheduled jobs against the day's traffic
 GET  /api/traffic-map/capacity/what-if?traffic_pct=&add_replicas=&job=&to_minute=
 GET|PUT /api/traffic-map/history/settings          → minute history on/off, retention
+GET  /api/traffic-map/blast-radius?node=           → what depends on a node (7 days)
+POST /api/traffic-map/tell-affected                → broadcast to the people affected
+GET|POST /api/traffic-map/debug-windows            → debug windows (DELETE /:id stops one)
+GET|POST /api/traffic-map/temp-caches              → temporary caches (DELETE /:id stops one)
+GET|PUT  /api/traffic-map/detectors                → detector settings for this environment
+GET  /api/traffic-map/ext-lenses[/:key?window=]    → extension lenses and their data
 socket  admin:join {room: 'traffic-map'}           → one 'traffic-map:frame' per second while watched`
     }
   ]

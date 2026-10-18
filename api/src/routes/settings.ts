@@ -11,7 +11,9 @@ import {
 import {
   bustInstanceOverridesCache,
   envOverrideKeys,
-  instanceKey
+  INSTANCE_RESERVED_KEYS,
+  instanceKey,
+  withoutReservedKeys
 } from '../services/settings-overrides.js'
 import { sendSms } from '../services/sms.js'
 
@@ -556,7 +558,7 @@ export async function settingsRoutes(app: FastifyInstance) {
       const row = (await db('nivaro_settings_overrides')
         .where({ instance_key: instanceKey() })
         .first('data')) as { data?: string | null } | undefined
-      if (row?.data) data = JSON.parse(row.data)
+      if (row?.data) data = withoutReservedKeys(JSON.parse(row.data))
     } catch {
       /* table absent mid-migration — empty */
     }
@@ -575,11 +577,21 @@ export async function settingsRoutes(app: FastifyInstance) {
       Object.entries(overrides).filter(([k]) => allowedSettingsKeys.includes(k))
     )
     const key = instanceKey()
-    const existing = await db('nivaro_settings_overrides').where({ instance_key: key }).first('id')
+    const existing = (await db('nivaro_settings_overrides')
+      .where({ instance_key: key })
+      .first('id', 'data')) as { id: number; data?: string | null } | undefined
     if (existing) {
+      // Feature-owned per-instance JSON (INSTANCE_RESERVED_KEYS) is not this form's to drop.
+      let kept: Record<string, unknown> = {}
+      try {
+        const prev = existing.data ? JSON.parse(existing.data) : {}
+        for (const k of INSTANCE_RESERVED_KEYS) if (prev?.[k] !== undefined) kept[k] = prev[k]
+      } catch {
+        kept = {}
+      }
       await db('nivaro_settings_overrides')
         .where({ instance_key: key })
-        .update({ data: JSON.stringify(filtered), updated_at: new Date() })
+        .update({ data: JSON.stringify({ ...filtered, ...kept }), updated_at: new Date() })
     } else {
       await db('nivaro_settings_overrides').insert({
         instance_key: key,

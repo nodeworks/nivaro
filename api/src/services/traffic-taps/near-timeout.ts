@@ -19,6 +19,7 @@
 import { db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { requestMeasure } from '../request-trace.js'
+import { detectorKnob, detectorOn } from '../traffic-detectors.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
 import { MinuteSlots } from './minute-slots.js'
 
@@ -32,6 +33,13 @@ export const PROXY_TIMEOUT_MS = Math.max(
   1000,
   Number(process.env.TRAFFIC_PROXY_TIMEOUT_MS) || 60_000
 )
+/** The proxy budget and "near" share in force (detector settings #2223; the consts are defaults). */
+export function proxyTimeoutMs(): number {
+  return detectorKnob('near_timeout', 'proxy_timeout_ms')
+}
+export function nearShare(): number {
+  return detectorKnob('near_timeout', 'share_pct') / 100
+}
 const RECENT = 8
 const ENTITY_CAP = 400
 const SQL_TEXT = 300
@@ -54,14 +62,15 @@ export interface NearTimeoutHit {
  */
 export function judgeRequest(
   r: { latencyMs: number; maxStmtMs: number; timeouts: number; status: number },
-  budgets: { db: number; proxy: number } = { db: DB_TIMEOUT_MS, proxy: PROXY_TIMEOUT_MS }
+  budgets: { db: number; proxy: number } = { db: DB_TIMEOUT_MS, proxy: proxyTimeoutMs() },
+  share = nearShare()
 ): NearTimeoutHit[] {
   const out: NearTimeoutHit[] = []
   const dbUsed = r.timeouts > 0 ? Math.max(1, r.maxStmtMs / budgets.db) : r.maxStmtMs / budgets.db
-  if (dbUsed >= NEAR_SHARE) out.push({ budget: 'db', used: dbUsed, over: dbUsed >= 1 })
+  if (dbUsed >= share) out.push({ budget: 'db', used: dbUsed, over: dbUsed >= 1 })
   const proxyUsed =
     r.status === 504 ? Math.max(1, r.latencyMs / budgets.proxy) : r.latencyMs / budgets.proxy
-  if (proxyUsed >= NEAR_SHARE) out.push({ budget: 'proxy', used: proxyUsed, over: proxyUsed >= 1 })
+  if (proxyUsed >= share) out.push({ budget: 'proxy', used: proxyUsed, over: proxyUsed >= 1 })
   return out
 }
 
@@ -124,6 +133,7 @@ function summarize(e: EntityState, windowS: number, sec: number): EntityNearTime
 const tap: TrafficTap = {
   id: NEAR_TIMEOUT_TAP,
   onRequest(c) {
+    if (!detectorOn('near_timeout')) return
     const m = requestMeasure(c.ev.req)
     const hits = judgeRequest({
       latencyMs: c.ev.latencyMs,
@@ -207,7 +217,7 @@ tap.entityDetail = (key, windowS, sec) => tap.entitySnapshot?.(key, windowS, sec
 registerTrafficTap(tap)
 
 export function budgetsWire(): { db_ms: number; proxy_ms: number; near_share: number } {
-  return { db_ms: DB_TIMEOUT_MS, proxy_ms: PROXY_TIMEOUT_MS, near_share: NEAR_SHARE }
+  return { db_ms: DB_TIMEOUT_MS, proxy_ms: proxyTimeoutMs(), near_share: nearShare() }
 }
 
 /** The lens's figures for the route (`/db-lens/near-timeout`). */
@@ -242,7 +252,8 @@ export async function nearTimeoutHistory(
   const gql = await hasColumn('nivaro_api_logs', 'graphql_operation').catch(() => false)
   const cols = ['method', 'path', 'status', 'latency_ms', 'error']
   if (gql) cols.push('graphql_operation', 'graphql_kind')
-  const near = Math.round(PROXY_TIMEOUT_MS * NEAR_SHARE)
+  const proxyMs = proxyTimeoutMs()
+  const near = Math.round(proxyMs * nearShare())
   const rows = (await db('nivaro_api_logs')
     .where('created_at', '>=', since)
     .andWhere((q) =>
@@ -277,7 +288,7 @@ export async function nearTimeoutHistory(
     const ms = Number(r.latency_ms) || 0
     const dbTimeout = /Timeout: Request failed to complete|ETIMEOUT/i.test(String(r.error ?? ''))
     if (dbTimeout) row.db_timeouts++
-    if (Number(r.status) === 504 || ms >= PROXY_TIMEOUT_MS) row.over_proxy++
+    if (Number(r.status) === 504 || ms >= proxyMs) row.over_proxy++
     else if (ms >= near) row.near_proxy++
     if (ms > row.worst_ms) row.worst_ms = ms
     by.set(key, row)

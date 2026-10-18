@@ -4,10 +4,8 @@ import '../../services/traffic-taps/field-change-heat.js'
 import '../../services/traffic-taps/graphql-field-heat.js'
 import '../../services/traffic-taps/hot-records.js'
 import '../../services/traffic-taps/read-shapes.js'
-import {
-  N_PLUS_ONE_AVG_TRIPS,
-  N_PLUS_ONE_MIN_REQUESTS
-} from '../../services/traffic-taps/request-cost.js'
+import { detectorKnob, detectorOn } from '../../services/traffic-detectors.js'
+import { N_PLUS_ONE_MIN_REQUESTS } from '../../services/traffic-taps/request-cost.js'
 
 /**
  * Group B2 — deep measurement (#1108 #1119 #1134 #1135 #1136 #1145 #1146 #1151). Importing this
@@ -18,8 +16,9 @@ import {
 export async function deepMeasurementRoutes(app: FastifyInstance): Promise<void> {
   app.get('/deep-measurement/config', async () => ({
     data: {
-      n_plus_one_avg_trips: N_PLUS_ONE_AVG_TRIPS,
-      n_plus_one_min_requests: N_PLUS_ONE_MIN_REQUESTS
+      n_plus_one_avg_trips: detectorKnob('n_plus_one', 'trips'),
+      n_plus_one_min_requests: N_PLUS_ONE_MIN_REQUESTS,
+      n_plus_one_enabled: detectorOn('n_plus_one')
     }
   }))
 }

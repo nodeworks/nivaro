@@ -67,7 +67,12 @@ import type {
   TuningObserverDef,
   ValidatorDef
 } from './registrations.js'
-import type { IntegrationSignal, SignalActionHandler, TrafficNodeDef } from './signals.js'
+import type {
+  IntegrationSignal,
+  SignalActionHandler,
+  TrafficLensDef,
+  TrafficNodeDef
+} from './signals.js'
 import type { ExtensionUser } from './user.js'
 
 // ─── In-memory knex ─────────────────────────────────────────────────────────
@@ -443,6 +448,7 @@ export interface TestContext extends ExtensionContext {
     signalActions: SignalActionHandler[]
     eventSources: EventSourceDef[]
     trafficNodes: TrafficNodeDef[]
+    trafficLenses: TrafficLensDef[]
     integrityChecks: IntegrityCheck[]
     links: LinkRegistration[]
     mailTypes: MailTypeDef[]
@@ -557,6 +563,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     signalActions: [],
     eventSources: [],
     trafficNodes: [],
+    trafficLenses: [],
     integrityChecks: [],
     links: [],
     mailTypes: [],
@@ -762,6 +769,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
       registerEventSource: (d) => registered.eventSources.push(d),
       registerTrafficNode: (d) => registered.trafficNodes.push(d)
     },
+    traffic: { registerLens: (d) => registered.trafficLenses.push(d) },
     integrity: { registerCheck: (c) => registered.integrityChecks.push(c) },
     links: { register: (r) => registered.links.push(r) },
     mail: {

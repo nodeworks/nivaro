@@ -9,6 +9,7 @@
  * Fed by request-trace's per-request measure, read once at onResponse. Memory only.
  */
 import { noteDerivedWrite, requestMeasure } from '../request-trace.js'
+import { detectorKnob, detectorOn } from '../traffic-detectors.js'
 import { registerTrafficTap, type TrafficTap, tapState } from '../traffic-taps.js'
 import { MinuteSlots } from './minute-slots.js'
 
@@ -117,7 +118,10 @@ export function costSummary(key: string, windowS: number, sec: number): CostSumm
     avg_trips: round1(avgTrips),
     avg_sql_ms: round1(v[S.db] / n),
     sql_share: v[S.total] > 0 ? round3(Math.min(1, v[S.db] / v[S.total])) : 0,
-    n_plus_one: n >= N_PLUS_ONE_MIN_REQUESTS && avgTrips > N_PLUS_ONE_AVG_TRIPS
+    n_plus_one:
+      detectorOn('n_plus_one') &&
+      n >= N_PLUS_ONE_MIN_REQUESTS &&
+      avgTrips > detectorKnob('n_plus_one', 'trips')
   }
 }
 
@@ -165,7 +169,7 @@ export function costDetail(key: string, windowS: number, sec: number): CostDetai
   return {
     ...sum,
     window_s: windowS,
-    threshold: N_PLUS_ONE_AVG_TRIPS,
+    threshold: detectorKnob('n_plus_one', 'trips'),
     min_requests: N_PLUS_ONE_MIN_REQUESTS,
     avg_ms: per(v[S.total]),
     breakdown: {
@@ -272,7 +276,7 @@ export const requestCostTap: TrafficTap = {
       if (sum.n_plus_one) n1.push(key)
       any = true
     }
-    return any ? { trips, n1, threshold: N_PLUS_ONE_AVG_TRIPS } : undefined
+    return any ? { trips, n1, threshold: detectorKnob('n_plus_one', 'trips') } : undefined
   },
   entitySnapshot(key, windowS, sec) {
     return costSummary(key, windowS, sec) ?? undefined

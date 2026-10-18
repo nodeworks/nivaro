@@ -66,6 +66,7 @@ import '../features/http-cache'
 import '../features/export-image'
 import '../features/history'
 import '../features/baselines'
+import '../features/tm-actions'
 
 export {
   type CanvasLayer,

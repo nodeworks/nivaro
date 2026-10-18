@@ -29,6 +29,7 @@ import { requestLensesRoutes } from './request-lenses.js'
 import { securityRoutes } from './security.js'
 import { snapshotRoutes } from './snapshots.js'
 import { staleTabsRoutes } from './stale-tabs.js'
+import { tmActionsRoutes } from './tm-actions.js'
 import { topologyRoutes } from './topology.js'
 import { trafficViewRoutes } from './view.js'
 
@@ -75,7 +76,8 @@ const FEATURES: FastifyPluginAsync[] = [
   mapDataRoutes,
   securityRoutes,
   historyRoutes,
-  baselineRoutes
+  baselineRoutes,
+  tmActionsRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {
