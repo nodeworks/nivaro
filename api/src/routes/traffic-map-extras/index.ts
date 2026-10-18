@@ -1,5 +1,6 @@
 // api/src/routes/traffic-map-extras/index.ts
 import type { FastifyInstance, FastifyPluginAsync } from 'fastify'
+import { baselineRoutes } from './baselines.js'
 import { clusterRoutes } from './cluster.js'
 import { compareRoutes } from './compare.js'
 import { dbLensesRoutes } from './db-lenses.js'
@@ -57,7 +58,8 @@ const FEATURES: FastifyPluginAsync[] = [
   inspectBackgroundRoutes,
   inspectEntitiesRoutes,
   inspectNavRoutes,
-  inspectActionsRoutes
+  inspectActionsRoutes,
+  baselineRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {

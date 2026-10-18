@@ -12,25 +12,29 @@ const MARKER_COLOR: Record<SparkMarker['kind'], string> = {
 /**
  * Area + line spark in a 100x24 viewBox, stretched to its box. Colour defaults to the accent.
  * With a `range` (epoch ms the series covers), change markers (#1093: restarts, deploys, config
- * writes, maintenance) are drawn over it — each with a hover label.
+ * writes, maintenance) are drawn over it — each with a hover label. A `band` (#2145, the node's
+ * normal range in the series' unit) is drawn behind the line.
  */
 export function Sparkline({
   data,
   color = 'var(--tm-accent)',
   className,
-  range
+  range,
+  band
 }: {
   data: number[]
   color?: string
   className?: string
   range?: { from: number; to: number }
+  band?: { lo: number; hi: number } | null
 }) {
   const markers = useSparkMarkers(range)
   const w = 100
   const h = 24
   const pad = 1.5
   const clean = data.map((v) => (Number.isFinite(v) && v > 0 ? v : 0))
-  const max = Math.max(1e-6, ...clean)
+  const max = Math.max(1e-6, ...clean, band && Number.isFinite(band.hi) ? band.hi : 0)
+  const y = (v: number) => h - pad - (Math.max(0, v) / max) * (h - 2 * pad)
   const pts = clean.map((v, i) => [
     pad + (i * (w - 2 * pad)) / Math.max(1, clean.length - 1),
     h - pad - (v / max) * (h - 2 * pad)
@@ -47,6 +51,17 @@ export function Sparkline({
       className={markers.length ? 'absolute inset-0 h-full w-full' : className}
       aria-hidden='true'
     >
+      {band && band.hi > 0 && (
+        <rect
+          data-tm-spark-band=''
+          x={pad}
+          width={w - 2 * pad}
+          y={y(band.hi)}
+          height={Math.max(0.6, y(band.lo) - y(band.hi))}
+          fill='var(--tm-muted)'
+          opacity='0.16'
+        />
+      )}
       <path
         d={`${line} L${last[0].toFixed(1)} ${h} L${first[0].toFixed(1)} ${h} Z`}
         fill={color}

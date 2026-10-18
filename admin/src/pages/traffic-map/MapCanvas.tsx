@@ -43,8 +43,11 @@ import {
   canvasLayers,
   edgeStyleFor,
   edgeStyles,
+  type NodeToneValue,
   nodeBadges,
   nodeProviders,
+  nodeToneFor,
+  nodeTones,
   setCanvasRepaint,
   sideBadgeFor,
   sideBadges
@@ -116,6 +119,8 @@ export interface EntityView {
   /** [read, create, update, delete, error] filtered by the kind filter. */
   kinds: number[]
   errFrac: number
+  /** #2145: how far the node is from its own normal (registry nodeTones); null = fixed rule. */
+  tone?: NodeToneValue | null
 }
 export interface LaneView {
   id: Lane
@@ -284,7 +289,8 @@ function buildData(
           label: entityLabel(cat, id, r.entity),
           rps: r.rps,
           kinds,
-          errFrac: r.errPct / 100
+          errFrac: r.errPct / 100,
+          tone: nodeTones.length ? nodeToneFor(r.key, m, win) : null
         }
       })
     })
@@ -1093,8 +1099,10 @@ export function MapCanvas({
           }
           ctx.beginPath()
           ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
-          ctx.fillStyle =
-            e.errFrac > 0.05 ? T.error : p > 0.02 ? KC[pulse?.kind ?? 'update'] : T.nodeLine
+          // #2145: judged against its own normal when a band exists, else the fixed 5% rule
+          const toned =
+            e.tone === 'normal' ? null : e.tone ? T[e.tone] : e.errFrac > 0.05 ? T.error : null
+          ctx.fillStyle = toned ?? (p > 0.02 ? KC[pulse?.kind ?? 'update'] : T.nodeLine)
           ctx.fill()
           // stacked kind mini-bar, scaled to the lane's busiest entity
           const bw = Math.min(92, Math.max(48, er.w * 0.27))

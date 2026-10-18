@@ -453,6 +453,22 @@ export const obsTrafficMap: DocSection = {
       type: 'p',
       text: 'Pause turns the window into a timeline you can drag back through the last 15 minutes, so someone who arrives after a blip can still see it. Live returns to the present. With the 15-minute window selected there is nothing earlier to show; pick 1 or 5 minutes to rewind.'
     },
+    { type: 'h2', id: 'traffic-map-baselines', text: 'Normal for this hour' },
+    {
+      type: 'p',
+      text: 'The map learns what is normal for every node, caller, caller-to-node edge and partner at each hour of the week, from hourly roll-ups of the request log (deployed instances only). The normal for 14:00 on a Tuesday comes from the same weekday at 13:00, 14:00 and 15:00 over the last four weeks: the median, and a range two spreads either side. The request log keeps 14 days, so the third and fourth weeks build up as the hourly job (traffic-baselines-rollup) rolls hours up; roll-ups are kept in Redis for 29 days.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Node colour: an entity dot turns amber when its errors or latency are two spreads above its own normal and red at four. Until a normal is learned the old rule applies (red over 5% errors). A request surge gets a "3.1× usual" pill; callers and partners get a pill when they fail more than usual.',
+        'Sparkline band: the inspector draws the node’s normal range behind its live line, and its "Normal for this hour" section shows requests, errors and p95 against their usual range.',
+        'Health score: every entity gets one figure from 0 to 100. Errors take up to 40 points (worse when above normal), latency against its normal up to 30, saturation (database pool, event loop) up to 20 and open findings such as N+1 or retry storms up to 20. Hover the score for the breakdown. Hot entities has a Health column and can be ordered by Least healthy or narrowed to nodes below 80.',
+        'What changed: when a node’s errors or latency rise past normal, the inspector finds the minute the rise began and compares the 15 minutes before with the minutes since. Callers, routes, screens, response sizes and client builds are ranked by their share of the rise, with any deploy, restart or config write just before it. This API process’s traffic only.',
+        'Busy hours: "Show when it is busy" in the inspector draws a weekday × hour heatmap of requests, errors or p95 over the last four weeks, in your time zone.',
+        'Summary: the Summary button turns the page into a plain view for non-technical readers: requests, errors, the slowest area, partners down and people active over the last 15 minutes, each green, amber or red against its normal, with one sentence on anything not green. The address carries ?view=summary, so the link can be shared with other administrators.'
+      ]
+    },
     { type: 'h2', id: 'traffic-map-sources', text: 'Where the numbers come from' },
     {
       type: 'ul',
@@ -762,7 +778,12 @@ export const obsTrafficMapAct: DocSection = {
         [
           'Tell me when…',
           'Any entity',
-          'Creates a `traffic` monitor prefilled with the entity, metric (errors or requests per minute, p95, error rate), threshold and window. You are notified when it starts failing, like any ops monitor. Each API process judges its own traffic.'
+          'Creates a `traffic` monitor prefilled with the entity, metric (errors or requests per minute, p95, error rate), threshold and window. You are notified when it starts failing, like any ops monitor. Each API process judges its own traffic. The alert can cover all the node’s traffic, one caller’s traffic into it, or its calls to one partner (an edge). While the form is open it replays the alert over the last two weeks of the request log and lists each time it would have fired, so you can set the threshold before saving. Partner edges cannot be replayed (the log does not say which route made a partner call).'
+        ],
+        [
+          'Deploy now?',
+          'The page header (also on the Release card under Environments)',
+          'Compares the last 15 minutes of requests with the normal for this hour, and checks for heavy jobs, background jobs and imports running and open incidents. It says Deploy now, or Wait with the reason and the quietest hour ahead. Fixed rules, no AI call.'
         ],
         [
           'Caller controls',

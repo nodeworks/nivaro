@@ -1,5 +1,6 @@
 import { entityLabel, fmtCount, fmtMs, fmtPct, fmtRate } from './EventTicker'
-import { hotCell, hotColumns } from './registry/hotColumns'
+import { hotCell, hotColumns, hotHeaderItems } from './registry/hotColumns'
+import { byOrder, FeatureBoundary } from './registry/registry'
 import { Sparkline } from './Sparkline'
 import type { Lane, TrafficCatalog } from './types'
 import { LANE_LABEL } from './types'
@@ -42,11 +43,22 @@ export function HotEntities({
       aria-label='Hot entities'
       id='tm-hot'
     >
-      <div className='border-b border-[var(--tm-line-2)] px-3.5 py-2'>
-        <h2 className='text-[13px] font-semibold'>Hot entities</h2>
-        <p className='text-[11.5px] text-[var(--tm-muted)]'>
-          Ranked by requests in the window · select a row to inspect it
-        </p>
+      <div className='flex flex-wrap items-start justify-between gap-x-3 gap-y-1.5 border-b border-[var(--tm-line-2)] px-3.5 py-2'>
+        <div className='min-w-0'>
+          <h2 className='text-[13px] font-semibold'>Hot entities</h2>
+          <p className='text-[11.5px] text-[var(--tm-muted)]'>
+            Ranked by requests in the window · select a row to inspect it
+          </p>
+        </div>
+        {hotHeaderItems.length > 0 && (
+          <div className='flex flex-wrap items-center gap-1.5'>
+            {byOrder(hotHeaderItems).map((h) => (
+              <FeatureBoundary key={h.id} id={h.id}>
+                <h.Component />
+              </FeatureBoundary>
+            ))}
+          </div>
+        )}
       </div>
       <div className='overflow-x-auto'>
         <table className='w-full border-collapse text-[12px] tabular-nums'>
