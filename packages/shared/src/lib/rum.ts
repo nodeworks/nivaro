@@ -19,6 +19,8 @@ interface RumEvent {
   lcp_ms?: number
   duration_ms?: number
   app?: string
+  /** Viewport width; the server keeps only a class (phone, tablet, laptop…). */
+  vw?: number
 }
 
 let started = false
@@ -166,7 +168,11 @@ function flush(): void {
 }
 
 function enqueue(e: RumEvent): void {
-  queue.push({ ...e, app: appName })
+  queue.push({
+    ...e,
+    app: appName,
+    vw: typeof window === 'undefined' ? undefined : window.innerWidth
+  })
   if (queue.length >= 10) flush()
   else {
     if (flushTimer) clearTimeout(flushTimer)

@@ -1,6 +1,8 @@
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { hasColumn } from '../lib/column-probe.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
+import { parseBrowser, screenClass } from '../services/traffic-inspect/people-ux-logic.js'
 
 /**
  * Real-user monitoring intake + summary. Intake accepts small batches from
@@ -18,6 +20,10 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
   app.post('/', { preHandler: requireAuth }, async (req) => {
     const b = req.body as { events?: Array<Record<string, unknown>> }
     const events = (Array.isArray(b?.events) ? b.events : []).slice(0, MAX_EVENTS)
+    // #2191 — browser, OS and a width class ride each row (migration 453; skipped until it lands).
+    const device = (await hasColumn('nivaro_rum_events', 'browser'))
+      ? parseBrowser(req.headers['user-agent'])
+      : null
     const rows = events
       .filter(
         (e) =>
@@ -33,7 +39,8 @@ export async function rumRoutes(app: FastifyInstance): Promise<void> {
         duration_ms: NUM(e.duration_ms),
         app: typeof e.app === 'string' ? e.app.slice(0, 100) : null,
         user: req.user?.id ?? null,
-        created_at: new Date()
+        created_at: new Date(),
+        ...(device ? { browser: device.browser, os: device.os, screen: screenClass(e.vw) } : {})
       }))
     if (rows.length > 0)
       await db('nivaro_rum_events')

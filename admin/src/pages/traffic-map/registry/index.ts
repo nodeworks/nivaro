@@ -55,6 +55,7 @@ import '../features/inspect-nav'
 import '../features/inspect-actions'
 import '../features/partners'
 import '../features/integrations'
+import '../features/people-ux'
 
 export {
   type CanvasLayer,
