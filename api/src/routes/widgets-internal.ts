@@ -553,6 +553,17 @@ async function renderWidget(
       return { awaiting, rows: [] }
     }
 
+    // User Scopes on raw SQL: the query's scope params for this caller, as the
+    // execute route applies them — BEFORE the SQL text is built and before the
+    // cache key, so the statement that runs and the key it is cached under both
+    // carry the caller's scope values.
+    await applyScopeParams(
+      (cq as { scope_params?: string | null }).scope_params ?? null,
+      params,
+      user?.id,
+      isAdmin
+    )
+
     // Use execSqlBatch directly — Knex MSSQL's execSql wraps in sp_executesql
     // which swallows stored procedure result sets. Full literal substitution is
     // safe for MSSQL: strings use '' quoting (backslash is not special).
@@ -582,14 +593,6 @@ async function renderWidget(
     // Scope injection is what keeps sharing-by-accident safe regardless: the
     // route mixes a restricted caller's scope values INTO the params before
     // keying, so a scoped result can never land under an unscoped key.
-    // User Scopes on raw SQL: the query's scope params for this caller, as the execute route
-    // applies them — and before the cache key, so scoped and unscoped results never share one.
-    await applyScopeParams(
-      (cq as { scope_params?: string | null }).scope_params ?? null,
-      params,
-      user?.id,
-      isAdmin
-    )
     const cacheKey = `cq:${cq.slug}:${JSON.stringify(params)}`
     const cacheTtl = Number(cq.cache_ttl ?? 0)
     let cachedRows: unknown[] | null = null
