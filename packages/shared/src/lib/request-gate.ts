@@ -346,11 +346,13 @@ const SETTLED_READ_PATHS =
 /**
  * Writes a record page makes all the time that can never change
  * configuration (record data outside system tables, view/lock/draft/presence
- * bookkeeping, chat, rule evaluation, read-like POSTs). Every other write
- * drops the settled answers — erring wide only costs a re-read.
+ * bookkeeping, chat, rule evaluation, read-like POSTs — the people-card batch
+ * and the file check are reads by POST, and each used to drop every settled
+ * answer mid-load). Every other write drops the settled answers — erring wide
+ * only costs a re-read.
  */
 const NON_CONFIG_WRITES =
-  /^\/(record-views|item-locks|drafts|presence|rum|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade)$|items\/(?!nivaro_|directus_)[^/]+)/
+  /^\/(record-views|item-locks|drafts|presence|rum|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade)$|items\/(?!nivaro_|directus_)[^/]+|users\/cards$|files\/verify$)/
 
 function cannotChangeConfig(c: AnyCommand): boolean {
   const path = (c._path ?? '').split('?')[0]

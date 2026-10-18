@@ -299,6 +299,26 @@ describe('settled configuration reads', () => {
     expect(wire(calls).filter((w) => w.startsWith('GET'))).toHaveLength(1)
   })
 
+  it('read-like POSTs (people-card batch, file check) keep them, even while a read is in flight', async () => {
+    const { client, calls } = fakeClient(() => ({ data: [] }))
+    const c = withGetCoalescing(client)
+    const first = c.request(get('/collections/workflows'))
+    await c.request(post('/users/cards', { ids: ['a'] }))
+    await c.request(post('/files/verify', { ids: ['f'] }))
+    await first
+    await c.request(get('/collections/workflows'))
+    expect(wire(calls).filter((w) => w.startsWith('GET'))).toHaveLength(1)
+  })
+
+  it('a write elsewhere under /users still drops them', async () => {
+    const { client, calls } = fakeClient(() => ({ data: [] }))
+    const c = withGetCoalescing(client)
+    await c.request(get('/collections/workflows'))
+    await c.request(post('/users/cards/extra', {}))
+    await c.request(get('/collections/workflows'))
+    expect(wire(calls).filter((w) => w.startsWith('GET'))).toHaveLength(2)
+  })
+
   it('forgetSettledReads() (a host write outside the SDK) drops them in every client', async () => {
     const { client, calls } = fakeClient(() => ({ data: [] }))
     const c1 = withGetCoalescing(client)
