@@ -142,13 +142,19 @@ function limitOf(g: TenantGate): number {
   return g.tenant ? Math.min(global, Math.max(1, TENANT_POOL_MAX - 1)) : global
 }
 
-function otherUserWaiting(g: TenantGate, w: Waiter): boolean {
-  return g.queue.some((x) => x.ticket !== w.ticket && x.who !== w.who)
+// Another person is waiting who is still UNDER their share. Waiters over their
+// own share never hold anyone back: when everyone waiting is over share, free
+// slots go out in arrival order instead of sitting idle until the fail-open.
+function underShareUserWaiting(g: TenantGate, w: Waiter): boolean {
+  const perUser = conf().perUser
+  return g.queue.some(
+    (x) => x.ticket !== w.ticket && x.who !== w.who && (g.byUser.get(x.who) ?? 0) < perUser
+  )
 }
 
 function eligible(g: TenantGate, w: Waiter): boolean {
   if (g.active >= limitOf(g)) return false
-  return (g.byUser.get(w.who) ?? 0) < conf().perUser || !otherUserWaiting(g, w)
+  return (g.byUser.get(w.who) ?? 0) < conf().perUser || !underShareUserWaiting(g, w)
 }
 
 function detach(w: Waiter): void {

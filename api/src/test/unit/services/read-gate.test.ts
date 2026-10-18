@@ -193,6 +193,26 @@ describe('read gate (#2452)', () => {
     expect(readGateStats().active).toBe(0)
   })
 
+  it('two users both over their share never leave a free slot idle', async () => {
+    resetReadGate({ global: 4, perUser: 1, maxWaitMs: 60_000 })
+    const a = await Promise.all([1, 2].map(() => acquireReadSlot('A')))
+    const b = await Promise.all([1, 2].map(() => acquireReadSlot('B')))
+    const aMore = track('A')
+    const bMore = track('B')
+    await tick()
+    a[0].release()
+    await tick()
+    // Both waiters are over share, so the oldest one (A) gets the free slot.
+    expect(aMore.state.slot?.who).toBe('A')
+    expect(bMore.state.slot).toBeNull()
+    expect(readGateStats().active).toBe(4)
+    a[1].release()
+    await tick()
+    expect(bMore.state.slot?.who).toBe('B')
+    for (const s of [aMore.state.slot, bMore.state.slot, ...b]) s?.release()
+    expect(readGateStats().active).toBe(0)
+  })
+
   it('fails open after the max wait instead of erroring', async () => {
     vi.useFakeTimers()
     resetReadGate({ global: 1, perUser: 1, maxWaitMs: 30_000 })
