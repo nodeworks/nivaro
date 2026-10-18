@@ -143,6 +143,8 @@ export interface ReadShapeRef {
   filter: unknown
   sort: readonly string[]
   conditions: unknown
+  /** The `fields` the caller asked for (#2206 REST field heat); absent = not recorded. */
+  fields?: readonly string[]
 }
 
 export type DerivedWriteKind = 'direct' | 'rollup' | 'queue' | 'integrity' | 'revision' | 'activity'
@@ -544,11 +546,12 @@ export function noteReadShape(
   collection: string,
   filter: unknown,
   sort: readonly string[],
-  conditions: unknown
+  conditions: unknown,
+  fields?: readonly string[]
 ): void {
   const ctx = als.getStore()
   if (!ctx || ctx.m.shape) return
-  ctx.m.shape = { collection, filter, sort, conditions }
+  ctx.m.shape = { collection, filter, sort, conditions, fields }
 }
 
 function accessEnter(m: Measure): void {

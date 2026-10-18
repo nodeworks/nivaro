@@ -28,6 +28,7 @@ import {
 import { registerReadinessCheck } from '../services/readiness.js'
 import { maskBodySecrets } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
+import { readAgreed, validateAgreed, withAgreed } from '../services/traffic-partner-contract.js'
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -287,6 +288,8 @@ function serializeForRead(row: ExternalApiRow) {
     // always showed it empty.
     retry_policy: parseJson(row.retry_policy) ?? null,
     outbound_contract: parseJson(row.outbound_contract) ?? null,
+    // #2150 — the response time / availability the partner agreed to (inside outbound_contract).
+    agreed_targets: readAgreed(row.outbound_contract),
     // #66 — mock rules per instance + whether THIS instance is mocking.
     mock_config: parseJson(row.mock_config) ?? null,
     mock_active: mockConfigFor(row) != null,
@@ -601,6 +604,7 @@ export async function externalApisRoutes(app: FastifyInstance) {
           headers?: Record<string, string>
         } | null
       > | null
+      agreed_targets: { p95_ms?: unknown; uptime_pct?: unknown } | null
       owner_user: string | null
       ack_grace_minutes: number
       skip_grace_minutes: number
@@ -726,6 +730,13 @@ export async function externalApisRoutes(app: FastifyInstance) {
       if (st != null && (!Number.isInteger(st) || st < 100 || st > 599))
         return reply.code(400).send({ error: 'health_expect_status must be an HTTP status' })
       patch.health_expect_status = st ?? null
+    }
+    // #2150 — agreed response time / availability, kept inside outbound_contract so the payload
+    // contract already in that column survives.
+    if (body.agreed_targets !== undefined) {
+      const v = validateAgreed(body.agreed_targets)
+      if (!v.ok) return reply.code(400).send({ error: v.error })
+      patch.outbound_contract = withAgreed(existing.outbound_contract, v.value)
     }
     if (body.base_url !== undefined) patch.base_url = body.base_url
     if (body.description !== undefined) patch.description = body.description

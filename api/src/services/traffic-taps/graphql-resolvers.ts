@@ -115,6 +115,16 @@ export function timedResolver<S, A, C extends { req?: unknown }, I extends { pat
   }
 }
 
+/** Milliseconds this request spent in timed nested resolvers (access checks left out; 0 when the
+ *  map was not being watched and nothing was timed). The query cost lens (#2205) reads it. */
+export function requestResolverMs(req: unknown): number {
+  const acc = (req as Record<string, unknown> | undefined)?.[REQ_KEY] as ReqAcc | undefined
+  if (!acc?.size) return 0
+  let ms = 0
+  for (const a of acc.values()) if (a.kind !== 'gate') ms += a.ms
+  return ms
+}
+
 /** Time one access-gate compile (`nestedGate`) under `gate:<collection>`. */
 export async function timedGate<T>(
   ctx: { req?: unknown } | undefined,

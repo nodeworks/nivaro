@@ -37,6 +37,7 @@ import {
   parseUpsertKeys,
   publicRun
 } from '../services/inbound-mappings.js'
+import { stampInboundOutcome } from '../services/traffic-taps/inbound-outcomes.js'
 
 // ─── #88 — inbound mappings ─────────────────────────────────────────────────
 // Admin CRUD at /inbound-mappings (+ a dry-run tester); the integration-facing
@@ -710,6 +711,7 @@ export async function inboundRoutes(app: FastifyInstance) {
       if (Array.isArray(payload) && payload.length > 500)
         return reply.code(413).send({ error: 'At most 500 entries per call' })
       const out = await applyInboundMapping(mapping, payload, req)
+      stampInboundOutcome(req, out) // Traffic Map (#2201): accepted / partly accepted / rejected
       await logActivity({
         action: 'inbound-mapping',
         collection: mapping.collection,

@@ -1001,6 +1001,17 @@ export const obsTrafficMapLenses: DocSection = {
         'Dead letters: failed flow runs, and webhook deliveries that failed in the last day with nothing successful since, gather in one node with Retry and Discard on each item or on everything listed. Discarding keeps the run in the flow history; webhook deliveries can be retried but not discarded.',
         'Cloud operators: `GET /admin/traffic-tenants?window=300` (the provisioning path, cloud mode only) with the `x-provision-secret` header ranks the tenants this process served by database time, then requests, then errors.'
       ]
+    },
+    { type: 'h2', id: 'traffic-map-partner-shapes', text: 'Partners and API shape' },
+    {
+      type: 'ul',
+      items: [
+        'Against what was agreed: set a response time (95th percentile, in ms) and an availability (percent) under External APIs → the partner → Agreed service levels. Select the partner node for the month so far, the share of judged hours that stayed inside both figures, and a 24-hour strip with the breached hours in red. An hour needs 3 or more calls to be judged. A call counts as available unless it is a 5xx or never arrived. Figures come from the outbound log, which is kept for 31 days.',
+        'Payload shape: on a partner node, which fields it started sending, stopped sending or changed the type of. The usual shape is learned per endpoint from the JSON bodies the outbound recorder still holds (the last 24 hours), and the newest calls are compared with it. It needs 20 bodies per endpoint. Field names and types only, never values.',
+        'Inbound mapping outcomes: on an inbound mapping’s node, payloads accepted (every entry written), partly accepted and rejected, with the top rejection reasons. Numbers and ids in a reason are folded together so the same cause counts once.',
+        'Query cost: on a GraphQL operation, its depth, average selections, time in nested resolvers and whole-request time, the callers sending it, and its place among the most expensive operations. Resolver time is measured only while the map is open.',
+        'Fields requested: on a collection, which fields callers ask for with `fields=` on REST list reads, how often, and who asks. `*` and a missing `fields` count together as "every column". Use it beside the filter and sort shapes when choosing an index or trimming a payload.'
+      ]
     }
   ]
 }
