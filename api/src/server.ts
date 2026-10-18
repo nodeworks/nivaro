@@ -38,6 +38,7 @@ import { setPulseApp } from './services/activity.js'
 import { pruneAiCalls } from './services/ai-log.js'
 import { bootPhase } from './services/boot-phases.js'
 import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
+import { registerMissedCronProbe } from './services/cron-misses.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
@@ -1541,6 +1542,8 @@ export async function buildServer() {
         return out
       }
       const bootAt = Date.now()
+      // #2267: the Traffic Map asks the detector's own question (job nodes show a missed-run badge).
+      registerMissedCronProbe(missedCrons)
       app.cron.schedule(
         'cron-miss-detector',
         '*/30 * * * *',

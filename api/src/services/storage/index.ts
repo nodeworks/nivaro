@@ -6,6 +6,7 @@
  * for the provider-specific variables.
  */
 import { AzureStorage } from './azure.js'
+import { instrumentStorage } from './instrument.js'
 import { LocalStorage } from './local.js'
 import { S3Storage } from './s3.js'
 
@@ -42,9 +43,10 @@ export function getStorage(): StorageProvider {
   const name = getStorageProviderName()
   if (_storage && _provider === name) return _storage
 
-  if (name === 's3') _storage = new S3Storage()
-  else if (name === 'azure') _storage = new AzureStorage()
-  else _storage = new LocalStorage()
+  // #2164: every call is timed for the Traffic Map's storage node.
+  if (name === 's3') _storage = instrumentStorage(new S3Storage(), name)
+  else if (name === 'azure') _storage = instrumentStorage(new AzureStorage(), name)
+  else _storage = instrumentStorage(new LocalStorage(), name)
 
   _provider = name
   return _storage

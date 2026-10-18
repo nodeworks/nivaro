@@ -878,6 +878,20 @@ export const obsTrafficMapPlatform: DocSection = {
         'Fan-out: the screens whose page loads fire the most calls.'
       ]
     },
+    { type: 'h2', id: 'traffic-map-back-office', text: 'Back-office nodes and badges' },
+    {
+      type: 'ul',
+      items: [
+        'Memory after GC: the memory the API process still holds right after a major garbage collection, with a trend line beside the event loop. If it climbs steadily it turns amber and says how fast it grows and how long until the limit. It needs about five minutes of collections to judge.',
+        'Storage: each file storage backend you use (local disk, S3, Azure Blob) is its own node, with the reads, writes, deletes and existence checks it served, the bytes moved, how long the backend took (not the request around it) and what failed. A missing file is counted as missing, not as a failure.',
+        'Database server: the database node also shows what the server itself is short of, from its own views every 15 seconds while the map is open: CPU, disk and log waits, queries waiting for memory, and tempdb use. SQL Server only; if the login cannot read server state the panel says so.',
+        'Work queues: the staged import queue, the extension event outbox, webhook retries and flow runs still going appear as nodes while something waits, with the number waiting, the age of the oldest, how fast the queue drains and whether the backlog is growing.',
+        'Missed runs: a job node gets a "missed a run" badge when the cron miss detector found it did not run when expected; its panel shows the expected time and the last run. Instances that do not run scheduled jobs show none.',
+        'Import size: the import worker node shows each run’s file size and rows, and says when a slower run was only a bigger file.',
+        'Bulk actions: a running bulk action appears as a node with records per second, how many were refused and who started it. It goes away when the run finishes.',
+        'Tuning: a collection or query node with a pending Database tuning proposal gets a "tuning idea" badge; its panel lists the proposals with the saving each promises and links to Database tuning. A statement shape lists the proposals for the tables it touches.'
+      ]
+    },
     { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
     {
       type: 'p',

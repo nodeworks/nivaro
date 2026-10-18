@@ -298,11 +298,21 @@ async function sourceDetail(app: FastifyInstance, id: string): Promise<Record<st
         .limit(10)
         .select('id', 'import_key', 'status', 'row_count', 'started_at', 'created_at')
         .catch(() => []),
-      db('nivaro_import_queue')
-        .whereIn('status', ['completed', 'error', 'canceled'])
-        .orderBy('id', 'desc')
+      // #2268: the file's size beside the rows, so a slower run with a bigger file reads as that.
+      db('nivaro_import_queue as q')
+        .leftJoin('nivaro_files as f', 'f.id', 'q.file')
+        .whereIn('q.status', ['completed', 'error', 'canceled'])
+        .orderBy('q.id', 'desc')
         .limit(8)
-        .select('id', 'import_key', 'status', 'row_count', 'duration', 'finished_at')
+        .select(
+          'q.id',
+          'q.import_key',
+          'q.status',
+          'q.row_count',
+          'q.duration',
+          'q.finished_at',
+          'f.filesize as file_bytes'
+        )
         .catch(() => [])
     ])
     return { kind, active, recent }
