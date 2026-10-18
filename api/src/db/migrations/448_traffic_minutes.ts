@@ -1,4 +1,5 @@
 import type { Knex } from 'knex'
+import { isMssql } from '../dialect.js'
 
 /**
  * Traffic Map longer high-resolution history (#2228): the OPTIONAL per-minute store.
@@ -28,7 +29,18 @@ export async function up(knex: Knex): Promise<void> {
       t.string('hist', 200).nullable()
       t.index(['bucket'], 'ix_traffic_minutes_bucket')
       t.index(['key', 'bucket'], 'ix_traffic_minutes_key_bucket')
+      if (!isMssql(knex)) t.index(['kind', 'bucket'], 'ix_traffic_minutes_kind_bucket')
     })
+  }
+  // The time-lapse read (kind + range, summing requests/errors/p95 per key) is answered from
+  // this index alone; the bucket index does not cover it, and edge rows share every range.
+  if (isMssql(knex) && (await knex.schema.hasTable('nivaro_traffic_minutes'))) {
+    await knex.raw(
+      `IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'ix_traffic_minutes_kind_bucket'
+                        AND object_id = OBJECT_ID('nivaro_traffic_minutes'))
+         CREATE INDEX ix_traffic_minutes_kind_bucket
+           ON nivaro_traffic_minutes (kind, bucket) INCLUDE ([key], requests, errors, p95)`
+    )
   }
   if (
     (await knex.schema.hasTable('nivaro_settings')) &&

@@ -18,6 +18,7 @@ import {
   type BandWire,
   type Baselines,
   baselinesAt,
+  countLogRows,
   epochHour,
   type HourCells,
   type KeyBands,
@@ -54,6 +55,13 @@ export async function liveWindow(nowMs = Date.now()): Promise<HourCells> {
   s.promise = (async () => {
     const rows = await readLogRows(from, nowMs, LIVE_ROW_CAP)
     const cells = rollupRows(rows)
+    // Past the cap the rows are a sample: the total (what the deploy check and the requests
+    // tile judge) comes from a count, errors scaled to the sample's rate.
+    if (rows.length >= LIVE_ROW_CAP) {
+      const n = await countLogRows(from, nowMs).catch(() => 0)
+      const t = cells.get('t')
+      if (t && n > t[0]) cells.set('t', [n, Math.round((t[1] * n) / Math.max(1, t[0])), t[2], t[3]])
+    }
     // a 15-minute window counts people per window (the band's unit), not per hour
     const p = cells.get('p')
     if (p) cells.set('p', [p[0], p[0], 0, 0])

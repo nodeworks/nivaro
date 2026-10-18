@@ -995,7 +995,7 @@ export const obsTrafficMapPlatform: DocSection = {
     },
     {
       type: 'p',
-      text: 'Without minute history the time-lapse reads hourly (or 5-minute) groups from the request log, which keeps about 14 days and knows nodes but not callers or partners. Turn on minute history in the panel header to keep every minute per node and per edge (requests, errors, p50 and p95, bytes) for 30 days, or a retention you choose. Every API process counts its own minutes and the instance that runs scheduled jobs writes them once a minute; old minutes are deleted nightly. It is off by default and not available in cloud mode.'
+      text: 'Without minute history the time-lapse reads hourly (or 5-minute) groups from the request log, which keeps about 14 days and knows nodes but not callers or partners. Turn on minute history in the panel header to keep every minute per node and per edge (requests, errors, p50 and p95, bytes) for 30 days, or a retention you choose. Every API process counts its own minutes and the instance that runs scheduled jobs writes them once a minute; old minutes are deleted every hour. It is off by default and not available in cloud mode.'
     },
     { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
     {

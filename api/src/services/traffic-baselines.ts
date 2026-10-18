@@ -300,10 +300,10 @@ export function computable(h: number, nowMs = Date.now()): boolean {
   return h < cur && h >= oldest
 }
 
-let gqlCols: boolean | null = null
 async function logColumns(): Promise<string[]> {
-  if (gqlCols === null)
-    gqlCols = await hasColumn('nivaro_api_logs', 'graphql_operation').catch(() => false)
+  // Asked every time: hasColumn caches per tenant, and in cloud one tenant's schema must never
+  // decide another's.
+  const gqlCols = await hasColumn('nivaro_api_logs', 'graphql_operation').catch(() => false)
   const base = [
     'method',
     'path',
@@ -330,6 +330,17 @@ export async function readLogRows(
     .limit(cap)
     .select(await logColumns())
   return (await sc.apply(q)) as LogRowLite[]
+}
+
+/** How many request-log rows [fromMs, toMs) holds for deployed instances (no cap). */
+export async function countLogRows(fromMs: number, toMs: number): Promise<number> {
+  const sc = await instanceScope({})
+  const q = db('nivaro_api_logs')
+    .where('created_at', '>=', new Date(fromMs))
+    .where('created_at', '<', new Date(toMs))
+    .count('* as n')
+  const row = ((await sc.apply(q)) as Array<{ n?: number | string }>)[0]
+  return Number(row?.n ?? 0)
 }
 
 /** Partner cells (`d:ext:<id>`) for [fromMs, toMs) from the outbound call log; [] when absent. */
@@ -811,7 +822,6 @@ export function resetBaselinesForTest(): void {
   s.inflight.clear()
   s.baseline = null
   s.baselinePromise = null
-  gqlCols = null
 }
 
 /** Tests: put an hour's cells straight into the memory cache. */

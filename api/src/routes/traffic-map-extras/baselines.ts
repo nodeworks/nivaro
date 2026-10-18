@@ -11,6 +11,7 @@
  * cron (`traffic-baselines-rollup`) is registered here, self-hosted only.
  */
 import type { FastifyInstance } from 'fastify'
+import { clientGoneSignal, sharedGatedRead } from '../../services/read-gate.js'
 import { previewTrafficAlert } from '../../services/traffic-alert-preview.js'
 import {
   baselinesAt,
@@ -116,6 +117,22 @@ export async function baselineRoutes(app: FastifyInstance): Promise<void> {
         error: 'Needs an entity (or edge), a metric and a threshold',
         code: 'ALERT_PREVIEW_INVALID'
       })
-    return { data: await previewTrafficAlert(cfg, req.query) }
+    // Two weeks of the request log: one gated run per identical question (single-flight),
+    // never more than the read gate allows at once.
+    try {
+      const { value } = await sharedGatedRead(
+        `tm:alert-preview|${JSON.stringify(cfg)}|${JSON.stringify(req.query ?? {})}`,
+        req.user?.id,
+        () => previewTrafficAlert(cfg, req.query),
+        { signal: clientGoneSignal(reply.raw), label: 'tm:alert-preview' }
+      )
+      return { data: value }
+    } catch (err) {
+      req.log.warn({ err }, 'traffic-map alert preview failed')
+      return reply.code(503).send({
+        error: 'The preview could not finish — try again in a moment',
+        code: 'ALERT_PREVIEW_FAILED'
+      })
+    }
   })
 }

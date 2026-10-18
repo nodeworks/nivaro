@@ -10,10 +10,11 @@
  *   GET  /history/jobs            scheduled jobs over the day's traffic + quieter slots (#2165)
  *   GET  /capacity/what-if        headroom, pool and loop lag under a scenario (#2151)
  * Mounted under /api/traffic-map by traffic-map-extras/index.ts (admin only, 404 in cloud).
- * Crons `traffic-minutes-write` (every minute, leader only) and `traffic-minutes-prune` (daily).
+ * Crons `traffic-minutes-write` (every minute, leader only) and `traffic-minutes-prune` (hourly).
  */
 import type { FastifyInstance } from 'fastify'
 import { listInstances } from '../../services/instance-roster.js'
+import { clientGoneSignal, sharedGatedRead } from '../../services/read-gate.js'
 import { instanceKey } from '../../services/settings-overrides.js'
 import {
   buildTimelapse,
@@ -206,14 +207,14 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
       )
       cron.schedule(
         'traffic-minutes-prune',
-        '25 4 * * *',
+        '25 * * * *',
         async () => {
           await pruneMinuteRows()
         },
         {
           idempotent: 'safe',
           description:
-            'Nightly 04:25 — deletes Traffic Map minute history older than its retention (30 days unless changed), 5,000 rows at a time.'
+            'Hourly at :25 — deletes Traffic Map minute history older than its retention (30 days unless changed), 5,000 rows at a time and at most 1,000,000 a run, so a busy store never falls behind.'
         }
       )
     }
@@ -307,9 +308,15 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
     if (kind === 'busiest_hour' && !caller && !route && !entity && !partner)
       return bad('busiest hour needs a caller, a route, a node or a partner')
     try {
-      return {
-        data: await searchHistory({ kind, caller, entity, route, error, partner, days })
-      }
+      const args = { kind, caller, entity, route, error, partner, days }
+      // Up to three long scans of the request log: gated, and one run per identical search.
+      const { value } = await sharedGatedRead(
+        `tm:history-search|${JSON.stringify(args)}`,
+        req.user?.id,
+        () => searchHistory(args),
+        { signal: clientGoneSignal(reply.raw), label: 'tm:history-search' }
+      )
+      return { data: value }
     } catch (err) {
       req.log.warn({ err }, 'traffic-map history search failed')
       return reply

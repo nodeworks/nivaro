@@ -16,7 +16,8 @@
  *    list atomically, merges the histograms (so p95 is the cluster's, not an average of nodes) and
  *    writes one batch. A late push for a minute already written becomes a second row for the same
  *    (bucket, key); reads sum them.
- *  - cron `traffic-minutes-prune` (daily) deletes rows past the retention, 5,000 at a time.
+ *  - cron `traffic-minutes-prune` (hourly) deletes rows past the retention, 5,000 at a time
+ *    (at most 1M a run: per-user edge rows can reach millions a day, so nightly fell behind).
  * Without Redis a process writes its own closed minutes directly. Cloud mode: off (one shared
  * writer cannot know each tenant's database) — the tap records nothing there.
  *
@@ -28,6 +29,7 @@ import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { logActivity } from './activity.js'
 import { getApp } from './io-holder.js'
+import { runLongSql } from './run-long.js'
 import {
   histFromText,
   histPercentile,
@@ -41,6 +43,8 @@ import { registerTrafficTap, tapState } from './traffic-taps.js'
 export const TAP_ID = 'minute-store'
 export const TABLE = 'nivaro_traffic_minutes'
 const MAX_KEYS = 3000
+/** The minute-store range read's own statement timeout (a 7-day time-lapse). */
+const STEPS_TIMEOUT_MS = 60_000
 const PUSH_MS = 10_000
 const REDIS_TTL_S = 1800
 const redisKey = (minute: number) => `nvr:tm:min:${minute}`
@@ -473,15 +477,26 @@ export async function minuteSteps(
   const kind = opts.edges ? 'edge' : 'node'
   if (isMssql(db)) {
     const like = opts.prefix ? ' AND [key] LIKE ?' : ''
-    const rows = (await db.raw(
-      `SELECT x.s AS s, x.[key] AS [key], SUM(x.requests) AS n, SUM(x.errors) AS e,
-              SUM(CAST(x.p95 AS bigint) * x.requests) AS p95w
-         FROM (SELECT DATEDIFF(minute, ?, bucket) / ? AS s, [key], requests, errors, p95
-                 FROM ${TABLE} WITH (NOLOCK)
-                WHERE bucket >= ? AND bucket < ? AND kind = ?${like}) x
-        GROUP BY x.s, x.[key]`,
-      [fromD, stepMin, fromD, toD, kind, ...(opts.prefix ? [`${opts.prefix}%`] : [])]
-    )) as Array<{ s: number; key: string; n: number; e: number; p95w: number | string }>
+    // Seven days of minutes outlive tedious's 15 s default: one statement on its own timeout
+    // (knex renders the bindings as escaped literals).
+    const sql = db
+      .raw(
+        `SELECT x.s AS s, x.[key] AS [key], SUM(x.requests) AS n, SUM(x.errors) AS e,
+                SUM(CAST(x.p95 AS bigint) * x.requests) AS p95w
+           FROM (SELECT DATEDIFF(minute, ?, bucket) / ? AS s, [key], requests, errors, p95
+                   FROM ${TABLE} WITH (NOLOCK)
+                  WHERE bucket >= ? AND bucket < ? AND kind = ?${like}) x
+          GROUP BY x.s, x.[key]`,
+        [fromD, stepMin, fromD, toD, kind, ...(opts.prefix ? [`${opts.prefix}%`] : [])]
+      )
+      .toQuery()
+    const rows = await runLongSql<{
+      s: number
+      key: string
+      n: number
+      e: number
+      p95w: number | string
+    }>(sql, { timeoutMs: STEPS_TIMEOUT_MS })
     return rows.map((r) => ({
       s: Number(r.s),
       key: String(r.key),
