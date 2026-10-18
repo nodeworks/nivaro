@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-18T20:50:40.720Z",
+  "generated_at": "2026-10-18T21:37:42.046Z",
   "releases": [
+    {
+      "version": "0.2.57",
+      "tag": "v0.2.57",
+      "date": "2026-10-18T17:37:28-04:00",
+      "sections": [
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "people-card batch and file check keep settled config reads",
+              "hash": "87832dc7"
+            }
+          ]
+        },
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www docs and the docs index",
+              "hash": "2045533e"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.56",
       "tag": "v0.2.56",
-      "date": "2026-10-18T16:50:29-04:00",
+      "date": "2026-10-18T16:50:40-04:00",
       "sections": [
         {
           "label": "Fixed",
