@@ -19,7 +19,7 @@ import { partnersRoutes } from './partners.js'
 import { peopleLensesRoutes } from './people-lenses.js'
 import { peopleUxRoutes } from './people-ux.js'
 import { platformRoutes } from './platform.js'
-import { platformNodesRoutes } from './platform-nodes.js',
+import { platformNodesRoutes } from './platform-nodes.js'
 import { realtimeRoutes } from './realtime.js'
 import { replayRoutes } from './replay.js'
 import { requestLensesRoutes } from './request-lenses.js'
