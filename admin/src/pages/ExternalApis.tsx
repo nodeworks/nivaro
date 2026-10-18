@@ -42,6 +42,8 @@ export interface ExternalApi {
   // tell about this api's unmet sends, and the two grace windows the
   // reconcile sweep judges pending/skipped rows against.
   owner_user?: string | null
+  /** #2150 — response time / availability the partner agreed to. */
+  agreed_targets?: { p95_ms: number | null; uptime_pct: number | null } | null
   ack_grace_minutes?: number
   skip_grace_minutes?: number
   created_at: string

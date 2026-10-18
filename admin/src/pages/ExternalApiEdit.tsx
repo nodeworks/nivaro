@@ -81,6 +81,9 @@ interface FormState {
   owner_user: string | null
   ack_grace_minutes: string
   skip_grace_minutes: string
+  // #2150 — figures the partner agreed to (Traffic Map judges its calls against them)
+  agreed_p95_ms: string
+  agreed_uptime_pct: string
 }
 
 const EMPTY: FormState = {
@@ -99,7 +102,9 @@ const EMPTY: FormState = {
   retry_on: ['network', '5xx', '429'],
   owner_user: null,
   ack_grace_minutes: '',
-  skip_grace_minutes: ''
+  skip_grace_minutes: '',
+  agreed_p95_ms: '',
+  agreed_uptime_pct: ''
 }
 
 export function ExternalApiEditPage() {
@@ -133,6 +138,10 @@ export function ExternalApiEditPage() {
         owner_user: data.owner_user ?? null,
         ack_grace_minutes: data.ack_grace_minutes != null ? String(data.ack_grace_minutes) : '',
         skip_grace_minutes: data.skip_grace_minutes != null ? String(data.skip_grace_minutes) : '',
+        agreed_p95_ms:
+          data.agreed_targets?.p95_ms != null ? String(data.agreed_targets.p95_ms) : '',
+        agreed_uptime_pct:
+          data.agreed_targets?.uptime_pct != null ? String(data.agreed_targets.uptime_pct) : '',
         ...(() => {
           try {
             const rp = (data as { retry_policy?: string | Record<string, unknown> | null })
@@ -203,7 +212,20 @@ export function ExternalApiEditPage() {
         // the editor and a freshly-created row always agree on what "blank"
         // means.
         ack_grace_minutes: form.ack_grace_minutes.trim() ? Number(form.ack_grace_minutes) : 60,
-        skip_grace_minutes: form.skip_grace_minutes.trim() ? Number(form.skip_grace_minutes) : 30
+        skip_grace_minutes: form.skip_grace_minutes.trim() ? Number(form.skip_grace_minutes) : 30,
+        ...(isNew
+          ? {}
+          : {
+              agreed_targets:
+                form.agreed_p95_ms.trim() || form.agreed_uptime_pct.trim()
+                  ? {
+                      p95_ms: form.agreed_p95_ms.trim() ? Number(form.agreed_p95_ms) : null,
+                      uptime_pct: form.agreed_uptime_pct.trim()
+                        ? Number(form.agreed_uptime_pct)
+                        : null
+                    }
+                  : null
+            })
       }
       return isNew
         ? api.post<{ data: ExternalApi }>('/external-apis', payload).then((r) => r.data.data)
@@ -540,6 +562,41 @@ export function ExternalApiEditPage() {
           Skip grace: how long a deliberate skip may stand while the data the guard checked still
           expects the message, before the sweep reports the skip as suspicious.
         </p>
+
+        <div className='space-y-1.5'>
+          <Label>Agreed service levels</Label>
+          <div className='flex flex-wrap items-end gap-4'>
+            <label className='flex flex-col gap-1.5 text-[12px] text-slate-500'>
+              Response time p95 (ms)
+              <Input
+                type='number'
+                min={1}
+                max={600000}
+                value={form.agreed_p95_ms}
+                onChange={(e) => setForm((f) => ({ ...f, agreed_p95_ms: e.target.value }))}
+                className='h-8 w-32 text-[12.5px]'
+                placeholder='800'
+              />
+            </label>
+            <label className='flex flex-col gap-1.5 text-[12px] text-slate-500'>
+              Availability (%)
+              <Input
+                type='number'
+                min={1}
+                max={100}
+                step='0.1'
+                value={form.agreed_uptime_pct}
+                onChange={(e) => setForm((f) => ({ ...f, agreed_uptime_pct: e.target.value }))}
+                className='h-8 w-32 text-[12.5px]'
+                placeholder='99.5'
+              />
+            </label>
+          </div>
+          <p className='text-[12px] text-slate-400'>
+            What the partner committed to. The Traffic Map marks the hours its calls fell outside
+            these and shows the month's attainment. Leave both blank for none.
+          </p>
+        </div>
       </Card>
 
       {!isNew && data && <EndpointsCard apiId={data.id} />}

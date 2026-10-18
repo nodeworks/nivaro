@@ -3359,7 +3359,7 @@ export async function readItems(
     : (query.sort ?? [])
   // Traffic Map (#1135): the request's first list read leaves its filter / sort inputs by
   // reference; the shape (paths + operators, never values) is derived after the response.
-  noteReadShape(collection, filter, sort, conditions)
+  noteReadShape(collection, filter, sort, conditions, fields)
 
   // Split dotted fields (e.g. 'category.name') into direct FK columns + expansion map
   const { direct: directFields0, nested: nestedFieldMap } = parseFieldExpansion(fields)
