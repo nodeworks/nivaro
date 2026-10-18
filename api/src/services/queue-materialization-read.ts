@@ -504,6 +504,7 @@ export function applyUnseenToCache(qb: Knex.QueryBuilder, userId: string): void 
           })
         )
           .whereRaw('c.created_at > v.last_viewed_at')
+          .whereNull('c.deleted_at')
           .whereNot('c.user', userId)
           .select(db.raw('1'))
       )

@@ -472,6 +472,7 @@ export async function loadRecordNotes(
     const childCollections = [...new Set(childRels.map((r) => r.many_collection))]
     const commented = childCollections.length
       ? ((await db('nivaro_comments')
+          .whereNull('deleted_at')
           .whereIn('collection', childCollections)
           .distinct('collection')) as Array<{ collection: string }>)
       : []
@@ -487,6 +488,7 @@ export async function loadRecordNotes(
       const labelByChildId = new Map(childRows.map((r) => [String(r.id), childRowLabel(r)]))
       const rows = (await db('nivaro_comments')
         .where({ collection: cc.collection })
+        .whereNull('deleted_at')
         .whereIn('item', [...labelByChildId.keys()])
         .orderBy('created_at', 'desc')
         .limit(CAP)

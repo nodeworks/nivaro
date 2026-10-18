@@ -92,6 +92,7 @@ export async function buildApprovalBrief(
       .first('r.data') as Promise<{ data: string | null } | undefined>,
     db('nivaro_comments')
       .where({ collection, item: String(item) })
+      .whereNull('deleted_at')
       .where('created_at', '>', enteredAt)
       .count('* as c')
       .first()

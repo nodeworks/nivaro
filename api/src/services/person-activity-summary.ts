@@ -111,6 +111,7 @@ async function eventsOf(userId: string, since: Date, until: Date): Promise<Ev[]>
       .catch(() => []) as Promise<Array<Record<string, unknown>>>,
     db('nivaro_comments')
       .where('user', userId)
+      .whereNull('deleted_at')
       .where('created_at', '>=', since)
       .where('created_at', '<', until)
       .limit(2000)

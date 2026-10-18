@@ -68,6 +68,7 @@ export async function recordRecapSince(
       .select('a.user', 'u.first_name', 'u.last_name', 'u.email', 'r.delta'),
     db('nivaro_comments')
       .where({ collection, item: id })
+      .whereNull('deleted_at')
       .where('created_at', '>', since)
       .whereNot('user', userId)
       .count({ c: '*' })

@@ -397,6 +397,20 @@ export interface Comment {
   created_at: ISODate
   updated_at: ISODate
   mentions: Array<{ id: number; user: string }>
+  /** True once the text has been changed after posting. */
+  edited?: boolean
+  version_count?: number
+  /** Tombstone: the comment was deleted (text is empty). */
+  deleted?: boolean
+  deleted_by_name?: string | null
+}
+
+export interface CommentVersion {
+  version: number
+  text: string
+  user: string | null
+  user_name: string | null
+  created_at: ISODate
 }
 
 export interface CustomQuery {
@@ -1247,6 +1261,11 @@ export function updateComment(id: string, body: { text: string }): Command<{ dat
 
 export function deleteComment(id: string): Command<void> {
   return cmd('DELETE', `/comments/${id}`)
+}
+
+/** Earlier versions of a comment, oldest first. Admins, record owners and the author only. */
+export function getCommentHistory(id: string): Command<{ data: CommentVersion[] }> {
+  return cmd('GET', `/comments/${id}/history`)
 }
 
 // ─── Flow runs ────────────────────────────────────────────────────────────────

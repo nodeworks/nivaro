@@ -783,6 +783,7 @@ async function recapBatch(
     >,
     db('nivaro_comments')
       .where('collection', collection)
+      .whereNull('deleted_at')
       .where(window('item', 'created_at'))
       .whereNot('user', userId)
       .groupBy('item')

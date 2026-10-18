@@ -10,16 +10,29 @@ interface Comment {
   text: string
   created_at: string
   updated_at: string
+  edited?: boolean
+  version_count?: number
+  deleted?: boolean
+  deleted_by_name?: string | null
 }
 
-function initials(u: Comment['user']) {
+interface CommentVersion {
+  version: number
+  text: string
+  user_name: string | null
+  created_at: string
+}
+
+function initials(u: Comment['user'] | null) {
+  if (!u) return '?'
   return (
     [u.first_name?.[0], u.last_name?.[0]].filter(Boolean).join('').toUpperCase() ||
     u.email?.[0]?.toUpperCase() ||
     '?'
   )
 }
-function displayName(u: Comment['user']) {
+function displayName(u: Comment['user'] | null) {
+  if (!u) return 'Unknown'
   return [u.first_name, u.last_name].filter(Boolean).join(' ') || u.email
 }
 function relativeTime(iso: string) {
@@ -46,6 +59,9 @@ export function CommentsSlot({
   const [posting, setPosting] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editText, setEditText] = useState('')
+  const [historyId, setHistoryId] = useState<string | null>(null)
+  const [history, setHistory] = useState<CommentVersion[] | null>(null)
+  const [historyError, setHistoryError] = useState(false)
   const mountedRef = useRef(true)
   const syncedRef = useRef(false)
 
@@ -110,6 +126,23 @@ export function CommentsSlot({
     }
   }
 
+  async function toggleHistory(id: string) {
+    if (!client) return
+    if (historyId === id) {
+      setHistoryId(null)
+      return
+    }
+    setHistoryId(id)
+    setHistory(null)
+    setHistoryError(false)
+    try {
+      const res = await client.request<{ data: CommentVersion[] }>(get(`/comments/${id}/history`))
+      if (mountedRef.current) setHistory(res.data ?? [])
+    } catch {
+      if (mountedRef.current) setHistoryError(true)
+    }
+  }
+
   async function deleteComment(id: string) {
     if (!client) return
     try {
@@ -138,9 +171,10 @@ export function CommentsSlot({
           <path d='M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z' />
         </svg>
         <span data-nf-slot-label>{labelOverride ?? 'Comments'}</span>
-        {!open && comments.length > 0 && (
+        {!open && comments.some((c) => !c.deleted) && (
           <span data-nf-slot-count>
-            {comments.length} comment{comments.length !== 1 ? 's' : ''}
+            {comments.filter((c) => !c.deleted).length} comment
+            {comments.filter((c) => !c.deleted).length !== 1 ? 's' : ''}
           </span>
         )}
         <svg
@@ -201,7 +235,18 @@ export function CommentsSlot({
               {/* Newest first — matches the shared CommentPanel ordering. */}
               {[...comments].reverse().map((c) => {
                 const isEditing = editingId === c.id
-                const edited = c.updated_at && c.updated_at !== c.created_at
+                if (c.deleted) {
+                  return (
+                    <div key={c.id} data-nf-comment data-nf-comment-deleted>
+                      <div data-nf-comment-body>
+                        <p data-nf-comment-text>
+                          <em>Comment deleted by {c.deleted_by_name ?? 'unknown'}</em>
+                        </p>
+                      </div>
+                    </div>
+                  )
+                }
+                const edited = !!c.edited
                 return (
                   <div key={c.id} data-nf-comment>
                     <div data-nf-avatar>{initials(c.user)}</div>
@@ -209,7 +254,16 @@ export function CommentsSlot({
                       <div data-nf-comment-header>
                         <span data-nf-comment-author>{displayName(c.user)}</span>
                         <span data-nf-comment-time>{relativeTime(c.created_at)}</span>
-                        {edited && <span data-nf-comment-edited>(edited)</span>}
+                        {edited && (
+                          <button
+                            type='button'
+                            data-nf-comment-edited
+                            title='Show earlier versions'
+                            onClick={() => void toggleHistory(c.id)}
+                          >
+                            (edited)
+                          </button>
+                        )}
                         <div data-nf-comment-actions>
                           {!isEditing && (
                             <>
@@ -295,6 +349,27 @@ export function CommentsSlot({
                         </div>
                       ) : (
                         <p data-nf-comment-text>{c.text}</p>
+                      )}
+                      {historyId === c.id && (
+                        <div data-nf-comment-history role='menu'>
+                          {historyError ? (
+                            <p data-nf-empty>Edit history isn't available to you.</p>
+                          ) : history === null ? (
+                            <p data-nf-empty>Loading…</p>
+                          ) : (
+                            history.map((v) => (
+                              <div key={v.version} data-nf-comment-version role='menuitem'>
+                                <div>
+                                  <span data-nf-comment-author>{v.user_name ?? 'Unknown'}</span>{' '}
+                                  <span data-nf-comment-time>
+                                    {new Date(v.created_at).toLocaleString()}
+                                  </span>
+                                </div>
+                                <p data-nf-comment-text>{v.text}</p>
+                              </div>
+                            ))
+                          )}
+                        </div>
                       )}
                     </div>
                   </div>

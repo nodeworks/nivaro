@@ -56,6 +56,7 @@ export async function timelineRoutes(app: FastifyInstance) {
       db('nivaro_workflow_instances').where({ collection, item }).select('id'),
       db('nivaro_comments')
         .where({ collection, item })
+        .whereNull('deleted_at')
         .orderBy('created_at', 'desc')
         .limit(CAP)
         .select('id', 'user', 'text', 'created_at'),

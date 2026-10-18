@@ -27,6 +27,8 @@ interface CommentRow {
   text: string
   created_at: Date
   updated_at: Date
+  deleted_at?: Date | null
+  deleted_by?: string | null
 }
 
 interface MentionUserRow {
@@ -160,6 +162,8 @@ export async function commentsRoutes(app: FastifyInstance) {
         'c.text',
         'c.created_at',
         'c.updated_at',
+        'c.deleted_at',
+        'c.deleted_by',
         'u.first_name',
         'u.last_name',
         'u.email'
@@ -170,6 +174,31 @@ export async function commentsRoutes(app: FastifyInstance) {
         email: string | null
       }
     >
+
+    // Edit history: how many earlier versions each comment has (edited = at least one).
+    const ids0 = comments.map((c) => c.id)
+    const versionCounts = new Map<string, number>()
+    if (ids0.length) {
+      const vc = (await db('nivaro_comment_versions')
+        .whereIn('comment', ids0)
+        .groupBy('comment')
+        .select('comment')
+        .count({ n: '*' })) as Array<{ comment: string; n: number | string }>
+      for (const r of vc) versionCounts.set(String(r.comment).toLowerCase(), Number(r.n))
+    }
+    const deleterIds = [...new Set(comments.map((c) => c.deleted_by).filter(Boolean))] as string[]
+    const deleterNames = new Map<string, string>()
+    if (deleterIds.length) {
+      const du = (await db('nivaro_users')
+        .whereIn('id', deleterIds)
+        .select('id', 'first_name', 'last_name', 'email')) as MentionUserRow[]
+      for (const d of du) {
+        deleterNames.set(
+          String(d.id).toLowerCase(),
+          [d.first_name, d.last_name].filter(Boolean).join(' ').trim() || d.email
+        )
+      }
+    }
 
     const ids = comments.map((c) => c.id)
     const mentions = ids.length
@@ -250,9 +279,15 @@ export async function commentsRoutes(app: FastifyInstance) {
             email: c.email
           }
         : null,
-      text: c.text,
+      text: c.deleted_at ? '' : c.text,
       created_at: c.created_at,
       updated_at: c.updated_at,
+      edited: !c.deleted_at && (versionCounts.get(String(c.id).toLowerCase()) ?? 0) > 0,
+      version_count: versionCounts.get(String(c.id).toLowerCase()) ?? 0,
+      deleted: !!c.deleted_at,
+      deleted_by_name: c.deleted_at
+        ? (deleterNames.get(String(c.deleted_by).toLowerCase()) ?? null)
+        : null,
       mentions: (mentionsByComment.get(c.id) ?? []).map((m) => ({
         id: m.user,
         first_name: m.first_name,
@@ -323,6 +358,7 @@ export async function commentsRoutes(app: FastifyInstance) {
     }
     const rows = (await db('nivaro_comments')
       .where({ collection })
+      .whereNull('deleted_at')
       .whereIn('item', ids)
       .groupBy('item')
       .select('item')
@@ -563,20 +599,90 @@ export async function commentsRoutes(app: FastifyInstance) {
     }
   )
 
+  // Edit history: admins, the record's current pipeline owners, and the comment's author.
+  app.get<{ Params: { id: string } }>('/:id/history', async (req, reply) => {
+    const comment = (await db('nivaro_comments').where('id', req.params.id).first()) as
+      | CommentRow
+      | undefined
+    if (!comment) return reply.code(404).send({ error: 'Not found' })
+    if (!req.isAdmin && !(await can(req.user!, 'read', comment.collection))) {
+      return reply.code(403).send({ error: 'Forbidden' })
+    }
+    const me = String(req.user!.id).toLowerCase()
+    let allowed = !!req.isAdmin || String(comment.user).toLowerCase() === me
+    if (!allowed) {
+      const owners = await resolveOwnerMentions(comment.collection, comment.item).catch(() => [])
+      allowed = owners.some((o) => String(o.id).toLowerCase() === me)
+    }
+    if (!allowed) return reply.code(403).send({ error: 'Forbidden' })
+
+    const rows = (await db('nivaro_comment_versions as v')
+      .leftJoin('nivaro_users as u', 'v.user', 'u.id')
+      .where('v.comment', comment.id)
+      .orderBy('v.version', 'asc')
+      .select(
+        'v.version',
+        'v.text',
+        'v.user',
+        'v.created_at',
+        'u.first_name',
+        'u.last_name',
+        'u.email'
+      )) as Array<{
+      version: number
+      text: string
+      user: string | null
+      created_at: Date
+      first_name: string | null
+      last_name: string | null
+      email: string | null
+    }>
+    return {
+      data: rows.map((r) => ({
+        version: r.version,
+        text: r.text,
+        user: r.user,
+        user_name: [r.first_name, r.last_name].filter(Boolean).join(' ').trim() || r.email || null,
+        created_at: r.created_at
+      }))
+    }
+  })
+
   // Edit own comment (or admin)
   app.patch<{ Params: { id: string }; Body: { text: string } }>('/:id', async (req, reply) => {
     const { id } = req.params
-    const existing = (await db('nivaro_comments').where({ id }).first()) as CommentRow | undefined
-    if (!existing) return reply.code(404).send({ error: 'Not found' })
-
-    if (existing.user !== req.user!.id && !req.isAdmin) {
-      return reply.code(403).send({ error: 'Forbidden' })
-    }
-
     const text = req.body?.text
-    if (!text) return reply.code(400).send({ error: 'text is required' })
 
-    await db('nivaro_comments').where({ id }).update({ text, updated_at: new Date() })
+    // Lock the comment row so concurrent edits/deletes serialize on it and
+    // version allocation + deletion checks see committed state.
+    const result = await db.transaction(async (trx) => {
+      const existing = (await trx('nivaro_comments').where({ id }).forUpdate().first()) as
+        | CommentRow
+        | undefined
+      if (!existing) return { code: 404, error: 'Not found' } as const
+      if (existing.user !== req.user!.id && !req.isAdmin) {
+        return { code: 403, error: 'Forbidden' } as const
+      }
+      if (!text) return { code: 400, error: 'text is required' } as const
+      if (existing.deleted_at) return { code: 400, error: 'Comment was deleted' } as const
+
+      const last = (await trx('nivaro_comment_versions')
+        .where('comment', id)
+        .max({ v: 'version' })
+        .first()) as { v: number | null } | undefined
+      const next = Number(last?.v ?? 0) + 1
+      await trx('nivaro_comment_versions').insert({
+        comment: id,
+        version: next,
+        text: existing.text,
+        user: req.user!.id,
+        created_at: new Date()
+      })
+      await trx('nivaro_comments').where({ id }).update({ text, updated_at: new Date() })
+      return { code: 200, existing, versionCount: next } as const
+    })
+    if (result.code !== 200) return reply.code(result.code).send({ error: result.error })
+    const { existing, versionCount } = result
     announceRecordAspect(existing.collection, existing.item, '$comments')
     const row = (await db('nivaro_comments').where({ id }).first()) as CommentRow
     await logActivity({
@@ -586,21 +692,46 @@ export async function commentsRoutes(app: FastifyInstance) {
       user: req.user?.id,
       req
     })
-    return { data: row }
+    return { data: { ...row, edited: true, version_count: versionCount } }
   })
 
   // Delete own comment (or admin)
   app.delete<{ Params: { id: string } }>('/:id', async (req, reply) => {
     const { id } = req.params
-    const existing = (await db('nivaro_comments').where({ id }).first()) as CommentRow | undefined
-    if (!existing) return reply.code(404).send({ error: 'Not found' })
 
-    if (existing.user !== req.user!.id && !req.isAdmin) {
-      return reply.code(403).send({ error: 'Forbidden' })
+    const result = await db.transaction(async (trx) => {
+      const existing = (await trx('nivaro_comments').where({ id }).forUpdate().first()) as
+        | CommentRow
+        | undefined
+      if (!existing) return { code: 404, error: 'Not found' } as const
+      if (existing.user !== req.user!.id && !req.isAdmin) {
+        return { code: 403, error: 'Forbidden' } as const
+      }
+      if (existing.deleted_at) return { code: 204 } as const
+
+      const last = (await trx('nivaro_comment_versions')
+        .where('comment', id)
+        .max({ v: 'version' })
+        .first()) as { v: number | null } | undefined
+      await trx('nivaro_comment_versions').insert({
+        comment: id,
+        version: Number(last?.v ?? 0) + 1,
+        text: existing.text,
+        user: req.user!.id,
+        created_at: new Date()
+      })
+      await trx('nivaro_comments')
+        .where({ id })
+        .update({ text: '', deleted_at: new Date(), deleted_by: req.user!.id })
+      await trx('nivaro_comment_reactions').where('comment', id).del()
+      await trx('nivaro_comment_mentions').where('comment', id).del()
+      return { code: 200, existing } as const
+    })
+    if (result.code === 404 || result.code === 403) {
+      return reply.code(result.code).send({ error: result.error })
     }
-
-    await db('nivaro_comments').where({ id }).delete()
-    announceRecordAspect(existing.collection, existing.item, '$comments')
+    if (result.code === 204) return reply.code(204).send()
+    announceRecordAspect(result.existing.collection, result.existing.item, '$comments')
     await logActivity({
       action: 'delete',
       collection: 'nivaro_comments',

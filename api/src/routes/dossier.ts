@@ -102,6 +102,7 @@ export async function dossierRoutes(app: FastifyInstance) {
           .catch(() => []),
         db('nivaro_comments')
           .where({ collection, item: id })
+          .whereNull('deleted_at')
           .orderBy('created_at', 'asc')
           .limit(30)
           .select('user', 'text', 'created_at')

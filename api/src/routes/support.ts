@@ -109,6 +109,7 @@ async function serializeTickets(rows: Array<TicketRow & Record<string, unknown>>
   const counts = ids.length
     ? ((await db('nivaro_comments')
         .where('collection', 'nivaro_tasks')
+        .whereNull('deleted_at')
         .whereIn('item', ids)
         .groupBy('item')
         .select('item')
@@ -494,6 +495,7 @@ export async function supportRoutes(app: FastifyInstance) {
     const thread = (await db('nivaro_comments as c')
       .leftJoin('nivaro_users as u', 'c.user', 'u.id')
       .where({ 'c.collection': 'nivaro_tasks', 'c.item': String(t.id) })
+      .whereNull('c.deleted_at')
       .orderBy('c.created_at', 'asc')
       .select('c.id', 'c.text', 'c.user', 'c.created_at', 'u.first_name', 'u.last_name')) as Array<
       Record<string, unknown>

@@ -61,6 +61,7 @@ export async function latestPeopleComment(
     const rows = (await db('nivaro_comments as c')
       .leftJoin('nivaro_users as u', 'c.user', 'u.id')
       .where({ 'c.collection': collection, 'c.item': String(item) })
+      .whereNull('c.deleted_at')
       .orderBy('c.created_at', 'desc')
       .limit(10)
       .select(

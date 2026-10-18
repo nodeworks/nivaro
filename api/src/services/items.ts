@@ -2763,6 +2763,7 @@ export async function applyConditions(
           this.select(db.raw('1'))
             .from('nivaro_comments as cmt')
             .where('cmt.collection', collection)
+            .whereNull('cmt.deleted_at')
             .whereRaw('cmt.item = CAST(??.?? AS NVARCHAR(255))', [collection, 'id'])
         })
         continue
