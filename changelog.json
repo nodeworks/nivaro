@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-10-18T17:26:18.644Z",
+  "generated_at": "2026-10-18T19:24:58.604Z",
   "releases": [
+    {
+      "version": "0.2.54",
+      "tag": "v0.2.54",
+      "date": "2026-10-18T15:24:34-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "perf",
+              "text": "metadata batch review fixes",
+              "hash": "5f7dc7e1"
+            },
+            {
+              "section": "Fixed",
+              "scope": "perf",
+              "text": "people-card batch review fixes",
+              "hash": "4e4210f2"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "batch collection metadata reads and dedupe record-page fetches",
+              "hash": "231d344a"
+            },
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "batch people cards and cache avatars on lists",
+              "hash": "46e242ca"
+            },
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "cache hashed admin assets for a year (#2438)",
+              "hash": "ef52110c"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.2.53",
       "tag": "v0.2.53",
-      "date": "2026-10-18T13:26:04-04:00",
+      "date": "2026-10-18T13:26:18-04:00",
       "sections": [
         {
           "label": "Added",
