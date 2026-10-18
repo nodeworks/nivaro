@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-18T20:06:00.577Z",
+  "generated_at": "2026-10-18T20:50:40.720Z",
   "releases": [
+    {
+      "version": "0.2.56",
+      "tag": "v0.2.56",
+      "date": "2026-10-18T16:50:29-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "migrations",
+              "text": "454 comment versions default created_at to UTC",
+              "hash": "ffef766f"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Comment edit history: version table, deleted-comment marker, history menu (#4)",
+              "hash": "32118636"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.55",
       "tag": "v0.2.55",
-      "date": "2026-10-18T16:05:48-04:00",
+      "date": "2026-10-18T16:06:00-04:00",
       "sections": [
         {
           "label": "Documentation",
