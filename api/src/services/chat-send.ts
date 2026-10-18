@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import type { User } from '../types.js'
@@ -914,4 +915,74 @@ export async function sweepDmEmailFallback(app: FastifyInstance): Promise<number
     }
   }
   return sent
+}
+
+// ── Message history ──────────────────────────────────────────────────────────
+
+/**
+ * Keep the text and attachments of a message as they were BEFORE an edit or
+ * delete. version = max(version) + 1 for that message; the first change stores
+ * the original send as version 1. Admin-only — never read by room endpoints.
+ */
+export async function recordMessageVersion(
+  msg: Record<string, unknown>,
+  reason: 'edit' | 'delete',
+  changedBy: string | null,
+  conn: Knex | Knex.Transaction = db
+): Promise<void> {
+  const messageId = Number(msg.id)
+  const last = (await conn('nivaro_chat_message_history')
+    .where({ message_id: messageId })
+    .max({ v: 'version' })
+    .first()) as { v?: number | string | null } | undefined
+  await conn('nivaro_chat_message_history').insert({
+    message_id: messageId,
+    version: Number(last?.v ?? 0) + 1,
+    text: String(msg.message ?? ''),
+    attachments: msg.attachments == null ? null : String(msg.attachments),
+    changed_at: new Date(),
+    changed_by: changedBy,
+    reason
+  })
+}
+
+/**
+ * Serialise a change to one message: lock the row, version what is stored NOW
+ * (not what the request loaded earlier), and apply the update — all in one
+ * transaction so concurrent edits/deletes each record the text they replaced.
+ * `apply` returns false to skip the change (nothing is versioned then).
+ */
+export async function changeChatMessage(
+  messageId: number,
+  reason: 'edit' | 'delete',
+  changedBy: string | null,
+  apply: (trx: Knex.Transaction, current: Record<string, unknown>) => Promise<boolean>
+): Promise<boolean> {
+  return db.transaction(async (trx) => {
+    const current = (await trx('chat_messages').where('id', messageId).forUpdate().first()) as
+      | Record<string, unknown>
+      | undefined
+    if (!current) return false
+    if (reason === 'edit' && current.deleted_at) return false
+    if (reason === 'delete' && current.deleted_at) return apply(trx, current)
+    await recordMessageVersion(current, reason, changedBy, trx)
+    return apply(trx, current)
+  })
+}
+
+/**
+ * Delete history older than nivaro_settings.chat_history_retention_days
+ * (NULL = 90, 0 = keep forever). Returns the number of rows deleted.
+ */
+export async function pruneChatMessageHistory(): Promise<number> {
+  const s = (await db('nivaro_settings')
+    .where({ id: 1 })
+    .first('chat_history_retention_days')
+    .catch(() => null)) as { chat_history_retention_days?: number | null } | null
+  if (!s) return 0
+  const raw = s.chat_history_retention_days
+  const days = raw == null ? 90 : Number(raw)
+  if (!Number.isFinite(days) || days <= 0) return 0
+  const cutoff = new Date(Date.now() - days * 86_400_000)
+  return (await db('nivaro_chat_message_history').where('changed_at', '<', cutoff).del()) as number
 }

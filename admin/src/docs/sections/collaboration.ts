@@ -763,7 +763,8 @@ export const collabChat: DocSection = {
       items: [
         'Edit — hover your own message and pick Edit. The window is 15 minutes from when it was sent; after that the option disappears. Edited messages show an "(edited)" marker, and an edit never re-fires mentions — nobody is notified again.',
         'Delete — you can delete your own messages at any time, and admins can delete anyone’s. A delete leaves a "Message removed" tombstone so the thread’s shape survives, but the text and attachments are gone and its reactions are cleared. Admin deletions of someone else’s message are recorded in the audit log with the original sender named.',
-        'Deleted messages stop counting: they are excluded from the sidebar’s room previews and from unread counts, so a removed message can’t leave a phantom badge.'
+        'Deleted messages stop counting: they are excluded from the sidebar’s room previews and from unread counts, so a removed message can’t leave a phantom badge.',
+        'Message history — the text and attachments as they were before each edit or delete are kept and shown to admins only, under Previous versions in the message detail of the admin message log at `/chat-analytics`. Room members never see it. History is purged after 90 days by default (`chat_history_retention_days` in settings; 0 keeps it forever).'
       ]
     },
     {

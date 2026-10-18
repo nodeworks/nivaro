@@ -758,6 +758,10 @@ export async function buildServer() {
           await import('./services/ai-conversations.js')
             .then((m) => m.pruneConversations())
             .catch(() => 0)
+          // Edited/deleted chat message history past chat_history_retention_days.
+          await import('./services/chat-send.js')
+            .then((m) => m.pruneChatMessageHistory())
+            .catch(() => 0)
           await db('nivaro_admin_journeys')
             .where('entered_at', '<', new Date(Date.now() - 30 * 86_400_000))
             .del()

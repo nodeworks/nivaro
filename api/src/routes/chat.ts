@@ -27,6 +27,7 @@ import {
   chatColumns,
   parseJsonList,
   postChatMessage,
+  changeChatMessage,
   redeemReplyToken,
   touchWatermark,
   upsertMembership
@@ -509,7 +510,11 @@ export async function chatRoutes(app: FastifyInstance) {
       const refs = parseTimeRefs(text, await userTimeZone(req.user!), new Date(msg.date_created))
       editPatch.time_refs = refs.length ? JSON.stringify(refs) : null
     }
-    await db('chat_messages').where('id', msg.id).update(editPatch)
+    const edited = await changeChatMessage(Number(msg.id), 'edit', req.user!.id, async (trx) => {
+      await trx('chat_messages').where('id', msg.id).update(editPatch)
+      return true
+    })
+    if (!edited) return reply.code(400).send({ error: 'Message was deleted' })
     void dropEmbedding(Number(msg.id)).then(() =>
       indexChatMessage(Number(msg.id), String(msg.room), text)
     )
@@ -535,10 +540,15 @@ export async function chatRoutes(app: FastifyInstance) {
     if (!own && !req.isAdmin) {
       return reply.code(403).send({ error: 'You can only delete your own messages' })
     }
-    await db('chat_messages')
-      .where('id', msg.id)
-      .update({ message: '', attachments: null, deleted_at: new Date() })
-    await db('nivaro_chat_reactions').where({ message_id: msg.id }).del()
+    // a repeat delete hits a tombstone: nothing left to version
+    // (changeChatMessage skips the version when the locked row is already one)
+    await changeChatMessage(Number(msg.id), 'delete', req.user!.id, async (trx) => {
+      await trx('chat_messages')
+        .where('id', msg.id)
+        .update({ message: '', attachments: null, deleted_at: new Date() })
+      await trx('nivaro_chat_reactions').where({ message_id: msg.id }).del()
+      return true
+    })
     void dropEmbedding(Number(msg.id))
     // Admins may delete OTHER people's messages — the log records who did.
     void logActivity({

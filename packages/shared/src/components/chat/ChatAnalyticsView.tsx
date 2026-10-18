@@ -112,6 +112,15 @@ interface MessageDetail {
   saved_by: number
   pinned: boolean
   history: Array<{ action: string; at: string; by: string | null; comment: string | null }>
+  versions?: Array<{
+    version: number
+    text: string
+    attachments: Array<{ id: string | number; name: string | null; type: string | null; size: number | null }>
+    changed_at: string
+    changed_by: string | null
+    changed_by_name: string | null
+    reason: 'edit' | 'delete'
+  }>
   admin_views?: { count: number; previous: { by: string | null; at: string } | null }
   context: {
     before: Array<ContextMessage>
@@ -1150,6 +1159,47 @@ function MessageDetailPanel({
                         {' '}
                         · {formatDateTime(h.at)}
                       </span>
+                    </li>
+                  ))}
+                </ul>
+              </DetailRow>
+            )}
+            {data.versions && data.versions.length > 0 && (
+              <DetailRow label='Previous versions'>
+                <ul className='space-y-1.5'>
+                  {data.versions.map((x) => (
+                    <li key={x.version} className='text-[12px]'>
+                      <span className='font-medium'>
+                        v{x.version} · before {x.reason === 'delete' ? 'delete' : 'edit'}
+                      </span>
+                      <span className='text-slate-500 dark:text-slate-400'>
+                        {' '}
+                        · {x.changed_by_name ?? 'Someone'} · {formatDateTime(x.changed_at)}
+                      </span>
+                      <p className='whitespace-pre-wrap break-words'>{x.text}</p>
+                      {x.attachments.length > 0 && (
+                        <ul className='mt-0.5 space-y-0.5 text-[11.5px]'>
+                          {x.attachments.map((f) => (
+                            <li key={f.id}>
+                              <a
+                                href={`${apiBase}/files/${f.id}?download=1`}
+                                className='inline-flex items-center gap-1 hover:underline'
+                                target='_blank'
+                                rel='noreferrer'
+                              >
+                                <Paperclip className='h-3 w-3' /> {f.name ?? `File ${f.id}`}
+                              </a>
+                              {f.size != null && (
+                                <span className='ml-1 text-[11px] text-slate-500 dark:text-slate-400'>
+                                  {f.size >= 1_048_576
+                                    ? `${(f.size / 1_048_576).toFixed(1)} MB`
+                                    : `${Math.max(1, Math.round(f.size / 1024))} KB`}
+                                </span>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </li>
                   ))}
                 </ul>

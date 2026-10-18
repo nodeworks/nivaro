@@ -393,9 +393,25 @@ export async function chatAdminRoutes(app: FastifyInstance) {
     // message's own history is what it went through, not who looked at it.
     const views = allHistory.filter((h) => String(h.action).startsWith('chat-admin-'))
     const history = allHistory.filter((h) => !String(h.action).startsWith('chat-admin-'))
+    const versions = (await db('nivaro_chat_message_history')
+      .where({ message_id: id })
+      .orderBy('version', 'asc')
+      .select('version', 'text', 'attachments', 'changed_at', 'changed_by', 'reason')
+      .catch(() => [])) as Array<Record<string, unknown>>
+    // Preserved attachments: resolve names once for every version
+    const versionFileIds = [...new Set(versions.flatMap((v) => parseIdList(v.attachments)))]
+    const versionFiles = new Map<string, Record<string, unknown>>()
+    if (versionFileIds.length) {
+      const rows = (await db('nivaro_files')
+        .whereIn('id', versionFileIds)
+        .select('id', 'title', 'filename_download', 'type', 'filesize')) as Array<
+        Record<string, unknown>
+      >
+      for (const f of rows) versionFiles.set(String(f.id), f)
+    }
     const actorIds = [
       ...new Set(
-        [...history.map((h) => h.user), ...views.slice(-1).map((v) => v.user), msg.masquerade_admin]
+        [...history.map((h) => h.user), ...versions.map((v) => v.changed_by), ...views.slice(-1).map((v) => v.user), msg.masquerade_admin]
           .filter(Boolean)
           .map((x) => String(x))
       )
@@ -462,6 +478,26 @@ export async function chatAdminRoutes(app: FastifyInstance) {
               }
             : null
         },
+        versions: versions.map((v) => ({
+          version: Number(v.version),
+          text: String(v.text ?? ''),
+          attachments: parseIdList(v.attachments).map((fid) => {
+            const f = versionFiles.get(String(fid))
+            return {
+              id: fid,
+              // a file purged since may no longer resolve — keep the id
+              name: f ? String(f.title || f.filename_download) : null,
+              type: f ? ((f.type as string | null) ?? null) : null,
+              size: f?.filesize != null ? Number(f.filesize) : null
+            }
+          }),
+          changed_at: v.changed_at,
+          changed_by: v.changed_by ?? null,
+          changed_by_name: v.changed_by
+            ? (actorName.get(String(v.changed_by).toUpperCase()) ?? null)
+            : null,
+          reason: v.reason
+        })),
         history: history.map((h) => ({
           action: h.action,
           at: h.timestamp,

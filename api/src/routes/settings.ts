@@ -65,6 +65,7 @@ const allowedSettingsKeys = [
   'ai_models',
   'ai_answer_cache_minutes',
   'ai_conversation_retention_days',
+  'chat_history_retention_days',
   'ai_prompt_caching',
   'ai_chat_guide',
   'ai_max_tokens_generate',
