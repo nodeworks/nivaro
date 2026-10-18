@@ -25,6 +25,7 @@ import {
 } from '../../context'
 import { get, post } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
+import { userCardQuery } from '../../lib/user-cards'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
 import { canOpenDm, openDmWith } from '../chat/chat-core'
 import { MailSuppressedPill } from '../profile/MailSuppressedPill'
@@ -1062,12 +1063,9 @@ export function UserChip({
     () => setOpen(false)
   )
 
+  // Batched: every chip on a list joins one POST /users/cards (lib/user-cards).
   const { data: user, isLoading } = useQuery<UserCardData | null>({
-    queryKey: ['user-card', userId],
-    queryFn: () =>
-      client!
-        .request<{ data: UserCardData }>(get(`/users/${userId}/card`))
-        .then((r) => r.data ?? null),
+    ...userCardQuery<UserCardData>(client, userId),
     enabled: !!client && !!userId,
     staleTime: 120_000
   })

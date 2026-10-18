@@ -13,6 +13,7 @@ import {
   runBulkUserAction
 } from '../services/people-access.js'
 import { writeRevision } from '../services/revisions.js'
+import { avatarEtag, readUserCards, USER_CARD_BATCH_MAX } from '../services/user-cards.js'
 import {
   buildTeamLoad,
   buildUserProfile,
@@ -114,6 +115,10 @@ export async function usersRoutes(app: FastifyInstance) {
   // Avatar as a data URI — deliberately its own endpoint so the nvarchar(max)
   // column never rides the directory listings. Authenticated: any user may
   // see any colleague's photo (same trust level as the name beside it).
+  // Lists normally get the photo from the batched card read instead (POST
+  // /users/cards); this route keeps client-less hosts working. The ETag turns
+  // a repeat after max-age into a body-less 304, and "no photo" is cacheable
+  // too, so people without one stop costing a full answer per mount.
   app.get<{ Params: { id: string } }>(
     '/:id/avatar',
     { preHandler: authenticate },
@@ -123,11 +128,34 @@ export async function usersRoutes(app: FastifyInstance) {
         .first('avatar', 'is_redacted')) as
         | { avatar: string | null; is_redacted: boolean | number | null }
         | undefined
-      if (!row || row.is_redacted) return reply.send({ data: { avatar: null } })
+      const avatar = !row || row.is_redacted ? null : (row.avatar ?? null)
+      const etag = avatarEtag(avatar)
       reply.header('cache-control', 'private, max-age=1800')
-      return reply.send({ data: { avatar: row.avatar ?? null } })
+      reply.header('etag', etag)
+      const inm = req.headers['if-none-match']
+      if (typeof inm === 'string' && inm.split(',').some((t) => t.trim() === etag)) {
+        return reply.code(304).send()
+      }
+      return reply.send({ data: { avatar } })
     }
   )
+
+  // POST /users/cards {ids} — the contact cards of up to 100 people in one
+  // read, for lists that show a chip per person (a GET /:id/card each was an
+  // N+1 on every list). Same reader as the single route, so the same columns
+  // and redaction; unknown or malformed ids are simply absent from `data`.
+  app.post('/cards', { preHandler: authenticate }, async (req, reply) => {
+    const ids = (req.body as { ids?: unknown } | null)?.ids
+    if (!Array.isArray(ids) || ids.some((v) => typeof v !== 'string')) {
+      return reply.code(400).send({ error: 'ids must be an array of user ids' })
+    }
+    if (ids.length > USER_CARD_BATCH_MAX) {
+      return reply
+        .code(400)
+        .send({ error: `At most ${USER_CARD_BATCH_MAX} ids per request`, code: 'TOO_MANY_IDS' })
+    }
+    return reply.send({ data: await readUserCards(ids as string[]) })
+  })
 
   app.get('/:id', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -146,30 +174,10 @@ export async function usersRoutes(app: FastifyInstance) {
 
   // GET /users/:id/card — authenticated (not admin-only); returns safe public fields for the
   // UserChip contact card including denormalised role_name and manager_name.
+  // Shares its reader with POST /users/cards (services/user-cards.ts).
   app.get('/:id/card', { preHandler: authenticate }, async (req, reply) => {
     const { id } = req.params as { id: string }
-    const row = (await db('nivaro_users as u')
-      .leftJoin('nivaro_roles as r', 'u.role', 'r.id')
-      .leftJoin('nivaro_users as m', 'u.manager_id', 'm.id')
-      .where('u.id', id)
-      .select(
-        'u.id',
-        'u.first_name',
-        'u.last_name',
-        'u.email',
-        'u.title',
-        'u.phone',
-        'u.department',
-        'u.company',
-        'u.avatar',
-        'u.status',
-        'u.last_access',
-        'u.is_out_of_office',
-        'r.name as role_name',
-        db.raw(`CONCAT(m.first_name, ' ', m.last_name) as manager_name`),
-        'u.manager_id'
-      )
-      .first()) as Record<string, unknown> | undefined
+    const [row] = await readUserCards([id])
     if (!row) return reply.code(404).send({ error: 'Not found' })
     return reply.send({ data: row })
   })

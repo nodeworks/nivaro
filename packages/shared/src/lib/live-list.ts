@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNivaroClient } from '../context'
 import { get, post } from './commands'
 import { useLiveCollection } from './live'
+import { loadUserCard } from './user-cards'
 
 /**
  * Shared pieces of the "lists update live" surfaces (collection browser,
@@ -94,18 +95,9 @@ function useActorNames(ids: string[]): Map<string, string> {
         .fetchQuery({
           queryKey: ['live-actor-name', id.toUpperCase()],
           queryFn: () =>
-            client
-              .request<{
-                data: {
-                  first_name?: string | null
-                  last_name?: string | null
-                  email?: string | null
-                }
-              }>(get(`/users/${encodeURIComponent(id)}/card`))
-              .then((r) => {
-                const d = r.data
-                return [d?.first_name, d?.last_name].filter(Boolean).join(' ') || d?.email || ''
-              }),
+            loadUserCard(client, id).then(
+              (d) => [d?.first_name, d?.last_name].filter(Boolean).join(' ') || d?.email || ''
+            ),
           staleTime: 10 * 60_000
         })
         .then((name) => {

@@ -116,6 +116,8 @@ export function useInvalidatePerson(userId: string | null | undefined) {
     void qc.invalidateQueries({ queryKey: ['user', userId] })
     void qc.invalidateQueries({ queryKey: ['users'] })
     void qc.invalidateQueries({ queryKey: ['user-avatar', userId] })
+    // Chips and avatars read the batched card (name + photo) under this key.
+    void qc.invalidateQueries({ queryKey: ['user-card', userId] })
   }
 }
 
