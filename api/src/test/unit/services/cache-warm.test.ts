@@ -5,13 +5,14 @@ vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
 import {
   type CacheWarmDeps,
   cacheWarmAllowed,
-  customQueryCacheKey,
   hitsFromParamSets,
   pickWarmTargets,
   runCacheWarm,
   takeBootWarm,
   type WarmQueryDef
 } from '../../../services/cache-warm.js'
+import { customQueryCacheKey, customQueryCacheValue } from '../../../services/custom-query-cache.js'
+import { buildFinalParams } from '../../../services/custom-query-exec.js'
 
 function q(slug: string, extra: Partial<WarmQueryDef> = {}): WarmQueryDef {
   return {
@@ -31,7 +32,7 @@ function fakeRedis() {
   const store = new Map<string, { value: string; ttl: number }>()
   return {
     store,
-    exists: vi.fn(async (key: string) => (store.has(key) ? 1 : 0)),
+    get: vi.fn(async (key: string) => store.get(key)?.value ?? null),
     setex: vi.fn(async (key: string, ttl: number, value: string) => {
       store.set(key, { value, ttl })
       return 'OK'
@@ -42,17 +43,6 @@ function fakeRedis() {
       return 'OK'
     })
   }
-}
-
-// The route's builder: declared params with defaults, typed.
-function buildFinalParams(defs: never, incoming: Record<string, unknown>) {
-  const out: Record<string, unknown> = {}
-  for (const d of defs as Array<{ name: string; default?: unknown; required?: boolean }>) {
-    const v = Object.hasOwn(incoming, d.name) ? incoming[d.name] : d.default
-    if (v == null && d.required) throw new Error(`Missing required parameter: ${d.name}`)
-    out[d.name] = v == null ? null : Number(v)
-  }
-  return out
 }
 
 function deps(over: Partial<CacheWarmDeps> = {}): Partial<CacheWarmDeps> {
@@ -74,12 +64,13 @@ function deps(over: Partial<CacheWarmDeps> = {}): Partial<CacheWarmDeps> {
 }
 
 describe('pickWarmTargets', () => {
-  it('ranks used slugs, caps them, and always adds warm_daily queries', () => {
+  it('ranks used cached slugs, caps them, and always adds warm_daily queries', () => {
     const queries = [
       q('low'),
       q('top'),
       q('mid'),
-      q('daily', { warm_daily: true }),
+      q('uncached', { cache_ttl: 0 }),
+      q('daily', { warm_daily: true, cache_ttl: 0, access: 'admin' }),
       q('off', { enabled: false }),
       q('weird', { access: 'nobody' })
     ]
@@ -87,10 +78,12 @@ describe('pickWarmTargets', () => {
       ['low', 1],
       ['top', 50],
       ['mid', 10],
+      ['uncached', 999],
       ['off', 99],
       ['weird', 99]
     ])
     const t = pickWarmTargets({ queries, hits, paramSets: [], cap: 2 })
+    // A popular ttl-0 query is never picked by usage; warm_daily always is.
     expect(t.map((x) => x.slug)).toEqual(['daily', 'top', 'mid'])
     expect(t.every((x) => x.kind === 'default')).toBe(true)
   })
@@ -123,9 +116,9 @@ describe('pickWarmTargets', () => {
     ])
   })
 
-  it('only=warm_daily ignores usage', () => {
+  it('only=warm_daily ignores usage and keeps any access value', () => {
     const t = pickWarmTargets({
-      queries: [q('a'), q('d', { warm_daily: 1 })],
+      queries: [q('a'), q('d', { warm_daily: 1, access: 'nobody' })],
       hits: new Map([['a', 9]]),
       paramSets: [],
       only: 'warm_daily'
@@ -152,7 +145,8 @@ describe('runCacheWarm', () => {
   it('writes the route key in the {cached_at, rows} shape with the query TTL', async () => {
     const redis = fakeRedis()
     const s = await runCacheWarm({ redis, deps: deps() })
-    const key = customQueryCacheKey('a', { year: 2026 })
+    // The real builder casts the integer default exactly as the route does.
+    const key = customQueryCacheKey('a', buildFinalParams(JSON.parse(q('a').params ?? '[]'), {}))
     expect(key).toBe('cq:a:{"year":2026}')
     const entry = redis.store.get(key)
     expect(entry?.ttl).toBe(300)
@@ -163,32 +157,99 @@ describe('runCacheWarm', () => {
     expect(s).toMatchObject({ warmed: 2, cached: 2, failed: 0, budgetSpent: false })
   })
 
-  it('runs a cache_ttl 0 query but writes nothing', async () => {
+  it('passes a real per-query timeout into the exec path, capped by the budget', async () => {
+    const exec = vi.fn(async () => [])
+    await runCacheWarm({
+      redis: fakeRedis(),
+      budgetMs: 30_000,
+      deps: deps({ exec, now: () => 0 })
+    })
+    expect(exec).toHaveBeenCalledWith(expect.any(String), expect.any(Object), {
+      timeoutMs: 30_000
+    })
+  })
+
+  it('a warm_daily query with cache_ttl 0 runs but writes nothing', async () => {
     const redis = fakeRedis()
     const exec = vi.fn(async () => [{ n: 1 }])
     const s = await runCacheWarm({
       redis,
-      deps: deps({ loadQueries: async () => [q('a', { cache_ttl: 0 })], exec })
+      deps: deps({
+        loadQueries: async () => [q('a', { cache_ttl: 0, warm_daily: true })],
+        loadHits: async () => ({ hits: new Map(), ownerLoad: 0 }),
+        exec
+      })
     })
     expect(exec).toHaveBeenCalledTimes(1)
     expect(redis.setex).not.toHaveBeenCalled()
     expect(s).toMatchObject({ warmed: 1, cached: 0 })
   })
 
-  it('skips a key that is still cached and a set that lands on the same key', async () => {
+  it('usage run skips a key cached within the hour and refreshes an older one', async () => {
+    const now = Date.parse('2026-10-17T10:00:00Z')
     const redis = fakeRedis()
-    redis.store.set('cq:a:{"year":2026}', { value: '{}', ttl: 10 })
-    const exec = vi.fn(async () => [])
+    redis.store.set('cq:a:{"year":2026}', {
+      value: customQueryCacheValue([], new Date(now - 10 * 60_000)),
+      ttl: 100
+    })
+    redis.store.set('cq:b:{"year":2026}', {
+      value: customQueryCacheValue([], new Date(now - 2 * 3600_000)),
+      ttl: 100
+    })
+    const exec = vi.fn(async () => [{ fresh: true }])
+    const s = await runCacheWarm({ redis, deps: deps({ exec, now: () => now }) })
+    expect(exec).toHaveBeenCalledTimes(1)
+    expect(s).toMatchObject({ warmed: 1, skipped: 1 })
+    expect(JSON.parse(redis.store.get('cq:b:{"year":2026}')?.value ?? '{}').rows).toEqual([
+      { fresh: true }
+    ])
+  })
+
+  it('warm_daily always overwrites and has no overall budget', async () => {
+    let clock = Date.parse('2026-10-17T06:00:00Z')
+    const redis = fakeRedis()
+    redis.store.set('cq:d:{"year":2026}', {
+      value: customQueryCacheValue([], new Date(clock)),
+      ttl: 9
+    })
+    const exec = vi.fn(async (_sql: string, _p: unknown, o: { timeoutMs: number }) => {
+      clock += 600_000
+      expect(o.timeoutMs).toBe(90_000)
+      return [{ n: 2 }]
+    })
     const s = await runCacheWarm({
       redis,
+      only: 'warm_daily',
+      budgetMs: 1,
+      deps: deps({
+        loadQueries: async () => [
+          q('d', { warm_daily: true }),
+          q('e', { warm_daily: true }),
+          q('f', { warm_daily: true })
+        ],
+        loadParamSets: async () => [{ target: 'd', params: '{"year":2025}', seen_count: 1 }],
+        exec,
+        now: () => clock
+      })
+    })
+    expect(exec).toHaveBeenCalledTimes(4)
+    expect(s).toMatchObject({ warmed: 4, cached: 4, budgetSpent: false })
+    expect(JSON.parse(redis.store.get('cq:d:{"year":2026}')?.value ?? '{}').rows).toEqual([
+      { n: 2 }
+    ])
+  })
+
+  it('dedupes a param set that lands on the default key', async () => {
+    const exec = vi.fn(async () => [])
+    const s = await runCacheWarm({
+      redis: fakeRedis(),
       deps: deps({
         loadParamSets: async () => [{ target: 'b', params: '{"year":2026}', seen_count: 5 }],
         exec
       })
     })
-    // a: cached already; b default; b's set is the default key again.
-    expect(exec).toHaveBeenCalledTimes(1)
-    expect(s).toMatchObject({ warmed: 1, skipped: 2 })
+    expect(exec).toHaveBeenCalledTimes(2)
+    expect(s).toMatchObject({ warmed: 2, skipped: 1 })
   })
 
   it('stops starting work once the budget is spent', async () => {
@@ -220,6 +281,32 @@ describe('runCacheWarm', () => {
     expect(s.warmed).toBe(2)
     // c + the owner-load read never started.
     expect(s.skipped).toBe(2)
+  })
+
+  it('never runs more than two queries at once', async () => {
+    let inFlight = 0
+    let peak = 0
+    const exec = vi.fn(async () => {
+      inFlight++
+      peak = Math.max(peak, inFlight)
+      await new Promise((r) => setTimeout(r, 5))
+      inFlight--
+      return []
+    })
+    await runCacheWarm({
+      redis: fakeRedis(),
+      concurrency: 8,
+      deps: deps({
+        loadQueries: async () => ['a', 'b', 'c', 'd', 'e'].map((s) => q(s)),
+        loadHits: async () => ({
+          hits: new Map(['a', 'b', 'c', 'd', 'e'].map((s) => [s, 1])),
+          ownerLoad: 0
+        }),
+        exec
+      })
+    })
+    expect(exec).toHaveBeenCalledTimes(5)
+    expect(peak).toBe(2)
   })
 
   it('counts a failing query and carries on; runs owner-load when it was used', async () => {

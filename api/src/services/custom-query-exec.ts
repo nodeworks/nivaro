@@ -74,7 +74,8 @@ export function buildFinalParams(
  */
 export async function execCustomQuerySql(
   sqlText: string,
-  finalParams: Record<string, unknown>
+  finalParams: Record<string, unknown>,
+  opts: { timeoutMs?: number } = {}
 ): Promise<Array<Record<string, unknown>>> {
   const resolvedSql = sqlText.replace(/:(\w+)/g, (_, k: string) => {
     const v = finalParams[k]
@@ -118,7 +119,11 @@ export async function execCustomQuerySql(
         setTimeout?: (ms: number) => void
       }
       // Heavy report procs outlive the connection-level 15s requestTimeout.
-      req.setTimeout?.(120_000)
+      // A caller with its own budget (the cache warmer) passes a shorter one,
+      // so a timed-out run really ends and frees its connection.
+      req.setTimeout?.(
+        opts.timeoutMs && opts.timeoutMs > 0 ? Math.min(opts.timeoutMs, 120_000) : 120_000
+      )
       const collected: Array<Record<string, unknown>> = []
       req.on('row', (cols) => {
         const row: Record<string, unknown> = {}

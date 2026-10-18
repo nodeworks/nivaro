@@ -4,22 +4,29 @@
  * Staging's database is rebuilt nightly, so the first dashboard of the day
  * meets a cold SQL Server buffer pool and plan cache and an empty Redis `cq:`
  * cache: nine calls waited more than 10 s on 2026-10-17 that ran in 3–8 s
- * once warm. This pre-runs the custom queries people actually open:
+ * once warm. Two kinds of run:
  *
- *   - the most-used slugs of the last 7 days (execute calls and custom-query
- *     widget renders in nivaro_api_logs; the recorded param sets when the log
- *     read fails), capped, plus every query flagged warm_daily;
- *   - per slug the default parameter set and its top recorded param sets.
+ *   - usage-ranked (boot, 06:30 weekdays): the most-used slugs of the last 7
+ *     days (execute calls and custom-query widget renders in nivaro_api_logs,
+ *     development instances excluded; the recorded param sets when the log
+ *     read fails), capped, ONLY those with cache_ttl > 0 — a query nobody
+ *     caches is never re-run because it was popular — plus every query flagged
+ *     warm_daily. Per slug the default parameter set and its top recorded
+ *     param sets. A key cached within the last hour is left alone.
+ *   - warm_daily (06:00, `only: 'warm_daily'`): every flagged query, any
+ *     access value, ALWAYS overwritten, no overall budget. A warm_daily query
+ *     with cache_ttl 0 still runs — the flag is the operator asking for it —
+ *     which warms the buffer pool and plan cache; its rows are dropped.
  *
  * Every run goes through the execute route's own SQL path
  * (buildFinalParams → execCustomQuerySql) AS AN UNRESTRICTED CALLER: scope
  * injection is a no-op for an administrator, so the key written is exactly the
- * one the route builds for every unrestricted viewer. A query with
- * cache_ttl > 0 gets its result under that key in the route's
- * `{cached_at, rows}` shape; a query with cache_ttl 0 still runs (that warms
- * the buffer pool and plan cache — the real morning cost) and its rows are
- * dropped. Restricted allowances are never warmed: their key carries the
- * person's scope values.
+ * one the route builds for every unrestricted viewer (customQueryCacheKey).
+ * Every reader checks the query's access BEFORE it reads the cache, so a key
+ * filled for an admin-only query is only ever served to an administrator.
+ * Restricted allowances are never warmed (their key carries scope values), and
+ * widget-render keys are not filled — they key on bound params only; a widget
+ * gains only the warm database.
  *
  * The owner-load report (viewer-independent, uncached, a pure read) is run
  * once when it was used. Queue worklists are NOT warmed: fetchQueueItems can
@@ -27,13 +34,22 @@
  */
 import type { Redis } from 'ioredis'
 import { cronTicksEnabled } from './cron-ticks.js'
+import {
+  customQueryCachedAt,
+  customQueryCacheKey,
+  customQueryCacheValue
+} from './custom-query-cache.js'
 
 /** The overall budget; CACHE_WARM_BUDGET_MS overrides. */
 export const CACHE_WARM_DEFAULT_BUDGET_MS = 240_000
 export const CACHE_WARM_TOP_SLUGS = 25
 export const CACHE_WARM_PARAM_SETS = 3
-/** One query may hold its worker this long; the statement itself still ends at tedious's 120 s. */
+/** One query's request timeout — passed to tedious, so a timed-out warm really ends. */
 export const CACHE_WARM_QUERY_TIMEOUT_MS = 90_000
+/** A usage-ranked run leaves a key cached more recently than this alone. */
+export const CACHE_WARM_FRESH_MS = 60 * 60 * 1000
+/** Never more than this many queries in flight. */
+const MAX_CONCURRENCY = 2
 const USAGE_DAYS = 7
 const VALID_ACCESS = new Set(['admin', 'authenticated', 'public'])
 /** The value secret-mask.ts stores for a sensitive param — never replayable. */
@@ -59,17 +75,6 @@ export function cacheWarmAllowed(): boolean {
 export function cacheWarmBudgetMs(): number {
   const n = Number(process.env.CACHE_WARM_BUDGET_MS)
   return Number.isFinite(n) && n > 0 ? n : CACHE_WARM_DEFAULT_BUDGET_MS
-}
-
-/** The custom-query cache key — the same string routes/custom-queries.ts
- *  builds after scope injection. Keep the two in step. */
-export function customQueryCacheKey(slug: string, finalParams: Record<string, unknown>): string {
-  return `cq:${slug}:${JSON.stringify(finalParams)}`
-}
-
-/** The cached value, in the execute route's `{cached_at, rows}` shape. */
-export function customQueryCacheValue(rows: unknown[], cachedAt: Date = new Date()): string {
-  return JSON.stringify({ cached_at: cachedAt.toISOString(), rows })
 }
 
 export interface WarmQueryDef {
@@ -134,13 +139,20 @@ export function pickWarmTargets(input: {
 }): WarmTarget[] {
   const cap = input.cap ?? CACHE_WARM_TOP_SLUGS
   const perSlug = input.perSlug ?? CACHE_WARM_PARAM_SETS
-  const eligible = input.queries.filter((q) => !!q.enabled && VALID_ACCESS.has(String(q.access)))
-  const daily = eligible.filter((q) => !!q.warm_daily).map((q) => q.slug)
+  const enabled = input.queries.filter((q) => !!q.enabled)
+  // The flag is explicit: any access value (every reader gates access before the cache).
+  const daily = enabled.filter((q) => !!q.warm_daily).map((q) => q.slug)
+  // Popularity alone never re-runs an uncached query.
   const used =
     input.only === 'warm_daily'
       ? []
-      : eligible
-          .filter((q) => (input.hits.get(q.slug) ?? 0) > 0)
+      : enabled
+          .filter(
+            (q) =>
+              VALID_ACCESS.has(String(q.access)) &&
+              (Number(q.cache_ttl) || 0) > 0 &&
+              (input.hits.get(q.slug) ?? 0) > 0
+          )
           .sort(
             (a, b) =>
               (input.hits.get(b.slug) ?? 0) - (input.hits.get(a.slug) ?? 0) ||
@@ -190,14 +202,18 @@ export interface CacheWarmDeps {
   ) => Promise<{ hits: SlugHits; ownerLoad: number } | null>
   loadParamSets: () => Promise<WarmParamSetRow[]>
   buildFinalParams: (defs: never, incoming: Record<string, unknown>) => Record<string, unknown>
-  exec: (sql: string, finalParams: Record<string, unknown>) => Promise<unknown[]>
+  exec: (
+    sql: string,
+    finalParams: Record<string, unknown>,
+    opts: { timeoutMs: number }
+  ) => Promise<unknown[]>
   ownerLoad: () => Promise<unknown>
   now: () => number
 }
 
 export interface CacheWarmOptions {
   redis?: {
-    exists(key: string): Promise<number>
+    get(key: string): Promise<string | null>
     setex(key: string, seconds: number, value: string): Promise<unknown>
   } | null
   budgetMs?: number
@@ -227,9 +243,12 @@ const defaultDeps: CacheWarmDeps = {
     try {
       const { db } = await import('../db/index.js')
       const { runLongSql } = await import('./run-long.js')
+      const { instanceScope } = await import('./api-log-instances.js')
+      // Laptops and probes share the database: their rows are not usage.
+      const scope = await instanceScope({})
       // Seven days of the request log is a big range scan in the morning — its
       // own timeout, never the 15 s pool default.
-      const sql = db('nivaro_api_logs')
+      const qb = db('nivaro_api_logs')
         // A plain ISO literal: knex inlines a Date in local time, the log is UTC.
         .where('created_at', '>=', since.toISOString().slice(0, 19))
         .where((w) =>
@@ -238,10 +257,7 @@ const defaultDeps: CacheWarmDeps = {
             .orWhere('path', 'like', '/api/widgets-internal/%/render')
             .orWhere('path', '/api/reports/owner-load')
         )
-        .groupBy('path')
-        .select('path')
-        .count({ n: '*' })
-        .toQuery()
+      const sql = scope.apply(qb).groupBy('path').select('path').count({ n: '*' }).toQuery()
       const rows = await runLongSql<{ path: string; n: number | string }>(sql, {
         timeoutMs: 60_000
       })
@@ -265,8 +281,8 @@ const defaultDeps: CacheWarmDeps = {
         if (w) widgetHits.set(Number(w[1]), (widgetHits.get(Number(w[1])) ?? 0) + n)
         else if (r.path === '/api/reports/owner-load') ownerLoad += n
       }
-      // A custom-query widget render counts toward its query: warming the route's
-      // key runs the same SQL, which warms what the widget reads.
+      // A custom-query widget render counts toward its query's rank: its key is
+      // not filled (bound params only), but the same SQL warms what it reads.
       if (widgetHits.size) {
         const widgets = (await db('nivaro_widgets')
           .whereIn('id', [...widgetHits.keys()].slice(0, 500))
@@ -321,17 +337,26 @@ async function resolveDeps(partial?: Partial<CacheWarmDeps>): Promise<CacheWarmD
   return deps
 }
 
-class WarmTimeout extends Error {}
-
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | undefined
-  return Promise.race([
-    p,
-    new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new WarmTimeout('warm timeout')), Math.max(1, ms))
-      timer.unref?.()
-    })
-  ]).finally(() => clearTimeout(timer))
+async function selectTargets(
+  deps: CacheWarmDeps,
+  only: 'warm_daily' | undefined,
+  now: number
+): Promise<{
+  queries: WarmQueryDef[]
+  targets: WarmTarget[]
+  ownerLoad: boolean
+}> {
+  const queries = await deps.loadQueries()
+  const since = new Date(now - USAGE_DAYS * 86_400_000)
+  const paramSets = await deps.loadParamSets()
+  const usage = only ? null : await deps.loadHits(since, queries)
+  const targets = pickWarmTargets({
+    queries,
+    hits: usage?.hits ?? hitsFromParamSets(paramSets, since),
+    paramSets,
+    only
+  })
+  return { queries, targets, ownerLoad: !only && (usage?.ownerLoad ?? 0) > 0 }
 }
 
 /** What a run would warm (the cron's dry run): slugs and how many param sets each. */
@@ -339,22 +364,13 @@ export async function planCacheWarm(
   opts: Pick<CacheWarmOptions, 'only' | 'deps'> = {}
 ): Promise<{ slugs: Array<{ slug: string; param_sets: number }>; owner_load: boolean }> {
   const deps = { ...defaultDeps, ...opts.deps }
-  const queries = await deps.loadQueries()
-  const since = new Date(deps.now() - USAGE_DAYS * 86_400_000)
-  const paramSets = await deps.loadParamSets()
-  const usage = opts.only ? null : await deps.loadHits(since, queries)
-  const targets = pickWarmTargets({
-    queries,
-    hits: usage?.hits ?? hitsFromParamSets(paramSets, since),
-    paramSets,
-    only: opts.only
-  })
+  const { targets, ownerLoad } = await selectTargets(deps, opts.only, deps.now())
   const bySlug = new Map<string, number>()
   for (const t of targets)
     bySlug.set(t.slug, (bySlug.get(t.slug) ?? 0) + (t.kind === 'param-set' ? 1 : 0))
   return {
     slugs: [...bySlug].map(([slug, param_sets]) => ({ slug, param_sets })),
-    owner_load: !opts.only && (usage?.ownerLoad ?? 0) > 0
+    owner_load: ownerLoad
   }
 }
 
@@ -362,8 +378,11 @@ export async function planCacheWarm(
 export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWarmSummary> {
   const deps = await resolveDeps(opts.deps)
   const started = deps.now()
-  const budget = opts.budgetMs ?? cacheWarmBudgetMs()
-  const deadline = started + budget
+  // warm_daily is the operator's explicit list: no overall budget, always overwrite.
+  const daily = opts.only === 'warm_daily'
+  const deadline = daily
+    ? Number.POSITIVE_INFINITY
+    : started + (opts.budgetMs ?? cacheWarmBudgetMs())
   const summary: CacheWarmSummary = {
     warmed: 0,
     skipped: 0,
@@ -374,17 +393,8 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
     targets: 0
   }
 
-  const queries = await deps.loadQueries()
+  const { queries, targets, ownerLoad } = await selectTargets(deps, opts.only, started)
   const bySlug = new Map(queries.map((q) => [q.slug, q]))
-  const since = new Date(started - USAGE_DAYS * 86_400_000)
-  const paramSets = await deps.loadParamSets()
-  const usage = opts.only ? null : await deps.loadHits(since, queries)
-  const targets = pickWarmTargets({
-    queries,
-    hits: usage?.hits ?? hitsFromParamSets(paramSets, since),
-    paramSets,
-    only: opts.only
-  })
   summary.targets = targets.length
 
   const seenKeys = new Set<string>()
@@ -419,41 +429,43 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
       }
       seenKeys.add(key)
       const ttl = Number(q.cache_ttl) || 0
-      if (ttl > 0 && opts.redis) {
-        // Still cached (a rolling deploy, a second run): the pool is warm too.
-        const fresh = await opts.redis.exists(key).catch(() => 0)
-        if (fresh) {
+      if (!daily && ttl > 0 && opts.redis) {
+        // Cached within the hour (a rolling deploy, a second run): the pool is
+        // warm too. Older entries are refreshed.
+        const at = customQueryCachedAt(await opts.redis.get(key).catch(() => null))
+        if (at != null && deps.now() - at < CACHE_WARM_FRESH_MS) {
           summary.skipped++
           continue
         }
       }
       try {
-        const rows = await withTimeout(
-          deps.exec(q.sql_text, finalParams),
-          Math.min(CACHE_WARM_QUERY_TIMEOUT_MS, remaining)
-        )
+        // The timeout reaches tedious: a warm that runs out really ends and
+        // hands its connection back.
+        const rows = await deps.exec(q.sql_text, finalParams, {
+          timeoutMs: Math.max(1, Math.min(CACHE_WARM_QUERY_TIMEOUT_MS, remaining))
+        })
         if (ttl > 0 && opts.redis) {
           await opts.redis.setex(key, ttl, customQueryCacheValue(rows, new Date(deps.now())))
           summary.cached++
         }
         summary.warmed++
-      } catch (err) {
+      } catch {
         summary.failed++
-        if (err instanceof WarmTimeout && deps.now() >= deadline) summary.budgetSpent = true
+        if (deps.now() >= deadline) summary.budgetSpent = true
       }
     }
   }
-  const concurrency = Math.max(1, Math.min(4, opts.concurrency ?? 2))
+  const concurrency = Math.max(1, Math.min(MAX_CONCURRENCY, opts.concurrency ?? MAX_CONCURRENCY))
   await Promise.all(Array.from({ length: Math.min(concurrency, targets.length) }, worker))
 
-  if (!opts.only && (usage?.ownerLoad ?? 0) > 0) {
-    const remaining = deadline - deps.now()
-    if (remaining <= 0) {
+  if (ownerLoad) {
+    if (deadline - deps.now() <= 0) {
       summary.budgetSpent = true
       summary.skipped++
     } else {
+      // Plain knex reads, each on the pool's own statement timeout.
       try {
-        await withTimeout(deps.ownerLoad(), Math.min(CACHE_WARM_QUERY_TIMEOUT_MS, remaining))
+        await deps.ownerLoad()
         summary.warmed++
       } catch {
         summary.failed++
@@ -464,7 +476,7 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
   summary.ms = deps.now() - started
   opts.log?.(
     summary,
-    `cache warm: ${summary.warmed} warmed (${summary.cached} cached), ${summary.skipped} skipped, ${summary.failed} failed of ${summary.targets} in ${summary.ms}ms${summary.budgetSpent ? ' — budget spent' : ''}`
+    `cache warm${daily ? ' (warm_daily)' : ''}: ${summary.warmed} warmed (${summary.cached} cached), ${summary.skipped} skipped, ${summary.failed} failed of ${summary.targets} in ${summary.ms}ms${summary.budgetSpent ? ' — budget spent' : ''}`
   )
   return summary
 }

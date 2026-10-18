@@ -2,6 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity, logActivityThrottled } from '../services/activity.js'
+import { customQueryCacheKey, customQueryCacheValue } from '../services/custom-query-cache.js'
 import {
   customQueryDependents,
   shapeChecks,
@@ -774,9 +775,12 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       } catch (err) {
         return reply.code(400).send({ error: err instanceof Error ? err.message : 'Bad params' })
       }
+      // Snapshot now: applyScopeParams below mutates finalParams before the
+      // import resolves, and recorded sets must be the caller's own (pre-scope).
+      const asked = { ...finalParams }
       void import('../services/db-tuning/param-sets.js').then(
         ({ effectiveParams, recordParamSet }) =>
-          recordParamSet('query', query.slug, effectiveParams(finalParams))
+          recordParamSet('query', query.slug, effectiveParams(asked))
       )
 
       // User-scope injection — must precede the cache key so scoped and
@@ -796,7 +800,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         (req.body as { refresh?: boolean })?.refresh === true &&
         (query.access !== 'public' || !!req.user)
 
-      const cacheKey = `cq:${slug}:${JSON.stringify(finalParams)}`
+      const cacheKey = customQueryCacheKey(slug, finalParams)
       if (query.cache_ttl > 0 && app.redis && !wantsRefresh) {
         try {
           const cached = await app.redis.get(cacheKey)
@@ -867,11 +871,7 @@ export async function customQueriesRoutes(app: FastifyInstance) {
             const at = new Date().toISOString()
             if (query.cache_ttl > 0 && app.redis) {
               try {
-                await app.redis.setex(
-                  cacheKey,
-                  query.cache_ttl,
-                  JSON.stringify({ cached_at: at, rows: ran })
-                )
+                await app.redis.setex(cacheKey, query.cache_ttl, customQueryCacheValue(ran, at))
               } catch (err) {
                 app.log.warn({ err }, 'Custom query cache write failed')
               }

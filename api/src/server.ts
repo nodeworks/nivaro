@@ -614,6 +614,14 @@ export async function buildServer() {
     })
   }
 
+  // #2445 — the delayed boot cache warm (set in the onReady block below);
+  // cleared on close so a short-lived process never starts it.
+  let cacheWarmTimer: ReturnType<typeof setTimeout> | null = null
+  app.addHook('onClose', async () => {
+    if (cacheWarmTimer) clearTimeout(cacheWarmTimer)
+    cacheWarmTimer = null
+  })
+
   // ─── Daily retention purge (self-hosted only) ─────────────────────────────
   // In cloud mode, retention runs per-tenant via the provisioning system.
   if (!process.env.CLOUD_META_DB_URL)
@@ -1573,8 +1581,9 @@ export async function buildServer() {
         }
       )
 
-      // #2445 — before business hours, pre-run the custom queries people
+      // #2445 — before business hours, pre-run the cached custom queries people
       // actually opened in the last 7 days (default + top recorded param sets)
+      // and the warm_daily ones
       // as an unrestricted caller, plus the owner-load report: after the
       // nightly rebuild the first dashboard met a cold buffer pool (>10 s).
       app.cron.schedule(
@@ -1592,7 +1601,7 @@ export async function buildServer() {
           heavy: true,
           idempotent: 'safe',
           description:
-            'Pre-runs the most-used custom queries (default + top param sets) as an unrestricted caller and fills their shared cache keys, plus the owner-load report, so the first dashboard of the day meets a warm database. Reads only; CACHE_WARM=off disables it.',
+            'Pre-runs the most-used CACHED custom queries (cache TTL above 0; default + top param sets) and every Warm daily query as an unrestricted caller, filling the cache key the execute route reads, plus the owner-load report, so the first dashboard of the day meets a warm database. It runs exactly what a viewer cache miss would run; a key cached within the hour is left alone. CACHE_WARM=off disables it.',
           dryRun: async () => {
             const { planCacheWarm } = await import('./services/cache-warm.js')
             return planCacheWarm()
@@ -1726,8 +1735,10 @@ export async function buildServer() {
       // #2445 — query caches and the buffer pool behind them, once per cluster
       // per version (nvr:warm:<version>), a while after listen so it never
       // competes with the boot's first requests. Never a readiness check.
-      // Metadata warms on every process.
-      setTimeout(() => {
+      // Metadata warms on every process. The query warm holds the cluster's
+      // heavy-job slot, like the 06:30 cron.
+      cacheWarmTimer = setTimeout(() => {
+        cacheWarmTimer = null
         void import('./services/cache-warm.js')
           .then(async (m) => {
             if (!m.cacheWarmAllowed()) return
@@ -1735,18 +1746,21 @@ export async function buildServer() {
             const { NIVARO_VERSION } = await import('./version.js')
             const { INSTANCE_ID } = await import('./services/instance-roster.js')
             if (!(await m.takeBootWarm(app.redis, NIVARO_VERSION, INSTANCE_ID))) return
-            await bootPhase(
-              'Warm query caches',
-              () =>
-                m.runCacheWarm({
-                  redis: app.redis,
-                  log: (summary, line) => app.log.info(summary, line)
-                }),
-              { background: true }
-            )
+            await app.cron.withHeavySlot('cache-warm (boot)', async () => {
+              await bootPhase(
+                'Warm query caches',
+                () =>
+                  m.runCacheWarm({
+                    redis: app.redis,
+                    log: (summary, line) => app.log.info(summary, line)
+                  }),
+                { background: true }
+              )
+            })
           })
           .catch((err) => app.log.warn({ err }, 'cache warm failed'))
-      }, 20_000).unref()
+      }, 20_000)
+      cacheWarmTimer.unref()
 
       // Nightly config-conformance runs for scheduled collections, with a
       // regression note when a collection's issue count grew since last run.

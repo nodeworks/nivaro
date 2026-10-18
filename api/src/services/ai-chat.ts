@@ -13,6 +13,7 @@ import { CONTEXT_TOOLS } from './ai-context-tool-defs.js'
 import { PANEL_TOOLS } from './ai-panel-tool-defs.js'
 import { describePlanStepKinds, type ProposePlanInput, proposePlan } from './ai-plans.js'
 import { WATCH_TOOLS } from './ai-watch-tool-defs.js'
+import { customQueryCacheKey, customQueryCacheValue } from './custom-query-cache.js'
 import { embedText, searchEmbeddings } from './embeddings.js'
 import type { PathNode } from './event-path/types.js'
 import { getApp } from './io-holder.js'
@@ -1660,7 +1661,7 @@ async function runChatTool(
       const redis = (getApp() as { redis?: unknown } | null)?.redis as
         | { get(k: string): Promise<string | null>; set(...a: unknown[]): Promise<string | null> }
         | undefined
-      const cacheKey = `cq:${slug}:${JSON.stringify(finalParams)}`
+      const cacheKey = customQueryCacheKey(slug, finalParams)
       let rows: Array<Record<string, unknown>> | null = null
       let cached = false
       if (query.cache_ttl > 0 && redis) {
@@ -1681,12 +1682,7 @@ async function runChatTool(
         rows = await execCustomQuerySql(query.sql_text, finalParams)
         if (query.cache_ttl > 0 && redis) {
           try {
-            await redis.set(
-              cacheKey,
-              JSON.stringify({ cached_at: new Date().toISOString(), rows }),
-              'EX',
-              query.cache_ttl
-            )
+            await redis.set(cacheKey, customQueryCacheValue(rows), 'EX', query.cache_ttl)
           } catch {
             /* cache is a convenience */
           }

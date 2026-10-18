@@ -3,6 +3,7 @@ import { db } from '../db/index.js'
 import { emitTrigger } from '../flows/registry.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { customQueryCacheKey, customQueryCacheValue } from '../services/custom-query-cache.js'
 import { applyScopeParams } from '../services/custom-query-scope.js'
 import { cachedDefinition } from '../services/definition-cache.js'
 import { can } from '../services/permissions.js'
@@ -593,7 +594,7 @@ async function renderWidget(
     // Scope injection is what keeps sharing-by-accident safe regardless: the
     // route mixes a restricted caller's scope values INTO the params before
     // keying, so a scoped result can never land under an unscoped key.
-    const cacheKey = `cq:${cq.slug}:${JSON.stringify(params)}`
+    const cacheKey = customQueryCacheKey(cq.slug, params)
     const cacheTtl = Number(cq.cache_ttl ?? 0)
     let cachedRows: unknown[] | null = null
     let cacheInfo: Record<string, unknown> | undefined
@@ -702,7 +703,7 @@ async function renderWidget(
           })
           if (cacheTtl > 0 && redis) {
             try {
-              await redis.setex(cacheKey, cacheTtl, JSON.stringify({ cached_at: at, rows: ran }))
+              await redis.setex(cacheKey, cacheTtl, customQueryCacheValue(ran, at))
             } catch {
               /* a cache write must never fail a render */
             }
