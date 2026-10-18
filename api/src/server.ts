@@ -395,6 +395,11 @@ export async function buildServer() {
     registerResponseConventions(app)
   }
 
+  // ─── Response compression (#2437): after every payload-reading onSend hook,
+  // before the routes it should cover (route-level hook; see the plugin note).
+  const { registerCompression } = await import('./plugins/compression.js')
+  await registerCompression(app)
+
   // ─── Error tracking: 5xx → nivaro_issues (deduped, fire-and-forget) ───────
   const errorContextCounters = new Map<string, number>()
   const DETAIL_KEYS = [
@@ -526,7 +531,16 @@ export async function buildServer() {
   // ─── Serve admin static build (release image) ────────────────────────────
   const adminBuildPath = join(import.meta.dirname, '../../admin/dist')
   if (existsSync(adminBuildPath)) {
-    await app.register(fastifyStatic, { root: adminBuildPath, prefix: '/' })
+    await app.register(fastifyStatic, {
+      root: adminBuildPath,
+      prefix: '/',
+      // scripts/precompress-dist.mjs writes .br/.gz beside each asset at build
+      preCompressed: true,
+      // a cache must key the .br/.gz/raw variants apart
+      setHeaders: (res) => {
+        res.setHeader('Vary', 'Accept-Encoding')
+      }
+    })
     app.setNotFoundHandler((req, reply) => {
       // Segment-exact prefix match: '/api/...' is an API miss, but the admin
       // SPA routes /api-analytics, /api-keys and /api-docs also START WITH

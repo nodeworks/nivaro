@@ -260,19 +260,24 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
     await logActivity({ action: 'heap-snapshot', user: req.user?.id, comment: name, req })
     return reply.send({ data: { name } })
   })
-  app.get<{ Params: { name: string } }>('/heap-snapshot/:name', async (req, reply) => {
-    const name = req.params.name
-    if (!/^nivaro-heap-\d+\.heapsnapshot$/.test(name)) {
-      return reply.code(400).send({ error: 'Invalid snapshot name' })
+  app.get<{ Params: { name: string } }>(
+    '/heap-snapshot/:name',
+    { compress: false },
+    async (req, reply) => {
+      const name = req.params.name
+      if (!/^nivaro-heap-\d+\.heapsnapshot$/.test(name)) {
+        return reply.code(400).send({ error: 'Invalid snapshot name' })
+      }
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const { createReadStream, existsSync } = await import('node:fs')
+      const path = join(tmpdir(), name)
+      if (!existsSync(path))
+        return reply.code(404).send({ error: 'Snapshot not found (restarted?)' })
+      reply.header('Content-Disposition', `attachment; filename="${name}"`)
+      return reply.send(createReadStream(path))
     }
-    const { tmpdir } = await import('node:os')
-    const { join } = await import('node:path')
-    const { createReadStream, existsSync } = await import('node:fs')
-    const path = join(tmpdir(), name)
-    if (!existsSync(path)) return reply.code(404).send({ error: 'Snapshot not found (restarted?)' })
-    reply.header('Content-Disposition', `attachment; filename="${name}"`)
-    return reply.send(createReadStream(path))
-  })
+  )
 
   // #235/#314 — rolling restart with safety gating: refuses while imports or
   // heavy jobs are mid-run (force=1 overrides), logs reason, exits AFTER the

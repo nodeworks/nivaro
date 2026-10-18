@@ -104,7 +104,7 @@ export async function backupsRoutes(app: FastifyInstance) {
     return reply.send({ data: { business, system, excluded: [...SYSTEM_EXCLUDE] } })
   })
 
-  app.get('/export', async (req, reply) => {
+  app.get('/export', { compress: false }, async (req, reply) => {
     const includeSystem = (req.query as { include_system?: string }).include_system === 'true'
 
     await logActivity({

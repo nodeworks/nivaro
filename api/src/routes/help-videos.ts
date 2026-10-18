@@ -853,7 +853,7 @@ export async function helpVideosRoutes(app: FastifyInstance) {
   app.get('/music', { preHandler: requireAuthor }, async (_req, reply) => {
     return reply.send({ data: await musicLibrary() })
   })
-  app.get('/music/:key', { preHandler: requireAuthor }, async (req, reply) => {
+  app.get('/music/:key', { preHandler: requireAuthor, compress: false }, async (req, reply) => {
     const { key } = req.params as { key: string }
     const t = /^[a-z][a-z0-9-]{0,39}$/i.test(key) ? await libraryTrackFile(key) : null
     if (!t) return reply.code(404).send({ error: 'Music not found', code: 'HELP_VIDEO_NOT_FOUND' })
@@ -1017,7 +1017,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
   // no-cache on every media answer: a browser may keep the bytes but must ask
   // again, so someone whose role or the video's visibility changed stops
   // getting it at once instead of after an hour of cache.
-  app.get('/:id/stream', async (req, reply) => {
+  app.get('/:id/stream', { compress: false }, async (req, reply) => {
     const { version, draft, author } = await resolve(req)
     // ?source=1 is honoured for authors only; a viewer never gets an original
     // whose blurs or cuts would show (see viewerMayPlaySource).
@@ -1044,7 +1044,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
   // pickDownloadFile), as an attachment. Viewers are refused when the video's
   // "Allow downloads" switch is off; authors and admins always may. Each
   // download (not each resumed range) is an activity row — data egress.
-  app.get('/:id/download', async (req, reply) => {
+  app.get('/:id/download', { compress: false }, async (req, reply) => {
     const { video, version, draft, author, userId } = await resolve(req)
     const q = req.query as { file?: string; source?: string }
     const file = q.file ?? 'video'
@@ -1140,7 +1140,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
 
   // A help-video package (see POST /packages). The link names the admin who
   // asked; that person must still be an active administrator now.
-  app.get('/packages/:token', async (req, reply) => {
+  app.get('/packages/:token', { compress: false }, async (req, reply) => {
     const { token } = req.params as { token: string }
     const gone = () =>
       reply.code(404).send({
@@ -1191,7 +1191,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
       .send(stream)
   })
 
-  app.get('/:id/captions.vtt', async (req, reply) => {
+  app.get('/:id/captions.vtt', { compress: false }, async (req, reply) => {
     const { version } = await resolve(req)
     const sourceMs = Number(version.source_duration_ms ?? 30 * 60_000)
     let raw: unknown = emptyEdits(0)
@@ -1266,7 +1266,7 @@ export async function helpVideoMediaRoutes(app: FastifyInstance) {
     })
   })
 
-  app.get('/:id/poster', async (req, reply) => {
+  app.get('/:id/poster', { compress: false }, async (req, reply) => {
     const { video } = await resolve(req)
     const file = video.poster_file ? await getFile(String(video.poster_file)) : undefined
     if (!file?.filename_disk) return reply.code(404).send({ error: 'No poster yet' })

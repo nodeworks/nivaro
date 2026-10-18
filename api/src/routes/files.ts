@@ -398,7 +398,7 @@ export async function filesRoutes(app: FastifyInstance) {
   // read are that ROW's stored key, never the caller's spelling of it. So no
   // case, Unicode, encoding or driver key-mapping variant can reach a
   // help-video object (or any object without a row) through here.
-  app.get('/raw/*', async (req, reply) => {
+  app.get('/raw/*', { compress: false }, async (req, reply) => {
     const key = (req.params as Record<string, string>)['*']
     if (!key || key.includes('..')) return reply.code(400).send({ error: 'Invalid key' })
     if (posix.normalize(key) !== key || /^[/\\]|[\\]|\/$|^\s|\s$/.test(key)) {
@@ -428,7 +428,7 @@ export async function filesRoutes(app: FastifyInstance) {
   })
 
   // On-the-fly image transformations, cached back into storage.
-  app.get('/:id/transform', async (req, reply) => {
+  app.get('/:id/transform', { compress: false }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const q = req.query as { w?: string; h?: string; fit?: string; format?: string; q?: string }
 
@@ -481,7 +481,7 @@ export async function filesRoutes(app: FastifyInstance) {
     return reply.send(transformed)
   })
 
-  app.get('/:id', async (req, reply) => {
+  app.get('/:id', { compress: false }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const q = req.query as { download?: string }
     const file = await servableFile(id, req)
