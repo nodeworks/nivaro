@@ -54,6 +54,7 @@ import '../features/inspect-entities'
 import '../features/inspect-nav'
 import '../features/inspect-actions'
 import '../features/partners'
+import '../features/integrations'
 
 export {
   type CanvasLayer,
