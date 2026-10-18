@@ -901,14 +901,22 @@ export async function resolveStateOwnersBatch(
     }
     set.add(col)
   }
+  // Walked once per (collection, state) pair, like the dotted fields above: a
+  // state's ~3,900 candidate groups were re-walked for every record in the
+  // batch — the bulk of this function's own CPU on a list or queue page.
+  const colsSeen = new Set<string>()
   for (const req of needsRecord) {
-    for (const { filters } of preparedByState.get(req.stateId)?.candidates ?? []) {
-      for (const f of filters) {
-        if (f.field.includes('.')) {
-          addCol(req.collection, f.field.split('.')[0])
-          // lookup_compare-style record_field reads ride the same row
-        } else {
-          addCol(req.collection, f.field)
+    const pairKey = `${req.collection}::${req.stateId}`
+    if (!colsSeen.has(pairKey)) {
+      colsSeen.add(pairKey)
+      for (const { filters } of preparedByState.get(req.stateId)?.candidates ?? []) {
+        for (const f of filters) {
+          if (f.field.includes('.')) {
+            addCol(req.collection, f.field.split('.')[0])
+            // lookup_compare-style record_field reads ride the same row
+          } else {
+            addCol(req.collection, f.field)
+          }
         }
       }
     }

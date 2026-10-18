@@ -144,8 +144,38 @@ function zoneFormatter(tz: string): Intl.DateTimeFormat {
   return f
 }
 
+type WallClock = { day: number; hour: number; key: string }
+
+// An instant's wall clock never changes, and every zone's offset is a multiple
+// of 15 minutes, so one read serves the whole quarter-hour. SLA ranges in a
+// batch overlap (they all end now), so most reads repeat. Bounded; cleared whole.
+const QUARTER_MS = 900_000
+const WALL_CACHE_MAX = 50_000
+const wallCache = new Map<string, Map<number, WallClock>>()
+let wallCacheSize = 0
+
 /** The instant's wall clock in the schedule's zone (server-local when unset). */
-function wallClock(d: Date, tz: string | null): { day: number; hour: number; key: string } {
+function wallClock(d: Date, tz: string | null): WallClock {
+  const bucket = Math.floor(d.getTime() / QUARTER_MS)
+  let zone = wallCache.get(tz ?? '')
+  const hit = zone?.get(bucket)
+  if (hit) return hit
+  const wc = readWallClock(new Date(bucket * QUARTER_MS), tz)
+  if (wallCacheSize >= WALL_CACHE_MAX) {
+    wallCache.clear()
+    wallCacheSize = 0
+    zone = undefined
+  }
+  if (!zone) {
+    zone = new Map()
+    wallCache.set(tz ?? '', zone)
+  }
+  zone.set(bucket, wc)
+  wallCacheSize++
+  return wc
+}
+
+function readWallClock(d: Date, tz: string | null): WallClock {
   if (!tz) return { day: d.getDay(), hour: d.getHours(), key: dateKey(d) }
   const parts = zoneFormatter(tz).formatToParts(d)
   const get = (type: string) => parts.find((p) => p.type === type)?.value ?? ''
@@ -156,26 +186,47 @@ function wallClock(d: Date, tz: string | null): { day: number; hour: number; key
   }
 }
 
+const HOUR_MS = 3_600_000
+
 /** Hours between two instants that fall inside the business schedule.
- *  Day/hour/holiday are judged in the SCHEDULE's timezone. */
+ *  Day/hour/holiday are judged in the SCHEDULE's timezone.
+ *
+ *  Counts the hourly steps from `from` (from, from+1h, … while < to) whose wall
+ *  clock is a working hour. It used to read the wall clock once per step — an
+ *  Intl format per hour, thousands per record for an SLA open for months, and
+ *  the batch status route's whole CPU. Now each local day is read at its first
+ *  and last step: when they agree (same day, hours contiguous) the day's
+ *  working hours are counted arithmetically; a day whose clock changes in
+ *  between (DST) is walked hour by hour as before. Same result, two reads a
+ *  day. */
 export function businessHoursElapsed(
   from: Date,
   to: Date,
   schedule: BusinessSchedule = getSlaScheduleSync()
 ): number {
+  const tz = schedule.timeZone
+  const working = (wc: { day: number; hour: number; key: string }) =>
+    !schedule.holidays.has(wc.key) &&
+    schedule.days.has(wc.day) &&
+    wc.hour >= schedule.startHour &&
+    wc.hour < schedule.endHour
+  const end = to.getTime()
+  let t = from.getTime()
   let hours = 0
-  const current = new Date(from)
-  while (current < to) {
-    const wc = wallClock(current, schedule.timeZone)
-    if (
-      !schedule.holidays.has(wc.key) &&
-      schedule.days.has(wc.day) &&
-      wc.hour >= schedule.startHour &&
-      wc.hour < schedule.endHour
-    ) {
-      hours++
+  while (t < end) {
+    const wc = wallClock(new Date(t), tz)
+    const steps = Math.min(24 - wc.hour, Math.ceil((end - t) / HOUR_MS))
+    const last = steps > 1 ? wallClock(new Date(t + (steps - 1) * HOUR_MS), tz) : wc
+    if (last.key === wc.key && last.hour === wc.hour + steps - 1) {
+      if (!schedule.holidays.has(wc.key) && schedule.days.has(wc.day)) {
+        const lo = Math.max(wc.hour, schedule.startHour)
+        const hi = Math.min(wc.hour + steps, schedule.endHour)
+        if (hi > lo) hours += hi - lo
+      }
+    } else {
+      for (let i = 0; i < steps; i++) if (working(wallClock(new Date(t + i * HOUR_MS), tz))) hours++
     }
-    current.setTime(current.getTime() + 3_600_000)
+    t += steps * HOUR_MS
   }
   return hours
 }
