@@ -1,10 +1,46 @@
 {
-  "generated_at": "2026-10-18T21:37:42.046Z",
+  "generated_at": "2026-10-18T22:48:47.266Z",
   "releases": [
+    {
+      "version": "0.2.58",
+      "tag": "v0.2.58",
+      "date": "2026-10-18T18:48:35-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": "ops",
+              "text": "CPU profile of a running replica, summarized",
+              "hash": "21dea88d"
+            }
+          ]
+        },
+        {
+          "label": "Performance",
+          "entries": [
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "SLA business hours and owner resolution stop burning API CPU",
+              "hash": "d08ba0d7"
+            },
+            {
+              "section": "Performance",
+              "scope": null,
+              "text": "drop the duplicate reads a record page made on every open",
+              "hash": "f9bf8ae0"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.2.57",
       "tag": "v0.2.57",
-      "date": "2026-10-18T17:37:28-04:00",
+      "date": "2026-10-18T17:37:42-04:00",
       "sections": [
         {
           "label": "Performance",
