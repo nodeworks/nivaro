@@ -59,8 +59,8 @@ export interface Overhead {
     callers: number
     downs: number
     bytes: number
-    process_rss: number
-    process_heap_used: number
+    process_rss?: number
+    process_heap_used?: number
   }
   watchers: number
 }
@@ -277,7 +277,7 @@ export function MapSettings() {
                 <Fig
                   label='Memory (estimate)'
                   value={fmtBytes(o.memory.bytes)}
-                  hint={`${o.memory.entities} nodes, ${o.memory.callers} callers, ${o.memory.downs} downstream; the whole process holds ${fmtBytes(o.memory.process_rss)}`}
+                  hint={`${o.memory.entities} nodes, ${o.memory.callers} callers, ${o.memory.downs} downstream${o.memory.process_rss != null ? `; the whole process holds ${fmtBytes(o.memory.process_rss)}` : ''}`}
                 />
                 <Fig
                   label='To browsers'

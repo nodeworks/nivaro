@@ -242,9 +242,13 @@ export async function mapDataRoutes(app: FastifyInstance): Promise<void> {
       sockets?: { adapter?: { rooms?: Map<string, Set<string>> } }
     } | null
     const watchers = io?.sockets?.adapter?.rooms?.get(trafficRoomFor(store))?.size ?? 0
-    return {
-      data: withTrafficStore(store, () => overheadReport(estimateMapBytes(), watchers)),
-      stores: trafficStoreIds().length
+    const data = withTrafficStore(store, () => overheadReport(estimateMapBytes(), watchers))
+    // One process serves many tenants in cloud mode: its memory and how many stores it holds are
+    // instance facts, not this tenant's, so they stay out of a tenant's answer.
+    if (process.env.CLOUD_META_DB_URL) {
+      const { process_rss: _rss, process_heap_used: _heap, ...memory } = data.memory
+      return { data: { ...data, memory } }
     }
+    return { data, stores: trafficStoreIds().length }
   })
 }
