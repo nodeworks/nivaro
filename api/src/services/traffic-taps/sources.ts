@@ -28,6 +28,8 @@ interface ImportRunState {
   label: string | null
   started_at: number
   rows: number | null
+  /** #2268: size of the file this run loads, so a slower run with a bigger file is not a regression. */
+  bytes: number | null
   phase: string
 }
 interface SourcesState {
@@ -142,7 +144,13 @@ export function noteFlowTrigger(src: TrafficSource, at = Date.now()): void {
 /** The staged-import worker's current run (#1143). */
 export function noteImportRun(
   phase: 'start' | 'rows' | 'done' | 'error',
-  run: { run_id: number; key: string; label?: string | null; rows?: number | null }
+  run: {
+    run_id: number
+    key: string
+    label?: string | null
+    rows?: number | null
+    bytes?: number | null
+  }
 ): void {
   try {
     const s = state()
@@ -153,6 +161,7 @@ export function noteImportRun(
         label: run.label ?? null,
         started_at: Date.now(),
         rows: null,
+        bytes: run.bytes ?? null,
         phase: 'running'
       }
       return
@@ -168,6 +177,7 @@ export function noteImportRun(
       label: run.label ?? null,
       started_at: Date.now(),
       rows: null,
+      bytes: run.bytes ?? null,
       phase
     }
     s.importLast = {

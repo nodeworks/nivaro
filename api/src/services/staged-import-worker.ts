@@ -296,7 +296,8 @@ async function runOne(
     noteImportRun('start', {
       run_id: Number(next.id),
       key: String(next.import_key),
-      label: definition.label ?? null
+      label: definition.label ?? null,
+      bytes: fileBuffer.length
     })
     const { rowCount, durationSeconds, summary, affected, matched } = await startChain(
       chainRoot,

@@ -21,6 +21,7 @@
 import { createHash, createHmac } from 'node:crypto'
 import { db } from '../db/index.js'
 import { getStorage } from './storage/index.js'
+import { instrumentStorage } from './storage/instrument.js'
 
 export type StorageDriverName = 'local' | 's3' | 'azure-blob'
 
@@ -379,8 +380,12 @@ export async function getActiveStorageDriver(): Promise<StorageDriver> {
   } catch {
     resolved = envDriver()
   }
-  _cache = { fetched: Date.now(), driver: resolved }
-  return resolved
+  // #2164: timed for the Traffic Map's storage node. The env provider is already timed inside
+  // getStorage(), so it is not wrapped twice; the Settings "Test connection" probe builds its
+  // driver with buildDriver and is not counted.
+  const timed = resolved.name === 'local' ? resolved : instrumentStorage(resolved, resolved.name)
+  _cache = { fetched: Date.now(), driver: timed }
+  return timed
 }
 
 /**
