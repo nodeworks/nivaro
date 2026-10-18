@@ -1001,6 +1001,26 @@ export const obsTrafficMapLenses: DocSection = {
         'Dead letters: failed flow runs, and webhook deliveries that failed in the last day with nothing successful since, gather in one node with Retry and Discard on each item or on everything listed. Discarding keeps the run in the flow history; webhook deliveries can be retried but not discarded.',
         'Cloud operators: `GET /admin/traffic-tenants?window=300` (the provisioning path, cloud mode only) with the `x-provision-secret` header ranks the tenants this process served by database time, then requests, then errors.'
       ]
+    },
+    { type: 'h2', id: 'traffic-map-people-experience', text: 'People and experience' },
+    {
+      type: 'p',
+      text: 'One panel on the Traffic Map page, People and experience, with a switch between ten lenses. Each reads real browser timings, the request log, journeys, notifications or the AI call log, and shows the worst rows first. A request is given a page by the visit the person had open when it arrived, so a person with two tabs open is attributed to the most recent page.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'New people: calls per visit, p95, error rate and browser time for people in their first 7 days against everyone else, per page, with how much slower the first-week experience is.',
+        'Browsers: per page, the p75 load and route time by browser, system and screen size class (phone, tablet, laptop, desktop, wide), flagging a value 1.5 times slower than the rest of the page. Only the class of the screen is stored, never the exact size. Timings from before this version carry no browser.',
+        'Errors by person (admin only): people ranked by browser errors and failed calls, with the pages and the error text, so support can reach out first.',
+        'Network or server: for each page, the median load split into the wait for the first byte (network), the slowest call the page waited on (server) and the rest (browser). It is an estimate.',
+        'Apdex: satisfied up to the target, tolerating up to four times it, frustrated beyond. Defaults are 1 s for pages and 0.5 s for calls (`TRAFFIC_APDEX_PAGE_MS`, `TRAFFIC_APDEX_REQUEST_MS`), adjustable on the lens. Per page or per person, with the weekly scores beside the totals. The log keeps 14 days, so a trend has two or three weekly points.',
+        'Sign-in: the path through sign-in as a funnel per method (Microsoft, SAML, password, token): login page, provider redirect, callback and first page, with failures and the p50 and p95 time between steps. Calls are tied together by address and browser.',
+        'Screen flow: moves between screens as a flow diagram per app, heaviest first, with the calls each move costs in the destination screen’s first five seconds.',
+        'Notification load: people who received 10 or more notifications in an hour (`TRAFFIC_NOTIFY_FLOOD_PER_HOUR`), with the hours, the channels, categories and senders responsible.',
+        'AI spend: AI cost by screen, from the AI call log and the page the caller had open, and the same top screens on the AI provider node.',
+        'Business heat: single-record reads and writes by the User Scope dimension value the record belongs to (a zone, a region, a project type), so one region’s month-end shows as that region. It counts only while the page is open, keeps no record values, and does not attribute list reads. Not available in cloud mode.'
+      ]
     }
   ]
 }
