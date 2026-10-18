@@ -999,7 +999,23 @@ export const obsTrafficMapLenses: DocSection = {
         'Queue cache: a node that appears when a queue is materialized, showing rows resynced per write and their cost, failures, rebuild runs and time since the last rebuild, plus the lookup every business write pays.',
         'Nested resolver time: on a GraphQL operation, the time spent per nested field path (to-one, to-many, many-to-many, linked records) and per access check, summed over every row a list resolved. Measured only while the map is open.',
         'Dead letters: failed flow runs, and webhook deliveries that failed in the last day with nothing successful since, gather in one node with Retry and Discard on each item or on everything listed. Discarding keeps the run in the flow history; webhook deliveries can be retried but not discarded.',
-        'Cloud operators: `GET /admin/traffic-tenants?window=300` (the provisioning path, cloud mode only) with the `x-provision-secret` header ranks the tenants this process served by database time, then requests, then errors.'
+        'Cloud operators: `GET /admin/traffic-tenants?window=300` (the provisioning path, cloud mode only) with the `x-provision-secret` header ranks the tenants this process served by database time, then requests, then errors.',
+        'HTTP caching (More → HTTP caching): every GET route in the window with its share of 304 Not Modified answers (browser cache hits the server revalidated), conditional requests, repeats (the same caller fetching the same URL again within a minute) and the cache headers it sent. Routes a browser could cache (static content, or high repeats) that send no Cache-Control, ETag or Last-Modified are flagged first. Report only: no header is changed.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-security', text: 'Security' },
+    {
+      type: 'p',
+      text: 'Badges on caller nodes, a Security section in the caller’s inspector and a Security panel (More → Security). Addresses and browsers are only shown to admins on this page; they are never sent on the live feed or kept in saved snapshots.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Places: requests by country and region from the caller’s address, looked up on the server in an offline MaxMind database. Set `TRAFFIC_GEOIP_DB` to a GeoLite2 Country or City `.mmdb` file to turn it on; addresses are never sent anywhere. A caller’s places are learned in its first 15 minutes; a place first seen after that gets a "new place" badge for an hour. Not-signed-in traffic is never flagged.',
+        'Scripted sessions: a person’s browser session that makes calls at a steady machine pace or in a fixed repeating loop from outside the app (the call carries no Nivaro app header, as from a browser extension or a script reusing the cookie), or whose client names a scripting tool such as curl. The panel shows the pattern and links to the person. The app’s own polling never flags.',
+        'One session from two places: the same session going back and forth between two networks within five minutes, a possible copied cookie. Both addresses and browsers are shown. When the two sides use different browsers or countries, active admins get an in-app notification (once per person every 6 hours; never the person themselves; deployed instances only). Private addresses and the ranges in `TRAFFIC_KNOWN_PROXIES` (comma-separated CIDRs of shared gateways and VPN exits) are left out, and masquerade and View-as are not sessions.',
+        'Wrong environment: calls whose Referer or Origin is another environment’s frontend or admin from the Environments registry, API keys this instance does not know (usually minted on another environment), and keys named for another environment.',
+        'Bad data by caller: records whose after-write Data Integrity check found problems in the last 7 days, credited to the caller whose write came just before the check, with the rules broken and example records.'
       ]
     }
   ]
