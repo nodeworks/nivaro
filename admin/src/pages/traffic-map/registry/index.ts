@@ -61,6 +61,8 @@ import '../features/realtime-nodes'
 import '../features/map-settings'
 import '../features/snapshot-compare'
 import '../features/node-about'
+import '../features/security'
+import '../features/http-cache'
 
 export {
   type CanvasLayer,

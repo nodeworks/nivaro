@@ -24,6 +24,7 @@ import { platformNodesRoutes } from './platform-nodes.js'
 import { realtimeRoutes } from './realtime.js'
 import { replayRoutes } from './replay.js'
 import { requestLensesRoutes } from './request-lenses.js'
+import { securityRoutes } from './security.js'
 import { snapshotRoutes } from './snapshots.js'
 import { staleTabsRoutes } from './stale-tabs.js'
 import { topologyRoutes } from './topology.js'
@@ -69,7 +70,8 @@ const FEATURES: FastifyPluginAsync[] = [
   integrationsRoutes,
   peopleUxRoutes,
   realtimeRoutes,
-  mapDataRoutes
+  mapDataRoutes,
+  securityRoutes
 ]
 
 export async function trafficMapExtraRoutes(app: FastifyInstance): Promise<void> {
