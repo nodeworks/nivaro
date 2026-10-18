@@ -80,6 +80,7 @@ import {
   canOpenDm,
   chatAvatarColor,
   chatInitials,
+  chatRoomTypesQuery,
   type DirectoryChannel,
   dmPeer,
   dmRoom,
@@ -98,6 +99,7 @@ import {
   useChatRoles,
   useChatRooms,
   useChatSearch,
+  useChatThread,
   useCreateChannel,
   useCreateGroupDm,
   useDeleteMessage,
@@ -110,7 +112,6 @@ import {
   usePeerReadAt,
   useRoomMembership,
   useRoomPins,
-  useChatThread,
   useSendChatMessage,
   useSetMyPreferences,
   useTogglePin,
@@ -508,25 +509,7 @@ function EntityChip({ token, url, mine }: { token: string; url: string | null; m
   const th = useTheme()
   const client = useNivaroClient()
 
-  const { data: types } = useQuery({
-    queryKey: ['nvr-chat-room-types'],
-    queryFn: async () => {
-      const res = (await client.request(
-        get<{
-          data: Array<{
-            prefix: string
-            collection: string
-            match_field: string
-            is_active: boolean
-          }>
-        }>('/chat/room-types')
-      )) as {
-        data: Array<{ prefix: string; collection: string; match_field: string; is_active: boolean }>
-      }
-      return (res.data ?? []).filter((t) => t.is_active)
-    },
-    staleTime: 5 * 60_000
-  })
+  const { data: types } = useQuery(chatRoomTypesQuery(client))
 
   const { data: card } = useQuery({
     queryKey: ['nvr-chat-entity-card', token],
@@ -762,29 +745,13 @@ function EntityRoomCard({ room }: { room: string }) {
   const isEntity =
     !!prefix && !!token && room !== cfg.globalRoom && prefix !== 'dm' && prefix !== 'ch'
 
+  const roomTypesQc = useQueryClient()
   const { data: card } = useQuery({
     queryKey: ['nvr-chat-room-card', room],
     queryFn: async () => {
-      const types = (await client.request(
-        get<{
-          data: Array<{
-            prefix: string
-            collection: string
-            match_field: string
-            is_active: boolean
-            label: string | null
-          }>
-        }>('/chat/room-types')
-      )) as {
-        data: Array<{
-          prefix: string
-          collection: string
-          match_field: string
-          is_active: boolean
-          label: string | null
-        }>
-      }
-      const t = (types.data ?? []).find((x) => x.is_active && x.prefix === prefix)
+      // The registry comes from the one shared cache entry, not a second read.
+      const types = await roomTypesQc.fetchQuery(chatRoomTypesQuery(client))
+      const t = types.find((x) => x.is_active && x.prefix === prefix)
       if (!t) return null
       const rec = (await client.request(
         get<{ data: Array<{ id: string | number }> }>(`/items/${t.collection}`, {
@@ -4642,9 +4609,8 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                                 // Only unusual places are worth naming; the
                                 // ordinary frontend sends no app at all.
                                 pageText =
-                                  (app
-                                    ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim()
-                                    : page) || null
+                                  (app ? `${page ?? ''}${page ? ' · ' : ''}${app}`.trim() : page) ||
+                                  null
                               }
                             }
                             const metaText = meta.join(' · ')

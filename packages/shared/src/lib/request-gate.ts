@@ -22,10 +22,26 @@ import { noteOwnWriteFromCommand } from './own-writes'
 
 type AnyCommand = { _method?: string; _path?: string; _body?: unknown; _params?: unknown }
 
+/**
+ * The query string a command puts on the wire, as a stable key: the SDK drops
+ * null/undefined params and stringifies the rest, so `{}`, `undefined`,
+ * `{ layout_id: 5 }` vs `{ layout_id: '5' }` and key order are the SAME
+ * request. Keying on raw JSON split them, and two components asking for one
+ * URL in the same tick each paid a round trip.
+ */
+function paramsKey(params: unknown): string {
+  if (!params || typeof params !== 'object') return ''
+  const entries = Object.entries(params as Record<string, unknown>)
+    .filter(([, v]) => v != null)
+    .map(([k, v]) => [k, String(v)] as const)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+  return entries.length ? new URLSearchParams(entries as [string, string][]).toString() : ''
+}
+
 function commandKey(c: AnyCommand): string {
   const method = (c._method ?? 'GET').toUpperCase()
   const body = method === 'GET' || c._body === undefined ? '' : JSON.stringify(c._body)
-  return `${method} ${c._path ?? ''} ${c._params ? JSON.stringify(c._params) : ''} ${body}`
+  return `${method} ${c._path ?? ''} ${paramsKey(c._params)} ${body}`
 }
 
 function isRead(c: AnyCommand): boolean {
@@ -72,6 +88,12 @@ export interface CoalescingOptions {
    * error they would have seen without batching. Writes never batch.
    */
   batchReads?: boolean
+  /**
+   * Collection metadata reads (`GET /collections/<name>`) asked for within
+   * ~10 ms ride one `GET /collections?names=`. On by default; an older server
+   * without the batch is detected and the loader steps aside. `false` opts out.
+   */
+  batchCollections?: boolean
 }
 
 /** The most reads one batch carries (the server's own cap). */
@@ -183,6 +205,172 @@ function readBatcher(client: NivaroClient) {
     })
 }
 
+// ─── Collection metadata batching ──────────────────────────────────────────
+
+/** The most collections one `GET /collections?names=` carries (the server's cap). */
+export const COLLECTION_BATCH_LIMIT = 50
+/** How long the loader collects names before it sends. */
+export const COLLECTION_BATCH_WINDOW_MS = 10
+
+const COLLECTION_META_PATH = /^\/collections\/([A-Za-z_][A-Za-z0-9_-]{0,127})$/
+
+/**
+ * The collection a GET command reads the metadata of (`GET /collections/<name>`
+ * with no query), or null. Sub-routes (`/collections/x/fields`) and reads with
+ * params never batch.
+ */
+export function batchableCollectionMeta(command: unknown): string | null {
+  const c = command as AnyCommand
+  if ((c._method ?? 'GET').toUpperCase() !== 'GET') return null
+  if (paramsKey(c._params) !== '') return null
+  const m = COLLECTION_META_PATH.exec(c._path ?? '')
+  return m ? m[1] : null
+}
+
+interface PendingMeta {
+  name: string
+  command: Command<unknown>
+  resolve: (v: unknown) => void
+  reject: (e: unknown) => void
+}
+
+/** The error the SDK throws for the single read's 404 — callers see no difference. */
+function notFoundError(): Error {
+  return Object.assign(new Error('Not found'), { status: 404, response: { error: 'Not found' } })
+}
+
+/**
+ * Names asked for within COLLECTION_BATCH_WINDOW_MS ride one
+ * `GET /collections?names=a,b,c` (chunks of COLLECTION_BATCH_LIMIT); each
+ * caller still gets `{ data }` exactly as its own single read answers it.
+ * A name the server lists as missing rejects like the single read's 404; a
+ * name whose read failed server-side, and every name of a batch that failed
+ * as a whole, is re-sent on its own — so one bad collection never fails the
+ * others and errors keep their native shape. A server without the batch
+ * (its list route answers an ARRAY) switches the loader off for good.
+ */
+function collectionMetaBatcher(client: NivaroClient) {
+  let supported = true
+  let pending: PendingMeta[] = []
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const alone = (p: PendingMeta) => client.request(p.command).then(p.resolve, p.reject)
+  const send = async (group: PendingMeta[]) => {
+    const names = [...new Set(group.map((p) => p.name))]
+    if (names.length === 1 || !supported) {
+      for (const p of group) void alone(p)
+      return
+    }
+    let body: { data?: unknown; missing?: unknown; errors?: unknown } | undefined
+    try {
+      body = (await client.request({
+        _method: 'GET',
+        _path: '/collections',
+        _params: { names: names.join(',') }
+      } as Command<unknown>)) as typeof body
+    } catch (err) {
+      // An older server refuses the param outright — stop asking it.
+      const status = (err as { status?: number })?.status
+      if (status === 400 || status === 404 || status === 405) supported = false
+      body = undefined
+    }
+    const data = body?.data
+    if (!data || typeof data !== 'object' || Array.isArray(data)) {
+      if (Array.isArray(data)) supported = false
+      for (const p of group) void alone(p)
+      return
+    }
+    const byName = data as Record<string, unknown>
+    const missing = new Set(Array.isArray(body?.missing) ? (body.missing as string[]) : [])
+    for (const p of group) {
+      if (Object.hasOwn(byName, p.name)) p.resolve({ data: cloneResult(byName[p.name]) })
+      else if (missing.has(p.name)) p.reject(notFoundError())
+      else void alone(p)
+    }
+  }
+  const flush = () => {
+    timer = undefined
+    const all = pending
+    pending = []
+    // Chunk by distinct name; a name asked twice stays in one chunk.
+    const chunks: PendingMeta[][] = []
+    const chunkOf = new Map<string, PendingMeta[]>()
+    for (const p of all) {
+      let chunk = chunkOf.get(p.name)
+      if (!chunk) {
+        const last = chunks[chunks.length - 1]
+        const lastNames = last ? new Set(last.map((x) => x.name)).size : COLLECTION_BATCH_LIMIT
+        chunk = last && lastNames < COLLECTION_BATCH_LIMIT ? last : []
+        if (chunk !== last) chunks.push(chunk)
+        chunkOf.set(p.name, chunk)
+      }
+      chunk.push(p)
+    }
+    for (const chunk of chunks) void send(chunk)
+  }
+  return <T>(command: Command<T>, name: string): Promise<T> =>
+    new Promise<T>((resolve, reject) => {
+      pending.push({
+        name,
+        command: command as Command<unknown>,
+        resolve: resolve as (v: unknown) => void,
+        reject
+      })
+      if (timer === undefined) timer = setTimeout(flush, COLLECTION_BATCH_WINDOW_MS)
+    })
+}
+
+// ─── Settled metadata reads ────────────────────────────────────────────────
+
+/**
+ * Configuration reads a record page asks for from many components under many
+ * query keys (different cache SHAPES, so the keys cannot merge), and not all
+ * at the same moment — a panel that mounts after the record landed asks
+ * again. Their answers change only when someone edits configuration, so an
+ * answer is reused for SETTLED_READ_MS after it arrives. Any write through
+ * this client (and `forgetSettledReads()`, which hosts with a second
+ * transport call on their own writes) drops every settled answer at once.
+ * Record data is never settled — a refetch after a live event must reach the
+ * server.
+ */
+export const SETTLED_READ_MS = 3000
+const SETTLED_READ_PATHS =
+  /^\/(collections\/[A-Za-z_][A-Za-z0-9_-]*|field-config\/[A-Za-z_][A-Za-z0-9_-]*|collection-layouts(\/active|\/summary\/[A-Za-z_][A-Za-z0-9_-]*)?|chat\/room-types)$/
+
+/**
+ * Writes a record page makes all the time that can never change
+ * configuration (record data outside system tables, view/lock/draft/presence
+ * bookkeeping, chat, rule evaluation, read-like POSTs). Every other write
+ * drops the settled answers — erring wide only costs a re-read.
+ */
+const NON_CONFIG_WRITES =
+  /^\/(record-views|item-locks|drafts|presence|rum|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade)$|items\/(?!nivaro_|directus_)[^/]+)/
+
+function cannotChangeConfig(c: AnyCommand): boolean {
+  const path = (c._path ?? '').split('?')[0]
+  if ((c._method ?? 'GET').toUpperCase() === 'POST' && READ_LIKE_POSTS.test(path)) return true
+  return NON_CONFIG_WRITES.test(path)
+}
+
+/** Whether a GET command's answer may be reused for SETTLED_READ_MS. */
+export function isSettledRead(command: unknown): boolean {
+  const c = command as AnyCommand
+  return isRead(c) && SETTLED_READ_PATHS.test(c._path ?? '')
+}
+
+/** Moves on every write (any client in this page) — an answer is reused only within its epoch. */
+let settledEpoch = 0
+
+/** Drop every settled metadata answer (call after a configuration write made outside the SDK client). */
+export function forgetSettledReads(): void {
+  settledEpoch++
+}
+
+interface SettledEntry {
+  at: number
+  epoch: number
+  value: unknown
+}
+
 export function withGetCoalescing(
   client: NivaroClient,
   opts: CoalescingOptions = {}
@@ -190,6 +378,16 @@ export function withGetCoalescing(
   if (isCoalesced(client)) return client
   const inflight = new Map<string, Promise<unknown>>()
   const batch = opts.batchReads ? readBatcher(client) : null
+  const metaBatch = opts.batchCollections === false ? null : collectionMetaBatcher(client)
+  const settled = new Map<string, SettledEntry>()
+  const settle = (key: string, epoch: number, value: unknown) => {
+    // An answer that was in flight across a write is not kept.
+    if (epoch !== settledEpoch) return
+    const now = Date.now()
+    if (settled.size >= 200)
+      for (const [k, e] of settled) if (now - e.at >= SETTLED_READ_MS) settled.delete(k)
+    settled.set(key, { at: now, epoch, value })
+  }
   const request = <T>(command: Command<T>): Promise<T> => {
     const c = command as unknown as AnyCommand
     if (!isRead(c)) {
@@ -197,19 +395,42 @@ export function withGetCoalescing(
       // noted before sending (the event can beat the response) and again with
       // the response so a create's new id counts.
       noteOwnWriteFromCommand(c._method, c._path, c._body)
-      return client.request<T>(command).then((res) => {
+      // A write that may change configuration drops settled answers, both now
+      // and when it lands (a read sent meanwhile must not settle).
+      const busts = !cannotChangeConfig(c)
+      if (busts) forgetSettledReads()
+      const sent = client.request<T>(command)
+      return (busts ? sent.finally(forgetSettledReads) : sent).then((res) => {
         noteOwnWriteFromCommand(c._method, c._path, c._body, res)
         return res
       })
     }
     const key = commandKey(c)
+    const settles = isSettledRead(c)
+    if (settles) {
+      const hit = settled.get(key)
+      if (hit && hit.epoch === settledEpoch && Date.now() - hit.at < SETTLED_READ_MS)
+        return Promise.resolve(cloneResult(hit.value as T))
+    }
     const current = inflight.get(key)
     if (current) return (current as Promise<T>).then(cloneResult)
     const read = batch ? batchableRead(c) : null
-    const sent = read && batch ? batch<T>(command, read) : client.request<T>(command)
-    const p = sent.finally(() => {
-      if (inflight.get(key) === p) inflight.delete(key)
-    })
+    const metaName = !read && metaBatch ? batchableCollectionMeta(c) : null
+    const sent =
+      read && batch
+        ? batch<T>(command, read)
+        : metaName && metaBatch
+          ? metaBatch<T>(command, metaName)
+          : client.request<T>(command)
+    const epoch = settledEpoch
+    const p = sent
+      .then((res) => {
+        if (settles) settle(key, epoch, cloneResult(res))
+        return res
+      })
+      .finally(() => {
+        if (inflight.get(key) === p) inflight.delete(key)
+      })
     inflight.set(key, p)
     return p
   }

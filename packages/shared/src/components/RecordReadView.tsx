@@ -1052,18 +1052,25 @@ export function RecordReadView({
     staleTime: 10 * 60_000,
     retry: false
   })
+  const qc = useQueryClient()
+  // Summary keeps its own copy (it diffs refetches to highlight what moved),
+  // but its FIRST copy is the record form's: the host has just read the same
+  // `GET /items/<c>/<id>` under ['item', …]. Seeding from it (with its age,
+  // so staleTime still applies) saves a second read of the record per load.
   const { data: record } = useQuery({
     queryKey: ['rrv-record', collection, itemId],
     queryFn: () =>
       client
         .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${itemId}`))
         .then((r) => r.data),
+    initialData: () =>
+      qc.getQueryData<Record<string, unknown>>(['item', collection, itemId]) ?? undefined,
+    initialDataUpdatedAt: () => qc.getQueryState(['item', collection, itemId])?.dataUpdatedAt,
     staleTime: 30_000,
     retry: false
   })
   // #1869 — Summary refreshes when someone else writes the record, and the
   // values that moved briefly highlight (edit mode shows its own ghosts).
-  const qc = useQueryClient()
   useLiveRecord(collection, itemId, (batch) => {
     if (batch.aspectsOnly || batch.deleted) return
     void qc.invalidateQueries({ queryKey: ['rrv-record', collection, itemId] })

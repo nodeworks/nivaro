@@ -693,10 +693,16 @@ export {
 export {
   BATCH_READ_LIMIT,
   type BatchableRead,
+  batchableCollectionMeta,
   batchableRead,
+  COLLECTION_BATCH_LIMIT,
+  COLLECTION_BATCH_WINDOW_MS,
   type CoalescingOptions,
   createGatedClient,
+  forgetSettledReads,
   type GatedClient,
+  isSettledRead,
+  SETTLED_READ_MS,
   withGetCoalescing
 } from './lib/request-gate'
 export { ROW_HIGHLIGHT_TINTS, rowHighlightClass, rowHighlightTextClass } from './lib/row-highlight'

@@ -2617,8 +2617,14 @@ export function ItemEditForm({
   // Guarded by STATE, not a ref: StrictMode runs the effect twice on mount
   // (cleanup cancels the first load) and a ref stamped on the first run would
   // make the second bail out with the check never completing.
+  // Keyed on the record being READY, not on the record object: a refetch
+  // landing mid-check (live sync, a recheck) used to cancel the check and
+  // send GET /drafts again. The comparison reads initialDataRef at the end,
+  // so it still sees the newest copy.
+  const recordReady = isNew || !!itemData
+  // biome-ignore lint/correctness/useExhaustiveDependencies: readiness, not identity, re-runs the check
   useEffect(() => {
-    if (!isNew && !itemData) return
+    if (!recordReady) return
     if (recoveryCheckedKey === recoveryKey) return
     let cancelled = false
     // #24 — the server copy (another device) competes with the local one; the
@@ -2662,7 +2668,7 @@ export function ItemEditForm({
     return () => {
       cancelled = true
     }
-  }, [isNew, itemData, recoveryKey, recoveryCheckedKey])
+  }, [isNew, recordReady, recoveryKey, recoveryCheckedKey])
 
   // Persist: debounced after every change while dirty; cleared the moment
   // the form is clean. Held off while an offer is pending so the freshly

@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { defaultItemUrl, useNavigation, useNivaroClient } from '../context'
 import { get } from '../lib/commands'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../lib/live'
+import { chatRoomTypesQuery } from './chat/chat-core'
 
 /**
  * Renders plain text with entity-registry-shaped record ids (e.g. AB26-12345,
@@ -21,20 +22,12 @@ const ENTITY_RE = String.raw`\b([A-Za-z]{2,4}\d{2}(?:INV)?-\d+)\b`
 const PATH_RE = String.raw`\b([a-z][a-z0-9_]{2,})\/(\d{1,12})\b`
 
 type RoomType = { prefix: string; collection: string; match_field: string; is_active: boolean }
+const EMPTY_ROOM_TYPES: RoomType[] = []
 
 function useRoomTypes(): RoomType[] {
   const client = useNivaroClient()
-  const { data } = useQuery({
-    queryKey: ['nvr-chat-room-types'],
-    queryFn: async () => {
-      const res = (await client.request(get<{ data: RoomType[] }>('/chat/room-types'))) as {
-        data: RoomType[]
-      }
-      return (res.data ?? []).filter((t) => t.is_active)
-    },
-    staleTime: 5 * 60_000
-  })
-  return data ?? []
+  const { data } = useQuery(chatRoomTypesQuery(client))
+  return (data as RoomType[] | undefined) ?? EMPTY_ROOM_TYPES
 }
 
 function RecordToken({ token, plain }: { token: string; plain?: boolean }) {
