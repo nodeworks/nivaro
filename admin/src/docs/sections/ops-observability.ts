@@ -233,13 +233,14 @@ export const opsConsoleDocs: DocSection = {
         'Cancel — deleting an active window turns maintenance mode off immediately. The smoke check can also be run by hand at any time from the same card.'
       ]
     },
-    { type: 'h2', id: 'ops-console-restart', text: 'Restart, follow-user, heap snapshot' },
+    { type: 'h2', id: 'ops-console-restart', text: 'Restart, follow-user, heap snapshot, CPU profile' },
     {
       type: 'ul',
       items: [
         'Restart — the Restart button requires a typed reason (audit-logged) and is refused while work is mid-run: running background jobs, staged imports, or processing collection imports each block it, and the refusal names what is running. The process exits cleanly and relies on the host’s restart policy to come back.',
         'Follow a user — pick a person and their next 50 requests are traced in full detail (per-phase waterfalls), regardless of how fast they are. Traces appear on the API Analytics page; a follow expires after an hour on its own.',
-        'Heap snapshot — captures a V8 heap snapshot of this replica and downloads it for analysis in Chrome DevTools. The file lives in the process’s temp directory, so download it right away — a restart discards it.'
+        'Heap snapshot — captures a V8 heap snapshot of this replica and downloads it for analysis in Chrome DevTools. The file lives in the process’s temp directory, so download it right away — a restart discards it.',
+        'CPU profile — `POST /api/ops-runtime/cpu-profile` with `{"seconds": 1–30}` (admins only) samples this replica’s main thread while you reproduce the slow screen, then answers with where the time went: self time by function, time by source file or package, and time by Nivaro’s own functions. The full `.cpuprofile` downloads from `GET /api/ops-runtime/cpu-profile/<name>` for Chrome DevTools; like the heap snapshot it lives in the temp directory until a restart. One profile runs at a time, no debug port is opened, each run is logged in Activity, and it is refused in cloud mode.'
       ]
     }
   ]

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { configEpochState } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
+import { type CpuProfile, summarizeCpuProfile } from '../lib/cpu-profile-summary.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { bustEverywhere, listCaches } from '../services/cache-registry.js'
@@ -11,6 +12,8 @@ import { listInstances } from '../services/instance-roster.js'
 import { probeSmtp } from '../services/mail.js'
 import { runtimeStats } from '../services/runtime-monitor.js'
 import { poolStats } from './ops-db.js'
+
+let cpuProfileRunning = false
 
 /**
  * Runtime observability (Ops batch A): #234 runtime stats, #297 instance
@@ -274,6 +277,64 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
       const path = join(tmpdir(), name)
       if (!existsSync(path))
         return reply.code(404).send({ error: 'Snapshot not found (restarted?)' })
+      reply.header('Content-Disposition', `attachment; filename="${name}"`)
+      return reply.send(createReadStream(path))
+    }
+  )
+
+  // CPU profile of THIS process (the main thread) for 1–30 s, through the
+  // in-process inspector — no debug port is opened. Answers with a summary
+  // (self time by function, inclusive by file/package and by our functions)
+  // and the name of the full .cpuprofile for DevTools, downloaded below. One at
+  // a time; refused in cloud mode, where the process serves every tenant.
+  app.post<{ Body: { seconds?: number } }>('/cpu-profile', async (req, reply) => {
+    if (process.env.CLOUD_META_DB_URL) {
+      return reply.code(403).send({ error: 'CPU profiles are not available in cloud mode' })
+    }
+    if (cpuProfileRunning)
+      return reply.code(409).send({ error: 'A CPU profile is already running' })
+    const seconds = Math.min(30, Math.max(1, Math.round(Number(req.body?.seconds) || 10)))
+    cpuProfileRunning = true
+    const { Session } = await import('node:inspector/promises')
+    const session = new Session()
+    try {
+      session.connect()
+      await session.post('Profiler.enable')
+      await session.post('Profiler.setSamplingInterval', { interval: 1000 })
+      await session.post('Profiler.start')
+      await new Promise((r) => setTimeout(r, seconds * 1000))
+      const { profile } = (await session.post('Profiler.stop')) as { profile: CpuProfile }
+      const { writeFile } = await import('node:fs/promises')
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const name = `nivaro-cpu-${Date.now()}.cpuprofile`
+      await writeFile(join(tmpdir(), name), JSON.stringify(profile))
+      await logActivity({
+        action: 'cpu-profile',
+        user: req.user?.id,
+        comment: `${name} (${seconds}s)`,
+        req
+      })
+      return reply.send({ data: { name, ...summarizeCpuProfile(profile) } })
+    } finally {
+      cpuProfileRunning = false
+      session.disconnect()
+    }
+  })
+  app.get<{ Params: { name: string } }>(
+    '/cpu-profile/:name',
+    { compress: false },
+    async (req, reply) => {
+      const name = req.params.name
+      if (!/^nivaro-cpu-\d+\.cpuprofile$/.test(name)) {
+        return reply.code(400).send({ error: 'Invalid profile name' })
+      }
+      const { tmpdir } = await import('node:os')
+      const { join } = await import('node:path')
+      const { createReadStream, existsSync } = await import('node:fs')
+      const path = join(tmpdir(), name)
+      if (!existsSync(path))
+        return reply.code(404).send({ error: 'Profile not found (restarted?)' })
       reply.header('Content-Disposition', `attachment; filename="${name}"`)
       return reply.send(createReadStream(path))
     }
