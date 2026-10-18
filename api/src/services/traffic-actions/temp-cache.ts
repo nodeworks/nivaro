@@ -293,7 +293,8 @@ function bumpAll(): void {
 export function bustAllTempCache(): void {
   if (activeRules('cache').length === 0 && entries.size === 0) return
   bumpAll()
-  if (trailing) return
+  // Every access write gets the full delay, and nothing is stored until it has passed.
+  if (trailing) clearTimeout(trailing)
   trailing = setTimeout(() => {
     trailing = null
     bumpAll()
@@ -448,6 +449,8 @@ function keepEntry(req: object, reply: ReplyLike, payload: unknown, now: number)
   if (!live) return
   // A write during the read: the answer may predate it — do not keep it.
   if (!p.deps.every(([k, v]) => epochOf(k) === v)) return
+  // An access change is still landing: who may see what is unsettled — keep nothing.
+  if (trailing) return
   const entryS = Math.min(ENTRY_S_MAX, Math.max(1, Number(live.opts?.entry_s) || ENTRY_S_DEFAULT))
   drop(p.key)
   while (totalBytes + bytes > TOTAL_MAX_BYTES && entries.size > 0) {

@@ -430,7 +430,7 @@ function wideTableOf(sql: string): string | null {
  * traces, debug windows, `GET /traces/:id`) can hand a token back.
  */
 const CREDENTIAL_SQL_RE = new RegExp(
-  `\\b(?:${[...SECRET_COLUMN_NAMES, 'key_hash', 'token_hash', 'signing_secret', 'client_secret'].join('|')})\\b|\\w*(?:secret|password|passwd)|\\w_(?:pass|token|api_key)\\b`,
+  `\\b(?:${[...SECRET_COLUMN_NAMES, 'key_hash', 'token_hash', 'signing_secret', 'client_secret'].join('|')})\\b|\\w*(?:secret|password|passwd)|\\b(?:\\w*_)?(?:pass|token|api_key)\\b`,
   'i'
 )
 export const REDACTED_BINDING = '[redacted]'

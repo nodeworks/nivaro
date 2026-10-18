@@ -40,6 +40,14 @@ describe('trace bindings', () => {
     expect(keptBindings('select * from orders where id = @p0', [7])).toEqual([7])
   })
 
+  it('redacts lookups by a bare token or api_key column (share links, forms, widget feeds)', () => {
+    expect(
+      keptBindings('select * from [nivaro_share_links] where [token] = @p0', ['s3cr3t'])
+    ).toEqual([REDACTED_BINDING])
+    expect(keptBindings('select * from x where api_key = @p0', ['k'])).toEqual([REDACTED_BINDING])
+    expect(keptBindings('select * from tokens_used where n = @p0', [1])).toEqual([1])
+  })
+
   it('a kept trace (slow, debug window, GET /traces/:id) never holds the raw token', () => {
     const handlers: Record<string, (...a: unknown[]) => void> = {}
     attachQueryTracing({
