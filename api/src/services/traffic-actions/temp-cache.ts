@@ -346,6 +346,31 @@ function keepEntry(req: object, reply: ReplyLike, payload: unknown, now: number)
   count(live, 'stored')
 }
 
+/**
+ * The two hooks on the items routes (registered there, after every guard). Callback hooks: no
+ * promise per request while no cache is on; a hit answers without calling done().
+ */
+export function registerTempCacheHooks(app: {
+  addHook(name: 'preHandler', fn: (req: unknown, reply: unknown, done: () => void) => void): unknown
+  addHook(
+    name: 'onSend',
+    fn: (
+      req: unknown,
+      reply: unknown,
+      payload: unknown,
+      done: (err: null, p: unknown) => void
+    ) => void
+  ): unknown
+}): void {
+  app.addHook('preHandler', (req, reply, done) => {
+    if (!tempCacheLookup(req as ReqLike, reply as ReplyLike)) done()
+  })
+  app.addHook('onSend', (req, reply, payload, done) => {
+    tempCacheStore(req as object, reply as ReplyLike, payload)
+    done(null, payload)
+  })
+}
+
 // ── admin side ───────────────────────────────────────────────────────────────
 export class TempCacheError extends Error {
   constructor(

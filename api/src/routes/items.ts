@@ -52,7 +52,7 @@ import {
   isSystemCollection,
   sensitiveColumns
 } from '../services/system-collections.js'
-import { tempCacheLookup, tempCacheStore } from '../services/traffic-actions/temp-cache.js'
+import { registerTempCacheHooks } from '../services/traffic-actions/temp-cache.js'
 import { evaluateTransitionRequirements } from '../services/transition-requirements.js'
 import { runUnit } from '../services/unit-of-work.js'
 import type { ItemsQuery, User } from '../types.js'
@@ -109,14 +109,7 @@ export async function itemsRoutes(app: FastifyInstance) {
   })
   // #2273 — a Traffic Map temporary cache (off unless an admin switched one on for a collection):
   // after every guard above, so a cached answer is only ever one the same caller already got.
-  // Callback hooks: no promise per request while no cache is on (a hit answers without done()).
-  app.addHook('preHandler', (req, reply, done) => {
-    if (!tempCacheLookup(req as never, reply as never)) done()
-  })
-  app.addHook('onSend', (req, reply, payload, done) => {
-    tempCacheStore(req, reply as never, payload)
-    done(null, payload)
-  })
+  registerTempCacheHooks(app)
 
   // #1304: several reads in one round trip. Each runs through readItems /
   // readOne as the caller and answers its own status; the batch itself only
