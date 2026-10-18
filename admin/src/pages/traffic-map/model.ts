@@ -20,6 +20,16 @@ export const ENTITY_CALLERS_TAP = 'entity-callers'
 export const WORKSPACE_SCOPE_TAP = 'workspace-scope'
 /** #1163: the app (x-nivaro-app) each caller uses most. */
 export const CALLER_APPS_TAP = 'caller-apps'
+/** #2185: per-edge response bytes, total time and errors (edge weight modes). */
+export const EDGE_WEIGHTS_TAP = 'edge-weights'
+/** #2185: what edge thickness means. */
+export type EdgeMetric = 'requests' | 'bytes' | 'time' | 'errors'
+const WEIGHT_SLOT: Record<Exclude<EdgeMetric, 'requests'>, number> = {
+  bytes: 0,
+  time: 1,
+  errors: 2
+}
+type EdgeWeightsWire = { i?: Record<string, number[]>; o?: Record<string, number[]> }
 /** #1100: events kept for rewinding the ticker (newest first). */
 const EVENT_LOG_CAP = 1500
 
@@ -138,6 +148,9 @@ export class TrafficModel {
   private meta = new Map<string, SnapshotEntity>()
   private edgeIn = new Map<string, Ring>() // 1 slot: count
   private edgeOut = new Map<string, Ring>()
+  /** #2185: `caller>lane` / `lane>down` -> [bytes, ms, errors] per second. */
+  private weightIn = new Map<string, Ring>()
+  private weightOut = new Map<string, Ring>()
   private nowSec = Math.floor(Date.now() / 1000)
   private snapSec = Number.NEGATIVE_INFINITY
   private recent: Array<{ sec: number; f: TrafficFrame }> = []
@@ -251,6 +264,8 @@ export class TrafficModel {
     this.meta.clear()
     this.edgeIn.clear()
     this.edgeOut.clear()
+    this.weightIn.clear()
+    this.weightOut.clear()
     this.callerSeen.clear()
     this.entityCallers.clear()
     this.callerP95.clear()
@@ -333,6 +348,11 @@ export class TrafficModel {
     for (const [w, byEdge] of Object.entries(ws?.i ?? {}))
       for (const [k, n] of Object.entries(byEdge))
         this.spread(this.nested(this.wsEdgeIn, w, k, 1), sec, win, [n])
+    const ew = snap.ext?.[EDGE_WEIGHTS_TAP] as EdgeWeightsWire | undefined
+    for (const [k, v] of Object.entries(ew?.i ?? {}))
+      this.spread(this.ring(this.weightIn, k, 3), sec, win, v.slice(0, 3))
+    for (const [k, v] of Object.entries(ew?.o ?? {}))
+      this.spread(this.ring(this.weightOut, k, 3), sec, win, v.slice(0, 3))
     for (const d of snap.down) {
       const r = this.ring(this.downs, d.id)
       this.spread(r, sec, win, [d.req, 0, 0, 0, 0, d.error])
@@ -461,6 +481,11 @@ export class TrafficModel {
     }
     const apps = f.ext?.[CALLER_APPS_TAP] as Record<string, string> | undefined
     if (apps) for (const [c, a] of Object.entries(apps)) this.callerApps.set(c, a)
+    const ew = f.ext?.[EDGE_WEIGHTS_TAP] as EdgeWeightsWire | undefined
+    if (ew) {
+      for (const [k, v] of Object.entries(ew.i ?? {})) this.ring(this.weightIn, k, 3).set(sec, v)
+      for (const [k, v] of Object.entries(ew.o ?? {})) this.ring(this.weightOut, k, 3).set(sec, v)
+    }
     for (const [key, n] of Object.entries(f.edges_in)) this.ring(this.edgeIn, key, 1).set(sec, [n])
     for (const [key, n] of Object.entries(f.edges_out))
       this.ring(this.edgeOut, key, 1).set(sec, [n])
@@ -541,7 +566,15 @@ export class TrafficModel {
   /** Drop everything idle for a full ring length so a long session cannot grow without bound. */
   private prune(): void {
     const cutoff = this.nowSec - RING
-    for (const map of [this.entities, this.callers, this.downs, this.edgeIn, this.edgeOut])
+    for (const map of [
+      this.entities,
+      this.callers,
+      this.downs,
+      this.edgeIn,
+      this.edgeOut,
+      this.weightIn,
+      this.weightOut
+    ])
       for (const [k, r] of map) if (r.touched <= cutoff) map.delete(k)
     for (const k of [...this.meta.keys()]) if (!this.entities.has(k)) this.meta.delete(k)
     const nowMs = Date.now()
@@ -668,6 +701,41 @@ export class TrafficModel {
       const share = laneShare ? (laneShare.get(lane) ?? 0) : 1
       const n = r.sum(this.at, win)[0] * share
       if (n > 0) out.set(key, n / win)
+    }
+    return { in: inn, out }
+  }
+
+  /**
+   * #2185: what each edge weighs per second in `metric` (bytes/s, ms/s, errors/s), keyed like
+   * edges(). 'requests' is edges() itself. An edge with traffic but no weight (no errors) reads 0.
+   * Under a workspace, an edge keeps the workspace's share of its weight (its share of the
+   * requests: weights carry no workspace).
+   */
+  edgeWeights(
+    win: number,
+    f: Filters,
+    metric: EdgeMetric
+  ): { in: Map<string, number>; out: Map<string, number> } {
+    const counts = this.edges(win, f)
+    if (metric === 'requests') return counts
+    const slot = WEIGHT_SLOT[metric]
+    const inn = new Map<string, number>()
+    const out = new Map<string, number>()
+    for (const [key, rps] of counts.in) {
+      let w = this.weightIn.get(key)?.sum(this.at, win)[slot] ?? 0
+      if (f.workspace && w > 0) {
+        const all = this.edgeIn.get(key)?.sum(this.at, win)[0] ?? 0
+        w *= all > 0 ? Math.min(1, (rps * win) / all) : 0
+      }
+      inn.set(key, w / win)
+    }
+    for (const [key, rps] of counts.out) {
+      let w = this.weightOut.get(key)?.sum(this.at, win)[slot] ?? 0
+      if (f.workspace && w > 0) {
+        const all = this.edgeOut.get(key)?.sum(this.at, win)[0] ?? 0
+        w *= all > 0 ? Math.min(1, (rps * win) / all) : 0
+      }
+      out.set(key, w / win)
     }
     return { in: inn, out }
   }

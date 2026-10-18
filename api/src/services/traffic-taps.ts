@@ -38,6 +38,8 @@ export interface TapRequestCtx {
   code: string | null
   /** Epoch second the event belongs to. */
   sec: number
+  /** Down nodes the map drew the request through (`db`, `redis` on a cache hit, `store`…). */
+  downs?: readonly string[]
   /** The ticker event the map queued for this request (reads and errors only); a tap may add
    *  `tags` / `extra` to it before it is sent. */
   event?: TrafficEventWire

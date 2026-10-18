@@ -2,7 +2,7 @@ import { Check, Link2 } from 'lucide-react'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
-import { getCanvasView, setCanvasView, subscribeCanvasView } from '../canvasView'
+import { getCanvasView, isEdgeMetric, setCanvasView, subscribeCanvasView } from '../canvasView'
 import { register } from '../registry/registry'
 import { toolbarItems } from '../registry/toolbarItems'
 import { viewParams } from '../registry/viewParams'
@@ -38,6 +38,28 @@ register(viewParams, {
   param: 'rates',
   get: () => (cv().labels ? '1' : null),
   set: (v) => setCanvasView({ labels: v === '1' }),
+  subscribe: subscribeCanvasView
+})
+// #2185 what edge thickness means; #2279 every node, and a renderer a link may force
+register(viewParams, {
+  id: 'edge-weight',
+  param: 'weight',
+  get: () => (cv().weight === 'requests' ? null : cv().weight),
+  set: (v) => setCanvasView({ weight: isEdgeMetric(v) ? v : 'requests' }),
+  subscribe: subscribeCanvasView
+})
+register(viewParams, {
+  id: 'node-density',
+  param: 'nodes',
+  get: () => (cv().density === 'all' ? 'all' : null),
+  set: (v) => setCanvasView({ density: v === 'all' ? 'all' : 'top' }),
+  subscribe: subscribeCanvasView
+})
+register(viewParams, {
+  id: 'renderer',
+  param: 'renderer',
+  get: () => (cv().renderer === 'auto' ? null : cv().renderer),
+  set: (v) => setCanvasView({ renderer: v === 'gl' || v === '2d' ? v : 'auto' }),
   subscribe: subscribeCanvasView
 })
 register(viewParams, {

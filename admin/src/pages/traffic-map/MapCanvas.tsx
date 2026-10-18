@@ -18,10 +18,16 @@ import {
   appGroupOf,
   type CanvasView,
   type EdgeScale,
-  edgeWidthFor,
+  edgeWidthByMetric,
+  fmtWeight,
+  HAIRLINE,
   isAppGroup,
+  type NodeDensity,
   setCanvasView,
   useCanvasView,
+  WEIGHT_HINT,
+  WEIGHT_LABEL,
+  WEIGHT_MEANS,
   ZOOM_LABEL,
   zoomBy
 } from './canvasView'
@@ -29,14 +35,16 @@ import { callerLabel, entityLabel } from './EventTicker'
 import { LegendButton, LegendGuide } from './Legend'
 import {
   bezierPoint,
-  computeLayout,
   hitTest,
+  type LayoutInput,
   type MapLayout,
   type MapTokens,
   type Rect,
+  type RouteRequest,
   readTokens
 } from './layout'
-import type { TrafficModel } from './model'
+import { setMapExportSource } from './mapExport'
+import type { EdgeMetric, TrafficModel } from './model'
 import { downKindOf, downLabel, isSourceId, OTHER_SOURCES } from './nodeKinds'
 import {
   badgeFor,
@@ -49,6 +57,10 @@ import {
   sideBadgeFor,
   sideBadges
 } from './registry/canvasLayers'
+import { makeColorParser, type RGBA } from './render/color'
+import { GlMapRenderer, webgl2Supported } from './render/glRenderer'
+import { buildGlScene, particleRects } from './render/glScene'
+import { useMapLayout } from './render/useMapLayout'
 import {
   type Filters,
   KIND_ORDER,
@@ -95,12 +107,22 @@ const CALLER_KIND_TEXT: Record<string, string> = {
   anon: 'no credentials'
 }
 const OTHERS = '__others__'
-const MAX_CALLERS = 6
-const MAX_SOURCES = 6
-/** Downstream column cap (busiest first; the data stores always stay). */
-const MAX_DOWNS = 14
-const MAX_ENTITIES_PER_LANE = 12
+/**
+ * Column caps (busiest first; the data stores always stay in the downstream column). `all`
+ * (#2279) draws every node the model holds, up to what the server keeps (40 entities a lane).
+ */
+const CAPS: Record<NodeDensity, { callers: number; sources: number; downs: number; ents: number }> =
+  {
+    top: { callers: 6, sources: 6, downs: 14, ents: 12 },
+    all: { callers: 400, sources: 60, downs: 60, ents: 40 }
+  }
 const MAX_PARTICLES = 300
+/** WebGL draws particles as instances: a big map can afford more of them. */
+const MAX_PARTICLES_GL = 1200
+/** #2279: nodes + edges from which `auto` draws the map with WebGL. */
+export const GL_AUTO_ITEMS = 800
+/** #2279: a map taller than this draws only its visible part (the box scrolls). */
+const VIEWPORT_MIN_H = 1600
 /** Per edge, per frame (frames are one second apart): above this the particles are sampled. */
 const PARTICLES_PER_EDGE = 24
 const FLASH_MS = 1200
@@ -139,16 +161,18 @@ export interface MapData {
   sources: NodeView[]
   lanes: LaneView[]
   downs: NodeView[]
-  edgesIn: Array<{ from: string; to: Lane; rps: number }>
-  edgesOut: Array<{ from: Lane; to: string; rps: number }>
+  /** `rps` = requests/s (particles, the path trace); `w` = the edge's weight in the chosen
+   *  measure per second (#2185: requests/s, bytes/s, ms/s or errors/s) — thickness and numbers. */
+  edgesIn: Array<{ from: string; to: Lane; rps: number; w: number }>
+  edgesOut: Array<{ from: Lane; to: string; rps: number; w: number }>
   /** Lane → its out edges, for routing a particle's second leg. */
   laneOut: Map<Lane, Array<{ to: string; rps: number }>>
   entityDowns: Map<string, Array<[string, number]>>
   /** #1161 zoomed in (exact entity × caller data): caller → entity edges. */
-  edgesEnt: Array<{ from: string; to: string; rps: number }>
+  edgesEnt: Array<{ from: string; to: string; rps: number; w: number }>
   /** Raw caller / source key → the node it is drawn under (itself, a group, or "Other …"). */
   callerNode: Map<string, string>
-  /** Busiest in / out edge (linear thickness, #1162). */
+  /** Heaviest in / out edge in the chosen measure (linear thickness #1162, relative #2185). */
   maxIn: number
   maxOut: number
   /** The model has received its first snapshot (before that: a quiet loading state). */
@@ -251,13 +275,18 @@ function buildData(
   m: TrafficModel,
   filters: Filters,
   cat: TrafficCatalog | null,
-  view: Pick<CanvasView, 'zoom' | 'groupApps' | 'expanded'> = {
+  view: Pick<CanvasView, 'zoom' | 'groupApps' | 'expanded'> &
+    Partial<Pick<CanvasView, 'weight' | 'density'>> = {
     zoom: 1,
     groupApps: false,
     expanded: null
   }
 ): MapData {
   const win = filters.win
+  const cap = CAPS[view.density ?? 'top']
+  const MAX_CALLERS = cap.callers
+  const MAX_SOURCES = cap.sources
+  const metric: EdgeMetric = view.weight ?? 'requests'
   // lanes + entities: hot() already applies the lane, kind and caller filters
   const rows = m.hot(win, filters, 100000)
   const byLane = new Map<Lane, typeof rows>()
@@ -275,7 +304,7 @@ function buildData(
     lanes.push({
       id,
       rps: list.reduce((a, r) => a + r.rps, 0),
-      entities: list.slice(0, MAX_ENTITIES_PER_LANE).map((r) => {
+      entities: list.slice(0, cap.ents).map((r) => {
         const s = m.entitySum(r.key, win)
         const kinds = KIND_ORDER.map((k, i) => (filters.kinds.has(k) ? s[i + 1] : 0))
         return {
@@ -309,7 +338,7 @@ function buildData(
   const nonCore = [...ids].filter((d) => !core.includes(d))
   const partners = busiest(nonCore.filter((d) => downKindOf(m, d) === 'partner'))
   const others = busiest(nonCore.filter((d) => downKindOf(m, d) !== 'partner'))
-  const downs: NodeView[] = [...core, ...partners, ...others].slice(0, MAX_DOWNS).map((id) => {
+  const downs: NodeView[] = [...core, ...partners, ...others].slice(0, cap.downs).map((id) => {
     const kind = downKindOf(m, id)
     return {
       id,
@@ -326,7 +355,9 @@ function buildData(
   // callers are ranked on the traffic they send into DRAWN lanes, so a caller whose requests
   // all land in lane `other` or a hidden lane never floats in the column without an edge
   const edges = m.edges(win, filters)
-  const drawnIn: Array<[string, Lane, number]> = []
+  // #2185: what each edge weighs in the chosen measure (requests = the counts themselves)
+  const weights = metric === 'requests' ? null : m.edgeWeights(win, filters, metric)
+  const drawnIn: Array<[string, Lane, number, number]> = []
   const perCaller = new Map<string, number>()
   const perSource = new Map<string, number>()
   for (const [key, rps] of edges.in) {
@@ -334,7 +365,7 @@ function buildData(
     const caller = key.slice(0, cut)
     const lane = key.slice(cut + 1) as Lane
     if (!laneSet.has(lane) || rps <= 0) continue
-    drawnIn.push([caller, lane, rps])
+    drawnIn.push([caller, lane, rps, weights ? (weights.in.get(key) ?? 0) : rps])
     const into = isSourceId(caller) ? perSource : perCaller
     into.set(caller, (into.get(caller) ?? 0) + rps)
   }
@@ -465,15 +496,19 @@ function buildData(
     for (const [k] of topSources) callerNode.set(k, k)
     for (const [k] of restSources) callerNode.set(k, OTHER_SOURCES)
   }
-  const inAgg = new Map<string, number>()
-  for (const [caller, lane, rps] of drawnIn) {
+  const inAgg = new Map<string, { rps: number; w: number }>()
+  for (const [caller, lane, rps, w] of drawnIn) {
     const node = callerNode.get(caller) ?? (isSourceId(caller) ? OTHER_SOURCES : OTHERS)
     const k = `${node}>${lane}`
-    inAgg.set(k, (inAgg.get(k) ?? 0) + rps)
+    const cur = inAgg.get(k)
+    if (cur) {
+      cur.rps += rps
+      cur.w += w
+    } else inAgg.set(k, { rps, w })
   }
-  const edgesIn = [...inAgg].map(([k, rps]) => {
+  const edgesIn = [...inAgg].map(([k, v]) => {
     const cut = k.lastIndexOf('>')
-    return { from: k.slice(0, cut), to: k.slice(cut + 1) as Lane, rps }
+    return { from: k.slice(0, cut), to: k.slice(cut + 1) as Lane, rps: v.rps, w: v.w }
   })
   const edgesOut: MapData['edgesOut'] = []
   const laneOut = new Map<Lane, Array<{ to: string; rps: number }>>()
@@ -482,7 +517,7 @@ function buildData(
     const from = key.slice(0, i) as Lane
     const to = key.slice(i + 1)
     if (!laneSet.has(from) || !downSet.has(to)) continue
-    edgesOut.push({ from, to, rps })
+    edgesOut.push({ from, to, rps, w: weights ? (weights.out.get(key) ?? 0) : rps })
     const list = laneOut.get(from) ?? []
     list.push({ to, rps })
     laneOut.set(from, list)
@@ -508,11 +543,22 @@ function buildData(
       for (const e of lane.entities)
         for (const c of drawnCallers) {
           const n = m.entityCallerSum(e.key, c.id, win)[0]
-          if (n > 0) edgesEnt.push({ from: c.id, to: e.key, rps: n / win })
+          if (n <= 0) continue
+          const rps = n / win
+          // the caller's weight into the lane, split by its share of the lane's requests
+          const laneKey = `${c.id}>${lane.id}`
+          const laneRps = edges.in.get(laneKey) ?? 0
+          const w = weights
+            ? (weights.in.get(laneKey) ?? 0) * (laneRps > 0 ? Math.min(1, rps / laneRps) : 0)
+            : rps
+          edgesEnt.push({ from: c.id, to: e.key, rps, w })
         }
   }
-  const maxIn = Math.max(0, ...edgesIn.map((e) => e.rps), ...edgesEnt.map((e) => e.rps))
-  const maxOut = Math.max(0, ...edgesOut.map((e) => e.rps))
+  let maxIn = 0
+  for (const e of edgesIn) if (e.w > maxIn) maxIn = e.w
+  for (const e of edgesEnt) if (e.w > maxIn) maxIn = e.w
+  let maxOut = 0
+  for (const e of edgesOut) if (e.w > maxOut) maxOut = e.w
 
   const busiestLanes = lanes
     .slice()
@@ -587,33 +633,105 @@ export function MapCanvas({
       buildData(m, filters, catalog, {
         zoom: view.zoom,
         groupApps: view.groupApps,
-        expanded: view.expanded
+        expanded: view.expanded,
+        weight: view.weight,
+        density: view.density
       }),
-    [m, filters, catalog, tick, view.zoom, view.groupApps, view.expanded]
+    [m, filters, catalog, tick, view.zoom, view.groupApps, view.expanded, view.weight, view.density]
   )
 
+  // the visible part of the map box (#2279 viewport drawing): scroll offset + size, kept current
+  // by the scroll handler and the resize observer so a paint never measures the DOM
+  const scrollRef = useRef({ x: 0, y: 0, w: 0, h: 0 })
   useEffect(() => {
     const box = boxRef.current
     if (!box) return
+    const measure = () => {
+      scrollRef.current = {
+        x: box.scrollLeft,
+        y: box.scrollTop,
+        w: box.clientWidth,
+        h: box.clientHeight
+      }
+    }
+    measure()
     setWidth(box.clientWidth)
     if (typeof ResizeObserver === 'undefined') return
-    const ro = new ResizeObserver(() => setWidth(box.clientWidth))
+    const ro = new ResizeObserver(() => {
+      measure()
+      setWidth(box.clientWidth)
+      dirtyRef.current = true
+    })
     ro.observe(box)
     return () => ro.disconnect()
   }, [])
 
-  const layout = useMemo(
+  // #2279: past GL_AUTO_ITEMS nodes + edges (or forced by a link) the geometry is drawn with
+  // WebGL; a browser without WebGL2, or a lost context, keeps the 2D canvas
+  const items =
+    data.callers.length +
+    data.sources.length +
+    data.downs.length +
+    data.lanes.reduce((a, l) => a + 1 + l.entities.length, 0) +
+    data.edgesIn.length +
+    data.edgesOut.length +
+    data.edgesEnt.length
+  const [glFailed, setGlFailed] = useState(false)
+  const glWanted = view.renderer === 'gl' || (view.renderer === 'auto' && items >= GL_AUTO_ITEMS)
+  const useGl = glWanted && !glFailed && webgl2Supported()
+
+  // #2278 layout + edge routing: memoised on the map's SHAPE (ids), not the per-tick data, so a
+  // frame that only moves numbers never re-lays out (nor posts a worker job)
+  const shapeKey = useMemo(
     () =>
-      computeLayout({
-        width,
-        callers: data.callers.map((c) => c.id),
-        sources: data.sources.map((c) => c.id),
-        lanes: data.lanes.map((l) => ({ id: l.id, entities: l.entities.map((e) => e.entity) })),
-        downs: data.downs.map((d) => d.id),
-        zoom: view.zoom
-      }),
-    [width, data, view.zoom]
+      [
+        data.callers.map((c) => c.id).join('\u0001'),
+        data.sources.map((c) => c.id).join('\u0001'),
+        data.lanes
+          .map((l) => `${l.id}:${l.entities.map((e) => e.entity).join('\u0001')}`)
+          .join('\u0002'),
+        data.downs.map((d) => d.id).join('\u0001')
+      ].join('\u0003'),
+    [data]
   )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: shapeKey stands for data's ids
+  const layoutInput = useMemo<LayoutInput>(
+    () => ({
+      width,
+      callers: data.callers.map((c) => c.id),
+      sources: data.sources.map((c) => c.id),
+      lanes: data.lanes.map((l) => ({ id: l.id, entities: l.entities.map((e) => e.entity) })),
+      downs: data.downs.map((d) => d.id),
+      zoom: view.zoom
+    }),
+    [width, shapeKey, view.zoom]
+  )
+  const edgeKey = useMemo(
+    () =>
+      useGl
+        ? [
+            data.edgesIn.map((e) => `${e.from}>${e.to}`).join('\u0001'),
+            data.edgesEnt.map((e) => `${e.from}>${e.to}`).join('\u0001'),
+            data.edgesOut.map((e) => `${e.from}>${e.to}`).join('\u0001')
+          ].join('\u0002')
+        : '',
+    [useGl, data]
+  )
+  // biome-ignore lint/correctness/useExhaustiveDependencies: edgeKey stands for data's edges
+  const routeReq = useMemo<RouteRequest | null>(
+    () =>
+      useGl
+        ? {
+            in: data.edgesIn.map((e) => [e.from, e.to]),
+            ent: data.edgesEnt.map((e) => [e.from, e.to]),
+            out: data.edgesOut.map((e) => [e.from, e.to])
+          }
+        : null,
+    [useGl, edgeKey]
+  )
+  const { layout, routes, via } = useMapLayout(layoutInput, routeReq)
+  // a tall map draws only what is on screen: the box scrolls, the canvas stays its size
+  const vp = useGl || layout.H > VIEWPORT_MIN_H
   useEffect(() => {
     if (import.meta.env.DEV) (window as unknown as { __tmLayout?: MapLayout }).__tmLayout = layout
   }, [layout])
@@ -678,9 +796,68 @@ export function MapCanvas({
     paused,
     reduced,
     view,
-    trace
+    trace,
+    vp,
+    routes
   })
-  live.current = { data, layout, active, selection, filters, paused, reduced, view, trace }
+  live.current = {
+    data,
+    layout,
+    active,
+    selection,
+    filters,
+    paused,
+    reduced,
+    view,
+    trace,
+    vp,
+    routes
+  }
+
+  // #2279 the WebGL renderer (an off-DOM canvas the paint composites), while it is wanted
+  const glRef = useRef<GlMapRenderer | null>(null)
+  const colorRef = useRef<((css: string) => RGBA) | null>(null)
+  const sceneKeyRef = useRef<unknown[] | null>(null)
+  useEffect(() => {
+    if (!useGl) return
+    const r = GlMapRenderer.create()
+    if (!r) {
+      setGlFailed(true)
+      return
+    }
+    r.onLost = () => {
+      glRef.current = null
+      setGlFailed(true)
+    }
+    colorRef.current ??= makeColorParser()
+    glRef.current = r
+    sceneKeyRef.current = null
+    dirtyRef.current = true
+    return () => {
+      glRef.current = null
+      r.dispose()
+    }
+  }, [useGl])
+
+  // #2142 the export button reads the drawn map from here
+  useEffect(() => {
+    setMapExportSource(() => {
+      const t = tokensRef.current
+      return t
+        ? {
+            data: live.current.data,
+            layout: live.current.layout,
+            tokens: t.T,
+            fonts: { sans: t.sans, mono: t.mono },
+            view: live.current.view,
+            filters: live.current.filters,
+            model: m,
+            selection: live.current.selection
+          }
+        : null
+    })
+    return () => setMapExportSource(null)
+  }, [m])
 
   // spawn one particle per new event (sampled per edge), only when motion is allowed.
   // Runs once per frame tick; filters/layout/motion are read from that render.
@@ -712,7 +889,8 @@ export function MapCanvas({
       const edgeKey = `${from}>${ev.lane}`
       const n = (perEdge.get(edgeKey) ?? 0) + 1
       perEdge.set(edgeKey, n)
-      if (n > PARTICLES_PER_EDGE || particles.current.length >= MAX_PARTICLES) continue
+      const maxP = glRef.current ? MAX_PARTICLES_GL : MAX_PARTICLES
+      if (n > PARTICLES_PER_EDGE || particles.current.length >= maxP) continue
       particles.current.push({
         stage: 0,
         t: -Math.random() * 0.4,
@@ -741,7 +919,7 @@ export function MapCanvas({
   // biome-ignore lint/correctness/useExhaustiveDependencies: these are the repaint triggers
   useLayoutEffect(() => {
     dirtyRef.current = true
-  }, [data, layout, active, themeV, paused, reduced])
+  }, [data, layout, routes, active, themeV, paused, reduced, vp, useGl])
 
   // draw: one loop per motion mode; reduced motion repaints through drawRef instead of a loop
   const drawRef = useRef<((dt: number) => boolean) | null>(null)
@@ -760,6 +938,50 @@ export function MapCanvas({
     let raf = 0
     let last = performance.now()
 
+    /**
+     * Advance every particle by `dt` (two legs: caller → lane, then lane → the store or partner
+     * its entity reaches) and return where the visible ones are now.
+     */
+    const stepParticles = (
+      dt: number,
+      pz: boolean,
+      d: MapData,
+      l: MapLayout
+    ): Array<{ x: number; y: number; kind: Kind }> => {
+      const list = particles.current
+      const out: Array<{ x: number; y: number; kind: Kind }> = []
+      for (let i = list.length - 1; i >= 0; i--) {
+        const p = list[i]
+        if (!pz) p.t += dt * p.speed
+        if (p.t >= 1) {
+          if (p.stage === 0) {
+            const ln = l.lanes[p.lane]
+            const fromEntity = d.entityDowns.get(p.entityKey)
+            const target = fromEntity?.length
+              ? pickWeighted(fromEntity)
+              : pickWeighted((d.laneOut.get(p.lane) ?? []).map((o) => [o.to, o.rps]))
+            const dn = target ? l.downs[target] : undefined
+            if (!ln || !dn) {
+              list.splice(i, 1)
+              continue
+            }
+            p.stage = 1
+            p.t = 0
+            p.a = { x: ln.x + ln.w, y: ln.y + 11 }
+            p.b = { x: dn.x, y: dn.y + dn.h / 2 }
+            p.speed = 1.1 + Math.random() * 0.5
+          } else {
+            list.splice(i, 1)
+            continue
+          }
+        }
+        if (p.t < 0) continue
+        const pt = bezierPoint(p.a, p.b, p.t)
+        out.push({ x: pt.x, y: pt.y, kind: p.kind })
+      }
+      return out
+    }
+
     /** Paints one frame; returns true while something is still animating. */
     const draw = (dt: number): boolean => {
       const {
@@ -771,8 +993,11 @@ export function MapCanvas({
         filters: lf,
         selection: lsel,
         view: vw,
-        trace: tr
+        trace: tr,
+        vp: inVp,
+        routes: rts
       } = live.current
+      const glr = glRef.current && !glRef.current.lost ? glRef.current : null
       const tok = tokensRef.current ?? {
         T: readTokens(rootRef.current ?? document.documentElement),
         sans: 'sans-serif',
@@ -780,18 +1005,32 @@ export function MapCanvas({
       }
       const { T, sans, mono } = tok
       const dpr = Math.min(2, window.devicePixelRatio || 1)
-      const pw = Math.round(l.W * dpr)
-      const ph = Math.round(l.H * dpr)
+      // #2279 viewport drawing: the canvas is the box's visible part, the map scrolls under it
+      const sv = scrollRef.current
+      const vw0 = inVp ? Math.max(1, Math.min(l.W, sv.w || l.W)) : l.W
+      const vh0 = inVp ? Math.max(1, Math.min(l.H, sv.h || l.H)) : l.H
+      const sx = inVp ? Math.max(0, Math.min(sv.x, l.W - vw0)) : 0
+      const sy = inVp ? Math.max(0, Math.min(sv.y, l.H - vh0)) : 0
+      const pw = Math.round(vw0 * dpr)
+      const ph = Math.round(vh0 * dpr)
       if (canvas.width !== pw || canvas.height !== ph) {
         canvas.width = pw
         canvas.height = ph
-        canvas.style.width = `${l.W}px`
-        canvas.style.height = `${l.H}px`
+        canvas.style.width = `${vw0}px`
+        canvas.style.height = `${vh0}px`
       }
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.clearRect(0, 0, l.W, l.H)
+      ctx.setTransform(dpr, 0, 0, dpr, -sx * dpr, -sy * dpr)
+      ctx.clearRect(sx, sy, vw0, vh0)
       ctx.fillStyle = T.card
-      ctx.fillRect(0, 0, l.W, l.H)
+      ctx.fillRect(sx, sy, vw0, vh0)
+      /** On screen (with a small margin)? Always true outside viewport drawing. */
+      const vis = (r: Rect | undefined) =>
+        !!r &&
+        (!inVp ||
+          (r.x + r.w >= sx - 8 &&
+            r.x <= sx + vw0 + 8 &&
+            r.y + r.h >= sy - 8 &&
+            r.y <= sy + vh0 + 8))
       ctx.textBaseline = 'alphabetic'
       const KC: Record<Kind, string> = {
         read: T.read,
@@ -847,6 +1086,49 @@ export function MapCanvas({
         return false
       }
 
+      // #2279 WebGL pass: edges, boxes, dots, bars and particles; the 2D pass below adds the rest
+      const metric: EdgeMetric = vw.weight
+      const glOn = !!glr
+      if (glr) {
+        const colorOf = () => {
+          colorRef.current ??= makeColorParser()
+          return colorRef.current
+        }
+        const key = [d, l, rts, sel, tr, T, vw.scale, metric]
+        const prev = sceneKeyRef.current
+        if (!prev || prev.length !== key.length || prev.some((v, i) => v !== key[i])) {
+          glr.setScene(
+            buildGlScene({
+              data: d,
+              layout: l,
+              routes: rts,
+              tokens: T,
+              color: colorOf(),
+              scale: vw.scale,
+              metric,
+              active: sel,
+              trace: tr,
+              styleOf: edgeStyles.length ? (dir, e) => edgeStyleFor({ dir, ...e }, m) : undefined
+            })
+          )
+          sceneKeyRef.current = key
+        }
+        const color = colorOf()
+        if (!rd && particles.current.length && !pz) animating = true
+        const moving = rd ? [] : stepParticles(dt, pz, d, l)
+        const pr = particleRects(moving, {
+          read: color(T.read),
+          create: color(T.create),
+          update: color(T.update),
+          delete: color(T.delete),
+          error: color(T.error)
+        })
+        glr.setParticles(pr.rects, pr.count)
+        const hlT0 = (pnow - hlRef.current.at) / HIGHLIGHT_MS
+        glr.render({ x: sx, y: sy, w: vw0, h: vh0 }, dpr, rd ? 1 : easeOut(hlT0))
+        ctx.drawImage(glr.canvas, sx, sy, vw0, vh0)
+      }
+
       // column captions (sentence case, D1)
       ctx.font = `500 11px ${sans}`
       ctx.fillStyle = T.muted
@@ -879,33 +1161,57 @@ export function MapCanvas({
       if (sel && !rd && hlT < 1) animating = true
       ctx.lineCap = 'round'
       const scale: EdgeScale = vw.scale
-      const strokeIn = (e: { from: string; to: Lane; rps: number }, accent: boolean) => {
+      // #2185: width by the chosen measure; traffic that weighs nothing in it (no errors, no
+      // bytes) is a faint hairline (a negative width here) so the map keeps its shape
+      const widthOf = (w: number, rps: number, max: number): number => {
+        const px = edgeWidthByMetric(w, metric, scale, max)
+        return px > 0 ? px : rps > 0 && metric !== 'requests' ? -HAIRLINE.width : 0
+      }
+      const strokeW = (px: number, accent: boolean, min = 0) => {
+        if (accent) {
+          ctx.lineWidth = Math.max(1.5, px)
+          ctx.stroke()
+        } else if (px < 0) {
+          const ga = ctx.globalAlpha
+          ctx.lineWidth = -px
+          ctx.globalAlpha = ga * HAIRLINE.alpha
+          ctx.stroke()
+          ctx.globalAlpha = ga
+        } else {
+          ctx.lineWidth = Math.max(min, px)
+          ctx.stroke()
+        }
+      }
+      const strokeIn = (e: { from: string; to: Lane; rps: number; w: number }, accent: boolean) => {
         const c = l.callers[e.from]
         const ln = l.lanes[e.to]
-        const w = edgeWidthFor(e.rps, scale, d.maxIn)
-        if (!c || !ln || w <= 0) return
+        const w = widthOf(e.w, e.rps, d.maxIn)
+        if (!c || !ln || w === 0) return
         edgePath(ctx, { x: c.x + c.w, y: c.y + c.h / 2 }, { x: ln.x, y: ln.y + 11 })
-        ctx.lineWidth = accent ? Math.max(1.5, w) : w
-        ctx.stroke()
+        strokeW(w, accent)
       }
-      const strokeOut = (e: { from: Lane; to: string; rps: number }, accent: boolean) => {
+      const strokeOut = (
+        e: { from: Lane; to: string; rps: number; w: number },
+        accent: boolean
+      ) => {
         const ln = l.lanes[e.from]
         const dn = l.downs[e.to]
-        const w = edgeWidthFor(e.rps, scale, d.maxOut)
-        if (!ln || !dn || w <= 0) return
+        const w = widthOf(e.w, e.rps, d.maxOut)
+        if (!ln || !dn || w === 0) return
         edgePath(ctx, { x: ln.x + ln.w, y: ln.y + 11 }, { x: dn.x, y: dn.y + dn.h / 2 })
-        ctx.lineWidth = accent ? Math.max(1.5, w) : w
-        ctx.stroke()
+        strokeW(w, accent)
       }
       // #1161 zoomed in: a caller's own edge into each entity row it reached
-      const strokeEnt = (e: { from: string; to: string; rps: number }, accent: boolean) => {
+      const strokeEnt = (
+        e: { from: string; to: string; rps: number; w: number },
+        accent: boolean
+      ) => {
         const c = l.callers[e.from]
         const er = l.ents[e.to]
-        const w = edgeWidthFor(e.rps, scale, d.maxIn)
-        if (!c || !er || w <= 0) return
+        const w = widthOf(e.w, e.rps, d.maxIn)
+        if (!c || !er || w === 0) return
         edgePath(ctx, { x: c.x + c.w, y: c.y + c.h / 2 }, { x: er.x, y: er.y + er.h / 2 })
-        ctx.lineWidth = accent ? Math.max(1.5, w) : Math.max(0.75, w * 0.8)
-        ctx.stroke()
+        strokeW(w > 0 ? w * 0.8 : w, accent, 0.75)
       }
       const entFrom = new Set(d.edgesEnt.map((e) => e.from))
       // #1129: off-path edges and nodes fade while a caller's path is traced
@@ -922,25 +1228,26 @@ export function MapCanvas({
         ctx.strokeStyle = st ? (T[st.tone] ?? T.edge) : T.edge
         ctx.setLineDash(st?.dash ?? [])
       }
-      for (const e of d.edgesIn) {
+      // (WebGL already drew the base edges and the highlight)
+      for (const e of glOn ? [] : d.edgesIn) {
         if (entFrom.has(e.from)) continue
         styleOf('in', e)
         ctx.globalAlpha = onPathIn(e) ? 1 : FADED
         strokeIn(e, false)
       }
-      for (const e of d.edgesEnt) {
+      for (const e of glOn ? [] : d.edgesEnt) {
         styleOf('in', { from: e.from, to: laneOfKey(e.to), rps: e.rps })
         ctx.globalAlpha = !tr || (e.from === tr.caller && tr.ents.has(e.to)) ? 1 : FADED
         strokeEnt(e, false)
       }
-      for (const e of d.edgesOut) {
+      for (const e of glOn ? [] : d.edgesOut) {
         styleOf('out', e)
         ctx.globalAlpha = onPathOut(e) ? 1 : FADED
         strokeOut(e, false)
       }
       ctx.globalAlpha = 1
       ctx.setLineDash([])
-      if (sel && !tr) {
+      if (sel && !tr && !glOn) {
         ctx.strokeStyle = T.accent
         ctx.globalAlpha = 0.55 * hl
         for (const e of d.edgesIn) if (inHit(e) && !entFrom.has(e.from)) strokeIn(e, true)
@@ -957,7 +1264,8 @@ export function MapCanvas({
       const isSel = (kind: Selection['kind'], id: string) =>
         !!sel && sel.kind === kind && sel.id === id
       const node = (r: Rect, n: NodeView, selected: boolean, side?: 'caller' | 'down') => {
-        if (n.kind === 'group') {
+        if (!vis(r)) return
+        if (n.kind === 'group' && !glOn) {
           // #1163 an app group reads as a stack of callers
           rr(ctx, r.x + 4, r.y + 4, r.w, r.h, 8)
           ctx.fillStyle = T.card2
@@ -966,14 +1274,19 @@ export function MapCanvas({
           ctx.strokeStyle = T.nodeLine
           ctx.stroke()
         }
-        rr(ctx, r.x, r.y, r.w, r.h, 8)
-        ctx.fillStyle = T.node
-        ctx.fill()
-        ctx.lineWidth = selected ? 2 : 1
-        ctx.strokeStyle = selected ? T.accent : T.nodeLine
-        if (n.partner) ctx.setLineDash([3, 3])
-        ctx.stroke()
-        ctx.setLineDash([])
+        // WebGL drew the box; a partner's dashed outline is still drawn here
+        if (!glOn || n.partner) {
+          rr(ctx, r.x, r.y, r.w, r.h, 8)
+          if (!glOn) {
+            ctx.fillStyle = T.node
+            ctx.fill()
+          }
+          ctx.lineWidth = selected ? 2 : 1
+          ctx.strokeStyle = selected ? T.accent : T.nodeLine
+          if (n.partner) ctx.setLineDash([3, 3])
+          ctx.stroke()
+          ctx.setLineDash([])
+        }
         ctx.font = `500 10px ${mono}`
         const rate = fmtRate(n.rps)
         const rateW = ctx.measureText(rate).width
@@ -1016,14 +1329,16 @@ export function MapCanvas({
 
       for (const lane of d.lanes) {
         const r = l.lanes[lane.id]
-        if (!r) continue
+        if (!r || !vis(r)) continue
         const laneSel = isSel('lane', lane.id)
-        rr(ctx, r.x, r.y, r.w, r.h, 8)
-        ctx.fillStyle = T.card2
-        ctx.fill()
-        ctx.lineWidth = laneSel ? 2 : 1
-        ctx.strokeStyle = laneSel ? T.accent : T.line
-        ctx.stroke()
+        if (!glOn) {
+          rr(ctx, r.x, r.y, r.w, r.h, 8)
+          ctx.fillStyle = T.card2
+          ctx.fill()
+          ctx.lineWidth = laneSel ? 2 : 1
+          ctx.strokeStyle = laneSel ? T.accent : T.line
+          ctx.stroke()
+        }
         // the lane header flashes when any of its entities just errored
         let laneFlash = 0
         for (const e of lane.entities) {
@@ -1060,7 +1375,7 @@ export function MapCanvas({
         const maxR = Math.max(0.1, ...lane.entities.map((e) => e.rps))
         for (const e of lane.entities) {
           const er = l.ents[e.key]
-          if (!er) continue
+          if (!er || !vis(er)) continue
           const entSel = isSel('entity', e.key)
           if (entSel) {
             rr(ctx, er.x, er.y + 1, er.w, er.h - 2, 4)
@@ -1091,18 +1406,23 @@ export function MapCanvas({
             ctx.stroke()
             ctx.globalAlpha = 1
           }
-          ctx.beginPath()
-          ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
-          ctx.fillStyle =
-            e.errFrac > 0.05 ? T.error : p > 0.02 ? KC[pulse?.kind ?? 'update'] : T.nodeLine
-          ctx.fill()
+          // (WebGL drew the resting dot and the bar; a pulsing dot is recoloured here)
+          if (!glOn || (p > 0.02 && e.errFrac <= 0.05)) {
+            ctx.beginPath()
+            ctx.arc(cx, cy, 2.5, 0, Math.PI * 2)
+            ctx.fillStyle =
+              e.errFrac > 0.05 ? T.error : p > 0.02 ? KC[pulse?.kind ?? 'update'] : T.nodeLine
+            ctx.fill()
+          }
           // stacked kind mini-bar, scaled to the lane's busiest entity
           const bw = Math.min(92, Math.max(48, er.w * 0.27))
           const bx = er.x + er.w - bw - 46
           const by = er.y + 8
-          ctx.fillStyle = T.line2
-          ctx.fillRect(bx, by, bw, 4)
-          const tot = e.kinds.reduce((a, b) => a + b, 0)
+          if (!glOn) {
+            ctx.fillStyle = T.line2
+            ctx.fillRect(bx, by, bw, 4)
+          }
+          const tot = glOn ? 0 : e.kinds.reduce((a, b) => a + b, 0)
           if (tot > 0) {
             const scale = (e.rps / maxR) * bw
             let acc = 0
@@ -1210,10 +1530,11 @@ export function MapCanvas({
       // #1162 numbers on edges
       if (vw.labels) {
         ctx.font = `600 9.5px ${mono}`
-        const tag = (a: { x: number; y: number }, b: { x: number; y: number }, rps: number) => {
-          if (!(rps > 0)) return
+        const tag = (a: { x: number; y: number }, b: { x: number; y: number }, wt: number) => {
+          if (!(wt > 0)) return
           const p = bezierPoint(a, b, 0.5)
-          const t = fmtRate(rps)
+          if (!vis({ x: p.x - 40, y: p.y - 8, w: 80, h: 16 })) return
+          const t = fmtWeight(wt, metric)
           const w = ctx.measureText(t).width + 8
           rr(ctx, p.x - w / 2, p.y - 7, w, 14, 7)
           ctx.fillStyle = T.card
@@ -1230,21 +1551,19 @@ export function MapCanvas({
           if (entFrom.has(e.from) || !onPathIn(e)) continue
           const c = l.callers[e.from]
           const ln = l.lanes[e.to]
-          if (c && ln) tag({ x: c.x + c.w, y: c.y + c.h / 2 }, { x: ln.x, y: ln.y + 11 }, e.rps)
+          if (c && ln) tag({ x: c.x + c.w, y: c.y + c.h / 2 }, { x: ln.x, y: ln.y + 11 }, e.w)
         }
         for (const e of d.edgesEnt) {
           if (tr && (e.from !== tr.caller || !tr.ents.has(e.to))) continue
           const c = l.callers[e.from]
           const er = l.ents[e.to]
-          if (c && er)
-            tag({ x: c.x + c.w, y: c.y + c.h / 2 }, { x: er.x, y: er.y + er.h / 2 }, e.rps)
+          if (c && er) tag({ x: c.x + c.w, y: c.y + c.h / 2 }, { x: er.x, y: er.y + er.h / 2 }, e.w)
         }
         for (const e of d.edgesOut) {
           if (!onPathOut(e)) continue
           const ln = l.lanes[e.from]
           const dn = l.downs[e.to]
-          if (ln && dn)
-            tag({ x: ln.x + ln.w, y: ln.y + 11 }, { x: dn.x, y: dn.y + dn.h / 2 }, e.rps)
+          if (ln && dn) tag({ x: ln.x + ln.w, y: ln.y + 11 }, { x: dn.x, y: dn.y + dn.h / 2 }, e.w)
         }
       }
 
@@ -1270,43 +1589,16 @@ export function MapCanvas({
         ctx.restore()
       }
 
-      // particles: two legs (caller → lane, lane → the store or partner the entity reaches)
-      if (rd) return false
-      const list = particles.current
-      if (list.length && !pz) animating = true
-      for (let i = list.length - 1; i >= 0; i--) {
-        const p = list[i]
-        if (!pz) p.t += dt * p.speed
-        if (p.t >= 1) {
-          if (p.stage === 0) {
-            const ln = l.lanes[p.lane]
-            const fromEntity = d.entityDowns.get(p.entityKey)
-            const target = fromEntity?.length
-              ? pickWeighted(fromEntity)
-              : pickWeighted((d.laneOut.get(p.lane) ?? []).map((o) => [o.to, o.rps]))
-            const dn = target ? l.downs[target] : undefined
-            if (!ln || !dn) {
-              list.splice(i, 1)
-              continue
-            }
-            p.stage = 1
-            p.t = 0
-            p.a = { x: ln.x + ln.w, y: ln.y + 11 }
-            p.b = { x: dn.x, y: dn.y + dn.h / 2 }
-            p.speed = 1.1 + Math.random() * 0.5
-          } else {
-            list.splice(i, 1)
-            continue
-          }
-        }
-        if (p.t < 0) continue
-        const pt = bezierPoint(p.a, p.b, p.t)
+      // particles (WebGL drew them already when it is on)
+      if (rd || glOn) return animating
+      if (particles.current.length && !pz) animating = true
+      for (const pt of stepParticles(dt, pz, d, l)) {
         ctx.beginPath()
-        ctx.arc(pt.x, pt.y, p.kind === 'read' ? 2.2 : 3, 0, Math.PI * 2)
-        ctx.fillStyle = KC[p.kind]
-        ctx.globalAlpha = p.kind === 'read' ? 0.75 : 1
+        ctx.arc(pt.x, pt.y, pt.kind === 'read' ? 2.2 : 3, 0, Math.PI * 2)
+        ctx.fillStyle = KC[pt.kind]
+        ctx.globalAlpha = pt.kind === 'read' ? 0.75 : 1
         ctx.fill()
-        if (p.kind === 'error') {
+        if (pt.kind === 'error') {
           ctx.beginPath()
           ctx.arc(pt.x, pt.y, 6, 0, Math.PI * 2)
           ctx.strokeStyle = T.error
@@ -1421,13 +1713,36 @@ export function MapCanvas({
     const cv = canvasRef.current
     if (!el || !cv || !tip) return
     const w = el.offsetWidth
-    const max = cv.offsetWidth - w - TIP_EDGE
-    el.style.left = `${Math.max(TIP_EDGE, Math.min(tip.x - w / 2, max))}px`
-  }, [tip])
+    // viewport drawing: the canvas shows map x from the scroll offset, the tip lives in map px
+    const left = vp ? Math.max(0, Math.min(scrollRef.current.x, layout.W - cv.offsetWidth)) : 0
+    const max = left + cv.offsetWidth - w - TIP_EDGE
+    el.style.left = `${Math.max(left + TIP_EDGE, Math.min(tip.x - w / 2, max))}px`
+  }, [tip, vp, layout.W])
 
   const pointer = (e: MouseEvent<HTMLCanvasElement>) => {
     const rect = e.currentTarget.getBoundingClientRect()
-    return hitTest(layout, e.clientX - rect.left, e.clientY - rect.top)
+    let x = e.clientX - rect.left
+    let y = e.clientY - rect.top
+    if (vp) {
+      // the sticky canvas shows the map from the (clamped) scroll offset
+      const sv = scrollRef.current
+      x += Math.max(0, Math.min(sv.x, layout.W - rect.width))
+      y += Math.max(0, Math.min(sv.y, layout.H - rect.height))
+    }
+    return hitTest(layout, x, y)
+  }
+  const onScroll = () => {
+    const box = boxRef.current
+    if (!box) return
+    scrollRef.current = {
+      x: box.scrollLeft,
+      y: box.scrollTop,
+      w: box.clientWidth,
+      h: box.clientHeight
+    }
+    if (!live.current.vp) return
+    dirtyRef.current = true
+    if (live.current.reduced) drawRef.current?.(0)
   }
   const clickable = (h: Selection | null) =>
     !!h && !(h.kind === 'caller' && (h.id === OTHERS || h.id === OTHER_SOURCES))
@@ -1477,12 +1792,14 @@ export function MapCanvas({
       className='min-w-0 rounded-lg border border-[var(--tm-line)] bg-[var(--tm-card)]'
       aria-label='Traffic map'
       data-tm-motion={reduced ? 'off' : 'on'}
+      data-tm-renderer={useGl ? 'gl' : '2d'}
+      data-tm-layout={via}
     >
       <div className='flex flex-wrap items-start justify-between gap-x-4 gap-y-2 border-b border-[var(--tm-line-2)] px-3.5 py-2'>
         <div className='min-w-0'>
           <h2 className='text-[13px] font-semibold'>Flow</h2>
           <p className='text-[11.5px] text-[var(--tm-muted)]'>
-            Callers → API lanes → data and partners · edge width = requests/s
+            Callers → API lanes → data and partners · edge width = {WEIGHT_MEANS[view.weight]}
             {view.scale === 'log' ? ' (log)' : view.scale === 'linear' ? ' (linear)' : ''}
           </p>
         </div>
@@ -1514,29 +1831,41 @@ export function MapCanvas({
       <div
         ref={boxRef}
         role='application'
-        className='relative overflow-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan'
+        className={cn(
+          'relative overflow-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
+          // #2279 a tall map scrolls inside its box; the canvas draws only what is in view
+          vp && 'max-h-[min(78vh,1100px)]'
+        )}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: the map box takes + / − / Escape (a canvas has no focusable children)
         tabIndex={0}
         onKeyDown={onKey}
+        onScroll={onScroll}
+        data-tm-viewport={vp ? '' : undefined}
         aria-label={`Flow map, ${ZOOM_LABEL[view.zoom].toLowerCase()} view. Plus and minus zoom; Escape clears a traced path.`}
         data-tm-zoom={view.zoom}
       >
-        <canvas
-          ref={canvasRef}
-          id='tm-canvas'
-          data-tm-canvas=''
-          role='img'
-          aria-label={data.summary}
-          className='block min-w-[720px]'
-          onMouseMove={(e) => {
-            const h = pointer(e)
-            if (!sameSel(h, hover)) setHover(h)
-            e.currentTarget.style.cursor =
-              clickable(h) || (h?.kind === 'caller' && isAppGroup(h.id)) ? 'pointer' : 'default'
-          }}
-          onMouseLeave={() => setHover(null)}
-          onClick={(e) => pick(pointer(e))}
-        />
+        {/* Viewport drawing keeps the canvas mounted in the same place: a W x H sizer gives the
+            box its scroll range and a sticky, zero-size holder pins the canvas to the view. */}
+        <div style={vp ? { position: 'relative', width: layout.W, height: layout.H } : undefined}>
+          <div className={vp ? 'sticky left-0 top-0 z-[1] h-0 w-0 overflow-visible' : undefined}>
+            <canvas
+              ref={canvasRef}
+              id='tm-canvas'
+              data-tm-canvas=''
+              role='img'
+              aria-label={data.summary}
+              className={cn('block', !vp && 'min-w-[720px]')}
+              onMouseMove={(e) => {
+                const h = pointer(e)
+                if (!sameSel(h, hover)) setHover(h)
+                e.currentTarget.style.cursor =
+                  clickable(h) || (h?.kind === 'caller' && isAppGroup(h.id)) ? 'pointer' : 'default'
+              }}
+              onMouseLeave={() => setHover(null)}
+              onClick={(e) => pick(pointer(e))}
+            />
+          </div>
+        </div>
         {tip && (
           <div
             ref={tipRef}
@@ -1560,6 +1889,7 @@ export function MapCanvas({
           {reduced
             ? 'Reduced motion: particles off, edge weights still update. '
             : `Particles are sampled above ${PARTICLES_PER_EDGE} requests/s per edge. Rows pulse on writes and flash on errors. `}
+          {useGl ? 'Drawn with WebGL (a big map). ' : ''}
           This node only · api · <span className='font-mono'>{m.instance || '…'}</span>
         </span>
         {stale ? (
@@ -1591,6 +1921,7 @@ const CHIP_ON =
   'border-[color-mix(in_srgb,var(--tm-accent)_55%,var(--tm-line))] bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
 const CHIP_OFF =
   'border-[var(--tm-line)] bg-[var(--tm-card)] text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
+const WEIGHTS: EdgeMetric[] = ['requests', 'bytes', 'time', 'errors']
 const SCALES: Array<[EdgeScale, string, string]> = [
   ['sqrt', '√', 'Square root: a busy edge stands out without hiding quiet ones'],
   ['log', 'log', 'Log: quiet and busy edges differ only a little'],
@@ -1695,6 +2026,43 @@ function FlowControls({
           ))}
         </fieldset>
       </div>
+      <div className='inline-flex items-center gap-1.5'>
+        <span className='text-[11.5px] font-medium text-[var(--tm-muted)]' id='tm-weight-label'>
+          Edges show
+        </span>
+        <fieldset
+          className='inline-flex min-w-0 overflow-hidden rounded-md border border-[var(--tm-line)]'
+          aria-labelledby='tm-weight-label'
+        >
+          {WEIGHTS.map((w, i) => (
+            <button
+              key={w}
+              type='button'
+              data-tm-weight={w}
+              aria-pressed={view.weight === w}
+              data-tip={WEIGHT_HINT[w]}
+              className={cn(
+                SEG,
+                i > 0 && 'border-l border-[var(--tm-line)]',
+                view.weight === w ? SEG_ON : SEG_OFF
+              )}
+              onClick={() => setCanvasView({ weight: w })}
+            >
+              {WEIGHT_LABEL[w]}
+            </button>
+          ))}
+        </fieldset>
+      </div>
+      <button
+        type='button'
+        id='tm-density'
+        aria-pressed={view.density === 'all'}
+        data-tip='Draw every caller, entity and downstream node, not only the busiest. A big map scrolls in its box and is drawn with WebGL.'
+        onClick={() => setCanvasView({ density: view.density === 'all' ? 'top' : 'all' })}
+        className={cn(CHIP, view.density === 'all' ? CHIP_ON : CHIP_OFF)}
+      >
+        All nodes
+      </button>
       <button
         type='button'
         id='tm-group-apps'

@@ -15,6 +15,8 @@ import {
 // Taps for the whole-map workspace scope (#1154) and app grouping (#1163) register at boot.
 import '../../services/traffic-taps/workspace-scope.js'
 import '../../services/traffic-taps/caller-apps.js'
+// #2185 edge weight modes: bytes, total time and errors per map edge.
+import '../../services/traffic-taps/edge-weights.js'
 
 /**
  * Canvas & view (group D):
