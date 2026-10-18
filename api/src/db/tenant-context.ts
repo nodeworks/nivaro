@@ -14,11 +14,15 @@ const store = new AsyncLocalStorage<TenantStore>()
 // Shared pool map — one Knex instance per connection string, never recreated.
 const pools = new Map<string, Knex>()
 
+/** Connections per tenant pool. The heavy-read gate (services/read-gate.ts)
+ *  sizes a tenant's limit from it. */
+export const TENANT_POOL_MAX = 5
+
 export function getOrCreateTenantPool(connectionString: string, client = 'pg'): Knex {
   if (!pools.has(connectionString)) {
     pools.set(
       connectionString,
-      knex({ client, connection: connectionString, pool: { min: 0, max: 5 } })
+      knex({ client, connection: connectionString, pool: { min: 0, max: TENANT_POOL_MAX } })
     )
   }
   return pools.get(connectionString)!

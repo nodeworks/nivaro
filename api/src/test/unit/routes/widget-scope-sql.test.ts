@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 // A custom-query widget applies the caller's User Scope values BEFORE the SQL
 // text is built: the statement that runs and the cache key it is stored under
-// both carry them.
+// both carry them. Concurrent same-key renders share one run.
+vi.mock('../../../config.js', () => ({ config: { NODE_ENV: 'test' } }))
+vi.mock('../../../services/ai-client.js', () => ({
+  getAiClient: vi.fn(async () => null),
+  getAiModelSettings: vi.fn(async () => ({}))
+}))
 vi.mock('../../../middleware/authenticate.js', () => ({
   authenticate: vi.fn(async () => {}),
   requireAdmin: vi.fn(async () => {})
@@ -24,7 +29,7 @@ vi.mock('../../../services/custom-query-scope.js', () => ({
   )
 }))
 
-const sql = vi.hoisted(() => ({ ran: [] as string[] }))
+const sql = vi.hoisted(() => ({ ran: [] as string[], hold: null as Promise<void> | null }))
 vi.mock('../../../db/index.js', () => {
   class Request {
     private handlers: Record<string, (...a: unknown[]) => void> = {}
@@ -46,7 +51,9 @@ vi.mock('../../../db/index.js', () => {
   const client = {
     _driver: () => ({ Request }),
     acquireConnection: async () => ({
-      execSqlBatch: (r: Request) => setTimeout(() => r.fire(), 0)
+      execSqlBatch: (r: Request) => {
+        void (sql.hold ?? Promise.resolve()).then(() => setTimeout(() => r.fire(), 0))
+      }
     }),
     releaseConnection: async () => {}
   }
@@ -107,6 +114,7 @@ async function render(userId: string) {
 
 afterEach(() => {
   sql.ran.length = 0
+  sql.hold = null
   resetSingleFlight()
 })
 
@@ -125,5 +133,28 @@ describe('custom-query widget User Scopes', () => {
     expect(res.statusCode).toBe(200)
     expect(sql.ran).toEqual(['EXEC dbo.spend 2026, NULL'])
     expect(redis.setex.mock.calls[0]?.[0]).toBe(`cq:spend:${JSON.stringify({ year: 2026 })}`)
+  })
+
+  it('concurrent renders share one run per final key, never across scope values', async () => {
+    let open!: () => void
+    sql.hold = new Promise<void>((r) => {
+      open = r
+    })
+    const calls = [
+      render('free-a'),
+      render('free-b'),
+      render('free-c'),
+      render('restricted'),
+      render('restricted')
+    ]
+    await new Promise((r) => setTimeout(r, 30))
+    open()
+    const out = await Promise.all(calls)
+    expect(out.map((o) => o.res.statusCode)).toEqual([200, 200, 200, 200, 200])
+    expect([...sql.ran].sort()).toEqual(["EXEC dbo.spend 2026, 'Z1'", 'EXEC dbo.spend 2026, NULL'])
+    const shared = out.filter((o) =>
+      String(o.res.headers['server-timing'] ?? '').includes('shared')
+    )
+    expect(shared).toHaveLength(3)
   })
 })
