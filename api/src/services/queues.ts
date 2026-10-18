@@ -35,7 +35,7 @@ import {
 } from './pipeline-subject.js'
 import { applyQueueGate, queueGateFor } from './queue-access.js'
 import { integrationsFilterBuckets, integrationsMatchKeys } from './queue-integrations.js'
-import { withReadGate } from './read-gate.js'
+import { withReadGateEach } from './read-gate.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
 
@@ -2983,29 +2983,26 @@ export async function fetchQueueItems(
   // Outer span so the trace attributes time that falls between the per-stage
   // spans inside the resolvers — otherwise a slow resolver tail reads as
   // "unaccounted" and points nowhere.
-  const resolveSources = () =>
-    span(
-      'queue:resolve-sources',
-      () =>
-        Promise.all(
-          sources.map((source) => {
-            if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
-            if (source.type === 'tasks') return resolveTasksSource(ceiling)
-            if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
-            if (source.type === 'addendums') return resolveAddendumsSource(source, user, ceiling)
-            return resolveOwnedByMeSource(user.id, ceiling)
-          })
-        ),
-      `${sources.length} source(s)`
-    )
-  // #2452 — the live fan-out is the expensive part; a request-path caller
-  // runs it holding a heavy-read slot (crons and digests pass no gate).
-  const results = options.readGate
-    ? await withReadGate(user.id, resolveSources, {
-        ...options.readGate,
-        label: `queue:${queueId}`
-      })
-    : await resolveSources()
+  // #2452 — the live fan-out is the expensive part; on a request path each
+  // source read holds its own heavy-read slot (one slot per source query, so
+  // a 10-source queue never takes the gate in one bite). Crons and digests
+  // pass no gate. The longest source wait is reported once.
+  const results = await span(
+    'queue:resolve-sources',
+    () =>
+      withReadGateEach(
+        user.id,
+        sources.map((source) => () => {
+          if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
+          if (source.type === 'tasks') return resolveTasksSource(ceiling)
+          if (source.type === 'approvals') return resolveApprovalsSource(ceiling)
+          if (source.type === 'addendums') return resolveAddendumsSource(source, user, ceiling)
+          return resolveOwnedByMeSource(user.id, ceiling)
+        }),
+        options.readGate ? { ...options.readGate, label: `queue:${queueId}` } : undefined
+      ),
+    `${sources.length} source(s)`
+  )
 
   const truncated = results.some((r) => r.truncated)
 

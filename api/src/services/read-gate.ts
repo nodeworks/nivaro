@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from 'node:async_hooks'
-import { getTenantId } from '../db/tenant-context.js'
+import { getTenantId, TENANT_POOL_MAX } from '../db/tenant-context.js'
 import { markSpan } from './request-trace.js'
-import { singleFlight } from './single-flight.js'
+import { abortError, singleFlight } from './single-flight.js'
 
 /**
  * Per-process "heavy read" gate (#2452).
@@ -12,17 +12,26 @@ import { singleFlight } from './single-flight.js'
  * the dashboard and nine calls passed 10 s cold. Nothing limited requests;
  * withHeavySlot (plugins/cron.ts) only serialises cron/render jobs.
  *
- * This is a small FIFO semaphore with a global limit and a per-user sub-limit.
+ * A small FIFO semaphore, counted PER TENANT (self-hosted = one tenant, ''):
+ *   - limit: HEAVY_READ_CONCURRENCY (default max(4, DB_POOL_MAX/3)); inside a
+ *     cloud tenant context min(that, TENANT_POOL_MAX - 1), so one tenant's
+ *     heavy reads always leave a connection of its own pool free.
+ *   - per-user sub-limit HEAVY_READ_PER_USER (4) — work-conserving: enforced
+ *     only while ANOTHER user of the same tenant is waiting. A lone user on an
+ *     idle gate may use every slot; under contention, arrival order decides
+ *     among the users still under their share.
+ *
  * It wraps ONLY expensive read bodies — never cache hits, cheap routes, writes
- * or streams. Three rules:
+ * or streams. Rules:
  *   - Fail open. A waiter that passes HEAVY_READ_MAX_WAIT_MS proceeds anyway
  *     (counted as timed_out) — the gate turns a stampede into a queue, never
  *     slowness into errors.
- *   - Never nest a wait inside a held slot. A body already holding a slot
+ *   - Never nest a wait inside a held slot. A body holding a slot
  *     (AsyncLocalStorage) runs nested gated calls straight through, and a slot
- *     holder never joins a single-flight that is still queued (sharedGatedRead).
- *   - Release in finally; a caller whose client disconnects while queued
- *     leaves the queue (AbortError) instead of running for nobody.
+ *     holder never joins a single-flight that is still queued.
+ *   - Release in finally. A caller whose client disconnects while QUEUED
+ *     leaves the queue (AbortError); work that already started runs to
+ *     completion — the gate never interrupts a statement.
  *
  * Per process, like the trace ring: replicas each gate their own pool.
  */
@@ -31,18 +40,6 @@ interface GateConfig {
   global: number
   perUser: number
   maxWaitMs: number
-}
-
-interface Waiter {
-  who: string
-  grant: (overflow: boolean) => void
-}
-
-export interface ReadSlot {
-  waitedMs: number
-  /** Proceeded after the max wait without a slot (fail-open). */
-  overflow: boolean
-  release: () => void
 }
 
 function envInt(name: string, fallback: number, min: number): number {
@@ -67,129 +64,237 @@ const conf = (): GateConfig => {
   return cfg
 }
 
-const holder = new AsyncLocalStorage<true>()
-let active = 0
-let overflowRunning = 0
-const byUser = new Map<string, number>()
-const queue: Waiter[] = []
-const SINCE = new Date().toISOString()
-const stats = {
-  acquired: 0,
-  immediate: 0,
-  waited: 0,
-  wait_ms_total: 0,
-  wait_ms_max: 0,
-  timed_out: 0,
-  aborted: 0,
-  reentrant: 0,
-  peak_active: 0,
-  peak_queue: 0
+export interface ReadSlot {
+  who: string
+  waitedMs: number
+  /** Proceeded after the max wait without a slot (fail-open). */
+  overflow: boolean
+  release: () => void
 }
 
-function tryGrant(who: string): boolean {
-  const c = conf()
-  if (active >= c.global || (byUser.get(who) ?? 0) >= c.perUser) return false
-  active++
-  byUser.set(who, (byUser.get(who) ?? 0) + 1)
-  stats.peak_active = Math.max(stats.peak_active, active)
-  return true
-}
-
-/** Grant queued waiters in arrival order; one whose user is at its sub-limit
- *  is skipped (it would block everyone behind it), not reordered. */
-function pump(): void {
-  let i = 0
-  while (i < queue.length && active < conf().global) {
-    const w = queue[i]
-    if (tryGrant(w.who)) {
-      queue.splice(i, 1)
-      w.grant(false)
-    } else i++
+function newStats() {
+  return {
+    acquired: 0,
+    immediate: 0,
+    waited: 0,
+    wait_ms_total: 0,
+    wait_ms_max: 0,
+    timed_out: 0,
+    aborted: 0,
+    reentrant: 0,
+    peak_active: 0,
+    peak_queue: 0
   }
 }
 
-function freeSlot(who: string): void {
-  active = Math.max(0, active - 1)
-  const n = (byUser.get(who) ?? 1) - 1
-  if (n <= 0) byUser.delete(who)
-  else byUser.set(who, n)
-  pump()
+interface TenantGate {
+  tenant: string
+  active: number
+  overflowRunning: number
+  byUser: Map<string, number>
+  queue: Waiter[]
+  stats: ReturnType<typeof newStats>
 }
 
-function abortError(): Error {
-  return Object.assign(new Error('Client went away while waiting for a read slot'), {
-    name: 'AbortError',
-    statusCode: 499
+/** One request for a slot. Several waiters (one per flight participant) may
+ *  stand for one ticket; whichever is granted first takes it for all. */
+interface Ticket {
+  gate: TenantGate
+  done: boolean
+  startedAt: number
+  waiters: Set<Waiter>
+  promise: Promise<ReadSlot>
+  resolve: (s: ReadSlot) => void
+  reject: (e: Error) => void
+}
+
+interface Waiter {
+  who: string
+  ticket: Ticket
+  timer: ReturnType<typeof setTimeout> | null
+  signal?: AbortSignal
+  onAbort?: () => void
+}
+
+const gates = new Map<string, TenantGate>()
+const SINCE = new Date().toISOString()
+
+const currentTenant = (): string => getTenantId() ?? ''
+
+function gateFor(tenant: string): TenantGate {
+  let g = gates.get(tenant)
+  if (!g) {
+    g = {
+      tenant,
+      active: 0,
+      overflowRunning: 0,
+      byUser: new Map(),
+      queue: [],
+      stats: newStats()
+    }
+    gates.set(tenant, g)
+  }
+  return g
+}
+
+function limitOf(g: TenantGate): number {
+  const global = conf().global
+  return g.tenant ? Math.min(global, Math.max(1, TENANT_POOL_MAX - 1)) : global
+}
+
+function otherUserWaiting(g: TenantGate, w: Waiter): boolean {
+  return g.queue.some((x) => x.ticket !== w.ticket && x.who !== w.who)
+}
+
+function eligible(g: TenantGate, w: Waiter): boolean {
+  if (g.active >= limitOf(g)) return false
+  return (g.byUser.get(w.who) ?? 0) < conf().perUser || !otherUserWaiting(g, w)
+}
+
+function detach(w: Waiter): void {
+  const q = w.ticket.gate.queue
+  const i = q.indexOf(w)
+  if (i >= 0) q.splice(i, 1)
+  if (w.timer) clearTimeout(w.timer)
+  w.timer = null
+  if (w.onAbort) w.signal?.removeEventListener('abort', w.onAbort)
+}
+
+function grant(w: Waiter, overflow: boolean): void {
+  const t = w.ticket
+  if (t.done) return
+  t.done = true
+  for (const x of t.waiters) detach(x)
+  t.waiters.clear()
+  const g = t.gate
+  if (overflow) g.overflowRunning++
+  else {
+    g.active++
+    g.byUser.set(w.who, (g.byUser.get(w.who) ?? 0) + 1)
+    g.stats.peak_active = Math.max(g.stats.peak_active, g.active)
+  }
+  const waitedMs = Math.round(performance.now() - t.startedAt)
+  g.stats.acquired++
+  if (waitedMs > 0) {
+    g.stats.waited++
+    g.stats.wait_ms_total += waitedMs
+    g.stats.wait_ms_max = Math.max(g.stats.wait_ms_max, waitedMs)
+  } else g.stats.immediate++
+  if (overflow) g.stats.timed_out++
+  let released = false
+  t.resolve({
+    who: w.who,
+    waitedMs,
+    overflow,
+    release: () => {
+      if (released) return
+      released = true
+      if (overflow) g.overflowRunning = Math.max(0, g.overflowRunning - 1)
+      else {
+        g.active = Math.max(0, g.active - 1)
+        const n = (g.byUser.get(w.who) ?? 1) - 1
+        if (n <= 0) g.byUser.delete(w.who)
+        else g.byUser.set(w.who, n)
+      }
+      pump(g)
+    }
   })
+}
+
+/** Grant waiters in arrival order while slots are free; a waiter at its
+ *  user's share while others wait is passed over, not reordered. */
+function pump(g: TenantGate): void {
+  for (;;) {
+    const w = g.queue.find((x) => eligible(g, x))
+    if (!w) return
+    grant(w, false)
+  }
+}
+
+function openTicket(tenant = currentTenant()): Ticket {
+  let resolve!: (s: ReadSlot) => void
+  let reject!: (e: Error) => void
+  const promise = new Promise<ReadSlot>((res, rej) => {
+    resolve = res
+    reject = rej
+  })
+  // Callers of a ticket that was abandoned may never await it.
+  promise.catch(() => {})
+  return {
+    gate: gateFor(tenant),
+    done: false,
+    startedAt: performance.now(),
+    waiters: new Set(),
+    promise,
+    resolve,
+    reject
+  }
+}
+
+/** Queue `who` for the ticket. If every waiter of a still-queued ticket has
+ *  gone (aborted), the ticket rejects with AbortError. */
+function addWaiter(t: Ticket, who: string, signal?: AbortSignal): void {
+  if (t.done) return
+  const g = t.gate
+  if (signal?.aborted) {
+    if (t.waiters.size === 0) {
+      t.done = true
+      g.stats.aborted++
+      t.reject(abortError())
+    }
+    return
+  }
+  const w: Waiter = { who, ticket: t, timer: null, signal }
+  t.waiters.add(w)
+  g.queue.push(w)
+  g.stats.peak_queue = Math.max(g.stats.peak_queue, g.queue.length)
+  w.timer = setTimeout(() => grant(w, true), conf().maxWaitMs)
+  w.timer.unref?.()
+  if (signal) {
+    w.onAbort = () => {
+      if (t.done) return
+      detach(w)
+      t.waiters.delete(w)
+      if (t.waiters.size === 0) {
+        t.done = true
+        g.stats.aborted++
+        t.reject(abortError('Client went away while waiting for a read slot'))
+      }
+      // One user fewer waiting can change who is under their share.
+      pump(g)
+    }
+    signal.addEventListener('abort', w.onAbort, { once: true })
+  }
+  pump(g)
 }
 
 /** Take a slot (or fail open after the max wait). Rejects with AbortError
  *  when `signal` aborts while still queued. */
 export function acquireReadSlot(who: string, signal?: AbortSignal): Promise<ReadSlot> {
-  if (signal?.aborted) {
-    stats.aborted++
-    return Promise.reject(abortError())
-  }
-  const started = performance.now()
-  const slotFor = (overflow: boolean, waitedMs: number): ReadSlot => {
-    let released = false
-    if (overflow) overflowRunning++
-    return {
-      waitedMs,
-      overflow,
-      release: () => {
-        if (released) return
-        released = true
-        if (overflow) overflowRunning = Math.max(0, overflowRunning - 1)
-        else freeSlot(who)
-      }
-    }
-  }
-  if (tryGrant(who)) {
-    stats.acquired++
-    stats.immediate++
-    return Promise.resolve(slotFor(false, 0))
-  }
-  return new Promise<ReadSlot>((resolve, reject) => {
-    let timer: ReturnType<typeof setTimeout> | null = null
-    const onAbort = () => {
-      const i = queue.indexOf(waiter)
-      if (i < 0) return
-      queue.splice(i, 1)
-      if (timer) clearTimeout(timer)
-      stats.aborted++
-      reject(abortError())
-    }
-    const waiter: Waiter = {
-      who,
-      grant: (overflow) => {
-        if (timer) clearTimeout(timer)
-        signal?.removeEventListener('abort', onAbort)
-        const waitedMs = Math.round(performance.now() - started)
-        stats.acquired++
-        stats.waited++
-        stats.wait_ms_total += waitedMs
-        stats.wait_ms_max = Math.max(stats.wait_ms_max, waitedMs)
-        if (overflow) stats.timed_out++
-        resolve(slotFor(overflow, waitedMs))
-      }
-    }
-    queue.push(waiter)
-    stats.peak_queue = Math.max(stats.peak_queue, queue.length)
-    signal?.addEventListener('abort', onAbort, { once: true })
-    timer = setTimeout(() => {
-      const i = queue.indexOf(waiter)
-      if (i < 0) return
-      queue.splice(i, 1)
-      waiter.grant(true)
-    }, conf().maxWaitMs)
-    timer.unref?.()
-  })
+  const t = openTicket()
+  addWaiter(t, who || 'anon', signal)
+  return t.promise
 }
 
-/** True while the current async context runs inside a held slot. */
+interface HolderStore {
+  held: boolean
+}
+const holder = new AsyncLocalStorage<HolderStore>()
+
+/** True while the current async context runs inside a held slot. Work a
+ *  gated body fired and forgot stops counting once the slot is released. */
 export function holdsReadSlot(): boolean {
-  return holder.getStore() === true
+  return holder.getStore()?.held === true
+}
+
+async function runHolding<T>(slot: ReadSlot, fn: () => Promise<T>): Promise<T> {
+  const store: HolderStore = { held: true }
+  try {
+    return await holder.run(store, fn)
+  } finally {
+    store.held = false
+    slot.release()
+  }
 }
 
 export interface GateOptions {
@@ -209,7 +314,7 @@ export async function withReadGate<T>(
   opts: GateOptions = {}
 ): Promise<T> {
   if (holdsReadSlot()) {
-    stats.reentrant++
+    gateFor(currentTenant()).stats.reentrant++
     return fn()
   }
   const slot = await acquireReadSlot(who || 'anon', opts.signal)
@@ -217,17 +322,49 @@ export async function withReadGate<T>(
     markSpan('read-gate', slot.waitedMs, opts.label)
     opts.onWait?.(slot.waitedMs)
   }
-  try {
-    return await holder.run(true, fn)
-  } finally {
-    slot.release()
-  }
+  return runHolding(slot, fn)
+}
+
+/**
+ * Run several independent read bodies concurrently, each holding ITS OWN
+ * slot (a live queue's sources: one slot per source query). `onWait` gets the
+ * longest wait once, after all finished. Without `gate`, they run ungated.
+ */
+export async function withReadGateEach<R>(
+  who: string | null | undefined,
+  fns: Array<() => Promise<R>>,
+  gate: (GateOptions & { label?: string }) | undefined
+): Promise<R[]> {
+  if (!gate) return Promise.all(fns.map((fn) => fn()))
+  let longest = 0
+  const out = await Promise.all(
+    fns.map((fn, i) =>
+      withReadGate(who, fn, {
+        signal: gate.signal,
+        label: gate.label ? `${gate.label}#${i}` : undefined,
+        onWait: (ms) => {
+          longest = Math.max(longest, ms)
+        }
+      })
+    )
+  )
+  if (longest > 0) gate.onWait?.(longest)
+  return out
+}
+
+interface GateFlight {
+  /** null = a re-entrant leader: runs inside its caller's slot. */
+  ticket: Ticket | null
+  waitedMs: number
 }
 
 /**
  * Single-flight + gate: concurrent callers of the same key share ONE gated
- * run. The tenant is prefixed here, so a shared-process cloud deployment never
- * shares a run across tenants. Callers authorise BEFORE calling this.
+ * run. Every participant of a flight that has not started queues for it, and
+ * the first granted starts it (the rest withdraw) — a user held at their own
+ * share never holds up a joiner who could run. The tenant prefixes the key,
+ * so a shared-process cloud deployment never shares a run across tenants.
+ * Callers authorise BEFORE calling this.
  */
 export async function sharedGatedRead<T>(
   key: string,
@@ -235,29 +372,43 @@ export async function sharedGatedRead<T>(
   fn: () => Promise<T>,
   opts: GateOptions = {}
 ): Promise<{ value: T; shared: boolean; waitedMs: number }> {
-  let waitedMs = 0
-  const { promise, shared } = singleFlight(
-    `${getTenantId() ?? ''}|${key}`,
-    ({ signal, markStarted }) =>
-      withReadGate(
-        who,
-        async () => {
-          markStarted()
-          return fn()
-        },
-        {
-          signal,
-          label: opts.label,
-          onWait: (ms) => {
-            waitedMs = ms
-            opts.onWait?.(ms)
-          }
-        }
-      ),
-    // A slot holder must never wait on a flight that is itself still queued.
-    { signal: opts.signal, joinPending: !holdsReadSlot() }
+  const reentrant = holdsReadSlot()
+  const tenant = currentTenant()
+  const me = who || 'anon'
+  const { promise, shared, ctx } = singleFlight<T, GateFlight>(
+    `${tenant}|${key}`,
+    async ({ ctx: flight, markStarted }) => {
+      if (!flight.ticket) {
+        gateFor(tenant).stats.reentrant++
+        markStarted()
+        return fn()
+      }
+      const slot = await flight.ticket.promise
+      flight.waitedMs = slot.waitedMs
+      markStarted()
+      return runHolding(slot, fn)
+    },
+    {
+      signal: opts.signal,
+      // A slot holder must never wait on a flight that is itself still queued.
+      joinPending: !reentrant,
+      ctx: () => {
+        const ticket = reentrant ? null : openTicket(tenant)
+        if (ticket) addWaiter(ticket, me, opts.signal)
+        return { ticket, waitedMs: 0 }
+      },
+      onJoin: (flight, started) => {
+        if (!started && flight.ticket) addWaiter(flight.ticket, me, opts.signal)
+      }
+    }
   )
   const value = await promise
+  const waitedMs = ctx.waitedMs
+  // Joiners report the flight's wait too: it is what their answer waited on.
+  if (waitedMs > 0) {
+    markSpan('read-gate', waitedMs, opts.label)
+    opts.onWait?.(waitedMs)
+  }
   return { value, shared, waitedMs }
 }
 
@@ -284,8 +435,9 @@ interface HeaderReply {
   header(name: string, value: string): unknown
 }
 
-/** Server-Timing for the gate: `gate;dur=<ms>` when the request queued, and
- *  `flight;desc="shared"` when it rode another caller's run. */
+/** Server-Timing for the gate: `gate;dur=<ms>` when the request (or the run
+ *  it shared) queued, and `flight;desc="shared"` when it rode another
+ *  caller's run. */
 export function gateServerTiming(
   reply: HeaderReply,
   info: { waitedMs?: number; shared?: boolean }
@@ -302,26 +454,26 @@ export function gateServerTiming(
   }
 }
 
+/** The CURRENT tenant's gate (self-hosted: the only one) — never another
+ *  tenant's, so a cloud tenant admin sees only their own load. */
 export function readGateStats() {
   const c = conf()
+  const g = gateFor(currentTenant())
   return {
     since: SINCE,
-    limits: { global: c.global, per_user: c.perUser, max_wait_ms: c.maxWaitMs },
-    active,
-    queued: queue.length,
-    overflow_running: overflowRunning,
-    users_active: byUser.size,
-    ...stats,
-    avg_wait_ms: stats.waited ? Math.round(stats.wait_ms_total / stats.waited) : 0
+    limits: { global: limitOf(g), per_user: c.perUser, max_wait_ms: c.maxWaitMs },
+    active: g.active,
+    queued: g.queue.length,
+    overflow_running: g.overflowRunning,
+    users_active: g.byUser.size,
+    ...g.stats,
+    avg_wait_ms: g.stats.waited ? Math.round(g.stats.wait_ms_total / g.stats.waited) : 0
   }
 }
 
 /** Tests only: reset state and optionally override the limits. */
 export function resetReadGate(over: Partial<GateConfig> = {}): void {
   cfg = { ...defaultConfig(), ...over }
-  active = 0
-  overflowRunning = 0
-  byUser.clear()
-  queue.length = 0
-  for (const k of Object.keys(stats) as Array<keyof typeof stats>) stats[k] = 0
+  for (const g of gates.values()) for (const w of g.queue) if (w.timer) clearTimeout(w.timer)
+  gates.clear()
 }
