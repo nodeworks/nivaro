@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-18T19:24:58.604Z",
+  "generated_at": "2026-10-18T20:06:00.577Z",
   "releases": [
+    {
+      "version": "0.2.55",
+      "tag": "v0.2.55",
+      "date": "2026-10-18T16:05:48-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "sync www docs and the docs index",
+              "hash": "dc8c1bd7"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Keep the original text of edited and deleted chat messages in nivaro_chat_message_history (#5)",
+              "hash": "ce311617"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.54",
       "tag": "v0.2.54",
-      "date": "2026-10-18T15:24:34-04:00",
+      "date": "2026-10-18T15:24:58-04:00",
       "sections": [
         {
           "label": "Fixed",
