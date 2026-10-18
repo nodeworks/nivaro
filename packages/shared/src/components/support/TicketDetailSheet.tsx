@@ -8,6 +8,7 @@ import { replayHref } from '../../lib/replay-capture'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { SimpleSelect } from '../ui/SimpleSelect'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '../ui/sheet'
+import { TicketTraffic } from './TicketTraffic'
 import {
   STATUS_TONE,
   type SupportCategory,
@@ -308,6 +309,8 @@ export function TicketDetailSheet({
                   </ul>
                 )}
               </section>
+
+              {t.can.work && <TicketTraffic ticketId={t.id} />}
 
               <section data-ticket-thread>
                 <h3 className='mb-2 text-[11px] font-semibold uppercase tracking-wide text-slate-500 dark:text-muted-foreground'>

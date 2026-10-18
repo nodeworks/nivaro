@@ -749,6 +749,11 @@ export const obsTrafficMapAct: DocSection = {
         'Runbook links appear on a node when an Environments component’s notes name one, or when an extension declares one.'
       ]
     },
+    { type: 'h2', id: 'traffic-map-chat-card', text: 'Share a node to chat' },
+    {
+      type: 'p',
+      text: 'Share to chat on an entity or node posts its live figure and a block-character sparkline to a channel you can see. The message rewrites itself about every 30 seconds, without a new notification. It freezes with its last values when you freeze it, when a node that had errors has had none for about three minutes, after two hours, or if the message is deleted. Up to 10 cards can be live at once; a server restart stops the refreshing and leaves the last values in place. Posting and freezing write an activity row.'
+    },
     { type: 'h2', id: 'traffic-map-actions', text: 'Actions' },
     {
       type: 'table',
@@ -1000,6 +1005,16 @@ export const obsTrafficMapLenses: DocSection = {
         'Nested resolver time: on a GraphQL operation, the time spent per nested field path (to-one, to-many, many-to-many, linked records) and per access check, summed over every row a list resolved. Measured only while the map is open.',
         'Dead letters: failed flow runs, and webhook deliveries that failed in the last day with nothing successful since, gather in one node with Retry and Discard on each item or on everything listed. Discarding keeps the run in the flow history; webhook deliveries can be retried but not discarded.',
         'Cloud operators: `GET /admin/traffic-tenants?window=300` (the provisioning path, cloud mode only) with the `x-provision-secret` header ranks the tenants this process served by database time, then requests, then errors.'
+      ]
+    },
+    { type: 'h2', id: 'traffic-map-other-features', text: 'The map beside other features' },
+    {
+      type: 'ul',
+      items: [
+        'Edit locks: a panel of records whose edit lock has been held 15 minutes or more, or that someone is waiting for. Each row names the holder, how long the lock has been held, how long since the holder’s browser last checked in (idle), the people waiting in order, and links to the record.',
+        'Web and workers: when processes report a role (`NIVARO_ROLE` on the instance roster), a panel groups requests, errors, p95, background calls and pool use by role. It says so when background jobs ran on the web processes and none on the workers. A process with no role counts as "unset"; the panel stays hidden until at least one has a role.',
+        'Business activity: per-minute counts of records created, workflow transitions, approvals decided, imports finished and partner pushes accepted, drawn beside the API’s own requests per minute for the last 15 minutes. When one of them falls to under 40% of its earlier rate while API traffic holds, the panel says so, so a quiet business is not mistaken for a quiet API. Counts only: no record values.',
+        'Traffic on a support ticket: people who work a ticket see their requester’s requests, errors and pages for 30 minutes either side of the moment it was raised, with a link to that moment on the map (administrators only). The requester never sees it, and opening it leaves an activity row.'
       ]
     }
   ]

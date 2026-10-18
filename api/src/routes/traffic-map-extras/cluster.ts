@@ -15,7 +15,7 @@ import { currentStoreId } from '../../services/traffic-taps.js'
  */
 const WINDOWS = new Set([60, 300, 900])
 
-function localSnapshot(window: number): TrafficSnapshot {
+export function localSnapshot(window: number): TrafficSnapshot {
   const stats = getRealtimeStats()
   const users = new Set<string>()
   for (const s of stats.sockets) {

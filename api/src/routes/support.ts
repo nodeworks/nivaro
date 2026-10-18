@@ -737,6 +737,35 @@ export async function supportRoutes(app: FastifyInstance) {
     }
   )
 
+  // GET /tickets/:id/traffic — #2276: the requester's requests, errors and pages ±30 min around
+  // the moment the ticket was raised. Desk only: the requester gets a 404, as for any ticket
+  // they may not work. Reading it leaves an activity row.
+  app.get<{ Params: { id: string } }>('/tickets/:id/traffic', async (req, reply) => {
+    const viewer = viewerOf(req)
+    const t = await loadTicket(Number(req.params.id))
+    if (!t || !(await canSeeTicket(viewer, t))) return reply.code(404).send({ error: 'Not found' })
+    if (!(await canWorkTicket(viewer, t)) && !(await canWorkDesk(viewer))) {
+      return reply.code(404).send({ error: 'Not found' })
+    }
+    if (!t.created_at || !t.created_by) return reply.send({ data: null })
+    const { ticketTraffic } = await import('../services/support-ticket-traffic.js')
+    const data = await ticketTraffic(String(t.created_by), t.created_at)
+    void logActivity({
+      action: 'support-traffic-view',
+      user: viewer.id,
+      collection: 'nivaro_tasks',
+      item: String(t.id),
+      comment: 'Viewed the requester’s traffic around the ticket'
+    })
+    return reply.send({
+      data: {
+        ...data,
+        // the map is an admin page: the link is offered to administrators only (epoch seconds)
+        map_at: viewer.isAdmin ? Math.floor(data.moment / 1000) : null
+      }
+    })
+  })
+
   // POST /tickets/:id/claim — take it: assigned to me, In progress.
   app.post<{ Params: { id: string } }>('/tickets/:id/claim', async (req, reply) => {
     const viewer = viewerOf(req)
