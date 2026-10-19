@@ -95,14 +95,14 @@ function DayBars({ days, target }: { days: InstanceSlo['days']; target: number }
   return (
     <div
       className='flex h-6 items-end gap-0.5'
-      title={weekly ? 'Availability per week (UTC)' : 'Availability per day (UTC)'}
+      data-tip={weekly ? 'Availability per week (UTC)' : 'Availability per day (UTC)'}
     >
       {bars.map((d) => {
         const ok = d.availability_pct == null || d.availability_pct >= target
         return (
           <span
             key={d.day}
-            title={`${d.label}: ${d.availability_pct ?? '—'}% of ${n(d.requests)} · ${weekly ? 'worst daily ' : ''}p95 ${d.p95_ms ?? '—'} ms`}
+            data-tip={`${d.label}: ${d.availability_pct ?? '—'}% of ${n(d.requests)} · ${weekly ? 'worst daily ' : ''}p95 ${d.p95_ms ?? '—'} ms`}
             className={cn(
               'w-2 rounded-sm',
               ok ? 'bg-emerald-500/70 dark:bg-emerald-400/60' : 'bg-red-500/80 dark:bg-red-400/70'
@@ -231,7 +231,7 @@ function TargetsEditor({ t, maxDays }: { t: SloTargets; maxDays: number | null }
       {maxDays != null && (
         <span className='text-[11px] text-slate-500 dark:text-slate-400'>
           up to {maxDays} days
-          {maxDays > 30 ? ' (past 30, p95 is estimated from hourly totals)' : ''}
+          {maxDays > 30 ? ' (past 30, p95 is estimated)' : ''}
         </span>
       )}
       <button
@@ -298,7 +298,7 @@ export function SloPanel() {
         </p>
       ) : r?.source === 'rollups' ? (
         <p className='mt-2 text-[11px] text-slate-500 dark:text-slate-400' data-slo-source>
-          From hourly totals in the long-history store. p95 is estimated from latency bands.
+          From hourly summaries. p95 is estimated.
         </p>
       ) : null}
       {!r ? (
@@ -313,7 +313,9 @@ export function SloPanel() {
                 <th className='pb-1 font-medium'>p95</th>
                 <th className='pb-1 font-medium'>Error budget</th>
                 <th className='pb-1 font-medium'>Burn rate</th>
-                <th className='pb-1 font-medium'>Days</th>
+                <th className='pb-1 font-medium'>
+                  {r.instances.some((i) => i.days.length > 45) ? 'Weeks' : 'Days'}
+                </th>
               </tr>
             </thead>
             <tbody>

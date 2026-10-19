@@ -12,6 +12,7 @@ import { queryIsReplayable } from '../services/secret-mask.js'
 import { LOCAL_LOG_DAYS } from '../services/telemetry-store.js'
 import {
   ROLLUP_WINDOW_DAYS,
+  rollupDataFrom,
   rollupRouteTotals,
   rollupSummary,
   rollupsEnabled,
@@ -50,7 +51,7 @@ function rollupWindow(hours: number): { from: number; to: number } {
 
 const rollupFailed = (reply: FastifyReply) =>
   reply.code(503).send({
-    error: 'The long-history store did not answer. Pick 7 days or less to read the request log.',
+    error: 'Long history didn’t answer. Pick 7 days or less to read the request log.',
     code: 'ROLLUPS_UNAVAILABLE'
   })
 
@@ -160,7 +161,7 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
     if (long.rollups) {
       const w = rollupWindow(long.hours)
       try {
-        const t = await rollupSummary(w.from, w.to)
+        const [t, dataFrom] = await Promise.all([rollupSummary(w.from, w.to), rollupDataFrom()])
         return reply.send({
           data: {
             total: t.n,
@@ -169,7 +170,9 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
             p95: t.p95 ?? 0,
             avg_latency: t.avg_ms ?? 0,
             source: 'rollups',
-            long_history: true
+            long_history: true,
+            // When the rollups start: a window reaching before it is partly empty.
+            data_from: dataFrom != null ? new Date(dataFrom).toISOString() : null
           }
         })
       } catch {

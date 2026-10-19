@@ -8,7 +8,9 @@ import {
   envMatcher,
   meanFromBuckets,
   percentileFromBuckets,
+  resetRollupDataFromForTests,
   rollupActive,
+  rollupDataFrom,
   rollupRouteTotals,
   rollupSloRows,
   rollupSteps,
@@ -253,5 +255,20 @@ describe('13-month reach elsewhere', () => {
     const now = Date.parse('2026-10-19T12:00:00Z')
     expect(windowOf({ minutes: 10_000_000 }, now, 400).from).toBe(now - 400 * D)
     expect(windowOf({ minutes: 10_000_000 }, now).from).toBe(now - 31 * D)
+  })
+})
+
+describe('where the rollups start', () => {
+  it('reads the first sample time once and caches it for an hour', async () => {
+    resetRollupDataFromForTests()
+    const calls = fakeStore(() => [instant({}, 1_760_832_000)])
+    const now = Date.parse('2026-10-19T12:00:00Z')
+    expect(await rollupDataFrom(now)).toBe(1_760_832_000_000)
+    expect(await rollupDataFrom(now + 60_000)).toBe(1_760_832_000_000)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].params.get('query')).toBe(
+      'min(tfirst_over_time(nivaro_tm_requests:1h{env="staging"}[400d]))'
+    )
+    resetRollupDataFromForTests()
   })
 })

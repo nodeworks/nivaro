@@ -39,6 +39,8 @@ export interface TimelapseBody {
   minutes: { enabled: boolean; first: string | null }
   /** The long-history store was wanted but did not answer (or is not set up). */
   note?: string
+  /** Rollup ranges: when the rollups start (epoch ms); earlier steps are empty. */
+  data_from?: number | null
 }
 /** GET /history/store — the long-history telemetry store (#2544). */
 export interface StoreStatusBody {
@@ -187,6 +189,8 @@ export const historyStore = {
   /** Open the time-lapse paused on `ms` (picks the range that holds it) and scroll to it. */
   openAt(ms: number): void {
     const age = Date.now() - ms
+    // Older than the longest range (13 months): nothing holds it.
+    if (age > 395 * 86_400_000) return
     const range: HistoryRange =
       age < 24 * 3600_000
         ? '24h'

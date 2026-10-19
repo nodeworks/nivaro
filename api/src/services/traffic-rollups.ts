@@ -447,6 +447,35 @@ export async function rollupSummary(
   }
 }
 
+let dataFromCache: { at: number; value: number | null } | null = null
+
+/**
+ * When the rollups start (epoch ms of the first request sample within ROLLUP_MAX_DAYS), so a
+ * long view can say "Data from …" instead of looking like quiet months. Cached for an hour;
+ * null when there is none or the store does not answer.
+ */
+export async function rollupDataFrom(nowMs = Date.now()): Promise<number | null> {
+  if (dataFromCache && nowMs - dataFromCache.at < HOUR_MS) return dataFromCache.value
+  const w = `${ROLLUP_MAX_DAYS}d`
+  let value: number | null = null
+  try {
+    const [first] = await metricsQuery(
+      `min(tfirst_over_time(${sel(SERIES.requests, w)}[${w}]))`,
+      undefined,
+      nowMs
+    )
+    value = first && Number.isFinite(first.value) ? Math.round(first.value * 1000) : null
+  } catch {
+    return null
+  }
+  dataFromCache = { at: nowMs, value }
+  return value
+}
+
+export function resetRollupDataFromForTests(): void {
+  dataFromCache = null
+}
+
 /** UTC midnight at or before `t`. */
 const dayFloor = (t: number) => Math.floor(t / DAY_MS) * DAY_MS
 

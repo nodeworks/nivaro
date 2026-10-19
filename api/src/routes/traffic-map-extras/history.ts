@@ -57,7 +57,12 @@ import {
   startMinuteStore,
   writePushedMinutes
 } from '../../services/traffic-minutes.js'
-import { rollupActive, rollupSteps, rollupsEnabled } from '../../services/traffic-rollups.js'
+import {
+  rollupActive,
+  rollupDataFrom,
+  rollupSteps,
+  rollupsEnabled
+} from '../../services/traffic-rollups.js'
 import { capacityReport, logMinutes } from '../../services/traffic-taps/capacity.js'
 import { nodeHealth } from '../../services/traffic-taps/node-health.js'
 
@@ -117,6 +122,8 @@ interface TimelapseBody {
   minutes: { enabled: boolean; first: string | null }
   /** Set when the long-history store was wanted but did not answer (the frames are partial). */
   note?: string
+  /** Rollup ranges: when the rollups start (epoch ms); earlier steps are empty, not quiet. */
+  data_from?: number | null
 }
 
 const timelapseCache = cached<TimelapseBody>(5 * 60_000)
@@ -200,17 +207,19 @@ async function buildRollupBody(
   let active: number[] | null = null
   let source: TimelapseBody['source'] = 'unavailable'
   let note: string | undefined
+  let dataFrom: number | null = null
   if (!rollupsEnabled()) {
-    note = 'Ranges past 30 days need the long-history store, which is not set up here.'
+    note = 'Long history isn’t set up, so ranges past 30 days have no frames.'
   } else {
     try {
-      ;[groups, active] = await Promise.all([
+      ;[groups, active, dataFrom] = await Promise.all([
         rollupSteps(from, to, stepS),
-        rollupActive(from, to, stepS).catch(() => null)
+        rollupActive(from, to, stepS).catch(() => null),
+        rollupDataFrom()
       ])
       source = 'rollups'
     } catch {
-      note = 'The long-history store did not answer, so this range has no frames right now.'
+      note = 'Long history didn’t answer, so this range has no frames right now.'
     }
   }
   const tl = buildTimelapse(groups, { from, to, stepS }, 40)
@@ -234,7 +243,8 @@ async function buildRollupBody(
     people,
     markers,
     minutes: { enabled: settings.enabled, first: coverage.first },
-    ...(note ? { note } : {})
+    ...(note ? { note } : {}),
+    ...(source === 'rollups' ? { data_from: dataFrom } : {})
   }
 }
 

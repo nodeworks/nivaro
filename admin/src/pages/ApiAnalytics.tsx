@@ -5,7 +5,7 @@ import {
   AskTheLogs,
   NivaroProvider
 } from '@nivaro/shared'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery } from '@tanstack/react-query'
 import { BarChart2 } from 'lucide-react'
 import React, { Fragment, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
@@ -37,6 +37,8 @@ interface Summary {
   source?: 'log' | 'rollups'
   /** The server can answer 90 days / 13 months (the long-history store is set up). */
   long_history?: boolean
+  /** Rollups: when they start (ISO); a window reaching before it is partly empty. */
+  data_from?: string | null
 }
 
 interface TimeseriesPoint {
@@ -64,12 +66,12 @@ interface ErrorLog {
 }
 
 const RANGES = [
-  { label: '24h', hours: 24, long: false },
-  { label: '3d', hours: 72, long: false },
-  { label: '7d', hours: 168, long: false },
+  { label: '24h', full: '24 hours', hours: 24, long: false },
+  { label: '3d', full: '3 days', hours: 72, long: false },
+  { label: '7d', full: '7 days', hours: 168, long: false },
   // #2544 Phase 5 — from the long-history store's hourly rollups, only when it is set up.
-  { label: '90d', hours: 90 * 24, long: true },
-  { label: '13 mo', hours: 395 * 24, long: true }
+  { label: '90d', full: '90 days', hours: 90 * 24, long: true },
+  { label: '13 mo', full: '13 months', hours: 395 * 24, long: true }
 ]
 /** The request log keeps 14 days: panels that read it are capped there on long ranges. */
 const LOG_HOURS = 14 * 24
@@ -78,6 +80,14 @@ function rangeText(hours: number): string {
   const r = RANGES.find((x) => x.hours === hours)
   if (hours === 395 * 24) return 'last 13 months'
   return r && hours >= 48 ? `last ${hours / 24} days` : `last ${hours}h`
+}
+
+/** "Data from Oct 19" when the rollups start after the window does; null otherwise. */
+export function dataFromText(dataFrom: string | null | undefined, hours: number): string | null {
+  if (!dataFrom) return null
+  const t = Date.parse(dataFrom)
+  if (!Number.isFinite(t) || t <= Date.now() - hours * 3600_000) return null
+  return `Data from ${new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}`
 }
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
@@ -137,14 +147,21 @@ export function ApiAnalyticsPage() {
   const long = hours > LOG_HOURS
   // Panels below read the request log, which only holds 14 days.
   const logHours = Math.min(hours, LOG_HOURS)
-  const { data: summary } = useQuery<Summary>({
+  // Long ranges read hourly summaries: nothing new to see every 30 seconds.
+  const refetchInterval = long ? 300_000 : 30_000
+  const { data: summary, isPlaceholderData: summaryStale } = useQuery<Summary>({
     queryKey: ['api-analytics-summary', hours, allInstances],
     queryFn: () =>
       api
         .get<{ data: Summary }>(`/api-analytics/summary?hours=${hours}${inst}`)
         .then((r) => r.data.data),
-    refetchInterval: 30_000
+    // Keeps long_history (and so the 90d / 13 mo buttons) steady while a new range loads.
+    placeholderData: keepPreviousData,
+    refetchInterval
   })
+  // Once the server said it can answer long ranges, keep offering them (a failed read included).
+  const longSeen = useRef(false)
+  if (summary?.long_history) longSeen.current = true
 
   const { data: timeseries = [] } = useQuery<TimeseriesPoint[]>({
     queryKey: ['api-analytics-timeseries', hours, allInstances],
@@ -152,7 +169,7 @@ export function ApiAnalyticsPage() {
       api
         .get<{ data: TimeseriesPoint[] }>(`/api-analytics/timeseries?hours=${hours}${inst}`)
         .then((r) => r.data.data),
-    refetchInterval: 30_000
+    refetchInterval
   })
 
   const { data: topPaths = [] } = useQuery<TopPath[]>({
@@ -161,7 +178,7 @@ export function ApiAnalyticsPage() {
       api
         .get<{ data: TopPath[] }>(`/api-analytics/top-paths?hours=${hours}${inst}`)
         .then((r) => r.data.data),
-    refetchInterval: 30_000
+    refetchInterval
   })
 
   const { data: errors = [] } = useQuery<ErrorLog[]>({
@@ -182,7 +199,11 @@ export function ApiAnalyticsPage() {
         : { month: 'short', day: 'numeric', hour: '2-digit' }
     )
   }))
-  const ranges = RANGES.filter((r) => !r.long || summary?.long_history || r.hours === hours)
+  const ranges = RANGES.filter((r) => !r.long || longSeen.current || r.hours === hours)
+  // The previous range's summary shows while a new one loads: no notes until this one lands.
+  const fromRollups = long && !summaryStale && summary?.source === 'rollups'
+  const longOff = long && !summaryStale && summary?.source === 'log'
+  const dataFrom = fromRollups ? dataFromText(summary?.data_from, hours) : null
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
@@ -209,6 +230,9 @@ export function ApiAnalyticsPage() {
               size='sm'
               variant={hours === r.hours ? 'default' : 'outline'}
               className='h-7 px-2.5 text-[12px]'
+              aria-pressed={hours === r.hours}
+              aria-label={`Last ${r.full}`}
+              data-tip={`Last ${r.full}`}
               onClick={() => {
                 setHours(r.hours)
                 setAskHours(null)
@@ -231,22 +255,28 @@ export function ApiAnalyticsPage() {
             }}
           />
         </NivaroProvider>
-        {long && (
+        {fromRollups ? (
           <p
             className='mb-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] text-muted-foreground dark:border-border dark:bg-card'
             data-api-analytics-long
           >
-            Totals, the chart and top paths come from hourly totals in the long-history store, so
-            latency is estimated from latency bands and paths are grouped by route. The panels
-            further down read the request log, which keeps 14 days.
+            Totals, chart and top paths use hourly summaries, so p95 is estimated. Panels below
+            cover the last 14 days.
           </p>
-        )}
+        ) : longOff ? (
+          <p
+            className='mb-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] text-muted-foreground dark:border-border dark:bg-card'
+            data-api-analytics-long-off
+          >
+            Long history isn’t set up. Showing the last 14 days.
+          </p>
+        ) : null}
         {/* Stat strip */}
         <div className='mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4'>
           <StatCard
             label='Total requests'
             value={summary ? formatNumber(summary.total) : '—'}
-            sub={rangeText(hours)}
+            sub={dataFrom ? `${rangeText(hours)} · ${dataFrom}` : rangeText(hours)}
           />
           <StatCard
             label='Error rate'
