@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-19T21:19:28.365Z",
+  "generated_at": "2026-10-19T21:43:58.776Z",
   "releases": [
+    {
+      "version": "0.2.65",
+      "tag": "v0.2.65",
+      "date": "2026-10-19T17:43:44-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release image: API and admin build in parallel, no GitHub Actions layer cache",
+              "hash": "32451c45"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.64",
       "tag": "v0.2.64",
-      "date": "2026-10-19T17:19:14-04:00",
+      "date": "2026-10-19T17:19:28-04:00",
       "sections": [
         {
           "label": "Other",
