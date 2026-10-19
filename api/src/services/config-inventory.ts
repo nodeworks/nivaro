@@ -184,7 +184,8 @@ export const DERIVED_TABLES: string[] = [
   'nivaro_layout_versions',
   'nivaro_report_versions',
   'nivaro_import_definition_versions',
-  'nivaro_graphql_schema_log'
+  'nivaro_graphql_schema_log',
+  'nivaro_chat_embeddings' // chat search by meaning (migration 430) — re-embedded from messages
 ]
 
 /** Operational / ephemeral. Never meaningful to compare across environments. */
@@ -338,7 +339,15 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_mail_log',
   'nivaro_mail_suppressions',
   'nivaro_drafts',
-  'nivaro_collection_snapshots'
+  'nivaro_collection_snapshots',
+
+  // ── classified 2026-10-19 — per-person votes, edit history, occurrences ──
+  'nivaro_chat_polls', // migration 430 — polls live in chat messages
+  'nivaro_chat_poll_votes',
+  'nivaro_chat_message_history', // migration 454 — edit history of chat messages
+  'nivaro_comment_versions', // migration 454 — edit history of comments
+  'nivaro_idea_votes', // migration 446 — one row per voter per idea
+  'nivaro_issue_occurrences' // migration 445 — each sighting of a logged issue
 ]
 
 /**
