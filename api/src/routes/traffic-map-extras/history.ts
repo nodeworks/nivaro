@@ -3,7 +3,8 @@
  * Traffic Map — long history, playback and history-derived analysis:
  *   GET  /history/settings        the optional minute store: settings + what it holds (#2228)
  *   PUT  /history/settings        switch it on/off, retention, edges (activity row)
- *   GET  /history/timelapse       24 h / 7 d of the map per step + people + markers (#2183/#2249)
+ *   GET  /history/timelapse       24 h / 7 d / 30 d / 90 d / 13 months of the map per step + people
+ *                                 + markers (#2183/#2249; 90 d and 13 months from rollups, #2544)
  *   GET  /history/search          last hit / first error / busiest hour (#2175)
  *   GET  /history/route-latency   one route's duration histogram and its modes (#2193)
  *   GET  /history/slow-params     query parameters that go with slow requests on a route (#2252)
@@ -56,6 +57,7 @@ import {
   startMinuteStore,
   writePushedMinutes
 } from '../../services/traffic-minutes.js'
+import { rollupActive, rollupSteps, rollupsEnabled } from '../../services/traffic-rollups.js'
 import { capacityReport, logMinutes } from '../../services/traffic-taps/capacity.js'
 import { nodeHealth } from '../../services/traffic-taps/node-health.js'
 
@@ -63,9 +65,13 @@ const RANGES = {
   '24h': { ms: 24 * 3600_000, stepS: 300 },
   '7d': { ms: 7 * 86_400_000, stepS: 3600 },
   // #2544 — older than the request log's 14 days: read from the long-history store.
-  '30d': { ms: 30 * 86_400_000, stepS: 6 * 3600 }
+  '30d': { ms: 30 * 86_400_000, stepS: 6 * 3600 },
+  // #2544 Phase 5 — past the log store's month: hourly request rollups in the metrics store.
+  '90d': { ms: 90 * 86_400_000, stepS: 12 * 3600 },
+  '13mo': { ms: 395 * 86_400_000, stepS: 3 * 86_400 }
 } as const
 type Range = keyof typeof RANGES
+const ROLLUP_RANGES = new Set<Range>(['90d', '13mo'])
 const HOURS = new Set([1, 6, 24, 168])
 const SEARCH_KINDS = new Set<SearchKind>(['last_hit', 'first_error', 'busiest_hour'])
 const PARTNER = /^ext:\d{1,9}$/
@@ -95,7 +101,7 @@ function cached<T>(ttlMs: number) {
 
 interface TimelapseBody {
   range: Range
-  source: 'minutes' | 'log' | 'store' | 'unavailable'
+  source: 'minutes' | 'log' | 'store' | 'rollups' | 'unavailable'
   from: number
   to: number
   step_s: number
@@ -122,6 +128,7 @@ async function buildTimelapseBody(range: Range, want: string | undefined): Promi
   // Whole steps, ending at the current step's end, so frames line up with the clock.
   const to = Math.ceil(Date.now() / (stepS * 1000)) * stepS * 1000
   const from = to - ms
+  if (ROLLUP_RANGES.has(range)) return buildRollupBody(range, from, to, stepS)
   const settings = await readMinuteSettings()
   const coverage = await minuteCoverage()
   // The minute store answers when it is on and reaches back far enough (an hour of slack).
@@ -165,6 +172,57 @@ async function buildTimelapseBody(range: Range, want: string | undefined): Promi
     source === 'store' ? storeActive(from, to, stepS).catch(() => null) : Promise.resolve(null)
   ])
   if (storeActiveSteps) people.active = storeActiveSteps
+  return {
+    range,
+    source,
+    from,
+    to,
+    step_s: stepS,
+    nodes: tl.nodes,
+    frames: tl.frames,
+    people,
+    markers,
+    minutes: { enabled: settings.enabled, first: coverage.first },
+    ...(note ? { note } : {})
+  }
+}
+
+/** 90 days / 13 months: the map per step from the hourly request rollups (#2544 Phase 5). */
+async function buildRollupBody(
+  range: Range,
+  from: number,
+  to: number,
+  stepS: number
+): Promise<TimelapseBody> {
+  const settings = await readMinuteSettings()
+  const coverage = await minuteCoverage()
+  let groups: TimelapseGroup[] = []
+  let active: number[] | null = null
+  let source: TimelapseBody['source'] = 'unavailable'
+  let note: string | undefined
+  if (!rollupsEnabled()) {
+    note = 'Ranges past 30 days need the long-history store, which is not set up here.'
+  } else {
+    try {
+      ;[groups, active] = await Promise.all([
+        rollupSteps(from, to, stepS),
+        rollupActive(from, to, stepS).catch(() => null)
+      ])
+      source = 'rollups'
+    } catch {
+      note = 'The long-history store did not answer, so this range has no frames right now.'
+    }
+  }
+  const tl = buildTimelapse(groups, { from, to, stepS }, 40)
+  const [people, markers] = await Promise.all([
+    peopleSteps(from, to, stepS).catch(() => ({
+      online: new Array(tl.frames.length).fill(null),
+      active: new Array(tl.frames.length).fill(0),
+      sampled: false
+    })),
+    timelapseMarkers(from, to)
+  ])
+  if (active) people.active = active
   return {
     range,
     source,
@@ -286,7 +344,7 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
       if (!(range in RANGES))
         return reply
           .code(400)
-          .send({ error: 'range must be 24h, 7d or 30d', code: 'RANGE_INVALID' })
+          .send({ error: 'range must be 24h, 7d, 30d, 90d or 13mo', code: 'RANGE_INVALID' })
       const want = req.query.source
       if (want != null && want !== 'minutes' && want !== 'log' && want !== 'store')
         return reply

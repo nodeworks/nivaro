@@ -987,7 +987,7 @@ export const obsTrafficMapPlatform: DocSection = {
     {
       type: 'ul',
       items: [
-        'Time-lapse plays the last 24 hours or 7 days (30 days with the telemetry store, below) at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.',
+        'Time-lapse plays the last 24 hours or 7 days (30 days, 90 days and 13 months with the telemetry store, below) at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.',
         'Under the request curve: people online (from the 5-minute socket samples, where scheduled jobs run) and people making requests, so more people can be told apart from more work per person.',
         'Jobs against peaks draws each scheduled job at its usual start and length over a typical day. A job in the peak gets the quietest start of the same length as a cron expression to copy, and what moving it would do to the pool.',
         'Search answers "when did this caller last call this route", "when did this error first appear" and "busiest hour for this node or partner", over the last day to month. Every field is optional and matched exactly; each answer opens its moment on the map.'
@@ -1005,9 +1005,10 @@ export const obsTrafficMapPlatform: DocSection = {
     {
       type: 'ul',
       items: [
-        'Time-lapse gains a 30 days range, read from the store in 6-hour steps (people making requests included).',
+        'Time-lapse gains a 30 days range, read from the store in 6-hour steps (people making requests included), and 90 days (12-hour steps) and 13 months (3-day steps) read from request rollups (below).',
         'Search answers ranges past 14 days from the store and says so under the answer.',
-        'The SLO window can be set up to 30 days; the per-day figures come from the store and the burn rates (24 hours at most) from the request log.',
+        'The SLO window can be set up to 13 months: up to 30 days the per-day figures come from the store’s request lines, longer windows from the rollups (one bar per week); the burn rates (24 hours at most) always come from the request log.',
+        'API Analytics offers 90 days and 13 months: totals, the chart (one bar per day) and top paths (grouped by route) come from the rollups; the panels further down keep reading the request log’s 14 days.',
         'When the store does not answer, each view falls back to the request log’s 14 days and says so.',
         '`GET /api/traffic-map/history/store` (administrators) reports whether the store is set up, reachable, and how far back it reaches.'
       ]
@@ -1039,6 +1040,11 @@ export const obsTrafficMapPlatform: DocSection = {
       type: 'note',
       text: 'Off in cloud mode: the store has no tenant labels.'
     },
+    { type: 'h3', id: 'telemetry-rollups', text: 'Request rollups: 13 months' },
+    {
+      type: 'p',
+      text: 'The stack’s alert evaluator turns the access lines into per-minute totals in the metrics store, which keeps 13 months: requests, errors and server errors, and how many requests finished under 25 ms, 50 ms, 100 ms … 30 s, per map node and instance and per route template, plus distinct signed-in people per hour. Nivaro sums those per step for the 90 day and 13 month views. Two figures are estimates: p95 is interpolated inside the latency band that crosses it, and people making requests is the busiest hour in each step. Steps before the rollups started read as empty. Same settings as above: nothing more to configure in Nivaro.'
+    },
     { type: 'h3', id: 'telemetry-traces', text: 'Request traces out to the stack' },
     {
       type: 'p',
@@ -1063,7 +1069,7 @@ export const obsTrafficMapPlatform: DocSection = {
     { type: 'h3', id: 'telemetry-ai', text: 'Asking AI about the telemetry' },
     {
       type: 'p',
-      text: 'The Telemetry page has an Ask box ("why was it slow between 14:00 and 14:30?", "which routes failed most today?") and a Slowest requests list with Explain on every row. The answer comes from read-only tools over the stack: the request log (weeks), request traces, metrics from a fixed list, container logs and the stack’s status. Every tool takes typed fields and builds its own query, so nothing the model writes runs as query text, and the answer names what it checked and the traces it looked at (each with Explain and Open in Grafana). Explain on a trace reads it from the traces store once it has left the process’s memory. The same tools are offered to the assistant in admin-only operations chat channels. `POST /api/telemetry/ask` (administrators, a few questions a minute), `GET /api/telemetry/traces`.'
+      text: 'The Telemetry page has an Ask box ("why was it slow between 14:00 and 14:30?", "which routes failed most today?") and a Slowest requests list with Explain on every row. The answer comes from read-only tools over the stack: the request log (weeks), request traces, metrics from a fixed list (including requests, server errors and p95 per day for 13 months, from the rollups), container logs and the stack’s status. Every tool takes typed fields and builds its own query, so nothing the model writes runs as query text, and the answer names what it checked and the traces it looked at (each with Explain and Open in Grafana). Explain on a trace reads it from the traces store once it has left the process’s memory. The same tools are offered to the assistant in admin-only operations chat channels. `POST /api/telemetry/ask` (administrators, a few questions a minute), `GET /api/telemetry/traces`.'
     },
     { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
     {

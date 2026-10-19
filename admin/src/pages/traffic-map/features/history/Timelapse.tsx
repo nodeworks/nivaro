@@ -1,6 +1,7 @@
 /**
  * #2183 — time-lapse playback of the last 24 hours or 7 days (from the minute store when it is on
- * and reaches back far enough, else hourly aggregates of the request log), with deploys,
+ * and reaches back far enough, else hourly aggregates of the request log), 30 days from the
+ * long-history store and 90 days / 13 months from its hourly rollups (#2544), with deploys,
  * restarts, configuration writes, maintenance windows and incidents marked as it plays. Pause on
  * any step to open it: its busiest nodes (click one to inspect it on the map), what changed near
  * it, and — inside the map's own rewind ring — "Rewind the map here".
@@ -35,15 +36,21 @@ const SOURCE_TEXT: Record<TimelapseBody['source'], string> = {
   minutes: 'From the minute history.',
   log: 'From the request log, grouped by route family (turn on minute history for callers and partners).',
   store: 'From the long-history store, which keeps the request log past its 14 days.',
+  rollups:
+    'From hourly totals in the long-history store. p95 is estimated from latency bands, and people is the busiest hour in each step.',
   unavailable: 'The request log can only be grouped this way on SQL Server.'
 }
 const RANGE_LABEL: Record<HistoryRange, string> = {
   '24h': '24 hours',
   '7d': '7 days',
-  '30d': '30 days'
+  '30d': '30 days',
+  '90d': '90 days',
+  '13mo': '13 months'
 }
+/** Ranges past the request log's 14 days: offered only with the long-history store. */
+const STORE_RANGES: HistoryRange[] = ['30d', '90d', '13mo']
 
-/** Whether the long-history store is set up (the 30-day range needs it). */
+/** Whether the long-history store is set up (the 30-day and longer ranges need it). */
 export function useStoreStatus(enabled: boolean) {
   return useQuery({
     queryKey: ['traffic-map', 'history', 'store'],
@@ -67,9 +74,14 @@ export function useTimelapse(range: HistoryRange, enabled: boolean) {
 
 export function curveTicks(from: number, stepS: number, n: number, range: HistoryRange) {
   const out: Array<{ i: number; label: string }> = []
-  const every = Math.round(
-    (range === '24h' ? 3 * 3600 : range === '7d' ? 86_400 : 3 * 86_400) / stepS
-  )
+  const tickS: Record<HistoryRange, number> = {
+    '24h': 3 * 3600,
+    '7d': 86_400,
+    '30d': 3 * 86_400,
+    '90d': 14 * 86_400,
+    '13mo': 30 * 86_400
+  }
+  const every = Math.round(tickS[range] / stepS)
   for (let i = 0; i < n; i += Math.max(1, every)) {
     const t = from + i * stepS * 1000
     out.push({
@@ -77,10 +89,23 @@ export function curveTicks(from: number, stepS: number, n: number, range: Histor
       label:
         range === '24h'
           ? new Date(t).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
-          : new Date(t).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
+          : range === '13mo'
+            ? new Date(t).toLocaleDateString(undefined, { month: 'short', year: '2-digit' })
+            : range === '90d'
+              ? new Date(t).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+              : new Date(t).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric' })
     })
   }
   return out
+}
+
+/** "5 min", "hour", "6 h", "day", "3 days" — what one step of the curve covers. */
+export function stepLabel(stepS: number): string {
+  if (stepS < 3600) return `${Math.round(stepS / 60)} min`
+  if (stepS === 3600) return 'hour'
+  if (stepS < 86_400) return `${Math.round(stepS / 3600)} h`
+  if (stepS === 86_400) return 'day'
+  return `${Math.round(stepS / 86_400)} days`
 }
 
 export function markerIndexes(
@@ -104,7 +129,9 @@ export function Timelapse() {
   const q = useTimelapse(range, st.tab === 'timelapse')
   const store = useStoreStatus(st.tab === 'timelapse')
   const ranges: HistoryRange[] =
-    store.data?.configured || range === '30d' ? ['24h', '7d', '30d'] : ['24h', '7d']
+    store.data?.configured || STORE_RANGES.includes(range)
+      ? ['24h', '7d', ...STORE_RANGES]
+      : ['24h', '7d']
   const data = q.data ?? null
   const n = data?.frames.length ?? 0
   const [idx, setIdx] = useState<number | null>(null)
@@ -264,9 +291,7 @@ export function Timelapse() {
             ticks={curveTicks(data.from, data.step_s, n, range)}
             legend={
               <>
-                <Swatch color='var(--tm-accent)'>
-                  Requests per {data.step_s >= 3600 ? 'hour' : `${data.step_s / 60} min`}
-                </Swatch>
+                <Swatch color='var(--tm-accent)'>Requests per {stepLabel(data.step_s)}</Swatch>
                 <Swatch color='var(--tm-error)'>Errors</Swatch>
                 {data.people.sampled && (
                   <Swatch color='var(--tm-fg-2)' dashed>

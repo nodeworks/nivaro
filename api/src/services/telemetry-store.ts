@@ -166,9 +166,14 @@ export interface MetricSample {
 
 /**
  * One instant MetricsQL query against the metrics store (VictoriaMetrics, through vmauth's read
- * path). `expr` is a fixed expression from this codebase — never request text.
+ * path). `expr` is a fixed expression from this codebase — never request text. `atMs` evaluates
+ * it at that moment instead of now.
  */
-export async function metricsQuery(expr: string, signal?: AbortSignal): Promise<MetricSample[]> {
+export async function metricsQuery(
+  expr: string,
+  signal?: AbortSignal,
+  atMs?: number
+): Promise<MetricSample[]> {
   const cfg = storeConfig()
   if (!cfg) throw new StoreUnavailableError('The telemetry store is not configured')
   const timeout = AbortSignal.timeout(cfg.timeoutMs)
@@ -180,7 +185,10 @@ export async function metricsQuery(expr: string, signal?: AbortSignal): Promise<
         'content-type': 'application/x-www-form-urlencoded',
         ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {})
       },
-      body: new URLSearchParams({ query: expr }).toString(),
+      body: new URLSearchParams({
+        query: expr,
+        ...(atMs != null && Number.isFinite(atMs) ? { time: String(Math.floor(atMs / 1000)) } : {})
+      }).toString(),
       signal: signal ? AbortSignal.any([signal, timeout]) : timeout
     })
   } catch (err) {

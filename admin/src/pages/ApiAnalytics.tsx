@@ -33,6 +33,10 @@ interface Summary {
   p50: number
   p95: number
   avg_latency: number
+  /** `rollups` = hourly totals from the long-history store (windows past 14 days, #2544). */
+  source?: 'log' | 'rollups'
+  /** The server can answer 90 days / 13 months (the long-history store is set up). */
+  long_history?: boolean
 }
 
 interface TimeseriesPoint {
@@ -60,10 +64,21 @@ interface ErrorLog {
 }
 
 const RANGES = [
-  { label: '24h', hours: 24 },
-  { label: '3d', hours: 72 },
-  { label: '7d', hours: 168 }
+  { label: '24h', hours: 24, long: false },
+  { label: '3d', hours: 72, long: false },
+  { label: '7d', hours: 168, long: false },
+  // #2544 Phase 5 — from the long-history store's hourly rollups, only when it is set up.
+  { label: '90d', hours: 90 * 24, long: true },
+  { label: '13 mo', hours: 395 * 24, long: true }
 ]
+/** The request log keeps 14 days: panels that read it are capped there on long ranges. */
+const LOG_HOURS = 14 * 24
+
+function rangeText(hours: number): string {
+  const r = RANGES.find((x) => x.hours === hours)
+  if (hours === 395 * 24) return 'last 13 months'
+  return r && hours >= 48 ? `last ${hours / 24} days` : `last ${hours}h`
+}
 
 function StatCard({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -119,6 +134,9 @@ export function ApiAnalyticsPage() {
     if (linkFilters) requestsRef.current?.scrollIntoView({ block: 'start' })
   }, [linkFilters])
 
+  const long = hours > LOG_HOURS
+  // Panels below read the request log, which only holds 14 days.
+  const logHours = Math.min(hours, LOG_HOURS)
   const { data: summary } = useQuery<Summary>({
     queryKey: ['api-analytics-summary', hours, allInstances],
     queryFn: () =>
@@ -157,21 +175,23 @@ export function ApiAnalyticsPage() {
 
   const points = timeseries.map((p) => ({
     ...p,
-    label: new Date(p.bucket).toLocaleString(undefined, {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit'
-    })
+    label: new Date(p.bucket).toLocaleString(
+      undefined,
+      long
+        ? { month: 'short', day: 'numeric' }
+        : { month: 'short', day: 'numeric', hour: '2-digit' }
+    )
   }))
+  const ranges = RANGES.filter((r) => !r.long || summary?.long_history || r.hours === hours)
 
   return (
     <div className='flex flex-1 min-h-0 flex-col'>
-      <header className='flex shrink-0 items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-border'>
+      <header className='flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-slate-200 px-6 py-4 dark:border-border'>
         <div className='flex items-center gap-2.5'>
           <BarChart2 className='h-5 w-5 text-muted-foreground' />
           <h1 className='text-lg font-semibold'>API Analytics</h1>
         </div>
-        <div className='flex items-center gap-1'>
+        <div className='flex flex-wrap items-center gap-1'>
           <Button
             size='sm'
             variant={allInstances ? 'default' : 'outline'}
@@ -183,7 +203,7 @@ export function ApiAnalyticsPage() {
           >
             {allInstances ? 'Incl. dev instances' : 'Deployed instances'}
           </Button>
-          {RANGES.map((r) => (
+          {ranges.map((r) => (
             <Button
               key={r.hours}
               size='sm'
@@ -211,12 +231,22 @@ export function ApiAnalyticsPage() {
             }}
           />
         </NivaroProvider>
+        {long && (
+          <p
+            className='mb-4 rounded-md border border-slate-200 bg-white px-3 py-2 text-[12px] text-muted-foreground dark:border-border dark:bg-card'
+            data-api-analytics-long
+          >
+            Totals, the chart and top paths come from hourly totals in the long-history store, so
+            latency is estimated from latency bands and paths are grouped by route. The panels
+            further down read the request log, which keeps 14 days.
+          </p>
+        )}
         {/* Stat strip */}
         <div className='mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4'>
           <StatCard
             label='Total requests'
             value={summary ? formatNumber(summary.total) : '—'}
-            sub={`last ${hours}h`}
+            sub={rangeText(hours)}
           />
           <StatCard
             label='Error rate'
@@ -233,7 +263,7 @@ export function ApiAnalyticsPage() {
 
         {/* Timeseries chart */}
         <div className='mb-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'>
-          <p className='mb-3 text-[13px] font-medium'>Requests per hour</p>
+          <p className='mb-3 text-[13px] font-medium'>Requests per {long ? 'day' : 'hour'}</p>
           {points.length === 0 ? (
             <p className='py-10 text-center text-[12px] text-muted-foreground'>
               No traffic recorded yet
@@ -369,10 +399,10 @@ export function ApiAnalyticsPage() {
         </div>
 
         <div className='mt-6'>
-          <ByKeyPanel hours={hours} allInstances={allInstances} />
+          <ByKeyPanel hours={logHours} allInstances={allInstances} />
         </div>
         <div className='mt-6'>
-          <GraphqlPanel hours={hours} allInstances={allInstances} />
+          <GraphqlPanel hours={logHours} allInstances={allInstances} />
         </div>
         <div className='mt-6'>
           <SlowTracesPanel />
@@ -383,7 +413,7 @@ export function ApiAnalyticsPage() {
         <div className='mt-6 scroll-mt-4' ref={requestsRef} id='api-request-log'>
           <NivaroProvider client={sharedClient}>
             <ApiRequestLog
-              hours={askHours ?? hours}
+              hours={askHours ?? logHours}
               allInstances={allInstances}
               filters={reqFilters}
               onFiltersChange={setReqFilters}

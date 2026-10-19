@@ -28,6 +28,7 @@ import {
   storeTime
 } from './telemetry-store.js'
 import { listStoredTraces, loadStoredTrace } from './telemetry-traces.js'
+import { ROLLUP_MAX_DAYS } from './traffic-rollups.js'
 
 const MAX_RESULT_CHARS = 12_000
 const MAX_ROUNDS = 6
@@ -65,7 +66,8 @@ function optNum(
 /** The time window: `from`/`to` (ISO) or the last `minutes` (default 60), within the store's reach. */
 export function windowOf(
   input: Record<string, unknown>,
-  nowMs = Date.now()
+  nowMs = Date.now(),
+  maxDays: number = STORE_MAX_DAYS
 ): { from: number; to: number } {
   const parse = (k: string) => {
     const v = input[k]
@@ -74,10 +76,10 @@ export function windowOf(
     if (!Number.isFinite(t)) throw new TelemetryToolError(`${k} must be an ISO date-time`)
     return t
   }
-  const earliest = nowMs - STORE_MAX_DAYS * 86_400_000
+  const earliest = nowMs - maxDays * 86_400_000
   let to = parse('to') ?? nowMs
   to = Math.min(nowMs + 60_000, Math.max(earliest + 60_000, to))
-  const minutes = optNum(input, 'minutes', 1, STORE_MAX_DAYS * 1440) ?? 60
+  const minutes = optNum(input, 'minutes', 1, maxDays * 1440) ?? 60
   let from = parse('from') ?? to - minutes * 60_000
   from = Math.max(earliest, Math.min(from, to - 60_000))
   return { from, to }
@@ -177,8 +179,24 @@ export const METRICS: Record<string, [string, string]> = {
   nfs_free_percent: [
     'File share free space, percent',
     '100 * node_filesystem_avail_bytes{E,fstype=~"nfs.*"} / node_filesystem_size_bytes{E,fstype=~"nfs.*"}'
+  ],
+  // #2544 Phase 5 — per-minute request rollups (traffic-rollups.ts), one point per day, 13 months.
+  requests_per_day: [
+    'API requests per day (reaches back 13 months)',
+    'sum(sum_over_time(nivaro_tm_requests{E,stats_result="n"}[1d]))'
+  ],
+  errors_5xx_per_day: [
+    'API server errors per day (reaches back 13 months)',
+    'sum(sum_over_time(nivaro_tm_requests{E,stats_result="e5"}[1d]))'
+  ],
+  p95_ms_daily: [
+    'API p95 response time per day, ms, estimated from latency bands (reaches back 13 months)',
+    'histogram_quantile(0.95, sum by (le) (label_replace(sum_over_time(nivaro_tm_latency{E}[1d]), "le", "$1", "stats_result", "le_(.*)")))'
   ]
 }
+
+/** Metrics read from the daily rollups: a 13-month reach and one point per day. */
+export const ROLLUP_METRICS = new Set(['requests_per_day', 'errors_5xx_per_day', 'p95_ms_daily'])
 
 export function metricExpr(name: string, env: string | null): string {
   const m = METRICS[name]
@@ -192,7 +210,8 @@ export function metricExpr(name: string, env: string | null): string {
 const windowProps = {
   minutes: {
     type: 'integer',
-    description: 'Look back this many minutes from now (default 60, up to 30 days).'
+    description:
+      'Look back this many minutes from now (default 60, up to 30 days; the *_per_day and *_daily metrics reach 13 months).'
   },
   from: { type: 'string', description: 'Window start, ISO date-time (UTC). Overrides minutes.' },
   to: { type: 'string', description: 'Window end, ISO date-time (UTC). Default now.' }
@@ -400,8 +419,10 @@ async function metricSeries(input: Record<string, unknown>) {
   const env = storeConfig()?.env ?? null
   const name = String(input.metric ?? '')
   const expr = metricExpr(name, env)
-  const { from, to } = windowOf(input)
-  const step = Math.max(15, Math.round((to - from) / 1000 / 120))
+  const daily = ROLLUP_METRICS.has(name)
+  const { from, to } = windowOf(input, Date.now(), daily ? ROLLUP_MAX_DAYS : STORE_MAX_DAYS)
+  // Daily metrics sum a one-day lookbehind: one point per day so no day is skipped.
+  const step = daily ? 86_400 : Math.max(15, Math.round((to - from) / 1000 / 120))
   const series = await metricsRange(expr, from, to, step)
   return {
     metric: name,

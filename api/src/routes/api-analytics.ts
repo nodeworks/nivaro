@@ -1,4 +1,4 @@
-import type { FastifyInstance } from 'fastify'
+import type { FastifyInstance, FastifyReply } from 'fastify'
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
@@ -9,6 +9,14 @@ import { instanceScope } from '../services/api-log-instances.js'
 import { recordReplayRoot } from '../services/chain-roots.js'
 import { applyRequestFilters, cleanLogFilter, type LogGroup } from '../services/log-filters.js'
 import { queryIsReplayable } from '../services/secret-mask.js'
+import { LOCAL_LOG_DAYS } from '../services/telemetry-store.js'
+import {
+  ROLLUP_WINDOW_DAYS,
+  rollupRouteTotals,
+  rollupSummary,
+  rollupsEnabled,
+  rollupTotals
+} from '../services/traffic-rollups.js'
 
 // The parser lives in lib/ now (the Traffic Map's caller panel shares it); kept here for callers.
 export { parseRefusal }
@@ -20,6 +28,31 @@ function parseHours(raw: string | undefined): number {
   if (!Number.isFinite(n) || n <= 0) return 24
   return Math.min(Math.floor(n), 24 * 30) // cap at 30 days
 }
+
+/**
+ * #2544 Phase 5 — summary, timeseries and top paths reach 13 months when the long-history store
+ * is set up: windows past the request log's 14 days read its hourly request rollups.
+ */
+function parseLongHours(raw: string | undefined): { hours: number; rollups: boolean } {
+  const n = Number(raw)
+  const enabled = rollupsEnabled()
+  if (!Number.isFinite(n) || n <= 0) return { hours: 24, rollups: false }
+  const hours = Math.min(Math.floor(n), 24 * (enabled ? ROLLUP_WINDOW_DAYS : 30))
+  return { hours, rollups: enabled && hours > LOCAL_LOG_DAYS * 24 }
+}
+
+/** A rollup window ending at the next whole day, `hours` long rounded up to whole days. */
+function rollupWindow(hours: number): { from: number; to: number } {
+  const day = 86_400_000
+  const to = Math.ceil(Date.now() / day) * day
+  return { from: to - Math.ceil(hours / 24) * day, to }
+}
+
+const rollupFailed = (reply: FastifyReply) =>
+  reply.code(503).send({
+    error: 'The long-history store did not answer. Pick 7 days or less to read the request log.',
+    code: 'ROLLUPS_UNAVAILABLE'
+  })
 
 function since(hours: number): Date {
   return new Date(Date.now() - hours * 60 * 60 * 1000)
@@ -123,6 +156,26 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
   // GET /api-analytics/summary?hours=24
   app.get('/summary', { preHandler: requireAdmin }, async (req, reply) => {
     const { hours: hoursRaw } = req.query as { hours?: string }
+    const long = parseLongHours(hoursRaw)
+    if (long.rollups) {
+      const w = rollupWindow(long.hours)
+      try {
+        const t = await rollupSummary(w.from, w.to)
+        return reply.send({
+          data: {
+            total: t.n,
+            error_rate: t.n > 0 ? Math.round((t.e / t.n) * 10000) / 100 : 0,
+            p50: t.p50 ?? 0,
+            p95: t.p95 ?? 0,
+            avg_latency: t.avg_ms ?? 0,
+            source: 'rollups',
+            long_history: true
+          }
+        })
+      } catch {
+        return rollupFailed(reply)
+      }
+    }
     const hours = parseHours(hoursRaw)
     const from = since(hours)
     const sc = await instanceScope(req.query)
@@ -154,7 +207,10 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
         error_rate: total > 0 ? Math.round((errors / total) * 10000) / 100 : 0,
         p50: percentile(latencies, 50),
         p95: percentile(latencies, 95),
-        avg_latency: Math.round(avg * 10) / 10
+        avg_latency: Math.round(avg * 10) / 10,
+        source: 'log',
+        // Whether the page may offer 90 days / 13 months (read from rollups).
+        long_history: rollupsEnabled()
       }
     })
   })
@@ -162,6 +218,26 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
   // GET /api-analytics/timeseries?hours=24 — hourly buckets
   app.get('/timeseries', { preHandler: requireAdmin }, async (req, reply) => {
     const { hours: hoursRaw } = req.query as { hours?: string }
+    const long = parseLongHours(hoursRaw)
+    if (long.rollups) {
+      // Daily buckets past 14 days.
+      const w = rollupWindow(long.hours)
+      try {
+        const steps = await rollupTotals(w.from, w.to, 86_400)
+        return reply.send({
+          data: steps.map((p) => ({
+            bucket: new Date(p.at).toISOString(),
+            count: p.n,
+            avg_latency: p.avg_ms ?? 0,
+            errors: p.e
+          })),
+          bucket: 'day',
+          source: 'rollups'
+        })
+      } catch {
+        return rollupFailed(reply)
+      }
+    }
     const hours = parseHours(hoursRaw)
     const from = since(hours)
     const sc = await instanceScope(req.query)
@@ -191,6 +267,27 @@ export async function apiAnalyticsRoutes(app: FastifyInstance) {
   // GET /api-analytics/top-paths?hours=24
   app.get('/top-paths', { preHandler: requireAdmin }, async (req, reply) => {
     const { hours: hoursRaw } = req.query as { hours?: string }
+    const long = parseLongHours(hoursRaw)
+    if (long.rollups) {
+      // Route templates ("GET /api/items/:collection"), not raw paths, past 14 days.
+      const w = rollupWindow(long.hours)
+      try {
+        const rows = await rollupRouteTotals(w.from, w.to, 20)
+        return reply.send({
+          data: rows.map((r) => ({
+            method: r.method,
+            path: r.path,
+            count: r.n,
+            avg_latency: r.avg_ms ?? 0,
+            errors: r.e,
+            p95: r.p95
+          })),
+          source: 'rollups'
+        })
+      } catch {
+        return rollupFailed(reply)
+      }
+    }
     const from = since(parseHours(hoursRaw))
     const sc = await instanceScope(req.query)
 
