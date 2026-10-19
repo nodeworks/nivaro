@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-19T00:59:33.646Z",
+  "generated_at": "2026-10-19T01:33:42.783Z",
   "releases": [
+    {
+      "version": "0.2.60",
+      "tag": "v0.2.60",
+      "date": "2026-10-18T21:33:30-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "oauth",
+              "text": "consent sign-in uses the instance's own login, whatever its methods",
+              "hash": "8f6bf46c"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release-chain: publish @nivaro/mcp with the other packages",
+              "hash": "21506269"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.59",
       "tag": "v0.2.59",
-      "date": "2026-10-18T20:59:21-04:00",
+      "date": "2026-10-18T20:59:33-04:00",
       "sections": [
         {
           "label": "Added",
