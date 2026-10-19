@@ -19,6 +19,7 @@ COPY packages/sdk/package.json ./packages/sdk/
 COPY packages/extension-kit/package.json ./packages/extension-kit/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/react/package.json ./packages/react/
+COPY packages/mcp/package.json ./packages/mcp/
 RUN pnpm install --frozen-lockfile
 
 # ─── Stage 3: build SDK + API + Admin ────────────────────────────────────────
@@ -36,6 +37,7 @@ COPY --from=deps /app/packages/sdk/node_modules ./packages/sdk/node_modules
 COPY --from=deps /app/packages/extension-kit/node_modules ./packages/extension-kit/node_modules
 COPY --from=deps /app/packages/shared/node_modules ./packages/shared/node_modules
 COPY --from=deps /app/packages/react/node_modules ./packages/react/node_modules
+COPY --from=deps /app/packages/mcp/node_modules ./packages/mcp/node_modules
 COPY . .
 # Stale incremental state makes tsc SKIP declaration emit in a fresh tree —
 # a checked-in tsbuildinfo once shipped shared/dist without its .d.ts files.
@@ -46,6 +48,8 @@ RUN pnpm --filter @nivaro/sdk build
 # The API imports its extension contract from the kit; a mounted extension
 # resolves the same package at runtime.
 RUN pnpm --filter @nivaro/extension-kit build
+# The API hosts the MCP server (/api/mcp) from the same package the npm stdio server ships.
+RUN pnpm --filter @nivaro/mcp build
 RUN pnpm --filter @nivaro/shared build
 # admin imports @nivaro/react (Playground's live form preview)
 RUN pnpm --filter @nivaro/react build
@@ -84,12 +88,14 @@ COPY packages/sdk/package.json ./packages/sdk/
 COPY packages/extension-kit/package.json ./packages/extension-kit/
 COPY packages/shared/package.json ./packages/shared/
 COPY packages/react/package.json ./packages/react/
+COPY packages/mcp/package.json ./packages/mcp/
 RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 
 # Compiled API + SDK
 COPY --from=build /app/api/dist ./api/dist
 COPY --from=build /app/packages/sdk/dist ./packages/sdk/dist
 COPY --from=build /app/packages/extension-kit/dist ./packages/extension-kit/dist
+COPY --from=build /app/packages/mcp/dist ./packages/mcp/dist
 # Cloud extensions (injected from private repo during build — dir may not exist in OSS builds)
 COPY --from=build /app/api/cloud-extensions ./api/cloud-extensions
 

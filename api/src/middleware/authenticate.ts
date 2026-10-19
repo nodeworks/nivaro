@@ -1,7 +1,10 @@
 import { createHash } from 'node:crypto'
 import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
+import { ACCESS_PREFIX } from '../lib/oauth.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
+import { mcpOAuthEnabled } from '../services/mcp-config.js'
+import { resolveAccessToken } from '../services/oauth-store.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
 import { callerBreakerCheck } from '../services/traffic-breaker.js'
@@ -29,7 +32,10 @@ declare module 'fastify' {
      * How this request authenticated — stamped by `authenticate` so the API
      * logger can tell an integration's token call from a person's session.
      */
-    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade' | 'key_sim'
+    authMethod?: 'session' | 'token' | 'api_key' | 'masquerade' | 'key_sim' | 'oauth'
+    /** Set when the request authenticated with an OAuth access token (nvo_*) from a connected app. */
+    oauthClientId?: string
+    oauthGrantId?: string
   }
 }
 
@@ -285,7 +291,9 @@ async function applyApiKey(
       /^\/api\/items(\/|$)/.test(path) ||
       /^(\/api)?\/graphql\/?$/.test(path) ||
       // a read that is a POST only because it carries a body
-      path === '/api/users/cards'
+      path === '/api/users/cards' ||
+      // MCP protocol messages; the tool calls inside are judged one by one
+      path === '/api/mcp'
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS' && !rehearsed) {
       throw httpError(
         403,
@@ -384,6 +392,23 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
         req.masqueradeAdminId = payload.admin_id
         req.authMethod = 'masquerade'
         touchMasqueradeMarker(req.server.redis, String(user.id), payload.admin_id)
+        return
+      }
+      // OAuth access token (nvo_*) — a connected app (ChatGPT, claude.ai, Claude Code, Codex)
+      // acting as the person who allowed it. Checked against its grant, so a revoked
+      // connection ends at once; the account must still be active.
+      if (token.startsWith(ACCESS_PREFIX)) {
+        req.authMethod = 'oauth'
+        const rec = mcpOAuthEnabled() ? await resolveAccessToken(req.server.redis, token) : null
+        if (!rec) throw httpError(401, 'The access token is invalid or expired', 'TOKEN_INVALID')
+        const user = await db<User>('nivaro_users')
+          .where({ id: rec.user_id, status: 'active' })
+          .first()
+        if (!user)
+          throw httpError(401, 'The account behind this token is not active', 'ACCOUNT_NOT_ACTIVE')
+        await hydrateRole(req, user)
+        req.oauthClientId = rec.client_id
+        req.oauthGrantId = rec.grant_id
         return
       }
       // Static user token

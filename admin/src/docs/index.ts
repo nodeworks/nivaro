@@ -82,8 +82,8 @@ import { aiPanelDocs } from './sections/ai-panel.js'
 import {
   adminI18nDocs,
   aiChatDocs,
-  aiQualityDocs,
   aiPlansDocs,
+  aiQualityDocs,
   fieldImpactDocs,
   formsV2Docs,
   pipelineHealthDocs,
@@ -263,6 +263,7 @@ import {
   lowCodePageBuilder,
   lowCodeRuleBuilder
 } from './sections/low-code.js'
+import { mcpDocs } from './sections/mcp.js'
 import { metricAlertsGuide } from './sections/metric-alerts.js'
 import {
   alertEngineGuide,
@@ -649,7 +650,8 @@ export const navSections: NavGroup[] = [
       aiDocumentAutofill,
       aiContentValidation,
       aiDuplicateDetection,
-      aiDesignDocs
+      aiDesignDocs,
+      mcpDocs
     ]
   },
   {

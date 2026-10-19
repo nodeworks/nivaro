@@ -12,6 +12,7 @@ import { getTenantId, getTenantSlug } from './db/tenant-context.js'
 import { loadCloudExtensions, loadExtensions, setApp } from './extensions/loader.js'
 import { registerFileCleanup } from './hooks/file-cleanup.js'
 import { describeDbRefusal, errorText } from './lib/db-refusal.js'
+import { adminAssetCacheControl } from './lib/static-cache.js'
 import { scopeRefusalBody } from './middleware/authenticate.js'
 import { getMetaDb, tenantHook } from './middleware/tenant.js'
 import { resolveWorkspace } from './middleware/workspace.js'
@@ -31,6 +32,7 @@ import { adminTrafficTenantRoutes } from './routes/admin/traffic-tenants.js'
 import { loadScheduledFlows } from './routes/flows.js'
 import { formRendererRoutes } from './routes/form-renderer.js'
 import { registerRoutes } from './routes/index.js'
+import { oauthPublicRoutes } from './routes/oauth.js'
 import { presencePublicRoutes } from './routes/presence.js'
 import { purgeExpiredRecordings } from './routes/session-recordings.js'
 import { sharePublicRoutes } from './routes/share-links.js'
@@ -43,7 +45,6 @@ import { registerMissedCronProbe } from './services/cron-misses.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
-import { adminAssetCacheControl } from './lib/static-cache.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
 import { purgeExpiredTrash } from './services/trash.js'
 import { NIVARO_VERSION } from './version.js'
@@ -531,6 +532,8 @@ export async function buildServer() {
   await app.register(legacyCompatRoutes)
   await app.register(formRendererRoutes)
   await app.register(sharePublicRoutes)
+  // OAuth for remote MCP clients — well-known documents must sit at the origin root.
+  await app.register(oauthPublicRoutes)
   await app.register(statusPublicRoutes)
 
   // ─── Serve admin static build (release image) ────────────────────────────
@@ -853,7 +856,7 @@ export async function buildServer() {
         {
           idempotent: 'safe',
           description:
-            'Every 5 minutes — takes a Traffic Map snapshot just after the day\'s busiest minute (and every N hours when a schedule is set on the map), then removes snapshots, scheduled snapshots and investigation notebooks older than the retention set on the map. Self-hosted only.'
+            "Every 5 minutes — takes a Traffic Map snapshot just after the day's busiest minute (and every N hours when a schedule is set on the map), then removes snapshots, scheduled snapshots and investigation notebooks older than the retention set on the map. Self-hosted only."
         }
       )
       // Session replay heatmaps (#1364): fold settled recordings into

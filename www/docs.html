@@ -300,6 +300,7 @@
           <a class="docs-nav-item" data-section="ai-content-validation" href="#ai-content-validation">AI Content Validation</a>
           <a class="docs-nav-item" data-section="ai-duplicate-detection" href="#ai-duplicate-detection">AI Duplicate Detection</a>
           <a class="docs-nav-item" data-section="ai-design" href="#ai-design">AI Design Helpers</a>
+          <a class="docs-nav-item" data-section="mcp" href="#mcp">AI Assistants (MCP)</a>
         </div>
       </div>
 
@@ -8647,6 +8648,72 @@ POST /api/ai-design/role-views/apply { role, collection, name, filters, sort?, c
 All routes require an administrator. Drafting and role design answer 503 when AI is not set up;
 the layout review and view suggestions still run their rule checks without it.</code></pre>
           <!-- /SYNC:ai-design -->
+        </div>
+
+        <div class="doc-section" id="s-mcp" data-toc='[{"id":"mcp","label":"Connect an AI assistant (MCP)"},{"id":"mcp-chatgpt","label":"ChatGPT"},{"id":"mcp-claude","label":"Claude (claude.ai and Claude Desktop)"},{"id":"mcp-claude-code","label":"Claude Code"},{"id":"mcp-codex","label":"Codex"},{"id":"mcp-npm","label":"The npm server (stdio)"},{"id":"mcp-what","label":"What an assistant can do"},{"id":"mcp-keys","label":"Sign-in or API key"},{"id":"mcp-connections","label":"Connected apps"},{"id":"mcp-settings","label":"Settings and how it works"}]'>
+          <!-- SYNC:mcp -->
+          <h1 class="doc-h1" id="mcp">Connect an AI assistant (MCP)</h1>
+          <p class="doc-p">Nivaro speaks the Model Context Protocol, so ChatGPT, Claude (claude.ai, Claude Desktop, Claude Code), Codex and Cursor can read and work with your data in a conversation: look up records and their history, run your custom queries, check My Work and queues, comment, create tasks and move records through their pipeline. The assistant always acts as **you** — your role, row rules and User Scopes apply exactly as in the app, and everything it changes is recorded as your change.</p>
+          <p class="doc-p">There are two ways in. The **hosted endpoint** <code class="doc-code">https://&lt;your-nivaro&gt;/api/mcp</code> needs nothing installed: the assistant signs you in through Nivaro (OAuth) or sends an API key. The **npm server** <code class="doc-code">@nivaro/mcp</code> runs on your own machine over stdio with an API key — useful for desktop tools when you prefer a key to a sign-in.</p>
+          <div class="doc-note">ChatGPT and claude.ai connect from their own cloud, so they can only reach a Nivaro that is reachable from the internet. An instance on a private network works with the tools that run on your machine — Claude Code, Claude Desktop (npm server), Codex and Cursor — while you are on that network.</div>
+          <h2 class="doc-h2" id="mcp-chatgpt">ChatGPT</h2>
+          <ul class="doc-ul">
+            <li>Settings → Apps &amp; Connectors → Advanced settings → turn on **Developer mode** (your workspace admin may need to allow it).</li>
+            <li>Create a connector: name it Nivaro, set the MCP server URL to <code class="doc-code">https://&lt;your-nivaro&gt;/api/mcp</code>, authentication **OAuth**.</li>
+            <li>ChatGPT opens Nivaro’s sign-in, then a consent page naming ChatGPT. **Allow** connects it. ChatGPT asks before running tools that change data — Nivaro marks every tool as read-only or not, and deletes as destructive.</li>
+          </ul>
+          <h2 class="doc-h2" id="mcp-claude">Claude (claude.ai and Claude Desktop)</h2>
+          <ul class="doc-ul">
+            <li>Settings → Connectors → **Add custom connector** → URL <code class="doc-code">https://&lt;your-nivaro&gt;/api/mcp</code>. Claude signs you in through Nivaro the same way.</li>
+            <li>Claude Desktop on a private network: use the npm server instead — add it to <code class="doc-code">claude_desktop_config.json</code> (see below) with an API key.</li>
+          </ul>
+          <h2 class="doc-h2" id="mcp-claude-code">Claude Code</h2>
+          <pre class="doc-pre"><code># sign in through Nivaro (run /mcp in Claude Code to finish the sign-in)
+claude mcp add --transport http nivaro https://&lt;your-nivaro&gt;/api/mcp
+
+# or with an API key
+claude mcp add --transport http nivaro https://&lt;your-nivaro&gt;/api/mcp \
+  --header "Authorization: Bearer nvk_your_key"</code></pre>
+          <h2 class="doc-h2" id="mcp-codex">Codex</h2>
+          <pre class="doc-pre"><code># sign in through Nivaro
+codex mcp add nivaro --url https://&lt;your-nivaro&gt;/api/mcp
+codex mcp login nivaro
+
+# or ~/.codex/config.toml with an API key in the environment
+[mcp_servers.nivaro]
+url = "https://&lt;your-nivaro&gt;/api/mcp"
+bearer_token_env_var = "NIVARO_TOKEN"</code></pre>
+          <h2 class="doc-h2" id="mcp-npm">The npm server (stdio)</h2>
+          <p class="doc-p">For any client that launches local servers (Claude Desktop, Cursor, Codex, Claude Code). It needs <code class="doc-code">NIVARO_URL</code> (the API origin, no <code class="doc-code">/api</code>) and <code class="doc-code">NIVARO_TOKEN</code> (an <code class="doc-code">nvk_</code> API key from API Keys, or a static token).</p>
+          <pre class="doc-pre"><code>{
+  "mcpServers": {
+    "nivaro": {
+      "command": "npx",
+      "args": ["-y", "@nivaro/mcp"],
+      "env": { "NIVARO_URL": "https://&lt;your-nivaro&gt;", "NIVARO_TOKEN": "nvk_your_key" }
+    }
+  }
+}</code></pre>
+          <h2 class="doc-h2" id="mcp-what">What an assistant can do</h2>
+          <ul class="doc-ul">
+            <li>Learn the data model (collections, fields, relations) and read, filter and total records.</li>
+            <li>Create, update and delete records — creates rehearse first unless told to store, deletes need an explicit confirm — and move records through their pipeline.</li>
+            <li>Work with My Work, queues, comments and mentions, tasks, revision history, custom queries, notifications, files (details only, never contents) and search.</li>
+            <li>Ask Nivaro’s own data assistant (Ask AI) a question.</li>
+            <li>Administrators also get read-only operations tools: health and readiness, runtime and database pool, Traffic Map summary, scheduled jobs and their runs, and a CPU profile of the API. Nothing restarts, pauses or reconfigures anything.</li>
+          </ul>
+          <h2 class="doc-h2" id="mcp-keys">Sign-in or API key</h2>
+          <p class="doc-p">Signing in (OAuth) connects the assistant as you, with your permissions, and needs nothing stored on your machine; access tokens last an hour and renew themselves for 30 days of use. An API key gives you finer control: a key with **narrowed scopes** is held to them, a key with **row restrictions** sees only those rows, and a **sandbox** key can explore everything and never changes anything — a safe way to try an assistant out.</p>
+          <h2 class="doc-h2" id="mcp-connections">Connected apps</h2>
+          <p class="doc-p">Every assistant you allowed is a connection: <code class="doc-code">GET /api/oauth/connections</code> lists them (name, when you connected, when it was last used) and <code class="doc-code">DELETE /api/oauth/connections/:id</code> disconnects one — its tokens stop working at once. Connecting and disconnecting are logged in Activity (<code class="doc-code">oauth-connect</code>, <code class="doc-code">oauth-revoke</code>). Suspending an account ends its connections too: every request checks the account is still active.</p>
+          <h2 class="doc-h2" id="mcp-settings">Settings and how it works</h2>
+          <ul class="doc-ul">
+            <li><code class="doc-code">MCP_HTTP=off</code> turns the hosted endpoint off (the npm server keeps working with a key); <code class="doc-code">MCP_OAUTH=off</code> turns sign-in off and leaves API keys working on <code class="doc-code">/api/mcp</code>.</li>
+            <li><code class="doc-code">MCP_PUBLIC_URL</code> names the address assistants reach this API on, when it is not the API’s own host — the sign-in must start and end there, and that address must be registered with your identity provider.</li>
+            <li>Discovery: <code class="doc-code">/.well-known/oauth-protected-resource</code> and <code class="doc-code">/.well-known/oauth-authorization-server</code>. Clients register themselves (<code class="doc-code">/oauth/register</code>, public clients only), must use PKCE (S256), and may only return to https addresses or to <code class="doc-code">localhost</code> on your machine.</li>
+            <li>Each <code class="doc-code">/api/mcp</code> request is answered on its own (no server-side session), so any API replica can serve it, and every tool call inside it is an ordinary API request — rate limits, the maintenance freeze and the request log apply to each call. Traffic Map counts connected assistants with people.</li>
+          </ul>
+          <!-- /SYNC:mcp -->
         </div>
 
         <!-- ENTERPRISE -->

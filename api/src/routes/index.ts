@@ -136,6 +136,7 @@ import { mailLogReadRoutes, mailLogRoutes } from './mail-log.js'
 import { mailSuppressionRoutes } from './mail-suppressions.js'
 import { mailTemplateRoutes } from './mail-templates.js'
 import { mailTypeRoutes } from './mail-types.js'
+import { mcpRoutes } from './mcp.js'
 import { meNotificationRoutes } from './me-notifications.js'
 import { mergeRoutes } from './merge.js'
 import { messageActionsRoutes } from './message-actions.js'
@@ -147,6 +148,7 @@ import { notificationBenchRoutes } from './notification-bench.js'
 import { notificationSubscriptionsRoutes } from './notification-subscriptions.js'
 import { notificationTemplateRoutes } from './notification-templates.js'
 import { notificationsRoutes } from './notifications.js'
+import { oauthConnectionRoutes } from './oauth.js'
 import { offboardingRoutes } from './offboarding.js'
 import { opsAssistantRoutes } from './ops-assistant.js'
 import { opsCalendarRoutes } from './ops-calendar.js'
@@ -262,7 +264,11 @@ export async function registerRoutes(app: FastifyInstance) {
       url.startsWith('/api/rum') ||
       // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
       url.startsWith('/api/items/batch-read') ||
-      url.startsWith('/api/users/cards')
+      url.startsWith('/api/users/cards') ||
+      // The MCP endpoint only carries protocol messages; each tool call inside it is its
+      // own API request, judged by this hook on its own method and path.
+      url === '/api/mcp' ||
+      url.startsWith('/api/mcp?')
     )
       return
     const { maintenanceState, MAINTENANCE_EXPLAINER, MAINTENANCE_DEFAULT_MESSAGE } = await import(
@@ -642,6 +648,9 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(aiSettingsRoutes, { prefix: '/ai-settings' })
   await app.register(aiKnowledgeRoutes, { prefix: '/ai-knowledge' })
   await app.register(zapierRoutes, { prefix: '/zapier' })
+  // Hosted MCP server (Streamable HTTP) + the person's connected AI apps (OAuth grants).
+  await app.register(mcpRoutes)
+  await app.register(oauthConnectionRoutes)
   await app.register(widgetRoutes, { prefix: '/widget' })
   await app.register(widgetsInternalRoutes, { prefix: '/widgets-internal' })
   // Root-level alias for clean external embeds: <script src="https://host/api/widget.js">

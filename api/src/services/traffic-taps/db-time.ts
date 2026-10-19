@@ -49,7 +49,9 @@ const PENDING_CAP = 5000
 export function requestCategory(authMethod: string | null | undefined): DbTimeCategory {
   if (authMethod === 'token' || authMethod === 'api_key' || authMethod === 'key_sim')
     return 'integrations'
-  if (authMethod === 'session' || authMethod === 'masquerade') return 'people'
+  // A connected AI app (OAuth) acts for the person who allowed it.
+  if (authMethod === 'session' || authMethod === 'masquerade' || authMethod === 'oauth')
+    return 'people'
   return 'other'
 }
 

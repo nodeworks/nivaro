@@ -20,6 +20,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 - **External API Flow Operation** — call any configured External API or custom URL from a flow, with SSRF protection
 - **Background Jobs** — scheduled jobs, backfills and remediations run in-process, recorded with outcome and history; one process fires scheduled jobs (Redis lease) so replicas never double-run them
 - **AI Features** — field generation and record summarization via Claude, fill a new record from a document (SOW, quote, spreadsheet → fields, lines, schedule, reviewed before save)
+- **AI Assistants (MCP)** — ChatGPT, Claude (claude.ai, Desktop, Code), Codex and Cursor work with your data through a hosted MCP endpoint (`/api/mcp`, sign-in via OAuth or an API key) or the `@nivaro/mcp` npm server; the assistant acts as you, under your permissions
 - **Dashboards & KPI Builder** — drag-and-drop widget grid
 - **Audit Log & Revisions** — full snapshot + delta per mutation
 - **Bulk Actions** — delete, field update, workflow transition across selections
@@ -173,6 +174,7 @@ Headless CMS — Fastify REST + GraphQL API, React admin UI, TypeScript SDK, and
 | Jobs | In-process scheduler (croner) with a Redis leader lease; every run recorded in `nivaro_job_runs` |
 | Admin UI | React 19 + Vite 6 + shadcn/ui (Tailwind v3) |
 | SDK | `@nivaro/sdk` — ESM, fully typed |
+| MCP | `@nivaro/mcp` — stdio server on npm; the same tools hosted at `/api/mcp` (Streamable HTTP + OAuth 2.1) |
 | Linter | Biome v2 |
 | Packages | pnpm v11 workspaces |
 
@@ -255,6 +257,14 @@ pnpm sdk:release 1.7.0
 ```
 
 Tags `@sdk-x.x.x` → GitHub Actions publishes `@nivaro/sdk` to npm.
+
+### MCP server (`@mcp-*` → npm)
+
+```bash
+pnpm mcp:release patch
+```
+
+Tags `@mcp-x.x.x` → GitHub Actions publishes `@nivaro/mcp` to npm. The hosted `/api/mcp` endpoint ships with the app image.
 
 ### Website (`@www-*` → Vercel)
 
