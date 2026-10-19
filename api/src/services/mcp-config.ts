@@ -65,10 +65,30 @@ export async function markMcpInnerRequest(req: FastifyRequest): Promise<void> {
  * credential that outlives its own disconnection.
  */
 const OAUTH_NO_WRITE =
-  /^\/api\/(auth|api-keys|oauth|graphql)(\/|$|\?)|^\/api\/users\/[^/]+\/token(\/|$|\?)|^\/api\/items\/(nivaro_|directus_)/
+  /^\/api\/(auth|api-keys|oauth|graphql)(\/|$)|^\/api\/users\/[^/]+\/token(\/|$)|^\/api\/items\/(nivaro_|directus_)/i
+
+/**
+ * The path as the router will see it: percent-decoded (to a fixed point),
+ * repeated slashes collapsed, lower-cased — so `/api/items/%6Eivaro_users`,
+ * `//api/Items/NIVARO_users` and the plain spelling are judged alike.
+ */
+export function normalizedPath(url: string): string {
+  let p = url.split('?')[0]
+  for (let i = 0; i < 3; i++) {
+    let d: string
+    try {
+      d = decodeURIComponent(p)
+    } catch {
+      break
+    }
+    if (d === p) break
+    p = d
+  }
+  return p.replace(/\/{2,}/g, '/').toLowerCase()
+}
 
 export function oauthAudienceRefusal(req: FastifyRequest): string | null {
-  const path = (req.url ?? '').split('?')[0]
+  const path = normalizedPath(req.url ?? '')
   if (path !== '/api/mcp' && !req.mcpInner)
     return 'This access token is for the MCP endpoint (/api/mcp) only'
   const m = req.method.toUpperCase()

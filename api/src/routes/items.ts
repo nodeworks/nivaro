@@ -95,6 +95,17 @@ function parseCsv(text: string): Record<string, string>[] {
 export async function itemsRoutes(app: FastifyInstance) {
   app.addHook('preHandler', authenticate)
   app.addHook('preHandler', resolveWorkspace)
+  // A connected AI app (OAuth) never writes a system table, whatever its user may
+  // do — judged on the routed collection name, not the raw URL.
+  app.addHook('preHandler', async (req, reply) => {
+    if (req.authMethod !== 'oauth' || req.method === 'GET' || req.method === 'HEAD') return
+    const c = (req.params as { collection?: string } | undefined)?.collection
+    if (c !== undefined && isSystemCollection(c))
+      return reply.code(403).send({
+        error: 'A connected app cannot change system tables',
+        code: 'OAUTH_TOKEN_AUDIENCE'
+      })
+  })
   // Idempotency-Key on any write here: a repeat of the same request returns
   // the first answer instead of writing twice. Runs after authentication.
   app.addHook('preHandler', idempotencyPreHandler('items'))

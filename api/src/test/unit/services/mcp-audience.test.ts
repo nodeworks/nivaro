@@ -3,6 +3,7 @@ import {
   MCP_INNER_HEADER,
   markMcpInnerRequest,
   mcpInnerHeaderValue,
+  normalizedPath,
   oauthAudienceRefusal
 } from '../../../services/mcp-config.js'
 
@@ -29,6 +30,22 @@ describe('OAuth token audience', () => {
     ])
       expect(oauthAudienceRefusal(req(m, u, true))).toMatch(/cannot use/)
     expect(oauthAudienceRefusal(req('GET', '/api/auth/me', true))).toBeNull()
+  })
+
+  it('judges encoded, mixed-case and doubled-slash spellings like the plain one', () => {
+    for (const [m, u] of [
+      ['PATCH', '/api/items/%6Eivaro_users/U1'],
+      ['PATCH', '/api/items/%256Eivaro_users/U1'],
+      ['PATCH', '/api/items/NIVARO_users/U1'],
+      ['POST', '/api/Items/Directus_users'],
+      ['POST', '//api//api-keys'],
+      ['POST', '/api/API-KEYS'],
+      ['POST', '/api/users/U1/%74oken'],
+      ['DELETE', '/api/OAuth/connections/x']
+    ])
+      expect(oauthAudienceRefusal(req(m, u, true)), u).toMatch(/cannot use/)
+    expect(normalizedPath('/api/%4Dcp?x=%2F')).toBe('/api/mcp')
+    expect(oauthAudienceRefusal(req('POST', '/api/%6Dcp'))).toBeNull()
   })
 
   it('turns the inner marker into a flag and removes it from the headers', async () => {
