@@ -26,7 +26,7 @@ import { config } from './config.js'
  * headless frontend itself — is reported at boot (server.ts) rather than
  * guessed around: nothing in env can distinguish it from a genuine admin host.
  */
-const servesAdminSpa = existsSync(join(import.meta.dirname, '../../admin/dist'))
+export const servesAdminSpa = existsSync(join(import.meta.dirname, '../../admin/dist'))
 
 const trim = (u: string | null | undefined) => (u ? u.replace(/\/$/, '') : null)
 

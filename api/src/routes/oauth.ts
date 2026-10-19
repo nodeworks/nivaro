@@ -1,5 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
+import { servesAdminSpa } from '../admin-base.js'
 import { db } from '../db/index.js'
 import {
   cleanClientName,
@@ -203,6 +204,17 @@ async function consentUser(
   return { user: req.user, stale: Date.now() - (req.session.authAt ?? 0) >= CONSENT_FRESH_MS }
 }
 
+/**
+ * Where to sign in before consenting, returning to `path` (this authorize URL).
+ * The instance's own login page when this process serves it — it offers every
+ * method the instance has (Microsoft, SSO providers, SAML, password, token) and
+ * carries the return through each; otherwise the default OIDC login.
+ */
+function signInUrl(path: string): string {
+  if (servesAdminSpa) return `/login?redirect=${encodeURIComponent(path)}`
+  return `/api/auth/login?returnTo=${encodeURIComponent(`${mcpPublicOrigin()}${path}`)}`
+}
+
 const cannotConnect = (reply: FastifyReply, message: string, status = 400) =>
   reply
     .code(status)
@@ -327,10 +339,10 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     if (!checked.ok) return cannotConnect(reply, checked.message)
     const { user, stale } = await consentUser(req, reply)
     if (!user || stale) {
-      // Sign in on this origin first (again, when the last sign-in is old); the
-      // login returns here with the same query.
-      const back = `${mcpPublicOrigin()}${req.url}`
-      return reply.redirect(`/api/auth/login?returnTo=${encodeURIComponent(back)}`)
+      // A stale sign-in is ended, so a fresh one — not the old session — consents
+      // (the login page would otherwise send a signed-in person straight back).
+      if (stale) await req.session.destroy()
+      return reply.redirect(signInUrl(req.url))
     }
     const csrf = randomBytes(24).toString('base64url')
     req.session.oauthCsrf = csrf

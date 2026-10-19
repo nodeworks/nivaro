@@ -110,7 +110,18 @@ function fakeRedis() {
   return r
 }
 
-const session: { userId?: string; oauthCsrf?: string; authAt?: number } = {}
+const session: {
+  userId?: string
+  oauthCsrf?: string
+  authAt?: number
+  destroy?: () => Promise<void>
+} = {}
+let destroyed = 0
+session.destroy = async () => {
+  destroyed++
+  session.userId = undefined
+  session.authAt = undefined
+}
 let app: FastifyInstance
 const redis = fakeRedis()
 
@@ -188,6 +199,10 @@ describe('OAuth for remote MCP clients', () => {
     const stale = await app.inject({ url: `/oauth/authorize?${qs}` })
     expect(stale.statusCode).toBe(302)
     expect(stale.headers.location).toContain('/api/auth/login?returnTo=')
+    // …and the old session is ended, so the sign-in that follows is a fresh one.
+    expect(destroyed).toBe(1)
+    expect(session.userId).toBeUndefined()
+    session.userId = 'U1'
 
     // Signed in recently → the consent page, framed nowhere.
     session.authAt = Date.now()

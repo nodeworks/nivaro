@@ -221,7 +221,7 @@ function TokenLoginFallback() {
       if (res.ok) {
         const raw = sessionStorage.getItem('nivaro_post_login_redirect')
         sessionStorage.removeItem('nivaro_post_login_redirect')
-        window.location.href = raw ?? '/'
+        window.location.href = safeLoginRedirect(raw)
         return
       }
       const body = await res.json().catch(() => null)
@@ -276,6 +276,9 @@ export function LoginPage() {
   const params = new URLSearchParams(window.location.search)
   const error = params.get('error')
   const redirectTo = params.get('redirect')
+  // Where an IdP round trip (Microsoft, SSO, SAML) returns: the same-origin
+  // redirect this page was opened with (an AI app's consent page), else home.
+  const returnTo = `${window.location.origin}${safeLoginRedirect(redirectTo)}`
   const totpStep = params.get('totp') === '1'
   const [tab, setTab] = usePersistedTab<'microsoft' | 'password'>('nvr_tab_login', 'microsoft')
   const [providers, setProviders] = useState<{
@@ -610,7 +613,7 @@ export function LoginPage() {
                 <>
                   {oidcOn && (
                     <a
-                      href={`/api/auth/login?returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
+                      href={`/api/auth/login?returnTo=${encodeURIComponent(returnTo)}`}
                       className='group flex w-full items-center justify-center gap-3 rounded-xl px-5 py-4 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'
                       style={{ background: isMicrosoft ? '#0078d4' : '#0f172a' }}
                     >
@@ -620,7 +623,7 @@ export function LoginPage() {
                   )}
                   {providers?.saml.enabled && (
                     <a
-                      href='/api/auth/saml/login'
+                      href={`/api/auth/saml/login?returnTo=${encodeURIComponent(returnTo)}`}
                       className='mt-3 flex w-full items-center justify-center gap-3 rounded-xl border border-slate-200 bg-white px-5 py-3.5 text-[14px] font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:shadow active:scale-[0.985]'
                     >
                       <KeyIcon dark />
@@ -632,7 +635,7 @@ export function LoginPage() {
                   {(providers?.sso ?? []).map((p) => (
                     <a
                       key={p.id}
-                      href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(`${window.location.origin}/`)}`}
+                      href={`/api/auth/login?provider=${encodeURIComponent(p.key)}&returnTo=${encodeURIComponent(returnTo)}`}
                       className={
                         resolveButtonColor(p.button_color)
                           ? 'mt-3 flex w-full items-center justify-center gap-3 rounded-xl px-5 py-3.5 text-[14px] font-semibold text-white shadow-md transition-all hover:shadow-lg hover:brightness-110 active:scale-[0.985]'

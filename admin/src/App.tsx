@@ -42,6 +42,10 @@ function safeRedirectPath(raw: string | null | undefined, fallback = '/'): strin
   }
 }
 
+/** A post-login target the SPA does not route (the OAuth consent page, an API
+ *  URL) — it must be a full page load, not a client-side navigation. */
+const isServerPath = (path: string) => /^\/(oauth|api)\//.test(path)
+
 const ActivityPage = lazy(() =>
   import('@/pages/Activity').then((m) => ({ default: m.ActivityPage }))
 )
@@ -406,7 +410,12 @@ function PublicRoute({ children }: { children: React.ReactNode }) {
     const params = new URLSearchParams(window.location.search)
     const raw = params.get('redirect') ?? sessionStorage.getItem('nivaro_post_login_redirect')
     sessionStorage.removeItem('nivaro_post_login_redirect')
-    return <Navigate to={safeRedirectPath(raw)} replace />
+    const target = safeRedirectPath(raw)
+    if (isServerPath(target)) {
+      window.location.replace(target)
+      return <AppShell />
+    }
+    return <Navigate to={target} replace />
   }
   return <>{children}</>
 }
@@ -421,7 +430,9 @@ function PostLoginRedirect() {
     if (raw) {
       fired.current = true
       sessionStorage.removeItem('nivaro_post_login_redirect')
-      navigate(safeRedirectPath(raw), { replace: true })
+      const target = safeRedirectPath(raw)
+      if (isServerPath(target)) window.location.replace(target)
+      else navigate(target, { replace: true })
     }
   }, [user, loading, navigate])
   return null
