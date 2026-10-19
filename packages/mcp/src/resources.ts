@@ -6,8 +6,8 @@
  *   nivaro://collection/<name>
  */
 import { type McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js'
-import type { NivaroClient } from '@nivaro/sdk'
-import { describeCollection, listCollections } from './tools/collections.js'
+import { type NivaroClient, readCollections } from '@nivaro/sdk'
+import { compactCollections, describeCollection, listCollections } from './tools/collections.js'
 
 export const COLLECTIONS_URI = 'nivaro://collections'
 export const COLLECTION_URI_TEMPLATE = 'nivaro://collection/{name}'
@@ -22,7 +22,7 @@ export function registerResources(server: McpServer, client: NivaroClient) {
     COLLECTIONS_URI,
     {
       title: 'Collections',
-      description: 'Every collection the key can read.',
+      description: 'Every business collection, one short entry each.',
       mimeType: 'application/json'
     },
     async (uri) => ({
@@ -30,7 +30,7 @@ export function registerResources(server: McpServer, client: NivaroClient) {
         {
           uri: uri.href,
           mimeType: 'application/json',
-          text: JSON.stringify(await listCollections(client), null, 2)
+          text: JSON.stringify(compactCollections((await client.request(readCollections())).data))
         }
       ]
     })
@@ -69,7 +69,7 @@ export function registerResources(server: McpServer, client: NivaroClient) {
           {
             uri: uri.href,
             mimeType: 'application/json',
-            text: JSON.stringify(await describeCollection(client, collection), null, 2)
+            text: JSON.stringify(await describeCollection(client, collection))
           }
         ]
       }

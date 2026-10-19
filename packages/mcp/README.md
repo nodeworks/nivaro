@@ -100,7 +100,7 @@ Every tool answers JSON text. A refusal answers `isError: true` with the API's o
 | Tool | What it does |
 | --- | --- |
 | `whoami` | The user the key acts as: id, name, role, admin flag, and the key's scopes / sandbox flag. |
-| `list_collections` | Every collection the key can read — name, display name, singleton flag. |
+| `list_collections` | One short entry per collection (name, label, singular label, singleton flag) — no fields. `search` narrows a long registry; business collections only unless `include_hidden`; 50 per page. |
 | `describe_collection` | One collection's schema: fields with type, interface, required/readonly/hidden flags and dropdown choices; relations; display template; natural keys. |
 | `read_items` | Page through records: `filter` (the SDK filter DSL), `sort`, `fields` (dotted paths follow relations), `search`, `limit` (capped at 200), `offset`. |
 | `read_item` | One record by id, optionally projected to `fields`. |
@@ -112,7 +112,7 @@ Every tool answers JSON text. A refusal answers `isError: true` with the API's o
 | `transition` | Runs one transition by id, with an optional comment; the API's role, condition and requirement checks apply. |
 | `ask_data` | A plain-language question answered by the instance's own data assistant, which queries the collections as the key's user and returns the answer plus the tool trace. Needs an AI provider configured on the instance. |
 | `my_work` | The key's user's inbox: owned records (SLA-first), tasks, team tasks, requested tasks, approval steps, unread notifications — each section cut to `limit`, with the totals. |
-| `list_queues` | The worklists the user can open, with the collections each reads. |
+| `list_queues` | The worklists the user can open, with the collections each reads; 25 per page. |
 | `read_queue` | One page of a queue's items (`scope` mine / unowned / claimed / all, `sort`, `page`, `limit` ≤ 100): label, state, owners, SLA status, age. |
 | `list_tasks` | A record's tasks (`collection` + `id`) or the user's own open tasks; `status` narrows either. |
 | `create_task` | Asks a person (`assignee`, from `find_people`) or a team (`team_id`) to do something on a record. |
@@ -126,10 +126,10 @@ Every tool answers JSON text. A refusal answers `isError: true` with the API's o
 | `read_file` | One file's metadata (name, type, size, uploader, date) — no storage key, no URL, no content. |
 | `search` | Text search across every collection the user can read (or the ones named): collection, id and label per hit. |
 | `find_people` | People by name or email: user id (for task assignees) and the `@handle` that mentions them. |
-| `list_custom_queries` | The saved reporting queries the user may run, with their parameters. |
+| `list_custom_queries` | The saved reporting queries the user may run, with their parameters; `search`, 25 per page. |
 | `run_custom_query` | Runs a saved query by slug with `params`; rows cut to `limit`, long values clipped. |
 
-Lists are paged or cut to a model-sized slice (`limit`, `offset` or `page`) and say so with `truncated` and a `total`; long text is clipped.
+Answers are compact by default: unindented JSON, lists paged or cut to a model-sized slice (about 25 entries; `limit`, `offset` or `page` to see more) that say so with `truncated` and a `total`, and long text clipped.
 
 ### Admin tools
 
@@ -157,7 +157,7 @@ Every tool carries MCP annotations so a client can decide when to ask the person
 
 | URI | Content |
 | --- | --- |
-| `nivaro://collections` | The collection list (same shape as `list_collections`). |
+| `nivaro://collections` | Every business collection, one short entry each (the `list_collections` entry shape, unpaged). |
 | `nivaro://collection/<name>` | One collection's schema (same shape as `describe_collection`); the template lists every readable collection. |
 
 ## Programmatic use

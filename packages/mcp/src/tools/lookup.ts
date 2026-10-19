@@ -12,7 +12,7 @@ import {
 } from '@nivaro/sdk'
 import { z } from 'zod'
 import { READ } from '../annotations.js'
-import { clip, clipRow, personName } from '../compact.js'
+import { clip, clipRow, pageOf, personName } from '../compact.js'
 import { fail, ok } from '../result.js'
 import { clampTo, collectionName, jsonObject, querySlug, toObject } from '../schema.js'
 
@@ -99,20 +99,44 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
       title: 'List saved queries',
       description:
         "The saved reporting queries the key's user may run, with the parameters each takes. Run one with run_custom_query.",
-      inputSchema: {},
+      inputSchema: {
+        search: z
+          .string()
+          .optional()
+          .describe('Case-insensitive match on slug, name or description.'),
+        limit: z.number().int().optional().describe('Queries per page (1–200, default 25).'),
+        offset: z.number().int().min(0).optional()
+      },
       annotations: READ
     },
-    async () => {
+    async ({ search, limit, offset }) => {
       try {
         const res = await client.request(listCustomQueryCatalog())
-        return ok(
-          res.data.map((q) => ({
+        const needle = search?.trim().toLowerCase()
+        const matching = needle
+          ? res.data.filter((q) =>
+              [q.slug, q.name, q.description].some(
+                (v) => typeof v === 'string' && v.toLowerCase().includes(needle)
+              )
+            )
+          : res.data
+        const page = pageOf(matching, clampTo(limit, 25, 200), offset)
+        return ok({
+          queries: page.items.map((q) => ({
             slug: q.slug,
             name: q.name,
-            description: clip(q.description, 300),
-            params: q.params ?? []
-          }))
-        )
+            description: clip(q.description, 200),
+            params: (q.params ?? []).map((p) => ({
+              name: p.name,
+              type: p.type,
+              required: p.required,
+              ...(p.default !== undefined ? { default: p.default } : {})
+            }))
+          })),
+          total: page.total,
+          offset: page.offset,
+          truncated: page.truncated
+        })
       } catch (err) {
         return fail(err)
       }
@@ -128,7 +152,7 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
       inputSchema: {
         slug: querySlug,
         params: jsonObject.optional().describe('Parameter values by name.'),
-        limit: z.number().int().optional().describe('Rows to return (1–200, default 50).')
+        limit: z.number().int().optional().describe('Rows to return (1–200, default 25).')
       },
       annotations: READ
     },
@@ -136,7 +160,7 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
       try {
         const res = await client.request(executeCustomQuery(slug, toObject(params)))
         const rows = Array.isArray(res.data) ? (res.data as Row[]) : []
-        const n = clampTo(limit, 50, 200)
+        const n = clampTo(limit, 25, 200)
         const meta = res as unknown as Row
         const out: Row = {
           rows: rows.slice(0, n).map((r) => (r && typeof r === 'object' ? clipRow(r, 500) : r)),

@@ -25,7 +25,7 @@ import {
 } from '@nivaro/sdk'
 import { z } from 'zod'
 import { READ, WRITE } from '../annotations.js'
-import { clip } from '../compact.js'
+import { clip, pageOf } from '../compact.js'
 import { fail, ok } from '../result.js'
 import { clampTo } from '../schema.js'
 
@@ -146,7 +146,7 @@ export function registerAdminTools(server: McpServer, client: NivaroClient) {
         ])
         return ok({
           this_replica: runtime.data,
-          instances: roster.data.slice(0, 50),
+          instances: roster.data.slice(0, 25),
           instances_total: roster.data.length,
           scheduler: roster.scheduler
         })
@@ -239,29 +239,36 @@ export function registerAdminTools(server: McpServer, client: NivaroClient) {
         failing_only: z
           .boolean()
           .optional()
-          .describe('Only jobs whose latest run failed or that failed in the last 7 days.')
+          .describe('Only jobs whose latest run failed or that failed in the last 7 days.'),
+        limit: z.number().int().optional().describe('Jobs per page (1–200, default 25).'),
+        offset: z.number().int().min(0).optional()
       },
       annotations: READ
     },
-    async ({ failing_only }) => {
+    async ({ failing_only, limit, offset }) => {
       try {
         const res = await client.request(readJobRegistry())
-        const crons = res.data.crons
-          .filter((c) => !failing_only || c.errors_7d > 0 || c.last?.status === 'error')
-          .map((c) => ({
-            id: c.id,
-            expression: c.expression,
-            overridden: c.overridden,
-            extension_id: c.extension_id,
-            next_run: c.next_run,
-            paused: c.paused,
-            heavy: c.heavy,
-            description: clip(c.description, 200),
-            last: c.last ? { ...c.last, error: clip(c.last.error, 500) } : null,
-            errors_7d: c.errors_7d
-          }))
+        const matching = res.data.crons.filter(
+          (c) => !failing_only || c.errors_7d > 0 || c.last?.status === 'error'
+        )
+        const page = pageOf(matching, clampTo(limit, 25, 200), offset)
+        const crons = page.items.map((c) => ({
+          id: c.id,
+          expression: c.expression,
+          overridden: c.overridden,
+          extension_id: c.extension_id,
+          next_run: c.next_run,
+          paused: c.paused,
+          heavy: c.heavy,
+          description: clip(c.description, 200),
+          last: c.last ? { ...c.last, error: clip(c.last.error, 500) } : null,
+          errors_7d: c.errors_7d
+        }))
         return ok({
           crons,
+          total: page.total,
+          offset: page.offset,
+          truncated: page.truncated,
           ticks_enabled: res.data.ticks_enabled,
           scheduler: res.data.scheduler,
           running: res.data.running.map((r) => ({

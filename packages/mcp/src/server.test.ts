@@ -172,25 +172,76 @@ describe('tools', () => {
     expect(JSON.stringify(body)).not.toContain('secret')
   })
 
-  it('list_collections summarises the registry', async () => {
-    answer = () => ({ data: [COLLECTION, { collection: 'nivaro_users', hidden: 1 }] })
+  it('list_collections answers one short entry per business collection', async () => {
+    answer = () => ({
+      data: [
+        { ...COLLECTION, singular: 'Article', description: 'd'.repeat(300), sort: 1, icon: 'x' },
+        { collection: 'settings', display_name: 'Settings', singleton: 1 },
+        { collection: 'archive', display_name: 'Archive', hidden: 1 },
+        { collection: 'nivaro_users', hidden: 1 }
+      ]
+    })
     const res = await mcp.callTool({ name: 'list_collections', arguments: {} })
     expect(calls[0]).toMatchObject({ _method: 'GET', _path: '/collections' })
-    expect(textOf(res)).toEqual([
-      {
-        collection: 'articles',
-        display_name: 'Articles',
+    const body = textOf(res)
+    expect(body).toEqual({
+      collections: [
+        {
+          name: 'articles',
+          label: 'Articles',
+          singular: 'Article',
+          description: `${'d'.repeat(100)}…`
+        },
+        { name: 'settings', label: 'Settings', singleton: true }
+      ],
+      total: 2,
+      offset: 0,
+      truncated: false
+    })
+    const hidden = textOf(
+      await mcp.callTool({ name: 'list_collections', arguments: { include_hidden: true } })
+    )
+    expect(hidden.collections.map((c: { name: string }) => c.name)).toEqual([
+      'articles',
+      'settings',
+      'archive',
+      'nivaro_users'
+    ])
+  })
+
+  it('list_collections searches, pages and stays small on a big registry', async () => {
+    answer = () => ({
+      data: Array.from({ length: 400 }, (_, i) => ({
+        collection: `table_${i}`,
+        display_name: `Table ${i}`,
+        description: 'A long description of what this table holds. '.repeat(5),
         singleton: false,
         hidden: false,
-        description: null
-      },
-      {
-        collection: 'nivaro_users',
-        display_name: null,
-        singleton: false,
-        hidden: true,
-        description: null
-      }
+        fields: Array.from({ length: 30 }, (_, f) => ({ field: `f${f}` }))
+      }))
+    })
+    const res = await mcp.callTool({ name: 'list_collections', arguments: {} })
+    const text = (res.content as Array<{ text: string }>)[0].text
+    const body = JSON.parse(text)
+    expect(body.collections).toHaveLength(50)
+    expect(body).toMatchObject({ total: 400, truncated: true })
+    expect(body.note).toMatch(/search/)
+    expect(text.length).toBeLessThan(10_000)
+    const found = textOf(
+      await mcp.callTool({ name: 'list_collections', arguments: { search: 'TABLE 39' } })
+    )
+    expect(found.collections.map((c: { name: string }) => c.name)).toEqual([
+      'table_39',
+      'table_390',
+      'table_391',
+      'table_392',
+      'table_393',
+      'table_394',
+      'table_395',
+      'table_396',
+      'table_397',
+      'table_398',
+      'table_399'
     ])
   })
 
