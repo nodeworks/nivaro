@@ -1,10 +1,29 @@
 {
-  "generated_at": "2026-10-19T02:18:07.910Z",
+  "generated_at": "2026-10-19T19:51:58.491Z",
   "releases": [
+    {
+      "version": "0.2.62",
+      "tag": "v0.2.62",
+      "date": "2026-10-19T15:51:47-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Long-history telemetry store for Traffic Map and SLO (#2544)",
+              "hash": "a180b6b0"
+            }
+          ]
+        }
+      ],
+      "count": 1
+    },
     {
       "version": "0.2.61",
       "tag": "v0.2.61",
-      "date": "2026-10-18T22:17:54-04:00",
+      "date": "2026-10-18T22:18:07-04:00",
       "sections": [
         {
           "label": "Fixed",
