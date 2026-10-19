@@ -264,9 +264,25 @@ function plan(cfg, ch) {
 
 /** `stage` is passed, not read from currentStage: the image wait runs in the
  *  background while a later stage is the current one. */
-async function waitForWorkflow(stage, repo, workflow, accept) {
-  await sleep(25_000) // the run does not exist the instant the tag lands
-  const id = sh('gh', ['run', 'list', '-R', repo, '--workflow', workflow, '-L1', '--json', 'databaseId', '-q', '.[0].databaseId'], { quiet: true }).stdout
+async function waitForWorkflow(stage, repo, workflow, tag, accept) {
+  // The run for THIS tag, asked for every 3 s — not a fixed 25 s sleep and then
+  // the workflow's newest run, which is the previous release's run whenever
+  // GitHub is slow to create this one. A run usually exists within seconds.
+  let id = ''
+  for (let i = 0; i < 100 && !id; i++) {
+    if (i) await sleep(3_000)
+    const res = sh('gh', ['run', 'list', '-R', repo, '--workflow', workflow, '-L', '20', '--json', 'databaseId,headBranch'], {
+      quiet: true,
+      allowFail: true
+    })
+    if (!res.ok) continue
+    try {
+      id = String(JSON.parse(res.stdout).find((r) => r.headBranch === tag)?.databaseId ?? '')
+    } catch {
+      id = ''
+    }
+  }
+  if (!id) throw new StageError(`no ${workflow} run for ${tag} after 5 minutes — did the tag reach ${repo}?`)
   log(`watching ${workflow} run ${id}`)
   emit(stage, 'progress', `watching ${workflow} run ${id}`)
   const res = await shAsync('gh', ['run', 'watch', '-R', repo, id, '--exit-status'], { quiet: true, allowFail: true })
@@ -429,53 +445,42 @@ async function main() {
       })
       const dirs = ['api', 'admin']
       for (const dir of dirs) log(`typecheck ${dir}`)
-      await Promise.all(
+      const typecheck = Promise.all(
         dirs.map((dir) =>
           shAsync('npx', ['tsc', '--noEmit'], { cwd: resolve(ROOT, dir), quiet: true }).catch((err) => {
             throw new StageError(`typecheck ${dir}: ${err.message}`)
           })
         )
       )
+      // Nothing below reads what the api/admin typecheck produces, so it runs
+      // beside it instead of after it (~25 s of a ~68 s preflight).
       // Known traps (#727) and T-SQL migrations with no dialect guard (#757):
       // each one has cost a session before, so a finding stops the release.
-      try {
-        sh('node', ['scripts/lint-traps.mjs'], { cwd: ROOT, quiet: true })
-        log('lint:traps clean')
-      } catch (err) {
-        throw new StageError(`lint:traps found known traps — run pnpm lint:traps (${err.message})`)
-      }
+      const traps = shAsync('node', ['scripts/lint-traps.mjs'], { cwd: ROOT, quiet: true }).then(
+        () => log('lint:traps clean'),
+        (err) => {
+          throw new StageError(`lint:traps found known traps — run pnpm lint:traps (${err.message})`)
+        }
+      )
       // Report only: which routes the published SDK cannot reach, and which
-      // of its commands reach nothing. A gap never blocks a release.
-      try {
-        const { stdout } = sh('npx', ['tsx', 'src/scripts/sdk-coverage.ts', '--summary'], {
-          cwd: resolve(ROOT, 'api'),
-          quiet: true
-        })
-        log(
-          String(stdout)
-            .split('\n')
-            .filter((l) => l.startsWith('sdk coverage'))
-            .pop() ?? 'sdk coverage: no summary'
+      // of its commands reach nothing (sdk coverage); fields partners used in
+      // the logged window that the schema no longer has, or deprecates
+      // (partners check, #608). Neither ever blocks a release.
+      const report = (script, label) =>
+        shAsync('npx', ['tsx', script, '--summary'], { cwd: resolve(ROOT, 'api'), quiet: true }).then(
+          ({ stdout }) =>
+            String(stdout)
+              .split('\n')
+              .filter((l) => l.startsWith(label))
+              .pop() ?? `${label}: no summary`,
+          (err) => `${label}: not run (${err.message})`
         )
-      } catch (err) {
-        log(`sdk coverage: not run (${err.message})`)
-      }
-      // Report only (#608): fields partners used in the logged window that
-      // the schema no longer has, or deprecates. Never blocks a release.
-      try {
-        const { stdout } = sh('npx', ['tsx', 'src/scripts/partners-check.ts', '--summary'], {
-          cwd: resolve(ROOT, 'api'),
-          quiet: true
-        })
-        log(
-          String(stdout)
-            .split('\n')
-            .filter((l) => l.startsWith('partners check'))
-            .pop() ?? 'partners check: no summary'
-        )
-      } catch (err) {
-        log(`partners check: not run (${err.message})`)
-      }
+      const reports = Promise.all([
+        report('src/scripts/sdk-coverage.ts', 'sdk coverage'),
+        report('src/scripts/partners-check.ts', 'partners check')
+      ])
+      await Promise.all([typecheck, traps])
+      for (const line of await reports) log(line)
       emit('preflight', 'ok')
     } else emit('preflight', 'skip', `resumed from ${FROM}`)
 
@@ -567,15 +572,15 @@ async function main() {
       emit('artifacts', 'start')
       const repo = cfg.workflowsRepo
       const imageWait = (async () => {
-        if (repo) await waitForWorkflow('artifacts', repo, 'docker-hub.yml', async () => (cfg.image ? imageExists(cfg.image, V) : false))
+        if (repo) await waitForWorkflow('artifacts', repo, 'docker-hub.yml', `@app-${V}`, async () => (cfg.image ? imageExists(cfg.image, V) : false))
         // The gate. A green workflow is a claim; the registry is the artifact.
         if (cfg.image) await until(`image ${cfg.image}:${V} on the registry`, () => imageExists(cfg.image, V), { stage: 'artifacts' })
       })()
       imageWait.catch(() => {}) // awaited below — never an unhandled rejection meanwhile
-      if (repo && p.wantKit) await waitForWorkflow('artifacts', repo, 'publish-kit.yml', async () => npmHas('@nivaro/extension-kit', KV))
-      if (repo && p.wantSdk) await waitForWorkflow('artifacts', repo, 'publish-sdk.yml', async () => npmHas('@nivaro/sdk', SV))
-      if (repo && p.wantReact) await waitForWorkflow('artifacts', repo, 'publish-react.yml', async () => npmHas('@nivaro/react', RV))
-      if (repo && p.wantMcp) await waitForWorkflow('artifacts', repo, 'publish-mcp.yml', async () => npmHas('@nivaro/mcp', MV))
+      if (repo && p.wantKit) await waitForWorkflow('artifacts', repo, 'publish-kit.yml', `@kit-${KV}`, async () => npmHas('@nivaro/extension-kit', KV))
+      if (repo && p.wantSdk) await waitForWorkflow('artifacts', repo, 'publish-sdk.yml', `@sdk-${SV}`, async () => npmHas('@nivaro/sdk', SV))
+      if (repo && p.wantReact) await waitForWorkflow('artifacts', repo, 'publish-react.yml', `@react-${RV}`, async () => npmHas('@nivaro/react', RV))
+      if (repo && p.wantMcp) await waitForWorkflow('artifacts', repo, 'publish-mcp.yml', `@mcp-${MV}`, async () => npmHas('@nivaro/mcp', MV))
       // npm acknowledges a publish before it serves it ("Your package is being
       // processed…"). On 2026-10-01 that took over 20 minutes for all three
       // packages; 10 minutes failed a healthy release. 45 minutes, every 30 s.
@@ -662,7 +667,10 @@ async function main() {
             expected = git(['rev-parse', '--short=8', `origin/${branch}`], { cwd })
           }
         }
-        let streak = 0
+        // Asked every 5 s so the new version is seen sooner, but it must keep
+        // answering for 15 s with no bad answer between — the window the old
+        // "two answers 15 s apart" rule gave against the answer-once-then-502.
+        let goodSince = 0
         let lastErr = ''
         await until(`${v.name} on ${expected}`, async () => {
           let body = null
@@ -678,12 +686,16 @@ async function main() {
             if (msg !== lastErr) log(`  probe: ${msg}`)
             lastErr = msg
           }
-          streak = body?.[v.field ?? 'version'] === expected ? streak + 1 : 0
-          return streak >= 2
+          if (body?.[v.field ?? 'version'] !== expected) {
+            goodSince = 0
+            return false
+          }
+          goodSince ||= Date.now()
+          return Date.now() - goodSince >= 15_000
           // The GitLab deploy job npm-installs on the host, prunes, pulls the
           // image and runs the gate: 13–15 minutes end to end, which outran
           // the earlier 12.5-minute window. Wait up to 30 minutes.
-        }, { tries: 120, every: 15_000 })
+        }, { tries: 360, every: 5_000 })
 
         // #1045 — answering the version proves the process booted, not that
         // the deploy is coherent. API entries run the post-deploy gate.
