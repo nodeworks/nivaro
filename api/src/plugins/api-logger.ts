@@ -384,7 +384,8 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
         accessLogLine({
           ...row,
           instance: INSTANCE,
-          traced: !!(req as unknown as { __nvrTraceExported?: boolean }).__nvrTraceExported
+          traced: !!(req as unknown as { __nvrTraceExported?: boolean }).__nvrTraceExported,
+          response_bytes: (req as unknown as { __nvrBytes?: number | null }).__nvrBytes ?? null
         }),
         'api'
       )

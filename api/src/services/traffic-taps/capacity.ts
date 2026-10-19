@@ -3,9 +3,10 @@
  * Traffic Map: headroom (#1123) and a 15-minute load projection (#1153).
  *
  * Headroom = the current request rate against a ceiling: a configured one
- * (TRAFFIC_CAPACITY_RPS) or the best sustained minute this instance has carried (the request log
- * over the last LOG_DAYS days, folded per minute, and this process's own ring). Pool use sits
- * beside it.
+ * (TRAFFIC_CAPACITY_RPS) or the best sustained minute this instance has carried — over up to
+ * 13 months from the telemetry stack's request rollups when it is set up (#2544), else the
+ * request log over the last LOG_DAYS days, folded per minute, and this process's own ring. Pool
+ * use sits beside it. The stack also gives the busiest minute per week (the growth trend).
  *
  * Projection = the last 15 minutes' per-minute rate, extended by its linear trend and blended
  * with how the same clock window usually moves on earlier days (from the same per-minute log
@@ -21,6 +22,7 @@ import { hasColumn } from '../../lib/column-probe.js'
 import { runLongSql } from '../run-long.js'
 import { instanceKey } from '../settings-overrides.js'
 import { currentTrafficSec } from '../traffic-map.js'
+import { type BusiestMinutes, rollupBusiestMinutes, rollupsEnabled } from '../traffic-rollups.js'
 import { registerTrafficTap, SecondRing, tapState } from '../traffic-taps.js'
 
 export const TAP_ID = 'capacity'
@@ -138,6 +140,38 @@ export function logMinutes(): LogMinutes | null {
 }
 export function setLogMinutesForTest(v: LogMinutes | null): void {
   logCache = v
+}
+
+// ── the telemetry stack, up to 13 months (#2544) ─────────────────────────────
+export const HISTORY_DAYS = 395
+let histCache: { value: BusiestMinutes; at: number } | null = null
+let histInflight: Promise<void> | null = null
+
+async function readHistory(): Promise<void> {
+  const value = await rollupBusiestMinutes(HISTORY_DAYS, instanceKey().slice(0, 60) || null)
+  histCache = { value, at: Date.now() }
+}
+
+/**
+ * The stack's busiest minute and weekly peaks (kicking off a refresh when stale; the route never
+ * waits); null without the stack or until the first read lands. A failed read keeps the last one.
+ */
+export function historyMinutes(): BusiestMinutes | null {
+  if (!rollupsEnabled()) return null
+  const stale = !histCache || Date.now() - histCache.at > CACHE_MS
+  if (stale && !histInflight) {
+    histInflight = readHistory()
+      .catch(() => {
+        /* keep the last answer; the request log still gives a ceiling */
+      })
+      .finally(() => {
+        histInflight = null
+      })
+  }
+  return histCache?.value ?? null
+}
+export function setHistoryForTest(v: BusiestMinutes | null): void {
+  histCache = v ? { value: v, at: Date.now() } : null
 }
 
 // ── pure figures ─────────────────────────────────────────────────────────────
@@ -260,7 +294,8 @@ export interface CapacityReport {
   ring_best_rps: number
   ceiling: {
     rps: number | null
-    source: 'configured' | 'measured' | 'ring' | null
+    /** `history` = the telemetry stack's busiest minute (up to 13 months). */
+    source: 'configured' | 'history' | 'measured' | 'ring' | null
     /** When the measured busiest minute happened (ISO), when measured. */
     at: string | null
     measuring: boolean
@@ -268,6 +303,14 @@ export interface CapacityReport {
     instance_filtered: boolean
   }
   headroom_pct: number | null
+  /** The telemetry stack's view (#2544): busiest minute + weekly peaks; null without the stack. */
+  history: {
+    best_rpm: number
+    at: string | null
+    weekly: Array<{ week: string; peak_rpm: number }>
+    data_from: string | null
+    days: number
+  } | null
   pool: { used: number; pending: number; max: number; saturated_pct: number }
   projection: Projection
 }
@@ -281,18 +324,24 @@ export function capacityReport(sec = currentTrafficSec()): CapacityReport {
   const ringBest = Math.max(0, ...minuteRps)
   const configured = Number(process.env.TRAFFIC_CAPACITY_RPS)
   const log = logMinutes()
+  const hist = historyMinutes()
   let ceilingRps: number | null = null
   let source: CapacityReport['ceiling']['source'] = null
   let at: string | null = null
   if (Number.isFinite(configured) && configured > 0) {
     ceilingRps = configured
     source = 'configured'
-  } else if (log || logError) {
-    // Until the request log has been read once the ceiling is unknown — a fresh process's own
-    // ring would make any rate read as ~100% of what it can carry.
+  } else if (log || logError || hist) {
+    // Until the request log (or the stack) has been read once the ceiling is unknown — a fresh
+    // process's own ring would make any rate read as ~100% of what it can carry.
     const best = log ? bestMinute(log.counts) : { n: 0, index: -1 }
     const measured = best.n / 60
-    if (measured >= ringBest && measured > 0) {
+    const historic = hist ? hist.best_rpm / 60 : 0
+    if (historic > measured && historic >= ringBest) {
+      ceilingRps = Math.round(historic * 100) / 100
+      source = 'history'
+      at = hist?.at != null ? new Date(hist.at).toISOString() : null
+    } else if (measured >= ringBest && measured > 0) {
       ceilingRps = Math.round(measured * 100) / 100
       source = 'measured'
       at = log ? new Date((log.start + best.index) * 60_000).toISOString() : null
@@ -317,11 +366,20 @@ export function capacityReport(sec = currentTrafficSec()): CapacityReport {
       rps: ceilingRps,
       source,
       at,
-      measuring: !log && !logError,
+      measuring: !log && !logError && !hist,
       error: logError,
       instance_filtered: log?.instanceFiltered ?? false
     },
     headroom_pct: ceilingRps ? Math.round((100 * nowRps) / ceilingRps) : null,
+    history: hist
+      ? {
+          best_rpm: hist.best_rpm,
+          at: hist.at != null ? new Date(hist.at).toISOString() : null,
+          weekly: hist.weekly,
+          data_from: hist.data_from != null ? new Date(hist.data_from).toISOString() : null,
+          days: HISTORY_DAYS
+        }
+      : null,
     pool: {
       used,
       pending: p?.numPendingAcquires?.() ?? 0,

@@ -137,6 +137,45 @@ export async function storeSteps(
   return stepsFromRows(rows, from, to, stepS)
 }
 
+const TOP_CALLERS = 40
+
+/**
+ * Callers (`c:<caller key>`) per step over [from, to) from the raw access lines — the
+ * time-lapse's caller nodes when it reads the telemetry stack (the stack keeps no per-minute
+ * series per person).
+ */
+export async function storeCallerSteps(
+  from: number,
+  to: number,
+  stepS: number,
+  signal?: AbortSignal
+): Promise<TimelapseGroup[]> {
+  const base = baseFilter(env())
+  // The busiest callers first (the time-lapse keeps 40 nodes), so a busy month of people does
+  // not run into the store's row cap.
+  const top = await logsQuery(
+    `${base} | stats by (caller) count() as n | sort by (n desc) limit ${TOP_CALLERS}`,
+    from,
+    to,
+    { signal }
+  )
+  const callers = top.map((r) => r.caller).filter((c): c is string => !!c)
+  if (!callers.length) return []
+  const rows = await logsQuery(
+    `${base} caller:in(${callers.map(lq).join(',')}) | stats by (_time:${stepDur(stepS)}, caller) count() as n, count() if (status:>=400) as e, quantile(0.95, ms) as p95`,
+    from,
+    to,
+    { signal }
+  )
+  const out: TimelapseGroup[] = []
+  for (const r of rows) {
+    const s = stepIndex(storeTime(r._time), from, to, stepS)
+    if (s < 0 || !r.caller) continue
+    out.push({ s, key: `c:${r.caller}`, n: num(r.n), e: num(r.e), p95: num(r.p95) })
+  }
+  return out
+}
+
 /** Distinct signed-in people (`u…` callers) per step over [from, to). */
 export async function storeActive(
   from: number,

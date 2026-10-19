@@ -51,6 +51,7 @@ import {
   poolPerRps,
   projectLoad,
   seasonalRatio,
+  setHistoryForTest,
   setLogMinutesForTest
 } from '../../../services/traffic-taps/capacity.js'
 import {
@@ -325,6 +326,46 @@ describe('#1123 / #1153 capacity', () => {
     expect(r.headroom_pct).toBe(20)
     expect(r.pool).toMatchObject({ used: 3, max: 10 })
     setLogMinutesForTest(null)
+  })
+  it('headroom: the telemetry stack’s busiest minute (13 months) wins when it is higher (#2544)', () => {
+    for (let s = 0; s < 60; s++) req({}, { at: at(T0 - s) })
+    const saved = process.env.TELEMETRY_STORE_URL
+    process.env.TELEMETRY_STORE_URL = 'http://store:8427'
+    const counts = new Int32Array(7 * 1440 + 2)
+    counts[3] = 300
+    setLogMinutesForTest({
+      start: Math.floor(T0 / 60) - 7 * 1440,
+      counts,
+      at: Date.now(),
+      instanceFiltered: true
+    })
+    const best = Date.parse('2027-03-02T14:05:00Z')
+    setHistoryForTest({
+      best_rpm: 1200,
+      at: best,
+      weekly: [
+        { week: '2027-02-22', peak_rpm: 900 },
+        { week: '2027-03-01', peak_rpm: 1200 }
+      ],
+      data_from: Date.parse('2026-10-20T00:00:00Z')
+    })
+    let r = capacityReport(T0)
+    expect(r.ceiling).toMatchObject({
+      rps: 20,
+      source: 'history',
+      at: '2027-03-02T14:05:00.000Z'
+    })
+    expect(r.history).toMatchObject({ best_rpm: 1200, days: 395 })
+    expect(r.history?.weekly).toHaveLength(2)
+    // A lower stack figure leaves the request log's busiest minute as the ceiling.
+    setHistoryForTest({ best_rpm: 120, at: best, weekly: [], data_from: null })
+    r = capacityReport(T0)
+    expect(r.ceiling).toMatchObject({ rps: 5, source: 'measured' })
+    expect(r.history).toMatchObject({ best_rpm: 120 })
+    setHistoryForTest(null)
+    setLogMinutesForTest(null)
+    if (saved === undefined) delete process.env.TELEMETRY_STORE_URL
+    else process.env.TELEMETRY_STORE_URL = saved
   })
 })
 

@@ -137,12 +137,19 @@ interface Capacity {
   ring_best_rps: number
   ceiling: {
     rps: number | null
-    source: 'configured' | 'measured' | 'ring' | null
+    source: 'configured' | 'history' | 'measured' | 'ring' | null
     at: string | null
     measuring: boolean
     error: string | null
   }
   headroom_pct: number | null
+  /** #2544 — the telemetry stack's busiest minute and weekly peaks (null without the stack). */
+  history?: {
+    best_rpm: number
+    at: string | null
+    weekly: Array<{ week: string; peak_rpm: number }>
+    data_from: string | null
+  } | null
   pool: { used: number; pending: number; max: number; saturated_pct: number }
   projection: {
     points: number[]
@@ -154,6 +161,7 @@ interface Capacity {
 
 const SOURCE_PHRASE: Record<string, string> = {
   configured: 'configured (TRAFFIC_CAPACITY_RPS)',
+  history: 'the busiest minute in the long history',
   measured: 'the busiest minute in the request log',
   ring: 'the busiest minute since this node started'
 }
@@ -165,6 +173,55 @@ function ceilingTitle(c: Capacity): string {
     ? ` (${new Date(c.ceiling.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})`
     : ''
   return `Ceiling: ${SOURCE_PHRASE[c.ceiling.source]}${at}`
+}
+
+/**
+ * "Mar 2" this year, "Mar 2, 2026" otherwise. `utc` for the server's week keys (Monday 00:00
+ * UTC), which local time would show as the Sunday before.
+ */
+const shortDate = (iso: string, utc = false) => {
+  const d = new Date(iso)
+  const year = utc ? d.getUTCFullYear() : d.getFullYear()
+  const now = utc ? new Date().getUTCFullYear() : new Date().getFullYear()
+  return d.toLocaleDateString([], {
+    month: 'short',
+    day: 'numeric',
+    ...(utc ? { timeZone: 'UTC' } : {}),
+    ...(year === now ? {} : { year: 'numeric' })
+  })
+}
+
+/** Monday 00:00 UTC of this week (YYYY-MM-DD) — the server's week keys. */
+function thisWeek(now = Date.now()): string {
+  const day = Math.floor(now / 86_400_000) * 86_400_000
+  const back = (new Date(day).getUTCDay() + 6) % 7
+  return new Date(day - back * 86_400_000).toISOString().slice(0, 10)
+}
+
+/** Whole weeks only: the running week's peak is still partial. */
+const fullWeeks = (h: NonNullable<Capacity['history']>) =>
+  h.weekly.filter((w) => w.week < thisWeek())
+
+/** Screen-reader summary of the weekly-peak line (first, last and highest week). */
+function weeklyLabel(h: NonNullable<Capacity['history']>): string {
+  const weeks = fullWeeks(h)
+  const since = h.data_from ? ` since ${shortDate(h.data_from)}` : ''
+  if (!weeks.length) return `Busiest minute per week${since}: no full week yet`
+  const top = weeks.reduce((a, w) => (w.peak_rpm > a.peak_rpm ? w : a))
+  const rpm = (n: number) => n.toLocaleString()
+  return `Busiest minute per week${since}: ${rpm(weeks[0].peak_rpm)} to ${rpm(
+    weeks[weeks.length - 1].peak_rpm
+  )} requests per minute, highest ${rpm(top.peak_rpm)} in the week of ${shortDate(
+    `${top.week}T00:00:00Z`,
+    true
+  )}`
+}
+
+/** "Best minute: 1,240 req/min on Mar 2". */
+function bestMinuteLine(h: NonNullable<Capacity['history']>): string {
+  const n = h.best_rpm.toLocaleString()
+  const on = h.at ? ` on ${shortDate(h.at)}` : ''
+  return `Best minute: ${n} req/min${on}`
 }
 
 function projectionLine(c: Capacity): string {
@@ -197,7 +254,7 @@ export function HeadroomTile() {
       className='min-[1280px]:col-span-2'
     >
       <span className='flex min-w-0 items-center justify-between gap-2'>
-        <span className='truncate tabular-nums' title={c ? ceilingTitle(c) : undefined}>
+        <span className='truncate tabular-nums' data-tip={c ? ceilingTitle(c) : undefined}>
           {!c
             ? '—'
             : c.ceiling.rps == null
@@ -224,6 +281,33 @@ export function HeadroomTile() {
           />
         )}
       </span>
+      {/* #2544 — growth toward the ceiling: the busiest minute of each week, up to 13 months. */}
+      {c?.history && c.history.best_rpm > 0 && (
+        <span
+          className='flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5'
+          data-testid='tm-strip-best-minute'
+        >
+          <span className='min-w-0 tabular-nums'>{bestMinuteLine(c.history)}</span>
+          {fullWeeks(c.history).length > 1 && (
+            <span
+              role='img'
+              aria-label={weeklyLabel(c.history)}
+              data-tip={
+                c.history.data_from
+                  ? `Busiest minute per week since ${shortDate(c.history.data_from)}`
+                  : 'Busiest minute per week'
+              }
+              className='flex min-w-[48px] flex-1 basis-full sm:basis-auto'
+            >
+              <Sparkline
+                data={fullWeeks(c.history).map((w) => w.peak_rpm)}
+                color='var(--tm-accent)'
+                className='h-[14px] w-full'
+              />
+            </span>
+          )}
+        </span>
+      )}
     </StripCell>
   )
 }

@@ -37,6 +37,7 @@ const SOURCE_TEXT: Record<TimelapseBody['source'], string> = {
   log: 'From the request log, grouped by route family (turn on minute history for callers and partners).',
   store: 'From the long-history store, which keeps the request log past its 14 days.',
   rollups: 'From hourly summaries. p95 is estimated, and people shows each step’s busiest hour.',
+  stack: 'From the long history, which keeps traffic for 13 months. p95 is estimated.',
   unavailable: 'The request log can only be grouped this way on SQL Server.'
 }
 const RANGE_LABEL: Record<HistoryRange, string> = {

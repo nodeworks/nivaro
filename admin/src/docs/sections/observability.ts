@@ -1045,6 +1045,18 @@ export const obsTrafficMapPlatform: DocSection = {
       type: 'p',
       text: 'The stack’s alert evaluator turns the access lines into per-minute totals in the metrics store, which keeps 13 months: requests, errors and server errors, and how many requests finished under 25 ms, 50 ms, 100 ms … 30 s, per map node and instance and per route template, plus distinct signed-in people per hour. Nivaro sums those per step for the 90 day and 13 month views. Two figures are estimates: p95 is interpolated inside the latency band that crosses it, and people making requests is the busiest hour in each step. Steps before the rollups started read as empty. Same settings as above: nothing more to configure in Nivaro.'
     },
+    {
+      type: 'p',
+      text: 'Each access line also carries the response size (`bytes`) and the kind of caller (`ck`: `key`, `oauth`, `token`, `user` or `anon`), and every partner call the map sees writes its own line (`nvr: "out"`: the partner node id, the map node it was made for, status, duration, failed or not; no names, paths or error text). From those the stack also keeps per-minute partner totals and hourly totals per caller and per caller kind.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Time-lapse: once the rollups reach back to the start of a 24 hour, 7 day or 30 day window, it reads them instead of the minute history in the database: map nodes and partners from the per-minute totals, callers from the request lines (the busiest 40). Longer ranges take callers from the hourly per-caller totals. Before then (or with `source=minutes|log|store`) it reads what it read before.',
+        'Minute history: with the stack set up, the History panel says traffic history is kept for 13 months there and offers to turn the database minute history off. It is never turned off for you; installs without the stack keep using it.',
+        'Headroom: the ceiling becomes the busiest single minute in up to 13 months of rollups for this instance (when that beats the request log’s 7 days), shown as "Best minute: N req/min on date" with a line of each week’s busiest minute. TRAFFIC_CAPACITY_RPS still wins; the 15-minute projection is unchanged.'
+      ]
+    },
     { type: 'h3', id: 'telemetry-traces', text: 'Request traces out to the stack' },
     {
       type: 'p',
