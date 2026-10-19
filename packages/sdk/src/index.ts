@@ -49,6 +49,7 @@ export * from './commands/files.js'
 export * from './commands/help-videos.js'
 export * from './commands/import-templates.js'
 export * from './commands/infra.js'
+export * from './commands/ops.js'
 export * from './commands/queues.js'
 export type { PresenceClient, PresenceOptions, PresenceSession } from './presence.js'
 export { createPresence } from './presence.js'
@@ -1289,6 +1290,20 @@ export function getFlowRun(runId: string): Command<{ data: FlowRun }> {
 
 export function listCustomQueries(): Command<{ data: CustomQuery[] }> {
   return cmd('GET', '/custom-queries')
+}
+
+export interface CustomQueryCatalogEntry {
+  id: number
+  slug: string
+  name: string
+  description: string | null
+  params: Array<{ name: string; type: string; required: boolean; default?: unknown }>
+}
+
+/** The queries any signed-in user may run (enabled, access 'authenticated'), with
+ *  their parameter definitions. Never carries the SQL. */
+export function listCustomQueryCatalog(): Command<{ data: CustomQueryCatalogEntry[] }> {
+  return cmd('GET', '/custom-queries/catalog')
 }
 
 export function executeCustomQuery(

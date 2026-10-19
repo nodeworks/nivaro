@@ -4,6 +4,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { aiChat, type NivaroClient, readMe } from '@nivaro/sdk'
 import { z } from 'zod'
+import { READ } from '../annotations.js'
 import { fail, ok } from '../result.js'
 
 const ME_FIELDS = [
@@ -30,7 +31,7 @@ export function registerAccountTools(server: McpServer, client: NivaroClient) {
       description:
         'The user the key acts as: id, name, role, admin flag, and — for a scoped or sandbox key — what it may do. Every other tool is bound by this identity.',
       inputSchema: {},
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async () => {
       try {
@@ -59,7 +60,7 @@ export function registerAccountTools(server: McpServer, client: NivaroClient) {
           .optional()
           .describe('Earlier turns of the same conversation, oldest first.')
       },
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async ({ question, history }) => {
       try {

@@ -1,48 +1,8 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js'
-import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
-import type { Command, NivaroClient } from '@nivaro/sdk'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createNivaroMcpServer, TOOL_NAMES } from './index.js'
-
-type Handler = (command: Command<unknown>) => unknown
-
-/** A client whose `request` records every command and answers from a table. */
-function mockClient(answer: Handler) {
-  const calls: Command<unknown>[] = []
-  const request = vi.fn(async (command: Command<unknown>) => {
-    calls.push(command)
-    return answer(command)
-  })
-  const client = {
-    request,
-    graphql: vi.fn(),
-    upload: vi.fn(),
-    importParse: vi.fn(),
-    fileUrl: (id: string) => `/files/${id}`,
-    setToken: vi.fn(),
-    getToken: () => 'nvk_test',
-    url: 'http://nivaro.test'
-  } as unknown as NivaroClient
-  return { client, calls, request }
-}
-
-function apiError(status: number, body: Record<string, unknown>) {
-  return Object.assign(new Error(String(body.error ?? 'failed')), { status, response: body })
-}
-
-async function connect(client: NivaroClient) {
-  const { server } = createNivaroMcpServer({ url: 'http://nivaro.test', client })
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair()
-  const mcp = new Client({ name: 'test', version: '0.0.0' })
-  await server.connect(serverTransport)
-  await mcp.connect(clientTransport)
-  return { mcp, server }
-}
-
-function textOf(result: { content: unknown }) {
-  const content = result.content as Array<{ type: string; text?: string }>
-  return JSON.parse(content[0]?.text ?? 'null')
-}
+import type { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import type { Command } from '@nivaro/sdk'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { ADMIN_TOOL_NAMES, createNivaroMcpServer, keyIsAdmin, TOOL_NAMES } from './index.js'
+import { apiError, connect, type Handler, mockClient, textOf } from './test-utils.js'
 
 const COLLECTION = {
   collection: 'articles',
@@ -110,11 +70,14 @@ describe('createNivaroMcpServer', () => {
     expect(() => createNivaroMcpServer({ url: '', token: 'nvk_x' })).toThrow(/URL/i)
   })
 
-  it('registers every tool and both resources', async () => {
+  it('registers every tool and both resources, and no admin tool by default', async () => {
     const { client } = mockClient(() => ({ data: [] }))
     const { mcp } = await connect(client)
     const tools = await mcp.listTools()
     expect(tools.tools.map((t) => t.name).sort()).toEqual([...TOOL_NAMES].sort())
+    for (const name of ADMIN_TOOL_NAMES) {
+      expect(tools.tools.map((t) => t.name)).not.toContain(name)
+    }
     const resources = await mcp.listResources()
     const templates = await mcp.listResourceTemplates()
     expect(resources.resources.map((r) => r.uri)).toContain('nivaro://collections')
@@ -122,6 +85,57 @@ describe('createNivaroMcpServer', () => {
       'nivaro://collection/{name}'
     )
     await mcp.close()
+  })
+
+  it('registers the admin tools only with adminTools: true', async () => {
+    const { client } = mockClient(() => ({ data: [] }))
+    const { mcp } = await connect(client, { adminTools: true })
+    const tools = await mcp.listTools()
+    expect(tools.tools.map((t) => t.name).sort()).toEqual(
+      [...TOOL_NAMES, ...ADMIN_TOOL_NAMES].sort()
+    )
+    await mcp.close()
+  })
+
+  it('annotates every tool, marks writes non-read-only and delete destructive', async () => {
+    const { client } = mockClient(() => ({ data: [] }))
+    const { mcp } = await connect(client, { adminTools: true })
+    const { tools } = await mcp.listTools()
+    const writes = new Set([
+      'create_item',
+      'update_item',
+      'delete_item',
+      'transition',
+      'create_task',
+      'complete_task',
+      'mark_notifications_read',
+      'add_comment',
+      'cpu_profile'
+    ])
+    for (const tool of tools) {
+      const a = tool.annotations
+      expect(a, tool.name).toBeDefined()
+      expect(a?.openWorldHint, tool.name).toBe(false)
+      expect(typeof a?.readOnlyHint, tool.name).toBe('boolean')
+      expect(a?.readOnlyHint, tool.name).toBe(!writes.has(tool.name))
+      if (!a?.readOnlyHint) {
+        expect(typeof a?.destructiveHint, tool.name).toBe('boolean')
+        expect(typeof a?.idempotentHint, tool.name).toBe('boolean')
+      }
+      expect(a?.destructiveHint === true, tool.name).toBe(tool.name === 'delete_item')
+    }
+    await mcp.close()
+  })
+
+  it('keyIsAdmin reads whoami and is false when it cannot tell', async () => {
+    const admin = mockClient(() => ({ data: { id: 'u1', is_admin: true } }))
+    expect(await keyIsAdmin(admin.client)).toBe(true)
+    expect(admin.calls[0]).toMatchObject({ _method: 'GET', _path: '/auth/me' })
+    expect(await keyIsAdmin(mockClient(() => ({ data: { is_admin: false } })).client)).toBe(false)
+    const down = mockClient(() => {
+      throw apiError(401, { error: 'Unauthorized' })
+    })
+    expect(await keyIsAdmin(down.client)).toBe(false)
   })
 })
 

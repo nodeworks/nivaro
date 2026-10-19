@@ -60,8 +60,8 @@ export function listTasks(query?: {
   item?: string
   assignee?: string
   created_by?: string
-  /** 'active' = open + in progress. */
-  status?: TaskStatus | 'active'
+  /** 'active' = open + in progress; 'all' = every status. */
+  status?: TaskStatus | 'active' | 'all'
   priority?: TaskPriority
   due?: 'overdue' | 'today' | 'week' | 'none'
   search?: string

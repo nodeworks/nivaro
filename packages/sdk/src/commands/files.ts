@@ -29,6 +29,16 @@ export function listFiles(
   return cmd('GET', '/files', options)
 }
 
+/** Metadata for a known set of file ids (the shape the file fields batch-resolve with). */
+export function readFilesByIds(
+  ids: string[]
+): Command<{ data: Array<FileRecord & { uploaded_by_name?: string | null }>; total: number }> {
+  return cmd('GET', '/files', {
+    filter: JSON.stringify({ id: { _in: ids } }),
+    limit: Math.max(1, ids.length)
+  })
+}
+
 export function readFileMeta(id: string): Command<{ data: FileRecord }> {
   return cmd('GET', `/files/${id}/meta`)
 }

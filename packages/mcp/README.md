@@ -1,6 +1,6 @@
 # @nivaro/mcp
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server for [Nivaro CMS](https://nivaro.dev). It wraps the typed `@nivaro/sdk` so Claude Code, Claude Desktop, Cursor and any other MCP client can read and write a Nivaro instance directly — collection schemas, records, aggregates, pipeline state and transitions, and the instance's own ask-your-data assistant.
+A [Model Context Protocol](https://modelcontextprotocol.io) server for [Nivaro CMS](https://nivaro.dev). It wraps the typed `@nivaro/sdk` so Claude Code, Claude Desktop, Cursor and any other MCP client can read and write a Nivaro instance directly — collection schemas, records, aggregates, pipeline state and transitions, My Work, queues, tasks, comments, notifications, history, files, saved queries, search, and the instance's own ask-your-data assistant. An administrator's key also gets read-only ops tools (health, runtime, database, traffic, jobs).
 
 Every tool calls the instance's REST API as the user behind the configured API key. Role permissions, row-level security, user scopes, validation and change-reason rules apply exactly as they do to any other API caller. Nothing is cached or reimplemented on the server side; the API decides.
 
@@ -111,6 +111,47 @@ Every tool answers JSON text. A refusal answers `isError: true` with the API's o
 | `list_pipeline_state` | Current state, the transitions the key's user may run (with ids), who owns the current state, the newest history entries. |
 | `transition` | Runs one transition by id, with an optional comment; the API's role, condition and requirement checks apply. |
 | `ask_data` | A plain-language question answered by the instance's own data assistant, which queries the collections as the key's user and returns the answer plus the tool trace. Needs an AI provider configured on the instance. |
+| `my_work` | The key's user's inbox: owned records (SLA-first), tasks, team tasks, requested tasks, approval steps, unread notifications — each section cut to `limit`, with the totals. |
+| `list_queues` | The worklists the user can open, with the collections each reads. |
+| `read_queue` | One page of a queue's items (`scope` mine / unowned / claimed / all, `sort`, `page`, `limit` ≤ 100): label, state, owners, SLA status, age. |
+| `list_tasks` | A record's tasks (`collection` + `id`) or the user's own open tasks; `status` narrows either. |
+| `create_task` | Asks a person (`assignee`, from `find_people`) or a team (`team_id`) to do something on a record. |
+| `complete_task` | Marks one task done. |
+| `list_notifications` | The user's notifications, newest first; unread only unless `unread_only: false`. |
+| `mark_notifications_read` | Marks the given ids read, or every unread one with `all: true`. |
+| `list_comments` | A record's comment thread with authors and mentions; long threads show the newest `limit`. |
+| `add_comment` | Posts a comment. Mentions: `@` + the part of an email before the `@`, `@owners`, `@watchers`, or a role name / group slug with hyphens for spaces. |
+| `list_revisions` | A record's change history, newest first: who, when, the changed fields with their new values, change reasons and pipeline moves (no full snapshots). |
+| `list_record_files` | Metadata of the files in a record's file fields. Never downloads content. |
+| `read_file` | One file's metadata (name, type, size, uploader, date) — no storage key, no URL, no content. |
+| `search` | Text search across every collection the user can read (or the ones named): collection, id and label per hit. |
+| `find_people` | People by name or email: user id (for task assignees) and the `@handle` that mentions them. |
+| `list_custom_queries` | The saved reporting queries the user may run, with their parameters. |
+| `run_custom_query` | Runs a saved query by slug with `params`; rows cut to `limit`, long values clipped. |
+
+Lists are paged or cut to a model-sized slice (`limit`, `offset` or `page`) and say so with `truncated` and a `total`; long text is clipped.
+
+### Admin tools
+
+When the key's user is an administrator, the `nivaro-mcp` command also registers these read-only tools (it calls `whoami` at startup; programmatically, pass `adminTools: true`). The API refuses them to anyone else regardless.
+
+| Tool | What it does |
+| --- | --- |
+| `health` | Readiness checks (boot, migrations, extensions, database, Redis) plus latency, migration count, sockets, read-gate pressure and memory of the answering replica. |
+| `preflight` | The deploy coherence check: migrations both ways, connectivity, required extensions, version pinning. |
+| `runtime_stats` | Memory, event-loop lag and pool of the answering replica, every registered API process, and the scheduler lease holder. |
+| `db_pool` | The connection pool: used/free/pending, wait pressure, and requests holding a connection over a second. |
+| `expensive_sql` | The statements with the most database CPU since the plan cache cleared. |
+| `traffic_summary` | A compact Traffic Map read over 1, 5 or 15 minutes: totals, busiest and most-erroring entities, top callers, downstream systems. |
+| `list_cron_jobs` | Every scheduled job with its schedule, latest run and 7-day error count, plus what is running now (`failing_only` narrows). |
+| `list_job_runs` | Background-job run history, filterable by kind, job id and status. |
+| `cpu_profile` | Samples the answering replica's CPU for 1–30 seconds and summarizes where the time went. |
+
+None of them restarts, kills, pauses, busts a cache, writes configuration or takes a heap snapshot.
+
+### Tool annotations
+
+Every tool carries MCP annotations so a client can decide when to ask the person first: reads are `readOnlyHint: true`; writes (`create_item`, `update_item`, `transition`, `create_task`, `complete_task`, `add_comment`, `mark_notifications_read`, and `cpu_profile`, which runs work on the server) are `readOnlyHint: false`; only `delete_item` is `destructiveHint: true`. All are `openWorldHint: false` — they talk only to the configured instance.
 
 ## Resources
 
@@ -129,7 +170,7 @@ const { server } = createNivaroMcpServer({ url: process.env.NIVARO_URL!, token: 
 await server.connect(new StdioServerTransport())
 ```
 
-`createNivaroMcpServer` also accepts a prebuilt `@nivaro/sdk` client (`client`) and a custom `fetch`, which is how the package's own tests drive every tool through a real in-process MCP client against a mocked API.
+`createNivaroMcpServer` also accepts a prebuilt `@nivaro/sdk` client (`client`), a custom `fetch`, and `adminTools: true` to register the admin tools (`ADMIN_TOOL_NAMES`; `TOOL_NAMES` lists the rest). `keyIsAdmin(client)` answers whether a key's user is an administrator, and `createNivaroMcpClient({ url, token })` builds the client the server uses. The package's own tests drive every tool through a real in-process MCP client against a mocked API.
 
 ## Follow-ups
 

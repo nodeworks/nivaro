@@ -67,3 +67,21 @@ export const transitionId = z
   .string()
   .regex(/^[A-Za-z0-9_-]{1,64}$/, 'A transition id is a uuid')
   .describe('An id from available_transitions.')
+
+/** `limit` floored into 1..max, or `fallback` when absent. */
+export function clampTo(limit: number | undefined, fallback: number, max: number): number {
+  if (limit === undefined || !Number.isFinite(limit)) return fallback
+  return Math.min(Math.max(Math.trunc(limit), 1), max)
+}
+
+export const numericId = z.number().int().positive()
+
+export const uuid = z
+  .string()
+  .regex(/^[A-Za-z0-9-]{1,64}$/, 'An id is a uuid')
+  .describe('A uuid.')
+
+export const querySlug = z
+  .string()
+  .regex(/^[A-Za-z0-9_-]{1,128}$/, 'A slug is letters, digits, hyphens and underscores')
+  .describe('The slug from list_custom_queries.')

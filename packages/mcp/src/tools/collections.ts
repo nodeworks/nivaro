@@ -6,6 +6,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type CMSCollection, type NivaroClient, readCollection, readCollections } from '@nivaro/sdk'
+import { READ } from '../annotations.js'
 import { fail, ok } from '../result.js'
 import { collectionName } from '../schema.js'
 
@@ -163,7 +164,7 @@ export function registerCollectionTools(server: McpServer, client: NivaroClient)
       description:
         "Every collection the key can read: name, display name, singleton flag. Call describe_collection for a collection's fields.",
       inputSchema: {},
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async () => {
       try {
@@ -181,7 +182,7 @@ export function registerCollectionTools(server: McpServer, client: NivaroClient)
       description:
         "A collection's schema: fields with type, interface, required/readonly/hidden flags and dropdown choices, plus its relations, display template and natural keys.",
       inputSchema: { collection: collectionName },
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async ({ collection }) => {
       try {

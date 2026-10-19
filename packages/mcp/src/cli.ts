@@ -9,9 +9,13 @@
  * request bodies are never logged. stdout is the MCP channel — only stderr
  * carries diagnostics.
  *
+ * At startup it asks the instance who the key is: an administrator's key also
+ * gets the read-only admin/ops tools. When that call fails the server still
+ * starts, with the everyday tools only.
+ *
  * Exit codes: 0 clean shutdown · 1 usage.
  */
-import { serveStdio } from './index.js'
+import { createNivaroMcpClient, keyIsAdmin, serveStdio } from './index.js'
 import { maskToken } from './result.js'
 
 const argv = process.argv.slice(2)
@@ -53,8 +57,12 @@ if (!token) {
 }
 
 try {
-  await serveStdio({ url, token })
-  process.stderr.write(`nivaro-mcp: serving ${url} as ${maskToken(token)}\n`)
+  const client = createNivaroMcpClient({ url, token })
+  const adminTools = await keyIsAdmin(client)
+  await serveStdio({ url, client, adminTools })
+  process.stderr.write(
+    `nivaro-mcp: serving ${url} as ${maskToken(token)}${adminTools ? ' (admin tools on)' : ''}\n`
+  )
 } catch (err) {
   const message = err instanceof Error ? err.message : String(err)
   process.stderr.write(`nivaro-mcp: ${message.replaceAll(token, maskToken(token))}\n`)

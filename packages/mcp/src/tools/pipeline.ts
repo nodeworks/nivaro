@@ -11,6 +11,7 @@ import {
   type WorkflowInstanceData
 } from '@nivaro/sdk'
 import { z } from 'zod'
+import { READ, WRITE } from '../annotations.js'
 import { fail, ok } from '../result.js'
 import { collectionName, recordId, transitionId } from '../schema.js'
 
@@ -99,7 +100,7 @@ export function registerPipelineTools(server: McpServer, client: NivaroClient) {
       description:
         "Where a record sits in its pipeline: current state, the transitions the key's user may run from it (with ids for the transition tool), who owns the current state, and the newest history entries. bound: false means the collection has no pipeline.",
       inputSchema: { collection: collectionName, id: recordId },
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async ({ collection, id }) => {
       try {
@@ -126,7 +127,7 @@ export function registerPipelineTools(server: McpServer, client: NivaroClient) {
         transition_id: transitionId,
         comment: z.string().optional().describe("Recorded in the record's history.")
       },
-      annotations: { destructiveHint: false }
+      annotations: WRITE
     },
     async ({ collection, id, transition_id, comment }) => {
       try {
