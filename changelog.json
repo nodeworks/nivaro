@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-19T22:40:45.806Z",
+  "generated_at": "2026-10-19T23:13:14.589Z",
   "releases": [
+    {
+      "version": "0.2.68",
+      "tag": "v0.2.68",
+      "date": "2026-10-19T19:13:02-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release image: install layers survive a version bump, layer cache on Docker Hub",
+              "hash": "fc59dccf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Shutdown ends websockets before the HTTP server waits on them",
+              "hash": "77e48e58"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.67",
       "tag": "v0.2.67",
-      "date": "2026-10-19T18:40:33-04:00",
+      "date": "2026-10-19T18:40:45-04:00",
       "sections": [
         {
           "label": "Other",
