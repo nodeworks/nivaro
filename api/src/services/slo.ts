@@ -14,14 +14,16 @@
  * share one database. Rows written before the column existed read as
  * "(before tracking)". The request log keeps 14 days, so the window is capped
  * there — unless the long-history telemetry store is configured (#2544): then windows up to 30
- * days read their per-day figures from the store, and the burn rates (24 hours at most) still
- * come from the request log.
+ * days read their per-day figures from the store's request lines, windows up to 13 months from
+ * its hourly request rollups (p95 estimated from latency bands), and the burn rates (24 hours at
+ * most) still come from the request log.
  */
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { storeEnabled } from './telemetry-store.js'
 import { type StoreSloDay, storeSloRows } from './traffic-history-store.js'
+import { ROLLUP_WINDOW_DAYS, rollupSloRows } from './traffic-rollups.js'
 
 export interface SloTargets {
   availability_pct: number
@@ -35,12 +37,12 @@ export const DEFAULT_SLO_TARGETS: SloTargets = {
   window_days: 7
 }
 const LOG_RETENTION_DAYS = 14
-/** With the long-history store, the standard 28/30-day windows. */
+/** Up to this many days the store's request lines answer (exact p95); longer reads rollups. */
 const STORE_WINDOW_DAYS = 30
 
-/** The longest SLO window this instance can compute. */
+/** The longest SLO window this instance can compute (13 months with the store). */
 export const maxSloWindowDays = (): number =>
-  storeEnabled() ? STORE_WINDOW_DAYS : LOG_RETENTION_DAYS
+  storeEnabled() ? ROLLUP_WINDOW_DAYS : LOG_RETENTION_DAYS
 
 export function parseSloTargets(raw: unknown): SloTargets {
   let v: unknown = raw
@@ -62,7 +64,7 @@ export function parseSloTargets(raw: unknown): SloTargets {
     // A saved window longer than this instance can compute is shortened, not discarded.
     window_days: Math.round(
       Math.min(
-        num(o.window_days, 1, STORE_WINDOW_DAYS, DEFAULT_SLO_TARGETS.window_days),
+        num(o.window_days, 1, ROLLUP_WINDOW_DAYS, DEFAULT_SLO_TARGETS.window_days),
         maxSloWindowDays()
       )
     )
@@ -147,9 +149,12 @@ export interface SloReport {
   }>
   instance_tracked: boolean
   computed_at: string
-  /** Where the window's figures came from (`store` = the long-history store, #2544). */
-  source: 'log' | 'store'
-  /** The longest window this instance can compute (14, or 30 with the store). */
+  /**
+   * Where the window's figures came from: `store` = the long-history store's request lines,
+   * `rollups` = its hourly request totals (windows past 30 days; p95 estimated), #2544.
+   */
+  source: 'log' | 'store' | 'rollups'
+  /** The longest window this instance can compute (14, or 395 with the store). */
   window_max_days: number
   /** Set when the store was needed but did not answer (the window was cut to 14 days). */
   note?: string
@@ -181,8 +186,13 @@ export async function computeSlo(): Promise<SloReport> {
   let fromStore: { days: StoreSloDay[]; p95ByInstance: Map<string, number | null> } | null = null
   if (targets.window_days > LOG_RETENTION_DAYS && storeEnabled()) {
     try {
-      fromStore = await storeSloRows(from.getTime(), Date.now())
-      source = 'store'
+      if (targets.window_days > STORE_WINDOW_DAYS) {
+        fromStore = await rollupSloRows(from.getTime(), Date.now())
+        source = 'rollups'
+      } else {
+        fromStore = await storeSloRows(from.getTime(), Date.now())
+        source = 'store'
+      }
     } catch {
       note = `The long-history store did not answer, so this covers the request log's last ${LOG_RETENTION_DAYS} days.`
       from = new Date(Date.now() - LOG_RETENTION_DAYS * 86_400_000)

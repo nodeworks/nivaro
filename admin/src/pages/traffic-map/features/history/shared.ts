@@ -13,7 +13,7 @@ import { viewParams } from '../../registry/viewParams'
 import type { TrafficCatalog } from '../../types'
 
 export type HistoryTab = 'timelapse' | 'jobs' | 'search'
-export type HistoryRange = '24h' | '7d' | '30d'
+export type HistoryRange = '24h' | '7d' | '30d' | '90d' | '13mo'
 
 export interface Marker {
   kind: string
@@ -23,7 +23,7 @@ export interface Marker {
 }
 export interface TimelapseBody {
   range: HistoryRange
-  source: 'minutes' | 'log' | 'store' | 'unavailable'
+  source: 'minutes' | 'log' | 'store' | 'rollups' | 'unavailable'
   from: number
   to: number
   step_s: number
@@ -37,8 +37,10 @@ export interface TimelapseBody {
   people: { online: Array<number | null>; active: number[]; sampled: boolean }
   markers: Marker[]
   minutes: { enabled: boolean; first: string | null }
-  /** The long-history store was wanted but did not answer. */
+  /** The long-history store was wanted but did not answer (or is not set up). */
   note?: string
+  /** Rollup ranges: when the rollups start (epoch ms); earlier steps are empty. */
+  data_from?: number | null
 }
 /** GET /history/store — the long-history telemetry store (#2544). */
 export interface StoreStatusBody {
@@ -187,7 +189,18 @@ export const historyStore = {
   /** Open the time-lapse paused on `ms` (picks the range that holds it) and scroll to it. */
   openAt(ms: number): void {
     const age = Date.now() - ms
-    const range: HistoryRange = age < 24 * 3600_000 ? '24h' : age < 7 * 86_400_000 ? '7d' : '30d'
+    // Older than the longest range (13 months): nothing holds it.
+    if (age > 395 * 86_400_000) return
+    const range: HistoryRange =
+      age < 24 * 3600_000
+        ? '24h'
+        : age < 7 * 86_400_000
+          ? '7d'
+          : age < 30 * 86_400_000
+            ? '30d'
+            : age < 90 * 86_400_000
+              ? '90d'
+              : '13mo'
     state = { ...state, tab: 'timelapse', range, at: ms, seek: state.seek + 1 }
     emit()
     if (typeof document !== 'undefined')

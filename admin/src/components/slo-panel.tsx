@@ -37,6 +37,11 @@ interface SloReport {
   instances: InstanceSlo[]
   monitors: Array<{ monitor: string; checks: number; failing: number; uptime_pct: number | null }>
   instance_tracked: boolean
+  /** `rollups` = hourly totals from the long-history store (windows past 30 days, #2544). */
+  source?: 'log' | 'store' | 'rollups'
+  /** The longest window this instance can compute. */
+  window_max_days?: number
+  note?: string
 }
 interface RemoteSlo {
   id: number
@@ -57,16 +62,47 @@ function burnTone(v: number | null, fast: boolean): string {
   return 'text-slate-600 dark:text-slate-300'
 }
 
+/** Long windows (past ~6 weeks) show one bar per week so the row keeps its width. */
+export function barsFor(
+  days: InstanceSlo['days']
+): Array<InstanceSlo['days'][number] & { label: string }> {
+  if (days.length <= 45) return days.map((d) => ({ ...d, label: d.day }))
+  const out: Array<InstanceSlo['days'][number] & { label: string }> = []
+  for (let i = 0; i < days.length; i += 7) {
+    const week = days.slice(i, i + 7)
+    const requests = week.reduce((s, d) => s + d.requests, 0)
+    const ok = week.reduce(
+      (s, d) => s + (d.availability_pct != null ? (d.availability_pct / 100) * d.requests : 0),
+      0
+    )
+    const p95s = week.map((d) => d.p95_ms).filter((v): v is number => v != null)
+    out.push({
+      day: week[0].day,
+      label: `Week of ${week[0].day}`,
+      requests,
+      availability_pct: requests ? Math.round((ok / requests) * 100_000) / 1000 : null,
+      // The worst day's p95 in the week (p95s do not add up).
+      p95_ms: p95s.length ? Math.max(...p95s) : null
+    })
+  }
+  return out
+}
+
 function DayBars({ days, target }: { days: InstanceSlo['days']; target: number }) {
   if (days.length === 0) return null
+  const bars = barsFor(days)
+  const weekly = bars.length !== days.length
   return (
-    <div className='flex h-6 items-end gap-0.5' title='Availability per day (UTC)'>
-      {days.map((d) => {
+    <div
+      className='flex h-6 items-end gap-0.5'
+      data-tip={weekly ? 'Availability per week (UTC)' : 'Availability per day (UTC)'}
+    >
+      {bars.map((d) => {
         const ok = d.availability_pct == null || d.availability_pct >= target
         return (
           <span
             key={d.day}
-            title={`${d.day}: ${d.availability_pct ?? '—'}% of ${n(d.requests)} · p95 ${d.p95_ms ?? '—'} ms`}
+            data-tip={`${d.label}: ${d.availability_pct ?? '—'}% of ${n(d.requests)} · ${weekly ? 'worst daily ' : ''}p95 ${d.p95_ms ?? '—'} ms`}
             className={cn(
               'w-2 rounded-sm',
               ok ? 'bg-emerald-500/70 dark:bg-emerald-400/60' : 'bg-red-500/80 dark:bg-red-400/70'
@@ -150,7 +186,7 @@ function InstanceRow({ label, i, t }: { label: string; i: InstanceSlo; t: SloTar
   )
 }
 
-function TargetsEditor({ t }: { t: SloTargets }) {
+function TargetsEditor({ t, maxDays }: { t: SloTargets; maxDays: number | null }) {
   const qc = useQueryClient()
   const [draft, setDraft] = useState({
     availability_pct: String(t.availability_pct),
@@ -192,6 +228,12 @@ function TargetsEditor({ t }: { t: SloTargets }) {
       {field('availability_pct', 'Availability %')}
       {field('p95_ms', 'p95 ms')}
       {field('window_days', 'Window days')}
+      {maxDays != null && (
+        <span className='text-[11px] text-slate-500 dark:text-slate-400'>
+          up to {maxDays} days
+          {maxDays > 30 ? ' (past 30, p95 is estimated)' : ''}
+        </span>
+      )}
       <button
         type='button'
         onClick={() => save.mutate()}
@@ -247,9 +289,18 @@ export function SloPanel() {
       </div>
       {editing && t && (
         <div className='mt-2'>
-          <TargetsEditor t={t} />
+          <TargetsEditor t={t} maxDays={r?.window_max_days ?? null} />
         </div>
       )}
+      {r?.note ? (
+        <p className='mt-2 text-[11px] text-amber-700 dark:text-amber-300' data-slo-note>
+          {r.note}
+        </p>
+      ) : r?.source === 'rollups' ? (
+        <p className='mt-2 text-[11px] text-slate-500 dark:text-slate-400' data-slo-source>
+          From hourly summaries. p95 is estimated.
+        </p>
+      ) : null}
       {!r ? (
         <div className='mt-3 h-16 animate-pulse rounded bg-muted' />
       ) : (
@@ -262,7 +313,16 @@ export function SloPanel() {
                 <th className='pb-1 font-medium'>p95</th>
                 <th className='pb-1 font-medium'>Error budget</th>
                 <th className='pb-1 font-medium'>Burn rate</th>
-                <th className='pb-1 font-medium'>Days</th>
+                <th className='pb-1 font-medium'>
+                  {[
+                    ...r.instances,
+                    ...(remote.data ?? []).flatMap((c) =>
+                      c.state === 'ok' && c.slo ? c.slo.instances : []
+                    )
+                  ].some((i) => i.days.length > 45)
+                    ? 'Weeks'
+                    : 'Days'}
+                </th>
               </tr>
             </thead>
             <tbody>
