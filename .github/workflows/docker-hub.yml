@@ -47,13 +47,12 @@ jobs:
           file: Dockerfile.release
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=nodeworks/nivaro,push-by-digest=true,name-canonical=true,push=true
-          # Layer cache in GitHub's cache backend, one scope per architecture:
-          # the two pnpm installs, the chromium apk layer and the node_modules
-          # COPY are skipped whenever the lockfile is unchanged (~70s of a
-          # 5-minute build). Evicted after 7 idle days; a weekly release keeps
-          # it warm.
-          cache-from: type=gha,scope=${{ matrix.platform }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+          # No layer cache. The GitHub Actions cache (type=gha, mode=max) never
+          # hit: the repo's 10 GB cache budget overflowed (13 GB on 2026-10-19),
+          # eviction dropped the oldest — unchanged — layers first, and every
+          # release bumps package.json before the installs anyway. Zero cached
+          # steps over the last three releases, while the export cost ~3 minutes
+          # of every build.
 
       - name: Export digest
         run: |

@@ -22,7 +22,7 @@ COPY packages/react/package.json ./packages/react/
 COPY packages/mcp/package.json ./packages/mcp/
 RUN pnpm install --frozen-lockfile
 
-# ─── Stage 3: build SDK + API + Admin ────────────────────────────────────────
+# ─── Stage 3: build base — workspace + node_modules + the SDK ───────────────
 FROM base AS build
 WORKDIR /app
 # admin's tsc+vite needs more heap than the default when building in
@@ -42,17 +42,20 @@ COPY . .
 # Stale incremental state makes tsc SKIP declaration emit in a fresh tree —
 # a checked-in tsbuildinfo once shipped shared/dist without its .d.ts files.
 RUN rm -f packages/*/tsconfig.tsbuildinfo api/tsconfig.tsbuildinfo
-# Build order matters: shared type-imports @nivaro/sdk's dist, admin imports
-# shared's dist — without sdk built first, inference collapses to implicit-any.
+# Every package below imports the SDK's dist, so it builds once, here.
 RUN pnpm --filter @nivaro/sdk build
+
+# ─── Stage 3a / 3b: API and admin build IN PARALLEL ─────────────────────────
+# BuildKit runs independent stages concurrently. The API chain (kit, mcp, api)
+# never imports shared/react/admin, and the admin chain never imports the API,
+# so one wait replaces two: the release image build took ~210 s serially; the
+# admin chain alone (~155 s) is now the critical path.
+FROM build AS build-api
 # The API imports its extension contract from the kit; a mounted extension
 # resolves the same package at runtime.
 RUN pnpm --filter @nivaro/extension-kit build
 # The API hosts the MCP server (/api/mcp) from the same package the npm stdio server ships.
 RUN pnpm --filter @nivaro/mcp build
-RUN pnpm --filter @nivaro/shared build
-# admin imports @nivaro/react (Playground's live form preview)
-RUN pnpm --filter @nivaro/react build
 # Inject cloud-only extensions before API build (fail-safe: exits 0 on any error).
 # Set CLOUD_EXTENSIONS_REPO + CLOUD_EXTENSIONS_TOKEN as Railway service env vars.
 # Both are declared as ARGs so Railway passes them in at build time.
@@ -62,6 +65,13 @@ RUN CLOUD_EXTENSIONS_REPO="$CLOUD_EXTENSIONS_REPO" \
     CLOUD_EXTENSIONS_TOKEN="$CLOUD_EXTENSIONS_TOKEN" \
     bash api/scripts/inject-cloud-extensions.sh
 RUN pnpm --filter @nivaro/api build
+
+FROM build AS build-admin
+# Build order matters: shared type-imports @nivaro/sdk's dist, admin imports
+# shared's dist — without sdk built first, inference collapses to implicit-any.
+RUN pnpm --filter @nivaro/shared build
+# admin imports @nivaro/react (Playground's live form preview)
+RUN pnpm --filter @nivaro/react build
 # `vite build` alone: the admin's `build` script is `tsc -b && vite build`, and
 # the typecheck already gated the release (release-chain preflight) — the
 # image build only bundles.
@@ -92,15 +102,15 @@ COPY packages/mcp/package.json ./packages/mcp/
 RUN pnpm install --frozen-lockfile --prod --filter @nivaro/api...
 
 # Compiled API + SDK
-COPY --from=build /app/api/dist ./api/dist
+COPY --from=build-api /app/api/dist ./api/dist
 COPY --from=build /app/packages/sdk/dist ./packages/sdk/dist
-COPY --from=build /app/packages/extension-kit/dist ./packages/extension-kit/dist
-COPY --from=build /app/packages/mcp/dist ./packages/mcp/dist
+COPY --from=build-api /app/packages/extension-kit/dist ./packages/extension-kit/dist
+COPY --from=build-api /app/packages/mcp/dist ./packages/mcp/dist
 # Cloud extensions (injected from private repo during build — dir may not exist in OSS builds)
-COPY --from=build /app/api/cloud-extensions ./api/cloud-extensions
+COPY --from=build-api /app/api/cloud-extensions ./api/cloud-extensions
 
 # Admin SPA — Fastify serves this at /app/admin/dist (resolved from api/dist/server.js)
-COPY --from=build /app/admin/dist ./admin/dist
+COPY --from=build-admin /app/admin/dist ./admin/dist
 
 # Mail templates
 COPY api/templates ./api/templates
