@@ -21,6 +21,7 @@ import { extensionRoutes } from '../extensions/loader.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { devInstanceKeys } from './api-log-instances.js'
 import { runLongSql } from './run-long.js'
+import { LOCAL_LOG_DAYS, STORE_MAX_DAYS, storeEnabled } from './telemetry-store.js'
 import {
   callerKeyFor,
   classifyRequest,
@@ -36,6 +37,7 @@ import {
   LAT_BOUNDS,
   type TimelapseGroup
 } from './traffic-history-analysis.js'
+import { storeSearch } from './traffic-history-store.js'
 import { changeMarkers } from './traffic-taps/change-markers.js'
 
 const LONG_MS = 120_000
@@ -261,6 +263,8 @@ export interface SearchAnswer {
   count: number
   /** The answer comes from a source with less history than asked (the request log keeps 14 days). */
   note?: string
+  /** `store` when the long-history telemetry store answered (#2544); absent = the request log. */
+  source?: 'store'
 }
 
 export const CALLER_KEY = /^(u[0-9A-Fa-f-]{36}|k\d{1,12}|anon)$/
@@ -319,16 +323,28 @@ function applyEntity(q: Knex.QueryBuilder, key: string): void {
   applyHistoryNarrowing(q, n)
 }
 
-const LOG_DAYS_KEPT = 14
+const LOG_DAYS_KEPT = LOCAL_LOG_DAYS
 
-export async function searchHistory(sq: SearchQuery, nowMs = Date.now()): Promise<SearchAnswer> {
-  const days = Math.max(1, Math.min(31, Math.round(sq.days)))
+export async function searchHistory(
+  sq: SearchQuery,
+  nowMs = Date.now(),
+  signal?: AbortSignal
+): Promise<SearchAnswer> {
+  const days = Math.max(1, Math.min(STORE_MAX_DAYS, Math.round(sq.days)))
   const from = nowMs - days * 86_400_000
-  const note =
-    days > LOG_DAYS_KEPT && !sq.partner
+  if (sq.kind === 'busiest_hour' && sq.partner) return partnerBusiestHour(sq.partner, from, nowMs)
+  let note =
+    days > LOG_DAYS_KEPT
       ? `The request log keeps about ${LOG_DAYS_KEPT} days, so older moments may be missing.`
       : undefined
-  if (sq.kind === 'busiest_hour' && sq.partner) return partnerBusiestHour(sq.partner, from, nowMs)
+  // #2544 — past the request log's 14 days, the long-history store answers the whole window.
+  if (days > LOG_DAYS_KEPT && storeEnabled()) {
+    try {
+      return { ...(await storeSearch(sq, from, nowMs, signal)), source: 'store' }
+    } catch {
+      note = `The long-history store did not answer, so only the request log's last ${LOG_DAYS_KEPT} days were searched.`
+    }
+  }
   const base = () => {
     const q = db('nivaro_api_logs')
       .where('created_at', '>=', isoUtc(from))

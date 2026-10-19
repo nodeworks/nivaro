@@ -210,6 +210,11 @@ export function HistorySearch() {
             </>
           )}
           {a.note && <Note>{a.note}</Note>}
+          {a.source === 'store' && (
+            <p className='m-0 text-[11.5px] text-[var(--tm-muted)]' data-tm-search-source='store'>
+              Answered from the long-history store, which keeps the request log past its 14 days.
+            </p>
+          )}
         </div>
       )}
     </div>

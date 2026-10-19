@@ -13,7 +13,7 @@ import { viewParams } from '../../registry/viewParams'
 import type { TrafficCatalog } from '../../types'
 
 export type HistoryTab = 'timelapse' | 'jobs' | 'search'
-export type HistoryRange = '24h' | '7d'
+export type HistoryRange = '24h' | '7d' | '30d'
 
 export interface Marker {
   kind: string
@@ -23,7 +23,7 @@ export interface Marker {
 }
 export interface TimelapseBody {
   range: HistoryRange
-  source: 'minutes' | 'log' | 'unavailable'
+  source: 'minutes' | 'log' | 'store' | 'unavailable'
   from: number
   to: number
   step_s: number
@@ -37,6 +37,18 @@ export interface TimelapseBody {
   people: { online: Array<number | null>; active: number[]; sampled: boolean }
   markers: Marker[]
   minutes: { enabled: boolean; first: string | null }
+  /** The long-history store was wanted but did not answer. */
+  note?: string
+}
+/** GET /history/store — the long-history telemetry store (#2544). */
+export interface StoreStatusBody {
+  configured: boolean
+  access_log: boolean
+  env: string | null
+  reachable: boolean | null
+  latency_ms: number | null
+  oldest: string | null
+  error: string | null
 }
 export interface MinuteSettingsBody {
   settings: { enabled: boolean; retention_days: number; edges: boolean }
@@ -100,6 +112,8 @@ export interface SearchAnswer {
   more: SearchHit[]
   count: number
   note?: string
+  /** `store` = the long-history telemetry store answered (#2544). */
+  source?: 'store'
 }
 
 /** A history node key's label (`e:items/workflows`, `c:u…`, `d:ext:3`). */
@@ -172,7 +186,8 @@ export const historyStore = {
   },
   /** Open the time-lapse paused on `ms` (picks the range that holds it) and scroll to it. */
   openAt(ms: number): void {
-    const range: HistoryRange = Date.now() - ms < 24 * 3600_000 ? '24h' : '7d'
+    const age = Date.now() - ms
+    const range: HistoryRange = age < 24 * 3600_000 ? '24h' : age < 7 * 86_400_000 ? '7d' : '30d'
     state = { ...state, tab: 'timelapse', range, at: ms, seek: state.seek + 1 }
     emit()
     if (typeof document !== 'undefined')

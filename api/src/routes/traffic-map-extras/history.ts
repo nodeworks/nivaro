@@ -17,6 +17,12 @@ import { listInstances } from '../../services/instance-roster.js'
 import { clientGoneSignal, sharedGatedRead } from '../../services/read-gate.js'
 import { instanceKey } from '../../services/settings-overrides.js'
 import {
+  LOCAL_LOG_DAYS,
+  STORE_MAX_DAYS,
+  storeEnabled,
+  storeStatus
+} from '../../services/telemetry-store.js'
+import {
   buildTimelapse,
   jobsAgainstPeaks,
   latencyDistribution,
@@ -38,6 +44,7 @@ import {
   searchHistory,
   timelapseMarkers
 } from '../../services/traffic-history-reads.js'
+import { storeActive, storeSteps } from '../../services/traffic-history-store.js'
 import { currentTrafficSec } from '../../services/traffic-map.js'
 import {
   MinuteSettingsUnavailableError,
@@ -54,7 +61,9 @@ import { nodeHealth } from '../../services/traffic-taps/node-health.js'
 
 const RANGES = {
   '24h': { ms: 24 * 3600_000, stepS: 300 },
-  '7d': { ms: 7 * 86_400_000, stepS: 3600 }
+  '7d': { ms: 7 * 86_400_000, stepS: 3600 },
+  // #2544 — older than the request log's 14 days: read from the long-history store.
+  '30d': { ms: 30 * 86_400_000, stepS: 6 * 3600 }
 } as const
 type Range = keyof typeof RANGES
 const HOURS = new Set([1, 6, 24, 168])
@@ -86,7 +95,7 @@ function cached<T>(ttlMs: number) {
 
 interface TimelapseBody {
   range: Range
-  source: 'minutes' | 'log' | 'unavailable'
+  source: 'minutes' | 'log' | 'store' | 'unavailable'
   from: number
   to: number
   step_s: number
@@ -100,6 +109,8 @@ interface TimelapseBody {
   people: { online: Array<number | null>; active: number[]; sampled: boolean }
   markers: Array<{ kind: string; at: number; until?: number; label: string }>
   minutes: { enabled: boolean; first: string | null }
+  /** Set when the long-history store was wanted but did not answer (the frames are partial). */
+  note?: string
 }
 
 const timelapseCache = cached<TimelapseBody>(5 * 60_000)
@@ -115,26 +126,45 @@ async function buildTimelapseBody(range: Range, want: string | undefined): Promi
   const coverage = await minuteCoverage()
   // The minute store answers when it is on and reaches back far enough (an hour of slack).
   const covers = coverage.table && !!coverage.first && Date.parse(coverage.first) <= from + 3600_000
+  // The store answers windows older than the request log, or when asked for by name.
+  const useStore =
+    storeEnabled() &&
+    (want === 'store' || (want == null && from < to - LOCAL_LOG_DAYS * 86_400_000 && !covers))
   const useMinutes =
-    want === 'minutes' ? coverage.table : want === 'log' ? false : settings.enabled && covers
-  let groups: TimelapseGroup[] | null
-  let source: TimelapseBody['source']
-  if (useMinutes) {
-    groups = await minuteSteps(from, to, stepS)
-    source = 'minutes'
-  } else {
-    groups = await logSteps(from, to, stepS)
-    source = groups ? 'log' : 'unavailable'
+    !useStore &&
+    (want === 'minutes' ? coverage.table : want === 'log' ? false : settings.enabled && covers)
+  let groups: TimelapseGroup[] | null = null
+  let source: TimelapseBody['source'] = 'unavailable'
+  let note: string | undefined
+  if (useStore) {
+    try {
+      groups = await storeSteps(from, to, stepS)
+      source = 'store'
+    } catch {
+      note = `The long-history store did not answer; showing the request log's last ${LOCAL_LOG_DAYS} days.`
+    }
+  }
+  if (source === 'unavailable') {
+    if (useMinutes) {
+      groups = await minuteSteps(from, to, stepS)
+      source = 'minutes'
+    } else {
+      groups = await logSteps(from, to, stepS)
+      source = groups ? 'log' : 'unavailable'
+    }
   }
   const tl = buildTimelapse(groups ?? [], { from, to, stepS }, 40)
-  const [people, markers] = await Promise.all([
-    peopleSteps(from, to, stepS).catch(() => ({
-      online: new Array(tl.frames.length).fill(null),
-      active: new Array(tl.frames.length).fill(0),
-      sampled: false
-    })),
-    timelapseMarkers(from, to)
+  const emptyPeople = () => ({
+    online: new Array(tl.frames.length).fill(null),
+    active: new Array(tl.frames.length).fill(0),
+    sampled: false
+  })
+  const [people, markers, storeActiveSteps] = await Promise.all([
+    peopleSteps(from, to, stepS).catch(emptyPeople),
+    timelapseMarkers(from, to),
+    source === 'store' ? storeActive(from, to, stepS).catch(() => null) : Promise.resolve(null)
   ])
+  if (storeActiveSteps) people.active = storeActiveSteps
   return {
     range,
     source,
@@ -145,7 +175,8 @@ async function buildTimelapseBody(range: Range, want: string | undefined): Promi
     frames: tl.frames,
     people,
     markers,
-    minutes: { enabled: settings.enabled, first: coverage.first }
+    minutes: { enabled: settings.enabled, first: coverage.first },
+    ...(note ? { note } : {})
   }
 }
 
@@ -245,17 +276,22 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
     }
   })
 
+  // #2544 — whether the long-history store is set up and answering, and how far back it reaches.
+  app.get('/history/store', async () => ({ data: await storeStatus() }))
+
   app.get<{ Querystring: { range?: string; source?: string } }>(
     '/history/timelapse',
     async (req, reply) => {
       const range = (req.query.range ?? '24h') as Range
       if (!(range in RANGES))
-        return reply.code(400).send({ error: 'range must be 24h or 7d', code: 'RANGE_INVALID' })
-      const want = req.query.source
-      if (want != null && want !== 'minutes' && want !== 'log')
         return reply
           .code(400)
-          .send({ error: 'source must be minutes or log', code: 'SOURCE_INVALID' })
+          .send({ error: 'range must be 24h, 7d or 30d', code: 'RANGE_INVALID' })
+      const want = req.query.source
+      if (want != null && want !== 'minutes' && want !== 'log' && want !== 'store')
+        return reply
+          .code(400)
+          .send({ error: 'source must be minutes, log or store', code: 'SOURCE_INVALID' })
       try {
         return {
           data: await timelapseCache(`${range}|${want ?? ''}`, () =>
@@ -288,7 +324,8 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
     const bad = (error: string) => reply.code(400).send({ error, code: 'SEARCH_INVALID' })
     if (!SEARCH_KINDS.has(kind)) return bad('kind must be last_hit, first_error or busiest_hour')
     const days = Number(q.days ?? 7)
-    if (!Number.isInteger(days) || days < 1 || days > 31) return bad('days must be 1 to 31')
+    if (!Number.isInteger(days) || days < 1 || days > STORE_MAX_DAYS)
+      return bad(`days must be 1 to ${STORE_MAX_DAYS}`)
     const caller = q.caller?.trim() || null
     const entity = q.entity?.trim() || null
     const route = q.route?.trim() || null
@@ -313,7 +350,7 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
       const { value } = await sharedGatedRead(
         `tm:history-search|${JSON.stringify(args)}`,
         req.user?.id,
-        () => searchHistory(args),
+        () => searchHistory(args, Date.now(), clientGoneSignal(reply.raw)),
         { signal: clientGoneSignal(reply.raw), label: 'tm:history-search' }
       )
       return { data: value }

@@ -987,7 +987,7 @@ export const obsTrafficMapPlatform: DocSection = {
     {
       type: 'ul',
       items: [
-        'Time-lapse plays the last 24 hours or 7 days at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.',
+        'Time-lapse plays the last 24 hours or 7 days (30 days with the telemetry store, below) at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.',
         'Under the request curve: people online (from the 5-minute socket samples, where scheduled jobs run) and people making requests, so more people can be told apart from more work per person.',
         'Jobs against peaks draws each scheduled job at its usual start and length over a typical day. A job in the peak gets the quietest start of the same length as a cron expression to copy, and what moving it would do to the pool.',
         'Search answers "when did this caller last call this route", "when did this error first appear" and "busiest hour for this node or partner", over the last day to month. Every field is optional and matched exactly; each answer opens its moment on the map.'
@@ -996,6 +996,48 @@ export const obsTrafficMapPlatform: DocSection = {
     {
       type: 'p',
       text: 'Without minute history the time-lapse reads hourly (or 5-minute) groups from the request log, which keeps about 14 days and knows nodes but not callers or partners. Turn on minute history in the panel header to keep every minute per node and per edge (requests, errors, p50 and p95, bytes) for 30 days, or a retention you choose. Every API process counts its own minutes and the instance that runs scheduled jobs writes them once a minute; old minutes are deleted every hour. It is off by default and not available in cloud mode.'
+    },
+    { type: 'h3', id: 'traffic-map-history-store', text: 'Long history from the telemetry store' },
+    {
+      type: 'p',
+      text: 'The request log keeps about 14 days. Where a telemetry stack runs beside the instance (VictoriaLogs behind vmauth), Nivaro can read older history from it. Each API process writes one structured line per logged request to its own output (route template, map node, caller key, status, duration, instance, request id, and the capped error text; never the query string, body, address or user agent), and the host collector ships those lines to the store. Nivaro only reads: every query is built on the server from typed fields, with a read-only token, and the browser never talks to the store.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Time-lapse gains a 30 days range, read from the store in 6-hour steps (people making requests included).',
+        'Search answers ranges past 14 days from the store and says so under the answer.',
+        'The SLO window can be set up to 30 days; the per-day figures come from the store and the burn rates (24 hours at most) from the request log.',
+        'When the store does not answer, each view falls back to the request log’s 14 days and says so.',
+        '`GET /api/traffic-map/history/store` (administrators) reports whether the store is set up, reachable, and how far back it reaches.'
+      ]
+    },
+    {
+      type: 'table',
+      head: ['Setting', 'What it does'],
+      rows: [
+        [
+          '`TELEMETRY_ACCESS_LOG=on`',
+          'Write one structured access line per logged request (off by default).'
+        ],
+        [
+          '`TELEMETRY_STORE_URL`',
+          'vmauth in front of VictoriaLogs, e.g. `http://efp_obs_vmauth:8427`.'
+        ],
+        [
+          '`TELEMETRY_STORE_TOKEN`',
+          'The read token (query paths only). `TELEMETRY_STORE_TOKEN_FILE` works too.'
+        ],
+        [
+          '`TELEMETRY_STORE_ENV`',
+          'The `env` label this instance’s lines carry, so staging and production never mix.'
+        ],
+        ['`TELEMETRY_STORE_TIMEOUT_MS`', 'Per-query timeout (default 20000).']
+      ]
+    },
+    {
+      type: 'note',
+      text: 'Off in cloud mode: the store has no tenant labels.'
     },
     { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
     {

@@ -16764,7 +16764,7 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <!-- /SYNC:traffic-map-lenses -->
         </div>
 
-        <div class="doc-section" id="s-traffic-map-platform" data-toc='[{"id":"traffic-map-platform","label":"Traffic Map: Sharing, Capacity and Scale"},{"id":"traffic-map-sharing","label":"Sharing and comparing"},{"id":"traffic-map-data","label":"Map data, schedules and cost"},{"id":"traffic-map-capacity","label":"Capacity and health"},{"id":"traffic-map-back-office","label":"Back-office nodes and badges"},{"id":"traffic-map-history","label":"History: time-lapse, jobs and search"},{"id":"traffic-map-nodes","label":"Several API processes"},{"id":"traffic-map-realtime-nodes","label":"Live connections, media, search and MCP"},{"id":"traffic-map-cloud","label":"Cloud mode"},{"id":"traffic-map-replay","label":"Load replay (development only)"},{"id":"traffic-map-extending","label":"Extending the map"},{"id":"traffic-map-ext-lenses","label":"Lenses from an extension"},{"id":"traffic-map-config","label":"Settings"}]'>
+        <div class="doc-section" id="s-traffic-map-platform" data-toc='[{"id":"traffic-map-platform","label":"Traffic Map: Sharing, Capacity and Scale"},{"id":"traffic-map-sharing","label":"Sharing and comparing"},{"id":"traffic-map-data","label":"Map data, schedules and cost"},{"id":"traffic-map-capacity","label":"Capacity and health"},{"id":"traffic-map-back-office","label":"Back-office nodes and badges"},{"id":"traffic-map-history","label":"History: time-lapse, jobs and search"},{"id":"traffic-map-history-store","label":"Long history from the telemetry store"},{"id":"traffic-map-nodes","label":"Several API processes"},{"id":"traffic-map-realtime-nodes","label":"Live connections, media, search and MCP"},{"id":"traffic-map-cloud","label":"Cloud mode"},{"id":"traffic-map-replay","label":"Load replay (development only)"},{"id":"traffic-map-extending","label":"Extending the map"},{"id":"traffic-map-ext-lenses","label":"Lenses from an extension"},{"id":"traffic-map-config","label":"Settings"}]'>
           <!-- SYNC:traffic-map-platform -->
           <h1 class="doc-h1" id="traffic-map-platform">Traffic Map: Sharing, Capacity and Scale</h1>
           <h2 class="doc-h2" id="traffic-map-sharing">Sharing and comparing</h2>
@@ -16810,12 +16810,30 @@ GET /api/partner-dependencies/:key/schema.graphql?download=1</code></pre>
           <h2 class="doc-h2" id="traffic-map-history">History: time-lapse, jobs and search</h2>
           <p class="doc-p">The History panel under the map loads nothing until you pick a view.</p>
           <ul class="doc-ul">
-            <li>Time-lapse plays the last 24 hours or 7 days at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.</li>
+            <li>Time-lapse plays the last 24 hours or 7 days (30 days with the telemetry store, below) at 60× or faster. Deploys, restarts, configuration writes, maintenance windows and incidents are marked on the curve. Pause or click anywhere to open that moment: its busiest nodes (click one to inspect it), what changed near it, and, for the last few minutes, Rewind the map here.</li>
             <li>Under the request curve: people online (from the 5-minute socket samples, where scheduled jobs run) and people making requests, so more people can be told apart from more work per person.</li>
             <li>Jobs against peaks draws each scheduled job at its usual start and length over a typical day. A job in the peak gets the quietest start of the same length as a cron expression to copy, and what moving it would do to the pool.</li>
             <li>Search answers "when did this caller last call this route", "when did this error first appear" and "busiest hour for this node or partner", over the last day to month. Every field is optional and matched exactly; each answer opens its moment on the map.</li>
           </ul>
           <p class="doc-p">Without minute history the time-lapse reads hourly (or 5-minute) groups from the request log, which keeps about 14 days and knows nodes but not callers or partners. Turn on minute history in the panel header to keep every minute per node and per edge (requests, errors, p50 and p95, bytes) for 30 days, or a retention you choose. Every API process counts its own minutes and the instance that runs scheduled jobs writes them once a minute; old minutes are deleted every hour. It is off by default and not available in cloud mode.</p>
+          <h3 class="doc-h3" id="traffic-map-history-store">Long history from the telemetry store</h3>
+          <p class="doc-p">The request log keeps about 14 days. Where a telemetry stack runs beside the instance (VictoriaLogs behind vmauth), Nivaro can read older history from it. Each API process writes one structured line per logged request to its own output (route template, map node, caller key, status, duration, instance, request id, and the capped error text; never the query string, body, address or user agent), and the host collector ships those lines to the store. Nivaro only reads: every query is built on the server from typed fields, with a read-only token, and the browser never talks to the store.</p>
+          <ul class="doc-ul">
+            <li>Time-lapse gains a 30 days range, read from the store in 6-hour steps (people making requests included).</li>
+            <li>Search answers ranges past 14 days from the store and says so under the answer.</li>
+            <li>The SLO window can be set up to 30 days; the per-day figures come from the store and the burn rates (24 hours at most) from the request log.</li>
+            <li>When the store does not answer, each view falls back to the request log’s 14 days and says so.</li>
+            <li><code class="doc-code">GET /api/traffic-map/history/store</code> (administrators) reports whether the store is set up, reachable, and how far back it reaches.</li>
+          </ul>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Setting</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td><code class="doc-code">TELEMETRY_ACCESS_LOG=on</code></td><td>Write one structured access line per logged request (off by default).</td></tr>
+              <tr><td><code class="doc-code">TELEMETRY_STORE_URL</code></td><td>vmauth in front of VictoriaLogs, e.g. <code class="doc-code">http://efp_obs_vmauth:8427</code>.</td></tr>
+              <tr><td><code class="doc-code">TELEMETRY_STORE_TOKEN</code></td><td>The read token (query paths only). <code class="doc-code">TELEMETRY_STORE_TOKEN_FILE</code> works too.</td></tr>
+              <tr><td><code class="doc-code">TELEMETRY_STORE_ENV</code></td><td>The <code class="doc-code">env</code> label this instance’s lines carry, so staging and production never mix.</td></tr>
+              <tr><td><code class="doc-code">TELEMETRY_STORE_TIMEOUT_MS</code></td><td>Per-query timeout (default 20000).</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Off in cloud mode: the store has no tenant labels.</div>
           <h2 class="doc-h2" id="traffic-map-nodes">Several API processes</h2>
           <p class="doc-p">Each API process counts its own traffic. While anyone watches the map, every process publishes its frames through the cache and the page merges them, so the map shows the whole deployment. When more than one process is sending, a Nodes control appears: all nodes combined (the default) or one process. Snapshots can be taken of every node or one. When nobody watches, nothing is published. In-flight requests, slow requests and the event loop stay per process.</p>
           <h2 class="doc-h2" id="traffic-map-realtime-nodes">Live connections, media, search and MCP</h2>

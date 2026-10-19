@@ -25,6 +25,7 @@ import {
   historyStore,
   nodeKeyLabel,
   RING_MS,
+  type StoreStatusBody,
   type TimelapseBody,
   useHistoryState
 } from './shared'
@@ -33,7 +34,24 @@ const SPEEDS = [60, 300, 900, 3600]
 const SOURCE_TEXT: Record<TimelapseBody['source'], string> = {
   minutes: 'From the minute history.',
   log: 'From the request log, grouped by route family (turn on minute history for callers and partners).',
+  store: 'From the long-history store, which keeps the request log past its 14 days.',
   unavailable: 'The request log can only be grouped this way on SQL Server.'
+}
+const RANGE_LABEL: Record<HistoryRange, string> = {
+  '24h': '24 hours',
+  '7d': '7 days',
+  '30d': '30 days'
+}
+
+/** Whether the long-history store is set up (the 30-day range needs it). */
+export function useStoreStatus(enabled: boolean) {
+  return useQuery({
+    queryKey: ['traffic-map', 'history', 'store'],
+    queryFn: async () =>
+      ((await api.get('/traffic-map/history/store'))?.data?.data ?? null) as StoreStatusBody | null,
+    enabled,
+    staleTime: 5 * 60_000
+  })
 }
 
 export function useTimelapse(range: HistoryRange, enabled: boolean) {
@@ -49,7 +67,9 @@ export function useTimelapse(range: HistoryRange, enabled: boolean) {
 
 export function curveTicks(from: number, stepS: number, n: number, range: HistoryRange) {
   const out: Array<{ i: number; label: string }> = []
-  const every = range === '24h' ? Math.round((3 * 3600) / stepS) : Math.round(86_400 / stepS)
+  const every = Math.round(
+    (range === '24h' ? 3 * 3600 : range === '7d' ? 86_400 : 3 * 86_400) / stepS
+  )
   for (let i = 0; i < n; i += Math.max(1, every)) {
     const t = from + i * stepS * 1000
     out.push({
@@ -82,6 +102,9 @@ export function Timelapse() {
   const st = useHistoryState()
   const range = st.range
   const q = useTimelapse(range, st.tab === 'timelapse')
+  const store = useStoreStatus(st.tab === 'timelapse')
+  const ranges: HistoryRange[] =
+    store.data?.configured || range === '30d' ? ['24h', '7d', '30d'] : ['24h', '7d']
   const data = q.data ?? null
   const n = data?.frames.length ?? 0
   const [idx, setIdx] = useState<number | null>(null)
@@ -153,7 +176,7 @@ export function Timelapse() {
       <div className='flex flex-wrap items-center gap-2'>
         <fieldset className='m-0 inline-flex min-w-0 rounded-md border border-[var(--tm-line)] p-0'>
           <legend className='sr-only'>Range</legend>
-          {(['24h', '7d'] as const).map((r) => (
+          {ranges.map((r) => (
             <button
               key={r}
               type='button'
@@ -171,7 +194,7 @@ export function Timelapse() {
               )}
               data-tm-history-range={r}
             >
-              {r === '24h' ? '24 hours' : '7 days'}
+              {RANGE_LABEL[r]}
             </button>
           ))}
         </fieldset>
@@ -215,6 +238,7 @@ export function Timelapse() {
           <span className='text-[11.5px] text-[var(--tm-muted)]'>{SOURCE_TEXT[data.source]}</span>
         )}
       </div>
+      {data?.note && <Note>{data.note}</Note>}
 
       {q.isLoading ? (
         <div

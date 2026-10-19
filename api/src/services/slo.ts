@@ -13,11 +13,15 @@
  * Grouped by nivaro_api_logs.instance (migration 379) — several instances can
  * share one database. Rows written before the column existed read as
  * "(before tracking)". The request log keeps 14 days, so the window is capped
- * there.
+ * there — unless the long-history telemetry store is configured (#2544): then windows up to 30
+ * days read their per-day figures from the store, and the burn rates (24 hours at most) still
+ * come from the request log.
  */
 import { isMssql } from '../db/dialect.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
+import { storeEnabled } from './telemetry-store.js'
+import { type StoreSloDay, storeSloRows } from './traffic-history-store.js'
 
 export interface SloTargets {
   availability_pct: number
@@ -31,6 +35,12 @@ export const DEFAULT_SLO_TARGETS: SloTargets = {
   window_days: 7
 }
 const LOG_RETENTION_DAYS = 14
+/** With the long-history store, the standard 28/30-day windows. */
+const STORE_WINDOW_DAYS = 30
+
+/** The longest SLO window this instance can compute. */
+export const maxSloWindowDays = (): number =>
+  storeEnabled() ? STORE_WINDOW_DAYS : LOG_RETENTION_DAYS
 
 export function parseSloTargets(raw: unknown): SloTargets {
   let v: unknown = raw
@@ -49,8 +59,12 @@ export function parseSloTargets(raw: unknown): SloTargets {
   return {
     availability_pct: num(o.availability_pct, 50, 99.999, DEFAULT_SLO_TARGETS.availability_pct),
     p95_ms: Math.round(num(o.p95_ms, 50, 120_000, DEFAULT_SLO_TARGETS.p95_ms)),
+    // A saved window longer than this instance can compute is shortened, not discarded.
     window_days: Math.round(
-      num(o.window_days, 1, LOG_RETENTION_DAYS, DEFAULT_SLO_TARGETS.window_days)
+      Math.min(
+        num(o.window_days, 1, STORE_WINDOW_DAYS, DEFAULT_SLO_TARGETS.window_days),
+        maxSloWindowDays()
+      )
     )
   }
 }
@@ -78,7 +92,7 @@ export function validateSloTargets(raw: unknown): string | null {
   return (
     check('availability_pct', 50, 99.999) ??
     check('p95_ms', 50, 120_000) ??
-    check('window_days', 1, LOG_RETENTION_DAYS)
+    check('window_days', 1, maxSloWindowDays())
   )
 }
 
@@ -133,6 +147,12 @@ export interface SloReport {
   }>
   instance_tracked: boolean
   computed_at: string
+  /** Where the window's figures came from (`store` = the long-history store, #2544). */
+  source: 'log' | 'store'
+  /** The longest window this instance can compute (14, or 30 with the store). */
+  window_max_days: number
+  /** Set when the store was needed but did not answer (the window was cut to 14 days). */
+  note?: string
 }
 
 const UNTRACKED = '(before tracking)'
@@ -149,22 +169,40 @@ export async function computeSlo(): Promise<SloReport> {
       instances: [],
       monitors: [],
       instance_tracked: false,
-      computed_at: new Date().toISOString()
+      computed_at: new Date().toISOString(),
+      source: 'log',
+      window_max_days: maxSloWindowDays()
     }
   const tracked = await hasColumn('nivaro_api_logs', 'instance')
   const inst = tracked ? `ISNULL(instance, '${UNTRACKED}')` : `'${UNTRACKED}'`
-  const from = new Date(Date.now() - targets.window_days * 86_400_000)
+  let from = new Date(Date.now() - targets.window_days * 86_400_000)
+  let source: SloReport['source'] = 'log'
+  let note: string | undefined
+  let fromStore: { days: StoreSloDay[]; p95ByInstance: Map<string, number | null> } | null = null
+  if (targets.window_days > LOG_RETENTION_DAYS && storeEnabled()) {
+    try {
+      fromStore = await storeSloRows(from.getTime(), Date.now())
+      source = 'store'
+    } catch {
+      note = `The long-history store did not answer, so this covers the request log's last ${LOG_RETENTION_DAYS} days.`
+      from = new Date(Date.now() - LOG_RETENTION_DAYS * 86_400_000)
+    }
+  }
 
-  const hist = (await db.raw(
-    `SELECT ${inst} AS instance, CONVERT(char(10), created_at, 23) AS day, ${BUCKET_SQL} AS upper,
+  const hist = (
+    fromStore
+      ? []
+      : await db.raw(
+          `SELECT ${inst} AS instance, CONVERT(char(10), created_at, 23) AS day, ${BUCKET_SQL} AS upper,
             COUNT(*) AS n,
             SUM(CASE WHEN status >= 500 THEN 1 ELSE 0 END) AS e5,
             SUM(CASE WHEN status >= 400 AND status < 500 THEN 1 ELSE 0 END) AS e4
        FROM nivaro_api_logs
       WHERE created_at >= ?
       GROUP BY ${inst}, CONVERT(char(10), created_at, 23), ${BUCKET_SQL}`,
-    [from]
-  )) as Array<{ instance: string; day: string; upper: number; n: number; e5: number; e4: number }>
+          [from]
+        )
+  ) as Array<{ instance: string; day: string; upper: number; n: number; e5: number; e4: number }>
 
   const now = Date.now()
   const recent = (await db.raw(
@@ -253,6 +291,17 @@ export async function computeSlo(): Promise<SloReport> {
       }
     })
   }
+  if (fromStore) {
+    for (const inst of storeInstances(fromStore, targets, (instance) => {
+      const rec = recent.find((r) => r.instance === instance)
+      return {
+        h1: rec ? burnOf(Number(rec.t1), Number(rec.e1)) : null,
+        h6: rec ? burnOf(Number(rec.t6), Number(rec.e6)) : null,
+        h24: rec ? burnOf(Number(rec.t24), Number(rec.e24)) : null
+      }
+    }))
+      instances.push(inst)
+  }
   instances.sort((a, b) =>
     a.instance === UNTRACKED ? 1 : b.instance === UNTRACKED ? -1 : b.requests - a.requests
   )
@@ -287,6 +336,60 @@ export async function computeSlo(): Promise<SloReport> {
       }))
       .sort((a, b) => (a.uptime_pct ?? 100) - (b.uptime_pct ?? 100)),
     instance_tracked: tracked,
-    computed_at: new Date().toISOString()
+    computed_at: new Date().toISOString(),
+    source,
+    window_max_days: maxSloWindowDays(),
+    ...(note ? { note } : {})
   }
+}
+
+/** InstanceSlo rows from the store's per-instance, per-day figures (#2544). */
+export function storeInstances(
+  rows: { days: StoreSloDay[]; p95ByInstance: Map<string, number | null> },
+  targets: SloTargets,
+  burnFor: (instance: string) => InstanceSlo['burn']
+): InstanceSlo[] {
+  const allowedShare = 1 - targets.availability_pct / 100
+  const byInstance = new Map<string, StoreSloDay[]>()
+  for (const d of rows.days) {
+    const list = byInstance.get(d.instance) ?? []
+    list.push(d)
+    byInstance.set(d.instance, list)
+  }
+  const out: InstanceSlo[] = []
+  for (const [instance, days] of byInstance) {
+    const requests = days.reduce((s, d) => s + d.n, 0)
+    const e5 = days.reduce((s, d) => s + d.e5, 0)
+    const e4 = days.reduce((s, d) => s + d.e4, 0)
+    const p95 = rows.p95ByInstance.get(instance) ?? null
+    const availability = requests ? Math.round((1 - e5 / requests) * 100_000) / 1000 : null
+    const allowed = Math.floor(allowedShare * requests)
+    out.push({
+      instance,
+      requests,
+      errors_5xx: e5,
+      errors_4xx: e4,
+      availability_pct: availability,
+      p95_ms: p95,
+      budget: {
+        allowed,
+        consumed: e5,
+        remaining_pct: allowed > 0 ? Math.round((1 - e5 / allowed) * 1000) / 10 : e5 === 0 ? 100 : 0
+      },
+      burn: burnFor(instance),
+      days: [...days]
+        .sort((a, b) => a.day.localeCompare(b.day))
+        .map((d) => ({
+          day: d.day,
+          requests: d.n,
+          availability_pct: d.n ? Math.round((1 - d.e5 / d.n) * 100_000) / 1000 : null,
+          p95_ms: d.p95
+        })),
+      meets: {
+        availability: availability == null ? null : availability >= targets.availability_pct,
+        p95: p95 == null ? null : p95 <= targets.p95_ms
+      }
+    })
+  }
+  return out
 }

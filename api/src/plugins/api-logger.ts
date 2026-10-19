@@ -6,6 +6,7 @@ import { hasChainColumns } from '../services/chain-columns.js'
 import { maskQueryString } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { requestTenantKey } from '../services/socket-tenant.js'
+import { accessLogEnabled, accessLogLine } from '../services/telemetry-store.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { errorCode, hasCacheHit, noteRequest } from '../services/traffic-map.js'
 import { notePublicHit } from '../services/traffic-taps/public-clients.js'
@@ -346,7 +347,7 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     if (isInternalDispatch(req as unknown as { headers: Record<string, unknown> })) return
 
     const ua = req.headers['user-agent']
-    buffer.push({
+    const row: ApiLogRow = {
       method: req.method,
       path: path.slice(0, 500),
       status: reply.statusCode,
@@ -373,7 +374,11 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
       chain_id: req.chainId ?? null,
       chain_parent: req.chainParent ?? null,
       request_id: req.requestId ?? null
-    })
+    }
+    buffer.push(row)
+    // #2544 — the same request as one structured line for the long-history telemetry store
+    // (the request log above prunes at 14 days). Ids, route, status and timing only.
+    if (accessLogEnabled()) app.log.info(accessLogLine({ ...row, instance: INSTANCE }), 'api')
 
     // Live traffic view (#276): stream to admin watchers only when someone is
     // actually watching — the room-size probe is a local map lookup.
