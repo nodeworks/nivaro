@@ -56,7 +56,7 @@ function summarizeNotification(n: Row): Row {
   const out: Row = {
     id: n.id,
     subject: n.subject ?? n.title ?? null,
-    message: clip(n.message, 300),
+    message: clip(n.message, 200),
     unread: n.status === 'inbox',
     at: n.timestamp ?? n.created_at ?? null
   }
@@ -128,25 +128,32 @@ export function registerWorkTools(server: McpServer, client: NivaroClient) {
       title: 'List my queues',
       description:
         "The worklists the key's user can open (their own and those shared with their role), with the collections each reads. Use read_queue to see a queue's items.",
-      inputSchema: {},
+      inputSchema: {
+        limit: z.number().int().optional().describe('Queues per page (1–100, default 25).'),
+        offset: z.number().int().min(0).optional()
+      },
       annotations: READ
     },
-    async () => {
+    async ({ limit, offset }) => {
       try {
         const res = await client.request(listQueues())
-        return ok(
-          res.data.map((q) => {
+        const page = pageOf(res.data, clampTo(limit, 25, 100), offset)
+        return ok({
+          queues: page.items.map((q) => {
             const row = q as unknown as Row
             return {
               id: q.id,
               name: q.name,
-              description: clip(q.description, 300),
+              description: clip(q.description, 200),
               shared: q.is_shared,
               claims_enabled: q.claims_enabled,
               source_collections: row.source_collections ?? []
             }
-          })
-        )
+          }),
+          total: page.total,
+          offset: page.offset,
+          truncated: page.truncated
+        })
       } catch (err) {
         return fail(err)
       }

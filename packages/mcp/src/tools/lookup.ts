@@ -12,7 +12,7 @@ import {
 } from '@nivaro/sdk'
 import { z } from 'zod'
 import { READ, WRITE } from '../annotations.js'
-import { clip, clipRow, personName } from '../compact.js'
+import { clip, clipRow, pageOf, personName } from '../compact.js'
 import { fail, ok } from '../result.js'
 import { clampTo, collectionName, jsonObject, querySlug, toObject } from '../schema.js'
 
@@ -98,47 +98,44 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
     {
       title: 'List saved queries',
       description:
-        "The saved reporting queries the key's user may run, with the parameters each takes. Use search to find one; run it with run_custom_query.",
+        "The saved reporting queries the key's user may run, with the parameters each takes. Run one with run_custom_query.",
       inputSchema: {
         search: z
           .string()
           .optional()
-          .describe('Only queries whose slug, name or description contains this text.'),
-        limit: z.number().int().optional().describe('Queries to return (1–200, default 50).')
+          .describe('Case-insensitive match on slug, name or description.'),
+        limit: z.number().int().optional().describe('Queries per page (1–200, default 25).'),
+        offset: z.number().int().min(0).optional()
       },
       annotations: READ
     },
-    async ({ search, limit }) => {
+    async ({ search, limit, offset }) => {
       try {
         const res = await client.request(listCustomQueryCatalog())
-        const q = search?.trim().toLowerCase()
-        const all = res.data.filter(
-          (c) =>
-            !q ||
-            [c.slug, c.name, c.description].some((v) =>
-              String(v ?? '')
-                .toLowerCase()
-                .includes(q)
+        const needle = search?.trim().toLowerCase()
+        const matching = needle
+          ? res.data.filter((q) =>
+              [q.slug, q.name, q.description].some(
+                (v) => typeof v === 'string' && v.toLowerCase().includes(needle)
+              )
             )
-        )
-        const n = clampTo(limit, 50, 200)
+          : res.data
+        const page = pageOf(matching, clampTo(limit, 25, 200), offset)
         return ok({
-          count: all.length,
-          truncated: all.length > n,
-          queries: all.slice(0, n).map((c) => ({
-            slug: c.slug,
-            name: c.name,
-            ...(c.description ? { description: clip(c.description, 120) } : {}),
-            params: (c.params ?? []).map((p: unknown) => {
-              if (!p || typeof p !== 'object') return p
-              const r = p as Record<string, unknown>
-              return {
-                name: r.name ?? r.key,
-                ...(r.type ? { type: r.type } : {}),
-                ...(r.required ? { required: true } : {})
-              }
-            })
-          }))
+          queries: page.items.map((q) => ({
+            slug: q.slug,
+            name: q.name,
+            description: clip(q.description, 200),
+            params: (q.params ?? []).map((p) => ({
+              name: p.name,
+              type: p.type,
+              required: p.required,
+              ...(p.default !== undefined ? { default: p.default } : {})
+            }))
+          })),
+          total: page.total,
+          offset: page.offset,
+          truncated: page.truncated
         })
       } catch (err) {
         return fail(err)
@@ -155,7 +152,7 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
       inputSchema: {
         slug: querySlug,
         params: jsonObject.optional().describe('Parameter values by name.'),
-        limit: z.number().int().optional().describe('Rows to return (1–200, default 50).')
+        limit: z.number().int().optional().describe('Rows to return (1–200, default 25).')
       },
       // Not read-only: a saved query may call a procedure that writes, so clients
       // that confirm writes should ask before running one.
@@ -165,7 +162,7 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
       try {
         const res = await client.request(executeCustomQuery(slug, toObject(params)))
         const rows = Array.isArray(res.data) ? (res.data as Row[]) : []
-        const n = clampTo(limit, 50, 200)
+        const n = clampTo(limit, 25, 200)
         const meta = res as unknown as Row
         const out: Row = {
           rows: rows.slice(0, n).map((r) => (r && typeof r === 'object' ? clipRow(r, 500) : r)),

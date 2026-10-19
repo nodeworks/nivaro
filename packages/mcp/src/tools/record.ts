@@ -120,7 +120,7 @@ export function registerRecordTools(server: McpServer, client: NivaroClient) {
       inputSchema: {
         collection: collectionName,
         id: recordId,
-        limit: z.number().int().optional().describe('Newest comments to show (1–200, default 30).')
+        limit: z.number().int().optional().describe('Newest comments to show (1–200, default 25).')
       },
       annotations: READ
     },
@@ -128,7 +128,7 @@ export function registerRecordTools(server: McpServer, client: NivaroClient) {
       try {
         const res = await client.request(listComments(collection, id))
         const all = res.data as unknown as Row[]
-        const n = clampTo(limit, 30, 200)
+        const n = clampTo(limit, 25, 200)
         const shown = all.slice(-n)
         const out: Row = {
           comments: shown.map((c) => {

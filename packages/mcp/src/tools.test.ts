@@ -80,7 +80,7 @@ describe('everyday-work tools', () => {
     })
     const body = textOf(await call('list_queues'))
     expect(calls[0]).toMatchObject({ _method: 'GET', _path: '/queues' })
-    expect(body).toEqual([
+    expect(body.queues).toEqual([
       {
         id: 'q-1',
         name: 'Approvals',
@@ -90,6 +90,7 @@ describe('everyday-work tools', () => {
         source_collections: ['orders']
       }
     ])
+    expect(body).toMatchObject({ total: 1, offset: 0, truncated: false })
   })
 
   it('read_queue always pages and shapes items', async () => {
@@ -534,10 +535,12 @@ describe('lookup tools', () => {
     const body = textOf(await call('list_custom_queries'))
     expect(calls[0]).toMatchObject({ _method: 'GET', _path: '/custom-queries/catalog' })
     expect(body).toEqual({
-      count: 1,
-      truncated: false,
-      queries: [{ slug: 'spend', name: 'Spend', params: [] }]
+      queries: [{ slug: 'spend', name: 'Spend', description: null, params: [] }],
+      total: 1,
+      offset: 0,
+      truncated: false
     })
+    expect(textOf(await call('list_custom_queries', { search: 'nothing' })).queries).toEqual([])
   })
 
   it('run_custom_query posts the params and cuts the rows', async () => {
@@ -746,6 +749,10 @@ describe('admin tools', () => {
     const body = textOf(await call('list_cron_jobs', { failing_only: true }))
     expect(calls[0]).toMatchObject({ _method: 'GET', _path: '/job-runs/registry' })
     expect(body.crons.map((c: { id: string }) => c.id)).toEqual(['flaky', 'bad'])
+    expect(body).toMatchObject({ total: 2, truncated: false })
+    const paged = textOf(await call('list_cron_jobs', { limit: 1 }))
+    expect(paged).toMatchObject({ total: 3, truncated: true })
+    expect(paged.crons).toHaveLength(1)
     expect(body.ticks_enabled).toBe(true)
   })
 

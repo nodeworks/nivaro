@@ -25,7 +25,7 @@ import {
 } from '@nivaro/sdk'
 import { z } from 'zod'
 import { READ, WRITE } from '../annotations.js'
-import { clip } from '../compact.js'
+import { clip, pageOf } from '../compact.js'
 import { fail, ok } from '../result.js'
 import { clampTo } from '../schema.js'
 
@@ -146,7 +146,7 @@ export function registerAdminTools(server: McpServer, client: NivaroClient) {
         ])
         return ok({
           this_replica: runtime.data,
-          instances: roster.data.slice(0, 50),
+          instances: roster.data.slice(0, 25),
           instances_total: roster.data.length,
           scheduler: roster.scheduler
         })
@@ -240,53 +240,35 @@ export function registerAdminTools(server: McpServer, client: NivaroClient) {
           .boolean()
           .optional()
           .describe('Only jobs whose latest run failed or that failed in the last 7 days.'),
-        search: z
-          .string()
-          .optional()
-          .describe('Only jobs whose id or description contains this text.'),
-        limit: z.number().int().optional().describe('Jobs to return (1–200, default 40).')
+        limit: z.number().int().optional().describe('Jobs per page (1–200, default 25).'),
+        offset: z.number().int().min(0).optional()
       },
       annotations: READ
     },
-    async ({ failing_only, search, limit }) => {
+    async ({ failing_only, limit, offset }) => {
       try {
         const res = await client.request(readJobRegistry())
-        const q = search?.trim().toLowerCase()
-        const matching = res.data.crons
-          .filter((c) => !failing_only || c.errors_7d > 0 || c.last?.status === 'error')
-          .filter(
-            (c) =>
-              !q ||
-              [c.id, c.description].some((v) =>
-                String(v ?? '')
-                  .toLowerCase()
-                  .includes(q)
-              )
-          )
-        const n = Math.min(200, Math.max(1, Math.round(limit ?? 40)))
-        const crons = matching.slice(0, n).map((c) => ({
+        const matching = res.data.crons.filter(
+          (c) => !failing_only || c.errors_7d > 0 || c.last?.status === 'error'
+        )
+        const page = pageOf(matching, clampTo(limit, 25, 200), offset)
+        const crons = page.items.map((c) => ({
           id: c.id,
           expression: c.expression,
-          ...(c.overridden ? { overridden: true } : {}),
-          ...(c.extension_id ? { extension_id: c.extension_id } : {}),
+          overridden: c.overridden,
+          extension_id: c.extension_id,
           next_run: c.next_run,
-          ...(c.paused ? { paused: true } : {}),
-          ...(c.description ? { description: clip(c.description, 80) } : {}),
-          last: c.last
-            ? {
-                status: c.last.status,
-                at:
-                  (c.last as Record<string, unknown>).started_at ??
-                  (c.last as Record<string, unknown>).at,
-                ...(c.last.error ? { error: clip(c.last.error, 200) } : {})
-              }
-            : null,
-          ...(c.errors_7d ? { errors_7d: c.errors_7d } : {})
+          paused: c.paused,
+          heavy: c.heavy,
+          description: clip(c.description, 200),
+          last: c.last ? { ...c.last, error: clip(c.last.error, 500) } : null,
+          errors_7d: c.errors_7d
         }))
         return ok({
-          count: matching.length,
-          truncated: matching.length > n,
           crons,
+          total: page.total,
+          offset: page.offset,
+          truncated: page.truncated,
           ticks_enabled: res.data.ticks_enabled,
           scheduler: res.data.scheduler,
           running: res.data.running.map((r) => ({

@@ -33,9 +33,9 @@ export interface ToolFailure {
   details?: Record<string, unknown>
 }
 
-/** The JSON text block every successful tool answers with. */
+/** The JSON text block every successful tool answers with — unindented, since indentation
+ *  roughly doubles what a model has to read for no gain. */
 export function ok(value: unknown): CallToolResult {
-  // Compact JSON: indentation is a third of a large answer and a model reads it no better.
   return { content: [{ type: 'text', text: JSON.stringify(value) }] }
 }
 
@@ -52,7 +52,7 @@ export function fail(err: unknown): CallToolResult {
 export function refuse(message: string, code: string): CallToolResult {
   return {
     isError: true,
-    content: [{ type: 'text', text: JSON.stringify({ error: message, code }, null, 2) }]
+    content: [{ type: 'text', text: JSON.stringify({ error: message, code }) }]
   }
 }
 

@@ -8,9 +8,9 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type CMSCollection, type NivaroClient, readCollection, readCollections } from '@nivaro/sdk'
 import { z } from 'zod'
 import { READ } from '../annotations.js'
-import { clip } from '../compact.js'
+import { clip, pageOf } from '../compact.js'
 import { fail, ok } from '../result.js'
-import { collectionName } from '../schema.js'
+import { clampTo, collectionName } from '../schema.js'
 
 export interface CollectionSummary {
   collection: string
@@ -18,6 +18,23 @@ export interface CollectionSummary {
   singleton: boolean
   hidden: boolean
   description: string | null
+}
+
+/** One line per collection: name and label, plus only what is set. */
+export interface CollectionEntry {
+  name: string
+  label: string | null
+  singular?: string
+  singleton?: true
+  hidden?: true
+  description?: string
+}
+
+export interface CollectionListOptions {
+  /** Case-insensitive match on name, label, singular label or description. */
+  search?: string
+  /** Also list hidden collections and the instance's own nivaro_ / directus_ tables. */
+  include_hidden?: boolean
 }
 
 export interface FieldSummary {
@@ -172,6 +189,41 @@ export async function listCollections(client: NivaroClient): Promise<CollectionS
   return res.data.map(summarizeCollection)
 }
 
+const SYSTEM_PREFIX = /^(nivaro|directus)_/i
+
+export function compactCollection(col: CMSCollection): CollectionEntry {
+  const label = col.display_name ?? null
+  const out: CollectionEntry = { name: col.collection, label }
+  const singular = typeof col.singular === 'string' ? col.singular.trim() : ''
+  if (singular && singular !== label) out.singular = singular
+  if (truthy(col.singleton)) out.singleton = true
+  if (truthy(col.hidden)) out.hidden = true
+  const description = typeof col.description === 'string' ? col.description.trim() : ''
+  if (description) out.description = clip(description, 100) ?? undefined
+  return out
+}
+
+/** The registry as one short entry per collection, business collections only unless asked. */
+export function compactCollections(
+  list: CMSCollection[],
+  options: CollectionListOptions = {}
+): CollectionEntry[] {
+  const needle = options.search?.trim().toLowerCase()
+  return list
+    .filter(
+      (c) =>
+        options.include_hidden === true || (!SYSTEM_PREFIX.test(c.collection) && !truthy(c.hidden))
+    )
+    .filter(
+      (c) =>
+        !needle ||
+        [c.collection, c.display_name, c.singular, c.description].some(
+          (v) => typeof v === 'string' && v.toLowerCase().includes(needle)
+        )
+    )
+    .map(compactCollection)
+}
+
 export async function describeCollection(
   client: NivaroClient,
   collection: string
@@ -186,37 +238,36 @@ export function registerCollectionTools(server: McpServer, client: NivaroClient)
     {
       title: 'List collections',
       description:
-        "The collections the key can read: name and display name (hidden ones only on request). Use search to narrow a long list; call describe_collection for a collection's fields.",
+        "The instance's collections, one short entry each (name, label, singular label, singleton flag). Pass search to narrow a long list; call describe_collection for a collection's fields.",
       inputSchema: {
         search: z
           .string()
           .optional()
-          .describe('Only collections whose name or display name contains this text.'),
-        include_hidden: z.boolean().optional().describe('Also list collections hidden in the app.')
+          .describe('Case-insensitive match on name, label or description.'),
+        include_hidden: z
+          .boolean()
+          .optional()
+          .describe('Also list hidden collections and the nivaro_/directus_ system tables.'),
+        limit: z.number().int().optional().describe('Entries per page (1–500, default 50).'),
+        offset: z.number().int().min(0).optional()
       },
       annotations: READ
     },
-    async ({ search, include_hidden }) => {
+    async ({ search, include_hidden, limit, offset }) => {
       try {
-        const q = search?.trim().toLowerCase()
-        const rows = (await listCollections(client))
-          .filter((c) => include_hidden || !c.hidden)
-          .filter(
-            (c) =>
-              !q ||
-              c.collection.toLowerCase().includes(q) ||
-              (c.display_name ?? '').toLowerCase().includes(q)
-          )
-          .map((c) => ({
-            collection: c.collection,
-            ...(c.display_name && c.display_name !== c.collection
-              ? { display_name: c.display_name }
-              : {}),
-            ...(c.singleton ? { singleton: true } : {}),
-            ...(c.hidden ? { hidden: true } : {}),
-            ...(c.description ? { description: clip(c.description, 100) } : {})
-          }))
-        return ok({ count: rows.length, collections: rows })
+        const res = await client.request(readCollections())
+        const all = compactCollections(res.data, { search, include_hidden })
+        const page = pageOf(all, clampTo(limit, 50, 500), offset)
+        const out: Record<string, unknown> = {
+          collections: page.items,
+          total: page.total,
+          offset: page.offset,
+          truncated: page.truncated
+        }
+        if (page.truncated) {
+          out.note = 'More collections than shown: pass search to narrow, or offset to page.'
+        }
+        return ok(out)
       } catch (err) {
         return fail(err)
       }
