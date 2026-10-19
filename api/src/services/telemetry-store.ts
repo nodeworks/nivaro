@@ -123,7 +123,7 @@ export async function logsQuery(
   query: string,
   from: number,
   to: number,
-  opts: { limit?: number; signal?: AbortSignal } = {}
+  opts: { limit?: number; signal?: AbortSignal; store?: 'logs' | 'traces' } = {}
 ): Promise<StoreRow[]> {
   const cfg = storeConfig()
   if (!cfg) throw new StoreUnavailableError('The telemetry store is not configured')
@@ -137,7 +137,9 @@ export async function logsQuery(
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout
   let res: Response
   try {
-    res = await transport(`${cfg.url}/select/logsql/query`, {
+    // vmauth serves the traces store under a /traces prefix (same LogsQL API).
+    const prefix = opts.store === 'traces' ? '/traces' : ''
+    res = await transport(`${cfg.url}${prefix}/select/logsql/query`, {
       method: 'POST',
       headers: {
         'content-type': 'application/x-www-form-urlencoded',
@@ -155,6 +157,55 @@ export async function logsQuery(
     throw new StoreUnavailableError(`The telemetry store answered ${res.status}`)
   }
   return parseNdjson(await res.text())
+}
+
+export interface MetricSample {
+  labels: Record<string, string>
+  value: number
+}
+
+/**
+ * One instant MetricsQL query against the metrics store (VictoriaMetrics, through vmauth's read
+ * path). `expr` is a fixed expression from this codebase — never request text.
+ */
+export async function metricsQuery(expr: string, signal?: AbortSignal): Promise<MetricSample[]> {
+  const cfg = storeConfig()
+  if (!cfg) throw new StoreUnavailableError('The telemetry store is not configured')
+  const timeout = AbortSignal.timeout(cfg.timeoutMs)
+  let res: Response
+  try {
+    res = await transport(`${cfg.url}/api/v1/query`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {})
+      },
+      body: new URLSearchParams({ query: expr }).toString(),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout
+    })
+  } catch (err) {
+    throw new StoreUnavailableError(
+      `The metrics store did not answer (${err instanceof Error ? err.name : 'error'})`
+    )
+  }
+  if (!res.ok) throw new StoreUnavailableError(`The metrics store answered ${res.status}`)
+  const body = (await res.json()) as {
+    data?: { result?: Array<{ metric?: Record<string, string>; value?: [number, string] }> }
+  }
+  return (body.data?.result ?? []).map((r) => ({
+    labels: r.metric ?? {},
+    value: Number(r.value?.[1])
+  }))
+}
+
+// Access lines this process wrote since it started (the telemetry page's egress figure).
+let accessLines = 0
+const accessSince = new Date().toISOString()
+export function noteAccessLine(): void {
+  accessLines++
+}
+export function accessLineStats(): { written: number; since: string } {
+  return { written: accessLines, since: accessSince }
 }
 
 /** Epoch ms of a store `_time` value (RFC 3339), or NaN. */
@@ -229,6 +280,8 @@ export interface AccessLogInput {
   request_id?: string | null
   chain_id?: string | null
   instance: string
+  /** The request's trace went to the telemetry stack (trace-export.ts): link the line to it. */
+  traced?: boolean
 }
 
 /**
@@ -256,7 +309,11 @@ export function accessLogLine(r: AccessLogInput): Record<string, string | number
   }
   if (r.collection) line.coll = r.collection
   if (r.graphql_operation) line.gql = r.graphql_operation
-  if (r.request_id) line.rid = r.request_id
+  if (r.request_id) {
+    line.rid = r.request_id
+    // The W3C trace id (the request id's hex digits), only when the trace was sent.
+    if (r.traced) line.tid = r.request_id.replace(/-/g, '').toLowerCase()
+  }
   if (r.chain_id) line.chain = r.chain_id
   if (r.error) line.err = r.error.slice(0, 300)
   return line

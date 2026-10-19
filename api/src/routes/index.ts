@@ -229,6 +229,7 @@ import { supportRoutes } from './support.js'
 import { syncJobsRoutes } from './sync-jobs.js'
 import { tasksRoutes } from './tasks.js'
 import { teamMiscRoutes, teamUserRoutes } from './team.js'
+import { telemetryRoutes } from './telemetry.js'
 import { testDataRoutes } from './test-data.js'
 import { throughputRoutes } from './throughput.js'
 import { timelineRoutes } from './timeline.js'
@@ -593,6 +594,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(supportRoutes, { prefix: '/support' })
   await app.register(remindersRoutes, { prefix: '/reminders' })
   await app.register(opsDbRoutes, { prefix: '/ops-db' })
+  await app.register(telemetryRoutes, { prefix: '/telemetry' })
   await app.register(opsRuntimeRoutes, { prefix: '/ops-runtime' })
   await app.register(opsLogsRoutes, { prefix: '/ops-logs' })
   await app.register(opsAssistantRoutes, { prefix: '/ops-assistant' })

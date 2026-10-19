@@ -1039,6 +1039,27 @@ export const obsTrafficMapPlatform: DocSection = {
       type: 'note',
       text: 'Off in cloud mode: the store has no tenant labels.'
     },
+    { type: 'h3', id: 'telemetry-traces', text: 'Request traces out to the stack' },
+    {
+      type: 'p',
+      text: 'The slow-request traces above live in each process’s memory. With `TRACE_EXPORT_URL` set, finished requests also go out as OpenTelemetry spans: every slow request (`TRACE_SLOW_MS`), every server error, everything someone asked to keep (Trace next call, follow a person), and a small sample of the rest. Each trace has the request span, its phases nested by time, and one span per SQL statement with the statement text only (never its values). The path is sent without its query string. The trace id is the request id without dashes, so the request log row, the `x-nivaro-request-id` header, the access line’s `tid` and the trace all match. Traces queue in memory and go out in batches; a failure is counted and dropped, never slowing a response.'
+    },
+    {
+      type: 'table',
+      head: ['Setting', 'What it does'],
+      rows: [
+        ['`TRACE_EXPORT_URL`', 'OTLP/HTTP traces endpoint, e.g. `http://efp_obs_alloy:4318/v1/traces`.'],
+        ['`TRACE_EXPORT_TOKEN`', 'Bearer token the receiver expects.'],
+        ['`TRACE_EXPORT_SAMPLE`', 'Share of other requests sent (default 0.02).'],
+        ['`TRACE_EXPORT_ENV`', '`deployment.environment.name` on every span (defaults to `TELEMETRY_STORE_ENV`).'],
+        ['`TELEMETRY_GRAFANA_URL`', 'Where the Telemetry page’s Open Grafana button points.']
+      ]
+    },
+    { type: 'h3', id: 'telemetry-page', text: 'The Telemetry page' },
+    {
+      type: 'p',
+      text: 'Operations → Health → Telemetry (administrators) shows the monitoring stack from inside Nivaro: whether the history store answers, whether traces are going out, firing alerts and failing uptime checks at the top; what this process sent next to what actually arrived in the last hour; the settings this server runs with (tokens shown only as set or not set); and the stack’s own health read from its metrics store: firing alerts, uptime checks, collected sources, backups to the file share, and disk and share space. Each part is read on its own, so one failing part shows its error without blanking the rest. Silenced alerts still appear (silences only stop the email); manage them in Grafana. `GET /api/telemetry/status`; `/api/metrics` also reports access lines and trace export counts.'
+    },
     { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
     {
       type: 'p',

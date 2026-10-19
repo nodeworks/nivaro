@@ -77,6 +77,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   SquareFunction,
+  Telescope,
   Terminal,
   TerminalSquare,
   ThumbsUp,
@@ -554,6 +555,13 @@ export const navCategories: NavCategory[] = [
         keywords: 'index proposals procedure rewrite cache rollup'
       },
       { icon: Waypoints, label: 'Traffic Map', to: '/traffic-map', section: 'Health' },
+      {
+        icon: Telescope,
+        label: 'Telemetry',
+        to: '/telemetry',
+        section: 'Health',
+        keywords: 'grafana traces logs metrics uptime alerts backups monitoring'
+      },
       { icon: Radio, label: 'Realtime', to: '/realtime', section: 'Health', keywords: 'sockets' },
       {
         icon: Activity,

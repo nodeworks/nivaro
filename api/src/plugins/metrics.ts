@@ -5,6 +5,8 @@ import fp from 'fastify-plugin'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
 import { poolNow, poolPressure } from '../services/pool-attribution.js'
+import { accessLineStats } from '../services/telemetry-store.js'
+import { traceExportStats } from '../services/trace-export.js'
 import { NIVARO_VERSION } from '../version.js'
 
 /**
@@ -176,6 +178,26 @@ export function renderMetrics(extras: MetricsExtras = {}): string {
   if (extras.cronLeader !== undefined && extras.cronLeader !== null) {
     metric('nivaro_cron_leader', 'gauge', '1 when this process holds the scheduler lease.')
     out.push(`nivaro_cron_leader ${extras.cronLeader ? 1 : 0}`)
+  }
+
+  // #2544 — what this process sends to the telemetry stack.
+  metric('nivaro_access_lines_total', 'counter', 'Access lines written for the telemetry store.')
+  out.push(`nivaro_access_lines_total ${accessLineStats().written}`)
+  const tx = traceExportStats()
+  if (tx.enabled || tx.traces_sent > 0) {
+    metric('nivaro_trace_export_traces_total', 'counter', 'Request traces sent, by reason queued.')
+    for (const [reason, n] of Object.entries(tx.by_reason))
+      out.push(`nivaro_trace_export_traces_total{reason="${reason}"} ${n}`)
+    metric('nivaro_trace_export_spans_total', 'counter', 'Spans sent to the traces store.')
+    out.push(`nivaro_trace_export_spans_total ${tx.spans_sent}`)
+    metric(
+      'nivaro_trace_export_dropped_total',
+      'counter',
+      'Traces dropped (queue full or send failed).'
+    )
+    out.push(`nivaro_trace_export_dropped_total ${tx.dropped}`)
+    metric('nivaro_trace_export_queued', 'gauge', 'Traces waiting to be sent.')
+    out.push(`nivaro_trace_export_queued ${tx.queued}`)
   }
   return `${out.join('\n')}\n`
 }

@@ -1,6 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import { _staticDb, db, dbRead } from '../db/index.js'
+import { instanceKey } from '../services/instance-key.js'
 import {
   attachQueryTracing,
   beginTrace,
@@ -11,6 +12,7 @@ import {
   markSerializeStart,
   setWideTables
 } from '../services/request-trace.js'
+import { flushTraceExport, setTraceExportInstance } from '../services/trace-export.js'
 import { attachInflightQueries, inflightEnd, inflightStart } from '../services/traffic-inflight.js'
 
 /**
@@ -26,6 +28,13 @@ import { attachInflightQueries, inflightEnd, inflightStart } from '../services/t
 export const REQUEST_ID_HEADER = 'x-nivaro-request-id'
 
 export const requestTracePlugin = fp(async (app: FastifyInstance) => {
+  setTraceExportInstance(instanceKey().slice(0, 60))
+  const flushTimer = setInterval(() => void flushTraceExport(), 5000)
+  flushTimer.unref()
+  app.addHook('onClose', async () => {
+    clearInterval(flushTimer)
+    await flushTraceExport().catch(() => {})
+  })
   // Round-trip accounting (#506/#507/#483): every statement a traced request
   // runs is counted and timed off knex's query events. Both pools — the
   // replica shares the request context, so its statements count too.
@@ -106,7 +115,7 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     if (!path.startsWith('/api/') || path.startsWith('/api/traces')) return
     inflightEnd(req)
     try {
-      finishTrace({
+      const exported = finishTrace({
         method: req.method,
         // routerPath collapses ids into the pattern (/api/items/:collection/:id),
         // so traces for the same endpoint group instead of fragmenting per record.
@@ -115,6 +124,8 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
         status: reply.statusCode,
         user: req.user?.id ?? null
       })
+      // The access line (api-logger, later in the same onResponse chain) links to the trace.
+      if (exported) (req as unknown as { __nvrTraceExported?: boolean }).__nvrTraceExported = true
     } catch (err) {
       // A diagnostic must never take down the response it is describing.
       app.log.warn({ err }, 'Failed to record request trace')

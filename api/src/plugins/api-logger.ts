@@ -6,7 +6,7 @@ import { hasChainColumns } from '../services/chain-columns.js'
 import { maskQueryString } from '../services/secret-mask.js'
 import { instanceKey } from '../services/settings-overrides.js'
 import { requestTenantKey } from '../services/socket-tenant.js'
-import { accessLogEnabled, accessLogLine } from '../services/telemetry-store.js'
+import { accessLogEnabled, accessLogLine, noteAccessLine } from '../services/telemetry-store.js'
 import { tenantScopedRoom } from '../services/tenant-rooms.js'
 import { errorCode, hasCacheHit, noteRequest } from '../services/traffic-map.js'
 import { notePublicHit } from '../services/traffic-taps/public-clients.js'
@@ -378,7 +378,17 @@ export const apiLoggerPlugin = fp(async (app: FastifyInstance) => {
     buffer.push(row)
     // #2544 — the same request as one structured line for the long-history telemetry store
     // (the request log above prunes at 14 days). Ids, route, status and timing only.
-    if (accessLogEnabled()) app.log.info(accessLogLine({ ...row, instance: INSTANCE }), 'api')
+    if (accessLogEnabled()) {
+      noteAccessLine()
+      app.log.info(
+        accessLogLine({
+          ...row,
+          instance: INSTANCE,
+          traced: !!(req as unknown as { __nvrTraceExported?: boolean }).__nvrTraceExported
+        }),
+        'api'
+      )
+    }
 
     // Live traffic view (#276): stream to admin watchers only when someone is
     // actually watching — the room-size probe is a local map lookup.

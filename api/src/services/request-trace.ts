@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { randomUUID } from 'node:crypto'
 // Leaf (one constant list, no db import).
 import { SECRET_COLUMN_NAMES } from './system-collections.js'
+import { exportReason, queueTraceExport, traceExportConfig } from './trace-export.js'
 
 /**
  * Per-request phase timing.
@@ -757,15 +758,16 @@ export function onTraceKept(fn: (rec: TraceRecord, request: unknown) => void): (
   }
 }
 
+/** Returns true when the request's trace went out to the telemetry stack (trace-export.ts). */
 export function finishTrace(meta: {
   method: string
   route: string
   url: string
   status: number
   user: string | null
-}): void {
+}): boolean {
   const ctx = als.getStore()
-  if (!ctx) return
+  if (!ctx) return false
   const total = performance.now() - ctx.start
   // #309 — follow-this-user: a flagged user's requests are kept regardless of
   // speed (their next N, whatever they touch), so a "it's slow for Beth"
@@ -793,7 +795,31 @@ export function finishTrace(meta: {
       }
     }
   }
-  if (total < SLOW_MS && !followed && !forced) return
+  // #690 — the trace out to the telemetry stack: slow, failed, kept, or sampled.
+  const reason = exportReason(
+    traceExportConfig(),
+    total,
+    meta.status,
+    SLOW_MS,
+    !!followed || forced
+  )
+  const exported =
+    reason != null &&
+    queueTraceExport({
+      requestId: ctx.id,
+      startMs: performance.timeOrigin + ctx.start,
+      totalMs: total,
+      method: meta.method,
+      route: meta.route,
+      path: meta.url,
+      status: meta.status,
+      user: meta.user,
+      queries: ctx.queries,
+      reason,
+      phases: ctx.spans,
+      statements: ctx.statements
+    })
+  if (total < SLOW_MS && !followed && !forced) return exported
 
   // Spans nest (a phase can contain sub-phases), so they are kept in start
   // order and the UI indents by overlap rather than being handed a tree the
@@ -833,6 +859,7 @@ export function finishTrace(meta: {
       }
     }
   }
+  return exported
 }
 
 export function listTraces(limit = 50): TraceRecord[] {
