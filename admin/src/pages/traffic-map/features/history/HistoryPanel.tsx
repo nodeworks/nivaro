@@ -52,6 +52,7 @@ function StackMinuteHistory({
     <div
       ref={box}
       tabIndex={-1}
+      aria-label='Minute history'
       className='flex flex-wrap items-center justify-end gap-1.5 text-[11.5px] outline-none'
       data-tm-minute-history={s.enabled ? 'on' : 'off'}
       data-tm-minute-history-stack=''
@@ -63,7 +64,7 @@ function StackMinuteHistory({
               ? 'Traffic history is kept for 13 months in the long history, so the minute history in this database isn’t needed.'
               : d.stack_from
                 ? `Long history starts ${shortDay(d.stack_from)}; keep this on until then.`
-                : 'Long history starts with its first minutes; keep this on until then.'}
+                : 'Long history has no traffic yet; keep this on for now.'}
           </span>
           {covers && (
             <TwoClickButton

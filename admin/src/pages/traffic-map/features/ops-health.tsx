@@ -175,13 +175,19 @@ function ceilingTitle(c: Capacity): string {
   return `Ceiling: ${SOURCE_PHRASE[c.ceiling.source]}${at}`
 }
 
-/** "Mar 2" this year, "Mar 2, 2026" otherwise. */
-const shortDate = (iso: string) => {
+/**
+ * "Mar 2" this year, "Mar 2, 2026" otherwise. `utc` for the server's week keys (Monday 00:00
+ * UTC), which local time would show as the Sunday before.
+ */
+const shortDate = (iso: string, utc = false) => {
   const d = new Date(iso)
+  const year = utc ? d.getUTCFullYear() : d.getFullYear()
+  const now = utc ? new Date().getUTCFullYear() : new Date().getFullYear()
   return d.toLocaleDateString([], {
     month: 'short',
     day: 'numeric',
-    ...(d.getFullYear() === new Date().getFullYear() ? {} : { year: 'numeric' })
+    ...(utc ? { timeZone: 'UTC' } : {}),
+    ...(year === now ? {} : { year: 'numeric' })
   })
 }
 
@@ -196,13 +202,19 @@ function thisWeek(now = Date.now()): string {
 const fullWeeks = (h: NonNullable<Capacity['history']>) =>
   h.weekly.filter((w) => w.week < thisWeek())
 
-/** Screen-reader text for the weekly-peak line. */
+/** Screen-reader summary of the weekly-peak line (first, last and highest week). */
 function weeklyLabel(h: NonNullable<Capacity['history']>): string {
   const weeks = fullWeeks(h)
   const since = h.data_from ? ` since ${shortDate(h.data_from)}` : ''
-  return `Busiest minute per week${since}: ${weeks
-    .map((w) => `week of ${shortDate(`${w.week}T00:00:00Z`)} ${w.peak_rpm.toLocaleString()}`)
-    .join(', ')} requests per minute`
+  if (!weeks.length) return `Busiest minute per week${since}: no full week yet`
+  const top = weeks.reduce((a, w) => (w.peak_rpm > a.peak_rpm ? w : a))
+  const rpm = (n: number) => n.toLocaleString()
+  return `Busiest minute per week${since}: ${rpm(weeks[0].peak_rpm)} to ${rpm(
+    weeks[weeks.length - 1].peak_rpm
+  )} requests per minute, highest ${rpm(top.peak_rpm)} in the week of ${shortDate(
+    `${top.week}T00:00:00Z`,
+    true
+  )}`
 }
 
 /** "Best minute: 1,240 req/min on Mar 2". */
