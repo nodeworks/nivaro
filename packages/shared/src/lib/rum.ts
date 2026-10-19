@@ -13,7 +13,7 @@
 
 interface RumEvent {
   route: string
-  kind: 'load' | 'route' | 'rage' | 'dead'
+  kind: 'load' | 'route' | 'rage' | 'dead' | 'widget'
   ttfb_ms?: number
   fcp_ms?: number
   lcp_ms?: number
@@ -21,6 +21,11 @@ interface RumEvent {
   app?: string
   /** Viewport width; the server keeps only a class (phone, tablet, laptop…). */
   vw?: number
+  /** 'widget' only (#1353): the canvas catalog key and the viewer's role id. */
+  widget?: string
+  role?: string
+  fetch_ms?: number
+  paint_ms?: number
 }
 
 let started = false
@@ -29,6 +34,8 @@ let toPattern: (path: string) => string = (p) => p
 const queue: RumEvent[] = []
 let flushTimer: ReturnType<typeof setTimeout> | null = null
 let apiBase = '/api'
+/** Hosts that sign in with a bearer token (no session cookie) hand it over here. */
+let tokenProvider: (() => string | null | undefined) | undefined
 
 // ─── Rage-click detection (#409) ────────────────────────────────────────────
 // 3+ clicks on the same element within 600ms = frustration; reported as a
@@ -149,15 +156,21 @@ function flush(): void {
   if (queue.length === 0) return
   const body = JSON.stringify({ events: queue.splice(0, queue.length) })
   try {
-    // sendBeacon survives pagehide; credentialed fetch is the fallback.
+    const token = tokenProvider?.()
+    // sendBeacon survives pagehide; credentialed fetch is the fallback. A beacon cannot carry an
+    // Authorization header, so a bearer-token host always takes the keepalive fetch.
     const ok =
+      !token &&
       typeof navigator.sendBeacon === 'function' &&
       navigator.sendBeacon(`${apiBase}/rum`, new Blob([body], { type: 'application/json' }))
     if (!ok) {
       void fetch(`${apiBase}/rum`, {
         method: 'POST',
         credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
         body,
         keepalive: true
       }).catch(() => {})
@@ -180,6 +193,34 @@ function enqueue(e: RumEvent): void {
   }
 }
 
+const WIDGET_KEY = /^[A-Za-z0-9._:-]{1,80}$/
+const ROLE_ID = /^[0-9A-Fa-f-]{36}$/
+
+/**
+ * Per-widget timing (#1353): how long a dashboard widget took to get its data
+ * (`fetchMs`, first fetch start to data settled) and to put it on screen
+ * (`paintMs`, settled to the next painted frame). Carries the catalog key and
+ * the viewer's role id only — no record data, no user input. A malformed key
+ * is dropped here so the server never sees it.
+ */
+export function rumWidget(opts: {
+  key: string
+  roleId?: string | null
+  fetchMs: number
+  paintMs: number
+}): void {
+  if (!started || !WIDGET_KEY.test(opts.key)) return
+  const role = opts.roleId && ROLE_ID.test(opts.roleId) ? opts.roleId.toUpperCase() : undefined
+  enqueue({
+    kind: 'widget',
+    route: `widget:${opts.key}`,
+    widget: opts.key,
+    role,
+    fetch_ms: Math.max(0, Math.round(opts.fetchMs)),
+    paint_ms: Math.max(0, Math.round(opts.paintMs))
+  })
+}
+
 /** Route-change timing: from the navigation to a settled double-rAF frame. */
 export function rumRouteChange(pathname: string): void {
   if (!started || typeof window === 'undefined') return
@@ -199,12 +240,14 @@ export function startRum(opts?: {
   app?: string
   routePattern?: (path: string) => string
   apiBase?: string
+  getToken?: () => string | null | undefined
 }): void {
   if (started || typeof window === 'undefined' || typeof performance === 'undefined') return
   started = true
   appName = opts?.app
   if (opts?.routePattern) toPattern = opts.routePattern
   if (opts?.apiBase) apiBase = opts.apiBase
+  tokenProvider = opts?.getToken
   watchRageClicks(() => toPattern(window.location.pathname))
   watchDeadClicks(() => toPattern(window.location.pathname))
 
