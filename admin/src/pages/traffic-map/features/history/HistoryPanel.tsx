@@ -3,8 +3,14 @@
  * peaks (#2165) and Search (#2175), plus the switch for the optional minute history (#2228).
  * Nothing is read until a tab is opened.
  */
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  type UseMutationResult,
+  useMutation,
+  useQuery,
+  useQueryClient
+} from '@tanstack/react-query'
 import { History } from 'lucide-react'
+import { useRef, useState } from 'react'
 import { SimpleSelect } from '@/components/ui/simple-select'
 import { api } from '@/lib/api'
 import { cn } from '@/lib/utils'
@@ -21,6 +27,89 @@ const TABS: Array<{ id: HistoryTab; label: string }> = [
   { id: 'search', label: 'Search' }
 ]
 const KEEP = [7, 14, 30, 60, 90].map((d) => ({ value: String(d), label: `keep ${d} days` }))
+
+const DAY_MS = 86_400_000
+const shortDay = (iso: string) =>
+  new Date(iso).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
+
+/** The minute-history switch when the long history (telemetry stack) is set up (#2544). */
+function StackMinuteHistory({
+  d,
+  held,
+  save
+}: {
+  d: MinuteSettingsBody
+  held: string
+  save: UseMutationResult<MinuteSettingsBody | null, Error, Partial<MinuteSettingsBody['settings']>>
+}) {
+  const s = d.settings
+  const box = useRef<HTMLDivElement>(null)
+  const [turnedOff, setTurnedOff] = useState(false)
+  const stackFrom = d.stack_from ? Date.parse(d.stack_from) : null
+  // The long history covers everything the database copy would still hold.
+  const covers = stackFrom != null && stackFrom <= Date.now() - s.retention_days * DAY_MS
+  return (
+    <div
+      ref={box}
+      tabIndex={-1}
+      className='flex flex-wrap items-center justify-end gap-1.5 text-[11.5px] outline-none'
+      data-tm-minute-history={s.enabled ? 'on' : 'off'}
+      data-tm-minute-history-stack=''
+    >
+      {s.enabled ? (
+        <>
+          <span className='text-[var(--tm-muted)]'>
+            {covers
+              ? 'Traffic history is kept for 13 months in the long history, so the minute history in this database isn’t needed.'
+              : d.stack_from
+                ? `Long history starts ${shortDay(d.stack_from)}; keep this on until then.`
+                : 'Long history starts with its first minutes; keep this on until then.'}
+          </span>
+          {covers && (
+            <TwoClickButton
+              id='tm-minute-toggle'
+              label='Turn off minute history'
+              armedLabel='Click again — the 13-month history stays'
+              busy={save.isPending}
+              onConfirm={() =>
+                save.mutate(
+                  { enabled: false },
+                  {
+                    onSuccess: () => {
+                      setTurnedOff(true)
+                      box.current?.focus()
+                    }
+                  }
+                )
+              }
+            />
+          )}
+        </>
+      ) : (
+        <>
+          <span className='text-[var(--tm-muted)]'>
+            Traffic history is kept for 13 months in the long history. Minute history:{' '}
+            <span className='text-[var(--tm-fg-2)]'>{held}</span>
+          </span>
+          <TwoClickButton
+            id='tm-minute-toggle'
+            label='Turn on minute history'
+            armedLabel='Click again to record every minute'
+            busy={save.isPending}
+            onConfirm={() => {
+              setTurnedOff(false)
+              save.mutate({ enabled: true })
+            }}
+          />
+        </>
+      )}
+      {turnedOff && !s.enabled && (
+        <Note tone='ok'>Minute history is off. Old minutes are removed as they expire.</Note>
+      )}
+      {save.isError && <Note tone='error'>{errorOf(save.error)}</Note>}
+    </div>
+  )
+}
 
 function MinuteHistorySwitch() {
   const qc = useQueryClient()
@@ -43,36 +132,15 @@ function MinuteHistorySwitch() {
   const d = q.data
   if (!d || d.cloud) return null
   const s = d.settings
-  // #2544 — the telemetry stack keeps the map's minutes for 13 months: say so, and offer to stop
-  // the database copy (never turned off for anyone).
-  if (d.stack)
-    return (
-      <div
-        className='flex flex-wrap items-center justify-end gap-1.5 text-[11.5px]'
-        data-tm-minute-history={s.enabled ? 'on' : 'off'}
-        data-tm-minute-history-stack=''
-      >
-        <span className='text-[var(--tm-muted)]'>
-          Traffic history is kept for 13 months on the telemetry stack
-          {s.enabled ? ', so the minute history in this database isn’t needed.' : '.'}
-        </span>
-        {s.enabled && (
-          <TwoClickButton
-            id='tm-minute-toggle'
-            label='Turn off'
-            armedLabel='Click again to stop recording'
-            busy={save.isPending}
-            onConfirm={() => save.mutate({ enabled: false })}
-          />
-        )}
-        {save.isError && <Note tone='error'>{errorOf(save.error)}</Note>}
-      </div>
-    )
   const held = d.coverage.first
     ? `holds minutes since ${new Date(d.coverage.first).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
     : s.enabled
       ? 'the first minutes land within two minutes (on the instance that runs scheduled jobs)'
       : 'off'
+  // #2544 — the long history (telemetry stack) keeps the map's minutes for 13 months. The
+  // database copy is called unneeded only once the long history reaches back past the copy's own
+  // retention; it is never turned off for anyone.
+  if (d.stack) return <StackMinuteHistory d={d} held={held} save={save} />
   return (
     <div
       className='flex flex-wrap items-center justify-end gap-1.5 text-[11.5px]'

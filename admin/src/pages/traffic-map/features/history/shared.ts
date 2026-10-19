@@ -56,8 +56,10 @@ export interface MinuteSettingsBody {
   settings: { enabled: boolean; retention_days: number; edges: boolean }
   coverage: { table: boolean; first: string | null; last: string | null }
   cloud: boolean
-  /** The telemetry stack keeps traffic history (13 months): this database copy isn't needed. */
+  /** The telemetry stack keeps traffic history (13 months). */
   stack?: boolean
+  /** When the stack's history starts (ISO); null = no rollups yet. */
+  stack_from?: string | null
 }
 export interface JobSlot {
   id: string

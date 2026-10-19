@@ -375,9 +375,24 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
     }
   }
 
+  /**
+   * #2544 — whether the telemetry stack keeps traffic history, and since when (ISO; null = not
+   * set up, or no rollups yet). The panel only calls the database copy unneeded once the stack
+   * reaches back past the copy's own retention.
+   */
+  const stackInfo = async () => {
+    if (!rollupsEnabled()) return { stack: false, stack_from: null }
+    const from = await rollupDataFrom().catch(() => null)
+    return { stack: true, stack_from: from != null ? new Date(from).toISOString() : null }
+  }
+
   app.get('/history/settings', async () => {
-    const [settings, coverage] = await Promise.all([readMinuteSettings(true), minuteCoverage()])
-    return { data: { settings, coverage, cloud, stack: rollupsEnabled() } }
+    const [settings, coverage, stack] = await Promise.all([
+      readMinuteSettings(true),
+      minuteCoverage(),
+      stackInfo()
+    ])
+    return { data: { settings, coverage, cloud, ...stack } }
   })
 
   app.put<{ Body: Record<string, unknown> }>('/history/settings', async (req, reply) => {
@@ -390,9 +405,8 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
         userId: req.user?.id ?? null,
         req
       })
-      return {
-        data: { settings, coverage: await minuteCoverage(), cloud, stack: rollupsEnabled() }
-      }
+      const [coverage, stack] = await Promise.all([minuteCoverage(), stackInfo()])
+      return { data: { settings, coverage, cloud, ...stack } }
     } catch (err) {
       if (err instanceof MinuteSettingsUnavailableError)
         return reply.code(409).send({ error: err.message, code: 'HISTORY_NOT_MIGRATED' })
