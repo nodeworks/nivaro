@@ -20,9 +20,8 @@
  * lookbehind of exactly one step, so the point at `from + (s + 1) * step` is step `s` — the
  * same buckets stepIndex() in traffic-history-store.ts hands out. Steps with no samples (before
  * the rollups started, quiet hours) are simply absent and read as zero.
- * If 13-month reads over minute samples get slow at production volume, add hourly recording
- * rules (`<series>:1h` = sum_over_time(<series>[1h]) every hour) and point SERIES at them: the
- * arithmetic here does not change.
+ * The four count series also have hourly twins (`<series>:1h`, same labels, one sample per
+ * closed hour, computed from the logs); any whole-hour lookbehind reads those (see `sel`).
  *
  * Every expression is fixed text from this module; the only value in it is the configured env,
  * quoted by `envMatcher()`. Nothing a request sends becomes query text.
@@ -65,7 +64,31 @@ export function envMatcher(env: string | null): string {
   return `{env="${env.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"}`
 }
 
-const sel = (metric: string) => `${metric}${envMatcher(storeConfig()?.env ?? null)}`
+/** Seconds in a MetricsQL window like `43200s` or `395d`; NaN for anything else. */
+export function windowSeconds(w: string): number {
+  const m = /^(\d+)([smhd])$/.exec(w)
+  if (!m) return Number.NaN
+  return Number(m[1]) * { s: 1, m: 60, h: 3600, d: 86_400 }[m[2] as 's' | 'm' | 'h' | 'd']
+}
+
+/** Count series with an hourly twin (`<series>:1h`, same labels, one sample per closed hour). */
+const HOURLY = new Set<string>([
+  SERIES.requests,
+  SERIES.latency,
+  SERIES.routeRequests,
+  SERIES.routeLatency
+])
+
+/**
+ * The selector for `metric` under a `[window]` lookbehind: the hourly twin when the window is
+ * whole hours (60x fewer samples over 13 months), else the per-minute series. The hourly twin
+ * has no sample for the hour still running, so a window ending now leaves that hour out.
+ */
+export function sel(metric: string, window?: string): string {
+  const s = window ? windowSeconds(window) : Number.NaN
+  const name = HOURLY.has(metric) && s >= 3600 && s % 3600 === 0 ? `${metric}:1h` : metric
+  return `${name}${envMatcher(storeConfig()?.env ?? null)}`
+}
 
 const num = (v: unknown): number => {
   const n = Number(v)
@@ -202,14 +225,14 @@ export async function rollupSteps(
 ): Promise<TimelapseGroup[]> {
   const [requests, latency] = await Promise.all([
     stepRange(
-      (w) => `sum by (entity, stats_result) (sum_over_time(${sel(SERIES.requests)}[${w}]))`,
+      (w) => `sum by (entity, stats_result) (sum_over_time(${sel(SERIES.requests, w)}[${w}]))`,
       from,
       to,
       stepS,
       signal
     ),
     stepRange(
-      (w) => `sum by (entity, stats_result) (sum_over_time(${sel(SERIES.latency)}[${w}]))`,
+      (w) => `sum by (entity, stats_result) (sum_over_time(${sel(SERIES.latency, w)}[${w}]))`,
       from,
       to,
       stepS,
@@ -279,14 +302,14 @@ export async function rollupTotals(
 ): Promise<RollupStep[]> {
   const [requests, latency] = await Promise.all([
     stepRange(
-      (w) => `sum by (stats_result) (sum_over_time(${sel(SERIES.requests)}[${w}]))`,
+      (w) => `sum by (stats_result) (sum_over_time(${sel(SERIES.requests, w)}[${w}]))`,
       from,
       to,
       stepS,
       signal
     ),
     stepRange(
-      (w) => `sum by (stats_result) (sum_over_time(${sel(SERIES.latency)}[${w}]))`,
+      (w) => `sum by (stats_result) (sum_over_time(${sel(SERIES.latency, w)}[${w}]))`,
       from,
       to,
       stepS,
@@ -363,12 +386,12 @@ export async function rollupRouteTotals(
   const w = hoursWindow(from, to)
   const [requests, latency] = await Promise.all([
     metricsQuery(
-      `sum by (route, stats_result) (sum_over_time(${sel(SERIES.routeRequests)}[${w}]))`,
+      `sum by (route, stats_result) (sum_over_time(${sel(SERIES.routeRequests, w)}[${w}]))`,
       signal,
       to
     ),
     metricsQuery(
-      `sum by (route, stats_result) (sum_over_time(${sel(SERIES.routeLatency)}[${w}]))`,
+      `sum by (route, stats_result) (sum_over_time(${sel(SERIES.routeLatency, w)}[${w}]))`,
       signal,
       to
     )
@@ -403,11 +426,15 @@ export async function rollupSummary(
   const w = hoursWindow(from, to)
   const [requests, latency] = await Promise.all([
     metricsQuery(
-      `sum by (stats_result) (sum_over_time(${sel(SERIES.requests)}[${w}]))`,
+      `sum by (stats_result) (sum_over_time(${sel(SERIES.requests, w)}[${w}]))`,
       signal,
       to
     ),
-    metricsQuery(`sum by (stats_result) (sum_over_time(${sel(SERIES.latency)}[${w}]))`, signal, to)
+    metricsQuery(
+      `sum by (stats_result) (sum_over_time(${sel(SERIES.latency, w)}[${w}]))`,
+      signal,
+      to
+    )
   ])
   const c = foldInstant(requests, latency, () => 'all').get('all') ?? newCell()
   return {
@@ -438,21 +465,21 @@ export async function rollupSloRows(
   const w = hoursWindow(from, to)
   const [requests, latency, windowLatency] = await Promise.all([
     stepRange(
-      (win) => `sum by (inst, stats_result) (sum_over_time(${sel(SERIES.requests)}[${win}]))`,
+      (win) => `sum by (inst, stats_result) (sum_over_time(${sel(SERIES.requests, win)}[${win}]))`,
       dayFrom,
       dayTo,
       stepS,
       signal
     ),
     stepRange(
-      (win) => `sum by (inst, stats_result) (sum_over_time(${sel(SERIES.latency)}[${win}]))`,
+      (win) => `sum by (inst, stats_result) (sum_over_time(${sel(SERIES.latency, win)}[${win}]))`,
       dayFrom,
       dayTo,
       stepS,
       signal
     ),
     metricsQuery(
-      `sum by (inst, stats_result) (sum_over_time(${sel(SERIES.latency)}[${w}]))`,
+      `sum by (inst, stats_result) (sum_over_time(${sel(SERIES.latency, w)}[${w}]))`,
       signal,
       to
     )

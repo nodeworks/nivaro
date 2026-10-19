@@ -12,7 +12,9 @@ import {
   rollupRouteTotals,
   rollupSloRows,
   rollupSteps,
-  rollupTotals
+  rollupTotals,
+  sel,
+  windowSeconds
 } from '../../../services/traffic-rollups.js'
 
 const KEYS = [
@@ -107,6 +109,16 @@ describe('step alignment', () => {
     expect(endStepIndex(from, from, to, 3600)).toBe(-1)
     expect(endStepIndex(to + H, from, to, 3600)).toBe(-1)
     expect(endStepIndex(Number.NaN, from, to, 3600)).toBe(-1)
+  })
+  it('reads hourly twins for whole-hour windows, minute series otherwise', () => {
+    expect(windowSeconds('43200s')).toBe(43200)
+    expect(windowSeconds('395d')).toBe(395 * 86_400)
+    expect(windowSeconds('nope')).toBeNaN()
+    expect(sel('nivaro_tm_requests', '43200s')).toMatch(/^nivaro_tm_requests:1h/)
+    expect(sel('nivaro_route_latency', '1d')).toMatch(/^nivaro_route_latency:1h/)
+    expect(sel('nivaro_tm_requests', '300s')).toMatch(/^nivaro_tm_requests(?!:)/)
+    expect(sel('nivaro_tm_requests', '5400s')).toMatch(/^nivaro_tm_requests(?!:)/)
+    expect(sel('nivaro_tm_active_people_1h', '86400s')).toMatch(/^nivaro_tm_active_people_1h(?!:)/)
   })
   it('quotes the env label', () => {
     expect(envMatcher('staging')).toBe('{env="staging"}')
