@@ -13,13 +13,17 @@
  */
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { createNivaro, type NivaroClient } from '@nivaro/sdk'
+import { createNivaro, type NivaroClient, readMe } from '@nivaro/sdk'
 import { identifyingFetch, tagToolCalls } from './identify.js'
 import { registerResources } from './resources.js'
 import { registerAccountTools } from './tools/account.js'
+import { registerAdminTools } from './tools/admin.js'
 import { registerCollectionTools } from './tools/collections.js'
 import { registerItemTools } from './tools/items.js'
+import { registerLookupTools } from './tools/lookup.js'
 import { registerPipelineTools } from './tools/pipeline.js'
+import { registerRecordTools } from './tools/record.js'
+import { registerWorkTools } from './tools/work.js'
 
 export const SERVER_NAME = 'nivaro'
 export const SERVER_VERSION = '0.1.0'
@@ -33,6 +37,11 @@ export interface NivaroMcpOptions {
   client?: NivaroClient
   /** Custom fetch (tests, proxies). */
   fetch?: typeof fetch
+  /**
+   * Also register the read-only admin/ops tools (ADMIN_TOOL_NAMES). Default false. Pass
+   * true only for an administrator's key — the API refuses them to anyone else anyway.
+   */
+  adminTools?: boolean
 }
 
 export interface NivaroMcp {
@@ -53,8 +62,58 @@ export const TOOL_NAMES = [
   'delete_item',
   'list_pipeline_state',
   'transition',
-  'ask_data'
+  'ask_data',
+  'my_work',
+  'list_queues',
+  'read_queue',
+  'list_tasks',
+  'create_task',
+  'complete_task',
+  'list_notifications',
+  'mark_notifications_read',
+  'list_comments',
+  'add_comment',
+  'list_revisions',
+  'list_record_files',
+  'read_file',
+  'search',
+  'find_people',
+  'list_custom_queries',
+  'run_custom_query'
 ] as const
+
+/** The read-only admin/ops tools, registered only with `adminTools: true`. */
+export const ADMIN_TOOL_NAMES = [
+  'health',
+  'preflight',
+  'runtime_stats',
+  'db_pool',
+  'expensive_sql',
+  'traffic_summary',
+  'list_cron_jobs',
+  'list_job_runs',
+  'cpu_profile'
+] as const
+
+/** The SDK client the server uses: the key as bearer, every call tagged as MCP traffic. */
+export function createNivaroMcpClient(options: {
+  url: string
+  token: string
+  fetch?: typeof fetch
+}): NivaroClient {
+  const url = (options.url ?? '').replace(/\/+$/, '')
+  return createNivaro(url, { token: options.token, fetch: identifyingFetch(options.fetch) })
+}
+
+/** Whether the key's user is an administrator, from whoami. False when it cannot tell. */
+export async function keyIsAdmin(client: NivaroClient): Promise<boolean> {
+  try {
+    const res = await client.request(readMe<{ is_admin?: unknown }>())
+    return res.data?.is_admin === true
+  } catch {
+    return false
+  }
+}
 
 export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   const url = (options.url ?? '').replace(/\/+$/, '')
@@ -65,7 +124,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
       if (!options.token) {
         throw new Error('A Nivaro token is required (NIVARO_TOKEN or --token).')
       }
-      return createNivaro(url, { token: options.token, fetch: identifyingFetch(options.fetch) })
+      return createNivaroMcpClient({ url, token: options.token, fetch: options.fetch })
     })()
 
   const server = new McpServer(
@@ -75,6 +134,7 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
         'Tools act on a Nivaro instance as the user behind the configured API key.',
         'Start with list_collections / describe_collection to learn names and fields,',
         'read_items / aggregate_items to look at data, and list_pipeline_state before a transition.',
+        'my_work is the place to start for what needs doing; search finds records by text, find_people finds user ids and @handles.',
         'create_item rehearses by default; pass dry_run: false to store. delete_item needs confirm: true.',
         "Refusals come back as JSON with the API's message and code — never retry a refused write unchanged."
       ].join(' ')
@@ -86,6 +146,10 @@ export function createNivaroMcpServer(options: NivaroMcpOptions): NivaroMcp {
   registerCollectionTools(server, client)
   registerItemTools(server, client)
   registerPipelineTools(server, client)
+  registerWorkTools(server, client)
+  registerRecordTools(server, client)
+  registerLookupTools(server, client)
+  if (options.adminTools === true) registerAdminTools(server, client)
   registerResources(server, client)
 
   return { server, client }
@@ -98,7 +162,9 @@ export async function serveStdio(options: NivaroMcpOptions): Promise<NivaroMcp> 
   return mcp
 }
 
+export { DESTRUCTIVE, READ, WRITE, WRITE_IDEMPOTENT } from './annotations.js'
 export { describeFailure, maskToken } from './result.js'
+export { registerAdminTools, summarizeTraffic } from './tools/admin.js'
 export type { CollectionSchema, CollectionSummary, FieldSummary } from './tools/collections.js'
 export { summarizeCollection, summarizeSchema } from './tools/collections.js'
 export type { PipelineStateView } from './tools/pipeline.js'

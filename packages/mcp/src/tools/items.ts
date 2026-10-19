@@ -18,6 +18,7 @@ import {
   updateItem
 } from '@nivaro/sdk'
 import { z } from 'zod'
+import { DESTRUCTIVE, READ, WRITE, WRITE_IDEMPOTENT } from '../annotations.js'
 import { fail, ok, refuse } from '../result.js'
 import {
   clampLimit,
@@ -71,7 +72,7 @@ export function registerItemTools(server: McpServer, client: NivaroClient) {
         limit: z.number().int().optional().describe(`Rows per page (1–${MAX_LIMIT}, default 25).`),
         offset: z.number().int().min(0).optional()
       },
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async ({ collection, filter, sort, fields, search, limit, offset }) => {
       try {
@@ -102,7 +103,7 @@ export function registerItemTools(server: McpServer, client: NivaroClient) {
         id: recordId,
         fields: stringList.optional()
       },
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async ({ collection, id, fields }) => {
       try {
@@ -137,7 +138,7 @@ export function registerItemTools(server: McpServer, client: NivaroClient) {
           .describe('Group fields, "countAll" or "<function>.<field>", "-" first for descending.'),
         limit: z.number().int().optional().describe('Groups per page (max 1000).')
       },
-      annotations: { readOnlyHint: true }
+      annotations: READ
     },
     async (args) => {
       try {
@@ -187,7 +188,7 @@ export function registerItemTools(server: McpServer, client: NivaroClient) {
           .default(true)
           .describe('true (default) rehearses without writing; false stores the record.')
       },
-      annotations: { destructiveHint: false }
+      annotations: WRITE
     },
     async ({ collection, data, dry_run }) => {
       try {
@@ -219,7 +220,7 @@ export function registerItemTools(server: McpServer, client: NivaroClient) {
           .optional()
           .describe("Why the change is made, recorded in the record's history.")
       },
-      annotations: { destructiveHint: false, idempotentHint: true }
+      annotations: WRITE_IDEMPOTENT
     },
     async ({ collection, id, data, change_reason }) => {
       try {
@@ -247,7 +248,7 @@ export function registerItemTools(server: McpServer, client: NivaroClient) {
         id: recordId,
         confirm: z.boolean().optional().describe('Must be true to delete.')
       },
-      annotations: { destructiveHint: true }
+      annotations: DESTRUCTIVE
     },
     async ({ collection, id, confirm }) => {
       if (confirm !== true) {
