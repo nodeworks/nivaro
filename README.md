@@ -264,7 +264,7 @@ Tags `@sdk-x.x.x` → GitHub Actions publishes `@nivaro/sdk` to npm.
 pnpm mcp:release patch
 ```
 
-Tags `@mcp-x.x.x` → GitHub Actions publishes `@nivaro/mcp` to npm. The hosted `/api/mcp` endpoint ships with the app image.
+Tags `@mcp-x.x.x` → GitHub Actions publishes `@nivaro/mcp` to npm. The release chain runs it whenever `packages/mcp` changed (after the SDK, whose version the publish pins). The hosted `/api/mcp` endpoint ships with the app image.
 
 ### Website (`@www-*` → Vercel)
 

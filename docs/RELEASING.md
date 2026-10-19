@@ -33,14 +33,19 @@ workflow does the publish. Secrets live in the GitHub repo settings
 | SDK (`@nivaro/sdk`) | `pnpm sdk:release patch\|minor\|major` | `@sdk-x.y.z` | `publish-sdk.yml` → npm |
 | Extension kit (`@nivaro/extension-kit`) | `pnpm kit:release patch\|minor\|major` | `@kit-x.y.z` | `publish-kit.yml` → npm |
 | React (`@nivaro/react`) | `pnpm react:release …` | `@react-x.y.z` | `publish-react.yml` → npm |
+| MCP server (`@nivaro/mcp`) | `pnpm mcp:release …` | `@mcp-x.y.z` | `publish-mcp.yml` → npm |
 | www (marketing + docs site) | `pnpm www:release …` | `@www-x.y.z` | `vercel.yml` → Vercel |
 | Nivaro app image | `pnpm release …` | `v x.y.z` + `@app-x.y.z` | `docker-hub.yml` → `nodeworks/nivaro:x.y.z` + `:latest` |
 
 `sdk:release` and `www:release` run `sync-docs` first, so the SDK README and
 `www/docs.html` are regenerated from `admin/src/docs` before the tag.
 
-Typical order when everything changed: `sdk` → `react` (react pins the sdk) →
-`release` (app image) → `www`.
+Typical order when everything changed: `sdk` → `mcp` (its publish pins the
+sdk version in the tree) → `react` (react pins the sdk) → `release` (app image)
+→ `www`. The release chain (below) runs the package releases for you: each one
+whose package changed since its own last tag (`--with-sdk`, `--with-mcp`,
+`--with-react` force one; `@nivaro/mcp` is released on the first chain run
+because it has never been tagged), then waits until npm serves each version.
 
 ## Deploying with third-party extensions
 
