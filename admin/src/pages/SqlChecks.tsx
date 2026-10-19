@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Loader2, Play, SearchCheck, Settings2 } from 'lucide-react'
-import { useEffect, useId, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState } from 'react'
 import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
@@ -45,13 +45,20 @@ export default function SqlChecks() {
     refetchInterval: (q) => (q.state.data?.is_running ? 5000 : false)
   })
   const s = summary.data
-  const wasRunning = useWasRunning(!!s?.is_running)
-  const criticalOpen = s?.counts?.open?.critical ?? 0
+  const finishedRuns = useFinishedRuns(!!s?.is_running)
+  // read at the moment a run finishes; a later change (marking a finding expected) must not re-announce
+  const criticalRef = useRef(0)
+  criticalRef.current = s?.counts?.open?.critical ?? 0
+  const announce = useCallback((msg: string) => {
+    // clear first so the same words twice in a session are still announced
+    setLiveMsg('')
+    requestAnimationFrame(() => setLiveMsg(msg))
+  }, [])
   useEffect(() => {
-    if (!wasRunning) return
+    if (finishedRuns === 0) return
     void qc.invalidateQueries({ queryKey: ['sql-checks'] })
-    setLiveMsg(`Run finished: ${criticalOpen} critical`)
-  }, [wasRunning, qc, criticalOpen])
+    announce(`Run finished: ${criticalRef.current} critical`)
+  }, [finishedRuns, qc, announce])
 
   useEffect(() => {
     if (!armed) return
@@ -63,7 +70,7 @@ export default function SqlChecks() {
     mutationFn: () => api.post('/sql-checks/run'),
     onSuccess: () => {
       toast.success('SQL checks started. Findings update when the run finishes.')
-      setLiveMsg('Run started')
+      announce('Run started')
       void qc.invalidateQueries({ queryKey: ['sql-checks'] })
     },
     onError: (err) => toast.error(errorText(err, 'Couldn’t start a run.'))
@@ -259,6 +266,7 @@ export default function SqlChecks() {
             initialObject={object}
             initialSeverity={severityParam}
             onClearObject={() => setTab('findings', { object: null })}
+            onSeverityChange={(v) => setTab('findings', { severity: v || null })}
           />
         )}
         {tab === 'trends' && s?.ready && (
@@ -271,15 +279,15 @@ export default function SqlChecks() {
   )
 }
 
-/** True on the render where `running` goes from true to false (a run just finished). */
-function useWasRunning(running: boolean): boolean {
+/** Counts running -> done transitions (one per finished run seen on this page). */
+function useFinishedRuns(running: boolean): number {
   const [prev, setPrev] = useState(running)
-  const [finished, setFinished] = useState(false)
+  const [count, setCount] = useState(0)
   if (prev !== running) {
     setPrev(running)
-    setFinished(prev && !running)
+    if (prev && !running) setCount((c) => c + 1)
   }
-  return finished
+  return count
 }
 
 function SettingsCard({

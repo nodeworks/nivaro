@@ -46,13 +46,16 @@ const CHECK_OPTIONS = [
 export function FindingsTab({
   initialObject,
   initialSeverity,
-  onClearObject
+  onClearObject,
+  onSeverityChange
 }: {
   initialObject?: string | null
   /** ?severity= (the DB Health strip links to critical). */
   initialSeverity?: string | null
   /** Clears ?object= from the URL along with the filter. */
   onClearObject?: () => void
+  /** Keeps ?severity= in step with the filter. */
+  onSeverityChange?: (severity: string) => void
 }) {
   const [status, setStatus] = useState('open')
   const [severity, setSeverity] = useState(
@@ -149,7 +152,12 @@ export function FindingsTab({
             />
             <SimpleSelect
               value={severity}
-              onChange={(v) => reset(() => setSeverity(v))}
+              onChange={(v) =>
+                reset(() => {
+                  setSeverity(v)
+                  onSeverityChange?.(v)
+                })
+              }
               options={SEVERITY_OPTIONS}
               ariaLabel='Severity'
               className='h-8 text-[12px]'

@@ -1,6 +1,5 @@
 import { COLOR_ROLES, useOverflowTip } from '@nivaro/shared'
 import { useLayoutEffect, useState } from 'react'
-import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 /** SQL checks (#2562) — types and labels shared by the page's tabs. */
@@ -199,22 +198,29 @@ const CHART_FALLBACK: ChartColors = {
 }
 /** SVG fills cannot read CSS variables, so each role is resolved to a plain colour once per theme. */
 export function useChartColors(): ChartColors {
-  const { resolvedTheme } = useTheme()
   const [colors, setColors] = useState<ChartColors>(CHART_FALLBACK)
   useLayoutEffect(() => {
-    const dark = resolvedTheme === 'dark'
-    const probe = document.createElement('span')
-    probe.style.display = 'none'
-    document.body.appendChild(probe)
-    const out = { ...CHART_FALLBACK }
-    for (const [key, role] of Object.entries(CHART_ROLE) as Array<[keyof ChartColors, string]>) {
-      probe.style.color = ''
-      probe.style.color = COLOR_ROLES[role][dark ? 1 : 0]
-      if (probe.style.color) out[key] = getComputedStyle(probe).color
+    // probe against what <html> actually carries: the theme provider adds `.dark` after render,
+    // so re-probe whenever its class changes (a live theme toggle)
+    const probeAll = () => {
+      const dark = document.documentElement.classList.contains('dark')
+      const probe = document.createElement('span')
+      probe.style.display = 'none'
+      document.body.appendChild(probe)
+      const out = { ...CHART_FALLBACK }
+      for (const [key, role] of Object.entries(CHART_ROLE) as Array<[keyof ChartColors, string]>) {
+        probe.style.color = ''
+        probe.style.color = COLOR_ROLES[role][dark ? 1 : 0]
+        if (probe.style.color) out[key] = getComputedStyle(probe).color
+      }
+      probe.remove()
+      setColors(out)
     }
-    probe.remove()
-    setColors(out)
-  }, [resolvedTheme])
+    probeAll()
+    const mo = new MutationObserver(probeAll)
+    mo.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'style'] })
+    return () => mo.disconnect()
+  }, [])
   return colors
 }
 
