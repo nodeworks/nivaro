@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-10-19T22:15:10.430Z",
+  "generated_at": "2026-10-19T22:40:45.806Z",
   "releases": [
+    {
+      "version": "0.2.67",
+      "tag": "v0.2.67",
+      "date": "2026-10-19T18:40:33-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Capacity and minute history UI: design review round 2",
+              "hash": "10d4438b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Long history UI: design review fixes (#2544)",
+              "hash": "bea7b002"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Traffic history on the telemetry stack; capacity over 13 months (#2544)",
+              "hash": "7833d5a4"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.2.66",
       "tag": "v0.2.66",
-      "date": "2026-10-19T18:14:58-04:00",
+      "date": "2026-10-19T18:15:10-04:00",
       "sections": [
         {
           "label": "Other",
