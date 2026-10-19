@@ -314,7 +314,14 @@ export function SloPanel() {
                 <th className='pb-1 font-medium'>Error budget</th>
                 <th className='pb-1 font-medium'>Burn rate</th>
                 <th className='pb-1 font-medium'>
-                  {r.instances.some((i) => i.days.length > 45) ? 'Weeks' : 'Days'}
+                  {[
+                    ...r.instances,
+                    ...(remote.data ?? []).flatMap((c) =>
+                      c.state === 'ok' && c.slo ? c.slo.instances : []
+                    )
+                  ].some((i) => i.days.length > 45)
+                    ? 'Weeks'
+                    : 'Days'}
                 </th>
               </tr>
             </thead>

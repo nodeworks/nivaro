@@ -161,7 +161,9 @@ export function ApiAnalyticsPage() {
   })
   // Once the server said it can answer long ranges, keep offering them (a failed read included).
   const longSeen = useRef(false)
+  // Sticky once offered; a fresh answer saying long history is off takes the buttons away.
   if (summary?.long_history) longSeen.current = true
+  else if (summary && !summaryStale && summary.long_history === false) longSeen.current = false
 
   const { data: timeseries = [] } = useQuery<TimeseriesPoint[]>({
     queryKey: ['api-analytics-timeseries', hours, allInstances],
@@ -231,7 +233,6 @@ export function ApiAnalyticsPage() {
               variant={hours === r.hours ? 'default' : 'outline'}
               className='h-7 px-2.5 text-[12px]'
               aria-pressed={hours === r.hours}
-              aria-label={`Last ${r.full}`}
               data-tip={`Last ${r.full}`}
               onClick={() => {
                 setHours(r.hours)
@@ -272,7 +273,14 @@ export function ApiAnalyticsPage() {
           </p>
         ) : null}
         {/* Stat strip */}
-        <div className='mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4'>
+        {/* While a new range loads, the previous range's figures stay dimmed, never relabelled. */}
+        <div
+          className={cn(
+            'mb-6 grid grid-cols-2 gap-4 transition-opacity lg:grid-cols-4',
+            summaryStale && 'opacity-50'
+          )}
+          aria-busy={summaryStale || undefined}
+        >
           <StatCard
             label='Total requests'
             value={summary ? formatNumber(summary.total) : '—'}

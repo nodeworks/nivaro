@@ -222,7 +222,7 @@ export function Timelapse() {
                 setPlaying(false)
               }}
               className={cn(
-                'shrink-0 whitespace-nowrap px-2.5 py-[3px] text-[12px] font-medium first:rounded-l-md last:rounded-r-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan',
+                'shrink-0 whitespace-nowrap px-2.5 py-[3px] text-[12px] font-medium first:rounded-l-md last:rounded-r-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
                 range === r
                   ? 'bg-[var(--tm-accent-soft)] text-[var(--tm-accent-ink)]'
                   : 'text-[var(--tm-fg-2)] hover:bg-[var(--tm-card-2)]'
