@@ -93,26 +93,54 @@ for p in "${STRIP_PATHS[@]}"; do
 done
 
 echo "→ verifying: leak terms absent from every blob in history"
-FAIL=0
-for term in "${LEAK_TERMS[@]}"; do
-  # grep every tree in history; suppress expected generic mentions by
-  # tightening LEAK_TERMS rather than whitelisting here.
-  HITS=$(git grep -l -i "$term" $(git rev-list --all) -- 2>/dev/null | head -3 || true)
-  if [ -n "$HITS" ]; then
-    echo "LEAK: '$term' found:" >&2
-    echo "$HITS" | sed 's/^/    /' >&2
-    FAIL=1
-  fi
-done
-for pat in "${LEAK_PATTERNS[@]}"; do
-  HITS=$(git grep -l -E "$pat" $(git rev-list --all) -- 2>/dev/null | head -3 || true)
-  if [ -n "$HITS" ]; then
-    echo "LEAK: pattern '$pat' found:" >&2
-    echo "$HITS" | sed 's/^/    /' >&2
-    FAIL=1
-  fi
-done
-[ "$FAIL" = "1" ] && exit 1
+# One pass over each UNIQUE reachable blob. `git grep <every commit>` read the
+# same files once per commit — 3441 trees took ~7 minutes per release; this
+# reads ~17k blobs once in seconds. Binary blobs are scanned too (git grep
+# matched them as well). git-filter-repo needs python3, so it is always here.
+ARGS=()
+for term in "${LEAK_TERMS[@]}"; do ARGS+=(-t "$term"); done
+for pat in "${LEAK_PATTERNS[@]}"; do ARGS+=(-p "$pat"); done
+python3 -I - "${ARGS[@]}" <<'PY'
+import re, subprocess, sys, threading
+checks = []
+argv = sys.argv[1:]
+for kind, value in zip(argv[0::2], argv[1::2]):
+    raw = value.encode()
+    rx = re.compile(re.escape(raw), re.I) if kind == '-t' else re.compile(raw)
+    checks.append((value, rx))
+objects = subprocess.run(['git', 'rev-list', '--all', '--objects'], capture_output=True, check=True).stdout
+listing = subprocess.run(['git', 'cat-file', '--batch-check=%(objecttype) %(objectname) %(rest)'],
+                         input=objects, capture_output=True, check=True).stdout
+blobs = []
+for line in listing.splitlines():
+    kind, rest = line.split(b' ', 1)
+    if kind == b'blob':
+        sha, _, path = rest.partition(b' ')
+        blobs.append((sha, path))
+cat = subprocess.Popen(['git', 'cat-file', '--batch'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+def feed():
+    cat.stdin.write(b''.join(sha + b'\n' for sha, _ in blobs))
+    cat.stdin.close()
+threading.Thread(target=feed, daemon=True).start()
+hits = {name: [] for name, _ in checks}
+for sha, path in blobs:
+    size = int(cat.stdout.readline().split()[2])
+    data = cat.stdout.read(size)
+    cat.stdout.read(1)
+    for name, rx in checks:
+        if len(hits[name]) < 3 and rx.search(data):
+            hits[name].append(path.decode(errors='replace'))
+if cat.wait() != 0:
+    sys.exit('git cat-file failed')
+failed = False
+for name, found in hits.items():
+    if found:
+        failed = True
+        print(f"LEAK: '{name}' found:", file=sys.stderr)
+        for f in found:
+            print(f'    {f}', file=sys.stderr)
+sys.exit(1 if failed else 0)
+PY
 
 echo "✓ mirror clean: $(git rev-list --count HEAD) commits, tip $(git rev-parse --short HEAD)"
 
@@ -134,25 +162,32 @@ if [ "${1:-}" = "--push" ]; then
   # tags (570 tags × one round trip each took 15 minutes; this takes seconds).
   # `|| true`: a remote with no tags yet (a first publish) makes grep exit 1,
   # which pipefail would turn into the end of the script.
+  # One set difference, not a fork-per-tag compare (1225 tags took ~55 s
+  # even when none needed pushing). An empty remote (a first publish) means
+  # every tag: an empty pattern file would match — and hide — everything.
   REMOTE_TAGS="$(git ls-remote --tags public | grep -v '\^{}$' || true)"
-  pushed=0 skipped=0
+  LOCAL_TAGS="$(git for-each-ref --format='%(objectname)%09%(refname)' refs/tags)"
+  if [ -n "$REMOTE_TAGS" ]; then
+    TO_PUSH="$(printf '%s\n' "$LOCAL_TAGS" | grep -vxF -f <(printf '%s\n' "$REMOTE_TAGS") | cut -f2 || true)"
+  else
+    TO_PUSH="$(printf '%s\n' "$LOCAL_TAGS" | cut -f2)"
+  fi
+  total=$(printf '%s\n' "$LOCAL_TAGS" | grep -c . || true)
+  pushed=0
   failed=()
-  for t in $(git tag); do
-    local_sha="$(git rev-parse "refs/tags/$t")"
-    if printf '%s\n' "$REMOTE_TAGS" | grep -q "^${local_sha}[[:space:]]refs/tags/${t}$"; then
-      skipped=$((skipped + 1))
-      continue
-    fi
+  for ref in $TO_PUSH; do
+    t="${ref#refs/tags/}"
     # Explicit src:dst — without a destination git re-reads the source ref to
     # name one, which is what died above. One failed tag no longer abandons
     # every tag after it: retry once, then record it and go on.
-    if git push --force public "refs/tags/$t:refs/tags/$t" ||
-      { sleep 2 && git push --force public "refs/tags/$t:refs/tags/$t"; }; then
+    if git push --force public "$ref:$ref" ||
+      { sleep 2 && git push --force public "$ref:$ref"; }; then
       pushed=$((pushed + 1))
     else
       failed+=("$t")
     fi
   done
+  skipped=$((total - pushed - ${#failed[@]}))
   echo "✓ published — tags pushed: $pushed, already current: $skipped"
   if [ "${#failed[@]}" -gt 0 ]; then
     echo "✗ ${#failed[@]} tag(s) failed to push: ${failed[*]} — rerun to retry them" >&2
