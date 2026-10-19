@@ -39,6 +39,12 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
+      # The ISO week: Dockerfile.release reruns `apk upgrade` (and the layers
+      # above it) when it changes, so the layer cache never pins old patches.
+      - name: Week for the apk refresh
+        id: week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+
       - name: Build and push by digest
         id: build
         uses: docker/build-push-action@v6 # TODO: pin SHA
@@ -47,12 +53,18 @@ jobs:
           file: Dockerfile.release
           platforms: ${{ matrix.platform }}
           outputs: type=image,name=nodeworks/nivaro,push-by-digest=true,name-canonical=true,push=true
-          # No layer cache. The GitHub Actions cache (type=gha, mode=max) never
-          # hit: the repo's 10 GB cache budget overflowed (13 GB on 2026-10-19),
-          # eviction dropped the oldest — unchanged — layers first, and every
-          # release bumps package.json before the installs anyway. Zero cached
-          # steps over the last three releases, while the export cost ~3 minutes
-          # of every build.
+          build-args: |
+            APK_WEEK=${{ steps.week.outputs.week }}
+          # Layer cache on Docker Hub, one tag per architecture. Reused layers
+          # keep their digest, so a deployment pulls only what changed: before
+          # it, every release shipped a new 823 MB apk layer and a new 597 MB
+          # install layer (544 MB compressed per pull) for unchanged contents.
+          # The GitHub Actions cache (type=gha) never hit — the repo's 10 GB
+          # budget overflowed and eviction took the oldest layers first — and
+          # was removed 2026-10-19. ignore-error: a cache problem never fails
+          # the build.
+          cache-from: type=registry,ref=nodeworks/nivaro:buildcache-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
+          cache-to: type=registry,ref=nodeworks/nivaro:buildcache-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }},mode=max,image-manifest=true,oci-mediatypes=true,ignore-error=true
 
       - name: Export digest
         run: |
