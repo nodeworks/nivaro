@@ -53,24 +53,37 @@ export function ExplainButton({
   const a = run.data
   const err = (run.error as { response?: { data?: { error?: string } } } | null)?.response?.data
     ?.error
+  // A self-starting explanation shows its progress, not a button, until there is something to redo.
+  const showButton = !autoRun || !!a || run.isError
   return (
-    <div className='flex flex-col gap-2'>
-      <div>
-        <Button
-          type='button'
-          variant='outline'
-          size={size}
-          disabled={run.isPending}
-          onClick={() => run.mutate(!!a)}
+    <div aria-live='polite' className='flex flex-col gap-2'>
+      {!showButton && run.isPending && (
+        <p
+          role='status'
+          className='m-0 flex items-center gap-1.5 text-[12px] text-muted-foreground'
         >
-          {run.isPending ? (
-            <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' />
-          ) : (
-            <Sparkles className='mr-1.5 h-3.5 w-3.5' />
-          )}
-          {a ? 'Explain again' : label}
-        </Button>
-      </div>
+          <Loader2 className='h-3.5 w-3.5 animate-spin' aria-hidden='true' />
+          Explaining…
+        </p>
+      )}
+      {showButton && (
+        <div>
+          <Button
+            type='button'
+            variant='outline'
+            size={size}
+            disabled={run.isPending}
+            onClick={() => run.mutate(!!a)}
+          >
+            {run.isPending ? (
+              <Loader2 className='mr-1.5 h-3.5 w-3.5 animate-spin' aria-hidden='true' />
+            ) : (
+              <Sparkles className='mr-1.5 h-3.5 w-3.5' aria-hidden='true' />
+            )}
+            {run.isPending ? 'Explaining…' : a ? 'Explain again' : label}
+          </Button>
+        </div>
+      )}
       {run.isError && (
         <p className='text-[12px] text-red-600 dark:text-red-400'>
           {err ?? 'Could not explain this right now'}
@@ -78,7 +91,7 @@ export function ExplainButton({
       )}
       {a && (
         <div className='rounded-lg border border-slate-200 bg-slate-50 p-3 text-[12.5px] leading-relaxed dark:border-border dark:bg-muted/30'>
-          <p className='mb-1 text-[11px] font-medium uppercase tracking-wide text-slate-500'>
+          <p className='mb-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground'>
             AI suggestion, not a verdict
           </p>
           <p className='whitespace-pre-wrap'>{a.summary}</p>

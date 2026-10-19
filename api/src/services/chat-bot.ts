@@ -533,7 +533,7 @@ async function answerQuestion(
     SET_REMINDER_TOOL,
     WATCH_TOOL,
     HELP_TOOL,
-    ...(opsOn ? [ops.OPS_STATUS_TOOL, ops.OPS_PROPOSE_TOOL] : []),
+    ...(opsOn ? [ops.OPS_STATUS_TOOL, ops.OPS_PROPOSE_TOOL, ...ops.opsTelemetryTools()] : []),
     ...[...extensionBotTools.values()].map((t) => ({
       name: t.name,
       description: t.description,

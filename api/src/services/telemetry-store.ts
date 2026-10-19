@@ -198,6 +198,53 @@ export async function metricsQuery(expr: string, signal?: AbortSignal): Promise<
   }))
 }
 
+export interface MetricSeries {
+  labels: Record<string, string>
+  points: Array<[number, number]>
+}
+
+/** A MetricsQL range query (fixed expression from this codebase) over [from, to], `stepS` apart. */
+export async function metricsRange(
+  expr: string,
+  from: number,
+  to: number,
+  stepS: number,
+  signal?: AbortSignal
+): Promise<MetricSeries[]> {
+  const cfg = storeConfig()
+  if (!cfg) throw new StoreUnavailableError('The telemetry store is not configured')
+  const timeout = AbortSignal.timeout(cfg.timeoutMs)
+  let res: Response
+  try {
+    res = await transport(`${cfg.url}/api/v1/query_range`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {})
+      },
+      body: new URLSearchParams({
+        query: expr,
+        start: String(Math.floor(from / 1000)),
+        end: String(Math.floor(to / 1000)),
+        step: `${Math.max(15, Math.round(stepS))}s`
+      }).toString(),
+      signal: signal ? AbortSignal.any([signal, timeout]) : timeout
+    })
+  } catch (err) {
+    throw new StoreUnavailableError(
+      `The metrics store did not answer (${err instanceof Error ? err.name : 'error'})`
+    )
+  }
+  if (!res.ok) throw new StoreUnavailableError(`The metrics store answered ${res.status}`)
+  const body = (await res.json()) as {
+    data?: { result?: Array<{ metric?: Record<string, string>; values?: Array<[number, string]> }> }
+  }
+  return (body.data?.result ?? []).map((r) => ({
+    labels: r.metric ?? {},
+    points: (r.values ?? []).map(([t, v]) => [t * 1000, Number(v)] as [number, number])
+  }))
+}
+
 // Access lines this process wrote since it started (the telemetry page's egress figure).
 let accessLines = 0
 const accessSince = new Date().toISOString()

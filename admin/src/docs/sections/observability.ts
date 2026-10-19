@@ -1060,6 +1060,11 @@ export const obsTrafficMapPlatform: DocSection = {
       type: 'p',
       text: 'Operations → Health → Telemetry (administrators) shows the monitoring stack from inside Nivaro: whether the history store answers, whether traces are going out, firing alerts and failing uptime checks at the top; what this process sent next to what actually arrived in the last hour; the settings this server runs with (tokens shown only as set or not set); and the stack’s own health read from its metrics store: firing alerts, uptime checks, collected sources, backups to the file share, and disk and share space. Each part is read on its own, so one failing part shows its error without blanking the rest. Silenced alerts still appear (silences only stop the email); manage them in Grafana. `GET /api/telemetry/status`; `/api/metrics` also reports access lines and trace export counts.'
     },
+    { type: 'h3', id: 'telemetry-ai', text: 'Asking AI about the telemetry' },
+    {
+      type: 'p',
+      text: 'The Telemetry page has an Ask box ("why was it slow between 14:00 and 14:30?", "which routes failed most today?") and a Slowest requests list with Explain on every row. The answer comes from read-only tools over the stack: the request log (weeks), request traces, metrics from a fixed list, container logs and the stack’s status. Every tool takes typed fields and builds its own query, so nothing the model writes runs as query text, and the answer names what it checked and the traces it looked at (each with Explain and Open in Grafana). Explain on a trace reads it from the traces store once it has left the process’s memory. The same tools are offered to the assistant in admin-only operations chat channels. `POST /api/telemetry/ask` (administrators, a few questions a minute), `GET /api/telemetry/traces`.'
+    },
     { type: 'h2', id: 'traffic-map-nodes', text: 'Several API processes' },
     {
       type: 'p',

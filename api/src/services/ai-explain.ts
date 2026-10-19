@@ -424,11 +424,48 @@ const gatherIssue: Gatherer = async (params) => {
 }
 
 // #1858 — a slow request
+/**
+ * #2544 — a trace that has left this process's memory ring (or was kept by another process) is
+ * read back from the long-history traces store instead, when the instance sends traces there.
+ */
+async function gatherStoredTrace(id: string): Promise<ExplainFacts> {
+  const { storeEnabled } = await import('./telemetry-store.js')
+  const notHere = 'That trace is no longer in memory (traces are kept per process)'
+  if (!storeEnabled()) throw new ExplainError(404, notHere)
+  const { loadStoredTrace } = await import('./telemetry-traces.js')
+  const t = await loadStoredTrace(id).catch(() => null)
+  if (!t) throw new ExplainError(404, `${notHere}, and the traces store does not have it either`)
+  return {
+    title: `${t.method} ${t.route} (${t.total_ms} ms)`,
+    facts: {
+      request: {
+        method: t.method,
+        route: t.route,
+        status: t.status,
+        total_ms: t.total_ms,
+        at: t.at,
+        why_it_was_traced: t.reason
+      },
+      database: {
+        round_trips: t.round_trips,
+        sql_ms: t.sql_ms,
+        unaccounted_ms: Math.max(0, t.total_ms - t.sql_ms)
+      },
+      phases: t.phases,
+      heaviest_statements: t.heaviest_statements,
+      repeated_statements: t.repeated_statements
+    },
+    instructions:
+      'Explain where the time of this request went (database waiting vs application time vs a repeated statement = N+1) and what would help most. Phases are nested by depth (0 = directly under the request) and can overlap the statements inside them; unaccounted_ms is request time outside any SQL. Statement values were left out on purpose.',
+    links: [{ label: 'Open database health', href: '/db-health' }]
+  }
+}
+
 const gatherTrace: Gatherer = async (params) => {
   const { getTrace, unaccountedMs } = await import('./request-trace.js')
-  const t = getTrace(str(params, 'id'))
-  if (!t)
-    throw new ExplainError(404, 'That trace is no longer in memory (traces are kept per process)')
+  const id = str(params, 'id')
+  const t = getTrace(id)
+  if (!t) return gatherStoredTrace(id)
   const shapes = t.top_sql.map((s) => ({
     sql: s.sql.slice(0, 500),
     calls: s.n,

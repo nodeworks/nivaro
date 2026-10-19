@@ -20,6 +20,9 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
 import { cn, formatDate, formatNumber, formatRelative } from '@/lib/utils'
+import { AskTelemetry } from './telemetry/AskTelemetry'
+import { SlowestRequests } from './telemetry/SlowestRequests'
+import { PartError, TONE, type Tone } from './telemetry/ui'
 
 /**
  * Telemetry (#2544) — the monitoring stack that runs beside this instance, seen from Nivaro:
@@ -91,31 +94,6 @@ interface TelemetryStatus {
   computed_at: string
 }
 
-type Tone = 'ok' | 'warn' | 'bad' | 'off'
-
-const TONE: Record<Tone, { dot: string; text: string; ring: string }> = {
-  ok: {
-    dot: 'bg-emerald-500',
-    text: 'text-emerald-700 dark:text-emerald-400',
-    ring: 'border-slate-200 dark:border-border'
-  },
-  warn: {
-    dot: 'bg-amber-500',
-    text: 'text-amber-700 dark:text-amber-400',
-    ring: 'border-amber-300 dark:border-amber-500/40'
-  },
-  bad: {
-    dot: 'bg-red-500',
-    text: 'text-red-700 dark:text-red-400',
-    ring: 'border-red-300 dark:border-red-500/40'
-  },
-  off: {
-    dot: 'bg-slate-300 dark:bg-slate-600',
-    text: 'text-muted-foreground',
-    ring: 'border-slate-200 dark:border-border'
-  }
-}
-
 const REASONS: Array<{ key: ExportReason; label: string; color: string }> = [
   { key: 'error', label: 'Server error', color: 'bg-red-500' },
   { key: 'slow', label: 'Slow', color: 'bg-amber-500' },
@@ -184,16 +162,6 @@ function Card({
       </header>
       <div className='p-4'>{children}</div>
     </section>
-  )
-}
-
-function PartError({ error }: { error: string | null }) {
-  if (!error) return null
-  return (
-    <p className='m-0 flex items-start gap-1.5 text-[12px] text-amber-700 dark:text-amber-400'>
-      <AlertTriangle className='mt-0.5 h-3.5 w-3.5 shrink-0' aria-hidden='true' />
-      {error}
-    </p>
   )
 }
 
@@ -607,11 +575,7 @@ function Space({ part }: { part: TelemetryStatus['stack']['space'] }) {
                 </span>
               </div>
               <div
-                role='meter'
-                aria-valuenow={used}
-                aria-valuemin={0}
-                aria-valuemax={100}
-                aria-label={`${d.mountpoint} ${used}% used`}
+                aria-hidden='true'
                 className='h-1.5 overflow-hidden rounded-full bg-slate-100 dark:bg-muted'
               >
                 <span
@@ -809,10 +773,14 @@ export function TelemetryPage() {
               />
             </div>
 
+            {s.settings.store.configured && <AskTelemetry grafanaUrl={s.settings.grafana_url} />}
+
             <div className='grid gap-4 xl:grid-cols-2'>
               <Alerts part={s.stack.alerts} grafanaUrl={s.settings.grafana_url} />
               <Uptime part={s.stack.uptime} />
             </div>
+
+            {s.settings.store.configured && <SlowestRequests grafanaUrl={s.settings.grafana_url} />}
 
             <div className='grid gap-4 xl:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]'>
               <Egress s={s} />

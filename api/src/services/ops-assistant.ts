@@ -4,6 +4,8 @@ import { db } from '../db/index.js'
 import type { User } from '../types.js'
 import { scrubText } from './ai-explain.js'
 import { parseRoom } from './chat.js'
+import { executeTelemetryTool, TELEMETRY_TOOL_NAMES, TELEMETRY_TOOLS } from './telemetry-ai.js'
+import { storeEnabled } from './telemetry-store.js'
 
 /**
  * The chat assistant's ops tools (#1967, #2015).
@@ -368,10 +370,19 @@ export const OPS_PROPOSE_TOOL: Anthropic.Tool = {
   }
 }
 
-export const OPS_TOOL_NAMES = new Set([OPS_STATUS_TOOL.name, OPS_PROPOSE_TOOL.name])
+export const OPS_TOOL_NAMES = new Set([
+  OPS_STATUS_TOOL.name,
+  OPS_PROPOSE_TOOL.name,
+  ...TELEMETRY_TOOL_NAMES
+])
+
+/** #2544 — the telemetry tools join the ops tools when this instance has a telemetry store. */
+export function opsTelemetryTools(): Anthropic.Tool[] {
+  return storeEnabled() ? TELEMETRY_TOOLS : []
+}
 
 export const OPS_PROMPT =
-  'This channel is an admin-only operations channel. You may use ops_status for live facts and propose_ops_action to suggest an action; proposals become approval cards that an administrator must approve — never say an action ran until it is approved.'
+  'This channel is an admin-only operations channel. You may use ops_status for live facts and propose_ops_action to suggest an action; proposals become approval cards that an administrator must approve — never say an action ran until it is approved. When telemetry tools are offered (telemetry_status, request_stats, find_requests, slow_traces, get_trace, metric_series, search_logs), use them for history and "why was it slow at …" questions: they reach weeks back, cite trace ids and times (UTC), and never guess numbers.'
 
 /**
  * Run an ops tool for the asker. Re-checks the asker and the room on EVERY
@@ -391,6 +402,7 @@ export async function executeOpsTool(
       : 'overview'
     return opsFacts(app, section)
   }
+  if (TELEMETRY_TOOL_NAMES.has(name)) return executeTelemetryTool(name, input)
   if (name === OPS_PROPOSE_TOOL.name) {
     const { createProposal } = await import('./ops-proposals.js')
     const p = await createProposal(app, asker, room as string, input)
