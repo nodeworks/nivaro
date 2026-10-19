@@ -210,8 +210,9 @@ async function consentUser(
  * method the instance has (Microsoft, SSO providers, SAML, password, token) and
  * carries the return through each; otherwise the default OIDC login.
  */
-function signInUrl(path: string): string {
-  if (servesAdminSpa) return `/login?redirect=${encodeURIComponent(path)}`
+function signInUrl(path: string, reauth = false): string {
+  if (servesAdminSpa)
+    return `/login?redirect=${encodeURIComponent(path)}${reauth ? '&reauth=1' : ''}`
   return `/api/auth/login?returnTo=${encodeURIComponent(`${mcpPublicOrigin()}${path}`)}`
 }
 
@@ -338,12 +339,11 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     const checked = await checkAuthorize(app, p)
     if (!checked.ok) return cannotConnect(reply, checked.message)
     const { user, stale } = await consentUser(req, reply)
-    if (!user || stale) {
-      // A stale sign-in is ended, so a fresh one — not the old session — consents
-      // (the login page would otherwise send a signed-in person straight back).
-      if (stale) await req.session.destroy()
-      return reply.redirect(signInUrl(req.url))
-    }
+    // Never a session change on this GET (any site can navigate someone here):
+    // a stale sign-in is asked to sign in AGAIN — the login page shows its form
+    // to a signed-in person when `reauth` is set — and the fresh sign-in stamps
+    // the same session.
+    if (!user || stale) return reply.redirect(signInUrl(req.url, stale))
     const csrf = randomBytes(24).toString('base64url')
     req.session.oauthCsrf = csrf
     return reply.type('text/html').send(consentPage(checked.client, checked.p, user, csrf))

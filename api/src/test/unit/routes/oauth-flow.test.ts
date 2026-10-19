@@ -199,10 +199,9 @@ describe('OAuth for remote MCP clients', () => {
     const stale = await app.inject({ url: `/oauth/authorize?${qs}` })
     expect(stale.statusCode).toBe(302)
     expect(stale.headers.location).toContain('/api/auth/login?returnTo=')
-    // …and the old session is ended, so the sign-in that follows is a fresh one.
-    expect(destroyed).toBe(1)
-    expect(session.userId).toBeUndefined()
-    session.userId = 'U1'
+    // …without ending the session: a GET never changes it (any site can navigate here).
+    expect(destroyed).toBe(0)
+    expect(session.userId).toBe('U1')
 
     // Signed in recently → the consent page, framed nowhere.
     session.authAt = Date.now()

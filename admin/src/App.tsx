@@ -403,10 +403,16 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
   return <>{children}</>
 }
 
+/** `/login?reauth=1`: someone already signed in must sign in again (an AI app's
+ *  consent page wants a recent sign-in) — show the form, do not bounce them. */
+const isReauth = () =>
+  window.location.pathname === '/login' &&
+  new URLSearchParams(window.location.search).get('reauth') === '1'
+
 function PublicRoute({ children }: { children: React.ReactNode }) {
   const { user, loading } = useAuth()
   if (loading) return <AppShell />
-  if (user) {
+  if (user && !isReauth()) {
     const params = new URLSearchParams(window.location.search)
     const raw = params.get('redirect') ?? sessionStorage.getItem('nivaro_post_login_redirect')
     sessionStorage.removeItem('nivaro_post_login_redirect')
@@ -426,6 +432,8 @@ function PostLoginRedirect() {
   const fired = useRef(false)
   useEffect(() => {
     if (loading || !user || fired.current) return
+    // The re-sign-in page redirects itself once the person signs in again.
+    if (isReauth()) return
     const raw = sessionStorage.getItem('nivaro_post_login_redirect')
     if (raw) {
       fired.current = true

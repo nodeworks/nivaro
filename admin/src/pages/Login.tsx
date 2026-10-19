@@ -280,6 +280,7 @@ export function LoginPage() {
   // redirect this page was opened with (an AI app's consent page), else home.
   const returnTo = `${window.location.origin}${safeLoginRedirect(redirectTo)}`
   const totpStep = params.get('totp') === '1'
+  const reauth = params.get('reauth') === '1'
   const [tab, setTab] = usePersistedTab<'microsoft' | 'password'>('nvr_tab_login', 'microsoft')
   const [providers, setProviders] = useState<{
     oidc: { enabled: boolean; label: string }
@@ -599,6 +600,11 @@ export function LoginPage() {
                 </button>
               </div>
 
+              {reauth && (
+                <div className='mb-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-[13px] text-slate-700 dark:border-border dark:bg-muted dark:text-slate-200'>
+                  Sign in again to connect an app to Nivaro — connecting needs a recent sign-in.
+                </div>
+              )}
               {error && tab === 'microsoft' && (
                 <div className='mb-5 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-[13px] text-red-700'>
                   {error === 'suspended'
