@@ -119,27 +119,45 @@ echo "✓ mirror clean: $(git rev-list --count HEAD) commits, tip $(git rev-pars
 if [ "${1:-}" = "--push" ]; then
   URL="${2:?usage: publish-github.sh --push <git-url>}"
   git remote add public "$URL"
+  # No background `gc --auto` while the tags go out: it repacks refs, and a
+  # push that has to re-read a ref mid-repack dies ("refs/tags/@react-0.1.103
+  # cannot be resolved to branch", 2026-10-19). The mirror is disposable.
+  git config gc.auto 0
   echo "→ force-pushing main + tags to $URL"
   # main only — never every local branch (a --all push once dragged dozens of
   # stale agent worktree branches onto the public repo).
-  git push --force public main
+  git push --force public refs/heads/main:refs/heads/main
   # Tags ONE PER PUSH: GitHub creates no push events (and fires no workflows)
   # when a single push contains more than three tags. filter-repo is
   # deterministic, so a tag already on the remote at the same sha needs no
   # push at all — compare once against the remote and push only new/changed
   # tags (570 tags × one round trip each took 15 minutes; this takes seconds).
-  REMOTE_TAGS="$(git ls-remote --tags public | grep -v '\^{}$')"
+  # `|| true`: a remote with no tags yet (a first publish) makes grep exit 1,
+  # which pipefail would turn into the end of the script.
+  REMOTE_TAGS="$(git ls-remote --tags public | grep -v '\^{}$' || true)"
   pushed=0 skipped=0
+  failed=()
   for t in $(git tag); do
     local_sha="$(git rev-parse "refs/tags/$t")"
     if printf '%s\n' "$REMOTE_TAGS" | grep -q "^${local_sha}[[:space:]]refs/tags/${t}$"; then
       skipped=$((skipped + 1))
       continue
     fi
-    git push --force public "refs/tags/$t"
-    pushed=$((pushed + 1))
+    # Explicit src:dst — without a destination git re-reads the source ref to
+    # name one, which is what died above. One failed tag no longer abandons
+    # every tag after it: retry once, then record it and go on.
+    if git push --force public "refs/tags/$t:refs/tags/$t" ||
+      { sleep 2 && git push --force public "refs/tags/$t:refs/tags/$t"; }; then
+      pushed=$((pushed + 1))
+    else
+      failed+=("$t")
+    fi
   done
   echo "✓ published — tags pushed: $pushed, already current: $skipped"
+  if [ "${#failed[@]}" -gt 0 ]; then
+    echo "✗ ${#failed[@]} tag(s) failed to push: ${failed[*]} — rerun to retry them" >&2
+    exit 1
+  fi
 else
   echo "  (dry build — rerun with --push <github-url> to publish)"
 fi
