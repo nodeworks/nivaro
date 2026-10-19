@@ -1,10 +1,58 @@
 {
-  "generated_at": "2026-10-18T22:48:47.266Z",
+  "generated_at": "2026-10-19T00:59:33.646Z",
   "releases": [
+    {
+      "version": "0.2.59",
+      "tag": "v0.2.59",
+      "date": "2026-10-18T20:59:21-04:00",
+      "sections": [
+        {
+          "label": "Added",
+          "entries": [
+            {
+              "section": "Added",
+              "scope": null,
+              "text": "hosted MCP endpoint with OAuth sign-in for ChatGPT, Claude and Codex",
+              "hash": "fd4e1b72"
+            },
+            {
+              "section": "Added",
+              "scope": "mcp",
+              "text": "everyday-work and admin/ops tools, with annotations",
+              "hash": "7f211279"
+            }
+          ]
+        },
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "mcp",
+              "text": "judge OAuth audience on the normalized path; items refuse OAuth system-table writes",
+              "hash": "1eb331f0"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mcp",
+              "text": "OAuth tokens stay on the MCP endpoint; hardened consent; compact tools; private health details",
+              "hash": "3fa42bf8"
+            },
+            {
+              "section": "Fixed",
+              "scope": "mcp",
+              "text": "compact list_collections and the other list answers",
+              "hash": "e1bb8a05"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.2.58",
       "tag": "v0.2.58",
-      "date": "2026-10-18T18:48:35-04:00",
+      "date": "2026-10-18T18:48:47-04:00",
       "sections": [
         {
           "label": "Added",
