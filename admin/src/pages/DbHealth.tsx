@@ -406,12 +406,12 @@ export function DbHealthPage() {
         )}
         {criticalSql > 0 && (
           <Link
-            to='/sql-checks?tab=findings'
+            to='/sql-checks?tab=findings&severity=critical'
             data-sql-checks-strip-link
-            className='mb-5 block rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200'
+            className='mb-5 block rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 hover:bg-red-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200 dark:hover:bg-red-500/15'
           >
-            {criticalSql} critical SQL {criticalSql === 1 ? 'finding' : 'findings'} open → SQL
-            checks
+            {criticalSql} critical SQL {criticalSql === 1 ? 'finding' : 'findings'} open{' '}
+            <span aria-hidden='true'>→</span> SQL checks
           </Link>
         )}
         <div className='grid gap-5 xl:grid-cols-2'>

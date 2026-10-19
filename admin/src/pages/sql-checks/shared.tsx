@@ -1,3 +1,6 @@
+import { COLOR_ROLES, useOverflowTip } from '@nivaro/shared'
+import { useLayoutEffect, useState } from 'react'
+import { useTheme } from '@/lib/theme'
 import { cn } from '@/lib/utils'
 
 /** SQL checks (#2562) — types and labels shared by the page's tabs. */
@@ -110,6 +113,8 @@ export interface FindingDetail extends FindingRow {
     event: 'opened' | 'resolved' | 'reopened' | 'accepted' | 'unaccepted'
     at: string
     by: string | null
+    /** The person's name (null when the event came from a run). */
+    by_name: string | null
     note: string | null
   }>
 }
@@ -176,11 +181,51 @@ const PILL: Record<Severity, string> = {
   info: 'bg-slate-100 text-slate-600 dark:bg-muted dark:text-muted-foreground'
 }
 
-/** Severity colours for charts (same hue family in both themes). */
-export const SEVERITY_COLOR: Record<Severity, string> = {
-  critical: '#ef4444',
-  warning: '#f59e0b',
-  info: '#94a3b8'
+/** Chart colours from the shared colour roles (desaturated in dark), resolved for the current theme. */
+const CHART_ROLE = {
+  critical: 'negative',
+  warning: 'warning',
+  info: 'muted',
+  new: 'accent',
+  resolved: 'positive'
+} as const
+export type ChartColors = Record<keyof typeof CHART_ROLE, string>
+const CHART_FALLBACK: ChartColors = {
+  critical: '#dc2626',
+  warning: '#b45309',
+  info: '#64748b',
+  new: '#0891b2',
+  resolved: '#15803d'
+}
+/** SVG fills cannot read CSS variables, so each role is resolved to a plain colour once per theme. */
+export function useChartColors(): ChartColors {
+  const { resolvedTheme } = useTheme()
+  const [colors, setColors] = useState<ChartColors>(CHART_FALLBACK)
+  useLayoutEffect(() => {
+    const dark = resolvedTheme === 'dark'
+    const probe = document.createElement('span')
+    probe.style.display = 'none'
+    document.body.appendChild(probe)
+    const out = { ...CHART_FALLBACK }
+    for (const [key, role] of Object.entries(CHART_ROLE) as Array<[keyof ChartColors, string]>) {
+      probe.style.color = ''
+      probe.style.color = COLOR_ROLES[role][dark ? 1 : 0]
+      if (probe.style.color) out[key] = getComputedStyle(probe).color
+    }
+    probe.remove()
+    setColors(out)
+  }, [resolvedTheme])
+  return colors
+}
+
+/** Truncated text that shows its full value on hover when it is cut off. */
+export function Clip({ text, className }: { text: string; className?: string }) {
+  const ref = useOverflowTip<HTMLSpanElement>(text)
+  return (
+    <span ref={ref} className={cn('block min-w-0 truncate', className)}>
+      {text}
+    </span>
+  )
 }
 
 export function SeverityPill({ severity, className }: { severity: Severity; className?: string }) {

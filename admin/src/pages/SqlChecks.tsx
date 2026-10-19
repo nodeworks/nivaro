@@ -34,7 +34,9 @@ export default function SqlChecks() {
     TABS.some((t) => t.key === params.get('tab')) ? params.get('tab') : 'findings'
   ) as TabKey
   const object = params.get('object')
+  const severityParam = params.get('severity')
   const [showSettings, setShowSettings] = useState(false)
+  const [liveMsg, setLiveMsg] = useState('')
   const [armed, setArmed] = useState(false)
 
   const summary = useQuery({
@@ -44,9 +46,12 @@ export default function SqlChecks() {
   })
   const s = summary.data
   const wasRunning = useWasRunning(!!s?.is_running)
+  const criticalOpen = s?.counts?.open?.critical ?? 0
   useEffect(() => {
-    if (wasRunning) void qc.invalidateQueries({ queryKey: ['sql-checks'] })
-  }, [wasRunning, qc])
+    if (!wasRunning) return
+    void qc.invalidateQueries({ queryKey: ['sql-checks'] })
+    setLiveMsg(`Run finished: ${criticalOpen} critical`)
+  }, [wasRunning, qc, criticalOpen])
 
   useEffect(() => {
     if (!armed) return
@@ -58,6 +63,7 @@ export default function SqlChecks() {
     mutationFn: () => api.post('/sql-checks/run'),
     onSuccess: () => {
       toast.success('SQL checks started. Findings update when the run finishes.')
+      setLiveMsg('Run started')
       void qc.invalidateQueries({ queryKey: ['sql-checks'] })
     },
     onError: (err) => toast.error(errorText(err, 'Couldn’t start a run.'))
@@ -92,8 +98,8 @@ export default function SqlChecks() {
             <p className='m-0 mt-1 max-w-[80ch] text-[12px] text-slate-500 dark:text-muted-foreground'>
               Every procedure, function, view and trigger in the database, plus import definitions’
               stored procedures and custom queries, checked for mistakes that corrupt or slow data:
-              MERGE keys that miss NULLs, writes without WHERE, transactions left open and more.
-              Checks read only; nothing is changed here.
+              MERGE keys that skip empty values, writes without WHERE, transactions left open and
+              more. Checks read only; nothing is changed here.
             </p>
           </div>
           <div className='flex shrink-0 flex-wrap items-center gap-2'>
@@ -131,12 +137,16 @@ export default function SqlChecks() {
             </Button>
           </div>
         </div>
-        <div
-          className='mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]'
-          aria-live='polite'
-        >
+        <span className='sr-only' role='status' aria-live='polite'>
+          {liveMsg}
+        </span>
+        <div className='mt-3 flex flex-wrap items-center gap-x-4 gap-y-1 text-[12px]'>
           {summary.isLoading ? (
             <Skeleton className='h-4 w-72' />
+          ) : summary.isError ? (
+            <span className='text-red-600 dark:text-red-400'>
+              {errorText(summary.error, 'Couldn’t load SQL checks.')}
+            </span>
           ) : !s?.ready ? (
             <span className='text-muted-foreground'>
               Waiting for the database update that adds SQL checks.
@@ -194,6 +204,23 @@ export default function SqlChecks() {
       <div
         role='tablist'
         aria-label='SQL checks sections'
+        onKeyDown={(e) => {
+          const i = TABS.findIndex((t) => t.key === tab)
+          const to =
+            e.key === 'ArrowRight'
+              ? (i + 1) % TABS.length
+              : e.key === 'ArrowLeft'
+                ? (i - 1 + TABS.length) % TABS.length
+                : e.key === 'Home'
+                  ? 0
+                  : e.key === 'End'
+                    ? TABS.length - 1
+                    : -1
+          if (to < 0) return
+          e.preventDefault()
+          setTab(TABS[to].key, { object: null, severity: null })
+          document.getElementById(`sql-checks-tab-${TABS[to].key}`)?.focus()
+        }}
         className='flex shrink-0 gap-1 overflow-x-auto border-b border-slate-200 bg-white px-4 dark:border-border dark:bg-card sm:px-6'
       >
         {TABS.map((t) => (
@@ -204,7 +231,8 @@ export default function SqlChecks() {
             id={`sql-checks-tab-${t.key}`}
             aria-selected={tab === t.key}
             aria-controls='sql-checks-panel'
-            onClick={() => setTab(t.key)}
+            tabIndex={tab === t.key ? 0 : -1}
+            onClick={() => setTab(t.key, { object: null, severity: null })}
             className={cn(
               '-mb-px shrink-0 whitespace-nowrap border-b-2 px-3 py-2 text-[12.5px] font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan',
               tab === t.key
@@ -226,7 +254,13 @@ export default function SqlChecks() {
         aria-labelledby={`sql-checks-tab-${tab}`}
         className='flex min-h-0 flex-1 flex-col overflow-y-auto bg-slate-50 dark:bg-background'
       >
-        {tab === 'findings' && <FindingsTab initialObject={object} />}
+        {tab === 'findings' && (
+          <FindingsTab
+            initialObject={object}
+            initialSeverity={severityParam}
+            onClearObject={() => setTab('findings', { object: null })}
+          />
+        )}
         {tab === 'trends' && s?.ready && (
           <TrendsTab summary={s} onObject={(name) => setTab('findings', { object: name })} />
         )}

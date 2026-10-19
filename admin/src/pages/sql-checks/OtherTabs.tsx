@@ -18,14 +18,15 @@ import { api } from '@/lib/api'
 import { cn, formatDate, formatDateTime, formatNumber } from '@/lib/utils'
 import {
   CHECK_LABEL,
+  Clip,
   errorText,
   type FixRow,
   fmtMs,
   objectLabel,
   type RunRow,
-  SEVERITY_COLOR,
   type Summary,
-  TYPE_LABEL
+  TYPE_LABEL,
+  useChartColors
 } from './shared'
 
 const PAGE = 25
@@ -70,6 +71,7 @@ export function TrendsTab({
   summary: Summary
   onObject: (name: string) => void
 }) {
+  const colors = useChartColors()
   const trend = (summary.trend ?? []).map((t) => ({
     run: `#${t.id}`,
     when: formatDate(t.started_at),
@@ -109,24 +111,24 @@ export function TrendsTab({
                 type='monotone'
                 dataKey='Critical'
                 stackId='1'
-                stroke={SEVERITY_COLOR.critical}
-                fill={SEVERITY_COLOR.critical}
+                stroke={colors.critical}
+                fill={colors.critical}
                 fillOpacity={0.35}
               />
               <Area
                 type='monotone'
                 dataKey='Warning'
                 stackId='1'
-                stroke={SEVERITY_COLOR.warning}
-                fill={SEVERITY_COLOR.warning}
+                stroke={colors.warning}
+                fill={colors.warning}
                 fillOpacity={0.3}
               />
               <Area
                 type='monotone'
                 dataKey='Info'
                 stackId='1'
-                stroke={SEVERITY_COLOR.info}
-                fill={SEVERITY_COLOR.info}
+                stroke={colors.info}
+                fill={colors.info}
                 fillOpacity={0.25}
               />
             </AreaChart>
@@ -146,8 +148,8 @@ export function TrendsTab({
               <YAxis allowDecimals={false} tick={tick} />
               <Tooltip contentStyle={TOOLTIP} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey='New' fill='#00ceff' radius={[3, 3, 0, 0]} />
-              <Bar dataKey='Resolved' fill='#10b981' radius={[3, 3, 0, 0]} />
+              <Bar dataKey='New' fill={colors.new} radius={[3, 3, 0, 0]} />
+              <Bar dataKey='Resolved' fill={colors.resolved} radius={[3, 3, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -159,7 +161,7 @@ export function TrendsTab({
           <ul className='m-0 grid list-none gap-1.5 p-0 text-[12.5px]'>
             {byCheck.map(([k, n]) => (
               <li key={k} className='flex items-center justify-between gap-3'>
-                <span className='min-w-0 truncate'>{CHECK_LABEL[k] ?? k}</span>
+                <Clip text={CHECK_LABEL[k] ?? k} />
                 <span className='shrink-0 font-semibold tabular-nums'>{formatNumber(n)}</span>
               </li>
             ))}
@@ -181,7 +183,7 @@ export function TrendsTab({
                   <span className='w-28 shrink-0 text-[11.5px] text-muted-foreground'>
                     {TYPE_LABEL[o.object_type]}
                   </span>
-                  <span className='min-w-0 flex-1 truncate font-mono'>{objectLabel(o)}</span>
+                  <Clip text={objectLabel(o)} className='flex-1 font-mono' />
                   <span className='shrink-0 font-semibold tabular-nums'>{o.n}</span>
                 </button>
               </li>

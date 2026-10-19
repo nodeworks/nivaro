@@ -13,6 +13,7 @@ import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
 import {
   CHECK_LABEL,
   CHECK_WHY,
+  Clip,
   errorText,
   type FindingDetail,
   type FindingRow,
@@ -42,9 +43,23 @@ const CHECK_OPTIONS = [
   ...Object.entries(CHECK_LABEL).map(([value, label]) => ({ value, label }))
 ]
 
-export function FindingsTab({ initialObject }: { initialObject?: string | null }) {
+export function FindingsTab({
+  initialObject,
+  initialSeverity,
+  onClearObject
+}: {
+  initialObject?: string | null
+  /** ?severity= (the DB Health strip links to critical). */
+  initialSeverity?: string | null
+  /** Clears ?object= from the URL along with the filter. */
+  onClearObject?: () => void
+}) {
   const [status, setStatus] = useState('open')
-  const [severity, setSeverity] = useState('')
+  const [severity, setSeverity] = useState(
+    initialSeverity && ['critical', 'warning', 'info'].includes(initialSeverity)
+      ? initialSeverity
+      : ''
+  )
   const [check, setCheck] = useState('')
   const [draftQ, setDraftQ] = useState('')
   const [q, setQ] = useState('')
@@ -59,6 +74,12 @@ export function FindingsTab({ initialObject }: { initialObject?: string | null }
     }, 300)
     return () => clearTimeout(t)
   }, [draftQ])
+  useEffect(() => {
+    if (initialSeverity && ['critical', 'warning', 'info'].includes(initialSeverity)) {
+      setSeverity(initialSeverity)
+      setPageNo(1)
+    }
+  }, [initialSeverity])
   useEffect(() => {
     if (initialObject != null) {
       setObject(initialObject)
@@ -99,7 +120,8 @@ export function FindingsTab({ initialObject }: { initialObject?: string | null }
       <section
         aria-label='Findings'
         className={cn(
-          'flex min-h-0 flex-col border-slate-200 dark:border-border lg:w-[440px] lg:shrink-0 lg:border-r',
+          // dense rows (pill, check, object, two-line message): 320px keeps the detail the wide side
+          'flex min-h-0 flex-col border-slate-200 dark:border-border lg:w-[320px] lg:shrink-0 lg:border-r',
           selected != null && 'hidden lg:flex'
         )}
       >
@@ -117,7 +139,7 @@ export function FindingsTab({ initialObject }: { initialObject?: string | null }
               className='h-8 pl-8 text-[12.5px]'
             />
           </div>
-          <div className='grid grid-cols-3 gap-2'>
+          <div className='grid grid-cols-2 gap-2 [&>*:last-child]:col-span-2'>
             <SimpleSelect
               value={status}
               onChange={(v) => reset(() => setStatus(v))}
@@ -142,12 +164,16 @@ export function FindingsTab({ initialObject }: { initialObject?: string | null }
           </div>
           {object && (
             <div className='flex items-center gap-2 text-[12px]'>
-              <span className='min-w-0 truncate text-muted-foreground'>
-                Object: <span className='font-mono text-foreground'>{object}</span>
-              </span>
+              <span className='shrink-0 text-muted-foreground'>Object:</span>
+              <Clip text={object} className='font-mono text-foreground' />
               <button
                 type='button'
-                onClick={() => reset(() => setObject(''))}
+                onClick={() =>
+                  reset(() => {
+                    setObject('')
+                    onClearObject?.()
+                  })
+                }
                 className='shrink-0 rounded px-1.5 py-0.5 text-nvr-cyan hover:bg-nvr-cyan/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
               >
                 Clear
@@ -187,19 +213,20 @@ export function FindingsTab({ initialObject }: { initialObject?: string | null }
                   >
                     <span className='flex min-w-0 items-center gap-2'>
                       <SeverityPill severity={f.severity} />
-                      <span className='min-w-0 truncate text-[12px] font-medium'>
-                        {CHECK_LABEL[f.check_key] ?? f.check_key}
-                      </span>
+                      <Clip
+                        text={CHECK_LABEL[f.check_key] ?? f.check_key}
+                        className='text-[12px] font-medium'
+                      />
                       {f.status !== 'open' && (
                         <span className='ml-auto shrink-0'>
                           <StatusText status={f.status} />
                         </span>
                       )}
                     </span>
-                    <span className='min-w-0 truncate font-mono text-[11.5px] text-muted-foreground'>
-                      {objectLabel(f)}
-                      {f.line ? `:${f.line}` : ''}
-                    </span>
+                    <Clip
+                      text={`${objectLabel(f)}${f.line ? `:${f.line}` : ''}`}
+                      className='font-mono text-[11.5px] text-muted-foreground'
+                    />
                     <span className='line-clamp-2 text-[12px] text-foreground/90'>{f.message}</span>
                     <span className='text-[11px] text-muted-foreground'>
                       First seen {formatRelative(f.first_seen_at)} · seen in {f.seen_count}{' '}
@@ -269,6 +296,12 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
   const [note, setNote] = useState('')
   const [accepting, setAccepting] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [announce, setAnnounce] = useState('')
+  useEffect(() => {
+    if (!copied) return
+    const t = setTimeout(() => setCopied(false), 1500)
+    return () => clearTimeout(t)
+  }, [copied])
   // the panel is keyed by finding id, so its state starts fresh; focus the heading once loaded
   const loadedId = q.data?.id
   useEffect(() => {
@@ -279,7 +312,9 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
     mutationFn: (body: { status: 'accepted' | 'open'; note?: string }) =>
       api.patch(`/sql-checks/findings/${id}`, body),
     onSuccess: (_r, body) => {
-      toast.success(body.status === 'accepted' ? 'Marked as expected' : 'Reopened')
+      const msg = body.status === 'accepted' ? 'Marked as expected' : 'Reopened'
+      toast.success(msg)
+      setAnnounce(msg)
       setAccepting(false)
       setNote('')
       void qc.invalidateQueries({ queryKey: ['sql-checks'] })
@@ -385,13 +420,13 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
               <ul className='m-0 grid gap-0.5 pl-4 text-[12.5px]'>
                 {Object.entries(figures.null_counts).map(([col, n]) => (
                   <li key={col}>
-                    <span className='font-mono'>{col}</span>: {formatNumber(n)} rows hold NULL now
+                    <span className='font-mono'>{col}</span> is empty in {formatNumber(n)} rows now
                   </li>
                 ))}
                 {typeof figures.extra_rows === 'number' && (
                   <li>
-                    {formatNumber(figures.extra_rows)} extra rows sit in NULL-key groups (copies a
-                    NULL-safe match would have updated)
+                    {formatNumber(figures.extra_rows)} rows look like repeats: stored again because
+                    their key was empty.
                   </li>
                 )}
                 {figures.table_rows != null && (
@@ -442,15 +477,19 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
                   variant='ghost'
                   className='ml-auto h-7 px-2 text-[12px] [&_svg]:size-3.5'
                   onClick={() => {
-                    void navigator.clipboard?.writeText(f.suggested_fix ?? '').then(() => {
-                      setCopied(true)
-                      setTimeout(() => setCopied(false), 1500)
-                    })
+                    if (!navigator.clipboard) return void toast.error('Couldn’t copy.')
+                    navigator.clipboard
+                      .writeText(f.suggested_fix ?? '')
+                      .then(() => setCopied(true))
+                      .catch(() => toast.error('Couldn’t copy.'))
                   }}
                 >
                   {copied ? <Check aria-hidden='true' /> : <Copy aria-hidden='true' />}
                   {copied ? 'Copied' : 'Copy'}
                 </Button>
+                <span className='sr-only' role='status' aria-live='polite'>
+                  {copied ? 'Copied to the clipboard' : ''}
+                </span>
               </div>
               <p className='m-0 whitespace-pre-wrap rounded-md border border-slate-200 bg-white p-3 text-[12.5px] dark:border-border dark:bg-card'>
                 {f.suggested_fix}
@@ -467,9 +506,10 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
                     {e.event === 'accepted'
                       ? 'Marked as expected'
                       : e.event === 'unaccepted'
-                        ? 'Reopened by a person'
+                        ? 'Reopened'
                         : e.event}
                   </span>
+                  {e.by_name && <span className='text-muted-foreground'> by {e.by_name}</span>}
                   <span className='text-muted-foreground'>
                     {' '}
                     · {formatDateTime(e.at)}
@@ -481,10 +521,10 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
             </ol>
           </section>
 
-          <section
-            className='grid gap-2 border-t border-slate-200 pt-3 dark:border-border'
-            aria-live='polite'
-          >
+          <section className='grid gap-2 border-t border-slate-200 pt-3 dark:border-border'>
+            <p className='sr-only' role='status' aria-live='polite'>
+              {announce}
+            </p>
             {f.status === 'open' &&
               (accepting ? (
                 <div className='grid gap-2'>

@@ -277,11 +277,37 @@ export async function sqlChecksRoutes(app: FastifyInstance): Promise<void> {
     if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
     const row = await db(FINDINGS).where('id', id).first()
     if (!row) return reply.code(404).send({ error: 'Not found' })
-    const events = await db(EVENTS)
+    const events = (await db(EVENTS)
       .where('finding_id', id)
       .orderBy('at', 'asc')
-      .orderBy('id', 'asc')
-    return { data: { ...findingOut(row), events } }
+      .orderBy('id', 'asc')) as Array<Record<string, unknown> & { by: string | null }>
+    // names for the people who accepted / reopened (directory columns only)
+    const ids = [...new Set(events.map((e) => e.by).filter((b): b is string => !!b))]
+    const people = ids.length
+      ? ((await db('nivaro_users')
+          .whereIn('id', ids)
+          .select('id', 'first_name', 'last_name', 'email')) as Array<{
+          id: string
+          first_name: string | null
+          last_name: string | null
+          email: string | null
+        }>)
+      : []
+    const nameOf = new Map(
+      people.map((p) => [
+        String(p.id).toLowerCase(),
+        [p.first_name, p.last_name].filter(Boolean).join(' ') || p.email || null
+      ])
+    )
+    return {
+      data: {
+        ...findingOut(row),
+        events: events.map((e) => ({
+          ...e,
+          by_name: e.by ? (nameOf.get(String(e.by).toLowerCase()) ?? null) : null
+        }))
+      }
+    }
   })
 
   app.patch<{ Params: { id: string }; Body: { status?: string; note?: string } | null }>(
