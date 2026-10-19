@@ -304,6 +304,12 @@ export async function graphqlPlugin(app: import('fastify').FastifyInstance) {
     })
   })
 
+  // Before the HTTP server closes (see the socket.io preClose): wss.close()
+  // stops new upgrades but leaves open clients connected, and those keep the
+  // server from closing.
+  app.addHook('preClose', async () => {
+    for (const client of wss.clients) client.terminate()
+  })
   app.addHook('onClose', async () => {
     await new Promise<void>((resolve) => wss.close(() => resolve()))
   })

@@ -1483,6 +1483,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
   sweepTimer.unref?.()
 
   app.decorate('io', io)
+  // Fastify closes the HTTP server BEFORE it runs onClose hooks, and the
+  // server closes only once every connection has ended. An open websocket
+  // never ends on its own, so io.close() below waited on the very close that
+  // was waiting on it: every deploy sat out the shutdown deadline, then
+  // Docker's SIGKILL (10 s). End the clients first.
+  app.addHook('preClose', async () => {
+    io.disconnectSockets(true)
+    io.engine.close()
+  })
   app.addHook('onClose', async () => {
     clearInterval(sweepTimer)
     io.close()

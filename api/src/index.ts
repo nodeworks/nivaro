@@ -161,8 +161,10 @@ async function main() {
     // that will not close) must not keep the old process alive: tsx watch
     // waits for it before starting the new one, so in development a hung
     // drain read as "the API hangs after every save". Production gets a
-    // longer budget for genuinely in-flight requests.
-    const deadlineMs = config.NODE_ENV === 'development' ? 3_000 : 15_000
+    // longer budget for genuinely in-flight requests — but under the
+    // container's stop timeout (Docker: 10 s, then SIGKILL), or the deadline
+    // never fires and every deploy waits the full 10 s for the kill.
+    const deadlineMs = config.NODE_ENV === 'development' ? 3_000 : 8_000
     const deadline = setTimeout(() => {
       app.log.warn(`Shutdown did not finish within ${deadlineMs}ms — exiting`)
       process.exit(0)
@@ -200,7 +202,14 @@ async function main() {
       } catch {
         /* best-effort bookkeeping — never delay the drain */
       }
+      // The SSE streams (events, views, GraphQL over SSE) are responses that
+      // end only when their client leaves, and the HTTP server closes only
+      // once every connection has ended. Past a short grace, cut what is
+      // left so the drain finishes on its own.
+      const cut = setTimeout(() => app.server.closeAllConnections?.(), 3_000)
+      cut.unref()
       await app.close()
+      clearTimeout(cut)
       await closeDb()
       process.exit(0)
     } catch (err) {

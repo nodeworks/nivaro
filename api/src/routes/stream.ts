@@ -89,8 +89,9 @@ export async function streamRoutes(app: FastifyInstance) {
     res.on('close', cleanup)
   })
 
-  // Drop all connections on server shutdown.
-  app.addHook('onClose', async () => {
+  // Drop all connections on server shutdown — in preClose, before the HTTP
+  // server waits for them to end.
+  app.addHook('preClose', async () => {
     for (const res of clients) {
       try {
         res.end()
