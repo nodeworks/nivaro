@@ -137,12 +137,19 @@ interface Capacity {
   ring_best_rps: number
   ceiling: {
     rps: number | null
-    source: 'configured' | 'measured' | 'ring' | null
+    source: 'configured' | 'history' | 'measured' | 'ring' | null
     at: string | null
     measuring: boolean
     error: string | null
   }
   headroom_pct: number | null
+  /** #2544 — the telemetry stack's busiest minute and weekly peaks (null without the stack). */
+  history?: {
+    best_rpm: number
+    at: string | null
+    weekly: Array<{ week: string; peak_rpm: number }>
+    data_from: string | null
+  } | null
   pool: { used: number; pending: number; max: number; saturated_pct: number }
   projection: {
     points: number[]
@@ -154,6 +161,7 @@ interface Capacity {
 
 const SOURCE_PHRASE: Record<string, string> = {
   configured: 'configured (TRAFFIC_CAPACITY_RPS)',
+  history: 'the busiest minute in the long history',
   measured: 'the busiest minute in the request log',
   ring: 'the busiest minute since this node started'
 }
@@ -165,6 +173,16 @@ function ceilingTitle(c: Capacity): string {
     ? ` (${new Date(c.ceiling.at).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })})`
     : ''
   return `Ceiling: ${SOURCE_PHRASE[c.ceiling.source]}${at}`
+}
+
+const shortDate = (iso: string) =>
+  new Date(iso).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })
+
+/** "Best minute: 1,240 req/min on Mar 2, 2027" (+ since when, while the history is short). */
+function bestMinuteLine(h: NonNullable<Capacity['history']>): string {
+  const n = h.best_rpm.toLocaleString()
+  const on = h.at ? ` on ${shortDate(h.at)}` : ''
+  return `Best minute: ${n} req/min${on}`
 }
 
 function projectionLine(c: Capacity): string {
@@ -224,6 +242,28 @@ export function HeadroomTile() {
           />
         )}
       </span>
+      {/* #2544 — growth toward the ceiling: the busiest minute of each week, up to 13 months. */}
+      {c?.history && c.history.best_rpm > 0 && (
+        <span className='flex min-w-0 items-center gap-2' data-testid='tm-strip-best-minute'>
+          <span
+            className='truncate tabular-nums'
+            data-tip={
+              c.history.data_from
+                ? `Busiest minute per week since ${shortDate(c.history.data_from)}`
+                : 'Busiest minute per week'
+            }
+          >
+            {bestMinuteLine(c.history)}
+          </span>
+          {c.history.weekly.length > 1 && (
+            <Sparkline
+              data={c.history.weekly.map((w) => w.peak_rpm)}
+              color='var(--tm-accent)'
+              className='h-[14px] min-w-[48px] flex-1'
+            />
+          )}
+        </span>
+      )}
     </StripCell>
   )
 }

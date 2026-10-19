@@ -43,6 +43,31 @@ function MinuteHistorySwitch() {
   const d = q.data
   if (!d || d.cloud) return null
   const s = d.settings
+  // #2544 — the telemetry stack keeps the map's minutes for 13 months: say so, and offer to stop
+  // the database copy (never turned off for anyone).
+  if (d.stack)
+    return (
+      <div
+        className='flex flex-wrap items-center justify-end gap-1.5 text-[11.5px]'
+        data-tm-minute-history={s.enabled ? 'on' : 'off'}
+        data-tm-minute-history-stack=''
+      >
+        <span className='text-[var(--tm-muted)]'>
+          Traffic history is kept for 13 months on the telemetry stack
+          {s.enabled ? ', so the minute history in this database isn’t needed.' : '.'}
+        </span>
+        {s.enabled && (
+          <TwoClickButton
+            id='tm-minute-toggle'
+            label='Turn off'
+            armedLabel='Click again to stop recording'
+            busy={save.isPending}
+            onConfirm={() => save.mutate({ enabled: false })}
+          />
+        )}
+        {save.isError && <Note tone='error'>{errorOf(save.error)}</Note>}
+      </div>
+    )
   const held = d.coverage.first
     ? `holds minutes since ${new Date(d.coverage.first).toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}`
     : s.enabled

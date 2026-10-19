@@ -30,11 +30,12 @@ import {
   type MetricSeries,
   metricsQuery,
   metricsRange,
+  STORE_MAX_DAYS,
   storeConfig,
   storeEnabled
 } from './telemetry-store.js'
 import type { TimelapseGroup } from './traffic-history-analysis.js'
-import type { StoreSloDay } from './traffic-history-store.js'
+import { type StoreSloDay, storeCallerSteps } from './traffic-history-store.js'
 
 /** How far back rollups are read (the metrics store keeps 13 months). */
 export const ROLLUP_MAX_DAYS = 400
@@ -52,7 +53,12 @@ const SERIES = {
   latency: 'nivaro_tm_latency',
   routeRequests: 'nivaro_route_requests',
   routeLatency: 'nivaro_route_latency',
-  activePeople: 'nivaro_tm_active_people_1h'
+  activePeople: 'nivaro_tm_active_people_1h',
+  // Partner calls (`nvr: "out"` lines): per down node and the entity it was made for.
+  downRequests: 'nivaro_tm_down_requests',
+  downLatency: 'nivaro_tm_down_latency',
+  // Hourly only: per caller key (no minute series per person — 13 months of those is too many).
+  callerRequests: 'nivaro_tm_caller_requests:1h'
 } as const
 
 const HOUR_MS = 3600_000
@@ -76,7 +82,9 @@ const HOURLY = new Set<string>([
   SERIES.requests,
   SERIES.latency,
   SERIES.routeRequests,
-  SERIES.routeLatency
+  SERIES.routeLatency,
+  SERIES.downRequests,
+  SERIES.downLatency
 ])
 
 /**
@@ -88,6 +96,17 @@ export function sel(metric: string, window?: string): string {
   const s = window ? windowSeconds(window) : Number.NaN
   const name = HOURLY.has(metric) && s >= 3600 && s % 3600 === 0 ? `${metric}:1h` : metric
   return `${name}${envMatcher(storeConfig()?.env ?? null)}`
+}
+
+/** `metric{env="…", k="v", …}` — extra matchers are fixed names from this module, values escaped. */
+export function selWith(metric: string, extra: Record<string, string>, window?: string): string {
+  const base = sel(metric, window)
+  const brace = base.indexOf('{')
+  const name = brace < 0 ? base : base.slice(0, brace)
+  const parts = brace < 0 ? [] : [base.slice(brace + 1, -1)]
+  for (const [k, v] of Object.entries(extra))
+    parts.push(`${k}="${v.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`)
+  return parts.length ? `${name}{${parts.join(',')}}` : name
 }
 
 const num = (v: unknown): number => {
@@ -254,6 +273,103 @@ export async function rollupSteps(
     }
   }
   return out
+}
+
+/** Partner nodes (`d:<down id>`) per step over [from, to), from the `nvr: "out"` rollups. */
+export async function rollupDownSteps(
+  from: number,
+  to: number,
+  stepS: number,
+  signal?: AbortSignal
+): Promise<TimelapseGroup[]> {
+  const [requests, latency] = await Promise.all([
+    stepRange(
+      (w) => `sum by (down, stats_result) (sum_over_time(${sel(SERIES.downRequests, w)}[${w}]))`,
+      from,
+      to,
+      stepS,
+      signal
+    ),
+    stepRange(
+      (w) => `sum by (down, stats_result) (sum_over_time(${sel(SERIES.downLatency, w)}[${w}]))`,
+      from,
+      to,
+      stepS,
+      signal
+    )
+  ])
+  return groupsOf(
+    foldSteps(requests, latency, (l) => l.down || null, from, to, stepS),
+    'd:'
+  )
+}
+
+/** Cells → time-lapse groups with `prefix` on each key (steps with no requests dropped). */
+function groupsOf(cells: Map<string, Map<number, Cell>>, prefix: string): TimelapseGroup[] {
+  const out: TimelapseGroup[] = []
+  for (const [k, byStep] of cells) {
+    for (const [s, c] of byStep) {
+      if (!c.n) continue
+      out.push({
+        s,
+        key: `${prefix}${k}`,
+        n: Math.round(c.n),
+        e: Math.round(c.e),
+        p95: percentileFromBuckets(c.buckets, 0.95) ?? 0
+      })
+    }
+  }
+  return out
+}
+
+/**
+ * Callers (`c:<caller key>`) per step from the hourly per-caller rollups — for windows past the
+ * log store's month (no latency there, so p95 is 0). Steps must be whole hours.
+ */
+export async function rollupCallerSteps(
+  from: number,
+  to: number,
+  stepS: number,
+  signal?: AbortSignal
+): Promise<TimelapseGroup[]> {
+  const requests = await stepRange(
+    (w) => `sum by (caller, stats_result) (sum_over_time(${sel(SERIES.callerRequests)}[${w}]))`,
+    from,
+    to,
+    stepS,
+    signal
+  )
+  return groupsOf(
+    foldSteps(requests, [], (l) => l.caller || null, from, to, stepS),
+    'c:'
+  )
+}
+
+/**
+ * The Traffic Map time-lapse from the telemetry stack (#2544): map nodes and partners from the
+ * rollups; callers from the raw access lines while the log store still holds the window (31
+ * days), else from the hourly per-caller rollups (whole-hour steps only). A failing partner or
+ * caller read leaves those nodes out; a failing node read throws, so the caller can fall back.
+ */
+export async function stackSteps(
+  from: number,
+  to: number,
+  stepS: number,
+  nowMs = Date.now(),
+  signal?: AbortSignal
+): Promise<TimelapseGroup[]> {
+  const rawCallers = from >= nowMs - STORE_MAX_DAYS * DAY_MS
+  const callers = rawCallers
+    ? storeCallerSteps(from, to, stepS, signal)
+    : stepS % 3600 === 0
+      ? rollupCallerSteps(from, to, stepS, signal)
+      : Promise.resolve([])
+  const [nodes, downs, people] = await Promise.all([
+    rollupSteps(from, to, stepS, signal),
+    rollupDownSteps(from, to, stepS, signal).catch(() => []),
+    callers.catch(() => [])
+  ])
+  return [...nodes, ...downs, ...people]
 }
 
 /** Peak hourly distinct signed-in people inside each step over [from, to). */
@@ -534,4 +650,88 @@ export async function rollupSloRows(
   for (const [instance, c] of foldInstant([], windowLatency, instOf))
     p95ByInstance.set(instance, percentileFromBuckets(c.buckets, 0.95))
   return { days, p95ByInstance }
+}
+
+export interface BusiestMinutes {
+  /** Requests in the busiest single minute in the window (0 = no data). */
+  best_rpm: number
+  /** Start of that minute (epoch ms), when known. */
+  at: number | null
+  /** Busiest minute per week (UTC weeks starting Monday), oldest first. */
+  weekly: Array<{ week: string; peak_rpm: number }>
+  /** End of the first day with any data (epoch ms), or null. */
+  data_from: number | null
+}
+
+/** Monday 00:00 UTC of the week holding `t`, as YYYY-MM-DD. */
+export function weekOf(t: number): string {
+  const d = dayFloor(t)
+  const back = (new Date(d).getUTCDay() + 6) % 7
+  return new Date(d - back * DAY_MS).toISOString().slice(0, 10)
+}
+
+/** Fold daily peaks ([day END ms, peak per minute]) into the weekly peaks and the best day. */
+export function foldDailyPeaks(points: Array<[number, number]>): {
+  best: { t: number; v: number } | null
+  weekly: Array<{ week: string; peak_rpm: number }>
+  first: number | null
+} {
+  const weeks = new Map<string, number>()
+  let best: { t: number; v: number } | null = null
+  let first: number | null = null
+  for (const [t, v] of points) {
+    if (!Number.isFinite(v) || v <= 0) continue
+    if (first == null || t < first) first = t
+    // A day's point is stamped at its END, so the day itself is the one just before.
+    const wk = weekOf(t - 1)
+    weeks.set(wk, Math.max(weeks.get(wk) ?? 0, v))
+    if (!best || v > best.v) best = { t, v }
+  }
+  const weekly = [...weeks]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([week, peak]) => ({ week, peak_rpm: Math.round(peak) }))
+  return { best, weekly, first }
+}
+
+/**
+ * The busiest single minute over the last `days` days (the capacity ceiling, #2544): daily
+ * peaks of the per-minute request total, then the exact minute inside the best day. `instance`
+ * narrows to one instance's lines (the `inst` label), the way the request-log ceiling does.
+ */
+export async function rollupBusiestMinutes(
+  days: number,
+  instance: string | null,
+  nowMs = Date.now(),
+  signal?: AbortSignal
+): Promise<BusiestMinutes> {
+  const extra: Record<string, string> = { stats_result: 'n' }
+  if (instance) extra.inst = instance
+  // Each minute's own total (its samples only — never a stale earlier minute), peaked per day.
+  const perMinute = `sum(sum_over_time(${selWith(SERIES.requests, extra)}[1m]))`
+  const end = Math.ceil(nowMs / DAY_MS) * DAY_MS
+  const start = end - Math.max(1, Math.min(ROLLUP_MAX_DAYS, Math.round(days))) * DAY_MS
+  const daily = await metricsRange(
+    `max_over_time(${perMinute}[1d:1m])`,
+    start + DAY_MS,
+    end,
+    DAY_MS / 1000,
+    signal
+  )
+  const { best, weekly, first } = foldDailyPeaks(daily.flatMap((sr) => sr.points))
+  if (!best) return { best_rpm: 0, at: null, weekly, data_from: first }
+  let at: number | null = null
+  try {
+    const minutes = await metricsRange(perMinute, best.t - DAY_MS + 60_000, best.t, 60, signal)
+    let top = 0
+    for (const sr of minutes)
+      for (const [t, v] of sr.points)
+        if (Number.isFinite(v) && v > top) {
+          top = v
+          // The point covers the minute ENDING at t.
+          at = t - 60_000
+        }
+  } catch {
+    at = null
+  }
+  return { best_rpm: Math.round(best.v), at, weekly, data_from: first }
 }

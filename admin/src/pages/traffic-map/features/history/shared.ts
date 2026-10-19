@@ -23,7 +23,7 @@ export interface Marker {
 }
 export interface TimelapseBody {
   range: HistoryRange
-  source: 'minutes' | 'log' | 'store' | 'rollups' | 'unavailable'
+  source: 'minutes' | 'log' | 'store' | 'rollups' | 'stack' | 'unavailable'
   from: number
   to: number
   step_s: number
@@ -56,6 +56,8 @@ export interface MinuteSettingsBody {
   settings: { enabled: boolean; retention_days: number; edges: boolean }
   coverage: { table: boolean; first: string | null; last: string | null }
   cloud: boolean
+  /** The telemetry stack keeps traffic history (13 months): this database copy isn't needed. */
+  stack?: boolean
 }
 export interface JobSlot {
   id: string

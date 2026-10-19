@@ -337,6 +337,29 @@ export interface AccessLogInput {
   instance: string
   /** The request's trace went to the telemetry stack (trace-export.ts): link the line to it. */
   traced?: boolean
+  /** Response body bytes when known (string/Buffer payloads); null for streams. */
+  response_bytes?: number | null
+}
+
+/**
+ * The kind of caller on an access line (`ck`): what the stack's hourly per-kind rollups group by.
+ *  - `key`   — a named API key (`k<id>` callers)
+ *  - `oauth` — a connected app (MCP OAuth token) acting as a person
+ *  - `token` — a person's static / bearer token
+ *  - `user`  — a signed-in session (masquerade included)
+ *  - `anon`  — nobody signed in
+ */
+export type CallerKind = 'key' | 'oauth' | 'token' | 'user' | 'anon'
+export function callerKind(src: {
+  authMethod?: string | null
+  apiKeyId?: number | null
+  userId?: string | null
+}): CallerKind {
+  if (src.authMethod === 'api_key' && src.apiKeyId != null) return 'key'
+  if (!src.userId) return 'anon'
+  if (src.authMethod === 'oauth') return 'oauth'
+  if (src.authMethod === 'token' || src.authMethod === 'static') return 'token'
+  return 'user'
 }
 
 /**
@@ -358,10 +381,13 @@ export function accessLogLine(r: AccessLogInput): Record<string, string | number
     route: routeTemplate(r.method, r.path, r.graphql_operation ?? null),
     entity: c ? entityKey(c.lane, c.entity) : 'other/api',
     caller: callerKeyFor({ authMethod: r.auth, apiKeyId: r.api_key_id, userId: r.user }),
+    ck: callerKind({ authMethod: r.auth, apiKeyId: r.api_key_id, userId: r.user }),
     status: r.status,
     ms: r.latency_ms,
     inst: r.instance
   }
+  if (r.response_bytes != null && Number.isFinite(r.response_bytes) && r.response_bytes >= 0)
+    line.bytes = Math.round(r.response_bytes)
   if (r.collection) line.coll = r.collection
   if (r.graphql_operation) line.gql = r.graphql_operation
   if (r.request_id) {
@@ -371,5 +397,37 @@ export function accessLogLine(r: AccessLogInput): Record<string, string | number
   }
   if (r.chain_id) line.chain = r.chain_id
   if (r.error) line.err = r.error.slice(0, 300)
+  return line
+}
+
+export interface OutLogInput {
+  /** The Traffic Map's downstream node id (`ext:<apiId>`, …), without the `d:` prefix. */
+  down: string
+  /** `<lane>/<entity>` the call was attributed to (`other/__background__` with no request). */
+  entity: string
+  /** HTTP status; null = no response. */
+  status: number | null
+  ms: number
+  failed: boolean
+  bytes?: number | null
+  instance: string
+}
+
+/**
+ * One line per finished partner call (`nvr: "out"`), so the stack can keep the Traffic Map's
+ * partner nodes for 13 months. Ids, status and timing only: no partner name, path, query
+ * string, body or error text.
+ */
+export function outLogLine(r: OutLogInput): Record<string, string | number> {
+  const line: Record<string, string | number> = {
+    nvr: 'out',
+    down: r.down.slice(0, 120),
+    entity: r.entity.slice(0, 200),
+    status: r.status != null && Number.isFinite(r.status) ? r.status : 0,
+    ms: Number.isFinite(r.ms) && r.ms > 0 ? Math.round(r.ms) : 0,
+    fail: r.failed ? 1 : 0,
+    inst: r.instance
+  }
+  if (r.bytes != null && Number.isFinite(r.bytes) && r.bytes >= 0) line.bytes = Math.round(r.bytes)
   return line
 }

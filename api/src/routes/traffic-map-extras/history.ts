@@ -60,8 +60,8 @@ import {
 import {
   rollupActive,
   rollupDataFrom,
-  rollupSteps,
-  rollupsEnabled
+  rollupsEnabled,
+  stackSteps
 } from '../../services/traffic-rollups.js'
 import { capacityReport, logMinutes } from '../../services/traffic-taps/capacity.js'
 import { nodeHealth } from '../../services/traffic-taps/node-health.js'
@@ -106,7 +106,7 @@ function cached<T>(ttlMs: number) {
 
 interface TimelapseBody {
   range: Range
-  source: 'minutes' | 'log' | 'store' | 'rollups' | 'unavailable'
+  source: 'minutes' | 'log' | 'store' | 'rollups' | 'stack' | 'unavailable'
   from: number
   to: number
   step_s: number
@@ -138,6 +138,26 @@ async function buildTimelapseBody(range: Range, want: string | undefined): Promi
   if (ROLLUP_RANGES.has(range)) return buildRollupBody(range, from, to, stepS)
   const settings = await readMinuteSettings()
   const coverage = await minuteCoverage()
+  // #2544 — the telemetry stack keeps the map's minutes (nodes, partners, callers) for 13 months:
+  // it answers whenever its rollups reach back to the window start (an hour of slack), unless a
+  // source is asked for by name. Before then the database minute store / request log answer.
+  if (rollupsEnabled() && (want == null || want === 'stack')) {
+    const dataFrom = await rollupDataFrom()
+    if (want === 'stack' || (dataFrom != null && dataFrom <= from + 3600_000)) {
+      try {
+        const [groups, active] = await Promise.all([
+          stackSteps(from, to, stepS),
+          storeActive(from, to, stepS).catch(() => null)
+        ])
+        return await stackBody(range, from, to, stepS, groups, active, dataFrom, {
+          enabled: settings.enabled,
+          first: coverage.first
+        })
+      } catch {
+        // fall through to the database minute store / request log
+      }
+    }
+  }
   // The minute store answers when it is on and reaches back far enough (an hour of slack).
   const covers = coverage.table && !!coverage.first && Date.parse(coverage.first) <= from + 3600_000
   // The store answers windows older than the request log, or when asked for by name.
@@ -194,6 +214,42 @@ async function buildTimelapseBody(range: Range, want: string | undefined): Promi
   }
 }
 
+/** The time-lapse body from the telemetry stack's groups (#2544): frames, people, markers. */
+async function stackBody(
+  range: Range,
+  from: number,
+  to: number,
+  stepS: number,
+  groups: TimelapseGroup[],
+  active: number[] | null,
+  dataFrom: number | null,
+  minutes: TimelapseBody['minutes']
+): Promise<TimelapseBody> {
+  const tl = buildTimelapse(groups, { from, to, stepS }, 40)
+  const [people, markers] = await Promise.all([
+    peopleSteps(from, to, stepS).catch(() => ({
+      online: new Array(tl.frames.length).fill(null),
+      active: new Array(tl.frames.length).fill(0),
+      sampled: false
+    })),
+    timelapseMarkers(from, to)
+  ])
+  if (active) people.active = active
+  return {
+    range,
+    source: 'stack',
+    from,
+    to,
+    step_s: stepS,
+    nodes: tl.nodes,
+    frames: tl.frames,
+    people,
+    markers,
+    minutes,
+    data_from: dataFrom
+  }
+}
+
 /** 90 days / 13 months: the map per step from the hourly request rollups (#2544 Phase 5). */
 async function buildRollupBody(
   range: Range,
@@ -213,7 +269,7 @@ async function buildRollupBody(
   } else {
     try {
       ;[groups, active, dataFrom] = await Promise.all([
-        rollupSteps(from, to, stepS),
+        stackSteps(from, to, stepS),
         rollupActive(from, to, stepS).catch(() => null),
         rollupDataFrom()
       ])
@@ -321,7 +377,7 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/history/settings', async () => {
     const [settings, coverage] = await Promise.all([readMinuteSettings(true), minuteCoverage()])
-    return { data: { settings, coverage, cloud } }
+    return { data: { settings, coverage, cloud, stack: rollupsEnabled() } }
   })
 
   app.put<{ Body: Record<string, unknown> }>('/history/settings', async (req, reply) => {
@@ -334,7 +390,9 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
         userId: req.user?.id ?? null,
         req
       })
-      return { data: { settings, coverage: await minuteCoverage(), cloud } }
+      return {
+        data: { settings, coverage: await minuteCoverage(), cloud, stack: rollupsEnabled() }
+      }
     } catch (err) {
       if (err instanceof MinuteSettingsUnavailableError)
         return reply.code(409).send({ error: err.message, code: 'HISTORY_NOT_MIGRATED' })
@@ -356,10 +414,16 @@ export async function historyRoutes(app: FastifyInstance): Promise<void> {
           .code(400)
           .send({ error: 'range must be 24h, 7d, 30d, 90d or 13mo', code: 'RANGE_INVALID' })
       const want = req.query.source
-      if (want != null && want !== 'minutes' && want !== 'log' && want !== 'store')
+      if (
+        want != null &&
+        want !== 'minutes' &&
+        want !== 'log' &&
+        want !== 'store' &&
+        want !== 'stack'
+      )
         return reply
           .code(400)
-          .send({ error: 'source must be minutes, log or store', code: 'SOURCE_INVALID' })
+          .send({ error: 'source must be minutes, log, store or stack', code: 'SOURCE_INVALID' })
       try {
         return {
           data: await timelapseCache(`${range}|${want ?? ''}`, () =>
