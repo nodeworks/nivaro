@@ -288,8 +288,16 @@ export async function customQueriesRoutes(app: FastifyInstance) {
       'name',
       'slug',
       'cache_ttl',
-      'enabled'
-    )) as Array<{ id: number; name: string; slug: string; cache_ttl: number; enabled: boolean }>
+      'enabled',
+      'sql_text'
+    )) as Array<{
+      id: number
+      name: string
+      slug: string
+      cache_ttl: number
+      enabled: boolean
+      sql_text: string
+    }>
     const bySlug = new Map(defs.map((d) => [d.slug, d]))
     const seen = new Set<string>()
     const merged = rows.map((r) => {
@@ -315,7 +323,33 @@ export async function customQueriesRoutes(app: FastifyInstance) {
         enabled: d.enabled,
         runs: 0
       }))
-    return { data: { since, rows: merged, silent } }
+    // #2446 — a TTL offer per slow uncached query, with the staleness window it
+    // would introduce; writers are withheld (never offered a TTL).
+    const { buildTtlSuggestions } = await import('../services/ttl-suggestions.js')
+    const statBySlug = new Map(rows.map((r) => [r.slug, r]))
+    const { suggestions, withheld } = await buildTtlSuggestions(
+      defs.map((d) => {
+        const st = statBySlug.get(d.slug)
+        return {
+          id: d.id,
+          slug: d.slug,
+          name: d.name,
+          sql_text: d.sql_text,
+          cache_ttl: d.cache_ttl,
+          enabled: d.enabled,
+          stat: st
+            ? {
+                hits: st.hits,
+                misses: st.misses,
+                uncached_runs: st.uncached_runs,
+                avg_exec_ms: st.avg_exec_ms
+              }
+            : null
+        }
+      }),
+      since
+    )
+    return { data: { since, rows: merged, silent, suggestions, withheld } }
   })
 
   app.get('/', { preHandler: requireAdmin }, async () => {
