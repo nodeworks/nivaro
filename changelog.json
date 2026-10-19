@@ -1,10 +1,40 @@
 {
-  "generated_at": "2026-10-19T01:33:42.783Z",
+  "generated_at": "2026-10-19T02:18:07.910Z",
   "releases": [
+    {
+      "version": "0.2.61",
+      "tag": "v0.2.61",
+      "date": "2026-10-18T22:17:54-04:00",
+      "sections": [
+        {
+          "label": "Fixed",
+          "entries": [
+            {
+              "section": "Fixed",
+              "scope": "oauth",
+              "text": "a stale sign-in signs in again instead of losing its session",
+              "hash": "d41f7626"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "publish-github: tag pushes survive a ref repack and never abandon the rest",
+              "hash": "10a19158"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.60",
       "tag": "v0.2.60",
-      "date": "2026-10-18T21:33:30-04:00",
+      "date": "2026-10-18T21:33:42-04:00",
       "sections": [
         {
           "label": "Fixed",
