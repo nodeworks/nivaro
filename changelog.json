@@ -1,10 +1,35 @@
 {
-  "generated_at": "2026-10-19T20:52:48.696Z",
+  "generated_at": "2026-10-19T21:19:28.365Z",
   "releases": [
+    {
+      "version": "0.2.64",
+      "tag": "v0.2.64",
+      "date": "2026-10-19T17:19:14-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "publish-github: leak check reads each blob once, tag compare is one set diff",
+              "hash": "1c390341"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "AI over the telemetry: ask, slowest requests, trace explainer (#2544)",
+              "hash": "a0177dbd"
+            }
+          ]
+        }
+      ],
+      "count": 2
+    },
     {
       "version": "0.2.63",
       "tag": "v0.2.63",
-      "date": "2026-10-19T16:52:36-04:00",
+      "date": "2026-10-19T16:52:48-04:00",
       "sections": [
         {
           "label": "Other",
