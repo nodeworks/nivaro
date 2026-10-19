@@ -44,6 +44,7 @@ import { CRON_DESCRIPTIONS } from './services/cron-descriptions.js'
 import { registerMissedCronProbe } from './services/cron-misses.js'
 import { trackError } from './services/error-tracking.js'
 import { callExternalApi } from './services/external-apis.js'
+import { markMcpInnerRequest } from './services/mcp-config.js'
 import { registerQueueSnapshotCron } from './services/queue-snapshots.js'
 import { registerStagedImportWorker } from './services/staged-import-worker.js'
 import { purgeExpiredTrash } from './services/trash.js'
@@ -163,6 +164,8 @@ export async function buildServer() {
   // app.inject caller) — the API log row and every write it causes carry it.
   await app.register(chainPlugin)
   await app.register(requestTracePlugin)
+  // Before anything reads headers: an in-process MCP tool call's marker becomes a request flag.
+  app.addHook('onRequest', markMcpInnerRequest)
   await app.register(rateLimitPlugin)
   // Traffic Map debug windows + temporary caches (#2215 / #2273) — timed rules every replica honours.
   await app.register(trafficActionsPlugin)

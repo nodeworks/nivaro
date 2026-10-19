@@ -11,7 +11,7 @@ import {
   readUsers
 } from '@nivaro/sdk'
 import { z } from 'zod'
-import { READ } from '../annotations.js'
+import { READ, WRITE } from '../annotations.js'
 import { clip, clipRow, personName } from '../compact.js'
 import { fail, ok } from '../result.js'
 import { clampTo, collectionName, jsonObject, querySlug, toObject } from '../schema.js'
@@ -98,21 +98,48 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
     {
       title: 'List saved queries',
       description:
-        "The saved reporting queries the key's user may run, with the parameters each takes. Run one with run_custom_query.",
-      inputSchema: {},
+        "The saved reporting queries the key's user may run, with the parameters each takes. Use search to find one; run it with run_custom_query.",
+      inputSchema: {
+        search: z
+          .string()
+          .optional()
+          .describe('Only queries whose slug, name or description contains this text.'),
+        limit: z.number().int().optional().describe('Queries to return (1–200, default 50).')
+      },
       annotations: READ
     },
-    async () => {
+    async ({ search, limit }) => {
       try {
         const res = await client.request(listCustomQueryCatalog())
-        return ok(
-          res.data.map((q) => ({
-            slug: q.slug,
-            name: q.name,
-            description: clip(q.description, 300),
-            params: q.params ?? []
-          }))
+        const q = search?.trim().toLowerCase()
+        const all = res.data.filter(
+          (c) =>
+            !q ||
+            [c.slug, c.name, c.description].some((v) =>
+              String(v ?? '')
+                .toLowerCase()
+                .includes(q)
+            )
         )
+        const n = clampTo(limit, 50, 200)
+        return ok({
+          count: all.length,
+          truncated: all.length > n,
+          queries: all.slice(0, n).map((c) => ({
+            slug: c.slug,
+            name: c.name,
+            ...(c.description ? { description: clip(c.description, 120) } : {}),
+            params: (c.params ?? []).map((p: unknown) => {
+              if (!p || typeof p !== 'object') return p
+              const r = p as Record<string, unknown>
+              return {
+                name: r.name ?? r.key,
+                ...(r.type ? { type: r.type } : {}),
+                ...(r.required ? { required: true } : {})
+              }
+            })
+          }))
+        })
       } catch (err) {
         return fail(err)
       }
@@ -130,7 +157,9 @@ export function registerLookupTools(server: McpServer, client: NivaroClient) {
         params: jsonObject.optional().describe('Parameter values by name.'),
         limit: z.number().int().optional().describe('Rows to return (1–200, default 50).')
       },
-      annotations: READ
+      // Not read-only: a saved query may call a procedure that writes, so clients
+      // that confirm writes should ask before running one.
+      annotations: WRITE
     },
     async ({ slug, params, limit }) => {
       try {

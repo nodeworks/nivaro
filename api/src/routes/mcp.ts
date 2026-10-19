@@ -1,9 +1,9 @@
-import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js'
-import { createNivaroMcpServer } from '@nivaro/mcp'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { authenticate } from '../middleware/authenticate.js'
 import {
+  MCP_INNER_HEADER,
   mcpHttpEnabled,
+  mcpInnerHeaderValue,
   mcpOAuthEnabled,
   mcpPublicOrigin,
   protectedResourceMetadataUrl
@@ -56,7 +56,10 @@ export function injectFetch(app: FastifyInstance, req: FastifyRequest): typeof f
       headers[k] = v
     })
     // The caller's own credential, never the SDK's placeholder.
-    Object.assign(headers, forward, { 'accept-encoding': 'identity' })
+    Object.assign(headers, forward, {
+      'accept-encoding': 'identity',
+      [MCP_INNER_HEADER]: mcpInnerHeaderValue()
+    })
     const res = await app.inject({
       method: (init?.method ?? 'GET') as 'GET',
       url: `${url.pathname}${url.search}`,
@@ -74,6 +77,21 @@ export function injectFetch(app: FastifyInstance, req: FastifyRequest): typeof f
   }) as typeof fetch
 }
 
+let mcpModules: Promise<{
+  createNivaroMcpServer: typeof import('@nivaro/mcp').createNivaroMcpServer
+  StreamableHTTPServerTransport: typeof import('@modelcontextprotocol/sdk/server/streamableHttp.js').StreamableHTTPServerTransport
+}> | null = null
+const loadMcp = () => {
+  mcpModules ??= Promise.all([
+    import('@nivaro/mcp'),
+    import('@modelcontextprotocol/sdk/server/streamableHttp.js')
+  ]).then(([m, t]) => ({
+    createNivaroMcpServer: m.createNivaroMcpServer,
+    StreamableHTTPServerTransport: t.StreamableHTTPServerTransport
+  }))
+  return mcpModules
+}
+
 export async function mcpRoutes(app: FastifyInstance) {
   app.post('/mcp', { compress: false }, async (req, reply) => {
     if (!mcpHttpEnabled())
@@ -88,6 +106,9 @@ export async function mcpRoutes(app: FastifyInstance) {
       throw err
     }
 
+    // Loaded on first use: boot never depends on the MCP packages, and a process
+    // nobody connects an assistant to never loads them.
+    const { createNivaroMcpServer, StreamableHTTPServerTransport } = await loadMcp()
     const { server } = createNivaroMcpServer({
       url: mcpPublicOrigin(),
       token,

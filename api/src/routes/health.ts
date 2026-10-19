@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import type { FastifyInstance } from 'fastify'
 import { config } from '../config.js'
 import { db } from '../db/index.js'
-import { requireAdmin } from '../middleware/authenticate.js'
+import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { bootState } from '../services/boot-phases.js'
 import { requestDevRestart } from '../services/dev-extension-watch.js'
 import { devStaleness, startDevStalenessScan } from '../services/dev-staleness.js'
@@ -147,7 +147,7 @@ export async function healthRoutes(app: FastifyInstance) {
     return reply.code(report.ready ? 200 : 503).send(report)
   })
 
-  app.get('/health', async (_req, reply) => {
+  app.get('/health', async (req, reply) => {
     const [dbOk, redisOk] = await Promise.all([
       db
         .raw('SELECT 1')
@@ -162,6 +162,12 @@ export async function healthRoutes(app: FastifyInstance) {
     const status = dbOk && redisOk ? 'ok' : 'degraded'
     const code = status === 'ok' ? 200 : 503
 
+    // Unauthenticated callers (load balancers, the app's DB-down probe) get the
+    // verdict only. Where the database and Redis live is for administrators — a
+    // hosted Redis URL carries its password — and even they never see that.
+    const admin = await authenticate(req, reply)
+      .then(() => !!req.isAdmin)
+      .catch(() => false)
     return reply.code(code).send({
       status,
       version: NIVARO_VERSION,
@@ -169,12 +175,11 @@ export async function healthRoutes(app: FastifyInstance) {
       cloud: !!process.env.CLOUD_META_DB_URL,
       db: {
         status: dbOk ? 'connected' : 'disconnected',
-        database: config.DB_DATABASE,
-        host: config.DB_HOST
+        ...(admin ? { database: config.DB_DATABASE, host: config.DB_HOST } : {})
       },
       redis: {
         status: redisOk ? 'connected' : 'disconnected',
-        url: config.REDIS_URL
+        ...(admin ? { url: redactUrlCredentials(config.REDIS_URL) } : {})
       },
       ts: new Date().toISOString()
     })
@@ -280,4 +285,15 @@ export async function healthRoutes(app: FastifyInstance) {
       }
     })
   })
+}
+
+/** `redis://user:secret@host:6379/0` → `redis://***@host:6379/0`. */
+export function redactUrlCredentials(raw: string): string {
+  try {
+    const u = new URL(raw)
+    if (!u.username && !u.password) return raw
+    return `${u.protocol}//***@${u.host}${u.pathname}${u.search}`
+  } catch {
+    return raw.replace(/\/\/[^@/]*@/, '//***@')
+  }
 }

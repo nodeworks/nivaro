@@ -10,7 +10,7 @@ import {
   verifyPkceS256,
   withAuthResponse
 } from '../lib/oauth.js'
-import { requireAuth } from '../middleware/authenticate.js'
+import { authenticate, requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { mcpOAuthEnabled, mcpPublicOrigin, mcpResourceUrl } from '../services/mcp-config.js'
 import {
@@ -121,30 +121,24 @@ const acceptableResource = (r: string | undefined) =>
 
 type Checked =
   | { ok: true; client: OAuthClient; p: AuthorizeParams }
-  | { ok: false; page: string } // shown, never redirected (client or redirect unknown)
-  | { ok: false; redirect: string } // client + redirect known: tell the client
+  // Shown on this origin, never sent to the client's address: before the person
+  // has chosen, a self-registered client must not turn Nivaro into a redirector.
+  | { ok: false; message: string }
 
 async function checkAuthorize(app: FastifyInstance, p: AuthorizeParams): Promise<Checked> {
+  const fail = (message: string) => ({ ok: false as const, message })
   const client = p.client_id ? await getClient(app.redis, p.client_id) : null
-  if (!client)
-    return { ok: false, page: 'This app is not registered with Nivaro (unknown client).' }
+  if (!client) return fail('This app is not registered with Nivaro (unknown client).')
   if (!p.redirect_uri || !redirectMatches(client.redirect_uris, p.redirect_uri))
-    return { ok: false, page: 'This app asked to return to an address it did not register.' }
-  const fail = (error: string, description: string) => ({
-    ok: false as const,
-    redirect: withAuthResponse(p.redirect_uri, {
-      error,
-      error_description: description,
-      state: p.state,
-      iss: mcpPublicOrigin()
-    })
-  })
-  if (p.response_type !== 'code') return fail('unsupported_response_type', 'Only code is supported')
+    return fail('This app asked to return to an address it did not register.')
+  if (p.response_type !== 'code') return fail('This app asked for an unsupported response type.')
   if (p.code_challenge_method !== 'S256' || !/^[A-Za-z0-9_-]{43}$/.test(p.code_challenge))
-    return fail('invalid_request', 'PKCE with S256 is required')
+    return fail('This app did not use PKCE (S256), which Nivaro requires.')
   if (p.scope && !p.scope.split(/\s+/).every((s) => s === OAUTH_SCOPE || s === ''))
-    return fail('invalid_scope', `The only scope is ${OAUTH_SCOPE}`)
-  if (!acceptableResource(p.resource)) return fail('invalid_target', 'Unknown resource')
+    return fail(
+      `This app asked for a scope Nivaro does not offer (the only one is ${OAUTH_SCOPE}).`
+    )
+  if (!acceptableResource(p.resource)) return fail('This app asked for access to another server.')
   return { ok: true, client, p }
 }
 
@@ -187,10 +181,56 @@ function consentPage(client: OAuthClient, p: AuthorizeParams, user: User, csrf: 
   )
 }
 
-const sessionUser = async (req: FastifyRequest): Promise<User | null> => {
-  const id = req.session?.userId
-  if (!id) return null
-  return ((await db<User>('nivaro_users').where({ id, status: 'active' }).first()) as User) ?? null
+/** A signed-in consent needs a sign-in this recent (a connected app keeps access for 30 days). */
+const CONSENT_FRESH_MS = 30 * 60_000
+
+/**
+ * The person on the consent page: a SESSION only (never a bearer token), judged
+ * by the same rules as every route (active account, session policy), and
+ * signed in recently. `stale` = signed in, but long ago — sign in again first.
+ */
+async function consentUser(
+  req: FastifyRequest,
+  reply: FastifyReply
+): Promise<{ user: User | null; stale: boolean }> {
+  if (req.headers.authorization) return { user: null, stale: false }
+  try {
+    await authenticate(req, reply)
+  } catch {
+    return { user: null, stale: false }
+  }
+  if (req.authMethod !== 'session' || !req.user) return { user: null, stale: false }
+  return { user: req.user, stale: Date.now() - (req.session.authAt ?? 0) >= CONSENT_FRESH_MS }
+}
+
+const cannotConnect = (reply: FastifyReply, message: string, status = 400) =>
+  reply
+    .code(status)
+    .type('text/html')
+    .send(page('Cannot connect', `<h1>Cannot connect</h1><p>${escapeHtml(message)}</p>`))
+
+/**
+ * Per-address limit for the public OAuth routes (the app-wide limiter covers
+ * /api only). Fixed window in Redis; true = refused (429 sent).
+ */
+async function limited(
+  app: FastifyInstance,
+  req: FastifyRequest,
+  reply: FastifyReply,
+  bucket: string,
+  max: number,
+  windowS: number
+): Promise<boolean> {
+  const win = Math.floor(Date.now() / 1000 / windowS)
+  const key = `nvr:oauth:rl:${bucket}:${req.ip}:${win}`
+  const n = await app.redis.incr(key)
+  if (n === 1) await app.redis.expire(key, windowS)
+  if (n <= max) return false
+  void reply
+    .code(429)
+    .header('Retry-After', String(windowS))
+    .send({ error: 'slow_down', error_description: 'Too many requests — try again later' })
+  return true
 }
 
 const equalStrings = (a: string, b: string) => {
@@ -240,65 +280,55 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     })
   }
 
-  app.post(
-    '/oauth/register',
-    { config: { rateLimit: { max: 20, timeWindow: '1 hour' } } },
-    async (req, reply) => {
-      if (!enabled(reply)) return
-      const body = (req.body ?? {}) as Record<string, unknown>
-      const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : []
-      if (uris.length === 0 || uris.length > 10 || !uris.every(isAllowedRedirectUri))
-        return oauthError(
-          reply,
-          400,
-          'invalid_redirect_uri',
-          'redirect_uris must be https, or http on localhost'
-        )
-      const method = str(body.token_endpoint_auth_method) || 'none'
-      if (method !== 'none')
-        return oauthError(
-          reply,
-          400,
-          'invalid_client_metadata',
-          'Only public clients (none) are supported'
-        )
-      const client = await registerClient(app.redis, {
-        client_name: cleanClientName(body.client_name),
-        redirect_uris: uris
+  app.post('/oauth/register', async (req, reply) => {
+    if (!enabled(reply)) return
+    if (await limited(app, req, reply, 'register', 20, 3600)) return
+    const body = (req.body ?? {}) as Record<string, unknown>
+    const uris = Array.isArray(body.redirect_uris) ? body.redirect_uris.map(String) : []
+    if (uris.length === 0 || uris.length > 10 || !uris.every(isAllowedRedirectUri))
+      return oauthError(
+        reply,
+        400,
+        'invalid_redirect_uri',
+        'redirect_uris must be https, or http on localhost'
+      )
+    const method = str(body.token_endpoint_auth_method) || 'none'
+    if (method !== 'none')
+      return oauthError(
+        reply,
+        400,
+        'invalid_client_metadata',
+        'Only public clients (none) are supported'
+      )
+    const client = await registerClient(app.redis, {
+      client_name: cleanClientName(body.client_name),
+      redirect_uris: uris
+    })
+    return reply
+      .code(201)
+      .header('Cache-Control', 'no-store')
+      .send({
+        client_id: client.client_id,
+        client_id_issued_at: Math.floor(Date.parse(client.created_at) / 1000),
+        client_name: client.client_name,
+        redirect_uris: client.redirect_uris,
+        token_endpoint_auth_method: 'none',
+        grant_types: ['authorization_code', 'refresh_token'],
+        response_types: ['code'],
+        scope: OAUTH_SCOPE
       })
-      return reply
-        .code(201)
-        .header('Cache-Control', 'no-store')
-        .send({
-          client_id: client.client_id,
-          client_id_issued_at: Math.floor(Date.parse(client.created_at) / 1000),
-          client_name: client.client_name,
-          redirect_uris: client.redirect_uris,
-          token_endpoint_auth_method: 'none',
-          grant_types: ['authorization_code', 'refresh_token'],
-          response_types: ['code'],
-          scope: OAUTH_SCOPE
-        })
-    }
-  )
+  })
 
   app.get('/oauth/authorize', async (req, reply) => {
     if (!enabled(reply)) return
     void reply.headers(SECURITY_HEADERS)
     const p = readAuthorizeParams(req.query as Record<string, unknown>)
     const checked = await checkAuthorize(app, p)
-    if (!checked.ok)
-      return 'redirect' in checked
-        ? reply.redirect(checked.redirect)
-        : reply
-            .code(400)
-            .type('text/html')
-            .send(
-              page('Cannot connect', `<h1>Cannot connect</h1><p>${escapeHtml(checked.page)}</p>`)
-            )
-    const user = await sessionUser(req)
-    if (!user) {
-      // Sign in on this origin first; the login returns here with the same query.
+    if (!checked.ok) return cannotConnect(reply, checked.message)
+    const { user, stale } = await consentUser(req, reply)
+    if (!user || stale) {
+      // Sign in on this origin first (again, when the last sign-in is old); the
+      // login returns here with the same query.
       const back = `${mcpPublicOrigin()}${req.url}`
       return reply.redirect(`/api/auth/login?returnTo=${encodeURIComponent(back)}`)
     }
@@ -314,28 +344,15 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     const csrf = str(body.csrf)
     const expected = req.session?.oauthCsrf ?? ''
     req.session.oauthCsrf = undefined
-    const user = await sessionUser(req)
-    if (!user || !csrf || !expected || !equalStrings(csrf, expected))
-      return reply
-        .code(400)
-        .type('text/html')
-        .send(
-          page(
-            'Cannot connect',
-            '<h1>Cannot connect</h1><p>This consent page expired. Go back to the app and connect again.</p>'
-          )
-        )
+    const { user, stale } = await consentUser(req, reply)
+    if (!user || stale || !csrf || !expected || !equalStrings(csrf, expected))
+      return cannotConnect(
+        reply,
+        'This consent page expired. Go back to the app and connect again.'
+      )
     const p = readAuthorizeParams(body)
     const checked = await checkAuthorize(app, p)
-    if (!checked.ok)
-      return 'redirect' in checked
-        ? reply.redirect(checked.redirect)
-        : reply
-            .code(400)
-            .type('text/html')
-            .send(
-              page('Cannot connect', `<h1>Cannot connect</h1><p>${escapeHtml(checked.page)}</p>`)
-            )
+    if (!checked.ok) return cannotConnect(reply, checked.message)
     if (body.decision !== 'allow')
       return reply.redirect(
         withAuthResponse(p.redirect_uri, {
@@ -364,65 +381,62 @@ export async function oauthPublicRoutes(app: FastifyInstance) {
     )
   })
 
-  app.post(
-    '/oauth/token',
-    { config: { rateLimit: { max: 120, timeWindow: '1 minute' } } },
-    async (req, reply) => {
-      if (!enabled(reply)) return
-      const b = (req.body ?? {}) as Record<string, unknown>
-      const grantType = str(b.grant_type)
-      const activeUser = async (id: string) =>
-        !!(await db('nivaro_users').where({ id, status: 'active' }).first('id'))
+  app.post('/oauth/token', async (req, reply) => {
+    if (!enabled(reply)) return
+    if (await limited(app, req, reply, 'token', 120, 60)) return
+    const b = (req.body ?? {}) as Record<string, unknown>
+    const grantType = str(b.grant_type)
+    const activeUser = async (id: string) =>
+      !!(await db('nivaro_users').where({ id, status: 'active' }).first('id'))
 
-      if (grantType === 'authorization_code') {
-        const rec = await consumeCode(app.redis, str(b.code))
-        if (!rec) return oauthError(reply, 400, 'invalid_grant', 'Unknown, used or expired code')
-        if (rec.client_id !== str(b.client_id))
-          return oauthError(reply, 400, 'invalid_grant', 'The code was issued to another client')
-        if (rec.redirect_uri !== str(b.redirect_uri))
-          return oauthError(
-            reply,
-            400,
-            'invalid_grant',
-            'redirect_uri does not match the authorization'
-          )
-        if (!verifyPkceS256(str(b.code_verifier), rec.code_challenge))
-          return oauthError(reply, 400, 'invalid_grant', 'PKCE verification failed')
-        if (!(await activeUser(rec.user_id)))
-          return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
-        const tokens = await issueTokens(app.redis, {
-          grant_id: rec.grant_id,
-          user_id: rec.user_id,
-          client_id: rec.client_id,
-          resource: rec.resource
-        })
-        return reply
-          .header('Cache-Control', 'no-store')
-          .send({ ...tokens, token_type: 'Bearer', scope: OAUTH_SCOPE })
-      }
-
-      if (grantType === 'refresh_token') {
-        const rec = await consumeRefresh(app.redis, str(b.refresh_token))
-        if (!rec)
-          return oauthError(reply, 400, 'invalid_grant', 'Unknown, used or expired refresh token')
-        if (b.client_id != null && rec.client_id !== str(b.client_id))
-          return oauthError(reply, 400, 'invalid_grant', 'The token was issued to another client')
-        if (!(await activeUser(rec.user_id)))
-          return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
-        const tokens = await issueTokens(app.redis, rec)
-        return reply
-          .header('Cache-Control', 'no-store')
-          .send({ ...tokens, token_type: 'Bearer', scope: OAUTH_SCOPE })
-      }
-
-      return oauthError(
-        reply,
-        400,
-        'unsupported_grant_type',
-        'Use authorization_code or refresh_token'
-      )
+    if (grantType === 'authorization_code') {
+      const rec = await consumeCode(app.redis, str(b.code))
+      if (!rec) return oauthError(reply, 400, 'invalid_grant', 'Unknown, used or expired code')
+      if (rec.client_id !== str(b.client_id))
+        return oauthError(reply, 400, 'invalid_grant', 'The code was issued to another client')
+      if (rec.redirect_uri !== str(b.redirect_uri))
+        return oauthError(
+          reply,
+          400,
+          'invalid_grant',
+          'redirect_uri does not match the authorization'
+        )
+      if (!verifyPkceS256(str(b.code_verifier), rec.code_challenge))
+        return oauthError(reply, 400, 'invalid_grant', 'PKCE verification failed')
+      if (!(await activeUser(rec.user_id)))
+        return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
+      const tokens = await issueTokens(app.redis, {
+        grant_id: rec.grant_id,
+        user_id: rec.user_id,
+        client_id: rec.client_id,
+        resource: rec.resource
+      })
+      return reply
+        .header('Cache-Control', 'no-store')
+        .send({ ...tokens, token_type: 'Bearer', scope: OAUTH_SCOPE })
     }
-  )
+
+    if (grantType === 'refresh_token') {
+      const rec = await consumeRefresh(app.redis, str(b.refresh_token))
+      if (!rec)
+        return oauthError(reply, 400, 'invalid_grant', 'Unknown, used or expired refresh token')
+      if (b.client_id != null && rec.client_id !== str(b.client_id))
+        return oauthError(reply, 400, 'invalid_grant', 'The token was issued to another client')
+      if (!(await activeUser(rec.user_id)))
+        return oauthError(reply, 400, 'invalid_grant', 'The account is not active')
+      const tokens = await issueTokens(app.redis, rec)
+      return reply
+        .header('Cache-Control', 'no-store')
+        .send({ ...tokens, token_type: 'Bearer', scope: OAUTH_SCOPE })
+    }
+
+    return oauthError(
+      reply,
+      400,
+      'unsupported_grant_type',
+      'Use authorization_code or refresh_token'
+    )
+  })
 
   app.post('/oauth/revoke', async (req, reply) => {
     if (!enabled(reply)) return

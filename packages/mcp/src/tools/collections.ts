@@ -6,7 +6,9 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { type CMSCollection, type NivaroClient, readCollection, readCollections } from '@nivaro/sdk'
+import { z } from 'zod'
 import { READ } from '../annotations.js'
+import { clip } from '../compact.js'
 import { fail, ok } from '../result.js'
 import { collectionName } from '../schema.js'
 
@@ -143,6 +145,28 @@ export function summarizeSchema(col: CMSCollection): CollectionSchema {
   }
 }
 
+const CHOICES_SHOWN = 25
+
+/** Fields as a model needs them: no false flags or empty values, long choice lists cut. */
+export function compactFields(fields: FieldSummary[], includeHidden: boolean) {
+  return fields
+    .filter((f) => includeHidden || !f.hidden)
+    .map((f) => {
+      const out: Record<string, unknown> = { field: f.field }
+      if (f.label && f.label !== f.field) out.label = f.label
+      if (f.type) out.type = f.type
+      if (f.interface && f.interface !== f.type) out.interface = f.interface
+      for (const flag of ['required', 'readonly', 'hidden', 'computed'] as const)
+        if (f[flag]) out[flag] = true
+      if (f.choices) {
+        out.choices = f.choices.slice(0, CHOICES_SHOWN)
+        if (f.choices.length > CHOICES_SHOWN) out.choices_more = f.choices.length - CHOICES_SHOWN
+      }
+      if (f.note) out.note = clip(f.note, 200)
+      return out
+    })
+}
+
 export async function listCollections(client: NivaroClient): Promise<CollectionSummary[]> {
   const res = await client.request(readCollections())
   return res.data.map(summarizeCollection)
@@ -162,13 +186,37 @@ export function registerCollectionTools(server: McpServer, client: NivaroClient)
     {
       title: 'List collections',
       description:
-        "Every collection the key can read: name, display name, singleton flag. Call describe_collection for a collection's fields.",
-      inputSchema: {},
+        "The collections the key can read: name and display name (hidden ones only on request). Use search to narrow a long list; call describe_collection for a collection's fields.",
+      inputSchema: {
+        search: z
+          .string()
+          .optional()
+          .describe('Only collections whose name or display name contains this text.'),
+        include_hidden: z.boolean().optional().describe('Also list collections hidden in the app.')
+      },
       annotations: READ
     },
-    async () => {
+    async ({ search, include_hidden }) => {
       try {
-        return ok(await listCollections(client))
+        const q = search?.trim().toLowerCase()
+        const rows = (await listCollections(client))
+          .filter((c) => include_hidden || !c.hidden)
+          .filter(
+            (c) =>
+              !q ||
+              c.collection.toLowerCase().includes(q) ||
+              (c.display_name ?? '').toLowerCase().includes(q)
+          )
+          .map((c) => ({
+            collection: c.collection,
+            ...(c.display_name && c.display_name !== c.collection
+              ? { display_name: c.display_name }
+              : {}),
+            ...(c.singleton ? { singleton: true } : {}),
+            ...(c.hidden ? { hidden: true } : {}),
+            ...(c.description ? { description: clip(c.description, 100) } : {})
+          }))
+        return ok({ count: rows.length, collections: rows })
       } catch (err) {
         return fail(err)
       }
@@ -180,13 +228,17 @@ export function registerCollectionTools(server: McpServer, client: NivaroClient)
     {
       title: 'Describe a collection',
       description:
-        "A collection's schema: fields with type, interface, required/readonly/hidden flags and dropdown choices, plus its relations, display template and natural keys.",
-      inputSchema: { collection: collectionName },
+        "A collection's schema: its fields (type, interface, flags, dropdown choices), relations, display template and natural keys. Hidden fields only on request.",
+      inputSchema: {
+        collection: collectionName,
+        include_hidden: z.boolean().optional().describe('Also list fields hidden in the app.')
+      },
       annotations: READ
     },
-    async ({ collection }) => {
+    async ({ collection, include_hidden }) => {
       try {
-        return ok(await describeCollection(client, collection))
+        const schema = await describeCollection(client, collection)
+        return ok({ ...schema, fields: compactFields(schema.fields, !!include_hidden) })
       } catch (err) {
         return fail(err)
       }

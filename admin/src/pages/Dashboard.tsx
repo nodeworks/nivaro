@@ -34,8 +34,8 @@ type HealthData = {
   status: 'ok' | 'degraded'
   version: string
   environment: string
-  db: { status: 'connected' | 'disconnected'; database: string; host: string }
-  redis: { status: 'connected' | 'disconnected'; url: string }
+  db: { status: 'connected' | 'disconnected'; database?: string; host?: string }
+  redis: { status: 'connected' | 'disconnected'; url?: string }
 }
 
 type ActivityEntry = {
@@ -581,7 +581,9 @@ export function DashboardPage() {
                 />
                 <InfoRow
                   label='Database'
-                  value={health ? `${health.db.database} (MSSQL)` : '—'}
+                  value={
+                    health?.db.database ? `${health.db.database} (MSSQL)` : health ? 'MSSQL' : '—'
+                  }
                   ok={health?.db.status === 'connected'}
                   err={health?.db.status === 'disconnected'}
                 />

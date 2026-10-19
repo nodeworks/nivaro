@@ -205,6 +205,8 @@ declare module '@fastify/session' {
     loginAt?: number
     /** Session policy (#665): newest authenticated request (ms). */
     lastSeenAt?: number
+    /** When this session last completed a sign-in (ms) — the OAuth consent page wants a recent one. */
+    authAt?: number
     /** OAuth consent page (routes/oauth.ts): the CSRF value its Allow / Cancel form must echo. */
     oauthCsrf?: string
   }

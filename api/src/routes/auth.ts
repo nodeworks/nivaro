@@ -482,6 +482,7 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       req.session.userId = user.id
+      req.session.authAt = Date.now()
       void recordLogin(app, user.id, 'oidc', req)
 
       const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
@@ -538,6 +539,7 @@ export async function authRoutes(app: FastifyInstance) {
 
     req.session.pendingTotpUserId = undefined
     req.session.userId = user.id
+    req.session.authAt = Date.now()
     void recordLogin(app, user.id, 'oidc', req)
 
     const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
@@ -593,6 +595,7 @@ export async function authRoutes(app: FastifyInstance) {
       }
 
       req.session.userId = user.id
+      req.session.authAt = Date.now()
       void recordLogin(app, user.id, 'saml', req)
 
       const returnTo = req.session.returnTo ?? `${config.ADMIN_URL}/`
@@ -639,6 +642,7 @@ export async function authRoutes(app: FastifyInstance) {
     })
 
     req.session.userId = user.id
+    req.session.authAt = Date.now()
     void recordLogin(app, user.id, 'password', req)
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
@@ -669,6 +673,7 @@ export async function authRoutes(app: FastifyInstance) {
     }
 
     req.session.userId = user.id
+    req.session.authAt = Date.now()
     void recordLogin(app, user.id, 'password', req)
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })
@@ -693,6 +698,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(401).send({ error: 'Invalid token' })
     }
     req.session.userId = user.id
+    req.session.authAt = Date.now()
     void recordLogin(app, user.id, 'static_token', req)
     await logActivity({ action: 'login', user: user.id, req })
     return reply.send({ ok: true })

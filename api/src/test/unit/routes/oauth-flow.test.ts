@@ -28,6 +28,18 @@ vi.mock('../../../db/index.js', () => {
   return { db }
 })
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => null) }))
+// The consent page authenticates like every route; here the session's user stands in.
+vi.mock('../../../middleware/authenticate.js', () => ({
+  requireAuth: vi.fn(async () => {}),
+  authenticate: vi.fn(
+    async (req: { session?: { userId?: string }; authMethod?: string; user?: unknown }) => {
+      const id = req.session?.userId
+      if (!id) throw Object.assign(new Error('Unauthorized'), { statusCode: 401 })
+      req.authMethod = 'session'
+      req.user = { id, status: 'active', first_name: 'Pat', last_name: 'Lee' }
+    }
+  )
+}))
 
 const { oauthPublicRoutes } = await import('../../../routes/oauth.js')
 const { resolveAccessToken, listGrants, revokeGrant } = await import(
@@ -54,6 +66,11 @@ function fakeRedis() {
     del: async (...ks: string[]) => ks.filter((k) => kv.delete(k)).length,
     exists: async (k: string) => (kv.has(k) ? 1 : 0),
     expire: async () => 1,
+    incr: async (k: string) => {
+      const n = Number(kv.get(k) ?? 0) + 1
+      kv.set(k, String(n))
+      return n
+    },
     smembers: async (k: string) => [...(sets.get(k) ?? [])],
     sadd: async (k: string, m: string) => {
       const s = sets.get(k) ?? new Set()
@@ -93,7 +110,7 @@ function fakeRedis() {
   return r
 }
 
-const session: { userId?: string; oauthCsrf?: string } = {}
+const session: { userId?: string; oauthCsrf?: string; authAt?: number } = {}
 let app: FastifyInstance
 const redis = fakeRedis()
 
@@ -165,8 +182,15 @@ describe('OAuth for remote MCP clients', () => {
       'https://nivaro.example/oauth/authorize?'
     )
 
-    // Signed in → the consent page, framed nowhere.
+    // Signed in long ago → sign in again first.
     session.userId = 'U1'
+    session.authAt = Date.now() - 2 * 3600_000
+    const stale = await app.inject({ url: `/oauth/authorize?${qs}` })
+    expect(stale.statusCode).toBe(302)
+    expect(stale.headers.location).toContain('/api/auth/login?returnTo=')
+
+    // Signed in recently → the consent page, framed nowhere.
+    session.authAt = Date.now()
     const consent = await app.inject({ url: `/oauth/authorize?${qs}` })
     expect(consent.statusCode).toBe(200)
     expect(consent.headers['x-frame-options']).toBe('DENY')
@@ -290,6 +314,7 @@ describe('OAuth for remote MCP clients', () => {
       state: 's'
     }
     session.userId = 'U1'
+    session.authAt = Date.now()
     await app.inject({ url: `/oauth/authorize?${new URLSearchParams(p)}` })
     const deny = await app.inject({
       method: 'POST',
@@ -304,6 +329,25 @@ describe('OAuth for remote MCP clients', () => {
   it('an unknown client or unregistered redirect never redirects', async () => {
     const res = await app.inject({
       url: '/oauth/authorize?client_id=nvc_00000000-0000-0000-0000-000000000000&redirect_uri=https://evil.example'
+    })
+    expect(res.statusCode).toBe(400)
+    expect(res.headers.location).toBeUndefined()
+  })
+
+  it('a bad request from a known client is shown here, never sent to its address', async () => {
+    const reg = await app.inject({
+      method: 'POST',
+      url: '/oauth/register',
+      payload: { client_name: 'Evil', redirect_uris: ['https://evil.example/cb'] }
+    })
+    session.userId = 'U1'
+    session.authAt = Date.now()
+    const res = await app.inject({
+      url: `/oauth/authorize?${new URLSearchParams({
+        client_id: reg.json().client_id,
+        redirect_uri: 'https://evil.example/cb',
+        response_type: 'token'
+      })}`
     })
     expect(res.statusCode).toBe(400)
     expect(res.headers.location).toBeUndefined()

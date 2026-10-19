@@ -533,7 +533,11 @@ describe('lookup tools', () => {
     })
     const body = textOf(await call('list_custom_queries'))
     expect(calls[0]).toMatchObject({ _method: 'GET', _path: '/custom-queries/catalog' })
-    expect(body).toEqual([{ slug: 'spend', name: 'Spend', description: null, params: [] }])
+    expect(body).toEqual({
+      count: 1,
+      truncated: false,
+      queries: [{ slug: 'spend', name: 'Spend', params: [] }]
+    })
   })
 
   it('run_custom_query posts the params and cuts the rows', async () => {

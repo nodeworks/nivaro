@@ -1505,17 +1505,14 @@ export const apiHealth: DocSection = {
   "status": "ok",
   "version": "1.0.0",
   "environment": "production",
-  "db": {
-    "status": "ok",
-    "database": "your_database",
-    "host": "db.example.com"
-  },
-  "redis": {
-    "status": "ok",
-    "url": "redis://cache.example.com:6379"
-  },
+  "db": { "status": "connected" },
+  "redis": { "status": "connected" },
   "ts": "2026-06-15T12:00:00.000Z"
 }
+
+// A signed-in administrator also sees where they live (Redis credentials masked):
+//   "db": { "status": "connected", "database": "your_database", "host": "db.example.com" },
+//   "redis": { "status": "connected", "url": "redis://***@cache.example.com:6379" }
 
 // Degraded response (503) — same shape with status: "error"
 {

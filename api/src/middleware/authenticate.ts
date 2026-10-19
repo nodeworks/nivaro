@@ -3,7 +3,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { ACCESS_PREFIX } from '../lib/oauth.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
-import { mcpOAuthEnabled } from '../services/mcp-config.js'
+import { mcpOAuthEnabled, oauthAudienceRefusal } from '../services/mcp-config.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
@@ -36,6 +36,8 @@ declare module 'fastify' {
     /** Set when the request authenticated with an OAuth access token (nvo_*) from a connected app. */
     oauthClientId?: string
     oauthGrantId?: string
+    /** An in-process tool call made by POST /api/mcp (services/mcp-config.ts). */
+    mcpInner?: boolean
   }
 }
 
@@ -406,6 +408,8 @@ async function authenticateIdentity(req: FastifyRequest, reply: FastifyReply) {
           .first()
         if (!user)
           throw httpError(401, 'The account behind this token is not active', 'ACCOUNT_NOT_ACTIVE')
+        const refusal = oauthAudienceRefusal(req)
+        if (refusal) throw httpError(403, refusal, 'OAUTH_TOKEN_AUDIENCE')
         await hydrateRole(req, user)
         req.oauthClientId = rec.client_id
         req.oauthGrantId = rec.grant_id

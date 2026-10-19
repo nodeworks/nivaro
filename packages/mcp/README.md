@@ -4,6 +4,19 @@ A [Model Context Protocol](https://modelcontextprotocol.io) server for [Nivaro C
 
 Every tool calls the instance's REST API as the user behind the configured API key. Role permissions, row-level security, user scopes, validation and change-reason rules apply exactly as they do to any other API caller. Nothing is cached or reimplemented on the server side; the API decides.
 
+## Hosted endpoint — no install
+
+Every Nivaro instance (0.2.59+) serves the same tools itself at `https://<your-nivaro>/api/mcp` (Streamable HTTP). Clients that support remote MCP servers connect there and sign you in through Nivaro with OAuth — or send an API key as a Bearer token. ChatGPT and claude.ai connect from their own cloud, so they need an instance reachable from the internet; on a private network use Claude Code, Codex or this npm package while you are on that network.
+
+| Client | How |
+| --- | --- |
+| ChatGPT | Settings → Apps & Connectors → Advanced → Developer mode → create a connector with the URL above, authentication OAuth |
+| claude.ai / Claude Desktop | Settings → Connectors → Add custom connector → the URL above |
+| Claude Code | `claude mcp add --transport http nivaro https://<your-nivaro>/api/mcp`, then `/mcp` to sign in (or add `--header "Authorization: Bearer nvk_…"`) |
+| Codex | `codex mcp add nivaro --url https://<your-nivaro>/api/mcp` then `codex mcp login nivaro` (or `bearer_token_env_var` in `~/.codex/config.toml`) |
+
+An OAuth-connected app acts as the person who allowed it, with their permissions; its token works only on `/api/mcp` (never on the rest of the API, and never to mint keys or tokens), and the person can disconnect it at any time.
+
 ## Install
 
 ```bash

@@ -110,7 +110,9 @@ describe('createNivaroMcpServer', () => {
       'complete_task',
       'mark_notifications_read',
       'add_comment',
-      'cpu_profile'
+      'cpu_profile',
+      // a saved query may call a procedure that writes
+      'run_custom_query'
     ])
     for (const tool of tools) {
       const a = tool.annotations
@@ -176,22 +178,21 @@ describe('tools', () => {
     answer = () => ({ data: [COLLECTION, { collection: 'nivaro_users', hidden: 1 }] })
     const res = await mcp.callTool({ name: 'list_collections', arguments: {} })
     expect(calls[0]).toMatchObject({ _method: 'GET', _path: '/collections' })
-    expect(textOf(res)).toEqual([
-      {
-        collection: 'articles',
-        display_name: 'Articles',
-        singleton: false,
-        hidden: false,
-        description: null
-      },
-      {
-        collection: 'nivaro_users',
-        display_name: null,
-        singleton: false,
-        hidden: true,
-        description: null
-      }
+    // Compact: hidden collections only on request, no false flags or empty values.
+    expect(textOf(res)).toEqual({
+      count: 1,
+      collections: [{ collection: 'articles', display_name: 'Articles' }]
+    })
+    const all = await mcp.callTool({
+      name: 'list_collections',
+      arguments: { include_hidden: true }
+    })
+    expect(textOf(all).collections).toEqual([
+      { collection: 'articles', display_name: 'Articles' },
+      { collection: 'nivaro_users', hidden: true }
     ])
+    const found = await mcp.callTool({ name: 'list_collections', arguments: { search: 'ART' } })
+    expect(textOf(found).count).toBe(1)
   })
 
   it('describe_collection returns fields with choices and relations', async () => {
@@ -204,13 +205,9 @@ describe('tools', () => {
     const schema = textOf(res)
     expect(schema.fields.find((f: { field: string }) => f.field === 'status')).toEqual({
       field: 'status',
-      label: null,
       type: 'string',
       interface: 'select-dropdown',
       required: true,
-      readonly: false,
-      hidden: false,
-      computed: false,
       choices: [
         { value: 'draft', text: 'Draft' },
         { value: 'live', text: 'Live' }

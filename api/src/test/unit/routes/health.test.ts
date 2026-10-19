@@ -125,3 +125,45 @@ describe('GET /health', () => {
     expect(body.environment).toBe('test')
   })
 })
+
+describe('GET /health — what an anonymous caller may see', () => {
+  const up = () => {
+    vi.mocked(db as unknown as { raw: (sql: string) => Promise<unknown> }).raw = vi
+      .fn()
+      .mockResolvedValue([])
+  }
+
+  it('hides where the database and Redis live from anyone but an administrator', async () => {
+    up()
+    const app = buildApp(async () => 'PONG')
+    await app.ready()
+    const body = (await app.inject({ method: 'GET', url: '/health' })).json()
+    expect(body.db).toEqual({ status: 'connected' })
+    expect(body.redis).toEqual({ status: 'connected' })
+    expect(JSON.stringify(body)).not.toContain('localhost')
+  })
+
+  it('shows an administrator the database and a credential-free Redis URL', async () => {
+    up()
+    const { authenticate } = await import('../../../middleware/authenticate.js')
+    vi.mocked(authenticate).mockImplementationOnce(async (req) => {
+      ;(req as { isAdmin?: boolean }).isAdmin = true
+    })
+    const app = buildApp(async () => 'PONG')
+    await app.ready()
+    const body = (await app.inject({ method: 'GET', url: '/health' })).json()
+    expect(body.db).toMatchObject({ database: 'testdb', host: 'localhost' })
+    expect(body.redis.url).toBe('redis://localhost:6379')
+  })
+})
+
+describe('redactUrlCredentials', () => {
+  it('masks user and password, keeps host, port, db and query', async () => {
+    const { redactUrlCredentials } = await import('../../../routes/health.js')
+    expect(redactUrlCredentials('redis://default:s3cret@cache.example.com:6380/2')).toBe(
+      'redis://***@cache.example.com:6380/2'
+    )
+    expect(redactUrlCredentials('rediss://:pw@h:6379')).toBe('rediss://***@h:6379')
+    expect(redactUrlCredentials('redis://localhost:6379')).toBe('redis://localhost:6379')
+  })
+})

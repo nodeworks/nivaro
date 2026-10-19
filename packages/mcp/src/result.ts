@@ -35,7 +35,8 @@ export interface ToolFailure {
 
 /** The JSON text block every successful tool answers with. */
 export function ok(value: unknown): CallToolResult {
-  return { content: [{ type: 'text', text: JSON.stringify(value, null, 2) }] }
+  // Compact JSON: indentation is a third of a large answer and a model reads it no better.
+  return { content: [{ type: 'text', text: JSON.stringify(value) }] }
 }
 
 /** Turn a thrown SDK/API error into a client-safe failure result. */
@@ -43,7 +44,7 @@ export function fail(err: unknown): CallToolResult {
   const failure = describeFailure(err)
   return {
     isError: true,
-    content: [{ type: 'text', text: JSON.stringify(failure, null, 2) }]
+    content: [{ type: 'text', text: JSON.stringify(failure) }]
   }
 }
 
