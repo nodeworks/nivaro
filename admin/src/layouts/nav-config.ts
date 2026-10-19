@@ -66,6 +66,7 @@ import {
   Scale,
   ScanSearch,
   ScrollText,
+  SearchCheck,
   SearchCode,
   ServerCog,
   Settings,
@@ -553,6 +554,13 @@ export const navCategories: NavCategory[] = [
         to: '/db-tuning',
         section: 'Health',
         keywords: 'index proposals procedure rewrite cache rollup'
+      },
+      {
+        icon: SearchCheck,
+        label: 'SQL checks',
+        to: '/sql-checks',
+        section: 'Health',
+        keywords: 'procedures merge null lint sqlfluff stored procedure findings'
       },
       { icon: Waypoints, label: 'Traffic Map', to: '/traffic-map', section: 'Health' },
       {

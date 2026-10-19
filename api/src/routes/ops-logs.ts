@@ -131,7 +131,10 @@ export async function opsLogsRoutes(app: FastifyInstance) {
       'REQUIRED_EXTENSIONS',
       'MIGRATION_SAFE_MODE',
       'RUNTIME_RSS_WARN_MB',
-      'IMPORT_STATEMENT_TIMEOUT_MS'
+      'IMPORT_STATEMENT_TIMEOUT_MS',
+      'SQL_CHECKS',
+      'SQL_LINT_URL',
+      'SQL_LINT_TOKEN'
     ]) {
       if (rows.some((r) => r.key === key)) continue
       const v = process.env[key]

@@ -1,0 +1,104 @@
+import type { DocSection } from '../types.js'
+
+export const sqlChecksDocs: DocSection = {
+  id: 'sql-checks',
+  label: 'SQL Checks',
+  content: [
+    { type: 'h1', id: 'sql-checks', text: 'SQL Checks' },
+    {
+      type: 'p',
+      text: 'The SQL checks page at /sql-checks (Operations → Health) checks the SQL that runs against the database for mistakes that corrupt or slow data. It reads every procedure, function, view and trigger definition from the database itself (sys.sql_modules), plus the SQL bodies Nivaro keeps in its own tables: import definitions’ stored procedure bodies and custom queries. Findings are tracked across runs, so a finding has a history: when it first appeared, how many runs saw it, and when it went away. Checks only read; nothing is changed by a run. Admins only; SQL Server only.'
+    },
+    { type: 'h2', id: 'sql-checks-checks', text: 'What it checks' },
+    {
+      type: 'table',
+      head: ['Check', 'Severity', 'What it finds'],
+      rows: [
+        [
+          'MERGE on a nullable key',
+          'Critical when the key holds NULLs now, else warning',
+          'A MERGE whose ON clause compares a nullable target column with = and no NULL-safe form (ISNULL / COALESCE, an IS NULL pair, IS NOT DISTINCT FROM, INTERSECT). NULL never equals NULL, so those rows are inserted again on every run. With live counts on, the finding shows how many rows hold NULL keys and how many extra rows already sit in NULL-key groups.'
+        ],
+        [
+          'MERGE source may repeat a key',
+          'Warning',
+          'A MERGE source with no ROW_NUMBER / GROUP BY / DISTINCT and no unique index on the joined columns. A repeated key stops the whole MERGE.'
+        ],
+        [
+          'Write without WHERE',
+          'Critical',
+          'An UPDATE or DELETE with no top-level WHERE and no JOIN predicate. Temp tables, table variables and MERGE actions are ignored.'
+        ],
+        [
+          'Transaction without XACT_ABORT',
+          'Warning',
+          'BEGIN TRAN in a module with no SET XACT_ABORT ON and no CATCH that rolls back on @@TRANCOUNT: a failed statement can leave the transaction open on a pooled connection.'
+        ],
+        ['Local-time clock', 'Info', 'GETDATE() / SYSDATETIME() calls (one finding per object, with the count and lines).'],
+        ['NOT IN over a nullable column', 'Warning', 'NOT IN (SELECT col …) where col is nullable and the subquery does not filter NULLs.'],
+        ['SELECT * on a wide table', 'Info', 'SELECT * from a table with max-length text or binary columns.'],
+        [
+          'Import body differs from deployed',
+          'Warning (info when not deployed)',
+          'An import definition whose stored procedure body differs from the deployed procedure of the same name (comments, whitespace and the CREATE / ALTER verb are ignored), or names a procedure the database does not have.'
+        ],
+        [
+          'SQLFluff rule',
+          'Info',
+          'Correctness rules from SQLFluff (ambiguous references RF01/RF02, AM01–AM07, unused CTEs ST03, subqueries in joins ST05) when a SQLFluff sidecar is configured. Layout and style rules are dropped.'
+        ]
+      ]
+    },
+    {
+      type: 'note',
+      text: 'The checks are pattern checks over T-SQL with comments and string literals blanked out, not a full parser: each prefers missing a case to raising a wrong one. A finding that is intended (a procedure that clears a work table on purpose) is marked as expected with a note; it stays out of the open count until someone reopens it.'
+    },
+    { type: 'h2', id: 'sql-checks-page', text: 'The page' },
+    {
+      type: 'ul',
+      items: [
+        'Header: open critical / warning / info counts, the last run (when, how long, whether SQLFluff ran), Run now (two clicks) and Settings.',
+        'Findings: filter by status, severity and check, or search. The detail shows the statement with line numbers, why it matters, the live figures, the suggested fix with a Copy button, the history (opened, resolved, reopened, marked as expected) and a link to the editor: /procedures for a procedure, the custom query editor, or the import definition in the Imports console (/imports?definition=<key>).',
+        'Trends: open findings per run by severity, new and resolved per run, open findings by check and the objects with the most.',
+        'Fixes: cleanups and guard indexes logged by fix scripts, and “Procedure changed” rows Nivaro logs itself when a run finds that findings went away because their procedure or query was edited.',
+        'Runs: every run with its duration, counts, SQLFluff status and errors.',
+        'DB & Runtime Health shows a strip linking here while critical findings are open.'
+      ]
+    },
+    { type: 'h2', id: 'sql-checks-settings', text: 'Settings and schedule' },
+    {
+      type: 'p',
+      text: 'Settings live on the page (nivaro_settings.sql_checks): run nightly (off by default), count NULL keys and copies (reads the tables a MERGE writes; tables over the row cap, 5,000,000 by default, are skipped), the per-table count timeout (120 s), and whether to check import definitions and custom queries. The nightly run is the `sql-checks` job at 03:30 (Background Jobs can move it); it only ticks on deployed instances. SQL_CHECKS=on or off in the server environment forces the nightly run on or off whatever the setting says, for databases rebuilt nightly from another one (the setting would be wiped); the page then shows the switch as set by the server’s configuration. Run now always works.'
+    },
+    { type: 'h2', id: 'sql-checks-sqlfluff', text: 'SQLFluff sidecar' },
+    {
+      type: 'p',
+      text: 'SQL_LINT_URL points at a small service running SQLFluff with the T-SQL dialect; SQL_LINT_TOKEN is its bearer token (a secret: SQL_LINT_TOKEN_FILE works, and the environment viewer masks it). Each module’s text is sent on its own, never any data: POST {SQL_LINT_URL}/lint with {sql, dialect: "tsql"} answers {violations: [{code, line, description}], parse_errors}. A busy sidecar (503) is retried with a short backoff; a refused token (401), a sidecar that stays busy or does not answer marks the run’s SQLFluff as unavailable and keeps the other checks; a per-module timeout (504) skips that module only. SQLFluff findings resolve only in runs where SQLFluff answered.'
+    },
+    { type: 'h2', id: 'sql-checks-fixes', text: 'Logging a fix from a script' },
+    {
+      type: 'p',
+      text: 'A script that repairs data (removes copies, adds a guard index) logs what it did so the page can show it next to the findings: insert into nivaro_sql_check_fixes directly, or POST /api/sql-checks/fixes as an administrator (an admin’s API key works).'
+    },
+    {
+      type: 'pre',
+      code: '{\n  "action": "cleanup",\n  "check_key": "merge-null-key",\n  "target_table": "workflows_files",\n  "rows_affected": 273657,\n  "backup_table": "zz_backup_workflows_files_20261019",\n  "detail": { "kept": "newest row per key" },\n  "run_by": "fix-null-key-copies"\n}'
+    },
+    { type: 'p', text: 'action is cleanup, proc_fix, guard_index or other.' },
+    { type: 'h2', id: 'sql-checks-api', text: 'API' },
+    {
+      type: 'table',
+      head: ['Route', 'What it does'],
+      rows: [
+        ['GET /api/sql-checks/summary', 'Open counts by severity and check, the last run, the trend over the last 30 runs, top objects, settings and whether a run is going.'],
+        ['POST /api/sql-checks/run', 'Starts a run in the background (202 with run_id); 409 while one is running.'],
+        ['GET /api/sql-checks/runs · /runs/:id', 'Run history (paged) and one run with its stats.'],
+        ['GET /api/sql-checks/findings', 'Findings; filters status (open, accepted, resolved, all), severity, check, object, q; page and limit.'],
+        ['GET /api/sql-checks/findings/:id', 'One finding with its statement, figures, suggested fix and event history.'],
+        ['PATCH /api/sql-checks/findings/:id', '{status: "accepted", note} marks it as expected (a note is required); {status: "open"} reopens one marked as expected.'],
+        ['GET · POST /api/sql-checks/fixes', 'The fix log (paged); log a fix from a script.'],
+        ['GET · PATCH /api/sql-checks/settings', 'Read and change the settings (strict: unknown keys and bad values are refused with every problem named).']
+      ]
+    }
+  ]
+}

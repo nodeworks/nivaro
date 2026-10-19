@@ -205,6 +205,15 @@ export function DbHealthPage() {
     staleTime: 60_000
   })
   const proposedCount = tuning.data?.by_status?.proposed ?? 0
+  const sqlChecks = useQuery({
+    queryKey: ['sql-checks', 'summary', 'strip'],
+    queryFn: () =>
+      api
+        .get<{ data?: { counts?: { open?: { critical?: number } } } }>('/sql-checks/summary')
+        .then((r) => r.data.data),
+    staleTime: 60_000
+  })
+  const criticalSql = sqlChecks.data?.counts?.open?.critical ?? 0
   const runtime = useOps<Record<string, unknown>>('/ops-runtime/runtime')
   const roster = useOps<Array<Record<string, unknown>>>('/ops-runtime/roster')
   const caches = useOps<Array<{ name: string; description: string }>>('/ops-runtime/caches')
@@ -393,6 +402,16 @@ export function DbHealthPage() {
           >
             {proposedCount} tuning {proposedCount === 1 ? 'proposal' : 'proposals'} waiting →
             Database tuning
+          </Link>
+        )}
+        {criticalSql > 0 && (
+          <Link
+            to='/sql-checks?tab=findings'
+            data-sql-checks-strip-link
+            className='mb-5 block rounded border border-red-300 bg-red-50 px-3 py-2 text-[12px] text-red-800 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-200'
+          >
+            {criticalSql} critical SQL {criticalSql === 1 ? 'finding' : 'findings'} open → SQL
+            checks
           </Link>
         )}
         <div className='grid gap-5 xl:grid-cols-2'>
