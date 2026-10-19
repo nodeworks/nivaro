@@ -1,10 +1,53 @@
 {
-  "generated_at": "2026-10-19T21:43:58.776Z",
+  "generated_at": "2026-10-19T22:15:10.430Z",
   "releases": [
+    {
+      "version": "0.2.66",
+      "tag": "v0.2.66",
+      "date": "2026-10-19T18:14:58-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Long history UI: design review round 2",
+              "hash": "dd16b662"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Long history: design review fixes (#2544)",
+              "hash": "448e3c58"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Long history: read hourly rollup twins for whole-hour windows",
+              "hash": "478d11cf"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "release-chain: preflight reports beside the typecheck, no blind waits",
+              "hash": "2ffc575a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Long history: 13-month views from request rollups (#2544)",
+              "hash": "361cde3a"
+            }
+          ]
+        }
+      ],
+      "count": 5
+    },
     {
       "version": "0.2.65",
       "tag": "v0.2.65",
-      "date": "2026-10-19T17:43:44-04:00",
+      "date": "2026-10-19T17:43:58-04:00",
       "sections": [
         {
           "label": "Other",
