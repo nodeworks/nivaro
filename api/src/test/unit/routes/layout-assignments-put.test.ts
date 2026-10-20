@@ -156,18 +156,38 @@ describe('field-group writes snapshot the layout first', () => {
       type: 'section',
       layout_id: 1
     })
-    expect(snapshotLayoutVersion).toHaveBeenCalledWith(1, expect.any(String), 'test-admin')
+    expect(snapshotLayoutVersion).toHaveBeenCalledWith(
+      1,
+      expect.any(String),
+      'test-admin',
+      expect.anything()
+    )
   })
   it('PATCH', async () => {
     await call('PATCH', '/field-groups/9', { label: 'New' })
-    expect(snapshotLayoutVersion).toHaveBeenCalledWith(1, expect.any(String), 'test-admin')
+    expect(snapshotLayoutVersion).toHaveBeenCalledWith(
+      1,
+      expect.any(String),
+      'test-admin',
+      expect.anything()
+    )
   })
   it('DELETE', async () => {
     await call('DELETE', '/field-groups/9')
-    expect(snapshotLayoutVersion).toHaveBeenCalledWith(1, expect.any(String), 'test-admin')
+    expect(snapshotLayoutVersion).toHaveBeenCalledWith(
+      1,
+      expect.any(String),
+      'test-admin',
+      expect.anything()
+    )
   })
   it('reorder', async () => {
     await call('POST', '/field-groups/reorder', { collection: 'c', order: [{ id: 9, sort: 2 }] })
-    expect(snapshotLayoutVersion).toHaveBeenCalledWith(1, expect.any(String), 'test-admin')
+    expect(snapshotLayoutVersion).toHaveBeenCalledWith(
+      1,
+      expect.any(String),
+      'test-admin',
+      expect.anything()
+    )
   })
 })

@@ -31,3 +31,22 @@ export async function activateLayout(
     .where({ id: Number(layout.id) })
     .update({ is_active: 1 })
 }
+
+/**
+ * Hold the layout row's update lock for the rest of the transaction, so
+ * every writer of one layout (the editor's ops batches and the older
+ * assignments / field-group / settings routes) runs one at a time and the
+ * editor's rev check sees the other writer's result. SQL Server only.
+ */
+export async function lockLayout(
+  trx: Knex | Knex.Transaction,
+  layoutId: number | string
+): Promise<void> {
+  const dialect = String(
+    (trx as unknown as { client?: { config?: { client?: unknown } } }).client?.config?.client ?? ''
+  )
+  if (!/mssql/i.test(dialect)) return
+  await trx.raw('SELECT id FROM nivaro_collection_layouts WITH (UPDLOCK, HOLDLOCK) WHERE id = ?', [
+    Number(layoutId)
+  ])
+}

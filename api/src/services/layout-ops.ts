@@ -1,6 +1,6 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
-import { activateLayout } from './layout-activation.js'
+import { activateLayout, lockLayout } from './layout-activation.js'
 import {
   applyLayoutOps,
   type GroupRow,
@@ -298,8 +298,10 @@ async function writePlacements(
   const was = new Map(before.placements.map((p) => [placementKey(p.field, p.group_key), p]))
   const posKey = placementKey(UNGROUPED_POS_FIELD, null)
 
+  // Same order as loadLayoutBundle, so the row it kept for a key keeps its id.
   const existing = (await trx('nivaro_layout_field_assignments')
     .where({ layout_id: layoutId })
+    .orderBy([{ column: 'sort' }, { column: 'id' }])
     .select('id', 'field', 'group_key')) as Array<{
     id: number
     field: string
@@ -353,11 +355,16 @@ async function snapshottedRecently(
   userId: string | null | undefined
 ): Promise<boolean> {
   if (!userId) return false
-  const recent = await trx('nivaro_layout_versions')
-    .where({ layout_id: layoutId, created_by: userId })
-    .where('created_at', '>=', new Date(Date.now() - SNAPSHOT_COALESCE_MS))
-    .first('id')
-  return !!recent
+  // Only the NEWEST version counts: if someone else saved since this user's
+  // last snapshot, the state before this batch is theirs and must be kept.
+  const newest = (await trx('nivaro_layout_versions')
+    .where({ layout_id: layoutId })
+    .orderBy('version', 'desc')
+    .first('created_by', 'created_at')) as
+    | { created_by: string | null; created_at: Date | string | null }
+    | undefined
+  if (!newest || newest.created_by !== userId || newest.created_at == null) return false
+  return new Date(newest.created_at).getTime() >= Date.now() - SNAPSHOT_COALESCE_MS
 }
 
 export type LayoutOpsResult =
@@ -375,12 +382,26 @@ export async function runLayoutOps(
   input: { ops: LayoutOp[]; base_rev: string; note?: string | null },
   userId?: string | null
 ): Promise<LayoutOpsResult> {
+  try {
+    return await applyInTransaction(layoutId, input, userId)
+  } catch (err) {
+    // A merged settings value failed at write time: the batch rolled back.
+    if (err instanceof LayoutWriteError) {
+      const at = input.ops.map((op) => op.op).lastIndexOf('layout_update')
+      return { status: 400, error: err.message, op_index: at >= 0 ? at : undefined }
+    }
+    throw err
+  }
+}
+
+function applyInTransaction(
+  layoutId: number,
+  input: { ops: LayoutOp[]; base_rev: string; note?: string | null },
+  userId?: string | null
+): Promise<LayoutOpsResult> {
   return db.transaction(async (trx: Knex.Transaction): Promise<LayoutOpsResult> => {
     // Writers of one layout queue here, so the second sees the first's rev.
-    await trx.raw(
-      'SELECT id FROM nivaro_collection_layouts WITH (UPDLOCK, HOLDLOCK) WHERE id = ?',
-      [layoutId]
-    )
+    await lockLayout(trx, layoutId)
     const raw = (await trx('nivaro_collection_layouts').where({ id: layoutId }).first()) as
       | Record<string, unknown>
       | undefined
