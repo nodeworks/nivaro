@@ -83,9 +83,11 @@ export const NO_DND: DesignDnd = {
 const noSubscribe = () => () => {}
 
 // A section's header strip height, measured live: a field dropped there goes
-// first in the section.
+// first in the section. A step or tab button is all header: a drop anywhere
+// on it goes first in that step.
 function headerHeight(el: HTMLElement | null): number {
   if (!el) return 0
+  if (el.hasAttribute('data-design-tab')) return el.getBoundingClientRect().height
   const header = Array.from(el.querySelectorAll('[data-design-group-header]')).find(
     (h) => h.closest('[data-design-target]') === el
   )

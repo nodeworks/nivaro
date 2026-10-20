@@ -11,7 +11,7 @@ import {
 } from '../../../lib/layout-ops'
 import { DesignDropBody, DesignNode } from '../DesignNode'
 import { type DesignTarget, type LayoutDesign, LayoutDesignContext } from '../design-context'
-import { LayoutDndProvider, NO_DND, useLayoutDnd } from './LayoutDndProvider'
+import { designClone, LayoutDndProvider, NO_DND, useLayoutDnd } from './LayoutDndProvider'
 import { useAddDragSource } from './node'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
@@ -441,5 +441,22 @@ describe('LayoutDndProvider', () => {
     act(() => root.render(<AddRow />))
     const row = host.querySelector('[data-rect="add:vendor"]') as HTMLElement
     expect(row.hasAttribute('aria-roledescription')).toBe(false)
+  })
+})
+
+describe('designClone', () => {
+  it('copies a step as a plain card: no dragging dim, no chevron shape', () => {
+    const step = document.createElement('div')
+    step.className = 'relative opacity-40 flex-1'
+    step.style.clipPath = 'polygon(0 0, 90% 0, 100% 50%, 90% 100%, 0 100%)'
+    step.style.transform = 'translateZ(0)'
+    const inner = document.createElement('button')
+    inner.style.clipPath = 'polygon(0 0, 100% 0, 100% 100%, 0 100%)'
+    step.append(inner)
+    const copy = designClone(step)
+    expect(copy.classList.contains('opacity-40')).toBe(false)
+    expect(copy.style.clipPath).toBe('none')
+    expect((copy.firstChild as HTMLElement).style.clipPath).toBe('none')
+    expect(copy.style.height).toBe('100%')
   })
 })
