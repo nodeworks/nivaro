@@ -411,7 +411,7 @@ export function GridTab() {
   }
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Setting
         k='field.grid_layout'
         label='Rows use the layout'
@@ -923,7 +923,7 @@ export function GridTab() {
             </Setting>
           </Section>
 
-          <Section title='More grid features'>
+          <Section title='More grid features (JSON)' collapsible>
             {JSON_KEYS.map((j) => (
               <Setting
                 key={j.key}

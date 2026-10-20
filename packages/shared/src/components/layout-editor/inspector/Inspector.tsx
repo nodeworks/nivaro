@@ -5,14 +5,17 @@ import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import {
   CANVAS_SLOT_KEYS,
+  type GroupRow,
   HEADER_GROUP_KEY,
   type LayoutBundle,
   type LayoutOp,
-  type PlacementRow
+  type PlacementRow,
+  UNGROUPED_KEY
 } from '../../../lib/layout-ops'
-import { cn, titleCase } from '../../../lib/utils'
+import { titleCase } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
+import { PanelBody, PanelHeader, PanelTabs } from '../panel-frame'
 import { slotName } from '../slot-names'
 import { type ApplyOptions, parseBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
@@ -26,14 +29,22 @@ import {
 import { GridTab } from './GridTab'
 import { GroupInspector } from './GroupInspector'
 import { HeaderItemInspector } from './HeaderItemInspector'
-import { GlobalWriterContext, type InspectorEnv, InspectorEnvContext, useInspectorEnv } from './kit'
+import {
+  GlobalWriterContext,
+  type InspectorEnv,
+  InspectorEnvContext,
+  ScopeLegend,
+  useInspectorEnv
+} from './kit'
 import { LookTab } from './LookTab'
 import {
   asObject,
   describeField,
+  type FieldInfo,
   findPlacement,
   isDefaultForm,
   layoutTypeOf,
+  NUMERIC_TYPES,
   overrideGroupOps,
   overridePlacementOps,
   SUBTITLE_FIELD
@@ -133,9 +144,11 @@ export function Inspector(props: InspectorProps) {
   if (!target) {
     return (
       <Shell>
-        <div className='flex flex-col items-center gap-2 py-10 text-center text-muted-foreground'>
-          <MousePointerClick className='h-5 w-5' />
-          <p className='text-[12px]'>Select a field, section or panel on the form to change it.</p>
+        <div className='flex flex-1 flex-col items-center justify-center gap-2 px-8 pb-16 text-center'>
+          <MousePointerClick className='h-5 w-5 text-slate-400' />
+          <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+            Select a field, section or panel on the form to change it.
+          </p>
         </div>
       </Shell>
     )
@@ -156,47 +169,51 @@ export function Inspector(props: InspectorProps) {
           : []
       if (ops.length) apply(ops, { label: `Override ${titleOf(target)} on this form` })
     }
-    return (
-      <Shell>
-        <div
-          data-setting='inspector.inherited_override'
-          className='space-y-2 rounded-md border border-slate-200 bg-slate-50 p-2.5 dark:border-border dark:bg-muted'
-        >
-          <p className='text-[12px] text-foreground'>
-            This comes from <span className='font-medium'>{name}</span>. Change it there for every
-            form built on it, or override it on this form only.
-          </p>
-          <div className='flex flex-wrap gap-2'>
+    const notice = (
+      <div
+        data-setting='inspector.inherited_override'
+        className='space-y-2.5 rounded-md bg-slate-50 p-3 dark:bg-muted/60'
+      >
+        <p className='text-[12px] leading-snug text-slate-700 dark:text-foreground'>
+          This comes from <span className='font-medium'>{name}</span>. Change it there for every
+          form built on it, or override it on this form only.
+        </p>
+        <div className='flex flex-wrap gap-2'>
+          <button
+            type='button'
+            data-override-here=''
+            disabled={!parent || (!parentRow && !parentGroup)}
+            onClick={override}
+            className='h-7 rounded-md bg-nvr-cyan px-2.5 text-[12px] font-medium text-white transition-colors hover:bg-[#00b8e0] disabled:opacity-40'
+          >
+            Override here
+          </button>
+          {parentId != null && props.openLayout && (
             <button
               type='button'
-              data-override-here=''
-              disabled={!parent || (!parentRow && !parentGroup)}
-              onClick={override}
-              className='rounded-md bg-nvr-cyan px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-[#00b8e0] disabled:opacity-40'
+              data-edit-in-parent=''
+              onClick={() => props.openLayout?.(parentId)}
+              className='h-7 rounded-md border border-slate-200 bg-white px-2.5 text-[12px] font-medium text-slate-700 transition-colors hover:bg-slate-50 dark:border-border dark:bg-background dark:text-foreground dark:hover:bg-muted'
             >
-              Override here
+              Edit in {name}
             </button>
-            {parentId != null && props.openLayout && (
-              <button
-                type='button'
-                data-edit-in-parent=''
-                onClick={() => props.openLayout?.(parentId)}
-                className='rounded-md border border-slate-200 px-2.5 py-1 text-[12px] hover:bg-muted dark:border-border'
-              >
-                Edit in {name}
-              </button>
-            )}
-          </div>
+          )}
         </div>
+      </div>
+    )
+    return (
+      <Shell>
         <InspectorEnvContext.Provider value={roEnv}>
-          {/* Tabs still switch; the controls sit in a disabled fieldset and writes go nowhere. */}
-          <div data-inherited-view='' className='opacity-70'>
-            {parentGroup ? (
-              <GroupInspector group={parentGroup} readOnly />
-            ) : parentRow ? (
-              <PlacementInspector target={target} row={parentRow} readOnly />
-            ) : null}
-          </div>
+          {parentGroup ? (
+            <GroupPanel group={parentGroup} notice={notice} readOnly />
+          ) : parentRow ? (
+            <PlacementInspector target={target} row={parentRow} notice={notice} readOnly />
+          ) : (
+            <>
+              <PanelHeader title={titleOf(target)} />
+              <PanelBody>{notice}</PanelBody>
+            </>
+          )}
         </InspectorEnvContext.Provider>
       </Shell>
     )
@@ -206,16 +223,16 @@ export function Inspector(props: InspectorProps) {
     <Shell>
       <InspectorEnvContext.Provider value={env}>
         {target.kind === 'group' ? (
-          group && (
-            <>
-              <Heading title={group.label || titleCase(group.key)} kind='Section' sub={group.key} />
-              <GroupInspector key={group.key} group={group} />
-            </>
-          )
+          group && <GroupPanel key={group.key} group={group} />
         ) : missing ? (
-          <p className='text-[12px] text-muted-foreground'>
-            {titleOf(target)} is not on this form any more.
-          </p>
+          <>
+            <PanelHeader title={titleOf(target)} />
+            <PanelBody>
+              <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+                {titleOf(target)} is not on this form any more.
+              </p>
+            </PanelBody>
+          </>
         ) : (
           <PlacementInspector key={targetKey(target)} target={target} row={row} />
         )}
@@ -232,7 +249,7 @@ function titleOf(t: DesignTarget): string {
 
 function Shell({ children }: { children: ReactNode }) {
   return (
-    <div data-inspector='' className='min-w-0 space-y-4 text-[12px]'>
+    <div data-inspector='' className='flex h-full min-h-0 min-w-0 flex-col text-[12px]'>
       {/* Hints are data-tip; a second TipLayer on the page stays idle. */}
       <TipLayer />
       {children}
@@ -240,17 +257,151 @@ function Shell({ children }: { children: ReactNode }) {
   )
 }
 
-function Heading({ title, kind, sub }: { title: string; kind: string; sub?: string }) {
+/** "Basic Information" — the section a placement sits in, by its label. */
+function sectionLabel(bundle: LayoutBundle, key: string | null): string | null {
+  if (!key || key === UNGROUPED_KEY) return null
+  if (key === HEADER_GROUP_KEY) return 'Header strip'
+  const g = bundle.groups.find((x) => x.key === key)
+  return g ? g.label || titleCase(g.key) : titleCase(key)
+}
+
+const dot = (a: string, b: string | null) => (b ? `${a} · ${b}` : a)
+
+/** What a field holds, in words: "picks one record", "number". */
+function fieldKindWords(info: FieldInfo): string {
+  if (info.isPath) return 'shows a linked value'
+  if (info.computedType) return 'calculated'
+  if (info.relKind === 'M2O') return 'picks one record'
+  if (info.relKind === 'M2M') return 'picks several records'
+  if (info.relKind === 'O2M')
+    return info.iface === 'inline-table' ? 'table of related rows' : 'related rows'
+  if (info.relKind) return 'related records'
+  if (NUMERIC_TYPES.has(info.type)) return 'number'
+  switch (info.type) {
+    case 'boolean':
+      return 'yes or no'
+    case 'date':
+      return 'date'
+    case 'datetime':
+    case 'timestamp':
+      return 'date and time'
+    case 'time':
+      return 'time'
+    case 'json':
+      return 'JSON'
+    case 'text':
+      return 'long text'
+    case 'uuid':
+      return 'ID'
+    case 'string':
+      return 'text'
+    default:
+      return info.type
+  }
+}
+
+function KeyLine({ words, k, setting }: { words?: string; k: string; setting?: string }) {
   return (
-    <div className='space-y-1'>
-      <div className='flex items-center gap-2'>
-        <h2 className='truncate text-[14px] font-semibold text-foreground'>{title}</h2>
-        <span className='shrink-0 rounded-full border border-slate-200 px-1.5 text-[11px] text-muted-foreground dark:border-border'>
-          {kind}
-        </span>
-      </div>
-      {sub && <p className='font-mono text-[11px] text-muted-foreground'>{sub}</p>}
-    </div>
+    <span data-setting={setting}>
+      {words && <>{words} · </>}
+      <span className='font-mono text-[11px]'>{k}</span>
+    </span>
+  )
+}
+
+/** "Step · Request", "Section", "Tabs or steps holder". */
+function groupEyebrow(bundle: LayoutBundle, group: GroupRow): string {
+  const parent = group.parent_key
+    ? (bundle.groups.find((g) => g.key === group.parent_key) ?? null)
+    : null
+  const kind =
+    group.type === 'tab'
+      ? parent?.tab_mode === 'steps'
+        ? 'Step'
+        : 'Tab'
+      : group.type === 'container'
+        ? group.tab_mode === 'steps'
+          ? 'Steps holder'
+          : 'Tabs holder'
+        : group.type === 'content'
+          ? 'Text block'
+          : group.type === 'metadata'
+            ? 'Record info'
+            : 'Section'
+  return dot(kind, parent ? parent.label || titleCase(parent.key) : null)
+}
+
+function GroupPanel({
+  group,
+  notice,
+  readOnly = false
+}: {
+  group: GroupRow
+  notice?: ReactNode
+  readOnly?: boolean
+}) {
+  const env = useInspectorEnv()
+  const body = <GroupInspector group={group} readOnly={readOnly} />
+  return (
+    <>
+      <PanelHeader
+        eyebrow={groupEyebrow(env.bundle, group)}
+        title={group.label || titleCase(group.key)}
+        sub={<KeyLine k={group.key} setting='group.key' />}
+      />
+      <PanelBody>
+        {notice}
+        {readOnly ? (
+          // Inputs sit in a disabled fieldset and writes go nowhere.
+          <div data-inherited-view='' className='opacity-70'>
+            {body}
+          </div>
+        ) : (
+          <>
+            <ScopeLegend />
+            {body}
+          </>
+        )}
+      </PanelBody>
+    </>
+  )
+}
+
+/** A placement panel without tabs: header, legend, body. */
+function SimplePanel({
+  eyebrow,
+  title,
+  sub,
+  notice,
+  readOnly,
+  children
+}: {
+  eyebrow: string
+  title: string
+  sub?: ReactNode
+  notice?: ReactNode
+  readOnly: boolean
+  children: ReactNode
+}) {
+  return (
+    <>
+      <PanelHeader eyebrow={eyebrow} title={title} sub={sub} />
+      <PanelBody>
+        {notice}
+        {readOnly ? (
+          <div data-inherited-view='' className='opacity-70'>
+            <fieldset disabled className='min-w-0'>
+              {children}
+            </fieldset>
+          </div>
+        ) : (
+          <>
+            <ScopeLegend />
+            {children}
+          </>
+        )}
+      </PanelBody>
+    </>
   )
 }
 
@@ -258,58 +409,93 @@ function Heading({ title, kind, sub }: { title: string; kind: string; sub?: stri
 function PlacementInspector({
   target,
   row,
+  notice,
   readOnly = false
 }: {
   target: DesignTarget
   row: PlacementRow | null
+  /** Shown first in the body (inherited: where it comes from). */
+  notice?: ReactNode
   readOnly?: boolean
 }) {
+  const env = useInspectorEnv()
   const field = target.kind === 'group' ? '' : target.field
   const groupKey =
     row?.group_key ?? (target.kind === 'group' ? null : (placementOf(target)?.group_key ?? null))
+  const where = sectionLabel(env.bundle, groupKey)
 
   if (field === SUBTITLE_FIELD)
     return (
-      <>
-        <Heading title='Subtitle' kind='Header' />
+      <SimplePanel eyebrow='Header' title='Subtitle' notice={notice} readOnly={readOnly}>
         <SubtitleInspector />
-      </>
+      </SimplePanel>
     )
   if (row && (WIDGET_RE.test(field) || row.widget_id != null))
     return (
-      <>
-        <Heading title={row.label_override || 'Widget'} kind='Widget' />
+      <SimplePanel
+        eyebrow={dot('Widget', where)}
+        title={row.label_override || 'Widget'}
+        notice={notice}
+        readOnly={readOnly}
+      >
         <WidgetInspector row={row} />
-      </>
+      </SimplePanel>
     )
   if (isSlotField(field))
     return (
-      <>
-        <Heading title={slotName(field)} kind='Panel' />
+      <SimplePanel
+        eyebrow={dot('Panel', where)}
+        title={slotName(field)}
+        notice={notice}
+        readOnly={readOnly}
+      >
         <SlotInspector field={field} groupKey={groupKey} row={row} />
-      </>
+      </SimplePanel>
     )
   if (!row) return null
   if (target.kind === 'header' || row.group_key === HEADER_GROUP_KEY)
-    return <HeaderItem row={row} />
-  return <FieldInspector row={row} readOnly={readOnly} />
+    return <HeaderItem row={row} notice={notice} readOnly={readOnly} />
+  return <FieldInspector row={row} where={where} notice={notice} readOnly={readOnly} />
 }
 
-function HeaderItem({ row }: { row: PlacementRow }) {
+function HeaderItem({
+  row,
+  notice,
+  readOnly
+}: {
+  row: PlacementRow
+  notice?: ReactNode
+  readOnly: boolean
+}) {
   const env = useInspectorEnv()
   const { data: meta } = useCollectionMeta(env.collection)
   const label = describeField(row.field, meta?.fields ?? [], meta?.relations ?? [], null).label
   return (
-    <>
-      <Heading title={row.label_override || label} kind='Header item' sub={row.field} />
+    <SimplePanel
+      eyebrow='Header strip'
+      title={row.label_override || label}
+      sub={<KeyLine k={row.field} />}
+      notice={notice}
+      readOnly={readOnly}
+    >
       <HeaderItemInspector row={row} label={label} />
-    </>
+    </SimplePanel>
   )
 }
 
 const EMPTY_META: CollectionMeta = { fields: [], relations: [], label: '' }
 
-function FieldInspector({ row, readOnly }: { row: PlacementRow; readOnly: boolean }) {
+function FieldInspector({
+  row,
+  where,
+  notice,
+  readOnly
+}: {
+  row: PlacementRow
+  where: string | null
+  notice?: ReactNode
+  readOnly: boolean
+}) {
   const env = useInspectorEnv()
   const { data: meta } = useCollectionMeta(env.collection)
   const m = meta ?? EMPTY_META
@@ -349,52 +535,57 @@ function FieldInspector({ row, readOnly }: { row: PlacementRow; readOnly: boolea
   ]
   const [tab, setTab] = useState<TabKey>('look')
   const active = tabs.some((t) => t.key === tab) ? tab : 'look'
+  // Tabs still switch in a read-only (inherited) view; the fieldset disables the controls.
+  const tabBody = (
+    <fieldset disabled={readOnly} className='min-w-0'>
+      {!meta ? (
+        <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+          Loading the field…
+        </p>
+      ) : active === 'look' ? (
+        <LookTab />
+      ) : active === 'rules' ? (
+        <RulesTab />
+      ) : active === 'picker' ? (
+        <PickerTab />
+      ) : active === 'grid' ? (
+        <GridTab />
+      ) : (
+        <AdvancedTab />
+      )}
+    </fieldset>
+  )
 
   return (
     <FieldCtxContext.Provider value={ctx}>
       <GlobalWriterContext.Provider value={writer}>
-        <Heading title={info.label} kind={info.relKind ?? titleCase(info.type)} sub={row.field} />
-        <p className='text-[11px] text-muted-foreground'>
-          Each setting says whether it changes this form only or every form that shows {info.label}.
-        </p>
-        <div role='tablist' className='flex gap-1 border-b border-slate-200 dark:border-border'>
-          {tabs.map((t) => (
-            <button
-              key={t.key}
-              type='button'
-              role='tab'
-              aria-selected={active === t.key}
-              data-inspector-tab={t.key}
-              onClick={() => {
-                env.flush()
-                setTab(t.key)
-              }}
-              className={cn(
-                '-mb-px border-b-2 px-2 py-1.5 text-[12px] transition-colors',
-                active === t.key
-                  ? 'border-nvr-cyan font-medium text-foreground'
-                  : 'border-transparent text-muted-foreground hover:text-foreground'
-              )}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-        <fieldset disabled={readOnly} className='min-w-0'>
-          {!meta ? (
-            <p className='text-[12px] text-muted-foreground'>Loading the field…</p>
-          ) : active === 'look' ? (
-            <LookTab />
-          ) : active === 'rules' ? (
-            <RulesTab />
-          ) : active === 'picker' ? (
-            <PickerTab />
-          ) : active === 'grid' ? (
-            <GridTab />
+        <PanelHeader
+          eyebrow={dot('Field', where)}
+          title={info.label}
+          sub={<KeyLine words={meta ? fieldKindWords(info) : undefined} k={row.field} />}
+        >
+          <PanelTabs
+            tabs={tabs}
+            active={active}
+            onChange={(t) => {
+              env.flush()
+              setTab(t)
+            }}
+          />
+        </PanelHeader>
+        <PanelBody>
+          {notice}
+          {readOnly ? (
+            <div data-inherited-view='' className='opacity-70'>
+              {tabBody}
+            </div>
           ) : (
-            <AdvancedTab />
+            <>
+              <ScopeLegend field />
+              {tabBody}
+            </>
           )}
-        </fieldset>
+        </PanelBody>
       </GlobalWriterContext.Provider>
     </FieldCtxContext.Provider>
   )

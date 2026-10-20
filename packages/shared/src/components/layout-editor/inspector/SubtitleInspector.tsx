@@ -37,7 +37,7 @@ export function SubtitleInspector() {
     )
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Toggle
         k='subtitle.enabled'
         label='Subtitle under the title'
@@ -85,7 +85,7 @@ export function SubtitleInspector() {
               {cfg.fields.map((f, i) => (
                 <div
                   key={f.field}
-                  className='space-y-1.5 rounded-md border border-slate-200 p-2 dark:border-border'
+                  className='space-y-3 rounded-md bg-slate-50 p-3 dark:bg-muted/50'
                 >
                   <div className='flex items-center justify-between gap-2'>
                     <span className='truncate text-[12px] text-foreground'>

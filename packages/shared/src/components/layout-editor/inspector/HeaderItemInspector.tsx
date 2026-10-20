@@ -75,7 +75,7 @@ export function HeaderItemInspector({ row, label }: { row: PlacementRow; label: 
   })()
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Setting k='header.label_override' label='Label' effect={`Empty uses "${label}".`}>
         <TextInput
           ariaLabel='Label'

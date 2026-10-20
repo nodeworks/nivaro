@@ -87,7 +87,7 @@ export function RulesTab() {
   const maxValues = typeof opts.max_values === 'number' ? opts.max_values : null
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Toggle
         k='field.required'
         label='Required'
@@ -140,7 +140,7 @@ export function RulesTab() {
             <div
               // biome-ignore lint/suspicious/noArrayIndexKey: conditions are positional
               key={i}
-              className='space-y-1.5 rounded-md border border-slate-200 p-2 dark:border-border'
+              className='space-y-3 rounded-md bg-slate-50 p-3 dark:bg-muted/50'
             >
               <div className='flex items-center gap-1.5'>
                 <div className='flex-1' data-setting='field.lock_conditions.type'>
@@ -291,7 +291,7 @@ export function RulesTab() {
 
       {atlQualifies && (
         <Section title='Apply to lines'>
-          <p className='text-[11px] text-muted-foreground'>
+          <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
             A button beside the field copies its value into one column of every line of a grid.
           </p>
           <Setting

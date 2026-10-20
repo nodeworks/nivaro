@@ -37,10 +37,16 @@ export function Combobox({
           role='combobox'
           aria-expanded={open}
           disabled={disabled}
-          className='h-7 w-full justify-between px-2 font-mono text-[12px] font-normal'
+          className='h-8 w-full justify-between rounded-md border-slate-200 bg-white px-2.5 text-[12.5px] font-normal dark:border-border dark:bg-background'
         >
-          <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-            {selected ? selected.label : (placeholder ?? 'Select…')}
+          {/* A stored value outside the list still shows, as its key. */}
+          <span
+            className={cn(
+              'truncate',
+              !selected && (value ? 'font-mono text-[12px]' : 'text-muted-foreground')
+            )}
+          >
+            {selected ? selected.label : value || (placeholder ?? 'Select…')}
           </span>
           <ChevronsUpDown className='ml-1 h-3 w-3 shrink-0 opacity-50' />
         </Button>
@@ -61,7 +67,7 @@ export function Combobox({
                     onChange(current === value ? '' : current)
                     setOpen(false)
                   }}
-                  className='font-mono text-[12px]'
+                  className='text-[12px]'
                 >
                   <Check
                     className={cn(

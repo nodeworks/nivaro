@@ -66,7 +66,7 @@ export function LookTab() {
     )
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       <Setting
         k='field.label'
         label='Label'
@@ -157,7 +157,7 @@ export function LookTab() {
 
       {info.relKind === 'M2O' && info.relatedCollection && (
         <Section title='Show under the value'>
-          <p className='text-[11px] text-muted-foreground'>
+          <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
             Fields of the picked record shown with it on this form.
           </p>
           <Buffered value={inline}>

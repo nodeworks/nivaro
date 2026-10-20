@@ -103,7 +103,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   return (
-    <fieldset disabled={readOnly} className='min-w-0 space-y-4'>
+    <fieldset disabled={readOnly} className='min-w-0 space-y-5'>
       <Setting k='group.label' label='Name' effect='The heading people see.'>
         <TextInput
           ariaLabel='Name'
@@ -111,11 +111,9 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
           onChange={(v) => update({ label: v }, `Rename ${name}`, true)}
         />
       </Setting>
-      <div data-setting='group.key' className='text-[11px] text-muted-foreground'>
-        Key <span className='font-mono'>{group.key}</span>
-      </div>
       <Setting k='group.icon' label='Icon' effect='Shown before the section title.'>
         <IconPicker
+          className='h-8 rounded-md border-slate-200 bg-white px-2.5 text-[12.5px] hover:bg-white dark:border-border dark:bg-background dark:hover:bg-background'
           value={group.icon ?? ''}
           onChange={(v) => update({ icon: v || null }, `Change the icon of ${name}`)}
         />
@@ -341,7 +339,9 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
             effect='A short summary while the section is closed.'
           >
             {placed.length === 0 ? (
-              <p className='text-[11px] text-muted-foreground'>Place fields in {name} first.</p>
+              <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                Place fields in {name} first.
+              </p>
             ) : (
               <div className='space-y-1.5'>
                 {placed.map((f) => {
@@ -372,7 +372,11 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
                           className='h-3.5 w-3.5 accent-nvr-cyan'
                         />
                         <span className='flex-1 truncate'>{label}</span>
-                        {isO2M && <span className='text-[11px] text-muted-foreground'>list</span>}
+                        {isO2M && (
+                          <span className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                            list
+                          </span>
+                        )}
                       </label>
                       {entry && (
                         <div className='space-y-1 pl-5'>

@@ -100,7 +100,7 @@ export function AdvancedTab() {
     )
 
   return (
-    <div className='space-y-4'>
+    <div className='space-y-5'>
       {!special && (
         <Setting
           k='field.impact'
@@ -108,9 +108,13 @@ export function AdvancedTab() {
           effect='Check here before renaming or deleting the field.'
         >
           {isLoading ? (
-            <p className='text-[11px] text-muted-foreground'>Looking…</p>
+            <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+              Looking…
+            </p>
           ) : (impacts ?? []).length === 0 ? (
-            <p className='text-[11px] text-muted-foreground'>Nothing else refers to {name}.</p>
+            <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+              Nothing else refers to {name}.
+            </p>
           ) : (
             <ul className='space-y-0.5 text-[12px]'>
               {(impacts ?? []).slice(0, 30).map((i, n) => (
@@ -124,24 +128,6 @@ export function AdvancedTab() {
           )}
         </Setting>
       )}
-
-      <Setting
-        k='field.overrides_raw'
-        label='This form’s settings as JSON'
-        effect='Everything this form changes about the field. Saved when you leave the box, if it parses.'
-      >
-        <JsonInput
-          ariaLabel='This form’s settings as JSON'
-          rows={6}
-          value={Object.keys(ov).length ? ov : null}
-          validate={(v) =>
-            v && typeof v === 'object' && !Array.isArray(v) ? null : 'Needs a JSON object'
-          }
-          onCommit={(v) =>
-            ctx.setPlacement({ overrides: v ?? null }, `Edit the settings of ${name} as JSON`)
-          }
-        />
-      </Setting>
 
       {!special && (
         <Section title='For API callers'>
@@ -189,13 +175,13 @@ export function AdvancedTab() {
       )}
 
       {cascades.length > 0 && (
-        <Section title='Cascade filters (raw)'>
+        <Section title='Cascade filters (raw)' collapsible>
           {cascades.map((r, i) => (
             <div
               key={`${r.parent_field}:${r.filter_column}`}
-              className='space-y-2 rounded-md border border-slate-200 p-2 dark:border-border'
+              className='space-y-4 rounded-md bg-slate-50 p-3 dark:bg-muted/50'
             >
-              <p className='text-[11px] text-muted-foreground'>
+              <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
                 Filter {i + 1}: by <span className='font-mono'>{r.parent_field}</span> on{' '}
                 <span className='font-mono'>{r.filter_column}</span>
               </p>
@@ -265,23 +251,43 @@ export function AdvancedTab() {
         </Section>
       )}
 
-      {info.iface === 'inline-table' && (
+      <Section title='Edit as JSON' collapsible>
         <Setting
-          k='field.row_rules.sources_when'
-          label='Row rules as JSON'
-          effect='For settings the rule editor does not show, such as a source gate (sources[].when).'
+          k='field.overrides_raw'
+          label='This form’s settings as JSON'
+          effect='Everything this form changes about the field. Saved when you leave the box, if it parses.'
         >
           <JsonInput
-            ariaLabel='Row rules as JSON'
+            ariaLabel='This form’s settings as JSON'
             rows={6}
-            value={opts.row_rules ?? null}
-            validate={(v) => (Array.isArray(v) ? null : 'Needs a list of rules')}
-            onCommit={(v) => ctx.setOption('row_rules', v, `Edit the rules of ${name} as JSON`)}
+            value={Object.keys(ov).length ? ov : null}
+            validate={(v) =>
+              v && typeof v === 'object' && !Array.isArray(v) ? null : 'Needs a JSON object'
+            }
+            onCommit={(v) =>
+              ctx.setPlacement({ overrides: v ?? null }, `Edit the settings of ${name} as JSON`)
+            }
           />
         </Setting>
-      )}
 
-      <Section title='Stored settings without an editor'>
+        {info.iface === 'inline-table' && (
+          <Setting
+            k='field.row_rules.sources_when'
+            label='Row rules as JSON'
+            effect='For settings the rule editor does not show, such as a source gate (sources[].when).'
+          >
+            <JsonInput
+              ariaLabel='Row rules as JSON'
+              rows={6}
+              value={opts.row_rules ?? null}
+              validate={(v) => (Array.isArray(v) ? null : 'Needs a list of rules')}
+              onCommit={(v) => ctx.setOption('row_rules', v, `Edit the rules of ${name} as JSON`)}
+            />
+          </Setting>
+        )}
+      </Section>
+
+      <Section title='Stored settings without an editor' collapsible>
         {RAW_OPTION_KEYS.map((r) => (
           <Setting key={r.key} k={`field.${r.key}`} label={r.label} effect={r.effect}>
             <JsonInput

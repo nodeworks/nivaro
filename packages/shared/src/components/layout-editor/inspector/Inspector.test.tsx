@@ -719,6 +719,52 @@ describe('Inspector', () => {
     expect(openLayout).toHaveBeenCalledWith(3)
   })
 
+  it('the header names the kind, the section, the field and its key', async () => {
+    await mount(field('vendor'))
+    const header = host.querySelector('[data-panel-header]')
+    expect(header?.querySelector('[data-panel-eyebrow]')?.textContent).toBe('Field · main')
+    expect(header?.querySelector('h2')?.textContent).toBe('Vendor')
+    expect(header?.textContent).toContain('picks one record · vendor')
+    // Tabs sit in the header; settings scroll in the body under it.
+    expect(header?.querySelector('[data-inspector-tab="look"]')).not.toBeNull()
+    expect(host.querySelector('[data-panel-body] [data-setting="field.label"]')).not.toBeNull()
+
+    await mount({ kind: 'group', key: 'step_one' })
+    expect(host.querySelector('[data-panel-eyebrow]')?.textContent).toBe('Step · steps')
+    expect(host.querySelector('[data-panel-header] [data-setting="group.key"]')?.textContent).toBe(
+      'step_one'
+    )
+  })
+
+  it('says "this form only" once and marks only every-form settings', async () => {
+    await mount(field('amount'))
+    expect(host.querySelector('[data-scope-legend]')?.textContent).toMatch(/this form only/)
+    // Form-only rows keep their scope for screen readers, out of sight.
+    expect(host.querySelector('[data-setting="field.label"] [data-scope="form"]')?.className).toBe(
+      'sr-only'
+    )
+    const every = host.querySelector('[data-setting="field.format"] [data-scope="field"]')
+    expect(every?.textContent).toContain('Every form')
+  })
+
+  it('raw JSON sections start folded and open on click', async () => {
+    await mount(field('amount'))
+    await click(host.querySelector('[data-inspector-tab="advanced"]'))
+    const toggles = [...host.querySelectorAll('[data-section-toggle]')]
+    expect(toggles.map((t) => t.textContent)).toEqual(
+      expect.arrayContaining(['Edit as JSON', 'Stored settings without an editor'])
+    )
+    const json = toggles.find((t) => t.textContent === 'Edit as JSON') as HTMLElement
+    const body = json.nextElementSibling as HTMLElement
+    expect(json.getAttribute('aria-expanded')).toBe('false')
+    expect(body.hidden).toBe(true)
+    // Folded settings stay mounted (parity keys and typed text survive a fold).
+    expect(body.querySelector('[data-setting="field.overrides_raw"] textarea')).not.toBeNull()
+    await click(json)
+    expect(json.getAttribute('aria-expanded')).toBe('true')
+    expect(body.hidden).toBe(false)
+  })
+
   it('hides Edit in parent when the host cannot open layouts', async () => {
     await mount(field('region', 'shipping'), {
       bundle: makeBundle({ parent_layout_id: 3 }),
