@@ -33,6 +33,7 @@ const FAMILIES: Array<[string, string]> = [
   ['nvr:chatreply', 'chat reply tokens'],
   ['nvr:linkprev', 'link previews'],
   ['nvr:epoch', 'cache epochs'],
+  ['nvr:mdl2', 'shared metadata cache'],
   ['bull:', 'job queues'],
   ['socket.io', 'socket adapter']
 ]

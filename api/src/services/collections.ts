@@ -1,4 +1,6 @@
+import { isRemoteEpochClear } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
+import { dropMetadataL2 } from '../db/metadata-l2.js'
 import { clearMetadataQueryCache } from '../db/metadata-query-cache.js'
 import { rawRows } from '../db/raw-rows.js'
 import { getTenantId } from '../db/tenant-context.js'
@@ -92,6 +94,12 @@ const physicalColumnsCache = new Map<string, { value: Set<string>; at: number }>
 /** Drop cached collection/field metadata (all, or one collection). */
 export function clearMetadataCache(collection?: string): void {
   clearMetadataQueryCache()
+  // #2441 — the shared Redis level: a clear made HERE (after this process changed configuration)
+  // drops the generations it keyed on; the whole generation, since a statement's entry cannot be
+  // tied to one collection (relation and column-list reads span several). A clear because ANOTHER
+  // process moved the epoch leaves them: they are already unreachable, and the new generation
+  // other processes are filling must survive.
+  if (!isRemoteEpochClear()) void dropMetadataL2()
   clearVirtualSqlCache()
   physicalColumnsCache.clear()
   if (collection) {

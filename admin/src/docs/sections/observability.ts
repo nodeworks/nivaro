@@ -52,6 +52,24 @@ export const obsApiAnalytics: DocSection = {
         '`METADATA_QUERY_CACHE=off` turns it off; `METADATA_QUERY_CACHE_TTL_MS` sets the lifetime. SQL Server only.'
       ]
     },
+    { type: 'h3', id: 'config-read-cache-shared', text: 'Shared across processes (Redis)' },
+    {
+      type: 'p',
+      text: 'A process that just started has nothing in memory, so it used to rebuild every collection, field list, relation, layout and column list one database round trip at a time; the GraphQL schema alone is a few hundred reads. Configuration reads now go to a second level in Redis before the database, so a fresh replica or a restart reads what another process already read. Each entry is keyed by the configuration number (`nivaro_cache_epochs`), the API version, the tenant and the database: a configuration change moves the number, and everything stored before it can no longer be reached. Nothing has to delete it; it expires after its lifetime.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The process that makes a configuration change skips the shared level until its own move of the number has landed, so it never reads back what it just replaced. A clear made after the change (saving in the Data Model, Clear on the Caches card) also drops the entries this process keyed on.',
+        'Only reads of the primary database are shared. A read replica can lag the number, so its reads stay in memory only.',
+        "A restored database (a staging copy refreshed from production every night) brings its own configuration number, which may be lower or one already used. Keys also carry the database's incarnation: the newest restore date in `msdb.dbo.restorehistory` with the database's `create_date` (a restore over an existing database keeps its `create_date`). The incarnation is re-read when the number cannot be read, moves in another process or goes backwards, and at least once a minute. A number that goes backwards, or a changed incarnation, also clears every in-process cache.",
+        'Redis slow, down or erroring: the read goes to the database, the error is counted and the shared level rests for 5 seconds. Nothing fails because of it.',
+        'An edit that does not move the number (a raw UPDATE from SQL Server Management Studio) stays invisible for up to the shared lifetime, not the 30 seconds of the in-memory cache. Clear all caches on the Caches card afterwards: it moves the number.',
+        'Off when the number is off (`CACHE_EPOCH=off`) and in cloud mode.',
+        '`GET /api/ops-db/metadata-cache` (under `l2`) and `GET /api/ops-runtime/caches` (under `metadata_l2`) report hits, misses, bytes read and written, the largest entry, entries skipped for size, errors and skips.',
+        '`METADATA_L2=off` turns it off; `METADATA_L2_TTL_S` sets the lifetime (default 600), `METADATA_L2_MAX_BYTES` the largest compressed entry kept (default 262144), `METADATA_L2_TIMEOUT_MS` how long a read waits for Redis (default 150).'
+      ]
+    },
     { type: 'h2', id: 'cache-epoch', text: 'Caches across processes' },
     {
       type: 'ul',

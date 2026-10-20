@@ -96,6 +96,21 @@ let dirty = false
 const own = new Map<string, Set<number>>()
 let missingUntil = 0
 let lastStatement: string | null = null
+// ── #2441: the epoch a shared (Redis) cache may key on ──────────────────────
+/** The configuration epoch as last read from the database (poll, direct read or own move). */
+let latestKnown: number | null = null
+let lastReadAt = 0
+/** Orders reads and moves: a slower, older answer never overwrites a newer one. */
+let opSeq = 0
+let lastAssignedSeq = 0
+/** Moves started by this process (ever) and in flight now — a read that overlapped one is not
+ *  trusted, it may have seen the number before or after the move. */
+let bumpGen = 0
+let bumpsInFlight = 0
+let direct: Promise<void> | null = null
+/** True while a handler for ANOTHER process's move runs (clears must not drop shared entries). */
+let remoteClear = false
+const EPOCH_FRESH_MS = 15_000
 let writesSeen = 0
 let moves = 0
 
@@ -214,9 +229,13 @@ async function bump(name: string): Promise<number | null> {
   const k = knexRef
   if (!k || !ENABLED) return null
   if (Date.now() < missingUntil) return null
-  if (name === CONFIG_EPOCH) {
+  const isConfig = name === CONFIG_EPOCH
+  const seq = ++opSeq
+  if (isConfig) {
     dirty = false
     lastBumpAt = Date.now()
+    bumpGen++
+    bumpsInFlight++
   }
   try {
     const changed = await k(TABLE)
@@ -237,12 +256,107 @@ async function bump(name: string): Promise<number | null> {
     const value = row ? Number(row.epoch) : null
     moves++
     if (value != null) remember(name, value)
+    if (isConfig && value != null) assignKnown(value, seq)
     return value
   } catch {
     // The table arrives with migration 358; until then there is nothing to move.
     missingUntil = Date.now() + 60_000
     return null
+  } finally {
+    if (isConfig) bumpsInFlight--
   }
+}
+
+function assignKnown(value: number, seq: number): void {
+  if (seq < lastAssignedSeq) return
+  lastAssignedSeq = seq
+  const backwards = latestKnown != null && value < latestKnown
+  latestKnown = value
+  lastReadAt = Date.now()
+  // The number only ever grows; smaller means the database was restored underneath us.
+  if (backwards) emitReset(true)
+}
+
+const resetListeners = new Set<(e: { backwards: boolean }) => void>()
+let pollFailing = false
+
+/**
+ * #2441 — hear what a database restore looks like from here: the configuration number went
+ * BACKWARDS (`backwards: true`), or moved in another process / could not be read (`false`: a
+ * restore may hide behind it). Synchronous; a throw is swallowed.
+ */
+export function onEpochReset(fn: (e: { backwards: boolean }) => void): () => void {
+  resetListeners.add(fn)
+  return () => {
+    resetListeners.delete(fn)
+  }
+}
+
+function emitReset(backwards: boolean): void {
+  for (const fn of resetListeners) {
+    try {
+      fn({ backwards })
+    } catch {
+      /* a listener never breaks the watch */
+    }
+  }
+}
+
+/** A read of the number, begun now: assigns its answer when it lands, unless a move by this
+ *  process overlapped it. */
+function beginRead(): (value: number) => void {
+  const seq = ++opSeq
+  const gen = bumpGen
+  const clean = bumpsInFlight === 0
+  return (value: number) => {
+    if (clean && gen === bumpGen && bumpsInFlight === 0) assignKnown(value, seq)
+  }
+}
+
+/**
+ * #2441 — the configuration epoch a SHARED cache may key on right now, or null when it must not
+ * be used: the mechanism is off, the number has not been read lately, or this process has a
+ * configuration write whose move has not landed (it would key on the epoch it is leaving).
+ */
+export function configEpochNow(): number | null {
+  if (!ENABLED || !knexRef) return null
+  if (Date.now() < missingUntil) return null
+  if (pending || dirty || bumpsInFlight > 0) return null
+  if (latestKnown == null || Date.now() - lastReadAt > EPOCH_FRESH_MS) return null
+  return latestKnown
+}
+
+/** configEpochNow(), reading the number first when it is stale or was never read (a fresh
+ *  process before its first poll). One read at a time; a failure answers null. */
+export async function configEpochForRead(): Promise<number | null> {
+  const now = configEpochNow()
+  if (now != null) return now
+  const k = knexRef
+  if (!ENABLED || !k || Date.now() < missingUntil) return null
+  if (pending || dirty || bumpsInFlight > 0) return null
+  if (!direct) {
+    const land = beginRead()
+    direct = (async () => {
+      try {
+        const row = (await k(TABLE).where({ name: CONFIG_EPOCH }).first('epoch')) as
+          | { epoch: number | string }
+          | undefined
+        // No row: the number has never moved on this database.
+        land(row ? Number(row.epoch) : 0)
+      } catch {
+        /* unreadable now: the shared cache is skipped */
+      } finally {
+        direct = null
+      }
+    })()
+  }
+  await direct
+  return configEpochNow()
+}
+
+/** True while this process clears caches because ANOTHER process moved the number. */
+export function isRemoteEpochClear(): boolean {
+  return remoteClear
 }
 
 const writeListeners = new Set<() => void>()
@@ -383,16 +497,34 @@ export function onEpoch(name: string, handler: (epoch: number) => void | Promise
 export function startEpochWatch(intervalMs = 5_000): void {
   if (!ENABLED || watcher || intervalMs <= 0) return
   const tick = async () => {
+    const land = beginRead()
     const now = await readEpochs()
-    if (!now) return
+    if (!now) {
+      // A restore takes the database away for a while: once per outage, say so (#2441).
+      if (!pollFailing) emitReset(false)
+      pollFailing = true
+      return
+    }
+    pollFailing = false
+    land(now.get(CONFIG_EPOCH) ?? 0)
     const moved = primed ? movedNames(seen, now, own) : []
     primed = true
     for (const [name, value] of now) seen.set(name, value)
+    if (moved.includes(CONFIG_EPOCH)) emitReset(false)
     for (const name of moved) {
       const handler = handlers.get(name)
       if (!handler) continue
       try {
-        await handler(now.get(name) as number)
+        // The synchronous part of a handler is a remote clear (#2441: it must not drop the
+        // shared metadata entries other processes just stored under the new number).
+        let result: void | Promise<void>
+        remoteClear = true
+        try {
+          result = handler(now.get(name) as number)
+        } finally {
+          remoteClear = false
+        }
+        await result
       } catch {
         /* one handler that fails must not stop the watch */
       }
@@ -408,6 +540,8 @@ export function stopEpochWatch(): void {
   watcher = null
   seen.clear()
   primed = false
+  latestKnown = null
+  lastReadAt = 0
 }
 
 export function configEpochState(): {
