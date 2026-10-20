@@ -1,3 +1,5 @@
+import { useState } from 'react'
+import { useApiFetchConfig } from '../../../context'
 import { type GroupRow, type LayoutBundle, UNGROUPED_KEY } from '../../../lib/layout-ops'
 import { titleCase } from '../../../lib/utils'
 import { DesignNode } from '../DesignNode'
@@ -10,21 +12,45 @@ import { useLayoutDesign } from '../design-context'
 
 export interface PdfCanvasProps {
   bundle: LayoutBundle
-  previewRecordId?: string | null
   collection: string
 }
 
-const hiddenKey = (f: string) => f.startsWith('__')
+const isSlotKey = (f: string) => f.startsWith('__')
 
-export function PdfCanvas({ bundle, previewRecordId, collection }: PdfCanvasProps) {
+export function PdfCanvas({ bundle, collection }: PdfCanvasProps) {
   const design = useLayoutDesign()
   const showHidden = design?.showHidden ?? false
   const sections: GroupRow[] = bundle.groups
     .filter((g) => g.key !== UNGROUPED_KEY && g.type !== 'ungrouped')
     .sort((a, b) => a.sort - b.sort)
-  const previewHref = `/api/collection-layouts/${bundle.layout.id}/preview-html?record_id=${encodeURIComponent(
-    previewRecordId ?? ''
-  )}`
+  const fetchCfg = useApiFetchConfig()
+  const [loading, setLoading] = useState(false)
+  const [failed, setFailed] = useState(false)
+
+  // The route is admin-only and the host may auth with a bearer token, so a
+  // plain link cannot carry it: fetch with the host's config, open the blob.
+  // The tab opens first so the click's popup allowance is not lost to the await.
+  const preview = async () => {
+    setLoading(true)
+    setFailed(false)
+    const tab = window.open('', '_blank')
+    try {
+      const resp = await fetch(
+        `${fetchCfg.apiBase}/collection-layouts/${bundle.layout.id}/preview-html`,
+        { headers: fetchCfg.authHeaders, credentials: fetchCfg.credentials }
+      )
+      if (!resp.ok) throw new Error(String(resp.status))
+      const url = URL.createObjectURL(new Blob([await resp.text()], { type: 'text/html' }))
+      if (tab) tab.location.href = url
+      else window.open(url, '_blank')
+      setTimeout(() => URL.revokeObjectURL(url), 60_000)
+    } catch {
+      tab?.close()
+      setFailed(true)
+    } finally {
+      setLoading(false)
+    }
+  }
 
   return (
     <div className='flex flex-col gap-4 p-4' data-pdf-canvas={collection}>
@@ -32,36 +58,27 @@ export function PdfCanvas({ bundle, previewRecordId, collection }: PdfCanvasProp
         <p className='text-[12px] text-slate-500 dark:text-slate-400'>
           Each section below becomes a section in the PDF, in this order.
         </p>
-        {previewRecordId ? (
-          <a
+        <div className='flex items-center gap-2'>
+          {failed && (
+            <span className='text-[12px] text-red-600 dark:text-red-400'>
+              Could not build the preview.
+            </span>
+          )}
+          <button
+            type='button'
             data-pdf-preview=''
             data-design-pass=''
-            href={previewHref}
-            target='_blank'
-            rel='noreferrer'
-            className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white'
+            disabled={loading}
+            onClick={preview}
+            className='rounded-md bg-nvr-cyan px-3 py-1.5 text-[12px] font-medium text-white disabled:opacity-60'
           >
-            Preview PDF
-          </a>
-        ) : (
-          <div className='flex items-center gap-2'>
-            <span className='text-[12px] text-slate-500 dark:text-slate-400'>
-              Pick a preview record to see the PDF.
-            </span>
-            <button
-              type='button'
-              data-pdf-preview=''
-              disabled
-              className='rounded-md bg-slate-200 px-3 py-1.5 text-[12px] font-medium text-slate-500 dark:bg-slate-800 dark:text-slate-400'
-            >
-              Preview PDF
-            </button>
-          </div>
-        )}
+            Preview with sample values
+          </button>
+        </div>
       </div>
       {sections.map((g) => {
         const cells = bundle.placements
-          .filter((p) => p.group_key === g.key && !hiddenKey(p.field))
+          .filter((p) => p.group_key === g.key && !isSlotKey(p.field))
           .filter((p) => p.is_visible || showHidden)
           .sort((a, b) => a.sort - b.sort)
         return (

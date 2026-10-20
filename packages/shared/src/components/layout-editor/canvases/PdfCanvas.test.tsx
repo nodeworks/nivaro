@@ -44,19 +44,23 @@ describe('PdfCanvas', () => {
     expect(host.textContent).not.toContain('Secret')
   })
 
-  it('preview link carries layout and record', () => {
-    act(() => root.render(<PdfCanvas bundle={bundle()} collection='orders' previewRecordId='42' />))
-    const a = host.querySelector('a[data-pdf-preview]') as HTMLAnchorElement
-    expect(a.getAttribute('href')).toBe('/api/collection-layouts/7/preview-html?record_id=42')
-    expect(a.target).toBe('_blank')
-  })
-
-  it('disables preview with a hint when no record', () => {
+  it('preview fetches preview-html with host auth and opens a blob tab', async () => {
+    const tab = { location: { href: '' }, close: vi.fn() }
+    const open = vi.spyOn(window, 'open').mockReturnValue(tab as unknown as Window)
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, text: async () => '<html></html>' })
+    vi.stubGlobal('fetch', fetchMock)
+    URL.createObjectURL = vi.fn(() => 'blob:x')
+    URL.revokeObjectURL = vi.fn()
     act(() => root.render(<PdfCanvas bundle={bundle()} collection='orders' />))
-    expect(host.querySelector('a[data-pdf-preview]')).toBeNull()
     const b = host.querySelector('button[data-pdf-preview]') as HTMLButtonElement
-    expect(b.disabled).toBe(true)
-    expect(host.textContent).toContain('Pick a preview record')
+    expect(b.disabled).toBe(false)
+    expect(b.textContent).toBe('Preview with sample values')
+    await act(async () => b.click())
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/collection-layouts/7/preview-html')
+    expect(open).toHaveBeenCalledWith('', '_blank')
+    expect(tab.location.href).toBe('blob:x')
+    vi.unstubAllGlobals()
+    open.mockRestore()
   })
 
   it('field cells are selectable design nodes', () => {
