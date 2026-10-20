@@ -1,13 +1,16 @@
 import type { FastifyInstance } from 'fastify'
 import { requireAdmin } from '../middleware/authenticate.js'
-import { listRemediations, runReadinessChecks, startRemediation } from '../services/readiness.js'
 import { logActivity } from '../services/activity.js'
+import { listRemediations, readReadiness, startRemediation } from '../services/readiness.js'
 
-/** Run every registered readiness check and score the result. Read-only —
- *  a scorecard someone refreshes, deliberately unlogged. */
+/** The scored readiness checklist. Read-only — a scorecard someone refreshes,
+ *  deliberately unlogged. Default: the stored results (each with its
+ *  computed_at; stale ones refresh in the background). `?fresh=1`: every check
+ *  live — the deploy gate, the pre-deploy snapshot and the Re-run button. */
 export async function readinessRoutes(app: FastifyInstance): Promise<void> {
-  app.get('/', { preHandler: requireAdmin }, async () => {
-    return { data: await runReadinessChecks() }
+  app.get<{ Querystring: { fresh?: string } }>('/', { preHandler: requireAdmin }, async (req) => {
+    const fresh = ['1', 'true', 'yes'].includes(String(req.query?.fresh ?? '').toLowerCase())
+    return { data: await readReadiness({ fresh }) }
   })
 
   /** Fire a check's automatic fix as a background job; poll /remediations. */

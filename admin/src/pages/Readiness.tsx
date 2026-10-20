@@ -1,19 +1,21 @@
 import { useLiveOps } from '@nivaro/shared'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, CheckCircle2, CircleSlash, Loader2, RefreshCw, XCircle } from 'lucide-react'
 import { useRef } from 'react'
 import { toast } from 'sonner'
-import { AlertTriangle, CheckCircle2, CircleSlash, RefreshCw, XCircle } from 'lucide-react'
-import { Button } from '@/components/ui/button'
 import { ExplainButton } from '@/components/explain-button'
+import { Button } from '@/components/ui/button'
 import { WeeklySummaryToggle } from '@/components/weekly-summary-toggle'
 import { api } from '@/lib/api'
-import { cn } from '@/lib/utils'
+import { cn, formatRelative } from '@/lib/utils'
 
 /**
  * Go-live readiness scorecard. The checks come from the deployment's
  * extension (e.g. legacy-system writes, cron takeover flags, id-sequence
- * margins, non-production hosts…); this page just runs and renders them, grouped, with the blockers
- * spelled out. Refresh re-runs everything live.
+ * margins, non-production hosts…); this page renders them, grouped, with the blockers
+ * spelled out. A plain read is the server's stored results (each with the time it
+ * ran; stale ones refresh in the background and arrive over the live-ops socket);
+ * Re-run checks asks for `fresh=1`, which runs everything live.
  */
 
 interface Check {
@@ -21,11 +23,14 @@ interface Check {
   label: string
   description?: string
   group?: string
-  status: 'pass' | 'warn' | 'fail' | 'skip' | 'error'
+  status: 'pass' | 'warn' | 'fail' | 'skip' | 'error' | 'pending'
   detail?: string
   blockers?: string[]
   remediation_label?: string
   duration_ms: number
+  /** When the server evaluated it; null while pending. */
+  computed_at?: string | null
+  stale?: boolean
 }
 
 interface RemediationJob {
@@ -39,6 +44,10 @@ interface Report {
   score: number | null
   counts: Record<string, number>
   checks: Check[]
+  /** The oldest result in the report. */
+  computed_at?: string | null
+  stale?: boolean
+  refreshing?: boolean
 }
 
 const STATUS_META: Record<
@@ -49,16 +58,32 @@ const STATUS_META: Record<
   warn: { icon: AlertTriangle, cls: 'text-amber-600 dark:text-amber-400', label: 'Warning' },
   fail: { icon: XCircle, cls: 'text-red-600 dark:text-red-400', label: 'Blocking' },
   error: { icon: XCircle, cls: 'text-red-600 dark:text-red-400', label: 'Check failed' },
-  skip: { icon: CircleSlash, cls: 'text-slate-400', label: 'Not applicable' }
+  skip: { icon: CircleSlash, cls: 'text-slate-400', label: 'Not applicable' },
+  pending: { icon: Loader2, cls: 'text-slate-400', label: 'Checking' }
 }
 
 export default function Readiness() {
-  const { data, isFetching, refetch, dataUpdatedAt } = useQuery<Report>({
+  // Re-run checks sets this for the one read it triggers: fresh=1 runs every
+  // check live; every other read (mount, refocus, polling) takes the stored results.
+  const freshNext = useRef(false)
+  const { data, isFetching, refetch } = useQuery<Report>({
     queryKey: ['readiness'],
-    queryFn: () => api.get<{ data: Report }>('/readiness').then((r) => r.data.data),
+    queryFn: () => {
+      const fresh = freshNext.current
+      freshNext.current = false
+      return api
+        .get<{ data: Report }>('/readiness', { params: fresh ? { fresh: 1 } : undefined })
+        .then((r) => r.data.data)
+    },
     staleTime: 60_000,
-    retry: false
+    retry: false,
+    // A background refresh lands over the socket; polling covers a page without one.
+    refetchInterval: (q) => (q.state.data?.refreshing ? 5_000 : false)
   })
+  const rerun = () => {
+    freshNext.current = true
+    void refetch()
+  }
 
   const qc = useQueryClient()
   // Server-held remediation jobs — polling survives navigation, so a fix
@@ -66,11 +91,8 @@ export default function Readiness() {
   const { data: remediations = [] } = useQuery<RemediationJob[]>({
     queryKey: ['readiness-remediations'],
     queryFn: () =>
-      api
-        .get<{ data: RemediationJob[] }>('/readiness/remediations')
-        .then((r) => r.data.data),
-    refetchInterval: (q) =>
-      q.state.data?.some((j) => j.status === 'running') ? 2_500 : false,
+      api.get<{ data: RemediationJob[] }>('/readiness/remediations').then((r) => r.data.data),
+    refetchInterval: (q) => (q.state.data?.some((j) => j.status === 'running') ? 2_500 : false),
     retry: false
   })
   const startedHere = useRef(new Set<string>())
@@ -97,9 +119,7 @@ export default function Readiness() {
     onError: (err: Error) => toast.error(err.message)
   })
 
-  const { data: trend = [] } = useQuery<
-    Array<{ snapshot_date: string; score: number | null }>
-  >({
+  const { data: trend = [] } = useQuery<Array<{ snapshot_date: string; score: number | null }>>({
     queryKey: ['readiness-trend'],
     queryFn: () =>
       api
@@ -125,18 +145,22 @@ export default function Readiness() {
               Go-Live Readiness
             </h1>
             <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-              Continuously answerable: can we cut over? Every check runs live against the current
-              state — nothing here is a cached opinion.
+              Continuously answerable: can we cut over? Each check shows when it last ran; a result
+              past its window re-runs in the background, and Re-run checks runs them all live now.
             </p>
           </div>
           <div className='flex items-center gap-3'>
             <WeeklySummaryToggle />
-            {dataUpdatedAt > 0 && (
-              <span className='text-[11.5px] text-slate-400'>
-                checked {new Date(dataUpdatedAt).toLocaleTimeString()}
+            {data?.computed_at && (
+              <span
+                className='text-[11.5px] text-slate-400'
+                data-tip={`Oldest result: ${new Date(data.computed_at).toLocaleString()}`}
+              >
+                checked {formatRelative(data.computed_at)}
+                {data.refreshing ? ' · refreshing…' : ''}
               </span>
             )}
-            <Button size='sm' variant='outline' disabled={isFetching} onClick={() => refetch()}>
+            <Button size='sm' variant='outline' disabled={isFetching} onClick={rerun}>
               <RefreshCw className={cn('h-3.5 w-3.5', isFetching && 'animate-spin')} /> Re-run
               checks
             </Button>
@@ -146,9 +170,7 @@ export default function Readiness() {
 
       <div className='flex-1 overflow-y-auto bg-slate-50 p-6 dark:bg-background'>
         <div className='max-w-[880px] space-y-4'>
-          {!data && isFetching && (
-            <p className='text-[12.5px] text-slate-400'>Running checks…</p>
-          )}
+          {!data && isFetching && <p className='text-[12.5px] text-slate-400'>Running checks…</p>}
           {data && data.checks.length === 0 && (
             <div className='rounded-lg border border-slate-200 bg-white p-5 dark:border-border dark:bg-card'>
               <p className='text-[13px] text-slate-600 dark:text-muted-foreground'>
@@ -163,16 +185,19 @@ export default function Readiness() {
               <ScoreRing score={data.score} />
               <div>
                 <p className='text-[15px] font-semibold text-slate-900 dark:text-foreground'>
-                  {data.score == null
-                    ? 'No scoreable checks'
-                    : data.score === 100
-                      ? 'Ready to cut over'
-                      : `${data.score}% ready`}
+                  {data.score == null && (data.counts.pending ?? 0) > 0
+                    ? 'Checking…'
+                    : data.score == null
+                      ? 'No scoreable checks'
+                      : data.score === 100
+                        ? 'Ready to cut over'
+                        : `${data.score}% ready`}
                 </p>
                 <p className='mt-0.5 text-[12.5px] text-slate-500 dark:text-muted-foreground'>
                   {data.counts.pass ?? 0} passing · {data.counts.warn ?? 0} warning
                   {(data.counts.warn ?? 0) === 1 ? '' : 's'} ·{' '}
                   {(data.counts.fail ?? 0) + (data.counts.error ?? 0)} blocking
+                  {(data.counts.pending ?? 0) > 0 && ` · ${data.counts.pending} still running`}
                 </p>
               </div>
               {trend.length >= 2 && (
@@ -204,13 +229,24 @@ export default function Readiness() {
                       )}
                     >
                       <div className='flex items-start gap-2.5'>
-                        <Icon className={cn('mt-0.5 h-4 w-4 shrink-0', meta.cls)} />
+                        <Icon
+                          className={cn(
+                            'mt-0.5 h-4 w-4 shrink-0',
+                            meta.cls,
+                            c.status === 'pending' && 'animate-spin'
+                          )}
+                        />
                         <div className='min-w-0 flex-1'>
                           <p className='text-[13px] font-medium text-slate-800 dark:text-foreground'>
                             {c.label}
                             <span className={cn('ml-2 text-[11px] font-normal', meta.cls)}>
                               {meta.label}
                             </span>
+                            {c.stale && c.computed_at && (
+                              <span className='ml-2 text-[11px] font-normal text-slate-400'>
+                                as of {formatRelative(c.computed_at)} · refreshing
+                              </span>
+                            )}
                           </p>
                           {c.detail && (
                             <p className='mt-0.5 text-[12px] text-slate-600 dark:text-muted-foreground'>
@@ -327,7 +363,14 @@ function ScoreRing({ score }: { score: number | null }) {
           : 'stroke-red-500'
   return (
     <svg width='68' height='68' viewBox='0 0 68 68' className='shrink-0 -rotate-90'>
-      <circle cx='34' cy='34' r={r} strokeWidth='6' fill='none' className='stroke-slate-100 dark:stroke-border' />
+      <circle
+        cx='34'
+        cy='34'
+        r={r}
+        strokeWidth='6'
+        fill='none'
+        className='stroke-slate-100 dark:stroke-border'
+      />
       <circle
         cx='34'
         cy='34'
@@ -360,7 +403,10 @@ function TrendLine({ points }: { points: Array<{ snapshot_date: string; score: n
   const w = 160
   const h = 40
   const line = pts
-    .map((p, i) => `${(i / (pts.length - 1)) * (w - 4) + 2},${h - 3 - ((p.score ?? 0) / 100) * (h - 6)}`)
+    .map(
+      (p, i) =>
+        `${(i / (pts.length - 1)) * (w - 4) + 2},${h - 3 - ((p.score ?? 0) / 100) * (h - 6)}`
+    )
     .join(' ')
   const last = pts[pts.length - 1]
   return (
@@ -380,4 +426,3 @@ function TrendLine({ points }: { points: Array<{ snapshot_date: string; score: n
     </svg>
   )
 }
-

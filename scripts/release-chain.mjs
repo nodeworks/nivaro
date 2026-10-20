@@ -49,7 +49,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { apiBase, curlRequest, readinessSnapshot, runGate } from './release-gate.mjs'
+import { apiBase, curlRequest, READINESS_PATH, readinessSnapshot, runGate } from './release-gate.mjs'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const argv = process.argv.slice(2)
@@ -355,7 +355,7 @@ async function snapshotReadiness(cfg, V) {
   for (const { v, base } of gateTargets(cfg)) {
     const token = gateToken(v, base)
     if (!token) continue
-    const res = await curlRequest(base, token)('GET', '/api/readiness', { auth: true })
+    const res = await curlRequest(base, token)('GET', READINESS_PATH, { auth: true })
     const snap = res.status === 200 ? readinessSnapshot(res.body) : null
     if (snap) {
       all[base] = { for_version: V, taken_at: new Date().toISOString(), snap }

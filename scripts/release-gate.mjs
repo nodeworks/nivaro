@@ -11,8 +11,10 @@
  *                                      required extensions loaded, DB + Redis
  *   GET  /api/preflight                admin — deploy coherence (503 = fail)
  *   POST /api/ops-runtime/smoke?strict=1  admin — the smoke suite (503 = fail)
- *   GET  /api/readiness                admin — the score must not drop against
+ *   GET  /api/readiness?fresh=1        admin — the score must not drop against
  *                                      the snapshot taken before the push
+ *                                      (fresh=1: every check live, never the
+ *                                      cached scorecard a plain read returns)
  *
  * The admin checks need a gate token. Without one they are reported as
  * skipped, loudly — the gate cannot invent a credential. A token the API
@@ -23,6 +25,10 @@
  */
 
 import { spawnSync } from 'node:child_process'
+
+/** The gate's readiness read: live, not the cached scorecard. An API older
+ *  than the cache ignores the parameter and runs live anyway. */
+export const READINESS_PATH = '/api/readiness?fresh=1'
 
 /** The API base of a verify URL that points at /api/version, else null. */
 export function apiBase(url) {
@@ -160,7 +166,7 @@ export async function runGate({ name, token, request, before, readinessTolerance
   // A readiness check can read a warming cache as a warning for the first
   // minute: one re-read after `settleMs` before calling a drop a drop.
   const readAfter = async () => {
-    const res = await request('GET', '/api/readiness', { auth: true })
+    const res = await request('GET', READINESS_PATH, { auth: true })
     if (refused(res.status)) return { refused: true, status: res.status }
     return { snap: res.status === 200 ? readinessSnapshot(res.body) : null, status: res.status }
   }

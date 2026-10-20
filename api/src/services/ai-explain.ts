@@ -681,9 +681,9 @@ const gatherJobRun: Gatherer = async (params) => {
 // #1860 — a readiness check
 const gatherReadiness: Gatherer = async (params) => {
   const id = str(params, 'id')
-  const { runReadinessChecks } = await import('./readiness.js')
-  const report = await runReadinessChecks()
-  const check = report.checks.find((c) => c.id === id)
+  // The stored result the admin is looking at (live only when it has none).
+  const { readReadinessCheck } = await import('./readiness.js')
+  const check = await readReadinessCheck(id)
   if (!check) throw new ExplainError(404, 'No such readiness check')
   return {
     title: `Readiness: ${check.label}`,

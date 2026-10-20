@@ -281,13 +281,16 @@ async function pushFacts() {
 }
 
 async function readinessFacts() {
-  const { runReadinessChecks } = await import('./readiness.js')
+  // Stored results (stale ones refresh in the background) — never a live run.
+  const { readReadiness } = await import('./readiness.js')
   const timeout = new Promise<null>((r) => setTimeout(() => r(null), 10_000))
-  const report = await Promise.race([runReadinessChecks().catch(() => null), timeout])
+  const report = await Promise.race([readReadiness().catch(() => null), timeout])
   if (!report) return { unavailable: 'Readiness checks did not finish in 10 seconds' }
   return {
     score: report.score,
     counts: report.counts,
+    computed_at: report.computed_at,
+    stale: report.stale,
     not_passing: report.checks
       .filter((c) => c.status !== 'pass' && c.status !== 'skip')
       .slice(0, 12)

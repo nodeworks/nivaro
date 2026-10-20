@@ -115,7 +115,7 @@ const healthy = {
   'GET /api/ready': { status: 200, body: { ready: true, checks: [] } },
   'GET /api/preflight': { status: 200, body: { data: { status: 'ok', checks: [] } } },
   'POST /api/ops-runtime/smoke?strict=1': { status: 200, body: { data: { ok: true, checks: [] } } },
-  'GET /api/readiness': { status: 200, body: { data: { score: 90, checks: [] } } }
+  'GET /api/readiness?fresh=1': { status: 200, body: { data: { score: 90, checks: [] } } }
 }
 
 test('runGate passes a healthy deploy and asks every check, authed where it must', async () => {
@@ -131,7 +131,7 @@ test('runGate passes a healthy deploy and asks every check, authed where it must
     'GET /api/ready',
     'GET /api/preflight (auth)',
     'POST /api/ops-runtime/smoke?strict=1 (auth)',
-    'GET /api/readiness (auth)'
+    'GET /api/readiness?fresh=1 (auth)'
   ])
 })
 
@@ -152,7 +152,7 @@ test('runGate fails on a refused token, a failed smoke check and a readiness dro
       ...healthy,
       'GET /api/preflight': { status: 401, body: { error: 'Invalid token' } },
       'POST /api/ops-runtime/smoke?strict=1': { status: 401, body: null },
-      'GET /api/readiness': { status: 401, body: null }
+      'GET /api/readiness?fresh=1': { status: 401, body: null }
     }),
     before: null
   })
@@ -163,7 +163,7 @@ test('runGate fails on a refused token, a failed smoke check and a readiness dro
   const dropped = await runGate({
     name: 's',
     token: 't',
-    request: fakeApi({ ...healthy, 'GET /api/readiness': { status: 200, body: { data: { score: 70, checks: [] } } } }),
+    request: fakeApi({ ...healthy, 'GET /api/readiness?fresh=1': { status: 200, body: { data: { score: 70, checks: [] } } } }),
     before: { score: 90, checks: {} },
     sleep: async (ms) => {
       slept += ms

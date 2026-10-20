@@ -237,6 +237,9 @@ export async function buildServer() {
     }
     const { setTransitionGuardRedis } = await import('./services/transition-guard.js')
     setTransitionGuardRedis(app.redis)
+    // Readiness results are shared by every replica (and refreshed by one).
+    const { setReadinessRedis } = await import('./services/readiness.js')
+    setReadinessRedis(app.redis)
     // Idempotency keys: one store hook for the whole app (no-op without a claim).
     const { registerIdempotencyStore } = await import('./services/idempotency.js')
     registerIdempotencyStore(app)
@@ -633,9 +636,12 @@ export async function buildServer() {
   // #2445 — the delayed boot cache warm (set in the onReady block below);
   // cleared on close so a short-lived process never starts it.
   let cacheWarmTimer: ReturnType<typeof setTimeout> | null = null
+  let readinessWarmTimer: ReturnType<typeof setTimeout> | null = null
   app.addHook('onClose', async () => {
     if (cacheWarmTimer) clearTimeout(cacheWarmTimer)
     cacheWarmTimer = null
+    if (readinessWarmTimer) clearTimeout(readinessWarmTimer)
+    readinessWarmTimer = null
   })
 
   // ─── Daily retention purge (self-hosted only) ─────────────────────────────
@@ -1800,6 +1806,21 @@ export async function buildServer() {
           .catch((err) => app.log.warn({ err }, 'cache warm failed'))
       }, 20_000)
       cacheWarmTimer.unref()
+      // Readiness results for this version (the cache is keyed by version, so
+      // a deploy starts empty): evaluate them once, on one replica, so the
+      // first dashboard reads a scorecard instead of 'pending'. Same switch as
+      // the cache warm — dev never runs the heavy checks unprompted.
+      readinessWarmTimer = setTimeout(() => {
+        readinessWarmTimer = null
+        void (async () => {
+          const { cacheWarmAllowed } = await import('./services/cache-warm.js')
+          if (!cacheWarmAllowed()) return
+          const { warmReadiness } = await import('./services/readiness.js')
+          const n = await warmReadiness()
+          if (n > 0) app.log.info(`readiness: evaluated ${n} check(s) for this version`)
+        })().catch((err) => app.log.warn({ err }, 'readiness warm failed'))
+      }, 15_000)
+      readinessWarmTimer.unref()
 
       // Nightly config-conformance runs for scheduled collections, with a
       // regression note when a collection's issue count grew since last run.
