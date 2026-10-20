@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
+import { activateLayout } from './layout-activation.js'
 
 /**
  * Layout version snapshots — see migration 211 for why this exists (the
@@ -10,10 +12,12 @@ import { db } from '../db/index.js'
  *     block the save it protects
  *   - deduped by content hash against the latest version, so the debounced
  *     save stream doesn't mint a version per keystroke burst
- *   - restore is ID-PRESERVING: assignments are bulk-replaced (they carry no
- *     external references), groups upsert by id (group ids are referenced by
- *     assignments' group_key/sort machinery and possibly other layouts'
- *     history — never deleted, extras left in place)
+ *   - restore is ID-PRESERVING and EXACT: assignments are bulk-replaced (they
+ *     carry no external references), groups upsert by id (group ids are
+ *     referenced by assignments' group_key/sort machinery), and groups created
+ *     after the version are removed with their assignments
+ *   - is_active is restored through the activate rule, never written raw, so a
+ *     restore can't leave two defaults of one type
  *   - pruned to the newest KEEP versions per layout
  */
 
@@ -132,27 +136,59 @@ export async function restoreLayoutVersion(
   // Restore exactly the columns the snapshot carries, minus identity — the
   // layouts table has no updated_at, and inventing columns 500s the restore
   // (found live).
-  const { id: _id, collection: _c, created_at: _ca, ...layoutCols } = snap.layout
-  if (Object.keys(layoutCols).length > 0) {
-    await db('nivaro_collection_layouts').where({ id: layoutId }).update(layoutCols)
-  }
+  const {
+    id: _id,
+    collection: _c,
+    created_at: _ca,
+    is_active: wasActive,
+    ...layoutCols
+  } = snap.layout
+  const keepGroupIds = new Set(
+    snap.groups
+      .map((g) => g.id)
+      .filter((gid) => gid != null)
+      .map((gid) => Number(gid))
+  )
 
-  // Groups upsert by id — assignments reference groups through key/sort, and
-  // deleting a group another surface still points at would orphan it.
-  for (const g of snap.groups) {
-    const { id, created_at: _gca, ...cols } = g as { id?: number } & Record<string, unknown>
-    if (id == null) continue
-    const existing = await db('nivaro_field_groups').where({ id }).first('id')
-    if (existing) await db('nivaro_field_groups').where({ id }).update(cols)
-    else await db('nivaro_field_groups').insert({ id: undefined, ...cols, layout_id: layoutId })
-  }
+  await db.transaction(async (trx: Knex.Transaction) => {
+    if (Object.keys(layoutCols).length > 0) {
+      await trx('nivaro_collection_layouts').where({ id: layoutId }).update(layoutCols)
+    }
+    if (wasActive !== undefined) {
+      const current = (await trx('nivaro_collection_layouts')
+        .where({ id: layoutId })
+        .first('id', 'collection', 'layout_type')) as
+        | { id: number; collection: string; layout_type: string | null }
+        | undefined
+      if (current && wasActive) await activateLayout(trx, current)
+      else if (current)
+        await trx('nivaro_collection_layouts').where({ id: layoutId }).update({ is_active: 0 })
+    }
 
-  // Assignments: bulk replace — they belong wholly to the layout.
-  await db('nivaro_layout_field_assignments').where({ layout_id: layoutId }).delete()
-  for (const a of snap.assignments) {
-    const { id: _aid, ...cols } = a as { id?: number } & Record<string, unknown>
-    await db('nivaro_layout_field_assignments').insert({ ...cols, layout_id: layoutId })
-  }
+    // Groups created after the version go (their assignments go with the
+    // bulk replace below), so the restored layout is exactly the version.
+    const currentGroups = (await trx('nivaro_field_groups')
+      .where({ layout_id: layoutId })
+      .select('id')) as Array<{ id: number }>
+    const laterIds = currentGroups.map((g) => Number(g.id)).filter((gid) => !keepGroupIds.has(gid))
+    if (laterIds.length > 0) await trx('nivaro_field_groups').whereIn('id', laterIds).delete()
+
+    // Groups upsert by id — assignments reference groups through key/sort.
+    for (const g of snap.groups) {
+      const { id, created_at: _gca, ...cols } = g as { id?: number } & Record<string, unknown>
+      if (id == null) continue
+      const existing = await trx('nivaro_field_groups').where({ id }).first('id')
+      if (existing) await trx('nivaro_field_groups').where({ id }).update(cols)
+      else await trx('nivaro_field_groups').insert({ id: undefined, ...cols, layout_id: layoutId })
+    }
+
+    // Assignments: bulk replace — they belong wholly to the layout.
+    await trx('nivaro_layout_field_assignments').where({ layout_id: layoutId }).delete()
+    for (const a of snap.assignments) {
+      const { id: _aid, ...cols } = a as { id?: number } & Record<string, unknown>
+      await trx('nivaro_layout_field_assignments').insert({ ...cols, layout_id: layoutId })
+    }
+  })
 
   return {
     restored_assignments: snap.assignments.length,

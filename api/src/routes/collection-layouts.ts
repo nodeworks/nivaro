@@ -1,10 +1,12 @@
 import { randomUUID } from 'crypto'
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { activateLayout, whereLayoutType } from '../services/layout-activation.js'
 import {
   diffLayoutVersions,
   getLayoutVersion,
@@ -103,11 +105,52 @@ const FIELD_IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
  *  layout; activation is type-scoped like the rest. */
 const LAYOUT_TYPES = ['grouped', 'table', 'file', 'addendum', 'detail', 'summary'] as const
 
+const isLayoutType = (t: unknown): t is (typeof LAYOUT_TYPES)[number] =>
+  LAYOUT_TYPES.includes(t as (typeof LAYOUT_TYPES)[number])
+
+/** A layout's machine name: lowercase letters, digits, `_` and `-` (the dash
+ *  form is what migration 092 backfilled; new slugs use `_`). '' when nothing
+ *  usable is left. */
+export function slugify(raw: string): string {
+  return raw
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/g, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/^[_-]+|[_-]+$/g, '')
+    .slice(0, 200)
+}
+
+/** The first free slug for `base` in `collection`: base, base_2, base_3, … */
+export async function nextFreeSlug(
+  collection: string,
+  base: string,
+  trx?: Knex | Knex.Transaction
+): Promise<string> {
+  const q = trx ?? db
+  const root = slugify(base) || 'layout'
+  const rows = (await q('nivaro_collection_layouts')
+    .where({ collection })
+    .whereNotNull('slug')
+    .select('slug')) as Array<{ slug: string }>
+  const taken = new Set(rows.map((r) => String(r.slug).toLowerCase()))
+  if (!taken.has(root)) return root
+  for (let n = 2; ; n++) {
+    if (!taken.has(`${root}_${n}`)) return `${root}_${n}`
+  }
+}
+
+const PDF_THEMES = ['classic', 'minimal', 'executive', 'custom'] as const
+const PDF_PAGE_SIZES = ['A4', 'Letter'] as const
+const PDF_ORIENTATIONS = ['portrait', 'landscape'] as const
+
 /** Layout settings a clone carries over — every column except identity
- *  (id/collection/name/slug/sort/is_active/created_at), the type (the clone
- *  request may change it) and parent inheritance (a clone is a copy, not a
- *  child). */
+ *  (id/collection/name/slug/sort/is_active/created_at) and the type (the
+ *  clone request may change it). parent_layout_id is carried: a copy of a
+ *  child inherits from the same parent, so it renders the same form. */
 const CLONE_CARRIED_COLUMNS = [
+  'parent_layout_id',
   'disable_comments',
   'disable_tasks',
   'tab_mode',
@@ -615,10 +658,19 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: { layout, groups, assignments } })
   })
 
-  // GET /collection-layouts?collection=x[&active=true]
+  // GET /collection-layouts?collection=x[&active=true][&layout_type=grouped]
   app.get('/', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, active } = req.query as { collection?: string; active?: string }
+    const { collection, active, layout_type } = req.query as {
+      collection?: string
+      active?: string
+      layout_type?: string
+    }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    if (layout_type !== undefined && !isLayoutType(layout_type)) {
+      return reply
+        .code(400)
+        .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
+    }
 
     let q = db('nivaro_collection_layouts')
       .where({ collection })
@@ -650,6 +702,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'allow_schedule',
         'allow_disable_pickers',
         'layout_type',
+        'parent_layout_id',
         'row_order_field',
         'pdf_theme',
         'pdf_template_id',
@@ -678,6 +731,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'hide_empty'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
+    if (layout_type) q = whereLayoutType(q, layout_type)
 
     // Non-admins never see role-restricted layouts they cannot open (New-item
     // menus, queue builders, drill pickers all read this list).
@@ -698,9 +752,19 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // POST /collection-layouts
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
-    const body = req.body as { collection: string; name: string }
+    const body = req.body as {
+      collection: string
+      name: string
+      slug?: string | null
+      layout_type?: string
+    }
     if (!body.collection || !body.name)
       return reply.code(400).send({ error: 'collection and name are required' })
+    if (body.layout_type !== undefined && !isLayoutType(body.layout_type)) {
+      return reply
+        .code(400)
+        .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
+    }
 
     const maxSortRow = await db('nivaro_collection_layouts')
       .where({ collection: body.collection })
@@ -708,10 +772,16 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .first()
     const maxSort = (maxSortRow?.m as number | null) ?? -1
 
+    // Every layout gets a machine name: without one it can't be opened by
+    // ?layout=, offered in New-item menus or named by queues and grids.
+    const slug = await nextFreeSlug(body.collection, body.slug || body.name)
+
     try {
       await db('nivaro_collection_layouts').insert({
         collection: body.collection,
         name: body.name,
+        slug,
+        ...(body.layout_type ? { layout_type: body.layout_type } : {}),
         is_active: 0,
         sort: maxSort + 1
       })
@@ -774,10 +844,23 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       tab_mode: string
       validate_before_next: boolean
       summary_enabled: boolean
-      summary_show_all: boolean
+      summary_hide_empty: boolean
       ai_enabled: boolean
+      accordion_mode: boolean
+      disable_revisions: boolean
+      disable_clone: boolean
+      disable_delete: boolean
+      row_order_field: string | null
+      pdf_theme: string | null
+      pdf_template_id: number | null
+      pdf_cover_enabled: boolean
+      pdf_cover_title_field: string | null
+      pdf_cover_subtitle: string | null
+      pdf_show_logo: boolean
+      pdf_page_size: string
+      pdf_orientation: string
+      pdf_button_label: string | null
       conditions: { role_ids?: string[] } | null
-      allow_clone: boolean
       allow_schedule: boolean
       allow_disable_pickers: boolean
       layout_type: string
@@ -811,11 +894,26 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
-    if (body.slug !== undefined) patch.slug = body.slug ?? null
+    if (body.slug !== undefined) {
+      if (body.slug == null || body.slug === '') patch.slug = null
+      else {
+        const slug = slugify(String(body.slug))
+        if (!slug) return reply.code(400).send({ error: 'slug must contain letters or digits' })
+        const others = (await db('nivaro_collection_layouts')
+          .where({ collection: existing.collection })
+          .whereNot({ id: Number(id) })
+          .whereNotNull('slug')
+          .select('slug')) as Array<{ slug: string }>
+        if (others.some((o) => String(o.slug).toLowerCase() === slug))
+          return reply
+            .code(409)
+            .send({ error: `Another layout of this collection already uses the slug "${slug}"` })
+        patch.slug = slug
+      }
+    }
     if (body.create_label !== undefined) patch.create_label = body.create_label ?? null
     if (body.create_hidden !== undefined) patch.create_hidden = body.create_hidden ? 1 : 0
     if (body.sort !== undefined) patch.sort = body.sort
-    if (body.is_active !== undefined) patch.is_active = body.is_active ? 1 : 0
     if (body.disable_comments !== undefined) patch.disable_comments = body.disable_comments ? 1 : 0
     if (body.disable_tasks !== undefined) patch.disable_tasks = body.disable_tasks ? 1 : 0
     if (body.tab_mode !== undefined) patch.tab_mode = body.tab_mode
@@ -853,11 +951,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (body.validate_before_next !== undefined)
       patch.validate_before_next = body.validate_before_next ? 1 : 0
     if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
-    if (body.summary_show_all !== undefined) patch.summary_show_all = body.summary_show_all ? 1 : 0
     if (body.ai_enabled !== undefined) patch.ai_enabled = body.ai_enabled ? 1 : 0
     if (body.conditions !== undefined)
       patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
-    if (body.allow_clone !== undefined) patch.allow_clone = body.allow_clone ? 1 : 0
     if (body.allow_schedule !== undefined) patch.allow_schedule = body.allow_schedule ? 1 : 0
     if (body.allow_disable_pickers !== undefined)
       patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
@@ -919,10 +1015,84 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     }
     if (body.hide_empty !== undefined) patch.hide_empty = body.hide_empty === true
 
-    if (Object.keys(patch).length === 0)
+    // Settings the renderers read that this route used to drop.
+    for (const key of [
+      'summary_hide_empty',
+      'accordion_mode',
+      'disable_revisions',
+      'disable_clone',
+      'disable_delete',
+      'pdf_cover_enabled',
+      'pdf_show_logo'
+    ] as const) {
+      if (body[key] !== undefined) patch[key] = body[key] ? 1 : 0
+    }
+    if (body.row_order_field !== undefined) {
+      const f = body.row_order_field
+      if (f == null || f === '') patch.row_order_field = null
+      else if (typeof f !== 'string' || !FIELD_IDENTIFIER_RE.test(f) || f.length > 255)
+        return reply.code(400).send({ error: 'row_order_field must be a field name or null' })
+      else patch.row_order_field = f
+    }
+    if (body.pdf_theme !== undefined) {
+      if (body.pdf_theme === null) patch.pdf_theme = null
+      else if (!PDF_THEMES.includes(body.pdf_theme as (typeof PDF_THEMES)[number]))
+        return reply.code(400).send({ error: `pdf_theme must be one of ${PDF_THEMES.join(', ')}` })
+      else patch.pdf_theme = body.pdf_theme
+    }
+    if (body.pdf_template_id !== undefined) {
+      const t = body.pdf_template_id
+      if (t === null) patch.pdf_template_id = null
+      else if (!Number.isInteger(Number(t)) || Number(t) <= 0)
+        return reply.code(400).send({ error: 'pdf_template_id must be a template id or null' })
+      else patch.pdf_template_id = Number(t)
+    }
+    if (body.pdf_cover_title_field !== undefined) {
+      const f = body.pdf_cover_title_field
+      if (f == null || f === '') patch.pdf_cover_title_field = null
+      else if (typeof f !== 'string' || !FIELD_IDENTIFIER_RE.test(f) || f.length > 255)
+        return reply.code(400).send({ error: 'pdf_cover_title_field must be a field name or null' })
+      else patch.pdf_cover_title_field = f
+    }
+    if (body.pdf_cover_subtitle !== undefined)
+      patch.pdf_cover_subtitle = body.pdf_cover_subtitle?.trim() ? body.pdf_cover_subtitle : null
+    if (body.pdf_page_size !== undefined) {
+      if (!PDF_PAGE_SIZES.includes(body.pdf_page_size as (typeof PDF_PAGE_SIZES)[number]))
+        return reply
+          .code(400)
+          .send({ error: `pdf_page_size must be one of ${PDF_PAGE_SIZES.join(', ')}` })
+      patch.pdf_page_size = body.pdf_page_size
+    }
+    if (body.pdf_orientation !== undefined) {
+      if (!PDF_ORIENTATIONS.includes(body.pdf_orientation as (typeof PDF_ORIENTATIONS)[number]))
+        return reply
+          .code(400)
+          .send({ error: `pdf_orientation must be one of ${PDF_ORIENTATIONS.join(', ')}` })
+      patch.pdf_orientation = body.pdf_orientation
+    }
+    if (body.pdf_button_label !== undefined)
+      patch.pdf_button_label = body.pdf_button_label?.trim().slice(0, 100) || null
+
+    if (Object.keys(patch).length === 0 && body.is_active === undefined)
       return reply.code(400).send({ error: 'No fields to update' })
 
-    await db('nivaro_collection_layouts').where({ id }).update(patch)
+    await db.transaction(async (trx: Knex.Transaction) => {
+      if (Object.keys(patch).length > 0)
+        await trx('nivaro_collection_layouts').where({ id }).update(patch)
+      // is_active only changes through the activate rule (one default per
+      // type). An active layout moved to another type takes that type's
+      // default with it, so the new type never ends up with two.
+      const type = (patch.layout_type as string | undefined) ?? existing.layout_type
+      const typeChanged =
+        patch.layout_type !== undefined && patch.layout_type !== (existing.layout_type ?? 'grouped')
+      if (
+        body.is_active === true ||
+        (body.is_active === undefined && typeChanged && existing.is_active)
+      )
+        await activateLayout(trx, { id, collection: existing.collection, layout_type: type })
+      else if (body.is_active === false)
+        await trx('nivaro_collection_layouts').where({ id }).update({ is_active: 0 })
+    })
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
     updated.conditions = parseConditions(updated.conditions)
     updated.record_conditions = parseRecordConditions(updated.record_conditions)
@@ -942,7 +1112,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: updated })
   })
 
-  // DELETE /collection-layouts/:id — blocked if it is the only layout for the collection
+  // DELETE /collection-layouts/:id — blocked if it is the only layout for the
+  // collection, or while another layout or an addendum still points at it.
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
@@ -957,30 +1128,84 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (count <= 1)
       return reply.code(409).send({ error: 'Cannot delete the only layout for a collection' })
 
-    // If deleting the active layout, promote the next one of the SAME type first
-    // (activation is type-scoped — grouped and detail defaults are independent).
-    if (existing.is_active) {
-      const layoutType = existing.layout_type ?? 'grouped'
-      const next = await db('nivaro_collection_layouts')
-        .where({ collection: existing.collection, layout_type: layoutType })
+    // References first: the delete used to remove groups and assignments and
+    // only then fail on the addendum FK, leaving an empty layout behind.
+    const [addendumOf, childrenOf, addendums] = await Promise.all([
+      db('nivaro_collection_layouts')
+        .where({ addendum_layout_id: Number(id) })
         .whereNot({ id: Number(id) })
-        .orderBy('sort', 'asc')
-        .first('id')
-      if (next) {
-        await db('nivaro_collection_layouts')
-          .where({ collection: existing.collection, layout_type: layoutType })
-          .update({ is_active: 0 })
-        await db('nivaro_collection_layouts').where({ id: next.id }).update({ is_active: 1 })
-      }
+        .select('id', 'name'),
+      db('nivaro_collection_layouts')
+        .where({ parent_layout_id: Number(id) })
+        .whereNot({ id: Number(id) })
+        .select('id', 'name'),
+      db('nivaro_addendums')
+        .where({ addendum_layout_id: Number(id) })
+        .select('id', 'title', 'parent_collection', 'parent_id')
+        .limit(50)
+    ])
+    const references = [
+      ...(addendumOf as Array<{ id: number; name: string }>).map((r) => ({
+        kind: 'layout_addendum',
+        id: r.id,
+        label: r.name
+      })),
+      ...(childrenOf as Array<{ id: number; name: string }>).map((r) => ({
+        kind: 'layout_parent',
+        id: r.id,
+        label: r.name
+      })),
+      ...(
+        addendums as Array<{
+          id: string
+          title: string | null
+          parent_collection: string
+          parent_id: string
+        }>
+      ).map((r) => ({
+        kind: 'addendum',
+        id: r.id,
+        label: r.title || `Addendum on ${r.parent_collection} ${r.parent_id}`
+      }))
+    ]
+    if (references.length > 0) {
+      return reply.code(409).send({
+        error: 'This layout is still in use. Point these at another layout first.',
+        references
+      })
     }
 
-    await db('nivaro_layout_field_assignments')
-      .where({ layout_id: Number(id) })
-      .delete()
-    await db('nivaro_field_groups')
-      .where({ layout_id: Number(id) })
-      .delete()
-    await db('nivaro_collection_layouts').where({ id }).delete()
+    // One transaction: promote the next default, then assignments → groups →
+    // layout. Version history is kept (migration 456 dropped the cascade).
+    await db.transaction(async (trx: Knex.Transaction) => {
+      // Deleting the active layout promotes the next one of the SAME type
+      // (activation is type-scoped — grouped and detail defaults are independent).
+      // File layouts are independent PDF buttons — nothing to promote.
+      const layoutType = existing.layout_type ?? 'grouped'
+      if (existing.is_active && layoutType !== 'file') {
+        const next = await whereLayoutType(
+          trx('nivaro_collection_layouts').where({ collection: existing.collection }),
+          layoutType
+        )
+          .whereNot({ id: Number(id) })
+          .orderBy('sort', 'asc')
+          .first('id')
+        if (next) {
+          await activateLayout(trx, {
+            id: next.id,
+            collection: existing.collection,
+            layout_type: layoutType
+          })
+        }
+      }
+      await trx('nivaro_layout_field_assignments')
+        .where({ layout_id: Number(id) })
+        .delete()
+      await trx('nivaro_field_groups')
+        .where({ layout_id: Number(id) })
+        .delete()
+      await trx('nivaro_collection_layouts').where({ id }).delete()
+    })
     await logActivity({
       action: 'delete',
       user: req.user?.id,
@@ -999,11 +1224,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     // Activation is scoped to the layout's type: one active 'grouped' layout
     // (ItemEdit default) and one active 'detail' layout (drill-down default)
-    // coexist per collection.
-    await db('nivaro_collection_layouts')
-      .where({ collection: existing.collection, layout_type: existing.layout_type ?? 'grouped' })
-      .update({ is_active: 0 })
-    await db('nivaro_collection_layouts').where({ id }).update({ is_active: 1 })
+    // coexist per collection; file layouts may have several on.
+    await db.transaction((trx: Knex.Transaction) => activateLayout(trx, existing))
 
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
     await logActivity({
@@ -1547,7 +1769,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const source = await db('nivaro_collection_layouts').where({ id }).first()
     if (!source) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as { name: string; layout_type?: string }
+    const body = req.body as { name: string; slug?: string | null; layout_type?: string }
     if (!body.name) return reply.code(400).send({ error: 'name is required' })
     // A clone may land as another TYPE (grouped → summary is how a Summary
     // layout starts life: the same groups and fields, rendered read-only).
@@ -1573,13 +1795,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     for (const col of CLONE_CARRIED_COLUMNS) {
       if (col in source && source[col] !== undefined) carried[col] = source[col]
     }
+    const slug = await nextFreeSlug(source.collection, body.slug || body.name)
     try {
       await db('nivaro_collection_layouts').insert({
         ...carried,
         collection: source.collection,
         name: body.name,
         layout_type: body.layout_type ?? source.layout_type ?? 'grouped',
-        slug: null,
+        slug,
         is_active: 0,
         sort: maxSort + 1
       })

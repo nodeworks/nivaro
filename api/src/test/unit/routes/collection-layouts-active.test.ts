@@ -16,7 +16,13 @@ vi.mock('../../../middleware/authenticate.js', () => ({
 
 vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () => {}) }))
 
-vi.mock('../../../db/index.js', () => ({ db: vi.fn() }))
+// PATCH writes inside db.transaction(); the transaction hands back the same mock.
+vi.mock('../../../db/index.js', () => {
+  const d = vi.fn()
+  return {
+    db: Object.assign(d, { transaction: vi.fn(async (cb: (t: unknown) => unknown) => cb(d)) })
+  }
+})
 
 import { db } from '../../../db/index.js'
 import { authenticate } from '../../../middleware/authenticate.js'
