@@ -121,4 +121,32 @@ describe('HistoryPanel', () => {
     expect(keys).toContain(JSON.stringify(['layout-editor', 'bundle', 5]))
     expect(keys).toContain(JSON.stringify(['layout-editor', 'versions', 5]))
   })
+
+  it('refetches the last-save diff on remount instead of serving the cache', async () => {
+    let diff = DIFF
+    const client = {
+      request: vi.fn(async (cmd: Cmd) => {
+        if (cmd._path === '/collection-layouts/5/versions') return { data: VERSIONS }
+        if (cmd._path.endsWith('/diff')) return { data: diff }
+        return { data: null }
+      })
+    }
+    const qc = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 30_000 } }
+    })
+    const tree = (
+      <QueryClientProvider client={qc}>
+        <NivaroProvider client={client as never}>
+          <HistoryPanel layoutId={5} />
+        </NivaroProvider>
+      </QueryClientProvider>
+    )
+    await act(async () => root.render(tree))
+    await settle(() => host.textContent?.includes('Shipping') ?? false)
+    await act(async () => root.render(<div />))
+    diff = { ...DIFF, groups: { ...DIFF.groups, added: ['Billing'] } }
+    await act(async () => root.render(tree))
+    await settle(() => host.textContent?.includes('Billing') ?? false)
+    expect(host.textContent).toContain('Billing')
+  })
 })

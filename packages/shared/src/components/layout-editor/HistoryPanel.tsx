@@ -138,7 +138,9 @@ export function HistoryPanel({
           get(`/collection-layouts/${layoutId}/versions/${diffId}/diff`, { against: 'current' })
         )
         .then((r) => r.data),
-    enabled: diffId != null
+    enabled: diffId != null,
+    staleTime: 0,
+    refetchOnMount: 'always'
   })
 
   const restore = useMutation({
