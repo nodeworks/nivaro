@@ -1,10 +1,49 @@
-export { HistoryPanel } from './HistoryPanel'
+export { bundleToActiveLayout, type CanvasLayout, previewForRole } from './bundle-to-active'
 export { PdfCanvas, type PdfCanvasProps } from './canvases/PdfCanvas'
+export { DesignDropZone, DesignNode, designWrap, useDesignWrap } from './DesignNode'
+export {
+  DesignCanvas,
+  designReadOnlyClient,
+  isDesignAllowedRequest,
+  type RefusedWrite
+} from './design-canvas'
+export {
+  type DesignTarget,
+  type LayoutDesign,
+  LayoutDesignContext,
+  type LayoutDesignProp,
+  targetKey,
+  useLayoutDesign
+} from './design-context'
+export { HistoryPanel } from './HistoryPanel'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
   useLayoutEditorHost
 } from './host'
+export type { FormSettingsProps, InspectorProps } from './inspector-slot'
+export { LayoutEditor, type LayoutEditorProps } from './LayoutEditor'
+export {
+  type ChoiceLabels,
+  choiceLabelsFrom,
+  type DescribeField,
+  describeConditions,
+  describeReason,
+  describeRoles,
+  type ExplainResponse,
+  LAYOUT_TYPES,
+  LayoutOverview,
+  type LayoutOverviewProps,
+  type LayoutType,
+  type OverviewReason,
+  type OverviewReasonKind,
+  type OverviewReference,
+  type OverviewResponse,
+  type OverviewRow,
+  type OverviewSection,
+  overviewKeys,
+  segmentsText
+} from './overview'
 export {
   CollectionFieldPicker,
   CollectionFieldPickerPanel,
@@ -15,3 +54,11 @@ export {
 export { IconPicker } from './pickers/icon-picker'
 export { RelationLabel } from './pickers/relation-label'
 export { RelationPicker } from './pickers/relation-picker'
+export {
+  type ApplyOptions,
+  CONFLICT_MESSAGE,
+  type DraftStatus,
+  type LayoutDraft,
+  layoutDraftKeys,
+  useLayoutDraft
+} from './useLayoutDraft'

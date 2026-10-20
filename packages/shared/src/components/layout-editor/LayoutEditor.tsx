@@ -1,0 +1,364 @@
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { AlertTriangle, Plus } from 'lucide-react'
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
+import { useNivaroClient } from '../../context'
+import { get } from '../../lib/commands'
+import type { LayoutBundle } from '../../lib/layout-ops'
+import { cn } from '../../lib/utils'
+import { Skeleton } from '../ui/skeleton'
+import { AddPanel } from './AddPanel'
+import { bundleToActiveLayout, previewForRole } from './bundle-to-active'
+import { type DesignTarget, type LayoutDesign, targetKey } from './design-context'
+import { EditorDndProvider, useEditorDnd } from './dnd-adapter'
+import { EditorCanvas } from './EditorCanvas'
+import { EditorTopBar, type PreviewAs } from './EditorTopBar'
+import { useLayoutEditorHost } from './host'
+import { FormSettings, Inspector } from './inspector-slot'
+import { LayoutsRail } from './LayoutsRail'
+import { useInvalidateLayouts, useLayoutOverview, useOverviewFields } from './overview/overview-api'
+import { type LayoutDraft, layoutDraftKeys, parseBundle, useLayoutDraft } from './useLayoutDraft'
+
+/**
+ * The layout editor (spec §7.2): layouts rail and Add panel on the left, the
+ * real form in design mode in the centre, the inspector (or Form settings) on
+ * the right, and a top bar with Preview as, Show hidden, History, Undo / Redo
+ * and the save status. One editor for every host: the Layouts tab (`page`)
+ * and a record page's Edit layout mode (`overlay`, over the whole page).
+ */
+export interface LayoutEditorProps {
+  collection: string
+  layoutId: number
+  onBack: () => void
+  mode: 'page' | 'overlay'
+  /** Another layout was picked in the rail — hosts mirror it into the URL. */
+  onLayoutChange?: (layoutId: number) => void
+  /** Open the preview on this record (the record page that opened the editor). */
+  previewRecordId?: string | null
+  /** Shown for layouts this editor cannot draw yet (grid columns). */
+  onOpenClassic?: (layoutId: number) => void
+}
+
+const versionsKey = (id: number) => ['layout-editor', 'versions', id] as const
+
+const isTyping = (el: EventTarget | null) => {
+  const t = el as HTMLElement | null
+  if (!t?.closest) return false
+  return !!t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')
+}
+
+/** ⌘Z / ⇧⌘Z (Ctrl elsewhere) — never while typing, where the field's own undo wins. */
+function useUndoKeys(draft: LayoutDraft) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.key.toLowerCase() !== 'z') return
+      if (isTyping(e.target)) return
+      e.preventDefault()
+      if (e.shiftKey) draft.redo()
+      else draft.undo()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [draft.undo, draft.redo])
+}
+
+/** Unsent typing or a batch still in flight: warn before the tab closes, send what can be sent. */
+function useLeaveGuard(draft: LayoutDraft) {
+  const busy = draft.status === 'saving'
+  useEffect(() => {
+    if (!busy) return
+    const onBefore = (e: BeforeUnloadEvent) => {
+      draft.flush()
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', onBefore)
+    return () => window.removeEventListener('beforeunload', onBefore)
+  }, [busy, draft.flush])
+  useEffect(() => {
+    const onHide = () => draft.flush()
+    window.addEventListener('pagehide', onHide)
+    return () => window.removeEventListener('pagehide', onHide)
+  }, [draft.flush])
+}
+
+/** Every save refreshes History and whatever shows this collection's layouts. */
+function useSavedRefresh(draft: LayoutDraft, layoutId: number, collection: string) {
+  const qc = useQueryClient()
+  const invalidateLayouts = useInvalidateLayouts(collection)
+  const rev = draft.bundle?.rev
+  useEffect(() => {
+    if (draft.status !== 'saved' || !rev) return
+    void qc.invalidateQueries({ queryKey: versionsKey(layoutId) })
+    invalidateLayouts()
+  }, [draft.status, rev, layoutId, qc, invalidateLayouts])
+}
+
+function useParentBundle(parentId: number | null) {
+  const client = useNivaroClient()
+  return useQuery<LayoutBundle | null>({
+    queryKey: layoutDraftKeys.bundle(parentId ?? 0),
+    queryFn: async () =>
+      parseBundle(await client.request<unknown>(get(`/collection-layouts/${parentId}/bundle`))),
+    enabled: parentId != null,
+    staleTime: 30_000
+  })
+}
+
+function usePreviewRecord(collection: string, id: string | null) {
+  const client = useNivaroClient()
+  return useQuery<Record<string, unknown> | null>({
+    queryKey: ['layout-editor', 'preview-record', collection, id],
+    queryFn: () =>
+      client
+        .request<{ data: Record<string, unknown> | null }>(get(`/items/${collection}/${id}`))
+        .then((r) => r.data ?? null),
+    enabled: id != null,
+    staleTime: 30_000
+  })
+}
+
+/** The canvas, inside the drag-and-drop layer so it can read LayoutDesign.dnd. */
+function Canvas({
+  collection,
+  bundle,
+  parent,
+  preview,
+  record,
+  selected,
+  onSelect,
+  showHidden,
+  onOpenClassic
+}: {
+  collection: string
+  bundle: LayoutBundle
+  parent: LayoutBundle | null
+  preview: PreviewAs
+  record: Record<string, unknown> | null
+  selected: DesignTarget | null
+  onSelect: (t: DesignTarget) => void
+  showHidden: boolean
+  onOpenClassic?: () => void
+}) {
+  const dnd = useEditorDnd()
+  const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
+  const layout = useMemo(
+    () => previewForRole(canvas.active, preview.roleId, showHidden),
+    [canvas.active, preview.roleId, showHidden]
+  )
+  const design = useMemo<LayoutDesign>(
+    () => ({
+      selected,
+      onSelect,
+      showHidden,
+      inheritedFrom: (t) => canvas.inherited.get(targetKey(t)) ?? null,
+      dnd
+    }),
+    [selected, onSelect, showHidden, canvas.inherited, dnd]
+  )
+  return (
+    <EditorCanvas
+      collection={collection}
+      bundle={bundle}
+      layout={layout}
+      record={record}
+      design={design}
+      onOpenClassic={onOpenClassic}
+    />
+  )
+}
+
+const leftTab = (on: boolean) =>
+  cn(
+    'inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium transition-colors',
+    on
+      ? 'bg-accent text-slate-900 dark:text-foreground'
+      : 'text-slate-500 hover:bg-muted hover:text-slate-800 dark:text-muted-foreground dark:hover:text-foreground'
+  )
+
+export function LayoutEditor({
+  collection,
+  layoutId,
+  onBack,
+  mode,
+  onLayoutChange,
+  previewRecordId = null,
+  onOpenClassic
+}: LayoutEditorProps) {
+  const host = useLayoutEditorHost()
+  const [currentId, setCurrentId] = useState(layoutId)
+  useEffect(() => setCurrentId(layoutId), [layoutId])
+  const draft = useLayoutDraft(currentId)
+  const bundle = draft.bundle
+
+  const [left, setLeft] = useState<'layouts' | 'add'>('layouts')
+  const [panel, setPanel] = useState<'inspector' | 'settings'>('inspector')
+  const [selected, setSelected] = useState<DesignTarget | null>(null)
+  const [showHidden, setShowHidden] = useState(false)
+  const [preview, setPreview] = useState<PreviewAs>({
+    record: previewRecordId ? { id: previewRecordId, label: `#${previewRecordId}` } : null,
+    roleId: null
+  })
+
+  const { data: overview } = useLayoutOverview(collection)
+  const { data: fields = [] } = useOverviewFields(collection)
+  const row = overview?.rows.find((r) => r.layout_id === currentId)
+  const parentId =
+    bundle?.layout.parent_layout_id != null ? Number(bundle.layout.parent_layout_id) : null
+  const { data: parent = null } = useParentBundle(parentId)
+  const { data: record = null } = usePreviewRecord(collection, preview.record?.id ?? null)
+
+  useUndoKeys(draft)
+  useLeaveGuard(draft)
+  useSavedRefresh(draft, currentId, collection)
+
+  const onSelect = useCallback((t: DesignTarget) => {
+    setSelected(t)
+    setPanel('inspector')
+  }, [])
+
+  const openLayout = (id: number) => {
+    setPanel('inspector')
+    if (id === currentId) return
+    draft.flush()
+    setSelected(null)
+    setCurrentId(id)
+    onLayoutChange?.(id)
+  }
+
+  const layoutName = String(bundle?.layout.name ?? row?.name ?? '')
+  const layoutType = String(bundle?.layout.layout_type ?? row?.layout_type ?? 'grouped')
+  const warning = host.warning ?? overview?.warning ?? null
+
+  const body: ReactNode = (
+    <div
+      data-layout-editor=''
+      data-mode={mode}
+      className={cn(
+        'flex min-h-0 flex-col bg-slate-50 dark:bg-background',
+        mode === 'page' ? 'flex-1' : 'fixed inset-0 z-[90]'
+      )}
+    >
+      <EditorTopBar
+        collection={collection}
+        layoutId={currentId}
+        layoutName={layoutName}
+        layoutType={layoutType}
+        row={row}
+        fields={fields}
+        draft={draft}
+        preview={preview}
+        onPreview={setPreview}
+        showHidden={showHidden}
+        onShowHidden={setShowHidden}
+        onBack={onBack}
+      />
+      {warning && (
+        <div
+          role='note'
+          className='flex shrink-0 items-center gap-2 border-b border-amber-200 bg-amber-50 px-4 py-1.5 text-[12.5px] text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200'
+        >
+          <AlertTriangle className='h-3.5 w-3.5 shrink-0' />
+          {warning}
+        </div>
+      )}
+      <div className='flex min-h-0 flex-1 overflow-hidden'>
+        <aside className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
+          <div
+            role='tablist'
+            aria-label='Left panel'
+            className='flex shrink-0 items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
+          >
+            <button
+              type='button'
+              role='tab'
+              aria-selected={left === 'layouts'}
+              data-editor-tab='layouts'
+              className={leftTab(left === 'layouts')}
+              onClick={() => setLeft('layouts')}
+            >
+              Layouts
+            </button>
+            <button
+              type='button'
+              role='tab'
+              aria-selected={left === 'add'}
+              data-editor-tab='add'
+              className={leftTab(left === 'add')}
+              onClick={() => setLeft('add')}
+              disabled={!bundle}
+              data-tip='Add a field, section, panel or widget after the selection'
+            >
+              <Plus className='h-3.5 w-3.5' />
+              Add
+            </button>
+          </div>
+          <div className='min-h-0 flex-1 overflow-y-auto'>
+            {left === 'add' && bundle ? (
+              <AddPanel
+                bundle={bundle}
+                collection={collection}
+                selected={selected}
+                apply={draft.apply}
+                onSelect={onSelect}
+              />
+            ) : (
+              <LayoutsRail
+                collection={collection}
+                currentId={currentId}
+                onOpen={openLayout}
+                settingsOpen={panel === 'settings'}
+                onSettings={() => setPanel('settings')}
+              />
+            )}
+          </div>
+        </aside>
+        <main className='min-w-0 flex-1 overflow-y-auto'>
+          {bundle ? (
+            <EditorDndProvider bundle={bundle} apply={draft.apply}>
+              <Canvas
+                collection={collection}
+                bundle={bundle}
+                parent={parent}
+                preview={preview}
+                record={record}
+                selected={selected}
+                onSelect={onSelect}
+                showHidden={showHidden}
+                onOpenClassic={onOpenClassic ? () => onOpenClassic(currentId) : undefined}
+              />
+            </EditorDndProvider>
+          ) : draft.error ? (
+            <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
+          ) : (
+            <div className='flex flex-col gap-3 p-6'>
+              <Skeleton className='h-10 w-full rounded-lg' />
+              <Skeleton className='h-48 w-full rounded-lg' />
+            </div>
+          )}
+        </main>
+        <aside
+          data-editor-inspector=''
+          className='w-[320px] shrink-0 overflow-y-auto border-l border-slate-200 bg-white dark:border-border dark:bg-card'
+        >
+          {bundle &&
+            (panel === 'settings' ? (
+              <FormSettings bundle={bundle} apply={draft.apply} collection={collection} />
+            ) : (
+              <Inspector
+                bundle={bundle}
+                target={selected}
+                apply={draft.apply}
+                collection={collection}
+              />
+            ))}
+        </aside>
+      </div>
+    </div>
+  )
+
+  // Fixed under the page outlet would be offset by its transform: portal out.
+  return mode === 'overlay' && typeof document !== 'undefined'
+    ? createPortal(body, document.body)
+    : body
+}
