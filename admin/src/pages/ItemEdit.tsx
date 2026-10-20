@@ -611,7 +611,9 @@ export function ItemEditPage() {
           }
         })
         .then((r) => r.data.data)
-        .catch(() => null),
+        // The API answers 404 when a collection has no layout; only that is
+        // "no layout yet". Any other failure stays unknown (null).
+        .catch((e) => (e?.response?.status === 404 ? { layout: null } : null)),
     enabled: !!collection,
     staleTime: 0
   })

@@ -11,6 +11,7 @@ const state = vi.hoisted(() => ({
   user: null as { id: string; is_admin: boolean } | null,
   chunkLoads: 0,
   noLayout: false,
+  activeStatus: 0,
   requests: [] as Array<{ method: string; url: string }>
 }))
 
@@ -91,6 +92,25 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/api')>()
   const adapter: AxiosAdapter = async (config) => {
     state.requests.push({ method: (config.method ?? 'get').toUpperCase(), url: config.url ?? '' })
+    const status = String(config.url ?? '').startsWith('/collection-layouts/active')
+      ? state.activeStatus || (state.noLayout ? 404 : 0)
+      : 0
+    if (status) {
+      // Shaped like the real API: 404 { error: 'No layout found' }.
+      throw new axios.AxiosError(
+        `Request failed with status code ${status}`,
+        'ERR_BAD_REQUEST',
+        config as never,
+        null,
+        {
+          data: { error: status === 404 ? 'No layout found' : 'boom' },
+          status,
+          statusText: '',
+          headers: {},
+          config: config as never
+        } as never
+      )
+    }
     return { data: answer(config), status: 200, statusText: 'OK', headers: {}, config }
   }
   return { ...actual, api: axios.create({ baseURL: '/api', adapter }) }
@@ -152,6 +172,7 @@ beforeEach(async () => {
   state.requests.length = 0
   state.chunkLoads = 0
   state.noLayout = false
+  state.activeStatus = 0
   vi.resetModules()
   ItemEditPage = (await import('@/pages/ItemEdit')).ItemEditPage
   HostProvider = (await import('@nivaro/shared')).NivaroProvider
@@ -179,6 +200,20 @@ describe('record page Edit layout toggle', () => {
     const link = await screen.findByRole('link', { name: /edit layout/i })
     expect(link.getAttribute('href')).toBe('/data-model/orders?tab=groups')
     expect(state.chunkLoads).toBe(0)
+  })
+
+  it('does not offer the first-form link when the layout read fails with a 500', async () => {
+    state.user = { id: 'u1', is_admin: true }
+    state.activeStatus = 500
+    renderWith(<ItemEditPage />, HostProvider)
+    await screen.findByTestId('item-form')
+    await waitFor(() =>
+      expect(state.requests.some((r) => r.url === '/collection-layouts/active')).toBe(true)
+    )
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 50))
+    })
+    expect(screen.queryByRole('link', { name: /edit layout/i })).toBeNull()
   })
 
   it('shows Edit layout for admins', async () => {
@@ -266,6 +301,7 @@ describe('classic layout editor', () => {
     // The guard itself: a write made through admin's axios while the classic
     // view is open never leaves the browser.
     await expect(api.patch('/collection-layouts/7', { name: 'x' })).rejects.toThrow(/Read-only/)
+    await expect(api.post('/field-groups', { collection: 'orders' })).rejects.toThrow(/Read-only/)
     await expect(api.put('/collection-layouts/7/assignments', { assignments: [] })).rejects.toThrow(
       /Read-only/
     )
