@@ -1,21 +1,9 @@
 import { createContext, type ReactNode, useCallback, useContext, useMemo, useState } from 'react'
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Cell,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  Tooltip,
-  XAxis,
-  YAxis
-} from 'recharts'
 import { useNavigation, useOptionalNivaroClient } from '../../context'
 import { type GlossaryTerm, glossarySegments, useGlossary } from '../../lib/glossary'
 import { cn } from '../../lib/utils'
 import { AutolinkedText } from '../AutolinkedText'
+import { RechartsGate } from '../charts/RechartsGate'
 import { type AnswerFormat, chartOf, formatsFor, listOf, rowsOfBlock } from './answer-formats'
 import { GlossaryMark, useGlossaryHref } from './GlossaryText'
 
@@ -426,7 +414,17 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
       {spec.title && (
         <div className='mb-1 text-[0.9em] font-medium text-muted-foreground'>{spec.title}</div>
       )}
-      {spec.type === 'pie' ? (
+      <RechartsGate
+        fallback={
+          <div
+            className='animate-pulse rounded-md bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
+            style={{ width: w, maxWidth: '100%', height }}
+            aria-busy='true'
+          />
+        }
+      >
+        {({ Bar, BarChart, CartesianGrid, Cell, Line, LineChart, Pie, PieChart, Tooltip, XAxis, YAxis }) =>
+      spec.type === 'pie' ? (
         <PieChart width={w} height={height}>
           <Pie
             data={spec.data}
@@ -486,7 +484,9 @@ function ChartBlock({ spec }: { spec: ChartSpec }) {
           <Tooltip {...tip} formatter={(v) => fmt(Number(v))} />
           <Bar dataKey='value' fill='#0ea5e9' radius={[3, 3, 0, 0]} />
         </BarChart>
-      )}
+      )
+        }
+      </RechartsGate>
     </div>
   )
 }
