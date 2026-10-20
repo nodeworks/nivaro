@@ -43,6 +43,12 @@ interface InflightList {
 
 /** Older than this reads as long-running. */
 const SLOW_MS = 5000
+/**
+ * The body is a fixed box (three 59px rows, the rest scrolls): the list changes every poll, and
+ * a panel that grew and shrank with it pushed every panel below it up and down.
+ */
+const BODY = 'h-[180px]'
+const VISIBLE_ROWS = 3
 
 export function fmtAge(ms: number): string {
   if (!Number.isFinite(ms) || ms < 0) return '—'
@@ -104,20 +110,28 @@ export function InflightPanel() {
       hint='Requests this node has not finished · oldest first, with the SQL they are running'
       actions={
         list && list.total > list.rows.length ? (
-          <span className='text-[11.5px] text-[var(--tm-muted)]'>
+          <span className='text-[11.5px] tabular-nums text-[var(--tm-muted)]'>
             {list.rows.length} of {list.total}
+          </span>
+        ) : list && list.rows.length > VISIBLE_ROWS ? (
+          <span className='text-[11.5px] tabular-nums text-[var(--tm-muted)]'>
+            {list.rows.length} running · scroll for all
           </span>
         ) : null
       }
     >
-      {!list ? (
-        <p className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]'>Loading…</p>
-      ) : list.rows.length === 0 ? (
-        <p className='px-3.5 py-3 text-[12px] text-[var(--tm-muted)]' id='tm-inflight-empty'>
-          Nothing in flight — every request on this node has answered.
-        </p>
+      {!list || list.rows.length === 0 ? (
+        <div className={cn(BODY, 'flex items-center justify-center px-3.5')}>
+          {!list ? (
+            <p className='text-[12px] text-[var(--tm-muted)]'>Loading…</p>
+          ) : (
+            <p className='text-[12px] text-[var(--tm-muted)]' id='tm-inflight-empty'>
+              Nothing in flight — every request on this node has answered.
+            </p>
+          )}
+        </div>
       ) : (
-        <ul className='max-h-[340px] divide-y divide-[var(--tm-line-2)] overflow-auto'>
+        <ul className={cn(BODY, 'divide-y divide-[var(--tm-line-2)] overflow-auto')}>
           {list.rows.map((r) => {
             const slow = r.age_ms >= SLOW_MS
             const sql = r.running[0]

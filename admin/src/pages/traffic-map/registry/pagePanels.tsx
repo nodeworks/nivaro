@@ -17,7 +17,8 @@ import { byOrder, FeatureBoundary, type Registered } from './registry'
  *
  * From 1100px the panels pack as a masonry: each run of half-width panels splits into two
  * columns that end as level as possible (order kept inside each column), and a `wide` panel spans
- * both and starts below everything before it. A plain two-column grid sized every row to its
+ * both and starts below everything before it; the last card in each column is drawn down to the
+ * run's bottom so the two columns end flush. A plain two-column grid sized every row to its
  * tallest panel and left holes beside the short ones. A panel keeps its column while its content changes (live figures never make
  * panels hop); the packing is redone when a panel appears or disappears, or when redoing it
  * would save REPACK_SAVES_PX of height. Narrower screens (and jsdom) get one plain column.
@@ -40,6 +41,8 @@ interface Slot {
   start: number
   span: number
   col: Col | 'both'
+  /** Last in its column: drawn down to the bottom of its run so both columns end flush. */
+  fill?: boolean
 }
 interface Packed {
   slots: Record<string, Slot>
@@ -105,19 +108,56 @@ function pack(
 
   const tops: [number, number] = [0, 0]
   const slots: Record<string, Slot> = {}
+  let last: [string | null, string | null] = [null, null]
+  // the run's last panel in each column reaches the run's bottom: no ragged edge above a wide panel
+  const level = () => {
+    const end = Math.max(tops[0], tops[1])
+    for (const id of last) {
+      if (!id) continue
+      slots[id].span = end - slots[id].start
+      slots[id].fill = true
+    }
+    last = [null, null]
+    tops[0] = tops[1] = end
+  }
   for (const it of shown) {
     const span = it.h + GAP
     if (it.wide) {
-      const start = Math.max(tops[0], tops[1])
-      slots[it.id] = { start, span, col: 'both' }
-      tops[0] = tops[1] = start + span
+      level()
+      slots[it.id] = { start: tops[0], span, col: 'both' }
+      tops[0] = tops[1] = tops[0] + span
       continue
     }
     const col = cols[it.id]
     slots[it.id] = { start: tops[col], span, col }
     tops[col] += span
+    last[col] = it.id
   }
-  return { slots, cols, height: Math.max(0, Math.max(tops[0], tops[1]) - GAP) }
+  level()
+  return { slots, cols, height: Math.max(0, tops[0] - GAP) }
+}
+
+/**
+ * A panel's own height, ignoring any fill: the bottom of the card's last child (a filled card is
+ * taller than its content, and measuring that would feed the fill back into the packing).
+ */
+function naturalHeight(el: HTMLElement): number {
+  const card = el.firstElementChild
+  if (!card) return el.getBoundingClientRect().height
+  const top = card.getBoundingClientRect().top
+  let bottom = top
+  for (const c of card.children) {
+    const b =
+      c.getBoundingClientRect().bottom + (Number.parseFloat(getComputedStyle(c).marginBottom) || 0)
+    if (b > bottom) bottom = b
+  }
+  const cs = getComputedStyle(card)
+  return (
+    bottom -
+    top +
+    (Number.parseFloat(cs.paddingBottom) || 0) +
+    (Number.parseFloat(cs.borderBottomWidth) || 0)
+  )
 }
 
 function useTwoColumns(): boolean {
@@ -143,13 +183,15 @@ export function PagePanels() {
   const els = useRef(new Map<string, HTMLDivElement>())
   const kept = useRef<{ visible: string; cols: Record<string, Col> } | null>(null)
   const [packed, setPacked] = useState<Packed | null>(null)
+  const ro = useRef<ResizeObserver | null>(null)
+  const watched = useRef(new Set<Element>())
   const panelsRef = useRef(panels)
   panelsRef.current = panels
 
   const measure = useCallback(() => {
     const items = panelsRef.current.map((p) => {
       const el = els.current.get(p.id)
-      return { id: p.id, wide: !!p.wide, h: el ? Math.ceil(el.getBoundingClientRect().height) : 0 }
+      return { id: p.id, wide: !!p.wide, h: el ? Math.ceil(naturalHeight(el)) : 0 }
     })
     const visible = items
       .filter((i) => i.h > 0)
@@ -165,8 +207,23 @@ export function PagePanels() {
     return next
   }, [])
 
+  // a filled card does not resize when its content does, so the cards' children are watched too
+  const watch = useCallback(() => {
+    const obs = ro.current
+    if (!obs) return
+    const next = new Set<Element>()
+    for (const el of els.current.values()) {
+      next.add(el)
+      for (const c of el.firstElementChild?.children ?? []) next.add(c)
+    }
+    for (const t of watched.current) if (!next.has(t)) obs.unobserve(t)
+    for (const t of next) if (!watched.current.has(t)) obs.observe(t)
+    watched.current = next
+  }, [])
+
   const apply = useCallback(
     (sync: boolean) => {
+      watch()
       const next = measure()
       const same = (prev: Packed | null) =>
         !!prev && JSON.stringify(prev.slots) === JSON.stringify(next.slots)
@@ -174,7 +231,7 @@ export function PagePanels() {
       if (sync) flushSync(() => setPacked((prev) => (same(prev) ? prev : next)))
       else setPacked((prev) => (same(prev) ? prev : next))
     },
-    [measure]
+    [measure, watch]
   )
 
   useLayoutEffect(() => {
@@ -183,10 +240,13 @@ export function PagePanels() {
       setPacked(null)
       return
     }
+    ro.current = new ResizeObserver(() => apply(true))
     apply(false)
-    const ro = new ResizeObserver(() => apply(true))
-    for (const el of els.current.values()) ro.observe(el)
-    return () => ro.disconnect()
+    return () => {
+      ro.current?.disconnect()
+      ro.current = null
+      watched.current = new Set()
+    }
   }, [twoCols, apply])
 
   if (panels.length === 0) return null
@@ -218,7 +278,8 @@ export function PagePanels() {
         const style: CSSProperties = slot
           ? {
               gridColumn: slot.col === 'both' ? '1 / -1' : slot.col + 1,
-              gridRow: `${slot.start + 1} / span ${slot.span}`
+              gridRow: `${slot.start + 1} / span ${slot.span}`,
+              minHeight: slot.fill ? slot.span - GAP : undefined
             }
           : {
               position: 'absolute',
@@ -234,7 +295,7 @@ export function PagePanels() {
               if (el) els.current.set(p.id, el)
               else els.current.delete(p.id)
             }}
-            className='min-w-0 self-start'
+            className='flex min-w-0 flex-col self-start [&>*]:flex-1'
             style={style}
           >
             <FeatureBoundary id={p.id}>
