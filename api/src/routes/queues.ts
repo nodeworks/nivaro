@@ -5,17 +5,22 @@ import { requireAuth } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { builtinAllowed } from '../services/bulk-actions.js'
 import { parseJson, toJsonStr } from '../services/pipeline-engine.js'
+import { canUserReadQueue } from '../services/queue-access.js'
 import { breachedCountsByQueue } from '../services/queue-materialization-read.js'
-import type { QueueRow, QueueScope, QueueSourceRow, QueueSourceType } from '../services/queues.js'
+import type {
+  QueueItemsQuery,
+  QueueRow,
+  QueueSourceRow,
+  QueueSourceType
+} from '../services/queues.js'
 import {
   computeAvailableExtraFields,
   computeExtraFieldMeta,
   fetchQueueItems,
   fetchQueueWorkload,
   isDisplayOnlySourceChange,
-  isQueueGroupAttribute,
   normalizeDisplayConfig,
-  parsePaginationParams,
+  parseQueueItemsQuery,
   validateAggregates,
   validateColumnFormats
 } from '../services/queues.js'
@@ -62,11 +67,7 @@ function formatSource(row: QueueSourceRow) {
  * authenticated user" just because is_shared=true).
  */
 export function canReadQueue(queue: QueueRow, req: FastifyRequest): boolean {
-  if (req.isAdmin) return true
-  if (queue.owner === req.user!.id) return true
-  if (!queue.is_shared) return false
-  const userRole = req.user!.role ?? null
-  return queue.role_id === null || queue.role_id === userRole
+  return canUserReadQueue(queue, req.user!, !!req.isAdmin)
 }
 
 const SOURCE_TYPES: QueueSourceType[] = [
@@ -1273,51 +1274,10 @@ export async function queuesRoutes(app: FastifyInstance) {
   //   only for group_key, paged like any other request.
   app.get('/:id/items', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const {
-      scope = 'all',
-      sort = '',
-      filters,
-      page: pageRaw,
-      limit: limitRaw,
-      group_by: groupBy,
-      group_key: groupKey,
-      group_sums: groupSums
-    } = req.query as {
-      scope?: string
-      sort?: string
-      filters?: string
-      page?: string
-      limit?: string
-      group_by?: string
-      group_key?: string
-      group_sums?: string
-    }
-    if (!['mine', 'unowned', 'all', 'claimed'].includes(scope)) {
-      return reply.code(400).send({ error: 'scope must be mine, unowned, all, or claimed' })
-    }
-    if (groupBy && !isQueueGroupAttribute(groupBy)) {
-      return reply.code(400).send({ error: `cannot group by ${groupBy}` })
-    }
-    const group = groupBy
-      ? {
-          by: groupBy,
-          key: groupKey ?? null,
-          sums: (groupSums ?? '')
-            .split(',')
-            .map((p) => p.trim().replace(/^extra\./, ''))
-            .filter((p) => /^[\w.]+$/.test(p))
-            .slice(0, 12)
-        }
-      : undefined
-
-    let parsedFilters: Record<string, unknown> = {}
-    if (filters) {
-      try {
-        parsedFilters = JSON.parse(filters)
-      } catch {
-        return reply.code(400).send({ error: 'filters must be valid JSON' })
-      }
-    }
+    // One parser for the route and the cache warm's replayed first pages.
+    const parsed = parseQueueItemsQuery(req.query as QueueItemsQuery)
+    if (!parsed.ok) return reply.code(400).send({ error: parsed.error })
+    const { scope, sort, filters: parsedFilters, group, page, limit } = parsed.value
 
     const queue = (await db<QueueRow>('nivaro_queues').where({ id }).first()) as
       | QueueRow
@@ -1327,20 +1287,12 @@ export async function queuesRoutes(app: FastifyInstance) {
       return reply.code(403).send({ error: 'Forbidden' })
     }
 
-    // Pagination is opt-in: only applied when the caller actually sent a page
-    // or limit param. The admin Kanban view shares this same endpoint but
-    // needs the full matching set (it renders every item as a card grouped
-    // by state), so it omits both params to get everything, same as before
-    // this feature existed.
-    const paginationRequested = pageRaw !== undefined || limitRaw !== undefined
-    const { page, limit } = parsePaginationParams(pageRaw, limitRaw)
-
-    const result = await fetchQueueItems(id, req.user!, scope as QueueScope, {
+    const result = await fetchQueueItems(id, req.user!, scope, {
       sort,
       filters: parsedFilters,
       withUnseen: true,
       group,
-      ...(paginationRequested ? { page, limit } : {}),
+      ...(page !== undefined ? { page, limit } : {}),
       readGate: {
         signal: clientGoneSignal(reply.raw),
         onWait: (ms) => gateServerTiming(reply, { waitedMs: ms })
@@ -1356,7 +1308,7 @@ export async function queuesRoutes(app: FastifyInstance) {
                 id,
                 req.user!,
                 !!req.isAdmin,
-                scope as QueueScope,
+                scope,
                 parsedFilters as Record<string, unknown> | undefined
               )
             )

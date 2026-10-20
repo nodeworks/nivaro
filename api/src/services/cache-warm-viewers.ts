@@ -74,6 +74,8 @@ export interface WarmViewer {
   isAdmin: boolean
   /** 'admin', '' (no restriction), or the sorted restrict allowances. */
   signature: string
+  /** nivaro_users.role — the queue phase groups by it (policies + row filters). */
+  role?: string | null
 }
 
 export interface WarmWidgetDef {

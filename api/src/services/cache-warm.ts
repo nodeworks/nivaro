@@ -33,10 +33,23 @@
  * no tenant prefix there, and a boot run has no tenant context).
  *
  * The owner-load report (viewer-independent, uncached, a pure read) is run
- * once when it was used. Queue worklists are NOT warmed: fetchQueueItems can
- * promote materialization and record empty-queue explanations (writes).
+ * once when it was used. Queue worklists: the queue phase
+ * (cache-warm-queues.ts) replays the most-used FIRST pages as one viewer per
+ * (queue, access signature) through fetchQueueItems with `readOnly: true` —
+ * the one write on that path (the materialization promotion) is skipped, and
+ * nothing it computes is stored or served (there is no queue result cache;
+ * it warms the buffer pool, plan cache and the read path's own caches). Same
+ * rules as the viewer phase: usage-ranked runs only, never in cloud mode.
  */
 import type { Redis } from 'ioredis'
+import {
+  type QueuePhaseDeps,
+  type QueueUsageLogRow,
+  type QueueWarmSummary,
+  queueUsageFromLog,
+  runQueueTargets,
+  selectQueueTargets
+} from './cache-warm-queues.js'
 import {
   CACHE_WARM_MAX_VIEWERS,
   pickViewerTargets,
@@ -213,6 +226,8 @@ export interface CacheWarmSummary {
   targets: number
   /** Widget renders + scoped execute calls, warmed as their viewers. */
   viewers?: ViewerWarmSummary
+  /** Queue worklist first pages, read as one viewer per (queue, access signature). */
+  queues?: QueueWarmSummary
   /** Extension warmers (ctx.cache.registerWarm). */
   warmers?: WarmerOutcome[]
 }
@@ -259,6 +274,8 @@ export interface CacheWarmOptions {
   deps?: Partial<CacheWarmDeps>
   /** false = skip the viewer phase. */
   viewers?: Partial<ViewerPhaseDeps> | false
+  /** false = skip the queue phase. */
+  queues?: Partial<QueuePhaseDeps> | false
   /** false = skip extension warmers; or a gate around each one (tests). */
   warmers?: false | { gate?: <T>(fn: () => Promise<T>) => Promise<T> }
   /** Defaults to CLOUD_META_DB_URL being set. */
@@ -408,7 +425,8 @@ const defaultViewerDeps: ViewerPhaseDeps = {
         return {
           id: String(u.id),
           isAdmin,
-          signature: scopeSignature(isAdmin, byUser.get(String(u.id).toLowerCase()) ?? [])
+          signature: scopeSignature(isAdmin, byUser.get(String(u.id).toLowerCase()) ?? []),
+          role: u.role ?? null
         }
       })
     } catch {
@@ -455,6 +473,84 @@ const defaultViewerDeps: ViewerPhaseDeps = {
   async gate(flightKey, fn) {
     const { sharedGatedRead } = await import('./read-gate.js')
     return sharedGatedRead(flightKey, 'cache-warm', fn, { label: 'cache-warm' })
+  }
+}
+
+/**
+ * Seven days of first-page queue reads (GET /api/queues/:id/items) by path,
+ * query string and person — its own scan (the query column is not part of
+ * the shared one), memoized for 5 minutes. Development instances excluded.
+ */
+const queueUsageMemo = new Map<string, { at: number; p: Promise<QueueUsageLogRow[] | null> }>()
+function queueApiLogUsage(since: Date): Promise<QueueUsageLogRow[] | null> {
+  const k = since.toISOString().slice(0, 15)
+  const hit = queueUsageMemo.get(k)
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.p
+  const p = (async () => {
+    try {
+      const { db } = await import('../db/index.js')
+      const { runLongSql } = await import('./run-long.js')
+      const { instanceScope } = await import('./api-log-instances.js')
+      const scope = await instanceScope({})
+      const qb = db('nivaro_api_logs')
+        .where('created_at', '>=', since.toISOString().slice(0, 19))
+        .where('path', 'like', '/api/queues/%/items')
+        .where('method', 'GET')
+        .where('status', '<', 400)
+      const sql = scope
+        .apply(qb)
+        .groupBy('path', 'query', 'user')
+        .select('path', 'query', 'user')
+        .count({ n: '*' })
+        .toQuery()
+      return await runLongSql<QueueUsageLogRow>(sql, { timeoutMs: 60_000 })
+    } catch {
+      return null
+    }
+  })()
+  queueUsageMemo.clear()
+  queueUsageMemo.set(k, { at: Date.now(), p })
+  return p
+}
+
+/** The route's own parser over a logged query string. */
+async function queueQueryParser() {
+  const { parseQueueItemsQuery } = await import('./queues.js')
+  return (q: Record<string, string>) => {
+    const r = parseQueueItemsQuery(q)
+    return r.ok ? r.value : null
+  }
+}
+
+const defaultQueueDeps: QueuePhaseDeps = {
+  async loadUsage(since) {
+    const rows = await queueApiLogUsage(since)
+    return rows ? queueUsageFromLog(rows) : null
+  },
+  loadViewers: (ids) => defaultViewerDeps.loadViewers(ids),
+  async run(t, signal) {
+    const { db } = await import('../db/index.js')
+    const { canUserReadQueue } = await import('./queue-access.js')
+    const { fetchQueueItems } = await import('./queues.js')
+    // The person as the request would hold them: their nivaro_users row.
+    const user = await db('nivaro_users').where({ id: t.as.id, status: 'active' }).first()
+    if (!user) return 'skipped'
+    const queue = await db('nivaro_queues').where({ id: t.queueId }).first()
+    // The route's gates: 404, then canReadQueue (the only queue visibility gate).
+    if (!queue || !canUserReadQueue(queue, user, t.as.isAdmin)) return 'skipped'
+    const p = t.parsed
+    await fetchQueueItems(t.queueId, user, p.scope, {
+      sort: p.sort,
+      filters: p.filters,
+      withUnseen: true,
+      group: p.group,
+      ...(p.page !== undefined ? { page: p.page, limit: p.limit } : {}),
+      // Never write (skips the materialization promotion); every source read
+      // holds its own heavy-read slot, counted against the warm.
+      readOnly: true,
+      readGate: { signal, who: 'cache-warm' }
+    })
+    return 'ok'
   }
 }
 
@@ -622,12 +718,21 @@ export interface CacheWarmPlan {
     people: number
     runs: number
   }>
+  /** Queue phase: per (queue, access signature), the replayed first page. */
+  queues?: Array<{
+    queue: string
+    signature: string
+    people: number
+    hits: number
+    as: string
+    query: string
+  }>
   warmers?: string[]
 }
 
 /** What a run would warm (the cron's dry run): slugs and how many param sets each. */
 export async function planCacheWarm(
-  opts: Pick<CacheWarmOptions, 'only' | 'deps' | 'viewers' | 'cloud'> = {}
+  opts: Pick<CacheWarmOptions, 'only' | 'deps' | 'viewers' | 'queues' | 'cloud'> = {}
 ): Promise<CacheWarmPlan> {
   const deps = { ...defaultDeps, ...opts.deps }
   const now = deps.now()
@@ -673,6 +778,22 @@ export async function planCacheWarm(
       agg.set(k, a)
     }
     plan.viewers = [...agg.values()].map(({ sigs, ...a }) => ({ ...a, signatures: sigs.size }))
+  }
+  if (opts.queues !== false) {
+    const qdeps = { ...defaultQueueDeps, ...(opts.queues || {}) }
+    const qt = await selectQueueTargets(
+      qdeps,
+      new Date(now - USAGE_DAYS * 86_400_000),
+      queueQueryParser
+    ).catch(() => [])
+    plan.queues = qt.map((t) => ({
+      queue: t.queueId,
+      signature: t.signature,
+      people: t.members,
+      hits: t.hits,
+      as: t.as.id,
+      query: t.query
+    }))
   }
   const { listCacheWarmers } = await import('./cache-warmers.js')
   plan.warmers = listCacheWarmers().map((w) => w.id)
@@ -804,6 +925,22 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
       /* the viewer phase never fails the warm */
     }
   }
+  // Queue worklists' first pages, read-only, as one viewer per (queue, access
+  // signature) — same rules as the viewer phase (no tenant context at boot).
+  if (!daily && !cloud && opts.queues !== false) {
+    const qdeps = { ...defaultQueueDeps, ...(opts.queues || {}) }
+    try {
+      const qt = await selectQueueTargets(
+        qdeps,
+        new Date(deps.now() - USAGE_DAYS * 86_400_000),
+        queueQueryParser
+      )
+      summary.queues = await runQueueTargets(qt, { deadline, now: deps.now, run: qdeps.run })
+      if (summary.queues.budgetSpent) summary.budgetSpent = true
+    } catch {
+      /* the queue phase never fails the warm */
+    }
+  }
   if (!daily && !cloud && opts.warmers !== false) {
     const gate =
       opts.warmers?.gate ??
@@ -818,9 +955,13 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
   summary.ms = deps.now() - started
   const v = summary.viewers
   const w = summary.warmers ?? []
+  const qs = summary.queues
   const extra = [
     v
       ? `; viewers: ${v.warmed} warmed (${v.cached} cached, ${v.joined} joined) for ${v.signatures} scope signature(s), ${v.skipped} skipped, ${v.failed} failed of ${v.targets}`
+      : '',
+    qs
+      ? `; queues: ${qs.warmed} first page(s) read for ${qs.signatures} access signature(s), ${qs.skipped} skipped, ${qs.failed} failed of ${qs.targets}`
       : '',
     w.length
       ? `; extension warmers: ${w.filter((x) => x.status === 'ok').length} ok, ${w.filter((x) => x.status === 'failed').length} failed, ${w.filter((x) => x.status === 'timeout').length} timed out, ${w.filter((x) => x.status === 'skipped').length} skipped`
@@ -853,6 +994,9 @@ export async function warmMetadata(limit = 15): Promise<number> {
     .toQuery()
   const rows = await runLongSql<{ collection: string }>(sql, { timeoutMs: 30_000 }).catch(() => [])
   for (const r of rows) await getFields(r.collection).catch(() => [])
+  // The queue read path's per-process caches (cache-warm-queues.ts).
+  const { warmQueueReadCaches } = await import('./cache-warm-queues.js')
+  await warmQueueReadCaches().catch(() => 0)
   return rows.length
 }
 

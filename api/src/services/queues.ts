@@ -1021,6 +1021,79 @@ export function parsePaginationParams(
   return { page, limit }
 }
 
+export interface QueueItemsQuery {
+  scope?: string
+  sort?: string
+  filters?: string
+  page?: string
+  limit?: string
+  group_by?: string
+  group_key?: string
+  group_sums?: string
+}
+
+export interface ParsedQueueItemsQuery {
+  scope: QueueScope
+  sort: string
+  filters: Record<string, unknown>
+  group?: { by: string; key: string | null; sums: string[] }
+  /** Present only when the caller sent page or limit (pagination is opt-in). */
+  page?: number
+  limit?: number
+}
+
+/**
+ * GET /queues/:id/items' query string → fetchQueueItems options. The route
+ * and the cache warm (cache-warm-queues.ts, replaying logged first pages)
+ * share it, so a warmed read is the exact request a viewer sends.
+ */
+export function parseQueueItemsQuery(
+  q: QueueItemsQuery
+): { ok: true; value: ParsedQueueItemsQuery } | { ok: false; error: string } {
+  const scope = q.scope ?? 'all'
+  if (!['mine', 'unowned', 'all', 'claimed'].includes(scope)) {
+    return { ok: false, error: 'scope must be mine, unowned, all, or claimed' }
+  }
+  if (q.group_by && !isQueueGroupAttribute(q.group_by)) {
+    return { ok: false, error: `cannot group by ${q.group_by}` }
+  }
+  const group = q.group_by
+    ? {
+        by: q.group_by,
+        key: q.group_key ?? null,
+        sums: (q.group_sums ?? '')
+          .split(',')
+          .map((p) => p.trim().replace(/^extra\./, ''))
+          .filter((p) => /^[\w.]+$/.test(p))
+          .slice(0, 12)
+      }
+    : undefined
+  let filters: Record<string, unknown> = {}
+  if (q.filters) {
+    try {
+      filters = JSON.parse(q.filters)
+    } catch {
+      return { ok: false, error: 'filters must be valid JSON' }
+    }
+  }
+  // Pagination is opt-in: only applied when the caller actually sent a page
+  // or limit param. The admin Kanban view shares this same endpoint but
+  // needs the full matching set (it renders every item as a card grouped
+  // by state), so it omits both params to get everything.
+  const paginationRequested = q.page !== undefined || q.limit !== undefined
+  const { page, limit } = parsePaginationParams(q.page, q.limit)
+  return {
+    ok: true,
+    value: {
+      scope: scope as QueueScope,
+      sort: q.sort ?? '',
+      filters,
+      ...(group ? { group } : {}),
+      ...(paginationRequested ? { page, limit } : {})
+    }
+  }
+}
+
 export function computeStats(items: QueueItem[]): QueueStats {
   const by_state: Record<string, number> = {}
   let unowned = 0
@@ -2028,7 +2101,13 @@ export async function resolveCollectionSource(
 
   let ids: string[]
   try {
-    const q = db(source.collection).select('id')
+    // ORDER BY the primary key: without it SQL Server returns the matches in
+    // whatever order the plan happens to produce (a parallel scan on the
+    // Workflows queue differed run to run), and every later step keeps this
+    // order — the unsorted page, the sanity-ceiling cut and the sort's input.
+    // Two identical unsorted requests paged rows twice or never (#503 only
+    // fixed sorted reads).
+    const q = db(source.collection).select('id').orderBy('id')
     applyQueueConditions(q as unknown as ConditionBuilder, conditions)
     applyQueueGate(q, gate, user)
     if (pushedDownState) {
@@ -2091,7 +2170,7 @@ export async function resolveCollectionSource(
     if (wanted.length > 0) {
       // Candidates still have to satisfy the source's own field conditions.
       try {
-        const cq = db(source.collection).select('id').whereIn('id', wanted)
+        const cq = db(source.collection).select('id').whereIn('id', wanted).orderBy('id')
         applyQueueConditions(cq as unknown as ConditionBuilder, conditions)
         applyQueueGate(cq, gate, user)
         const extra = (await cq) as Array<{ id: string | number }>
@@ -2553,6 +2632,8 @@ export async function resolveAddendumsSource(
       's.color as state_color'
     )
     .orderBy('a.created_at', 'asc')
+    // Ties on created_at break on the key, so unsorted pages are stable.
+    .orderBy('a.id', 'asc')
   if (opts.onlyIds) {
     if (opts.onlyIds.length === 0) return empty
     q.whereIn('a.id', opts.onlyIds)
@@ -2660,6 +2741,7 @@ export async function resolveTasksSource(
     .leftJoin('nivaro_users as u', 't.assignee', 'u.id')
     .whereIn('t.status', ['open', 'in_progress'])
     .orderBy('t.created_at', 'asc')
+    .orderBy('t.id', 'asc')
     .select(
       't.id',
       't.title',
@@ -2750,6 +2832,7 @@ export async function resolveApprovalsSource(
   const rows = (await db('nivaro_approval_instances as i')
     .where('i.status', 'pending')
     .orderBy('i.created_at', 'asc')
+    .orderBy('i.id', 'asc')
     .select(
       'i.id',
       'i.collection',
@@ -2859,6 +2942,8 @@ export async function resolveOwnedBySource(
       .where((qb) => qb.whereNotNull('b.collection').orWhere('wi.collection', ADDENDUM_COLLECTION))
       .whereNotNull('wi.current_state')
       .whereNull('wi.completed_at')
+      // A stable scan order: the ceiling cut and the unsorted rows follow it.
+      .orderBy('wi.id')
       .select(
         'wi.id as instance_id',
         'wi.collection',
@@ -2990,7 +3075,16 @@ export async function fetchQueueItems(
     group?: { by: string; key?: string | null; sums?: string[] }
     /** #2452 — run a LIVE (non-materialized) source fan-out through the
      *  heavy-read gate; request paths pass it, background work does not. */
-    readGate?: { signal?: AbortSignal; onWait?: (ms: number) => void }
+    readGate?: {
+      signal?: AbortSignal
+      onWait?: (ms: number) => void
+      /** Whose share of the gate the slots count against; default the viewer. */
+      who?: string
+    }
+    /** Never write: skip the materialization promotion a large live match
+     *  enqueues (the cache warm reads as a viewer and must leave no trace).
+     *  The rows returned are identical — promotion only affects later reads. */
+    readOnly?: boolean
   } = {}
 ): Promise<{
   items: QueueItem[]
@@ -3096,7 +3190,7 @@ export async function fetchQueueItems(
     'queue:resolve-sources',
     () =>
       withReadGateEach(
-        user.id,
+        options.readGate?.who ?? user.id,
         sources.map((source) => () => {
           if (source.type === 'collection') return resolveCollectionSource(source, user, ceiling)
           if (source.type === 'tasks') return resolveTasksSource(ceiling)
@@ -3112,7 +3206,7 @@ export async function fetchQueueItems(
   const truncated = results.some((r) => r.truncated)
 
   const summedMatchedCount = results.reduce((sum, r) => sum + r.matchedCount, 0)
-  if (summedMatchedCount > PROMOTION_THRESHOLD) {
+  if (summedMatchedCount > PROMOTION_THRESHOLD && !options.readOnly) {
     const queue = (await db('nivaro_queues').where({ id: queueId }).first()) as
       | { materialized: boolean }
       | undefined

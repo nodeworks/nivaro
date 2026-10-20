@@ -48,6 +48,13 @@ function makeDbChain(result: unknown) {
   return chain
 }
 
+/** The chain the fake db handed out for `table` (first call). */
+function chainFor(table: string): ReturnType<typeof makeDbChain> {
+  const m = vi.mocked(db as unknown as (t: string) => unknown).mock
+  const i = m.calls.findIndex((c) => c[0] === table)
+  return m.results[i]?.value as ReturnType<typeof makeDbChain>
+}
+
 function source(overrides: Partial<QueueSourceRow> = {}): QueueSourceRow {
   return {
     id: 1,
@@ -165,7 +172,9 @@ describe('resolveCollectionSource — state_values filters the full match set, n
     const result = await resolveCollectionSource(source(), makeAdminUser())
 
     expect(articlesChain.whereExists).toHaveBeenCalledTimes(1)
-    expect(result.items.map((i) => i.item_id).sort()).toEqual(['2', '4'])
+    // The ids query is ordered by the key: unsorted pages are stable run to run.
+    expect(articlesChain.orderBy).toHaveBeenCalledWith('id')
+    expect(result.items.map((i) => i.item_id)).toEqual(['2', '4'])
     expect(result.matchedCount).toBe(2)
     expect(result.truncated).toBe(false)
   })
@@ -193,6 +202,11 @@ describe('resolveTasksSource', () => {
     })
 
     const result = await resolveTasksSource()
+    // created_at ties break on the key.
+    expect(chainFor('nivaro_tasks as t').orderBy.mock.calls).toEqual([
+      ['t.created_at', 'asc'],
+      ['t.id', 'asc']
+    ])
     expect(result.items).toHaveLength(1)
     expect(result.matchedCount).toBe(1)
     expect(result.truncated).toBe(false)
@@ -251,6 +265,8 @@ describe('resolveOwnedByMeSource', () => {
     )
 
     const result = await resolveOwnedByMeSource('me')
+    // A stable scan order: the ceiling cut and the unsorted rows follow it.
+    expect(chainFor('nivaro_workflow_instances as wi').orderBy).toHaveBeenCalledWith('wi.id')
     expect(result.items.map((i) => i.item_id)).toEqual(['1'])
     expect(result.matchedCount).toBe(2)
     expect(result.truncated).toBe(false)

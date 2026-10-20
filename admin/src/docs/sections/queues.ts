@@ -40,6 +40,7 @@ export const queuesGuide: DocSection = {
         'GET /api/queues/:id/items fans out to each active source, normalizes results into a common shape (collection, item_id, label, state, owners, sla_status, at_risk, aging_hours, url), merges and dedupes by collection+item_id, and returns both the item list and aggregate stats.',
         'SLA status, at-risk flags, and pipeline owners for collection sources reuse the same batch logic that powers CollectionBrowser — computeStatusBatch, evaluateRows, and resolveStateOwners — so a queue never diverges from what you would see filtering that collection directly.',
         'Scope tabs (My Items / No Owners / All Items) are query params on the same endpoint, applied after the merge.',
+        'Page order is stable. With no sort, rows come in source order, then by record id within each source. Tasks, approvals and addendums come oldest first, then by id. Rows that tie on the sort column are ordered by collection, then record id. So two identical requests return the same pages, and paging through a queue shows every row once.',
         'Every new queue is seeded with one owned_by_me source, so a useful personal worklist exists with zero configuration.'
       ]
     },

@@ -933,6 +933,9 @@ export async function fetchMaterializedQueueItems(
           'CASE WHEN EXISTS (SELECT 1 FROM nivaro_queue_item_owners qio WHERE qio.queue_item_id = qi.id) THEN 1 ELSE 0 END AS has_owner'
         )
       )
+    // No sort key (an sla_status / aging filter alone): the JS step keeps the
+    // scan's order, so the scan needs one — the cache row id, as the SQL path.
+    if (!sortKey) narrowQuery.orderBy('qi.id', 'asc')
     if (sortKey.startsWith('extra.')) {
       narrowQuery.select(
         db.raw('JSON_VALUE(qi.extra, ?) AS sort_val', [

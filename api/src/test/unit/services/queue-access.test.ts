@@ -21,7 +21,7 @@ vi.mock('../../../db/index.js', () => ({
 vi.mock('../../../services/permissions.js', () => perms)
 vi.mock('../../../services/user-scopes.js', () => scopes)
 
-const { applyQueueGate, applyQueueGatesToCache, queueGateFor } = await import(
+const { applyQueueGate, applyQueueGatesToCache, canUserReadQueue, queueGateFor } = await import(
   '../../../services/queue-access.js'
 )
 const user = { id: 'u1', role: 'r1' } as never
@@ -41,7 +41,10 @@ describe('queue row access', () => {
     perms.getRowFilter.mockResolvedValue([{ field: 'owner', op: 'eq', value: '$CURRENT_USER' }])
     expect((await queueGateFor(user, 'orders'))?.rowFilter).toBeTruthy()
     perms.getRowFilter.mockResolvedValue(null)
-    scopes.getUserScopeEnforcement.mockResolvedValue({ filters: [{ hops: [], ids: [4] }], deny: false })
+    scopes.getUserScopeEnforcement.mockResolvedValue({
+      filters: [{ hops: [], ids: [4] }],
+      deny: false
+    })
     expect((await queueGateFor(user, 'orders'))?.scopes.filters).toHaveLength(1)
   })
 
@@ -49,13 +52,22 @@ describe('queue row access', () => {
     const q = knex('orders').select('id')
     applyQueueGate(
       q,
-      { collection: 'orders', deny: false, rowFilter: [{}], scopes: { filters: [{}], deny: false } } as never,
+      {
+        collection: 'orders',
+        deny: false,
+        rowFilter: [{}],
+        scopes: { filters: [{}], deny: false }
+      } as never,
       user
     )
     expect(q.toSQL().sql).toContain('[owner] = ?')
     expect(q.toSQL().sql).toContain('[orders].[zone] in (?)')
     const denied = knex('orders').select('id')
-    applyQueueGate(denied, { collection: 'orders', deny: true, rowFilter: null, scopes: NONE }, user)
+    applyQueueGate(
+      denied,
+      { collection: 'orders', deny: true, rowFilter: null, scopes: NONE },
+      user
+    )
     expect(denied.toSQL().sql).toContain('1 = 0')
   })
 
@@ -70,7 +82,12 @@ describe('queue row access', () => {
     applyQueueGatesToCache(
       qb,
       [
-        { collection: 'orders', deny: false, rowFilter: null, scopes: { filters: [{}], deny: false } },
+        {
+          collection: 'orders',
+          deny: false,
+          rowFilter: null,
+          scopes: { filters: [{}], deny: false }
+        },
         { collection: 'invoices', deny: true, rowFilter: null, scopes: { filters: [], deny: true } }
       ] as never,
       user
@@ -81,5 +98,17 @@ describe('queue row access', () => {
     )
     expect(sql).toContain('not [qi].[collection] = ?')
     expect(bindings).toEqual(['q1', 'orders', 4, 'invoices'])
+  })
+})
+
+describe('canUserReadQueue (the queue visibility gate, request or cache warm)', () => {
+  const u = { id: 'u1', role: 'R1' }
+  it('admins and owners always; others only a shared queue open to all or to their role', () => {
+    expect(canUserReadQueue({ owner: 'x', is_shared: false, role_id: null }, u, true)).toBe(true)
+    expect(canUserReadQueue({ owner: 'u1', is_shared: false, role_id: null }, u, false)).toBe(true)
+    expect(canUserReadQueue({ owner: 'x', is_shared: false, role_id: null }, u, false)).toBe(false)
+    expect(canUserReadQueue({ owner: 'x', is_shared: true, role_id: null }, u, false)).toBe(true)
+    expect(canUserReadQueue({ owner: 'x', is_shared: true, role_id: 'R1' }, u, false)).toBe(true)
+    expect(canUserReadQueue({ owner: 'x', is_shared: 1, role_id: 'R2' }, u, false)).toBe(false)
   })
 })

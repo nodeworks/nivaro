@@ -1630,7 +1630,8 @@ export async function buildServer() {
       // actually opened in the last 7 days (default + top recorded param sets)
       // and the warm_daily ones as an unrestricted caller, plus the owner-load
       // report; then widget renders + scoped execute calls as their viewers
-      // (one per scope signature) and extension warmers: after the nightly
+      // (one per scope signature), queue first pages read-only (one per queue
+      // + access signature) and extension warmers: after the nightly
       // rebuild the first dashboard met a cold buffer pool (>10 s).
       app.cron.schedule(
         'cache-warm',
@@ -1647,7 +1648,7 @@ export async function buildServer() {
           heavy: true,
           idempotent: 'safe',
           description:
-            'Pre-runs the most-used CACHED custom queries (cache TTL above 0; default + top param sets) and every Warm daily query as an unrestricted caller, filling the cache key the execute route reads, plus the owner-load report; then the most-used custom-query widgets and the queries people with User Scopes run, AS one recent viewer per scope signature (their own access gate and scope values); then extension warmers. It runs exactly what a viewer cache miss would run; a key cached within the hour is left alone. CACHE_WARM=off disables it.',
+            'Pre-runs the most-used CACHED custom queries (cache TTL above 0; default + top param sets) and every Warm daily query as an unrestricted caller, filling the cache key the execute route reads, plus the owner-load report; then the most-used custom-query widgets and the queries people with User Scopes run, AS one recent viewer per scope signature (their own access gate and scope values); then the most-used queue worklist first pages, read-only, as one viewer per queue and access signature (nothing stored; warms the database and the read path caches); then extension warmers. It runs exactly what a viewer cache miss would run; a key cached within the hour is left alone. CACHE_WARM=off disables it.',
           dryRun: async () => {
             const { planCacheWarm } = await import('./services/cache-warm.js')
             return planCacheWarm()

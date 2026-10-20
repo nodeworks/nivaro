@@ -21,6 +21,7 @@ import {
   normalizeDisplayConfig,
   paginateItems,
   parsePaginationParams,
+  parseQueueItemsQuery,
   type QueueItem,
   type QueueScope,
   type QueueSourceRow,
@@ -1330,5 +1331,54 @@ describe('computeExtraFieldMeta aggregates', () => {
         aggregate: 'sum'
       }
     ])
+  })
+})
+
+describe('parseQueueItemsQuery (GET /queues/:id/items + the cache warm)', () => {
+  it('defaults like the route and only paginates when page or limit was sent', () => {
+    expect(parseQueueItemsQuery({})).toEqual({
+      ok: true,
+      value: { scope: 'all', sort: '', filters: {} }
+    })
+    expect(parseQueueItemsQuery({ scope: 'mine', limit: '5' })).toEqual({
+      ok: true,
+      value: { scope: 'mine', sort: '', filters: {}, page: 1, limit: 5 }
+    })
+    expect(parseQueueItemsQuery({ page: '3', limit: '500' })).toMatchObject({
+      ok: true,
+      value: { page: 3, limit: 100 }
+    })
+  })
+
+  it('parses filters and group options', () => {
+    const r = parseQueueItemsQuery({
+      filters: '{"state":["review"]}',
+      group_by: 'state',
+      group_sums: 'extra.amount, bad name ,x'
+    })
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        scope: 'all',
+        sort: '',
+        filters: { state: ['review'] },
+        group: { by: 'state', key: null, sums: ['amount', 'x'] }
+      }
+    })
+  })
+
+  it('refuses with the route messages, in the route order', () => {
+    expect(parseQueueItemsQuery({ scope: 'x', filters: '{' })).toEqual({
+      ok: false,
+      error: 'scope must be mine, unowned, all, or claimed'
+    })
+    expect(parseQueueItemsQuery({ group_by: 'nope' })).toEqual({
+      ok: false,
+      error: 'cannot group by nope'
+    })
+    expect(parseQueueItemsQuery({ filters: '{' })).toEqual({
+      ok: false,
+      error: 'filters must be valid JSON'
+    })
   })
 })
