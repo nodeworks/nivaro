@@ -125,10 +125,11 @@ export function HistoryPanel({
     queryFn: () =>
       client
         .request<{ data: VersionRow[] }>(get(`/collection-layouts/${layoutId}/versions`))
-        .then((r) => r.data ?? [])
+        .then((r) => r.data ?? []),
+    staleTime: 0,
+    refetchOnMount: 'always'
   })
-  const newestId = versions[0]?.id ?? null
-  const diffId = diffFor ?? newestId
+  const diffId: number | 'newest' | null = diffFor ?? (versions.length > 0 ? 'newest' : null)
   const { data: diff, isLoading: diffLoading } = useQuery({
     queryKey: ['layout-editor', 'version-diff', layoutId, diffId],
     queryFn: () =>
@@ -152,7 +153,7 @@ export function HistoryPanel({
     }
   })
 
-  const diffVersion = versions.find((v) => v.id === diffId)
+  const diffVersion = versions.find((v) => v.id === diffFor)
   const btn =
     'rounded border border-slate-200 px-1.5 py-0.5 text-[11px] hover:bg-slate-50 dark:border-border dark:hover:bg-muted'
 
@@ -192,7 +193,7 @@ export function HistoryPanel({
           No versions yet. One is saved before every change.
         </p>
       ) : (
-        <ul className='space-y-1'>
+        <ul className='max-h-48 space-y-1 overflow-y-auto'>
           {versions.map((v) => (
             <li
               key={v.id}

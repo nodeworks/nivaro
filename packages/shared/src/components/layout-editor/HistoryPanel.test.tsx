@@ -95,11 +95,11 @@ describe('HistoryPanel', () => {
     await settle(() => host.textContent?.includes('Shipping') ?? false)
     const t = host.textContent ?? ''
     expect(t).toContain('What the last save changed')
-    expect(t).toContain('name: B'.slice(0, 5))
+    expect(t).toContain('name: A → B')
     expect(t).toContain('Shipping')
     expect(t).toContain('po_number')
     expect(t).toContain('2 fields were removed from the form')
-    expect(calls.some((c) => c._path === '/collection-layouts/5/versions/12/diff')).toBe(true)
+    expect(calls.some((c) => c._path === '/collection-layouts/5/versions/newest/diff')).toBe(true)
     expect(calls.find((c) => c._path.endsWith('/diff'))?._params).toEqual({ against: 'current' })
   })
 
