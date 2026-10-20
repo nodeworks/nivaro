@@ -9,13 +9,15 @@
  *   history are dropped. Any other failure rolls back that batch only.
  * - Text edits (`apply(ops, { label, text: true })`) wait for a 600 ms pause
  *   per (target, setting) and go out as one op; the draft shows each keystroke.
- *   A structural op, undo or redo sends pending text first, so order holds.
+ *   A structural op, undo or redo sends pending text first, so order holds;
+ *   `flush()` sends it now (blur). Each batch carries its step label as `note`.
  * - Undo: one batch = one step. Its inverse is computed from the bundle just
  *   before the batch (inverseOps) and sent as a new batch. Every op has an
  *   exact inverse expressed in ops — none needs a snapshot restore:
  *   group_remove expands to group_create + group_move (its tabs) + move/place
  *   (its fields, with their full settings).
- * - A refetch never replaces the draft while anything is pending or typed.
+ * - A refetch never replaces the draft while anything is pending or typed; a
+ *   refetched bundle with a new rev (someone else saved) clears undo/redo.
  */
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useSyncExternalStore } from 'react'
@@ -49,6 +51,8 @@ export interface LayoutDraft {
   apply(ops: LayoutOp[], opts?: ApplyOptions): void
   undo(): void
   redo(): void
+  /** Send typed text now instead of after the pause (blur). */
+  flush(): void
   canUndo: boolean
   canRedo: boolean
   status: DraftStatus
@@ -90,7 +94,10 @@ export interface SaveFailure {
 }
 
 /** SDK errors carry `status` + `response` (body); axios nests `response.status` / `response.data`. */
-export function parseSaveFailure(err: unknown): SaveFailure {
+export function parseSaveFailure(
+  err: unknown,
+  fallback = 'The layout could not be saved'
+): SaveFailure {
   const e = err as {
     status?: number
     message?: string
@@ -104,7 +111,7 @@ export function parseSaveFailure(err: unknown): SaveFailure {
     (typeof body?.error === 'string' && body.error) ||
     (typeof body?.message === 'string' && body.message) ||
     (typeof e?.message === 'string' && e.message) ||
-    'The layout could not be saved'
+    fallback
   return { status, message, bundle: parseBundle(body?.bundle) }
 }
 
@@ -260,6 +267,8 @@ interface Batch {
   id: number
   kind: BatchKind
   ops: LayoutOp[]
+  /** The step's label, sent as the ops `note` (History shows it). */
+  note: string
 }
 interface Step {
   label: string
@@ -275,7 +284,7 @@ interface TextEdit {
 }
 
 export interface DraftTransport {
-  send(ops: LayoutOp[], baseRev: string): Promise<LayoutBundle>
+  send(ops: LayoutOp[], baseRev: string, note: string): Promise<LayoutBundle>
   /** A bundle the server confirmed — mirror it into the query cache. */
   saved(bundle: LayoutBundle): void
   /** A 409 without a usable bundle: fetch the layout again. */
@@ -283,7 +292,7 @@ export interface DraftTransport {
   notify(message: string): void
 }
 
-type View = Omit<LayoutDraft, 'apply' | 'undo' | 'redo' | 'isLoading'>
+type View = Omit<LayoutDraft, 'apply' | 'undo' | 'redo' | 'flush' | 'isLoading'>
 
 /** Split a text apply into single-setting update ops keyed by (target, setting). */
 function textEdits(ops: LayoutOp[]): Array<{ key: string; op: LayoutOp }> | null {
@@ -338,10 +347,19 @@ export class LayoutDraftEngine {
 
   getView = (): View => this.view
 
-  /** A fetched bundle. Ignored while anything is pending, so typing is never overwritten. */
+  /**
+   * A fetched bundle. Ignored while anything is pending, so typing is never
+   * overwritten. Our own saves arrive here with the rev we already hold; a new
+   * rev means someone else saved, and the undo steps (index-based inverses of
+   * the old state) would undo over their change — so the history goes.
+   */
   receive(bundle: LayoutBundle) {
     if (this.pending()) return
     if (this.server && this.server.rev === bundle.rev) return
+    if (this.server) {
+      this.undoStack = []
+      this.redoStack = []
+    }
     this.server = bundle
     this.draft = bundle
     this.emit()
@@ -364,12 +382,14 @@ export class LayoutDraftEngine {
       return
     }
     this.clearOutcome()
-    const batch = this.enqueue('do', ops)
+    const batch = this.enqueue('do', ops, label)
     this.pushUndo({ label, forward: ops, inverse, batchId: batch.id })
     this.redoStack = []
     this.refresh()
   }
 
+  // Undo / redo pop the step before checking it still applies: a step that no
+  // longer fits the draft is discarded with an error, not retried.
   undo() {
     this.flushText()
     const step = this.undoStack.pop()
@@ -381,7 +401,7 @@ export class LayoutDraftEngine {
       return
     }
     this.clearOutcome()
-    step.batchId = this.enqueue('undo', step.inverse).id
+    step.batchId = this.enqueue('undo', step.inverse, `Undo ${step.label}`).id
     this.redoStack.push(step)
     this.refresh()
   }
@@ -398,7 +418,7 @@ export class LayoutDraftEngine {
       return
     }
     this.clearOutcome()
-    step.batchId = this.enqueue('redo', step.forward).id
+    step.batchId = this.enqueue('redo', step.forward, `Redo ${step.label}`).id
     this.undoStack.push(step)
     this.refresh()
   }
@@ -437,7 +457,7 @@ export class LayoutDraftEngine {
     if (!edit) return
     clearTimeout(edit.timer)
     this.text.delete(key)
-    const batch = this.enqueue('do', [edit.op])
+    const batch = this.enqueue('do', [edit.op], edit.label)
     this.pushUndo({
       label: edit.label,
       forward: [edit.op],
@@ -447,13 +467,8 @@ export class LayoutDraftEngine {
     this.refresh()
   }
 
-  dispose() {
-    this.flushText()
-    this.listeners.clear()
-  }
-
-  private enqueue(kind: BatchKind, ops: LayoutOp[]): Batch {
-    const batch = { id: this.nextId++, kind, ops }
+  private enqueue(kind: BatchKind, ops: LayoutOp[], note: string): Batch {
+    const batch = { id: this.nextId++, kind, ops, note }
     this.queue.push(batch)
     return batch
   }
@@ -529,7 +544,8 @@ export class LayoutDraftEngine {
         if (i === 0 && this.inFlight) kept.push(batch)
         else {
           this.rollback(batch)
-          this.error = messageOf(e)
+          // A server refusal said first stays the message shown.
+          this.error ??= messageOf(e)
           this.outcome = 'error'
         }
       }
@@ -551,7 +567,7 @@ export class LayoutDraftEngine {
     const batch = this.queue[0]
     this.inFlight = true
     this.transport
-      .send(batch.ops, this.server.rev)
+      .send(batch.ops, this.server.rev, batch.note)
       .then((bundle) => {
         this.server = bundle
         this.queue.shift()
@@ -619,14 +635,13 @@ export function useLayoutDraft(layoutId: number): LayoutDraft {
 
   const engineRef = useRef<{ id: number; engine: LayoutDraftEngine } | null>(null)
   if (!engineRef.current || engineRef.current.id !== layoutId) {
-    engineRef.current?.engine.dispose()
     const key = layoutDraftKeys.bundle(layoutId)
     engineRef.current = {
       id: layoutId,
       engine: new LayoutDraftEngine({
-        send: async (ops, baseRev) => {
+        send: async (ops, baseRev, note) => {
           const res = await live.current.client.request<unknown>(
-            post(`/collection-layouts/${layoutId}/ops`, { ops, base_rev: baseRev })
+            post(`/collection-layouts/${layoutId}/ops`, { ops, base_rev: baseRev, note })
           )
           const bundle = parseBundle(res)
           if (!bundle) throw new Error('The server answered without the saved layout')
@@ -650,7 +665,8 @@ export function useLayoutDraft(layoutId: number): LayoutDraft {
     if (query.data) engine.receive(query.data)
   }, [engine, query.data])
 
-  // Typed text still waiting for its pause goes out when the editor closes.
+  // Typed text still waiting for its pause goes out when the editor closes or
+  // switches layout (useSyncExternalStore drops the old engine's listener).
   useEffect(() => () => engine.flushText(), [engine])
 
   const apply = useCallback(
@@ -659,6 +675,20 @@ export function useLayoutDraft(layoutId: number): LayoutDraft {
   )
   const undo = useCallback(() => engine.undo(), [engine])
   const redo = useCallback(() => engine.redo(), [engine])
+  const flush = useCallback(() => engine.flushText(), [engine])
 
-  return { ...view, apply, undo, redo, isLoading: query.isLoading }
+  // A bundle that never loaded is an error, not an empty idle editor.
+  const loadFailed = !view.bundle && query.error != null
+  return {
+    ...view,
+    status: loadFailed ? 'error' : view.status,
+    error:
+      view.error ??
+      (loadFailed ? parseSaveFailure(query.error, 'The layout could not be read').message : null),
+    apply,
+    undo,
+    redo,
+    flush,
+    isLoading: query.isLoading
+  }
 }

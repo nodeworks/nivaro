@@ -61,15 +61,25 @@ function baseBundle(): LayoutBundle {
 }
 
 /** A stand-in for POST /collection-layouts/:id/ops: applies with the shared twin, checks rev. */
-function fakeServer(initial = baseBundle()) {
+function fakeServer(
+  initial = baseBundle(),
+  opts: { loadError?: { status: number; body: unknown } } = {}
+) {
   let current = initial
   let n = 1
-  const posts: Array<{ ops: LayoutOp[]; base_rev: string }> = []
+  const posts: Array<{ ops: LayoutOp[]; base_rev: string; note?: string }> = []
   const gates: Array<() => Promise<void>> = []
   let failNext: { status: number; body: unknown } | null = null
   const client = {
     request: vi.fn(async (cmd: Cmd) => {
-      if (cmd._method === 'GET' && cmd._path === '/collection-layouts/7/bundle') return current
+      if (cmd._method === 'GET' && cmd._path === '/collection-layouts/7/bundle') {
+        if (opts.loadError)
+          throw Object.assign(new Error('request failed'), {
+            status: opts.loadError.status,
+            response: opts.loadError.body
+          })
+        return current
+      }
       if (cmd._method === 'POST' && cmd._path === '/collection-layouts/7/ops') {
         const body = cmd._body as { ops: LayoutOp[]; base_rev: string }
         posts.push(body)
@@ -122,6 +132,7 @@ function fakeServer(initial = baseBundle()) {
 let host: HTMLDivElement
 let root: Root
 let draft: LayoutDraft
+let qc: QueryClient
 
 function Probe() {
   draft = useLayoutDraft(7)
@@ -140,8 +151,8 @@ afterEach(() => {
   host.remove()
 })
 
-async function mount(client: { request: unknown }) {
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+async function mount(client: { request: unknown }, waitForBundle = true) {
+  qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   await act(async () => {
     root.render(
       createElement(
@@ -152,7 +163,7 @@ async function mount(client: { request: unknown }) {
       )
     )
   })
-  await settle(() => draft.bundle !== null)
+  if (waitForBundle) await settle(() => draft.bundle !== null)
 }
 
 async function settle(until: () => boolean, rounds = 100) {
@@ -210,6 +221,8 @@ describe('useLayoutDraft', () => {
     expect(draft.bundle?.rev).toBe('r2')
     expect(draft.bundle).toEqual(server.current)
     expect(server.posts[0].base_rev).toBe('r1')
+    // The step label rides as the ops note, so History names the edit.
+    expect(server.posts[0].note).toBe('Move Status')
   })
 
   it('serialises batches in order', async () => {
@@ -314,6 +327,7 @@ describe('useLayoutDraft', () => {
     expect(content(draft.bundle)).toEqual(original)
     await settle(() => draft.status === 'saved' && server.posts.length === 2)
     expect(content(server.current)).toEqual(original)
+    expect(server.posts.map((p) => p.note)).toEqual(['Tidy up', 'Undo Tidy up'])
     expect(draft.canRedo).toBe(true)
 
     act(() => draft.redo())
@@ -374,6 +388,133 @@ describe('useLayoutDraft', () => {
     await settle(() => draft.status === 'saved' && server.posts.length === 2)
     expect(server.posts.map((p) => p.ops[0].op)).toEqual(['group_update', 'group_move'])
     expect(server.current.groups.find((g) => g.key === 'main')?.label).toBe('General')
+  })
+})
+
+describe('useLayoutDraft — failures, other writers, flushing', () => {
+  it('surfaces a bundle that fails to load', async () => {
+    const server = fakeServer(baseBundle(), {
+      loadError: { status: 404, body: { error: 'Layout not found' } }
+    })
+    await mount(server.client, false)
+    await settle(() => draft.status === 'error')
+    expect(draft.bundle).toBe(null)
+    expect(draft.error).toBe('Layout not found')
+    expect(draft.isLoading).toBe(false)
+  })
+
+  it("drops the undo history when another admin's save is fetched", async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() =>
+      draft.apply([{ op: 'remove', at: { field: 'status', group_key: 'main' } }], {
+        label: 'Remove Status'
+      })
+    )
+    await settle(() => draft.status === 'saved')
+    expect(draft.canUndo).toBe(true)
+
+    server.otherWriter([
+      { op: 'move', from: { field: 'notes', group_key: 'details' }, to_group_key: 'main', index: 0 }
+    ])
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ['layout-editor', 'bundle', 7] })
+    })
+    await settle(() => draft.bundle?.rev === server.current.rev)
+    expect(fieldsIn(draft.bundle, 'main')).toEqual(['notes', 'title'])
+    expect(draft.canUndo).toBe(false)
+    expect(draft.canRedo).toBe(false)
+  })
+
+  it('flush sends typed text without waiting for the pause', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() =>
+      draft.apply([{ op: 'group_update', key: 'main', patch: { label: 'General' } }], {
+        label: 'Rename section',
+        text: true
+      })
+    )
+    act(() => draft.flush())
+    await settle(() => server.posts.length === 1, 20)
+    expect(server.posts[0].ops).toEqual([
+      { op: 'group_update', key: 'main', patch: { label: 'General' } }
+    ])
+    expect(server.posts[0].note).toBe('Rename section')
+  })
+
+  it('unmount flushes pending text', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() =>
+      draft.apply([{ op: 'layout_update', patch: { name: 'Main form' } }], {
+        label: 'Rename form',
+        text: true
+      })
+    )
+    act(() => root.render(null))
+    await settle(() => server.posts.length === 1, 20)
+    expect(server.current.layout.name).toBe('Main form')
+  })
+
+  it('rolls back the failed batch and re-applies the later one', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const release = server.hold()
+    server.failNext(400, { error: 'Field "due" does not exist', op_index: 0 })
+    act(() => {
+      draft.apply([{ op: 'place', field: 'due', group_key: 'details', index: 1 }], {
+        label: 'Add Due'
+      })
+      draft.apply(
+        [
+          {
+            op: 'update_placement',
+            at: { field: 'title', group_key: 'main' },
+            patch: { col_span: 6 }
+          }
+        ],
+        { label: 'Width' }
+      )
+    })
+    release()
+    await settle(() => server.posts.length === 2 && draft.status !== 'saving')
+    expect(draft.status).toBe('error')
+    expect(draft.error).toBe('Field "due" does not exist')
+    expect(fieldsIn(draft.bundle, 'details')).toEqual(['notes'])
+    expect(draft.bundle?.placements.find((p) => p.field === 'title')?.col_span).toBe(6)
+    expect(draft.bundle).toEqual(server.current)
+    expect(draft.undoLabel).toBe('Width')
+  })
+
+  it("keeps the server's message when a later batch no longer applies", async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    const before = draft.bundle
+    const release = server.hold()
+    server.failNext(400, { error: 'Field "due" does not exist', op_index: 0 })
+    act(() => {
+      draft.apply([{ op: 'place', field: 'due', group_key: 'details', index: 1 }], {
+        label: 'Add Due'
+      })
+      draft.apply(
+        [
+          {
+            op: 'move',
+            from: { field: 'due', group_key: 'details' },
+            to_group_key: 'main',
+            index: 0
+          }
+        ],
+        { label: 'Move Due' }
+      )
+    })
+    release()
+    await settle(() => draft.status === 'error')
+    expect(draft.error).toBe('Field "due" does not exist')
+    expect(draft.bundle).toEqual(before)
+    expect(server.posts).toHaveLength(1)
+    expect(draft.canUndo).toBe(false)
   })
 })
 
