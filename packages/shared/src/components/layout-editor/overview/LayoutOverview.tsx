@@ -33,7 +33,6 @@ import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Skeleton } from '../../ui/skeleton'
 import {
   type ChoiceLabels,
-  choiceLabelsFrom,
   type DescribeField,
   describeReason,
   type Segment
@@ -50,7 +49,8 @@ import {
   apiFailure,
   useInvalidateLayouts,
   useLayoutOverview,
-  useOverviewFields
+  useOverviewFields,
+  useRuleChoiceLabels
 } from './overview-api'
 import { Pill, Sentence, shapeLine, TYPE_USE } from './purpose'
 import type {
@@ -78,7 +78,7 @@ export interface LayoutOverviewProps {
 
 const SECTIONS: Array<{ id: OverviewSection; title: string; hint?: string }> = [
   { id: 'forms', title: 'Forms people fill in — checked in this order' },
-  { id: 'link_only', title: 'Opened by a link or button only' },
+  { id: 'link_only', title: 'Opened by a link, a button or the New menu' },
   {
     id: 'other_views',
     title: 'Other views of the same record',
@@ -128,16 +128,20 @@ function alsoCell(row: OverviewRow): ReactNode {
   return `“${row.new_menu.label}” on New menu`
 }
 
+const ONLY_LAYOUT_REASON = 'The only form for this collection can’t be deleted'
+
 // ─── Row menu ────────────────────────────────────────────────────────────────
 
 function RowMenu({
   row,
+  only,
   onOpen,
   onRename,
   onDelete,
   onDone
 }: {
   row: OverviewRow
+  only: boolean
   onOpen: () => void
   onRename: () => void
   onDelete: () => void
@@ -254,7 +258,13 @@ function RowMenu({
           <button
             type='button'
             role='menuitem'
-            className={cn(item, 'text-red-600 dark:text-red-400')}
+            disabled={only}
+            data-tip={only ? ONLY_LAYOUT_REASON : undefined}
+            className={cn(
+              item,
+              'text-red-600 dark:text-red-400',
+              only && 'cursor-not-allowed opacity-50'
+            )}
             onClick={() => {
               setOpen(false)
               onDelete()
@@ -359,6 +369,8 @@ interface RowProps {
   fields: DescribeField[]
   choices: ChoiceLabels
   tested: boolean
+  /** The collection's only layout: it is the fallback for every record. */
+  only: boolean
   onOpen: (id: number) => void
   onChanged: () => void
   drag?: {
@@ -369,7 +381,7 @@ interface RowProps {
   }
 }
 
-function RowView({ row, fields, choices, tested, onOpen, onChanged, drag }: RowProps) {
+function RowView({ row, fields, choices, tested, only, onOpen, onChanged, drag }: RowProps) {
   const client = useNivaroClient()
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(row.name)
@@ -455,7 +467,11 @@ function RowView({ row, fields, choices, tested, onOpen, onChanged, drag }: RowP
               <Pill tone='rule'>rule</Pill>
             )}
             {row.section === 'forms' && row.reason.kind === 'role' && <Pill tone='role'>role</Pill>}
-            {row.section === 'link_only' && <Pill tone='link'>link only</Pill>}
+            {row.section === 'link_only' && (
+              <Pill tone='link'>
+                {row.new_menu && !row.new_menu.hidden ? 'link or New menu' : 'link only'}
+              </Pill>
+            )}
             {tested && (
               <span className='inline-flex items-center gap-1 text-[11.5px] font-semibold text-[#0089ad] dark:text-nvr-cyan'>
                 <Check className='h-3 w-3' />
@@ -478,7 +494,13 @@ function RowView({ row, fields, choices, tested, onOpen, onChanged, drag }: RowP
         </td>
         <td className={cn(cell, 'w-[22%] text-[12.5px] text-slate-500 dark:text-muted-foreground')}>
           {row.section === 'unused' ? (
-            <button type='button' className={btnOutline} onClick={() => setConfirmDelete(true)}>
+            <button
+              type='button'
+              className={btnOutline}
+              disabled={only}
+              data-tip={only ? ONLY_LAYOUT_REASON : undefined}
+              onClick={() => setConfirmDelete(true)}
+            >
               Delete
             </button>
           ) : (
@@ -488,6 +510,7 @@ function RowView({ row, fields, choices, tested, onOpen, onChanged, drag }: RowP
         <td className={cn(cell, 'w-[44px] px-1.5 text-right')}>
           <RowMenu
             row={row}
+            only={only}
             onOpen={() => onOpen(row.layout_id)}
             onRename={() => {
               renameSettled.current = false
@@ -698,13 +721,13 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
   const client = useNivaroClient()
   const { data, isLoading, isError, refetch } = useLayoutOverview(collection)
   const { data: fields = [] } = useOverviewFields(collection)
-  const choices = useMemo(() => choiceLabelsFrom(fields), [fields])
   const invalidate = useInvalidateLayouts(collection)
   const [explain, setExplain] = useState<ExplainResult | null>(null)
   const [creatingFirst, setCreatingFirst] = useState(false)
   // Optimistic order for Other views while the sort PATCHes land.
   const [otherOrder, setOtherOrder] = useState<number[] | null>(null)
-  const rows = data?.rows ?? []
+  const rows = useMemo(() => data?.rows ?? [], [data])
+  const choices = useRuleChoiceLabels(collection, fields, rows)
   // biome-ignore lint/correctness/useExhaustiveDependencies: a fresh server read resets the local order
   useEffect(() => setOtherOrder(null), [data])
   // biome-ignore lint/correctness/useExhaustiveDependencies: a test result belongs to one collection
@@ -726,6 +749,8 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
         seed_fields: true
       })
       if (id == null) throw new Error('No id came back')
+      // The first form is the default, so the overview never says none is marked.
+      await client.request(post(`/collection-layouts/${id}/activate`)).catch(() => undefined)
       created('grouped', id)
     } catch (err) {
       toast.error(apiFailure(err, 'Could not create the form').message)
@@ -770,6 +795,7 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       fields,
       choices,
       tested: explain?.layout_id === row.layout_id,
+      only: rows.length === 1,
       onOpen,
       onChanged: invalidate
     }
