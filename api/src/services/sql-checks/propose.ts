@@ -112,16 +112,22 @@ const HEAD_RE = new RegExp(
 )
 
 /** The name a procedure's CREATE / ALTER header carries (offsets in the original text), or null. */
-export function procHeaderName(
-  sql: string
-): { schema: string | null; name: string; start: number; end: number } | null {
+export function procHeaderName(sql: string): {
+  schema: string | null
+  name: string
+  start: number
+  end: number
+  /** The header verb, upper-cased with single spaces: CREATE PROCEDURE, CREATE OR ALTER PROC… */
+  verb: string
+} | null {
   const masked = maskSql(sql)
   const m = HEAD_RE.exec(masked)
   if (!m) return null
   const start = m.index + m[0].length - m[1].length
   const end = m.index + m[0].length
   const { schema, name } = splitName(sql.slice(start, end))
-  return { schema, name, start, end }
+  const verb = masked.slice(m.index, start).trim().replace(/\s+/g, ' ').toUpperCase()
+  return { schema, name, start, end, verb }
 }
 
 const bracket = (s: string) => `[${s.replace(/]/g, ']]')}]`

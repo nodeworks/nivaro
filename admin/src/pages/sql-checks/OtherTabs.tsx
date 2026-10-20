@@ -253,10 +253,19 @@ function PageFix({ row }: { row: FixRow }) {
   const [armed, setArmed] = useTwoClick()
   const [status, setStatus] = useState('')
   const revert = useMutation({
-    mutationFn: () => api.post(`/sql-checks/fixes/${row.id}/revert`),
-    onSuccess: () => {
-      setStatus('Previous version restored')
-      toast.success('Previous version restored')
+    mutationFn: () =>
+      api
+        .post<{ data: { reverted: boolean; skipped_import_bodies?: string[] } }>(
+          `/sql-checks/fixes/${row.id}/revert`
+        )
+        .then((r) => r.data.data),
+    onSuccess: (r) => {
+      const n = r.skipped_import_bodies?.length ?? 0
+      const msg = n
+        ? `Previous version restored. ${n} import definition ${n === 1 ? 'body was' : 'bodies were'} edited since and ${n === 1 ? 'was' : 'were'} left as ${n === 1 ? 'it is' : 'they are'}.`
+        : 'Previous version restored'
+      setStatus(msg)
+      toast.success(msg)
       void qc.invalidateQueries({ queryKey: ['sql-checks'] })
     },
     onError: (err) => {

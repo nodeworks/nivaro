@@ -114,7 +114,8 @@ export function ProposeFix({ finding }: { finding: FindingDetail }) {
     }
   })
 
-  if (!fixable || finding.status === 'resolved') return null
+  // a fix applied here resolves the finding: keep showing its outcome until the panel changes
+  if (!fixable || (finding.status === 'resolved' && !outcome)) return null
 
   const startOver = () => {
     setOutcome(null)
@@ -222,6 +223,17 @@ export function ProposeFix({ finding }: { finding: FindingDetail }) {
                     : 'Compiles (checked in a transaction that was rolled back).'
                   : `Does not compile: ${compile.data?.error ?? 'unknown error'}`}
           </p>
+          {compile.isError && (
+            <Button
+              size='sm'
+              variant='outline'
+              className='h-7 w-fit text-[12px]'
+              disabled={compile.isFetching}
+              onClick={() => void compile.refetch()}
+            >
+              {compile.isFetching ? 'Checking…' : 'Check again'}
+            </Button>
+          )}
 
           {p.notes.length > 0 && (
             <ul className='m-0 grid gap-1 pl-4 text-[12px] text-muted-foreground'>
@@ -299,6 +311,8 @@ export function ProposeFix({ finding }: { finding: FindingDetail }) {
               onClick={() => {
                 setAsked(false)
                 setOutcome(null)
+                // a later Propose fix checks the compile afresh
+                qc.removeQueries({ queryKey: ['sql-checks', 'proposal-compile', finding.id] })
                 setConfirmedFor(null)
               }}
             >

@@ -24,10 +24,12 @@ import { logActivity } from '../activity.js'
 import {
   deployOn,
   liveProcedureDefinition,
+  ProcLockBusyError,
   sha256,
   snapshotImportDefinition,
   sqlErrorText,
-  toCreateOrAlter
+  toCreateOrAlter,
+  withProcLock
 } from '../procedure-deploy.js'
 import { withLongConnection } from '../run-long.js'
 import { checkObject, type ObjectType, type SqlObject } from './checkers.js'
@@ -209,34 +211,25 @@ export async function guardedDeploy(
 ): Promise<string> {
   if (!isMssql(db)) throw new FixError(409, 'Fixes are applied on SQL Server only.')
   const qualified = `${bracket(target.schema ?? 'dbo')}.${bracket(target.name)}`
-  const resource =
-    `sqlcheck:${(target.schema ?? 'dbo').toLowerCase()}.${target.name.toLowerCase()}`.slice(0, 255)
   const read = `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(${nq(qualified)}, N'P')`
   return withLongConnection(
     async (c) => {
-      const [lock] = await c.run<{ r: number }>(
-        `DECLARE @r int; EXEC @r = sp_getapplock @Resource = ${nq(resource)}, @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 15000; SELECT @r AS r`
-      )
-      if (!(Number(lock?.r) >= 0))
-        throw new FixError(
-          409,
-          'Another change to this procedure is in progress. Try again shortly.'
-        )
       try {
-        const [cur] = await c.run<{ definition: string | null }>(read)
-        if (!cur?.definition || sha256(cur.definition) !== expectHash)
-          throw new FixError(
-            409,
-            'The procedure changed since it was read. Look at the proposed fix again.',
-            'SQL_CHECK_FIX_STALE'
-          )
-        await deployOn(c, text)
-        const [after] = await c.run<{ definition: string | null }>(read)
-        return after?.definition ?? ''
-      } finally {
-        await c
-          .run(`EXEC sp_releaseapplock @Resource = ${nq(resource)}, @LockOwner = 'Session'`)
-          .catch(() => c.discard())
+        return await withProcLock(c, target, async () => {
+          const [cur] = await c.run<{ definition: string | null }>(read)
+          if (!cur?.definition || sha256(cur.definition) !== expectHash)
+            throw new FixError(
+              409,
+              'The procedure changed since it was read. Look at the proposed fix again.',
+              'SQL_CHECK_FIX_STALE'
+            )
+          await deployOn(c, text)
+          const [after] = await c.run<{ definition: string | null }>(read)
+          return after?.definition ?? ''
+        })
+      } catch (e) {
+        if (e instanceof ProcLockBusyError) throw new FixError(409, e.message)
+        throw e
       }
     },
     { timeoutMs: 150_000 }
@@ -319,6 +312,13 @@ export async function compileProposal(
   newDefinitionHash: string
 ): Promise<CompileResult> {
   const f = await loadFinding(findingId)
+  if (f.status !== 'open')
+    throw new FixError(
+      409,
+      f.status === 'resolved'
+        ? 'This finding is already resolved.'
+        : 'This finding is marked as expected; reopen it first.'
+    )
   const { current, proposal, out } = await build(f)
   if (!proposal.newDefinition) throw new FixError(409, 'No fix can be proposed for this finding.')
   if (out.new_definition_hash !== newDefinitionHash)

@@ -218,7 +218,7 @@ export async function procedureRoutes(app: FastifyInstance) {
         [name]
       )) as unknown[]
       try {
-        await deployProcedure(definition)
+        await deployProcedure(definition, { schema: 'dbo', name })
       } catch (e) {
         return reply.code(400).send({ error: (e as Error).message })
       }

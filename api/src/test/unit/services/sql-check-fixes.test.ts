@@ -120,6 +120,7 @@ vi.mock('../../../services/sql-checks/run.js', async (orig) => {
 })
 
 import {
+  definitionNameMatches,
   deployProcedure,
   importBodyTargetsOwn,
   sha256,
@@ -339,10 +340,41 @@ describe('procedure-deploy helpers', () => {
     expect(importBodyTargetsOwn('CREATE OR ALTER PROCEDURE [a.b] AS SELECT 1', 'a.b')).toBe(true)
   })
   // S6
-  it('sends the text as one batch, with ? and backslashes untouched', async () => {
+  it('sends the text as one batch, with ? and backslashes untouched, under the procedure lock (R2)', async () => {
     deployed.length = 0
-    await deployProcedure("CREATE PROCEDURE p AS SELECT '?' AS q, 'a\\?b' AS r")
+    batches.length = 0
+    await deployProcedure("CREATE PROCEDURE p AS SELECT '?' AS q, 'a\\?b' AS r", {
+      schema: 'dbo',
+      name: 'p'
+    })
     expect(deployed).toEqual(["CREATE OR ALTER PROCEDURE p AS SELECT '?' AS q, 'a\\?b' AS r"])
+    const steps = batches.map((b) =>
+      /sp_getapplock/.test(b)
+        ? 'lock'
+        : /sp_releaseapplock/.test(b)
+          ? 'unlock'
+          : /CREATE OR ALTER/.test(b)
+            ? 'create'
+            : null
+    )
+    expect(steps.filter(Boolean)).toEqual(['lock', 'create', 'unlock'])
+    expect(batches.find((b) => /sp_getapplock/.test(b))).toContain("N'sqlcheck:dbo.p'")
+  })
+  // R3
+  it('leaves a header that already says CREATE OR ALTER exactly as written', () => {
+    const body = 'create or alter proc dbo.p as select 1'
+    expect(toCreateOrAlter(body)).toBe(body)
+  })
+  // R1
+  it('reads the procedure name outside comments, so a decoy comment cannot pass the check', () => {
+    const decoy = '/* create procedure Foo */\nCREATE PROCEDURE Bar AS SELECT 1'
+    expect(definitionNameMatches(decoy, 'Foo')).toBe(false)
+    expect(definitionNameMatches(decoy, 'Bar')).toBe(true)
+    expect(definitionNameMatches('CREATE PROCEDURE etl.Bar AS SELECT 1', 'Bar')).toBe(false)
+    const body = '-- create or alter procedure Foo\nCREATE OR ALTER PROCEDURE Bar AS SELECT 1'
+    expect(importBodyTargetsOwn(body, 'Foo')).toBe(false)
+    expect(importBodyTargetsOwn(body, 'Bar')).toBe(true)
+    expect(importBodyTargetsOwn('CREATE PROCEDURE Bar AS SELECT 1', 'Bar')).toBe(false)
   })
 })
 
@@ -424,6 +456,16 @@ describe('applying a fix', () => {
     expect(compiled).toHaveLength(1)
     expect(deployed).toHaveLength(0)
     expect(batches).toContain('IF @@TRANCOUNT > 0 ROLLBACK TRANSACTION')
+  })
+
+  // R4
+  it('does not compile for a finding that is resolved or marked as expected', async () => {
+    for (const status of ['resolved', 'accepted']) {
+      findingRow.value = { ...(findingRow.value as object), status }
+      live.defs = [BAD]
+      await expect(compileProposal(5, 'a'.repeat(64))).rejects.toMatchObject({ status: 409 })
+    }
+    expect(compiled).toHaveLength(0)
   })
 
   it('refuses a stale preview (409) and an unconfirmed risky fix (400)', async () => {

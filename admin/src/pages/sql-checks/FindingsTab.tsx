@@ -594,7 +594,9 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
             )}
             {f.status === 'resolved' && (
               <p className='m-0 text-[12px] text-muted-foreground'>
-                Not seen in the latest run. It reopens if it comes back.
+                {f.events.at(-1)?.event === 'fixed'
+                  ? 'Fixed from this page. It reopens if a later run finds it again.'
+                  : 'Not seen in the latest run. It reopens if it comes back.'}
               </p>
             )}
           </section>

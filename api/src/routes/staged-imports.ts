@@ -122,7 +122,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         })
       }
       try {
-        await deployProcedure(body)
+        await deployProcedure(body, { schema: 'dbo', name: proc })
       } catch (err) {
         return reply.code(400).send({ error: `Deploy failed: ${(err as Error).message}` })
       }
