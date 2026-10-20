@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import parityRows from './parity-keys.json'
 
 // The parity checklist for the layout-editor rebuild: one row per setting today's
 // Layouts tab offers (or the spec adds), with the home it gets in the new editor.
@@ -93,11 +94,15 @@ interface ParityRow {
   layout_types: string[]
 }
 
-// Loaded by a non-literal specifier: a static JSON import would have to be listed in the
-// composite tsconfig (TS6307), and this package ships no node typings for fs.
-const PARITY_JSON = './parity-keys.json'
-const rows = (await import(/* @vite-ignore */ PARITY_JSON)).default as ParityRow[]
+const rows = parityRows as ParityRow[]
 const byKey = new Map(rows.map((r) => [r.key, r]))
+
+// Every-form keys that are not nivaro_fields rows: the report widget definition
+// (nivaro_widgets) is shared by every layout that places the widget.
+const OTHER_GLOBAL_KEYS = ['widget.report_config', 'add.report_widget']
+const isGlobalKey = (key: string) =>
+  GLOBAL_FIELD_KEYS.some((g) => key === g || key.startsWith(`${g}.`)) ||
+  OTHER_GLOBAL_KEYS.includes(key)
 
 describe('layout editor parity keys', () => {
   it('has unique, non-empty keys and labels', () => {
@@ -142,6 +147,10 @@ describe('layout editor parity keys', () => {
     for (const key of GLOBAL_FIELD_KEYS) {
       expect(byKey.get(key)?.scope, key).toBe('field')
     }
+  })
+
+  it('marks nothing else every-form', () => {
+    for (const r of rows) expect(r.scope === 'field', r.key).toBe(isGlobalKey(r.key))
   })
 
   it('covers every form settings section', () => {
