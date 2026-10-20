@@ -1,3 +1,4 @@
+export { PdfCanvas, type PdfCanvasProps } from './canvases/PdfCanvas'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
