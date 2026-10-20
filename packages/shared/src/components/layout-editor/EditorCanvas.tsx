@@ -40,8 +40,7 @@ export function EditorCanvas({
   layout,
   record,
   design,
-  apply,
-  onOpenClassic
+  apply
 }: {
   collection: string
   bundle: LayoutBundle
@@ -49,7 +48,6 @@ export function EditorCanvas({
   record: Record<string, unknown> | null
   design: LayoutDesign
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
-  onOpenClassic?: () => void
 }) {
   const renderer = canvasRenderer(String(bundle.layout.layout_type ?? 'grouped'))
   let body: ReactNode
@@ -73,15 +71,6 @@ export function EditorCanvas({
     body = (
       <LayoutDesignContext.Provider value={design}>
         <TableWithFields bundle={bundle} apply={apply} collection={collection} />
-        {onOpenClassic && (
-          <button
-            type='button'
-            onClick={onOpenClassic}
-            className='mx-4 mb-4 self-start text-[12.5px] font-medium text-[#0089ad] underline-offset-2 hover:underline dark:text-nvr-cyan'
-          >
-            Open in classic editor
-          </button>
-        )}
       </LayoutDesignContext.Provider>
     )
   return (

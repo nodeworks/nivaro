@@ -99,15 +99,6 @@
     "layout_types": ["grouped"]
   },
   {
-    "key": "overview.classic_editor",
-    "label": "View classic editor (read-only) during parity",
-    "home": "overview",
-    "tab_or_section": "Actions",
-    "scope": "form",
-    "status": "add",
-    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
-  },
-  {
     "key": "overview.open",
     "label": "Open a layout in the editor; ?layout=<id> deep link goes straight to it",
     "home": "overview",

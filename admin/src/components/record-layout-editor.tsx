@@ -1,5 +1,4 @@
 import { LayoutEditor } from '@nivaro/shared'
-import { useNavigate } from 'react-router'
 import { AdminLayoutEditorHost } from '@/lib/layout-editor-host'
 
 /**
@@ -18,7 +17,6 @@ export default function RecordLayoutEditor({
   recordId: string | null
   onClose: () => void
 }) {
-  const navigate = useNavigate()
   return (
     <AdminLayoutEditorHost collection={collection}>
       <LayoutEditor
@@ -27,9 +25,6 @@ export default function RecordLayoutEditor({
         mode='overlay'
         previewRecordId={recordId}
         onBack={onClose}
-        onOpenClassic={(id) =>
-          navigate(`/data-model/${encodeURIComponent(collection)}?tab=groups&classic=${id}`)
-        }
       />
     </AdminLayoutEditorHost>
   )

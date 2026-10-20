@@ -46,8 +46,6 @@ export interface LayoutEditorProps {
   onLayoutChange?: (layoutId: number) => void
   /** Open the preview on this record (the record page that opened the editor). */
   previewRecordId?: string | null
-  /** Shown for layouts this editor cannot draw yet (grid columns). */
-  onOpenClassic?: (layoutId: number) => void
   /** Overlay mode: where the overlay mounts. Default: the modal dialog/sheet
    *  the editor is declared in (its scroll/pointer lock would make a body
    *  portal dead), else document.body. */
@@ -197,8 +195,7 @@ function Canvas({
   selected,
   onSelect,
   showHidden,
-  apply,
-  onOpenClassic
+  apply
 }: {
   collection: string
   bundle: LayoutBundle
@@ -209,7 +206,6 @@ function Canvas({
   onSelect: (t: DesignTarget) => void
   showHidden: boolean
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
-  onOpenClassic?: () => void
 }) {
   const dnd = useLayoutDnd()
   const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
@@ -242,7 +238,6 @@ function Canvas({
       record={record}
       design={design}
       apply={apply}
-      onOpenClassic={onOpenClassic}
     />
   )
 }
@@ -304,7 +299,6 @@ export function LayoutEditor({
   mode,
   onLayoutChange,
   previewRecordId = null,
-  onOpenClassic,
   portalContainer
 }: LayoutEditorProps) {
   const host = useLayoutEditorHost()
@@ -482,7 +476,6 @@ export function LayoutEditor({
                 onSelect={onSelect}
                 showHidden={showHidden}
                 apply={draft.apply}
-                onOpenClassic={onOpenClassic ? () => onOpenClassic(currentId) : undefined}
               />
             ) : draft.error ? (
               <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
