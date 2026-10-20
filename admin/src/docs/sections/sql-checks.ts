@@ -7,7 +7,7 @@ export const sqlChecksDocs: DocSection = {
     { type: 'h1', id: 'sql-checks', text: 'SQL Checks' },
     {
       type: 'p',
-      text: 'The SQL checks page at /sql-checks (Operations → Health) checks the SQL that runs against the database for mistakes that corrupt or slow data. It reads every procedure, function, view and trigger definition from the database itself (sys.sql_modules), plus the SQL bodies Nivaro keeps in its own tables: import definitions’ stored procedure bodies and custom queries. Findings are tracked across runs, so a finding has a history: when it first appeared, how many runs saw it, and when it went away. Checks only read; nothing is changed by a run. Admins only; SQL Server only.'
+      text: 'The SQL checks page at /sql-checks (Operations → Health) checks the SQL that runs against the database for mistakes that corrupt or slow data. It reads every procedure, function, view and trigger definition from the database itself (sys.sql_modules), plus the SQL bodies Nivaro keeps in its own tables: import definitions’ stored procedure bodies and custom queries. Findings are tracked across runs, so a finding has a history: when it first appeared, how many runs saw it, and when it went away. Checks only read; nothing is changed by a run. Two kinds of procedure fix can be applied from a finding by a person (see Applying a fix). Admins only; SQL Server only.'
     },
     { type: 'h2', id: 'sql-checks-checks', text: 'What it checks' },
     {
@@ -34,9 +34,21 @@ export const sqlChecksDocs: DocSection = {
           'Warning',
           'BEGIN TRAN in a module with no SET XACT_ABORT ON and no CATCH that rolls back on @@TRANCOUNT: a failed statement can leave the transaction open on a pooled connection.'
         ],
-        ['Local-time clock', 'Info', 'GETDATE() / SYSDATETIME() calls (one finding per object, with the count and lines).'],
-        ['NOT IN over a nullable column', 'Warning', 'NOT IN (SELECT col …) where col is nullable and the subquery does not filter NULLs.'],
-        ['SELECT * on a wide table', 'Info', 'SELECT * from a table with max-length text or binary columns.'],
+        [
+          'Local-time clock',
+          'Info',
+          'GETDATE() / SYSDATETIME() calls (one finding per object, with the count and lines).'
+        ],
+        [
+          'NOT IN over a nullable column',
+          'Warning',
+          'NOT IN (SELECT col …) where col is nullable and the subquery does not filter NULLs.'
+        ],
+        [
+          'SELECT * on a wide table',
+          'Info',
+          'SELECT * from a table with max-length text or binary columns.'
+        ],
         [
           'Import body differs from deployed',
           'Warning (info when not deployed)',
@@ -75,6 +87,27 @@ export const sqlChecksDocs: DocSection = {
       type: 'p',
       text: 'SQL_LINT_URL points at a small service running SQLFluff with the T-SQL dialect; SQL_LINT_TOKEN is its bearer token (a secret: SQL_LINT_TOKEN_FILE works, and the environment viewer masks it). Each module’s text is sent on its own, never any data: POST {SQL_LINT_URL}/lint with {sql, dialect: "tsql"} answers {violations: [{code, line, description}], parse_errors}. A busy sidecar (503) is retried with a short backoff; a refused token (401), a sidecar that stays busy or does not answer marks the run’s SQLFluff as unavailable and keeps the other checks; a per-module timeout (504) skips that module only. SQLFluff findings resolve only in runs where SQLFluff answered.'
     },
+    { type: 'h2', id: 'sql-checks-apply', text: 'Applying a fix' },
+    {
+      type: 'p',
+      text: 'Two mechanical findings can be fixed from their detail panel with Propose fix: a transaction without SET XACT_ABORT ON (the statement is added first in the procedure body, after AS / AS BEGIN and after a leading SET NOCOUNT ON), and a MERGE on a nullable key whose ON clause is a plain AND of column-to-column equalities (each pair on a nullable target column becomes (s.k = t.k OR (s.k IS NULL AND t.k IS NULL))). Anything else (functions, OR, literals, ranges in the ON clause, other checks, views and functions) says “This one needs a person” and keeps the written steps.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'The preview changes nothing: it shows the diff with old and new line numbers. The compile check is a separate POST (it holds a schema lock on the procedure for up to 5 seconds) that compiles the new definition inside a transaction that is rolled back.',
+        'Adding XACT_ABORT is marked risky when the procedure commits in a CATCH block or reads XACT_STATE() or @@ERROR to carry on after an error: with XACT_ABORT ON those paths behave differently (error 3930). A NULL-safe ON carries a note that the OR form can turn an index seek into a scan on a large table.',
+        'A NULL-safe ON is marked risky when copies already sit in NULL-key groups (one incoming row then updates all of them) or when the MERGE source may repeat a key (SQL Server would stop the whole MERGE). A risky fix needs an extra confirmation.',
+        'Apply (two clicks) sends the preview’s hash; if the definition changed since the preview it is refused (409) and the preview is rebuilt.',
+        'A procedure is changed with CREATE OR ALTER through the same path as the Procedures page, on one connection that holds an exclusive application lock on that procedure (so two servers cannot change it at once) and re-reads it first: if it changed since the preview, nothing is deployed. The deployed text always names the procedure itself (a renamed procedure, or a header without a schema, is rewritten to [schema].[name]). It is then checked again at once; if the re-check reports anything new, or the finding is still there, the previous definition is put back automatically (only while the procedure is still exactly what the fix deployed) and the panel says why.',
+        'An import definition whose stored body was identical to the procedure gets the new body too (with a version snapshot). A finding on a stored body that differs from the deployed procedure only changes the stored body; deploy it from the import definition.',
+        'Every apply, automatic put-back and revert is a “Procedure changed” row on the Fixes tab with the diff; Revert (two clicks) restores the previous definition, and is refused when the procedure changed again after the fix. When an automatic put-back itself failed, the row offers Restore previous version. Import definition bodies that were synced are put back only if nobody edited them since, with their deployed hash and time.'
+      ]
+    },
+    {
+      type: 'warn',
+      text: 'If your deployment keeps a procedure’s source elsewhere (a repository or deploy script), update it there too — otherwise the next deploy puts the old version back.'
+    },
     { type: 'h2', id: 'sql-checks-fixes', text: 'Logging a fix from a script' },
     {
       type: 'p',
@@ -90,14 +123,48 @@ export const sqlChecksDocs: DocSection = {
       type: 'table',
       head: ['Route', 'What it does'],
       rows: [
-        ['GET /api/sql-checks/summary', 'Open counts by severity and check, the last run, the trend over the last 30 runs, top objects, settings and whether a run is going.'],
-        ['POST /api/sql-checks/run', 'Starts a run in the background (202 with run_id); 409 while one is running.'],
+        [
+          'GET /api/sql-checks/summary',
+          'Open counts by severity and check, the last run, the trend over the last 30 runs, top objects, settings and whether a run is going.'
+        ],
+        [
+          'POST /api/sql-checks/run',
+          'Starts a run in the background (202 with run_id); 409 while one is running.'
+        ],
         ['GET /api/sql-checks/runs · /runs/:id', 'Run history (paged) and one run with its stats.'],
-        ['GET /api/sql-checks/findings', 'Findings; filters status (open, accepted, resolved, all), severity, check, object, q; page and limit.'],
-        ['GET /api/sql-checks/findings/:id', 'One finding with its statement, figures, suggested fix and event history.'],
-        ['PATCH /api/sql-checks/findings/:id', '{status: "accepted", note} marks it as expected (a note is required); {status: "open"} reopens one marked as expected.'],
+        [
+          'GET /api/sql-checks/findings',
+          'Findings; filters status (open, accepted, resolved, all), severity, check, object, q; page and limit.'
+        ],
+        [
+          'GET /api/sql-checks/findings/:id',
+          'One finding with its statement, figures, suggested fix and event history.'
+        ],
+        [
+          'PATCH /api/sql-checks/findings/:id',
+          '{status: "accepted", note} marks it as expected (a note is required); {status: "open"} reopens one marked as expected.'
+        ],
+        [
+          'GET /api/sql-checks/findings/:id/proposal',
+          'The proposed fix: {proposable, class, risky, reasons, notes, diff, unified, new_definition_hash}. Changes nothing and compiles nothing.'
+        ],
+        [
+          'POST /api/sql-checks/findings/:id/proposal/compile',
+          '{new_definition_hash} compiles the previewed text in a rolled-back transaction: {ok, error?}.'
+        ],
+        [
+          'POST /api/sql-checks/findings/:id/apply',
+          '{new_definition_hash, confirm_risky?} applies the previewed fix; 409 when the definition changed since the preview, 422 when it does not compile. Answers {fix_id, applied, rolled_back, reason?, deployed}.'
+        ],
+        [
+          'POST /api/sql-checks/fixes/:id/revert',
+          'Restores the definition a fix from the page replaced (also after a failed automatic put-back); 409 when the procedure changed after the fix. Answers {reverted, skipped_import_bodies}.'
+        ],
         ['GET · POST /api/sql-checks/fixes', 'The fix log (paged); log a fix from a script.'],
-        ['GET · PATCH /api/sql-checks/settings', 'Read and change the settings (strict: unknown keys and bad values are refused with every problem named).']
+        [
+          'GET · PATCH /api/sql-checks/settings',
+          'Read and change the settings (strict: unknown keys and bad values are refused with every problem named).'
+        ]
       ]
     }
   ]

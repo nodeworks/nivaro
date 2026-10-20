@@ -124,7 +124,7 @@ export function buildCatalog(
   }
 }
 
-async function loadCatalog(): Promise<LoadedCatalog> {
+export async function loadCatalog(): Promise<LoadedCatalog> {
   const [columns, uniques, rows] = await Promise.all([
     db.raw(`SELECT c.TABLE_SCHEMA AS sch, c.TABLE_NAME AS tbl, c.COLUMN_NAME AS col, c.IS_NULLABLE AS nullable,
               c.DATA_TYPE AS type, c.CHARACTER_MAXIMUM_LENGTH AS len

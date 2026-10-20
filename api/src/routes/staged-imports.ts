@@ -14,6 +14,11 @@ import {
 import { parseRecalcRollups } from '../services/import-rollups.js'
 import { hasRunReports, parseRunReport, rebuildRunReport } from '../services/import-run-report.js'
 import { executeRevert, planRevert } from '../services/import-run-revert.js'
+import {
+  deployProcedure,
+  importBodyTargetsOwn,
+  snapshotImportDefinition
+} from '../services/procedure-deploy.js'
 import { describeStagingTables, purgeStagingTable } from '../services/staged-import-purge.js'
 import { rehearseProcedureImport } from '../services/staged-import-rehearsal.js'
 import {
@@ -43,42 +48,7 @@ import {
  * deployment-configured SQL against shared staging tables, so queueing and
  * definition management are admin-only.
  */
-/** Snapshot the whole definition (proc body + schema + validation together)
- *  so a bad edit is one click from undone. Content-deduped, pruned to 30. */
-async function snapshotDefinition(key: string, note: string, userId: string | null): Promise<void> {
-  try {
-    const row = await db('nivaro_import_definitions').where({ key }).first()
-    if (!row) return
-    const snapshot = JSON.stringify(row)
-    const latest = await db('nivaro_import_definition_versions')
-      .where('definition', row.id)
-      .orderBy('version', 'desc')
-      .first()
-    if (latest && latest.snapshot === snapshot) return
-    await db('nivaro_import_definition_versions').insert({
-      definition: row.id,
-      version: (Number(latest?.version) || 0) + 1,
-      snapshot,
-      note: note.slice(0, 255),
-      created_by: userId,
-      created_at: new Date()
-    })
-    const versions = await db('nivaro_import_definition_versions')
-      .where('definition', row.id)
-      .orderBy('version', 'desc')
-      .select('id')
-    if (versions.length > 30) {
-      await db('nivaro_import_definition_versions')
-        .whereIn(
-          'id',
-          versions.slice(30).map((v) => v.id)
-        )
-        .del()
-    }
-  } catch {
-    // Version capture must never block the edit it protects.
-  }
-}
+const snapshotDefinition = snapshotImportDefinition
 
 const IDENT_RE = /^[A-Za-z_][A-Za-z0-9_]*$/
 
@@ -146,17 +116,13 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'This definition has no stored procedure body' })
       if (!IDENT_RE.test(proc))
         return reply.code(400).send({ error: 'Definition has no valid procedure name' })
-      const targetsOwn = new RegExp(
-        `create\\s+or\\s+alter\\s+proc(edure)?\\s+(\\[?dbo\\]?\\.)?\\[?${proc}\\]?\\b`,
-        'i'
-      )
-      if (!targetsOwn.test(body)) {
+      if (!importBodyTargetsOwn(body, proc)) {
         return reply.code(400).send({
           error: `The body must start with CREATE OR ALTER PROCEDURE ${proc} — deploys are scoped to this definition's own procedure.`
         })
       }
       try {
-        await db.raw(body)
+        await deployProcedure(body, { schema: 'dbo', name: proc })
       } catch (err) {
         return reply.code(400).send({ error: `Deploy failed: ${(err as Error).message}` })
       }

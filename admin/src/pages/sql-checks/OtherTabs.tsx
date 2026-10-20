@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import {
   Area,
@@ -12,6 +12,7 @@ import {
   XAxis,
   YAxis
 } from 'recharts'
+import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { api } from '@/lib/api'
@@ -19,14 +20,17 @@ import { cn, formatDate, formatDateTime, formatNumber } from '@/lib/utils'
 import {
   CHECK_LABEL,
   Clip,
+  DiffView,
   errorText,
   type FixRow,
   fmtMs,
   objectLabel,
+  type PageFixDetail,
   type RunRow,
   type Summary,
   TYPE_LABEL,
-  useChartColors
+  useChartColors,
+  useTwoClick
 } from './shared'
 
 const PAGE = 25
@@ -241,6 +245,112 @@ const td = 'px-3 py-2 align-top'
 
 // ─── Fixes ──────────────────────────────────────────────────────────────────
 
+/** Outcome, diff and Revert for a procedure fix applied from the SQL checks page (#2563). */
+function PageFix({ row }: { row: FixRow }) {
+  const qc = useQueryClient()
+  const d = (row.detail ?? {}) as PageFixDetail
+  const [showDiff, setShowDiff] = useState(false)
+  const [armed, setArmed] = useTwoClick()
+  const [status, setStatus] = useState('')
+  const revert = useMutation({
+    mutationFn: () =>
+      api
+        .post<{ data: { reverted: boolean; skipped_import_bodies?: string[] } }>(
+          `/sql-checks/fixes/${row.id}/revert`
+        )
+        .then((r) => r.data.data),
+    onSuccess: (r) => {
+      const n = r.skipped_import_bodies?.length ?? 0
+      const msg = n
+        ? `Previous version restored. ${n} import definition ${n === 1 ? 'body was' : 'bodies were'} edited since and ${n === 1 ? 'was' : 'were'} left as ${n === 1 ? 'it is' : 'they are'}.`
+        : 'Previous version restored'
+      setStatus(msg)
+      toast.success(msg)
+      void qc.invalidateQueries({ queryKey: ['sql-checks'] })
+    },
+    onError: (err) => {
+      const msg = errorText(err, 'Couldn’t revert this fix.')
+      setStatus(msg)
+      toast.error(msg)
+    }
+  })
+  const state = d.reverted
+    ? `Reverted${d.reverted_by ? ` by ${d.reverted_by}` : ''}`
+    : d.applied
+      ? d.deployed
+        ? 'Applied and checked'
+        : 'Stored body saved (not deployed)'
+      : d.rolled_back
+        ? `Put back automatically: ${d.rollback_reason ?? 'the re-check was not clean'}`
+        : d.error
+          ? `Failed: ${d.error}`
+          : d.rollback_error
+            ? `Rollback failed: ${d.rollback_error}`
+            : 'Not applied'
+  return (
+    <div className='mt-1 grid gap-1 font-sans'>
+      <span
+        className={cn(
+          'text-[11.5px]',
+          d.applied && !d.reverted
+            ? 'text-emerald-700 dark:text-emerald-400'
+            : d.rollback_error || d.error
+              ? 'text-red-600 dark:text-red-400'
+              : 'text-muted-foreground'
+        )}
+      >
+        {state}
+      </span>
+      <span className='sr-only' role='status' aria-live='polite'>
+        {status}
+      </span>
+      <div className='flex flex-wrap items-center gap-2'>
+        {(d.diff?.length ?? 0) > 0 && (
+          <button
+            type='button'
+            aria-expanded={showDiff}
+            onClick={() => setShowDiff((v) => !v)}
+            className='rounded text-[11.5px] text-nvr-cyan hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+          >
+            {showDiff ? 'Hide diff' : 'View diff'}
+          </button>
+        )}
+        {(d.applied || !!d.rollback_error) && !d.reverted && !!d.applied_definition_hash && (
+          <Button
+            size='sm'
+            variant='outline'
+            className={cn(
+              'h-6 px-2 text-[11.5px]',
+              armed && 'border-amber-500 text-amber-700 dark:text-amber-300'
+            )}
+            disabled={revert.isPending}
+            onClick={() => {
+              if (!armed) return setArmed(true)
+              setArmed(false)
+              revert.mutate()
+            }}
+          >
+            {revert.isPending
+              ? 'Restoring…'
+              : armed
+                ? d.applied
+                  ? 'Click again to revert'
+                  : 'Click again to restore'
+                : d.applied
+                  ? 'Revert'
+                  : 'Restore previous version'}
+          </Button>
+        )}
+      </div>
+      {showDiff && d.diff && (
+        <div className='max-w-[640px]'>
+          <DiffView hunks={d.diff} label={`Change made by fix ${row.id}`} />
+        </div>
+      )}
+    </div>
+  )
+}
+
 const ACTION_LABEL: Record<FixRow['action'], string> = {
   cleanup: 'Cleanup',
   proc_fix: 'Procedure changed',
@@ -278,8 +388,8 @@ export function FixesTab() {
     <div className='p-4 sm:p-6'>
       <p className='m-0 mb-3 max-w-[80ch] text-[12.5px] text-muted-foreground'>
         Cleanups and guard indexes are logged by the fix scripts that apply them. “Procedure
-        changed” is logged here when a run finds that findings went away because their procedure or
-        query was edited.
+        changed” is logged when a fix is applied from a finding (with its diff and a Revert), or
+        when a run finds that findings went away because their procedure or query was edited.
       </p>
       {rows.length === 0 ? (
         <p className='m-0 text-[12.5px] text-muted-foreground'>No fixes recorded yet.</p>
@@ -310,22 +420,26 @@ export function FixesTab() {
                   </td>
                   <td className={cn(td, 'font-mono')}>
                     {r.target_table ?? r.target_object ?? '—'}
-                    {r.detail && (
-                      <div>
-                        <button
-                          type='button'
-                          aria-expanded={open === r.id}
-                          onClick={() => setOpen(open === r.id ? null : r.id)}
-                          className='mt-1 rounded font-sans text-[11.5px] text-nvr-cyan hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
-                        >
-                          {open === r.id ? 'Hide details' : 'Details'}
-                        </button>
-                        {open === r.id && (
-                          <pre className='m-0 mt-1 max-h-60 max-w-[480px] overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[11px] dark:bg-muted'>
-                            {JSON.stringify(r.detail, null, 2)}
-                          </pre>
-                        )}
-                      </div>
+                    {(r.detail as PageFixDetail | null)?.source === 'sql-checks-page' ? (
+                      <PageFix row={r} />
+                    ) : (
+                      r.detail && (
+                        <div>
+                          <button
+                            type='button'
+                            aria-expanded={open === r.id}
+                            onClick={() => setOpen(open === r.id ? null : r.id)}
+                            className='mt-1 rounded font-sans text-[11.5px] text-nvr-cyan hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'
+                          >
+                            {open === r.id ? 'Hide details' : 'Details'}
+                          </button>
+                          {open === r.id && (
+                            <pre className='m-0 mt-1 max-h-60 max-w-[480px] overflow-auto whitespace-pre-wrap rounded bg-slate-50 p-2 text-[11px] dark:bg-muted'>
+                              {JSON.stringify(r.detail, null, 2)}
+                            </pre>
+                          )}
+                        </div>
+                      )
                     )}
                   </td>
                   <td className={cn(td, 'text-right tabular-nums')}>

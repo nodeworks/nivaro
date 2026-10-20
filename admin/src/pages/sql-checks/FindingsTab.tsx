@@ -10,10 +10,12 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Textarea } from '@/components/ui/textarea'
 import { api } from '@/lib/api'
 import { cn, formatDateTime, formatNumber, formatRelative } from '@/lib/utils'
+import { ProposeFix } from './ProposeFix'
 import {
   CHECK_LABEL,
   CHECK_WHY,
   Clip,
+  EVENT_LABEL,
   errorText,
   type FindingDetail,
   type FindingRow,
@@ -505,18 +507,14 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
             </section>
           )}
 
+          <ProposeFix key={f.id} finding={f} />
+
           <section className='grid gap-2'>
             <h3 className='m-0 text-[12.5px] font-semibold'>History</h3>
             <ol className='m-0 grid list-none gap-1.5 border-l border-slate-200 p-0 pl-3 dark:border-border'>
               {f.events.map((e) => (
                 <li key={e.id} className='text-[12px]'>
-                  <span className='font-medium capitalize'>
-                    {e.event === 'accepted'
-                      ? 'Marked as expected'
-                      : e.event === 'unaccepted'
-                        ? 'Reopened'
-                        : e.event}
-                  </span>
+                  <span className='font-medium'>{EVENT_LABEL[e.event] ?? e.event}</span>
                   {e.by_name && <span className='text-muted-foreground'> by {e.by_name}</span>}
                   <span className='text-muted-foreground'>
                     {' '}
@@ -596,7 +594,9 @@ function FindingPanel({ id, onBack }: { id: number; onBack: () => void }) {
             )}
             {f.status === 'resolved' && (
               <p className='m-0 text-[12px] text-muted-foreground'>
-                Not seen in the latest run. It reopens if it comes back.
+                {f.events.at(-1)?.event === 'fixed'
+                  ? 'Fixed from this page. It reopens if a later run finds it again.'
+                  : 'Not seen in the latest run. It reopens if it comes back.'}
               </p>
             )}
           </section>

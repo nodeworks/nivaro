@@ -74,7 +74,25 @@ vi.mock('../../../services/sql-checks/settings.js', async (orig) => {
   }
 })
 
+vi.mock('../../../services/sql-checks/apply.js', async (orig) => {
+  const m = (await orig()) as Record<string, unknown>
+  return {
+    ...m,
+    proposalFor: vi.fn(async (id: number) => ({ finding_id: id, proposable: true })),
+    compileProposal: vi.fn(async () => ({ ok: true })),
+    applyFix: vi.fn(async () => ({ fix_id: 1, applied: true, rolled_back: false, deployed: true })),
+    revertFix: vi.fn(async () => ({ reverted: true }))
+  }
+})
+
 import { sqlChecksRoutes } from '../../../routes/sql-checks.js'
+import {
+  applyFix,
+  compileProposal,
+  FixError,
+  proposalFor,
+  revertFix
+} from '../../../services/sql-checks/apply.js'
 import { runSqlChecks, sqlChecksInFlight } from '../../../services/sql-checks/run.js'
 
 async function build() {
@@ -102,7 +120,11 @@ describe('SQL checks routes (#2562)', () => {
       ['GET', '/sql-checks/findings'],
       ['POST', '/sql-checks/run'],
       ['POST', '/sql-checks/fixes'],
-      ['PATCH', '/sql-checks/settings']
+      ['PATCH', '/sql-checks/settings'],
+      ['GET', '/sql-checks/findings/1/proposal'],
+      ['POST', '/sql-checks/findings/1/proposal/compile'],
+      ['POST', '/sql-checks/findings/1/apply'],
+      ['POST', '/sql-checks/fixes/1/revert']
     ] as const) {
       const res = await app.inject({ method, url, payload: method === 'GET' ? undefined : {} })
       expect(res.statusCode, `${method} ${url}`).toBe(403)
@@ -212,5 +234,52 @@ describe('SQL checks routes (#2562)', () => {
       rows_affected: 273657,
       run_by: 'efp-ops fix-null-key-copies'
     })
+  })
+
+  it('applies a fix only with the preview hash, and maps fix errors to their status', async () => {
+    const app = await build()
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/sql-checks/findings/5/apply',
+      payload: { new_definition_hash: 'nope' }
+    })
+    expect(bad.statusCode).toBe(400)
+    expect(applyFix).not.toHaveBeenCalled()
+    const hash = 'a'.repeat(64)
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/sql-checks/findings/5/apply',
+      payload: { new_definition_hash: hash, confirm_risky: true }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(applyFix).toHaveBeenCalledWith(
+      expect.objectContaining({ findingId: 5, newDefinitionHash: hash, confirmRisky: true })
+    )
+    vi.mocked(revertFix).mockRejectedValueOnce(new FixError(409, 'changed since'))
+    const conflict = await app.inject({ method: 'POST', url: '/sql-checks/fixes/3/revert' })
+    expect(conflict.statusCode).toBe(409)
+    expect(conflict.json()).toMatchObject({ error: 'changed since' })
+  })
+
+  it('previews with a GET and compiles only with a POST bound to the preview hash (S5)', async () => {
+    const app = await build()
+    const get = await app.inject({ method: 'GET', url: '/sql-checks/findings/5/proposal' })
+    expect(get.statusCode).toBe(200)
+    expect(proposalFor).toHaveBeenCalledWith(5)
+    expect(compileProposal).not.toHaveBeenCalled()
+    const bad = await app.inject({
+      method: 'POST',
+      url: '/sql-checks/findings/5/proposal/compile',
+      payload: {}
+    })
+    expect(bad.statusCode).toBe(400)
+    const hash = 'b'.repeat(64)
+    const ok = await app.inject({
+      method: 'POST',
+      url: '/sql-checks/findings/5/proposal/compile',
+      payload: { new_definition_hash: hash }
+    })
+    expect(ok.statusCode).toBe(200)
+    expect(compileProposal).toHaveBeenCalledWith(5, hash)
   })
 })
