@@ -23,8 +23,8 @@
  */
 
 import { isConfigWrite, noteConfigWrite } from './config-epoch.js'
-import { isOwnerWrite, ownersChanged } from './owner-signal.js'
 import { opsTopicsOfWrite, raiseOpsWrite } from './ops-signal.js'
+import { isOwnerWrite, ownersChanged } from './owner-signal.js'
 
 const TABLES = new Set([
   'nivaro_relations',
@@ -107,7 +107,9 @@ export function isInvalidatingWrite(sql: string): boolean {
 export function clearMetadataQueryCache(): void {
   if (cache.size > 0 || inflight.size > 0) counters.busts++
   cache.clear()
-  // A read that started before the write must not store what it saw.
+  // A read that started before the write must not store what it saw, and a
+  // caller arriving now must not join it either.
+  inflight.clear()
   generation++
 }
 
@@ -224,8 +226,11 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     const running = inflight.get(key)
     if (running) {
       counters.shared++
+      const joinedAt = generation
       return running.then(
         (rows) => {
+          // A write landed while the shared read ran: ask again rather than take its rows.
+          if (joinedAt !== generation) return original.call(this, connection, query)
           query.response = rebuild(rows)
           return query
         },
@@ -249,7 +254,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
 
     return original.call(this, connection, query).then(
       (done) => {
-        inflight.delete(key)
+        if (inflight.get(key) === shared) inflight.delete(key)
         const rows = reduce(done.response)
         if (rows) {
           if (startedAt === generation) {
@@ -263,7 +268,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
         return done
       },
       (err) => {
-        inflight.delete(key)
+        if (inflight.get(key) === shared) inflight.delete(key)
         fail(err)
         throw err
       }

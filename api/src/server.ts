@@ -240,20 +240,28 @@ export async function buildServer() {
     // Readiness results are shared by every replica (and refreshed by one).
     const { setReadinessRedis } = await import('./services/readiness.js')
     setReadinessRedis(app.redis)
-    // Compiled permission cache (#2442, PERMISSION_CACHE=on): access versions live in Redis,
-    // and every pool that writes moves them on an access-table write — whether or not this
-    // process has the cache on, so a partly enabled fleet stays correct.
+    // Compiled permission cache (#2442, PERMISSION_CACHE=on): access versions live in Redis;
+    // every pool that writes moves them on an access-table write, a procedure that may
+    // touch one, and when a transaction that wrote one settles. Off: nothing is attached.
     {
-      const { _backgroundDb, _staticDb } = await import('./db/index.js')
-      const { attachPermissionCacheSeam, setPermissionCacheRedis } = await import(
-        './services/permission-cache.js'
-      )
-      setPermissionCacheRedis(app.redis)
-      for (const k of [_staticDb, _backgroundDb]) {
-        attachPermissionCacheSeam(
-          (k as unknown as { client?: Parameters<typeof attachPermissionCacheSeam>[0] } | null)
-            ?.client
-        )
+      const pc = await import('./services/permission-cache.js')
+      if (pc.permissionCacheEnabled()) {
+        const { _backgroundDb, _staticDb } = await import('./db/index.js')
+        pc.setPermissionCacheRedis(app.redis)
+        for (const k of [_staticDb, _backgroundDb]) {
+          const client = (k as unknown as { client?: object } | null)?.client
+          pc.attachPermissionCacheSeam(client as Parameters<typeof pc.attachPermissionCacheSeam>[0])
+          pc.attachPermissionCacheCommitHook(client)
+        }
+        if (config.DB_CLIENT === 'mssql') {
+          pc.setPermissionCacheProcLookup(async (name) => {
+            const rows = (await _staticDb.raw('SELECT OBJECT_DEFINITION(OBJECT_ID(?)) AS body', [
+              name
+            ])) as Array<{ body: string | null }>
+            return rows?.[0]?.body ?? null
+          })
+        }
+        app.log.info('Permission cache on')
       }
     }
     // Idempotency keys: one store hook for the whole app (no-op without a claim).

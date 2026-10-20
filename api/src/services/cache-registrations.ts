@@ -25,7 +25,12 @@ import { bustInstanceOverridesCache } from './settings-overrides.js'
 import { clearSlaZoneCache } from './sla-zones.js'
 import { bustTransitionGuardCache } from './transition-guard.js'
 import { clearTreePermissionCache } from './tree-permissions.js'
-import { bustScopeDimensionCache, bustScopePathCache, bustUserScopeCache } from './user-scopes.js'
+import {
+  bustRoleAdminCache,
+  bustScopeDimensionCache,
+  bustScopePathCache,
+  bustUserScopeCache
+} from './user-scopes.js'
 
 /**
  * Cache console wiring (#236): names the process's major in-memory caches so
@@ -88,11 +93,16 @@ export function registerKnownCaches(): void {
   onPermissionCacheReset((userId) => {
     if (!userId) clearMetadataQueryCache()
   })
-  registerCache('user-scopes', 'User scope rows, scope dimensions and resolved scope paths', () => {
-    bustUserScopeCache()
-    bustScopeDimensionCache()
-    bustScopePathCache()
-  })
+  registerCache(
+    'user-scopes',
+    'User scope rows, scope dimensions, resolved scope paths and role admin flags',
+    () => {
+      bustUserScopeCache()
+      bustScopeDimensionCache()
+      bustScopePathCache()
+      bustRoleAdminCache()
+    }
+  )
   registerCache(
     'workflow-auto',
     'Workflow bindings and watched child collections for automatic transitions',

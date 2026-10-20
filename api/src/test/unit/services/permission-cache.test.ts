@@ -3,23 +3,29 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { db } from '../../../db/index.js'
 import { runWithTenantDb } from '../../../db/tenant-context.js'
 import {
+  attachPermissionCacheCommitHook,
   attachPermissionCacheSeam,
+  bodyTouchesAccess,
   bumpAccessVersion,
   bumpUserAccessVersion,
+  classifyStatement,
   clearPermissionCache,
   isAccessWrite,
+  notePermissionStatement,
   notePrincipalKind,
   PERMISSION_CACHE_TTL_MS,
   permissionCacheStats,
   resetPermissionCacheForTests,
   setPermissionCacheEnabled,
+  setPermissionCacheProcLookup,
   setPermissionCacheRedis
 } from '../../../services/permission-cache.js'
 import { can, getAllowedFields, getRowFilter, isAdminRole } from '../../../services/permissions.js'
 import {
   bustScopeDimensionCache,
   bustUserScopeCache,
-  getUserScopeEnforcement
+  getUserScopeEnforcement,
+  getUserScopes
 } from '../../../services/user-scopes.js'
 import type { User } from '../../../types.js'
 import { makeRegularUser } from '../../helpers.js'
@@ -39,6 +45,7 @@ const state = {
   policies: [] as FakePolicy[],
   userScopes: [] as Array<Record<string, unknown>>,
   dimensions: [] as Array<Record<string, unknown>>,
+  columnFail: 0,
   reads: 0
 }
 
@@ -91,6 +98,13 @@ function chainFor(table: string) {
     orderBy: vi.fn(() => chain),
     select: vi.fn(() => chain),
     first: vi.fn(async () => rows()[0]),
+    columnInfo: vi.fn(async () => {
+      if (state.columnFail > 0) {
+        state.columnFail--
+        throw new Error('column read failed')
+      }
+      return { id: {}, first_name: {}, last_name: {}, email: {} }
+    }),
     // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
     then: (res: (v: unknown) => unknown, rej?: (e: unknown) => unknown) =>
       Promise.resolve(rows()).then(res, rej)
@@ -99,6 +113,10 @@ function chainFor(table: string) {
 }
 
 // ── a Redis that two "processes" share ───────────────────────────────────────
+
+const G = 'nvr:permver:{}:g'
+const NONCE = 'nvr:permver:{}:n'
+const U = (id: string) => `nvr:permver:{}:u:${id}`
 
 function makeRedis() {
   const kv = new Map<string, string>()
@@ -115,15 +133,22 @@ function makeRedis() {
       kv.set(key, String(n))
       return n
     }),
-    expire: vi.fn(async () => 1)
+    expire: vi.fn(async () => 1),
+    set: vi.fn(async (key: string, value: string, _mode: 'NX') => {
+      if (kv.has(key)) return null
+      kv.set(key, value)
+      return 'OK'
+    })
   }
+  // The incarnation nonce a running cluster already has.
+  kv.set(NONCE, 'boot-1')
   return r
 }
 let redis = makeRedis()
 
 /** Another replica moving the cluster-wide version (its own write went through its seam). */
 async function remoteBump(userId?: string) {
-  await redis.incr(userId ? `nvr:permver:u:${userId.toLowerCase()}` : 'nvr:permver:g')
+  await redis.incr(userId ? U(userId.toLowerCase()) : G)
 }
 
 /** Each request gets a fresh user object from authenticate. */
@@ -266,7 +291,7 @@ describe('on: separate principals never share an entry', () => {
       )
     )
     expect(state.reads).toBeGreaterThan(reads)
-    expect(redis.mget.mock.calls.some((c) => c[0] === 'nvr:permver:t:tenant-a:g')).toBe(true)
+    expect(redis.mget.mock.calls.some((c) => c[1] === 'nvr:permver:{tenant-a}:g')).toBe(true)
   })
 })
 
@@ -337,9 +362,9 @@ describe('on: every access-changing write path makes the next call rebuild', () 
       mutate()
       client.emit('query', { sql })
       expect(await can(freshUser(), 'delete', 'articles')).toBe(true)
-      expect(redis.kv.get('nvr:permver:g')).toBe('1')
+      expect(redis.kv.get(G)).toBe('1')
       client.emit('query-response', [], { sql })
-      expect(redis.kv.get('nvr:permver:g')).toBe('2')
+      expect(redis.kv.get(G)).toBe('2')
     })
   }
 
@@ -355,11 +380,11 @@ describe('on: every access-changing write path makes the next call rebuild', () 
     vi.useFakeTimers()
     const client = seamClient()
     client.emit('query', { sql: 'update [nivaro_roles] set [name] = @p0', __knexTxId: 'trx1' })
-    const after = Number(redis.kv.get('nvr:permver:g'))
+    const after = Number(redis.kv.get(G))
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(Number(redis.kv.get('nvr:permver:g'))).toBe(after + 1)
+    expect(Number(redis.kv.get(G))).toBe(after + 1)
     await vi.advanceTimersByTimeAsync(15_000)
-    expect(Number(redis.kv.get('nvr:permver:g'))).toBe(after + 3)
+    expect(Number(redis.kv.get(G))).toBe(after + 3)
   })
 
   it('another replica moved the cluster-wide version', async () => {
@@ -428,6 +453,18 @@ describe('on: every access-changing write path makes the next call rebuild', () 
     expect((await getUserScopeEnforcement(freshUser(), 'articles')).filters).toEqual([])
   })
 
+  it("a person's bump drops only that person's entries here", async () => {
+    const other = () => freshUser({ id: 'other-user-id' })
+    await can(other(), 'read', 'articles')
+    await can(freshUser(), 'read', 'articles')
+    const reads = state.reads
+    bumpUserAccessVersion('test-user-id')
+    await can(other(), 'read', 'articles')
+    expect(state.reads).toBe(reads)
+    await can(freshUser(), 'read', 'articles')
+    expect(state.reads).toBeGreaterThan(reads)
+  })
+
   it('API key / View-as / scope routes move the person version', async () => {
     expect(await can(freshUser(), 'delete', 'articles')).toBe(false)
     state.policies.push({
@@ -438,7 +475,7 @@ describe('on: every access-changing write path makes the next call rebuild', () 
     })
     bumpUserAccessVersion('TEST-USER-ID')
     await Promise.resolve()
-    expect(redis.kv.get('nvr:permver:u:test-user-id')).toBe('1')
+    expect(redis.kv.get(U('test-user-id'))).toBe('1')
     expect(await can(freshUser(), 'delete', 'articles')).toBe(true)
   })
 
@@ -561,5 +598,232 @@ describe('isAccessWrite', () => {
     ['update [articles] set [title] = @p0', false]
   ])('%s → %s', (sql, want) => {
     expect(isAccessWrite(sql)).toBe(want)
+  })
+})
+
+describe('statement shapes that may change access', () => {
+  it.each([
+    ['UPDATE nivaro_roles WITH (ROWLOCK) SET admin_access = 0', true],
+    ['update /* x */ nivaro_roles set admin_access = 0', true],
+    ['update nivaro_roles r set admin_access = false', true],
+    ['update nivaro_roles as r set admin_access = false', true],
+    ['SET NOCOUNT ON; DROP TABLE nivaro_policies', true],
+    ['SET NOCOUNT ON; DROP TABLE some_junction', true],
+    ['create table [projects_regions] ([id] int)', true],
+    ['CREATE OR ALTER VIEW v_scope AS SELECT 1 AS x', true],
+    ['select * into archive_copy from projects', true],
+    ["EXEC sp_executesql N'UPDATE nivaro_roles SET admin_access = 0'", true],
+    ['exec (@sql)', true],
+    ["exec('update x set y = 1')", true],
+    ['insert into [nivaro_policies] ([role]) output inserted.[id] values (@p0)', true],
+    ['update [nivaro_policies] set [fields] = @p0 where [id] = @p1;select @@rowcount', true],
+    [
+      'merge [nivaro_user_scopes] as t using (select 1 as a) s on 1 = 0 when not matched then insert (a) values (1);',
+      true
+    ],
+    ["select * from nivaro_roles where name = 'update nivaro_roles set x'", false],
+    ['select * from nivaro_roles -- update nivaro_roles set x', false],
+    ['select [id] into #ids from [nivaro_relations]', false],
+    ['create table #scratch (id int)', false],
+    ['drop table if exists #scratch', false],
+    ['exec sp_getapplock @Resource = @p0', false]
+  ])('%s → %s', (sql, want) => {
+    expect(isAccessWrite(sql)).toBe(want)
+  })
+
+  it('names the procedures a batch runs', () => {
+    expect(classifyStatement('EXEC dbo.usp_budget_rollup @year = 2026').procs).toEqual([
+      'dbo.usp_budget_rollup'
+    ])
+    expect(classifyStatement('exec @rc = [dbo].[sync_scopes]').procs).toEqual(['dbo.sync_scopes'])
+  })
+
+  it('a procedure body decides: unknown or touching = bump, a plain one = no bump', async () => {
+    const bodies: Record<string, string> = {
+      'dbo.report_only': 'CREATE PROCEDURE dbo.report_only AS SELECT * FROM projects',
+      'dbo.sync_scopes': 'CREATE PROCEDURE dbo.sync_scopes AS DELETE FROM nivaro_user_scopes',
+      'dbo.nested': 'CREATE PROCEDURE dbo.nested AS EXEC dbo.other'
+    }
+    setPermissionCacheProcLookup(async (name) => bodies[name] ?? null)
+    const tick = () => new Promise((r) => setTimeout(r, 0))
+    const start = Number(redis.kv.get(G) ?? 0)
+    // First sight: not known yet, so it counts.
+    expect(notePermissionStatement('exec dbo.report_only', false)).toBe(true)
+    await tick()
+    expect(notePermissionStatement('exec dbo.report_only', false)).toBe(false)
+    notePermissionStatement('exec dbo.sync_scopes', false)
+    await tick()
+    expect(notePermissionStatement('exec dbo.sync_scopes', false)).toBe(true)
+    notePermissionStatement('exec dbo.nested', false)
+    await tick()
+    expect(notePermissionStatement('exec dbo.nested', false)).toBe(true)
+    // A redeployed procedure is looked at again.
+    notePermissionStatement('CREATE OR ALTER PROCEDURE dbo.report_only AS SELECT 1', false)
+    expect(notePermissionStatement('exec dbo.report_only', false)).toBe(true)
+    expect(bodyTouchesAccess(null)).toBe(true)
+    await tick()
+    expect(Number(redis.kv.get(G))).toBeGreaterThan(start)
+    setPermissionCacheProcLookup(null)
+  })
+})
+
+describe('transactions move the version when they settle', () => {
+  type Pending = { resolve: () => void; reject: (e: unknown) => void }
+  class FakeClient {
+    trxs: Pending[] = []
+    transaction(_container: unknown, _config: unknown, outerTx?: { txid: string }) {
+      let resolve: () => void = () => {}
+      let reject: (e: unknown) => void = () => {}
+      const p = new Promise<void>((res, rej) => {
+        resolve = res
+        reject = rej
+      })
+      p.catch(() => {})
+      this.trxs.push({ resolve, reject })
+      return {
+        txid: `trx${this.trxs.length}`,
+        outerTx: outerTx ?? null,
+        // biome-ignore lint/suspicious/noThenProperty: a knex Transaction is a thenable
+        then: (a: () => void, b: (e: unknown) => void) => p.then(a, b)
+      }
+    }
+  }
+  const client = new FakeClient()
+  attachPermissionCacheCommitHook(client)
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+  const g = () => Number(redis.kv.get(G) ?? 0)
+
+  it('commit of a transaction that wrote an access table moves the version after it', async () => {
+    const trx = client.transaction(null, null)
+    notePermissionStatement('update [nivaro_policies] set [x] = @p0', false, trx.txid)
+    await tick()
+    const during = g()
+    client.trxs[client.trxs.length - 1].resolve()
+    await tick()
+    expect(g()).toBe(during + 1)
+  })
+
+  it('a rollback moves it too, and an unrelated transaction does not', async () => {
+    const trx = client.transaction(null, null)
+    notePermissionStatement('delete from [nivaro_roles] where [id] = @p0', false, trx.txid)
+    client.transaction(null, null)
+    await tick()
+    const during = g()
+    client.trxs[client.trxs.length - 1].resolve()
+    await tick()
+    expect(g()).toBe(during)
+    client.trxs[client.trxs.length - 2].reject(new Error('rolled back'))
+    await tick()
+    expect(g()).toBe(during + 1)
+  })
+
+  it('a savepoint hands its mark to the outer transaction', async () => {
+    const outer = client.transaction(null, null)
+    const inner = client.transaction(null, null, outer)
+    notePermissionStatement(
+      'insert into [nivaro_user_scopes] ([user]) values (@p0)',
+      false,
+      inner.txid
+    )
+    await tick()
+    const during = g()
+    client.trxs[client.trxs.length - 1].resolve() // savepoint released
+    await tick()
+    expect(g()).toBe(during)
+    client.trxs[client.trxs.length - 2].resolve() // outer commit
+    await tick()
+    expect(g()).toBe(during + 1)
+  })
+})
+
+describe('races and resets the fills must not survive', () => {
+  const region = {
+    id: 1,
+    name: 'region',
+    label: 'Region',
+    target_collection: 'articles',
+    strict: false,
+    is_active: true
+  }
+  const restrict = {
+    id: 1,
+    user: 'test-user-id',
+    dimension: 'region',
+    mode: 'restrict',
+    values: '[7]'
+  }
+
+  it('the cache console / epoch clear also drops the scope rows the entries came from', async () => {
+    state.dimensions = [region]
+    expect((await getUserScopeEnforcement(freshUser(), 'articles')).filters).toEqual([])
+    state.userScopes.push(restrict)
+    clearPermissionCache()
+    expect((await getUserScopeEnforcement(freshUser(), 'articles')).filters).toHaveLength(1)
+  })
+
+  it('a scope-row read that straddled a reset is answered but not kept', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((t: string) => {
+      const c = chainFor(t) as Record<string, unknown>
+      const then = c.then as (a: (v: unknown) => unknown, b?: (e: unknown) => unknown) => unknown
+      // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
+      c.then = (a: (v: unknown) => unknown, b?: (e: unknown) => unknown) =>
+        gate.then(() => then(a, b))
+      return c as never
+    })
+    const pending = getUserScopes('test-user-id')
+    await new Promise((r) => setTimeout(r, 0))
+    bumpAccessVersion() // a write landed while the read was out…
+    release() // …and the read comes back with what it saw before it
+    expect(await pending).toHaveLength(0)
+    state.userScopes.push(restrict)
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation(
+      (t: string) => chainFor(t) as never
+    )
+    expect(await getUserScopes('test-user-id')).toHaveLength(1)
+  })
+
+  it('counters lost and climbed back to the same number still count as a move (nonce)', async () => {
+    await remoteBump()
+    expect(await can(freshUser(), 'delete', 'articles')).toBe(false)
+    state.policies.push({
+      id: 9,
+      role: 'regular-role-id',
+      action: 'delete',
+      collection: 'articles'
+    })
+    // Redis came back empty, then one write moved g back to exactly 1.
+    redis.kv.clear()
+    await remoteBump()
+    expect(await can(freshUser(), 'delete', 'articles')).toBe(true) // no nonce: uncached
+    await new Promise((r) => setTimeout(r, 0))
+    expect(redis.kv.get(NONCE)).toBeTruthy()
+    expect(await can(freshUser(), 'delete', 'articles')).toBe(true) // new nonce: rebuilt
+  })
+
+  it('a field list built from the fallback column list is not kept', async () => {
+    state.policies.push({
+      id: 20,
+      role: 'regular-role-id',
+      action: 'read',
+      collection: 'nivaro_users'
+    })
+    state.columnFail = 1
+    expect(await getAllowedFields(freshUser(), 'read', 'nivaro_users')).toEqual(['id'])
+    expect(await getAllowedFields(freshUser(), 'read', 'nivaro_users')).toContain('first_name')
+  })
+})
+
+describe('off: nothing on the write side', () => {
+  it('moves no version and reads nothing', async () => {
+    setPermissionCacheEnabled(false)
+    expect(notePermissionStatement('update [nivaro_roles] set [x] = 1', false, 'trx9')).toBe(false)
+    bumpAccessVersion()
+    bumpUserAccessVersion('test-user-id')
+    await new Promise((r) => setTimeout(r, 0))
+    expect(redis.incr).not.toHaveBeenCalled()
   })
 })

@@ -1,5 +1,9 @@
 import type { Knex } from 'knex'
 import { resolveDb } from '../db/index.js'
+import { bumpAccessVersion, notePermissionStatement } from './permission-cache.js'
+
+/** Pinned connections a batch with a possible access write ran on (permission cache). */
+const touched = new WeakSet<object>()
 
 /**
  * Long-running and multi-statement SQL, outside knex.raw's two limits.
@@ -98,8 +102,20 @@ function execBatch<T>(
       for (const c of cols) row[c.metadata.colName] = c.value
       rows.push(row as T)
     })
-    req.once('requestCompleted', () => done(() => resolve(rows)))
-    req.on('error', (e) => done(() => reject(e)))
+    req.once('requestCompleted', () =>
+      done(() => {
+        notePermissionStatement(sql, true)
+        resolve(rows)
+      })
+    )
+    req.on('error', (e) =>
+      done(() => {
+        notePermissionStatement(sql, true)
+        reject(e)
+      })
+    )
+    // A raw batch reaches no knex event: the permission cache hears it here.
+    if (notePermissionStatement(sql, false)) touched.add(conn)
     conn.execSqlBatch(req)
   })
 }
@@ -154,6 +170,9 @@ export async function withLongConnection<R>(
       )
     }
     await client.releaseConnection(conn)
+    // Batches on this connection may have held a transaction across calls (BEGIN … COMMIT):
+    // it has ended now, whichever way.
+    if (touched.delete(conn)) bumpAccessVersion()
   }
 }
 

@@ -5,7 +5,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { ApiKeyScope } from '../middleware/authenticate.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { bumpUserAccessVersion } from '../services/permission-cache.js'
+import { bumpUserAccessVersion, permissionCacheEnabled } from '../services/permission-cache.js'
 
 interface ApiKeyBody {
   scope_restrictions?: Array<{ dimension: string; values: Array<string | number> }> | null
@@ -294,9 +294,9 @@ export async function apiKeysRoutes(app: FastifyInstance) {
   // Delete
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
-    const owner = (await db('nivaro_api_keys').where({ id }).first('user')) as
-      | { user?: string }
-      | undefined
+    const owner = permissionCacheEnabled()
+      ? ((await db('nivaro_api_keys').where({ id }).first('user')) as { user?: string } | undefined)
+      : undefined
     const deleted = await db('nivaro_api_keys').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'API key not found' })
     bumpUserAccessVersion(owner?.user)

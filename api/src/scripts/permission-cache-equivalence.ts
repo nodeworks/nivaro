@@ -87,6 +87,16 @@ async function compiledRead(user: User, collection: string): Promise<string> {
   return JSON.stringify({ sql: native.sql, bindings: native.bindings, deny: scope.deny })
 }
 
+/** Run `fn` over `items` with `n` in flight (the shared DB answers each read in ~20 ms). */
+async function pool<T>(items: T[], n: number, fn: (item: T) => Promise<void>): Promise<void> {
+  let next = 0
+  await Promise.all(
+    Array.from({ length: Math.max(1, n) }, async () => {
+      while (next < items.length) await fn(items[next++])
+    })
+  )
+}
+
 function same(a: unknown, b: unknown): boolean {
   return JSON.stringify(a) === JSON.stringify(b)
 }
@@ -100,6 +110,7 @@ async function main() {
 
   const sampleSize = arg('collections', 12)
   const executeSample = arg('execute', 40)
+  const concurrency = arg('concurrency', 6)
   const users = (await db('nivaro_users')
     .where({ status: 'active' })
     .whereNotNull('role')
@@ -134,19 +145,21 @@ async function main() {
   const t0 = performance.now()
   let s0 = roundTrips()
   let offCalls = 0
-  for (const role of roles) {
+  const rolePairs = roles.flatMap((role) =>
+    [...allCollections, ...SYSTEM].map((c) => [role, c] as const)
+  )
+  await pool(rolePairs, concurrency, async ([role, c]) => {
     const u = users.find((x) => String(x.role) === role) as User
-    for (const c of [...allCollections, ...SYSTEM]) {
-      refRole.set(`${role}|${c}`, await roleAnswers({ ...u }, c))
-      offCalls++
-    }
-  }
+    refRole.set(`${role}|${c}`, await roleAnswers({ ...u }, c))
+    offCalls++
+  })
   const offRoleMs = performance.now() - t0
   const offRoleStatements = roundTrips() - s0
   s0 = roundTrips()
-  for (const u of users) {
+  await pool(users, concurrency, async (u) => {
     for (const c of collectionsFor(u)) refRead.set(`${u.id}|${c}`, await compiledRead({ ...u }, c))
-  }
+  })
+  console.log(`uncached reads compiled for every person (${refRead.size})`)
   console.log(
     `uncached: ${offCalls} role×collection sets (${offCalls * 12} answers) in ${offRoleMs.toFixed(0)} ms, ${offRoleStatements} round trips (${(offRoleStatements / offCalls).toFixed(1)} per collection × 4 actions)`
   )
@@ -160,15 +173,17 @@ async function main() {
     if (mismatches <= 20)
       console.log(`MISMATCH ${what} user=${u.id} role=${u.role} ${c}`, { want, got })
   }
-  const passMs: number[] = []
-  const passStatements: number[] = []
-  for (const pass of ['cold', 'warm']) {
-    const start = performance.now()
-    const st = roundTrips()
-    const everyCollection = [...allCollections, ...SYSTEM]
-    for (const c of everyCollection) {
-      for (const base of users) {
-        if (!collectionsFor(base).includes(c)) continue
+  // Cold then warm per collection, back to back: the warm pass lands inside the TTL, and a
+  // collection's entries for every person fit in the cache at once.
+  const passStatements = [0, 0]
+  const passMs = [0, 0]
+  const everyCollection = [...allCollections, ...SYSTEM]
+  for (const c of everyCollection) {
+    const who = users.filter((base) => collectionsFor(base).includes(c))
+    for (const [i, pass] of ['cold', 'warm'].entries()) {
+      const start = performance.now()
+      const st = roundTrips()
+      await pool(who, concurrency, async (base) => {
         // A fresh user object per "request", tagged like authenticate does.
         const u = { ...base } as User
         notePrincipalKind(u, 'session::::')
@@ -182,15 +197,16 @@ async function main() {
         compared++
         if (read !== refRead.get(`${base.id}|${c}`))
           report(`${pass} compiled read`, base, c, refRead.get(`${base.id}|${c}`), read)
-      }
+      })
+      passMs[i] += performance.now() - start
+      passStatements[i] += roundTrips() - st
     }
-    passMs.push(performance.now() - start)
-    passStatements.push(roundTrips() - st)
-    console.log(
-      `cached ${pass}: ${(performance.now() - start).toFixed(0)} ms, ${roundTrips() - st} round trips`,
-      permissionCacheStats()
-    )
+    if (who.length > 10) console.log(`  ${c}: ${who.length} people`)
   }
+  console.log(
+    `cached: cold ${passMs[0].toFixed(0)} ms / ${passStatements[0]} round trips, warm ${passMs[1].toFixed(0)} ms / ${passStatements[1]} round trips`,
+    permissionCacheStats()
+  )
 
   // ── 3. key separation: API-key restrictions + View-as kinds ─────────────────
   const scoped = (await db('nivaro_user_scopes')
