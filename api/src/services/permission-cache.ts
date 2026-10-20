@@ -39,8 +39,9 @@
  *  - the configuration epoch (db/config-epoch.ts) clears this cache and the
  *    caches it is built from when another process — a script, a process with
  *    the cache off, a process on another Redis — wrote configuration.
- * A writer outside the app (SSMS, a job on the database server) moves none of
- * them: the hard TTL is the backstop.
+ * A writer outside the app (SSMS, a job on the database server, a linked server, a
+ * trigger on a business table that writes an access table, sp_MSforeachtable-style
+ * generated SQL) moves none of them: the hard TTL is the backstop.
  *
  * Whenever the versions move, the caches the entries are built from (user
  * scope rows, dimensions, scope routes, role admin flags, driver-seam config
@@ -60,9 +61,8 @@ import type { User } from '../types.js'
 export interface PermissionCacheRedis {
   status?: string
   mget(...keys: string[]): Promise<Array<string | null>>
-  incr(key: string): Promise<number>
-  expire(key: string, seconds: number): Promise<number>
-  set(key: string, value: string, mode: 'NX'): Promise<unknown>
+  // biome-ignore lint/suspicious/noExplicitAny: ioredis overloads (NX / EX ttl)
+  set(...args: any[]): Promise<unknown>
 }
 
 function bounded(raw: string | undefined, fallback: number, min: number, max: number): number {
@@ -101,7 +101,8 @@ export function permissionCacheEnabled(): boolean {
   return enabled
 }
 
-/** Tests and the equivalence harness switch the cache at run time. */
+/** Tests and the equivalence harness switch the cache at run time. A process that booted
+ *  with it off has no seam or commit hook attached, so its own writes move nothing. */
 export function setPermissionCacheEnabled(on: boolean): void {
   enabled = on && !CLOUD
   resetLocal(undefined, false)
@@ -112,6 +113,14 @@ export function setPermissionCacheEnabled(on: boolean): void {
 type Entry = { at: number; v: unknown }
 const entries = new Map<string, Entry>()
 let generation = 0
+/** Per person: a reset for one person drops only that person's in-flight fills. */
+const userGeneration = new Map<string, number>()
+let tokenSeq = 0
+/** A value no other write — here or on any process, before or after a Redis loss — ever
+ *  produces, so a version can never come back to one an entry was stored under. */
+function freshToken(): string {
+  return `${NONCE_SEED}-${(++tokenSeq).toString(36)}`
+}
 const seenGlobal = new Map<string, string>()
 const seenUser = new Map<string, string>()
 const kinds = new WeakMap<object, string>()
@@ -147,14 +156,20 @@ export function onPermissionCacheReset(fn: (userId?: string) => void): void {
 }
 
 function resetLocal(userId: string | undefined, listeners: boolean, scan = true): void {
-  if (userId === undefined) entries.clear()
-  else if (scan) {
-    for (const key of entries.keys()) {
-      if (key.split('\u0000', 3)[2]?.toLowerCase() === userId) entries.delete(key)
+  if (userId === undefined) {
+    entries.clear()
+    procTouches.clear()
+    // A fill that started before this point is not stored.
+    generation++
+  } else {
+    if (scan) {
+      for (const key of entries.keys()) {
+        if (key.split('\u0000', 3)[2]?.toLowerCase() === userId) entries.delete(key)
+      }
     }
+    if (userGeneration.size >= 50_000) userGeneration.clear()
+    userGeneration.set(userId, (userGeneration.get(userId) ?? 0) + 1)
   }
-  // A fill that started before this point is not stored.
-  generation++
   counters.resets++
   if (!listeners) return
   for (const fn of resetListeners) {
@@ -194,14 +209,17 @@ function tenantKey(): string {
   return getTenantId() ?? ''
 }
 // One hash slot per tenant ({…}), so the MGET also works on a Redis Cluster.
+function slot(tenant: string): string {
+  return `{${tenant || 'self'}}`
+}
 function globalKey(tenant: string): string {
-  return `${KEY}:{${tenant}}:g`
+  return `${KEY}:${slot(tenant)}:g`
 }
 function userKey(tenant: string, uid: string): string {
-  return `${KEY}:{${tenant}}:u:${uid}`
+  return `${KEY}:${slot(tenant)}:u:${uid}`
 }
 function nonceKey(tenant: string): string {
-  return `${KEY}:{${tenant}}:n`
+  return `${KEY}:${slot(tenant)}:n`
 }
 
 /** A version this process had not seen yet — moved elsewhere, or seen for the first time
@@ -226,7 +244,9 @@ function observe(tenant: string, uid: string, v: Versions): void {
   if (g === now) resetLocal(uid, true, u !== undefined)
 }
 
-let nonceSeq = 0
+/** Missing-nonce resets, at most one per tenant per second (a Redis that refuses writes
+ *  would otherwise clear every cache on every request). */
+const lastNonceReset = new Map<string, number>()
 
 async function readVersions(
   r: PermissionCacheRedis,
@@ -249,9 +269,16 @@ async function readVersions(
     if (res[0] == null) {
       // No nonce: the counters were lost (or never made). Start a new incarnation, drop
       // everything built under the old one, and answer this request uncached.
-      void r.set(nonceKey(tenant), `${NONCE_SEED}-${++nonceSeq}`, 'NX').catch(() => {})
+      void r.set(nonceKey(tenant), freshToken(), 'NX').catch(() => {})
       seenGlobal.delete(tenant)
-      resetLocal(undefined, true)
+      const at = Date.now()
+      if (at - (lastNonceReset.get(tenant) ?? 0) >= 1_000) {
+        lastNonceReset.set(tenant, at)
+        resetLocal(undefined, true)
+      } else {
+        entries.clear()
+        generation++
+      }
       return null
     }
     const v = { n: String(res[0]), g: String(res[1] ?? '0'), u: String(res[2] ?? '0') }
@@ -334,13 +361,15 @@ export async function cachedAccess<T>(
   }
   counters.misses++
   const gen = generation
+  const uid = String(user.id ?? '').toLowerCase()
+  const ugen = userGeneration.get(uid) ?? 0
   let degraded = false
   const value = await compute({
     degraded() {
       degraded = true
     }
   })
-  if (gen === generation && enabled && !degraded) {
+  if (gen === generation && ugen === (userGeneration.get(uid) ?? 0) && enabled && !degraded) {
     if (entries.size >= MAX_ENTRIES) {
       const oldest = entries.keys().next().value
       if (oldest !== undefined) entries.delete(oldest)
@@ -362,7 +391,7 @@ export function bumpAccessVersion(): void {
   resetLocal(undefined, true)
   const r = redis
   if (!r) return
-  void r.incr(globalKey(tenantKey())).catch(() => {
+  void r.set(globalKey(tenantKey()), freshToken()).catch(() => {
     counters.version_errors++
   })
 }
@@ -380,12 +409,9 @@ export function bumpUserAccessVersion(userId: string | number | null | undefined
   const r = redis
   if (!r) return
   const key = userKey(tenantKey(), uid)
-  void r
-    .incr(key)
-    .then(() => r.expire(key, USER_VERSION_TTL_S))
-    .catch(() => {
-      counters.version_errors++
-    })
+  void r.set(key, freshToken(), 'EX', USER_VERSION_TTL_S).catch(() => {
+    counters.version_errors++
+  })
 }
 
 const ACCESS_TABLES = [
@@ -412,11 +438,35 @@ const EXEC_RE = /\bexec(?:ute)?(?:\s*(\()|\s+(?:@\w+\s*=\s*)?([\w.[\]"#@]+))/gi
 
 /** Comments and string literals removed, so neither can make or hide a write. */
 function strip(sql: string): string {
-  return sql
-    .replace(/\/\*[\s\S]*?\*\//g, ' ')
-    .replace(/--[^\n]*/g, ' ')
-    .replace(/N?'(?:[^']|'')*'/g, "''")
+  // One pass, left to right: whichever starts first wins, so a quote inside a comment and
+  // a comment marker inside a string are both read as what they are.
+  return sql.replace(/N?'(?:[^']|'')*'?|\/\*[\s\S]*?(?:\*\/|$)|--[^\n]*/gi, (m) =>
+    m.startsWith('/*') || m.startsWith('--') ? ' ' : "''"
+  )
 }
+
+/** System procedures that never write data (everything else named sp_… is looked up). */
+const READ_ONLY_SYSTEM_PROCS = new Set([
+  'sp_getapplock',
+  'sp_releaseapplock',
+  'sp_set_session_context',
+  'sp_spaceused',
+  'sp_who',
+  'sp_who2',
+  'sp_lock',
+  'sp_help',
+  'sp_helptext',
+  'sp_helpindex',
+  'sp_columns',
+  'sp_tables',
+  'sp_describe_first_result_set',
+  'sp_describe_undeclared_parameters',
+  'sp_refreshview',
+  'sp_recompile',
+  'sp_prepare',
+  'sp_unprepare',
+  'sp_reset_connection'
+])
 
 export type StatementVerdict = { bump: boolean; procs: string[] }
 
@@ -440,8 +490,13 @@ export function classifyStatement(sql: string): StatementVerdict {
     if (target === '(' || target.startsWith('@')) return { bump: true, procs: [] }
     const name = target.replace(/[[\]"]/g, '').toLowerCase()
     const leaf = name.split('.').pop() ?? name
-    // System procedures (sp_executesql's text was judged above, sp_rename above).
-    if (leaf.startsWith('sp_') && !name.includes('.')) continue
+    if (leaf === 'sp_executesql' || leaf === 'sp_sqlexec') {
+      // Its text was judged above when it is a literal; SQL held in a variable is unknown.
+      const rest = code.slice((m.index ?? 0) + m[0].length)
+      if (!/^\s*''/.test(rest)) return { bump: true, procs: [] }
+      continue
+    }
+    if (READ_ONLY_SYSTEM_PROCS.has(leaf)) continue
     procs.push(name)
   }
   return { bump: false, procs }
@@ -457,8 +512,10 @@ export function isAccessWrite(sql: string): boolean {
 // dynamic SQL or changes tables may change access; one that does none of those cannot.
 // Not known yet = may (the version moves, and the body is looked up for next time).
 let procLookup: ((name: string) => Promise<string | null>) | null = null
-const procTouches = new Map<string, boolean>()
+const procTouches = new Map<string, { at: number; touches: boolean }>()
 const procPending = new Set<string>()
+/** Moves on every procedure DDL this process sees: a lookup that straddled one is dropped. */
+let procGeneration = 0
 
 /** server.ts hands over a reader for procedure bodies (OBJECT_DEFINITION). */
 export function setPermissionCacheProcLookup(
@@ -476,14 +533,18 @@ export function bodyTouchesAccess(body: string | null): boolean {
 
 function procMayChangeAccess(name: string): boolean {
   const known = procTouches.get(name)
-  if (known !== undefined) return known
+  // A verdict lives no longer than an entry: a body altered elsewhere is read again.
+  if (known && Date.now() - known.at < PERMISSION_CACHE_TTL_MS) return known.touches
   const lookup = procLookup
   if (lookup && !procPending.has(name)) {
     procPending.add(name)
+    const g0 = procGeneration
+    const at = Date.now()
     void lookup(name)
       .then((body) => {
+        if (g0 !== procGeneration) return
         if (procTouches.size >= 2_000) procTouches.clear()
-        procTouches.set(name, bodyTouchesAccess(body))
+        procTouches.set(name, { at, touches: bodyTouchesAccess(body) })
       })
       .catch(() => {})
       .finally(() => procPending.delete(name))
@@ -511,7 +572,10 @@ const wroteAccess = new Set<string>()
  */
 export function notePermissionStatement(sql: string, after: boolean, txId?: unknown): boolean {
   if (!enabled || !sql) return false
-  if (PROC_DDL_RE.test(sql)) procTouches.clear()
+  if (PROC_DDL_RE.test(sql)) {
+    procTouches.clear()
+    procGeneration++
+  }
   const verdict = classifyStatement(sql)
   const bump = verdict.bump || verdict.procs.some((p) => procMayChangeAccess(p))
   if (!bump) return false
@@ -541,7 +605,12 @@ export function attachPermissionCacheSeam(client: EmitterLike | null | undefined
   client.on('query-error', (_err: unknown, q: unknown) => seen(q, true))
 }
 
-type TrxLike = { txid?: unknown; outerTx?: { txid?: unknown } | null; then?: unknown }
+type TrxLike = {
+  txid?: unknown
+  outerTx?: { txid?: unknown } | null
+  then?: unknown
+  on?: (ev: string, fn: (q: unknown) => void) => unknown
+}
 type TransactionFn = (...a: unknown[]) => unknown
 const COMMIT_HOOK = Symbol.for('nivaro.permissionCacheCommitHook')
 
@@ -571,6 +640,20 @@ export function attachPermissionCacheCommitHook(client: object | null | undefine
 function watchTransaction(trx: TrxLike | null | undefined): void {
   const txid = trx?.txid
   if (!trx || txid == null || typeof trx.then !== 'function') return
+  // The Transaction re-emits every statement its client runs (savepoints included); knex
+  // drops __knexTxId from the connection when a savepoint ends, so this is what attributes
+  // the outer transaction's later statements.
+  if (typeof trx.on === 'function') {
+    trx.on('query', (q: unknown) => {
+      const sql = (q as QueryEvent | null)?.sql
+      if (!enabled || typeof sql !== 'string') return
+      const v = classifyStatement(sql)
+      if (v.bump || v.procs.some((p) => procMayChangeAccess(p))) {
+        if (wroteAccess.size > 10_000) wroteAccess.clear()
+        wroteAccess.add(String(txid))
+      }
+    })
+  }
   const settled = () => {
     if (!wroteAccess.delete(String(txid))) return
     const outer = trx.outerTx?.txid
@@ -589,6 +672,8 @@ export function resetPermissionCacheForTests(): void {
   wroteAccess.clear()
   procTouches.clear()
   procPending.clear()
+  userGeneration.clear()
+  lastNonceReset.clear()
   resetLocal(undefined, false)
   for (const k of Object.keys(counters) as Array<keyof typeof counters>) counters[k] = 0
 }

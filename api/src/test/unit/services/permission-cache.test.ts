@@ -114,9 +114,9 @@ function chainFor(table: string) {
 
 // ── a Redis that two "processes" share ───────────────────────────────────────
 
-const G = 'nvr:permver:{}:g'
-const NONCE = 'nvr:permver:{}:n'
-const U = (id: string) => `nvr:permver:{}:u:${id}`
+const G = 'nvr:permver:{self}:g'
+const NONCE = 'nvr:permver:{self}:n'
+const U = (id: string) => `nvr:permver:{self}:u:${id}`
 
 function makeRedis() {
   const kv = new Map<string, string>()
@@ -134,9 +134,12 @@ function makeRedis() {
       return n
     }),
     expire: vi.fn(async () => 1),
-    set: vi.fn(async (key: string, value: string, _mode: 'NX') => {
-      if (kv.has(key)) return null
+    /** How many times this process wrote each key (versions are opaque tokens). */
+    writes: new Map<string, number>(),
+    set: vi.fn(async (key: string, value: string, ...options: Array<string | number>) => {
+      if (options.includes('NX') && kv.has(key)) return null
       kv.set(key, value)
+      r.writes.set(key, (r.writes.get(key) ?? 0) + 1)
       return 'OK'
     })
   }
@@ -362,9 +365,9 @@ describe('on: every access-changing write path makes the next call rebuild', () 
       mutate()
       client.emit('query', { sql })
       expect(await can(freshUser(), 'delete', 'articles')).toBe(true)
-      expect(redis.kv.get(G)).toBe('1')
+      expect(redis.writes.get(G)).toBe(1)
       client.emit('query-response', [], { sql })
-      expect(redis.kv.get(G)).toBe('2')
+      expect(redis.writes.get(G)).toBe(2)
     })
   }
 
@@ -380,11 +383,11 @@ describe('on: every access-changing write path makes the next call rebuild', () 
     vi.useFakeTimers()
     const client = seamClient()
     client.emit('query', { sql: 'update [nivaro_roles] set [name] = @p0', __knexTxId: 'trx1' })
-    const after = Number(redis.kv.get(G))
+    const after = redis.writes.get(G) ?? 0
     await vi.advanceTimersByTimeAsync(1_000)
-    expect(Number(redis.kv.get(G))).toBe(after + 1)
+    expect(redis.writes.get(G)).toBe(after + 1)
     await vi.advanceTimersByTimeAsync(15_000)
-    expect(Number(redis.kv.get(G))).toBe(after + 3)
+    expect(redis.writes.get(G)).toBe(after + 3)
   })
 
   it('another replica moved the cluster-wide version', async () => {
@@ -475,7 +478,7 @@ describe('on: every access-changing write path makes the next call rebuild', () 
     })
     bumpUserAccessVersion('TEST-USER-ID')
     await Promise.resolve()
-    expect(redis.kv.get(U('test-user-id'))).toBe('1')
+    expect(redis.writes.get(U('test-user-id'))).toBe(1)
     expect(await can(freshUser(), 'delete', 'articles')).toBe(true)
   })
 
@@ -646,7 +649,7 @@ describe('statement shapes that may change access', () => {
     }
     setPermissionCacheProcLookup(async (name) => bodies[name] ?? null)
     const tick = () => new Promise((r) => setTimeout(r, 0))
-    const start = Number(redis.kv.get(G) ?? 0)
+    const start = redis.writes.get(G) ?? 0
     // First sight: not known yet, so it counts.
     expect(notePermissionStatement('exec dbo.report_only', false)).toBe(true)
     await tick()
@@ -662,7 +665,7 @@ describe('statement shapes that may change access', () => {
     expect(notePermissionStatement('exec dbo.report_only', false)).toBe(true)
     expect(bodyTouchesAccess(null)).toBe(true)
     await tick()
-    expect(Number(redis.kv.get(G))).toBeGreaterThan(start)
+    expect(redis.writes.get(G) ?? 0).toBeGreaterThan(start)
     setPermissionCacheProcLookup(null)
   })
 })
@@ -691,7 +694,7 @@ describe('transactions move the version when they settle', () => {
   const client = new FakeClient()
   attachPermissionCacheCommitHook(client)
   const tick = () => new Promise((r) => setTimeout(r, 0))
-  const g = () => Number(redis.kv.get(G) ?? 0)
+  const g = () => redis.writes.get(G) ?? 0
 
   it('commit of a transaction that wrote an access table moves the version after it', async () => {
     const trx = client.transaction(null, null)
@@ -824,6 +827,134 @@ describe('off: nothing on the write side', () => {
     bumpAccessVersion()
     bumpUserAccessVersion('test-user-id')
     await new Promise((r) => setTimeout(r, 0))
-    expect(redis.incr).not.toHaveBeenCalled()
+    expect(redis.set).not.toHaveBeenCalled()
+  })
+})
+
+describe('second review: remaining shapes and residuals', () => {
+  const tick = () => new Promise((r) => setTimeout(r, 0))
+
+  it.each([
+    ["select '/*' as a; update nivaro_roles set admin_access = 0 -- */", true],
+    ["select 'x--', 1; update nivaro_roles set admin_access=0", true],
+    ["select 'it''s' as a; delete from nivaro_policies where id = 1", true],
+    ['EXEC sp_executesql @s', true],
+    ['exec sp_sqlexec @s', true],
+    ["EXEC sp_executesql N'select 1'", false],
+    ['exec sp_who2', false]
+  ])('%s → %s', (sql, want) => {
+    expect(isAccessWrite(sql)).toBe(want)
+  })
+
+  it('a user procedure named sp_… is looked up, not taken for a system one', () => {
+    expect(classifyStatement('EXEC sp_update_redacted_user_details').procs).toEqual([
+      'sp_update_redacted_user_details'
+    ])
+  })
+
+  it('statements after a savepoint ended still mark the outer transaction', async () => {
+    const listeners: Array<(q: unknown) => void> = []
+    let resolve: () => void = () => {}
+    const p = new Promise<void>((r) => {
+      resolve = r
+    })
+    const proto = {
+      transaction() {
+        return {
+          txid: 'outer-1',
+          outerTx: null,
+          on: (_ev: string, fn: (q: unknown) => void) => listeners.push(fn),
+          // biome-ignore lint/suspicious/noThenProperty: a knex Transaction is a thenable
+          then: (a: () => void, b: () => void) => p.then(a, b)
+        }
+      }
+    }
+    const client = Object.create(proto)
+    attachPermissionCacheCommitHook(client)
+    ;(client as { transaction: () => unknown }).transaction()
+    // The statement reaches the Transaction's own 'query' event without a txid.
+    for (const fn of listeners) fn({ sql: 'update [nivaro_roles] set [admin_access] = 0' })
+    const before = redis.writes.get(G) ?? 0
+    resolve()
+    await tick()
+    expect(redis.writes.get(G)).toBe(before + 1)
+  })
+
+  it('a procedure verdict lives no longer than an entry', async () => {
+    vi.useFakeTimers()
+    setPermissionCacheProcLookup(async () => 'CREATE PROCEDURE dbo.p AS SELECT 1')
+    notePermissionStatement('exec dbo.p', false)
+    await vi.advanceTimersByTimeAsync(0)
+    expect(notePermissionStatement('exec dbo.p', false)).toBe(false)
+    vi.advanceTimersByTime(PERMISSION_CACHE_TTL_MS + 1)
+    expect(notePermissionStatement('exec dbo.p', false)).toBe(true)
+    setPermissionCacheProcLookup(null)
+  })
+
+  it('a body lookup that straddled a redeploy is not kept', async () => {
+    let answer: (b: string) => void = () => {}
+    setPermissionCacheProcLookup(
+      () =>
+        new Promise<string>((r) => {
+          answer = r
+        })
+    )
+    notePermissionStatement('exec dbo.q', false)
+    notePermissionStatement('ALTER PROCEDURE dbo.q AS DELETE FROM nivaro_user_scopes', false)
+    answer('CREATE PROCEDURE dbo.q AS SELECT 1') // the old body
+    await tick()
+    expect(notePermissionStatement('exec dbo.q', false)).toBe(true)
+    setPermissionCacheProcLookup(null)
+  })
+
+  it('every version write is a value never used before', async () => {
+    bumpAccessVersion()
+    await tick()
+    const first = redis.kv.get(G)
+    bumpAccessVersion()
+    await tick()
+    expect(redis.kv.get(G)).not.toBe(first)
+    bumpUserAccessVersion('test-user-id')
+    await tick()
+    expect(redis.set).toHaveBeenCalledWith(
+      U('test-user-id'),
+      expect.any(String),
+      'EX',
+      expect.any(Number)
+    )
+  })
+
+  it('a Redis that will not take the nonce resets at most once a second', async () => {
+    redis.kv.delete(NONCE)
+    redis.set.mockImplementation(async () => {
+      throw new Error('READONLY')
+    })
+    const before = Number(permissionCacheStats().resets)
+    for (let i = 0; i < 5; i++) await can(freshUser(), 'read', 'articles')
+    expect(Number(permissionCacheStats().resets) - before).toBe(1)
+    expect(permissionCacheStats().entries).toBe(0)
+  })
+
+  it("one person's reset leaves another person's fill in flight alone", async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((r) => {
+      release = r
+    })
+    vi.mocked(db as unknown as (t: string) => unknown).mockImplementation((t: string) => {
+      const c = chainFor(t) as Record<string, unknown>
+      const first = c.first as () => Promise<unknown>
+      c.first = async () => {
+        await gate
+        return first()
+      }
+      return c as never
+    })
+    const pending = can(freshUser({ id: 'other-user-id' }), 'read', 'articles')
+    await tick()
+    bumpUserAccessVersion('test-user-id')
+    release()
+    await pending
+    expect(permissionCacheStats().dropped).toBe(0)
+    expect(Number(permissionCacheStats().stores)).toBeGreaterThan(0)
   })
 })
