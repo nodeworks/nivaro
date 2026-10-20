@@ -294,10 +294,16 @@ export async function computeStatusBatch(
   // Most recent entry into the current state, per instance — for ALL
   // candidates, not just ruled ones: aging (elapsed in state) is
   // rule-independent; only the thresholds need a rule.
+  // Only the three columns the loop reads (#1224): `select *` dragged every
+  // history row's comment and payload across for a few hundred instances.
   const history = await selectInChunks(
     candidates.map((i) => i.id),
     2000,
-    (chunk) => db('nivaro_workflow_history').whereIn('instance', chunk).orderBy('timestamp', 'desc')
+    (chunk) =>
+      db('nivaro_workflow_history')
+        .whereIn('instance', chunk)
+        .orderBy('timestamp', 'desc')
+        .select('instance', 'to_state', 'timestamp')
   )
 
   const enteredAt = new Map<string, Date>()

@@ -35,6 +35,7 @@ import {
 } from './pipeline-subject.js'
 import { applyQueueGate, queueGateFor } from './queue-access.js'
 import { integrationsFilterBuckets, integrationsMatchKeys } from './queue-integrations.js'
+import { PathReadBatch } from './queue-path-batch.js'
 import { withReadGateEach } from './read-gate.js'
 import { span } from './request-trace.js'
 import { sendBackBatch } from './send-backs.js'
@@ -1481,57 +1482,66 @@ export async function renderTemplateLabels(
 export async function getLabels(
   itemsByCollection: Map<string, Set<string>>
 ): Promise<Record<string, string>> {
+  // Collections resolve concurrently (#1224) — each is its own few round
+  // trips, and My Work asks for every bound collection at once. Merged in
+  // the map's order, so the result is the one the serial loop built.
+  const parts = await Promise.all(
+    [...itemsByCollection].map(([collection, ids]) => labelsForCollection(collection, ids))
+  )
   const labels: Record<string, string> = {}
-  for (const [collection, ids] of itemsByCollection) {
-    try {
-      // Addendums are not a registered collection: label = title · parent label.
-      if (collection === ADDENDUM_COLLECTION) {
-        const infos = await loadAddendums([...ids])
-        const parents = new Map<string, Set<string>>()
-        for (const info of infos.values()) {
-          if (!info.parentCollection || !info.parentId) continue
-          if (!parents.has(info.parentCollection)) parents.set(info.parentCollection, new Set())
-          parents.get(info.parentCollection)!.add(info.parentId)
-        }
-        const parentLabels = parents.size > 0 ? await getLabels(parents) : {}
-        for (const [id, info] of infos) {
-          const parentLabel =
-            info.parentCollection && info.parentId
-              ? (parentLabels[`${info.parentCollection}:${info.parentId}`] ?? info.parentId)
-              : null
-          labels[`${collection}:${id}`] = addendumLabel(info, parentLabel)
-        }
-        continue
-      }
-      const colMeta = (await db('nivaro_collections')
-        .where({ collection })
-        .first('display_template')) as { display_template: string | null } | undefined
-      if (colMeta?.display_template) {
-        Object.assign(
-          labels,
-          await renderTemplateLabels(collection, [...ids], colMeta.display_template)
-        )
-        continue
-      }
+  for (const part of parts) Object.assign(labels, part)
+  return labels
+}
 
-      const fields = (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
-        field: string
-      }>
-      const fieldNames = fields.map((f) => f.field)
-      const labelField = LABEL_CANDIDATES.find((c) => fieldNames.includes(c))
-      const pk = fieldNames.includes('id') ? 'id' : null
-      if (!labelField || !pk) continue
-
-      const rows = (await selectInChunks([...ids], 2000, (chunk) =>
-        db(collection).whereIn(pk, chunk).select(pk, labelField)
-      )) as Array<Record<string, unknown>>
-      for (const row of rows) {
-        const value = row[labelField]
-        if (value != null) labels[`${collection}:${row[pk]}`] = String(value)
+async function labelsForCollection(
+  collection: string,
+  ids: Set<string>
+): Promise<Record<string, string>> {
+  const labels: Record<string, string> = {}
+  try {
+    // Addendums are not a registered collection: label = title · parent label.
+    if (collection === ADDENDUM_COLLECTION) {
+      const infos = await loadAddendums([...ids])
+      const parents = new Map<string, Set<string>>()
+      for (const info of infos.values()) {
+        if (!info.parentCollection || !info.parentId) continue
+        if (!parents.has(info.parentCollection)) parents.set(info.parentCollection, new Set())
+        parents.get(info.parentCollection)!.add(info.parentId)
       }
-    } catch {
-      // Collection table may not exist or be queryable — labels stay empty
+      const parentLabels = parents.size > 0 ? await getLabels(parents) : {}
+      for (const [id, info] of infos) {
+        const parentLabel =
+          info.parentCollection && info.parentId
+            ? (parentLabels[`${info.parentCollection}:${info.parentId}`] ?? info.parentId)
+            : null
+        labels[`${collection}:${id}`] = addendumLabel(info, parentLabel)
+      }
+      return labels
     }
+    const colMeta = (await db('nivaro_collections')
+      .where({ collection })
+      .first('display_template')) as { display_template: string | null } | undefined
+    if (colMeta?.display_template) {
+      return await renderTemplateLabels(collection, [...ids], colMeta.display_template)
+    }
+
+    const fields = (await db('nivaro_fields').where({ collection }).select('field')) as Array<{
+      field: string
+    }>
+    const fieldNames = fields.map((f) => f.field)
+    const labelField = LABEL_CANDIDATES.find((c) => fieldNames.includes(c))
+    const pk = fieldNames.includes('id') ? 'id' : null
+    if (!labelField || !pk) return labels
+
+    const rows = (await selectInChunks([...ids], 2000, (chunk) =>
+      db(collection).whereIn(pk, chunk).select(pk, labelField)
+    )) as Array<Record<string, unknown>>
+    for (const row of rows) {
+      const value = row[labelField]
+      if (value != null) labels[`${collection}:${row[pk]}`] = String(value)
+    }
+  } catch {
+    // Collection table may not exist or be queryable — labels stay empty
   }
   return labels
 }
@@ -1584,17 +1594,34 @@ export interface PathValue {
   ids: string[]
 }
 
+/** #1224 — a read-sharing batch for one resolve's extra-column paths. */
+export function newPathReadBatch(): PathReadBatch {
+  return new PathReadBatch(
+    (collection, keys, columns, keyColumn) =>
+      selectInChunks(keys, 2000, (chunk) =>
+        db(collection)
+          .whereIn(keyColumn, chunk)
+          .select([...new Set([keyColumn, 'id', ...columns])])
+      ) as Promise<Array<Record<string, unknown>>>,
+    (collection) => getRelations(collection)
+  )
+}
+
 export async function resolvePathValues(
   collection: string,
   ids: string[],
   segments: string[],
-  relationsCache: Map<string, CMSRelation[]>
+  relationsCache: Map<string, CMSRelation[]>,
+  /** #1224 — share reads with the other paths of the same resolve. */
+  batch?: PathReadBatch
 ): Promise<Map<string, PathValue>> {
   if (ids.length === 0 || segments.length === 0) return new Map()
 
   let relations = relationsCache.get(collection)
   if (!relations) {
-    relations = await getRelations(collection)
+    relations = batch
+      ? await batch.relations(collection, relationsCache)
+      : await getRelations(collection)
     relationsCache.set(collection, relations)
   }
 
@@ -1606,11 +1633,13 @@ export async function resolvePathValues(
     // columns) must not select [id, id]: tedious collapses duplicate column
     // names into an ARRAY value, so String(row.id) becomes "2022,2022" and
     // every map lookup downstream misses — the whole path resolved empty.
-    const rows = await selectInChunks(ids, 2000, (chunk) =>
-      db(collection)
-        .whereIn('id', chunk)
-        .select(head === 'id' ? ['id'] : ['id', head])
-    )
+    const rows = batch
+      ? await batch.rows(collection, ids, head === 'id' ? [] : [head])
+      : await selectInChunks(ids, 2000, (chunk) =>
+          db(collection)
+            .whereIn('id', chunk)
+            .select(head === 'id' ? ['id'] : ['id', head])
+        )
     const out = new Map<string, PathValue>()
     for (const row of rows as Array<Record<string, unknown>>) {
       const v = row[head]
@@ -1620,9 +1649,11 @@ export async function resolvePathValues(
   }
 
   if (classified.type === 'm2o') {
-    const rows = await selectInChunks(ids, 2000, (chunk) =>
-      db(collection).whereIn('id', chunk).select(['id', head])
-    )
+    const rows = batch
+      ? await batch.rows(collection, ids, [head])
+      : await selectInChunks(ids, 2000, (chunk) =>
+          db(collection).whereIn('id', chunk).select(['id', head])
+        )
     const fkByRowId = new Map<string, string>()
     const relatedIds = new Set<string>()
     for (const row of rows as Array<Record<string, unknown>>) {
@@ -1638,7 +1669,8 @@ export async function resolvePathValues(
         classified.relatedCollection,
         [...relatedIds],
         rest,
-        relationsCache
+        relationsCache,
+        batch
       )
       const out = new Map<string, PathValue>()
       for (const [rowId, fk] of fkByRowId) {
@@ -1654,9 +1686,17 @@ export async function resolvePathValues(
     const relatedCol = await getCollection(classified.relatedCollection)
     const template = relatedCol?.display_template ?? null
     const selectFields = template ? extractTemplateFields(template) : ['*']
-    const relatedRows = await selectInChunks([...relatedIds], 2000, (chunk) =>
-      db(classified.relatedCollection).whereIn('id', chunk).select(selectFields)
-    )
+    const relatedIdList = [...relatedIds]
+    const readRelated = () =>
+      selectInChunks(relatedIdList, 2000, (chunk) =>
+        db(classified.relatedCollection).whereIn('id', chunk).select(selectFields)
+      )
+    const relatedRows = batch
+      ? await batch.once(
+          `m2o\u0000${classified.relatedCollection}\u0000${selectFields.join(',')}\u0000${relatedIdList.join(',')}`,
+          readRelated
+        )
+      : await readRelated()
     const displayById = new Map<string, string>()
     for (const r of relatedRows as Array<Record<string, unknown>>) {
       displayById.set(String(r.id), resolveDisplayValue(r, template))
@@ -1679,11 +1719,17 @@ export async function resolvePathValues(
 
   if (classified.type === 'o2m') {
     const manyField = classified.manyField as string
-    const relatedRows = await selectInChunks(ids, 2000, (chunk) =>
-      db(classified.relatedCollection)
-        .whereIn(manyField, chunk)
-        .select(rest.length > 0 ? [manyField, 'id'] : [manyField, ...selectFields])
-    )
+    const o2mCols = rest.length > 0 ? [manyField, 'id'] : [manyField, ...selectFields]
+    const readRelated = () =>
+      selectInChunks(ids, 2000, (chunk) =>
+        db(classified.relatedCollection).whereIn(manyField, chunk).select(o2mCols)
+      )
+    const relatedRows = batch
+      ? await batch.once(
+          `o2m\u0000${classified.relatedCollection}\u0000${manyField}\u0000${o2mCols.join(',')}\u0000${ids.join(',')}`,
+          readRelated
+        )
+      : await readRelated()
     const grouped = new Map<string, Record<string, unknown>[]>()
     for (const row of relatedRows as Array<Record<string, unknown>>) {
       const parentId = String(row[manyField])
@@ -1697,11 +1743,35 @@ export async function resolvePathValues(
       const allRelatedIds = [
         ...new Set((relatedRows as Array<Record<string, unknown>>).map((r) => String(r.id)))
       ]
+      // #1224 — a plain column one hop down (`workflow_lines.requisition_id`)
+      // used to be re-read BY ID: thousands of child ids in 2000-id chunks.
+      // The same rows come back keyed by the parents (a few hundred ids), and
+      // every such path of this resolve shares that one read. The hop's own
+      // row order above is untouched, so multi-value cells list identically.
+      if (batch && rest.length === 1 && allRelatedIds.length > 0) {
+        const relatedRels = await batch.relations(classified.relatedCollection, relationsCache)
+        const leaf = rest[0]
+        if (!classifyRelationSegment(classified.relatedCollection, leaf, relatedRels)) {
+          const leafRows = await batch.rows(
+            classified.relatedCollection,
+            ids,
+            leaf === 'id' ? [] : [leaf],
+            manyField
+          )
+          const nested = new Map<string, PathValue>()
+          for (const row of leafRows) {
+            const v = row[leaf]
+            nested.set(String(row.id), { value: v == null ? '' : String(v), ids: [] })
+          }
+          return joinMultiHop(ids, grouped, nested)
+        }
+      }
       const nested = await resolvePathValues(
         classified.relatedCollection,
         allRelatedIds,
         rest,
-        relationsCache
+        relationsCache,
+        batch
       )
       return joinMultiHop(ids, grouped, nested)
     }
@@ -1718,20 +1788,27 @@ export async function resolvePathValues(
   }
 
   // m2m
-  const junctionRows = await selectInChunks(ids, 2000, (chunk) =>
-    db(`${classified.junction} as _j`)
-      .whereIn(`_j.${classified.junctionFkToParent}`, chunk)
-      .join(
-        `${classified.relatedCollection} as _rel`,
-        '_rel.id',
-        `_j.${classified.junctionFkToOther}`
+  const readJunction = () =>
+    selectInChunks(ids, 2000, (chunk) =>
+      db(`${classified.junction} as _j`)
+        .whereIn(`_j.${classified.junctionFkToParent}`, chunk)
+        .join(
+          `${classified.relatedCollection} as _rel`,
+          '_rel.id',
+          `_j.${classified.junctionFkToOther}`
+        )
+        .select([
+          `_j.${classified.junctionFkToParent} as __parent_id`,
+          '_rel.id as __rel_id',
+          ...selectFields.map((f) => `_rel.${f}`)
+        ])
+    )
+  const junctionRows = batch
+    ? await batch.once(
+        `m2m\u0000${classified.junction}\u0000${classified.junctionFkToParent}\u0000${classified.junctionFkToOther}\u0000${classified.relatedCollection}\u0000${selectFields.join(',')}\u0000${ids.join(',')}`,
+        readJunction
       )
-      .select([
-        `_j.${classified.junctionFkToParent} as __parent_id`,
-        '_rel.id as __rel_id',
-        ...selectFields.map((f) => `_rel.${f}`)
-      ])
-  )
+    : await readJunction()
   const grouped = new Map<string, Record<string, unknown>[]>()
   for (const row of junctionRows as Array<Record<string, unknown>>) {
     const parentId = String(row.__parent_id)
@@ -1749,7 +1826,8 @@ export async function resolvePathValues(
       classified.relatedCollection,
       allRelatedIds,
       rest,
-      relationsCache
+      relationsCache,
+      batch
     )
     const groupedIds = new Map<string, Record<string, unknown>[]>()
     for (const [parentId, list] of grouped) {
@@ -1781,27 +1859,30 @@ export async function resolveAggregateValues(
   ids: string[],
   segments: string[],
   fn: QueueAggregateFn,
-  relationsCache: Map<string, CMSRelation[]>
+  relationsCache: Map<string, CMSRelation[]>,
+  batch?: PathReadBatch
 ): Promise<Map<string, PathValue>> {
   if (ids.length === 0 || segments.length === 0) return new Map()
 
   let relations = relationsCache.get(collection)
   if (!relations) {
-    relations = await getRelations(collection)
+    relations = batch
+      ? await batch.relations(collection, relationsCache)
+      : await getRelations(collection)
     relationsCache.set(collection, relations)
   }
 
   const [head, leaf] = segments
   const classified = classifyRelationSegment(collection, head, relations)
   if (!classified || classified.type === 'm2o') {
-    return resolvePathValues(collection, ids, segments, relationsCache)
+    return resolvePathValues(collection, ids, segments, relationsCache, batch)
   }
 
   // Exactly one relation hop + leaf (validated at write time) — anything else
   // (legacy configs, hand-crafted payloads) falls back to plain resolution
   // rather than silently aggregating the wrong segment of a multi-hop path.
   if (segments.length > 2) {
-    return resolvePathValues(collection, ids, segments, relationsCache)
+    return resolvePathValues(collection, ids, segments, relationsCache, batch)
   }
 
   // Aggregate expression: function fixed by validated enum switch, leaf column
@@ -1858,12 +1939,13 @@ export async function resolveExtraPathValues(
   ids: string[],
   path: string,
   relationsCache: Map<string, CMSRelation[]>,
-  aggregates: Record<string, QueueAggregateFn> | null
+  aggregates: Record<string, QueueAggregateFn> | null,
+  batch?: PathReadBatch
 ): Promise<Map<string, PathValue>> {
   const segments = path.split('.')
   const fn = aggregates?.[path]
-  if (fn) return resolveAggregateValues(collection, ids, segments, fn, relationsCache)
-  return resolvePathValues(collection, ids, segments, relationsCache)
+  if (fn) return resolveAggregateValues(collection, ids, segments, fn, relationsCache, batch)
+  return resolvePathValues(collection, ids, segments, relationsCache, batch)
 }
 
 // Join a multi-valued hop's children through the resolved remainder of the
@@ -2290,38 +2372,45 @@ export async function resolveCollectionSource(
         const relationsCache = new Map<string, CMSRelation[]>()
         const aggregates =
           (parseJson(source.aggregates ?? null) as Record<string, QueueAggregateFn> | null) ?? null
-        // Parallelized across paths. relationsCache is a shared Map populated via a
-        // check-then-fetch-then-set pattern — concurrent calls for the same collection may
-        // each miss the cache and independently re-fetch getRelations() (redundant work,
-        // not a correctness bug: every caller writes the same relations for that
-        // collection, so a duplicate write is harmless).
-        await Promise.all(
+        // Parallelized across paths, sharing reads through one batch (#1224):
+        // one relations lookup per collection, one root-row select for every
+        // plain / m2o head, identical relation reads run once.
+        const batch = newPathReadBatch()
+        const resolved = await Promise.all(
           extraFieldPaths.map(async (path) => {
             try {
-              const valuesByRowId = await resolveExtraPathValues(
+              return await resolveExtraPathValues(
                 source.collection as string,
                 ids,
                 path,
                 relationsCache,
-                aggregates
+                aggregates,
+                batch
               )
-              for (const [rowId, pv] of valuesByRowId) {
-                const extra = extraById.get(rowId) ?? {}
-                extra[path] = pv.value
-                extraById.set(rowId, extra)
-                if (pv.ids.length > 0) {
-                  const idsRec = extraIdsById.get(rowId) ?? {}
-                  idsRec[path] = pv.ids
-                  extraIdsById.set(rowId, idsRec)
-                }
-              }
             } catch {
               // Degrade gracefully — a stale/deleted/relational field config must not
               // break the whole queue's item list, and must not prevent OTHER extra
               // field paths on the same source from resolving.
+              return null
             }
           })
         )
+        // Folded in configured path order, so a row's `extra` keys no longer
+        // follow whichever path's reads happened to land first.
+        extraFieldPaths.forEach((path, i) => {
+          const valuesByRowId = resolved[i]
+          if (!valuesByRowId) return
+          for (const [rowId, pv] of valuesByRowId) {
+            const extra = extraById.get(rowId) ?? {}
+            extra[path] = pv.value
+            extraById.set(rowId, extra)
+            if (pv.ids.length > 0) {
+              const idsRec = extraIdsById.get(rowId) ?? {}
+              idsRec[path] = pv.ids
+              extraIdsById.set(rowId, idsRec)
+            }
+          }
+        })
         return { extraById, extraIdsById }
       }
     ),
@@ -2763,20 +2852,22 @@ export async function resolveOwnedBySource(
   const wanted = new Map(userIds.map((u) => [u.toUpperCase(), u]))
   // Bound collections' instances PLUS addendum instances (an addendum runs its
   // own instance on a collection that is never bound — pipeline-subject.ts).
-  const instances = (await db('nivaro_workflow_instances as wi')
-    .leftJoin('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
-    .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
-    .where((qb) => qb.whereNotNull('b.collection').orWhere('wi.collection', ADDENDUM_COLLECTION))
-    .whereNotNull('wi.current_state')
-    .whereNull('wi.completed_at')
-    .select(
-      'wi.id as instance_id',
-      'wi.collection',
-      'wi.item',
-      'wi.current_state',
-      's.key as state_key',
-      's.color as state_color'
-    )) as Array<{
+  const instances = (await span('owned-by:instances', async () =>
+    db('nivaro_workflow_instances as wi')
+      .leftJoin('nivaro_workflow_bindings as b', 'wi.collection', 'b.collection')
+      .leftJoin('nivaro_workflow_states as s', 'wi.current_state', 's.id')
+      .where((qb) => qb.whereNotNull('b.collection').orWhere('wi.collection', ADDENDUM_COLLECTION))
+      .whereNotNull('wi.current_state')
+      .whereNull('wi.completed_at')
+      .select(
+        'wi.id as instance_id',
+        'wi.collection',
+        'wi.item',
+        'wi.current_state',
+        's.key as state_key',
+        's.color as state_color'
+      )
+  )) as Array<{
     instance_id: string
     collection: string
     item: string
@@ -2796,13 +2887,6 @@ export async function resolveOwnedBySource(
   const truncated = matchedCount > ceiling
   const scoped = truncated ? instances.slice(0, ceiling) : instances
 
-  const byCollection = new Map<string, Set<string>>()
-  for (const inst of scoped) {
-    if (!byCollection.has(inst.collection)) byCollection.set(inst.collection, new Set())
-    byCollection.get(inst.collection)!.add(inst.item)
-  }
-  const labels = await getLabels(byCollection)
-
   const ownerRequests = scoped.map((inst) => ({
     key: `${inst.collection}:${inst.item}`,
     stateId: inst.current_state,
@@ -2810,21 +2894,42 @@ export async function resolveOwnedBySource(
     collection: inst.collection,
     itemId: inst.item
   }))
-  const ownersByKey = await resolveStateOwnersBatch(ownerRequests)
+  const ownersByKey = await span(
+    'owned-by:owners',
+    () => resolveStateOwnersBatch(ownerRequests),
+    `${ownerRequests.length} records`
+  )
 
-  // Addendum rows open their PARENT record with the addendum view pinned.
-  const addendumIds = scoped
-    .filter((i) => i.collection === ADDENDUM_COLLECTION)
-    .map((i) => String(i.item))
-  const addendumInfos = addendumIds.length > 0 ? await loadAddendums(addendumIds) : new Map()
-
-  const itemsByUser = new Map<string, QueueItem[]>(userIds.map((u) => [u, []]))
+  // Only the instances one of these people owns become rows, so labels and
+  // addendum paths are read for those alone (#1224) — not for every open
+  // instance in every bound collection, which is what My Work used to pay.
+  const owned: Array<{ inst: (typeof scoped)[number]; owners: ResolvedOwner[]; mine: string[] }> =
+    []
   for (const inst of scoped) {
     const owners = ownersByKey.get(`${inst.collection}:${inst.item}`) ?? []
     const mine = owners
       .map((o) => wanted.get(String(o.id).toUpperCase()))
       .filter((u): u is string => !!u)
-    if (mine.length === 0) continue
+    if (mine.length > 0) owned.push({ inst, owners, mine })
+  }
+  const byCollection = new Map<string, Set<string>>()
+  for (const { inst } of owned) {
+    if (!byCollection.has(inst.collection)) byCollection.set(inst.collection, new Set())
+    byCollection.get(inst.collection)!.add(inst.item)
+  }
+  // Addendum rows open their PARENT record with the addendum view pinned.
+  const addendumIds = owned
+    .filter(({ inst }) => inst.collection === ADDENDUM_COLLECTION)
+    .map(({ inst }) => String(inst.item))
+  const [labels, addendumInfos] = await span('owned-by:labels', () =>
+    Promise.all([
+      getLabels(byCollection),
+      addendumIds.length > 0 ? loadAddendums(addendumIds) : Promise.resolve(new Map())
+    ])
+  )
+
+  const itemsByUser = new Map<string, QueueItem[]>(userIds.map((u) => [u, []]))
+  for (const { inst, owners, mine } of owned) {
     const addendumPath =
       inst.collection === ADDENDUM_COLLECTION
         ? (() => {
