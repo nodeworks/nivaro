@@ -60,6 +60,27 @@ export interface ItemActionDef {
     confirm_label?: string
     input?: { label: string; placeholder?: string; required?: boolean }
   }
+  /**
+   * Ask the person to pick ONE of a per-record list before executing (e.g.
+   * which attached file to send). The record form and the row menu fetch
+   * the options when the button is pressed: two or more → a picker, exactly
+   * one → used without asking, none → the action runs without a pick. The
+   * pick reaches execute as `payload[key]`. Bulk runs never ask; execute
+   * must handle a missing pick.
+   */
+  choose?: {
+    /** Payload key the picked value is posted under. */
+    key: string
+    /** Heading over the options ("File to send"). */
+    label: string
+    /** One sentence under the heading. */
+    body?: string
+    options(ctx: {
+      collection: string
+      itemId: string | number
+      userId?: string
+    }): Promise<ItemActionChoice[]>
+  }
   execute(ctx: ItemActionContext): Promise<{ message: string; data?: unknown }>
   /** The action CREATES AN ADDENDUM: core enforces the addendum-create gates
    *  (collection toggle, role allow-list, pipeline-state allow-list) — the
@@ -82,6 +103,14 @@ export interface ItemActionDef {
     itemId: string | number
     userId?: string
   }): Promise<ItemActionPreflightIssue[]>
+}
+
+/** One option of an item action's `choose` step. */
+export interface ItemActionChoice {
+  value: string
+  label: string
+  /** Small grey line under the label ("2.4 MB · added 3 Oct"). */
+  hint?: string
 }
 
 /** One thing standing between an item action and a clean run (#616). */

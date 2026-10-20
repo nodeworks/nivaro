@@ -87,8 +87,12 @@ export async function runRowPush(
   collection: string,
   id: string | number,
   op: RowPushOp,
-  note?: string
+  note?: string,
+  pick?: string | null
 ): Promise<PushRunOutcome['outcomes'][number] | null> {
+  const payload: Record<string, unknown> = {}
+  if (note?.trim()) payload.message = note.trim()
+  if (op.kind === 'push' && op.action.choose && pick != null) payload[op.action.choose.key] = pick
   const res =
     op.kind === 'push'
       ? await client.request<{ data: PushRunOutcome }>(
@@ -96,7 +100,7 @@ export async function runRowPush(
             collection,
             action_id: op.action.id,
             ids: [id],
-            ...(note?.trim() ? { payload: { message: note.trim() } } : {})
+            ...(Object.keys(payload).length > 0 ? { payload } : {})
           })
         )
       : await client.request<{ data: PushRunOutcome }>(

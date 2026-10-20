@@ -1727,6 +1727,32 @@ export const extRegistrations: DocSection = {
   },
 });`
     },
+    {
+      type: 'p',
+      text: 'Add `choose` when the person must pick one of a per-record list first, such as which attached file to send. When the button is pressed, the record form and the row menu fetch the options from `GET /api/item-actions/:id/choices?collection=&item=`. With two or more options they show a picker; with exactly one they use it without asking; with none the action runs without a pick. The pick reaches `execute` as `payload[key]`. Bulk runs never ask, so `execute` must handle a missing pick.'
+    },
+    {
+      type: 'pre',
+      code: `ctx.itemActions.register({
+  id: 'push-to-erp',
+  label: 'Push to ERP',
+  collections: ['invoices'],
+  choose: {
+    key: 'file_id',
+    label: 'File to send',
+    body: 'The ERP accepts one file. Pick the one to attach.',
+    async options({ itemId }) {
+      const files = await listInvoiceFiles(itemId);
+      return files.map((f) => ({ value: f.id, label: f.name, hint: f.size }));
+    },
+  },
+  async execute({ itemId, payload }) {
+    const fileId = payload?.file_id ?? (await listInvoiceFiles(itemId))[0]?.id;
+    // ...
+    return { message: 'Invoice pushed to ERP' };
+  },
+});`
+    },
 
     { type: 'h3', text: 'Notification channels' },
     {

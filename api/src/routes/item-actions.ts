@@ -41,13 +41,66 @@ export async function itemActionsRoutes(app: FastifyInstance) {
         ).filter((a): a is (typeof actions)[number] => a !== null)
       : actions
     return {
-      data: kept.map(({ execute: _x, applicable: _a, preflight, ...rest }) => ({
+      data: kept.map(({ execute: _x, applicable: _a, preflight, choose, ...rest }) => ({
         ...rest,
         // #616 — the form asks /preflight only for actions that can answer.
-        has_preflight: typeof preflight === 'function'
+        has_preflight: typeof preflight === 'function',
+        // The client asks /choices when pressed; the options are per record.
+        ...(choose
+          ? { choose: { key: choose.key, label: choose.label, body: choose.body ?? null } }
+          : {})
       }))
     }
   })
+
+  // What a `choose` action offers on THIS record (e.g. which file to send).
+  app.get<{ Params: { id: string }; Querystring: { collection?: string; item?: string } }>(
+    '/item-actions/:id/choices',
+    { preHandler: [requireAuth] },
+    async (req, reply) => {
+      const action = itemActionRegistry.get(req.params.id)
+      if (!action) return reply.status(404).send({ error: 'Item action not found' })
+      const collection = String(req.query.collection ?? '')
+      const item = String(req.query.item ?? '')
+      if (!collection || !item)
+        return reply.status(400).send({ error: 'collection and item are required' })
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(collection))
+        return reply.status(400).send({ error: 'Not a valid collection' })
+      // Options name the record's contents (file names) — bind the check to
+      // the action's own collections and to THIS record being visible, so a
+      // caller can't point the action at a record they cannot read.
+      if (action.collections && !action.collections.includes(collection))
+        return reply.status(404).send({ error: 'Item action not found' })
+      const { can } = await import('../services/permissions.js')
+      if (!(await can(req.user!, 'read', collection)))
+        return reply.status(403).send({ error: 'Forbidden' })
+      const { readOne } = await import('../services/items.js')
+      const row = await readOne(req.user!, collection, item, undefined, ['id']).catch(() => null)
+      if (!row) return reply.status(404).send({ error: 'Not found' })
+      if (!action.choose) return { data: [] }
+      if (action.applicable) {
+        const ok = await action.applicable({ collection, itemId: item }).catch(() => true)
+        if (!ok) return { data: [] }
+      }
+      try {
+        const raw = await action.choose.options({ collection, itemId: item, userId: req.user?.id })
+        return {
+          data: (Array.isArray(raw) ? raw : [])
+            .filter((o) => o && o.value != null && o.label != null)
+            .slice(0, 200)
+            .map((o) => ({
+              value: String(o.value),
+              label: String(o.label).slice(0, 300),
+              ...(o.hint != null ? { hint: String(o.hint).slice(0, 300) } : {})
+            }))
+        }
+      } catch (err) {
+        return reply
+          .status(500)
+          .send({ error: err instanceof Error ? err.message : 'Could not load the options' })
+      }
+    }
+  )
 
   // #616 — what would stop this action on THIS record, before anyone presses
   // it. Read-only: the extension's own pre-validations, nothing sent.

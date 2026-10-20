@@ -12,6 +12,12 @@ export {
 export { ErpFailureBanner } from './ErpFailureBanner'
 export { ExternalRequestsChip } from './ExternalRequestsChip'
 export { ItemActionButtons } from './ItemActionButtons'
+export {
+  ItemActionChoiceList,
+  type ItemActionChoiceOption,
+  type ItemActionChooseMeta,
+  itemActionChoiceStep
+} from './ItemActionChoices'
 export { CustomActionButtons } from './CustomActionButtons'
 export { ItemLockBanner, LockHolderButton, useItemLock } from './ItemLockBanner'
 export { PipelinePanel, PipelineTransitionButtons } from './PipelinePanel'

@@ -3,8 +3,12 @@ import { createNivaro } from '@nivaro/sdk'
 import {
   DrilldownContext,
   type DrilldownTarget,
+  ItemActionChoiceList,
+  type ItemActionChoiceOption,
+  type ItemActionChooseMeta,
   ItemEditAuthContext,
   ItemEditForm,
+  itemActionChoiceStep,
   NavigationContext,
   NivaroProvider,
   usePublishAskContext
@@ -346,17 +350,21 @@ export function ItemEditPage() {
   const queryClient = useQueryClient()
 
   async function runItemAction(
-    action: { id: string; label: string },
-    message?: string
+    action: { id: string; label: string; choose?: ItemActionChooseMeta },
+    message?: string,
+    pick?: string | null
   ): Promise<void> {
     setRunningItemAction(action.id)
     try {
+      const payload: Record<string, unknown> = {}
+      if (message?.trim()) payload.message = message.trim()
+      if (action.choose && pick != null) payload[action.choose.key] = pick
       const res = await api.post<{ data: { message: string } }>(
         `/item-actions/${action.id}/execute`,
         {
           collection,
           itemId: id,
-          ...(message?.trim() ? { payload: { message: message.trim() } } : {})
+          ...(Object.keys(payload).length > 0 ? { payload } : {})
         }
       )
       toast.success(res.data.data.message)
@@ -432,6 +440,9 @@ export function ItemEditPage() {
     (typeof extItemActions)[number] | null
   >(null)
   const [itemActionNote, setItemActionNote] = useState('')
+  // The action's choose step (e.g. which file to send): listed when 2+.
+  const [itemActionChoices, setItemActionChoices] = useState<ItemActionChoiceOption[] | null>(null)
+  const [itemActionPick, setItemActionPick] = useState<string | null>(null)
 
   // ── Admin-specific queries ────────────────────────────────────────────────
   const { data: colMeta } = useQuery({
@@ -567,6 +578,7 @@ export function ItemEditPage() {
               confirm_label?: string
               input?: { label: string; placeholder?: string; required?: boolean }
             }
+            choose?: ItemActionChooseMeta
           }>
         }>('/item-actions/registered', { params: { collection, item: id } })
         .then((r) => r.data.data),
@@ -889,13 +901,36 @@ export function ItemEditPage() {
                         (action.variant as 'default' | 'destructive' | 'outline') ?? 'outline'
                       }
                       disabled={runningItemAction !== null}
-                      onClick={() => {
-                        if (action.confirm) {
+                      onClick={async () => {
+                        let pick: string | null = null
+                        let options: ItemActionChoiceOption[] | null = null
+                        if (action.choose) {
+                          setRunningItemAction(action.id)
+                          try {
+                            const res = await api.get<{ data: ItemActionChoiceOption[] }>(
+                              `/item-actions/${action.id}/choices`,
+                              { params: { collection, item: id } }
+                            )
+                            const step = itemActionChoiceStep(res.data.data ?? [])
+                            if (step.ask) options = res.data.data
+                            else pick = step.value
+                          } catch (err) {
+                            const detail = (err as { response?: { data?: { error?: string } } })
+                              ?.response?.data?.error
+                            toast.error(detail ?? `${action.label}: could not load the options`)
+                            return
+                          } finally {
+                            setRunningItemAction(null)
+                          }
+                        }
+                        if (action.confirm || options) {
                           setItemActionNote('')
+                          setItemActionChoices(options)
+                          setItemActionPick(pick)
                           setConfirmItemAction(action)
                           return
                         }
-                        void runItemAction(action)
+                        void runItemAction(action, undefined, pick)
                       }}
                     >
                       {runningItemAction === action.id ? (
@@ -917,6 +952,14 @@ export function ItemEditPage() {
                             <p className='mt-2 text-[12.5px] leading-relaxed text-slate-600 dark:text-muted-foreground'>
                               {confirmItemAction.confirm.body}
                             </p>
+                          )}
+                          {confirmItemAction.choose && itemActionChoices && (
+                            <ItemActionChoiceList
+                              choose={confirmItemAction.choose}
+                              options={itemActionChoices}
+                              value={itemActionPick}
+                              onChange={setItemActionPick}
+                            />
                           )}
                           {confirmItemAction.confirm?.input && (
                             <div className='mt-3'>
@@ -943,13 +986,14 @@ export function ItemEditPage() {
                             <Button
                               size='sm'
                               disabled={
-                                !!confirmItemAction.confirm?.input?.required &&
-                                !itemActionNote.trim()
+                                (!!confirmItemAction.confirm?.input?.required &&
+                                  !itemActionNote.trim()) ||
+                                (!!itemActionChoices && itemActionPick == null)
                               }
                               onClick={() => {
                                 const a = confirmItemAction
                                 setConfirmItemAction(null)
-                                void runItemAction(a, itemActionNote)
+                                void runItemAction(a, itemActionNote, itemActionPick)
                               }}
                             >
                               {confirmItemAction.confirm?.confirm_label ?? confirmItemAction.label}

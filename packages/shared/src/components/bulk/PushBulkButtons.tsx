@@ -13,6 +13,7 @@ import {
   bulkActionEnabled,
   useAvailableBulkActions
 } from './BulkActionButtons'
+import type { ItemActionChooseMeta } from '../panels/ItemActionChoices'
 
 /**
  * #620 — integration pushes over a selection, rendered inside
@@ -40,6 +41,9 @@ export interface PushItemAction {
     confirm_label?: string
     input?: { label: string; placeholder?: string; required?: boolean }
   }
+  /** Pick one of a per-record list first — asked on one-record pushes only;
+   *  bulk runs leave it to the action's default. */
+  choose?: ItemActionChooseMeta
 }
 
 export type PushRunOutcome = BulkRunResult & {

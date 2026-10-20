@@ -112,7 +112,12 @@ import { QuickPickerDialog, useQuickPickerSteps } from './item-edit/QuickPickerD
 import { UserChip, UserRosterCluster } from './item-edit/UserChip'
 import { LiveRowMark } from './LiveRowMark'
 import { MapView } from './MapView'
-import { RevisionsPanel } from './panels'
+import {
+  ItemActionChoiceList,
+  type ItemActionChoiceOption,
+  itemActionChoiceStep,
+  RevisionsPanel
+} from './panels'
 import { RealtimeStaleMark } from './RealtimeStatusBanner'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { RowHighlightLegend } from './RowHighlightLegend'
@@ -837,6 +842,29 @@ export function RowActionsMenu({
       setReason('')
     }
   }, [open])
+  // A push with a choose step (e.g. which file to send): options load when
+  // its confirm opens; two or more are listed, exactly one rides along.
+  const pushChooseAction =
+    confirm?.push?.kind === 'push' && confirm.push.action.choose ? confirm.push.action : null
+  const pushChoicesQ = useQuery({
+    queryKey: ['item-action-choices', pushChooseAction?.id ?? null, collection, String(id)],
+    queryFn: () =>
+      client
+        .request<{ data: ItemActionChoiceOption[] }>(
+          get(`/item-actions/${pushChooseAction!.id}/choices`, { collection, item: String(id) })
+        )
+        .then((r) => r.data ?? []),
+    enabled: !!pushChooseAction,
+    staleTime: 0
+  })
+  const [pushPick, setPushPick] = useState<string | null>(null)
+  const pushChooseId = pushChooseAction?.id ?? null
+  // biome-ignore lint/correctness/useExhaustiveDependencies: a new push confirm starts unpicked
+  useEffect(() => setPushPick(null), [pushChooseId])
+  const pushChoiceStep = pushChoicesQ.data ? itemActionChoiceStep(pushChoicesQ.data) : null
+  const pushChoiceValue = pushChoiceStep && !pushChoiceStep.ask ? pushChoiceStep.value : pushPick
+  const pushChoiceBlocked =
+    !!pushChooseAction && (!pushChoiceStep || (pushChoiceStep.ask && pushPick == null))
   // Clamp to viewport — re-runs when the panel grows (transitions load in,
   // the confirm view swaps in with options + textarea).
   // biome-ignore lint/correctness/useExhaustiveDependencies: content growth triggers
@@ -921,8 +949,8 @@ export function RowActionsMenu({
   // #622 — one-record push / retry through the bulk endpoints (the built-in
   // switch, access, update permission and per-record gates all apply).
   const pushMut = useMutation({
-    mutationFn: ({ op, note }: { op: RowPushOp; note?: string }) =>
-      runRowPush(client, collection, id, op, note).then((outcome) => ({ op, outcome })),
+    mutationFn: ({ op, note, pick }: { op: RowPushOp; note?: string; pick?: string | null }) =>
+      runRowPush(client, collection, id, op, note, pick).then((outcome) => ({ op, outcome })),
     onSuccess: ({ op, outcome }) => {
       setOpen(false)
       const label = op.kind === 'push' ? op.action.label : 'Retry'
@@ -1012,6 +1040,25 @@ export function RowActionsMenu({
                       : `Re-sends the stored request to ${confirm.push.partners.join(', ')}.`}
                   </p>
                 )}
+                {pushChooseAction?.choose &&
+                  (pushChoicesQ.isError ? (
+                    <p className='mb-1.5 px-1 text-[11.5px] text-red-600 dark:text-red-400'>
+                      Could not load the options.
+                    </p>
+                  ) : pushChoicesQ.isLoading ? (
+                    <p className='mb-1.5 px-1 text-[11.5px] text-slate-500 dark:text-slate-400'>
+                      Loading…
+                    </p>
+                  ) : pushChoiceStep?.ask ? (
+                    <div className='mb-1.5 -mt-3 px-1'>
+                      <ItemActionChoiceList
+                        choose={pushChooseAction.choose}
+                        options={pushChoicesQ.data ?? []}
+                        value={pushPick}
+                        onChange={setPushPick}
+                      />
+                    </div>
+                  ) : null)}
                 {confirm.options.length > 1 && (
                   <div className='mb-1.5 space-y-0.5'>
                     {confirm.options.map((t) => (
@@ -1059,6 +1106,7 @@ export function RowActionsMenu({
                     disabled={
                       confirm.push
                         ? pushMut.isPending ||
+                          pushChoiceBlocked ||
                           (confirm.push.kind === 'push' &&
                             !!confirm.push.action.confirm?.input?.required &&
                             reason.trim().length === 0)
@@ -1068,7 +1116,8 @@ export function RowActionsMenu({
                           : !confirm.picked || transitionMut.isPending
                     }
                     onClick={() => {
-                      if (confirm.push) pushMut.mutate({ op: confirm.push, note: reason })
+                      if (confirm.push)
+                        pushMut.mutate({ op: confirm.push, note: reason, pick: pushChoiceValue })
                       else if (confirm.action)
                         actionMut.mutate({ action: confirm.action, comment: reason })
                       else if (confirm.picked)

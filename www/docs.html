@@ -8076,6 +8076,26 @@ data: {"collection":"articles","item":"42","action":"update","changed_fields":["
     return { message: 'Invoice pushed to ERP' };
   },
 });</code></pre>
+          <p class="doc-p">Add <code class="doc-code">choose</code> when the person must pick one of a per-record list first, such as which attached file to send. When the button is pressed, the record form and the row menu fetch the options from <code class="doc-code">GET /api/item-actions/:id/choices?collection=&amp;item=</code>. With two or more options they show a picker; with exactly one they use it without asking; with none the action runs without a pick. The pick reaches <code class="doc-code">execute</code> as <code class="doc-code">payload[key]</code>. Bulk runs never ask, so <code class="doc-code">execute</code> must handle a missing pick.</p>
+          <pre class="doc-pre"><code>ctx.itemActions.register({
+  id: 'push-to-erp',
+  label: 'Push to ERP',
+  collections: ['invoices'],
+  choose: {
+    key: 'file_id',
+    label: 'File to send',
+    body: 'The ERP accepts one file. Pick the one to attach.',
+    async options({ itemId }) {
+      const files = await listInvoiceFiles(itemId);
+      return files.map((f) =&gt; ({ value: f.id, label: f.name, hint: f.size }));
+    },
+  },
+  async execute({ itemId, payload }) {
+    const fileId = payload?.file_id ?? (await listInvoiceFiles(itemId))[0]?.id;
+    // ...
+    return { message: 'Invoice pushed to ERP' };
+  },
+});</code></pre>
           <h3 class="doc-h3">Notification channels</h3>
           <p class="doc-p">Every in-app notification is also delivered to all registered channels. Useful for Slack, Teams, SMS, email via a custom provider.</p>
           <pre class="doc-pre"><code>ctx.notificationChannels.register({

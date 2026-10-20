@@ -7,6 +7,12 @@ import { useNivaroClient } from '../../context'
 import { get, post } from '../../lib/commands'
 import { PushReadinessChip } from '../integrations/RecordIntegrationPreview'
 import { Button } from '../ui/button'
+import {
+  ItemActionChoiceList,
+  type ItemActionChoiceOption,
+  type ItemActionChooseMeta,
+  itemActionChoiceStep
+} from './ItemActionChoices'
 
 /**
  * Extension-registered item actions (ctx.itemActions.register — e.g. an
@@ -29,6 +35,8 @@ interface ItemActionMeta {
   }
   /** The action can pre-flight this record (#616): a readiness chip shows. */
   has_preflight?: boolean
+  /** Pick one of a per-record list first (GET /item-actions/:id/choices). */
+  choose?: ItemActionChooseMeta
 }
 
 export function ItemActionButtons({ collection, itemId }: { collection: string; itemId: string }) {
@@ -49,16 +57,32 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
 
   const [confirming, setConfirming] = useState<ItemActionMeta | null>(null)
   const [note, setNote] = useState('')
+  // The choose step: options shown when there are two or more; `picked`
+  // carries an automatic single pick through a plain confirm too.
+  const [choices, setChoices] = useState<ItemActionChoiceOption[] | null>(null)
+  const [picked, setPicked] = useState<string | null>(null)
 
   const execute = useMutation({
-    mutationFn: ({ action, message }: { action: ItemActionMeta; message?: string }) =>
-      client.request<{ data: { message: string } }>(
+    mutationFn: ({
+      action,
+      message,
+      pick
+    }: {
+      action: ItemActionMeta
+      message?: string
+      pick?: string | null
+    }) => {
+      const payload: Record<string, unknown> = {}
+      if (message?.trim()) payload.message = message.trim()
+      if (action.choose && pick != null) payload[action.choose.key] = pick
+      return client.request<{ data: { message: string } }>(
         post(`/item-actions/${action.id}/execute`, {
           collection,
           itemId,
-          ...(message?.trim() ? { payload: { message: message.trim() } } : {})
+          ...(Object.keys(payload).length > 0 ? { payload } : {})
         })
-      ),
+      )
+    },
     onSuccess: (res) => {
       toast.success((res as { data?: { message?: string } })?.data?.message ?? 'Action completed')
       void qc.invalidateQueries({ queryKey: ['item', collection, String(itemId)] })
@@ -89,6 +113,37 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
     onSettled: () => setRunningId(null)
   })
 
+  const press = async (a: ItemActionMeta) => {
+    let pick: string | null = null
+    let options: ItemActionChoiceOption[] | null = null
+    if (a.choose) {
+      setRunningId(a.id)
+      try {
+        const res = await client.request<{ data: ItemActionChoiceOption[] }>(
+          get(`/item-actions/${a.id}/choices`, { collection, item: itemId })
+        )
+        const step = itemActionChoiceStep(res.data ?? [])
+        if (step.ask) options = res.data
+        else pick = step.value
+      } catch (err) {
+        const resp = (err as { response?: { error?: string } })?.response
+        toast.error(resp?.error ?? `${a.label}: could not load the options`)
+        setRunningId(null)
+        return
+      }
+      setRunningId(null)
+    }
+    if (a.confirm || options) {
+      setNote('')
+      setChoices(options)
+      setPicked(pick)
+      setConfirming(a)
+      return
+    }
+    setRunningId(a.id)
+    execute.mutate({ action: a, pick })
+  }
+
   if (!actions || actions.length === 0) return null
 
   return (
@@ -101,15 +156,7 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
             variant={a.variant ?? 'outline'}
             className='gap-1.5'
             disabled={runningId !== null}
-            onClick={() => {
-              if (a.confirm) {
-                setNote('')
-                setConfirming(a)
-                return
-              }
-              setRunningId(a.id)
-              execute.mutate({ action: a })
-            }}
+            onClick={() => void press(a)}
           >
             {runningId === a.id ? (
               <Loader2 className='h-3.5 w-3.5 animate-spin' />
@@ -151,6 +198,14 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
                   {confirming.confirm.body}
                 </p>
               )}
+              {confirming.choose && choices && (
+                <ItemActionChoiceList
+                  choose={confirming.choose}
+                  options={choices}
+                  value={picked}
+                  onChange={setPicked}
+                />
+              )}
               {confirming.confirm?.input && (
                 <div className='mt-3'>
                   <p className='mb-1 text-[11.5px] font-medium text-slate-500'>
@@ -172,12 +227,15 @@ export function ItemActionButtons({ collection, itemId }: { collection: string; 
                 <Button
                   type='button'
                   size='sm'
-                  disabled={!!confirming.confirm?.input?.required && !note.trim()}
+                  disabled={
+                    (!!confirming.confirm?.input?.required && !note.trim()) ||
+                    (!!choices && picked == null)
+                  }
                   onClick={() => {
                     const a = confirming
                     setConfirming(null)
                     setRunningId(a.id)
-                    execute.mutate({ action: a, message: note })
+                    execute.mutate({ action: a, message: note, pick: picked })
                   }}
                 >
                   {confirming.confirm?.confirm_label ?? confirming.label}
