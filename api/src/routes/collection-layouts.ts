@@ -2016,21 +2016,23 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         input_bindings?: unknown
         widget_id?: number | null
         show_approval_chain?: boolean
-        hide_actions_when_collapsed?: boolean
       }>
     }
     if (!Array.isArray(body.assignments))
       return reply.code(400).send({ error: 'assignments array required' })
 
-    // Upsert by (layout_id, field) (#774): a save used to DELETE every row and
+    // Upsert by (layout_id, field, group_key): a field may sit in two groups
+    // (header strip + body) and both placements survive. (#774): a save used to DELETE every row and
     // re-insert, so assignment ids churned on each 400ms auto-save (version
     // restores had to match by field, and any column the insert map forgot —
     // hide_actions_when_collapsed — was silently dropped). Rows keep their
     // id now; only what left the payload is deleted; every column is carried.
+    const keyOf = (field: string, groupKey: string | null | undefined) =>
+      `${field}\u0000${groupKey ?? ''}`
     const wanted = new Map<string, (typeof body.assignments)[number]>()
     for (const a of body.assignments) {
       if (!a || typeof a.field !== 'string' || !a.field) continue
-      wanted.set(a.field, a) // a field named twice: the last entry wins
+      wanted.set(keyOf(a.field, a.group_key), a) // same pair named twice: the last entry wins
     }
     const rowOf = (a: (typeof body.assignments)[number]) => ({
       group_key: a.group_key ?? null,
@@ -2045,20 +2047,30 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       lock_conditions: a.lock_conditions ?? null,
       input_bindings: serializeBindings(a.input_bindings),
       widget_id: a.widget_id ?? null,
-      show_approval_chain: a.show_approval_chain ? 1 : 0,
-      hide_actions_when_collapsed: a.hide_actions_when_collapsed ? 1 : 0
+      show_approval_chain: a.show_approval_chain ? 1 : 0
     })
     await db.transaction(async (trx) => {
       const existing = (await trx('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
-        .select('id', 'field')) as Array<{ id: number; field: string }>
-      const byField = new Map(existing.map((r) => [r.field, r.id]))
-      const gone = existing.filter((r) => !wanted.has(r.field)).map((r) => r.id)
+        .select('id', 'field', 'group_key')) as Array<{
+        id: number
+        field: string
+        group_key: string | null
+      }>
+      const byKey = new Map<string, number>()
+      const gone: number[] = []
+      for (const r of existing) {
+        const k = keyOf(r.field, r.group_key)
+        // A leftover duplicate of the same pair goes; the first row keeps its id.
+        if (wanted.has(k) && !byKey.has(k)) byKey.set(k, r.id)
+        else gone.push(r.id)
+      }
       if (gone.length > 0) {
         await trx('nivaro_layout_field_assignments').whereIn('id', gone).delete()
       }
-      for (const [field, a] of wanted) {
-        const rowId = byField.get(field)
+      for (const [k, a] of wanted) {
+        const field = a.field
+        const rowId = byKey.get(k)
         if (rowId != null) {
           await trx('nivaro_layout_field_assignments').where({ id: rowId }).update(rowOf(a))
         } else {

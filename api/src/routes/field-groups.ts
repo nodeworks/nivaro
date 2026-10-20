@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { snapshotLayoutVersion } from '../services/layout-versions.js'
 
 export async function fieldGroupsRoutes(app: FastifyInstance) {
   // GET /field-groups/:collection — list groups for active layout (backward compat)
@@ -77,6 +78,10 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     if (!body.collection || !body.key || !body.label || !body.type) {
       return reply.code(400).send({ error: 'collection, key, label, and type are required' })
+    }
+
+    if (body.layout_id != null) {
+      await snapshotLayoutVersion(Number(body.layout_id), 'before group add', req.user?.id)
     }
 
     await db('nivaro_field_groups').insert({
@@ -172,6 +177,9 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if (Object.keys(patch).length === 0)
       return reply.code(400).send({ error: 'No fields to update' })
 
+    if (existing.layout_id) {
+      await snapshotLayoutVersion(Number(existing.layout_id), 'before group edit', req.user?.id)
+    }
     await db('nivaro_field_groups').where({ id }).update(patch)
     const updated = await db('nivaro_field_groups').where({ id }).first()
 
@@ -194,6 +202,7 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
     if (!existing) return reply.code(404).send({ error: 'Not found' })
 
     if (existing.layout_id) {
+      await snapshotLayoutVersion(Number(existing.layout_id), 'before group delete', req.user?.id)
       // Layout-aware: clear group_key in assignments for this layout
       await db('nivaro_layout_field_assignments')
         .where({ layout_id: existing.layout_id, group_key: existing.key })
@@ -224,6 +233,17 @@ export async function fieldGroupsRoutes(app: FastifyInstance) {
 
     if (!body.collection || !Array.isArray(body.order) || body.order.length === 0) {
       return reply.code(400).send({ error: 'collection and order array are required' })
+    }
+
+    const touched = (await db('nivaro_field_groups')
+      .where({ collection: body.collection })
+      .whereIn(
+        'id',
+        body.order.map((o) => o.id)
+      )
+      .select('layout_id')) as Array<{ layout_id: number | null }>
+    for (const lid of new Set(touched.map((t) => t.layout_id).filter((l) => l != null))) {
+      await snapshotLayoutVersion(Number(lid), 'before group reorder', req.user?.id)
     }
 
     for (const item of body.order) {
