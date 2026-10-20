@@ -167,7 +167,7 @@ export function ColumnPresetRow({
             <span
               key={token}
               title='Not in the current layout or relation set'
-              className='inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700'
+              className='inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700 dark:border-amber-700/60 dark:bg-amber-400/10 dark:text-amber-300'
             >
               {token}
               <button

@@ -60,7 +60,7 @@ export function InlineDisplaySection({
             'flex-1 rounded border px-2 py-0.5 text-[11px]',
             separator === null
               ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-              : 'border-slate-200 text-slate-500 hover:border-slate-300'
+              : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
           )}
         >
           Stacked
@@ -72,7 +72,7 @@ export function InlineDisplaySection({
             'flex-1 rounded border px-2 py-0.5 text-[11px]',
             separator !== null
               ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-              : 'border-slate-200 text-slate-500 hover:border-slate-300'
+              : 'border-slate-200 text-slate-500 hover:border-slate-300 dark:border-border dark:text-muted-foreground'
           )}
         >
           Inline
@@ -108,7 +108,7 @@ export function InlineDisplaySection({
                 'flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 border transition-colors',
                 entry.line_break
                   ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
-                  : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
+                  : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600 dark:border-border dark:text-muted-foreground dark:hover:text-foreground'
               )}
             >
               <CornerDownLeft className='h-3 w-3' />

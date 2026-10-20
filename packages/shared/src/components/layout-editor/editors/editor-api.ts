@@ -14,14 +14,28 @@ export interface EditorApi {
   patch<T = any>(path: string, body?: unknown): Promise<{ data: T }>
 }
 
+/**
+ * The SDK throws `{ status, response: <body> }`; the moved catch sites read
+ * axios's `err.response.data.error`. Rethrow in that shape (message and
+ * status kept) so every one of them shows the server's words.
+ */
+function asAxiosError(e: unknown): never {
+  const status = (e as { status?: number })?.status
+  const body = (e as { response?: unknown })?.response
+  if (!(e instanceof Error) || status == null) throw e
+  throw Object.assign(new Error(e.message), { status, response: { status, data: body } })
+}
+
 export function useEditorApi(): EditorApi {
   const client = useNivaroClient()
   return useMemo(
     () => ({
       get: (path, config) =>
-        client.request<any>(get(path, config?.params)).then((data) => ({ data })),
-      post: (path, body) => client.request<any>(post(path, body)).then((data) => ({ data })),
-      patch: (path, body) => client.request<any>(patch(path, body)).then((data) => ({ data }))
+        client.request<any>(get(path, config?.params)).then((data) => ({ data }), asAxiosError),
+      post: (path, body) =>
+        client.request<any>(post(path, body)).then((data) => ({ data }), asAxiosError),
+      patch: (path, body) =>
+        client.request<any>(patch(path, body)).then((data) => ({ data }), asAxiosError)
     }),
     [client]
   )

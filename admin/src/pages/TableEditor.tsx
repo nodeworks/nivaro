@@ -1,8 +1,4 @@
 import type { Modifier } from '@dnd-kit/core'
-import { SimpleSelect } from '@/components/ui/simple-select'
-import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
-import { LayoutReviewSection } from '@/components/ai-layout-review'
-import { ExplainButton } from '@/components/explain-button'
 import {
   closestCenter,
   DndContext,
@@ -44,6 +40,9 @@ import {
   Users,
   X
 } from 'lucide-react'
+import { HelpTextDraftsSection } from '@/components/ai-help-text-drafts'
+import { LayoutReviewSection } from '@/components/ai-layout-review'
+import { ExplainButton } from '@/components/explain-button'
 import {
   Select,
   SelectContent,
@@ -51,6 +50,7 @@ import {
   SelectTrigger,
   SelectValue
 } from '@/components/ui/select'
+import { SimpleSelect } from '@/components/ui/simple-select'
 
 const snapLeftEdgeToCursor: Modifier = ({ activatorEvent, draggingNodeRect, transform }) => {
   if (draggingNodeRect && activatorEvent && 'clientX' in activatorEvent) {
@@ -83,6 +83,7 @@ import {
   CollectionFieldPickerPanel,
   type ColumnPresetItem,
   ColumnPresetRow,
+  Combobox,
   DataGuideCard,
   type DrawerRelationItem,
   DrawerRelationRow,
@@ -91,9 +92,9 @@ import {
   FieldPickerPanel,
   IconPicker,
   type InlineDisplayConfig,
+  type LayoutInlineDisplayEntry as InlineDisplayEntry,
   InlineDisplaySection,
   isM2MIfacePreset,
-  type LayoutInlineDisplayEntry as InlineDisplayEntry,
   LayoutPicker,
   NUMERIC_FIELD_TYPES,
   O2MAggFieldCombobox,
@@ -105,10 +106,10 @@ import {
   PRESET_SPECIAL_GROUP_KEYS,
   type PresetFieldOption,
   type PresetOptionGroup,
-  ReportWidgetConfigSection,
-  ROW_RULE_SKIP_TYPES,
   RelationLabel,
   RelationPicker,
+  ReportWidgetConfigSection,
+  ROW_RULE_SKIP_TYPES,
   RoleConditionRow,
   type RowRuleItem,
   RowRuleLint,
@@ -118,6 +119,7 @@ import {
   type SubtitleField,
   SwapConfigEditor,
   seedQuickPickerSteps,
+  TipLayer,
   useReportPickers
 } from '@nivaro/shared'
 import {
@@ -292,74 +294,6 @@ function TypeBadge({ type }: { type: string }) {
     <span className={cn('rounded px-1.5 py-0.5 font-mono text-[10.5px] font-medium', style)}>
       {type}
     </span>
-  )
-}
-
-// ─── Combobox (shadcn Popover + Command) ──────────────────────────────────────
-
-function Combobox({
-  value,
-  onChange,
-  options,
-  placeholder,
-  disabled
-}: {
-  value: string
-  onChange: (v: string) => void
-  options: { value: string; label: string }[]
-  placeholder?: string
-  disabled?: boolean
-}) {
-  const [open, setOpen] = useState(false)
-  const selected = options.find((o) => o.value === value)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant='outline'
-          role='combobox'
-          aria-expanded={open}
-          disabled={disabled}
-          className='h-7 w-full justify-between px-2 font-mono text-[12px] font-normal'
-        >
-          <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-            {selected ? selected.label : (placeholder ?? 'Select…')}
-          </span>
-          <ChevronsUpDown className='ml-1 h-3 w-3 shrink-0 opacity-50' />
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent className='w-[240px] p-0' align='start'>
-        <Command>
-          <CommandInput placeholder='Search…' className='h-8 text-[12px]' />
-          <CommandList>
-            <CommandEmpty className='py-3 text-center text-[12px] text-muted-foreground'>
-              No results
-            </CommandEmpty>
-            <CommandGroup>
-              {options.map((opt) => (
-                <CommandItem
-                  key={opt.value}
-                  value={opt.value}
-                  onSelect={(current) => {
-                    onChange(current === value ? '' : current)
-                    setOpen(false)
-                  }}
-                  className='font-mono text-[12px]'
-                >
-                  <Check
-                    className={cn(
-                      'mr-2 h-3 w-3',
-                      value === opt.value ? 'opacity-100' : 'opacity-0'
-                    )}
-                  />
-                  {opt.label}
-                </CommandItem>
-              ))}
-            </CommandGroup>
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
   )
 }
 
@@ -1452,7 +1386,9 @@ function FieldsTab({
                   impactNote += `\n\n⚠ ${callers.hits.length} API caller(s) used this field in the last 14 days:\n${callers.hits
                     .slice(0, 8)
                     .map((h) => `  • ${h.ref}${h.detail ? ` (${h.detail})` : ''}`)
-                    .join('\n')}${callers.hits.length > 8 ? `\n  +${callers.hits.length - 8} more` : ''}\n`
+                    .join(
+                      '\n'
+                    )}${callers.hits.length > 8 ? `\n  +${callers.hits.length - 8} more` : ''}\n`
                 }
                 if (configTotal > 0) {
                   const lines = config
@@ -4725,7 +4661,9 @@ function SummaryConditionsEditor({
           className='h-6 gap-1 px-2 text-[11.5px] font-normal'
           data-summary-condition-field={current ?? 'new'}
         >
-          {current ? labelOf(current) : (
+          {current ? (
+            labelOf(current)
+          ) : (
             <>
               <Plus className='h-3 w-3' /> Add field
             </>
@@ -4764,9 +4702,7 @@ function SummaryConditionsEditor({
   return (
     <div className='flex min-w-0 flex-wrap items-center gap-1.5' data-summary-conditions>
       <span className='text-[11.5px] text-slate-500'>record</span>
-      {list.length === 0 && (
-        <span className='text-[11.5px] italic text-slate-400'>any record</span>
-      )}
+      {list.length === 0 && <span className='text-[11.5px] italic text-slate-400'>any record</span>}
       {list.map((c, i) => (
         <span
           key={`${i}-${c.field}`}
@@ -9222,7 +9158,6 @@ const ALIAS_INTERFACES = new Set([
 ])
 
 // ── Cascade Filters ───────────────────────────────────────────────────────────
-
 
 /** Layout setting: the ordered relation fields the quick picker walks when a
  *  record is created. Empty = no quick picker. "Seed" fills it from the
@@ -21684,7 +21619,11 @@ export function TableEditorPage() {
               />
             )}
             {tab === 'groups' && (
-              <LayoutsTab tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />
+              <>
+                {/* The moved layout editors show their hints with data-tip. */}
+                <TipLayer />
+                <LayoutsTab tableName={table ?? ''} dbColumns={tableData?.columns ?? []} />
+              </>
             )}
             {tab === 'behavior' && <BehaviorTab tableName={table ?? ''} tableData={tableData} />}
             {tab === 'content' && (
@@ -21707,7 +21646,10 @@ export function TableEditorPage() {
               />
             )}
             {tab === 'settings' && isAdmin && !isSystem && table && (
-              <DataGuideCard collection={table} className='mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card' />
+              <DataGuideCard
+                collection={table}
+                className='mt-6 rounded-lg border border-slate-200 bg-white p-4 dark:border-border dark:bg-card'
+              />
             )}
           </>
         )}

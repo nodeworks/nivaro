@@ -246,7 +246,7 @@ export function RowRuleTester({
           {running ? 'Running…' : 'Run'}
         </Button>
       </div>
-      {error && <p className='mt-1.5 text-[11px] text-red-600'>{error}</p>}
+      {error && <p className='mt-1.5 text-[11px] text-red-600 dark:text-red-400'>{error}</p>}
       {result && (
         <div className='mt-2 space-y-2'>
           <div className='flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500'>

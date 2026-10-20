@@ -432,7 +432,7 @@ export function PrecedenceSourceRow({
         <button
           type='button'
           onClick={onRemove}
-          className='h-6 w-6 flex items-center justify-center text-slate-300 hover:text-red-400 transition-colors rounded hover:bg-red-50'
+          className='h-6 w-6 flex items-center justify-center text-slate-300 hover:text-red-400 transition-colors rounded hover:bg-red-50 dark:text-muted-foreground dark:hover:bg-red-500/10'
         >
           ✕
         </button>
@@ -811,7 +811,9 @@ export function SelectButton<T extends string>({
             }}
             className={cn(
               'w-full text-left px-2.5 py-1.5 rounded text-[12px] hover:bg-muted transition-colors',
-              o.value === value ? 'font-medium text-slate-900 bg-slate-50' : 'text-slate-700'
+              o.value === value
+                ? 'font-medium text-slate-900 bg-slate-50 dark:text-foreground dark:bg-muted'
+                : 'text-slate-700 dark:text-muted-foreground'
             )}
           >
             {o.label}
@@ -1180,6 +1182,8 @@ export function RowRuleRow({
         className='flex items-center gap-1.5 px-2.5 py-2 cursor-pointer select-none hover:bg-muted transition-colors'
         onClick={() => setExpanded((v) => !v)}
         onKeyDown={(e) => {
+          // Keys on the remove button inside belong to that button.
+          if (e.target !== e.currentTarget) return
           if (e.key === 'Enter' || e.key === ' ') {
             e.preventDefault()
             setExpanded((v) => !v)
@@ -1193,17 +1197,18 @@ export function RowRuleRow({
           {collapsedSummary}
         </span>
         {rule.only_if_empty && (
-          <span className='shrink-0 rounded px-1 py-0.5 text-[11px] font-medium bg-amber-50 text-amber-600 border border-amber-100'>
+          <span className='shrink-0 rounded px-1 py-0.5 text-[11px] font-medium bg-amber-50 text-amber-600 border border-amber-100 dark:bg-amber-400/10 dark:text-amber-300 dark:border-amber-700/60'>
             fallback
           </span>
         )}
         <button
           type='button'
+          aria-label='Remove rule'
           onClick={(e) => {
             e.stopPropagation()
             onRemove()
           }}
-          className='shrink-0 text-slate-300 hover:text-red-400 transition-colors ml-1'
+          className='shrink-0 text-slate-300 hover:text-red-400 transition-colors ml-1 dark:text-muted-foreground'
         >
           <X className='h-3.5 w-3.5' />
         </button>
@@ -1213,7 +1218,7 @@ export function RowRuleRow({
       {expanded && (
         <>
           {/* IF section */}
-          <div className='border-t border-slate-100 px-2.5 py-2 space-y-1.5 bg-slate-50/50 dark:border-border'>
+          <div className='border-t border-slate-100 px-2.5 py-2 space-y-1.5 bg-slate-50/50 dark:border-border dark:bg-muted/40'>
             <div className='flex items-start gap-1.5'>
               <span className='text-[11px] font-semibold text-slate-400 mt-[7px] w-5 shrink-0 tracking-wide'>
                 IF
@@ -1858,7 +1863,7 @@ export function RowRuleRow({
           </div>
 
           {/* Footer */}
-          <div className='border-t border-slate-100 px-2.5 py-1.5 bg-slate-50/50 dark:border-border'>
+          <div className='border-t border-slate-100 px-2.5 py-1.5 bg-slate-50/50 dark:border-border dark:bg-muted/40'>
             <label
               className='flex items-center gap-2 cursor-pointer'
               data-setting='field.row_rules.only_if_empty'

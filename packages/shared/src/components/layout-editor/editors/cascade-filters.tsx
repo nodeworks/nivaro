@@ -204,7 +204,7 @@ export function CascadeFiltersEditor({
                               <span className='flex items-center gap-1.5'>
                                 {sel.label}
                                 {sel.kind === 'M2M' && (
-                                  <span className='rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
+                                  <span className='rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300'>
                                     M2M
                                   </span>
                                 )}
@@ -242,7 +242,7 @@ export function CascadeFiltersEditor({
                                   />
                                   <span className='flex-1'>{item.label}</span>
                                   {item.kind === 'M2M' && (
-                                    <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
+                                    <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300'>
                                       M2M
                                     </span>
                                   )}
@@ -475,7 +475,7 @@ export function CascadeFiltersEditor({
                       <span className='flex items-center gap-1.5'>
                         {sel.label}
                         {sel.kind === 'M2M' && (
-                          <span className='rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
+                          <span className='rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300'>
                             M2M
                           </span>
                         )}
@@ -513,7 +513,7 @@ export function CascadeFiltersEditor({
                           />
                           <span className='flex-1'>{item.label}</span>
                           {item.kind === 'M2M' && (
-                            <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
+                            <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-400/15 dark:text-amber-300'>
                               M2M
                             </span>
                           )}
