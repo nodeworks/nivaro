@@ -12,9 +12,11 @@
  * placements per group_key (null = the Ungrouped zone), groups per
  * parent_key. The top level (parent_key null) is the record page's vertical
  * order: top-level groups, the Ungrouped zone (pseudo group `__ungrouped__`,
- * stored as the `__ungrouped_pos__` row) and the slot cards (CANVAS_SLOT_KEYS
- * placements with group_key null), which therefore take no part in the
- * Ungrouped zone's own order.
+ * stored as the `__ungrouped_pos__` row) and the slot cards (isCanvasSlot:
+ * CANVAS_SLOT_KEYS, `__owners__`, `__pdf__` and `__ext_<key>__` placements
+ * with group_key null), which therefore take no part in the Ungrouped zone's
+ * own order. Equal stored sorts keep the order the record page shows: the
+ * canvas tie order, then row id (new rows last).
  */
 
 export type PlacementKey = { field: string; group_key: string | null }
@@ -265,7 +267,8 @@ export const GROUP_TYPES = ['section', 'tab', 'metadata', 'container', 'content'
 export const UNGROUPED_KEY = '__ungrouped__'
 export const HEADER_GROUP_KEY = '__header__'
 
-/** Slot cards: placed with group_key null, ordered among the top-level groups. */
+/** Slot cards: placed with group_key null, ordered among the top-level groups
+ *  (with `__owners__`, `__pdf__` and `__ext_<key>__`, see isCanvasSlot). */
 export const CANVAS_SLOT_KEYS = [
   '__pipeline__',
   '__tasks__',
@@ -275,18 +278,27 @@ export const CANVAS_SLOT_KEYS = [
   '__related_records__'
 ] as const
 
+/** Extension slot cards (#425) — the record page's extSlotKey pattern. */
+const EXT_SLOT_RE = /^__ext_[a-z][a-z0-9-]{1,60}__$/
+
+/** Field names no placement may take (the Ungrouped zone's position row). */
+export const RESERVED_FIELDS = ['__ungrouped_pos__'] as const
+
 // Tie order when stored sorts collide — the record page's (ItemEditForm
-// sectionOrder): groups, Ungrouped, pipeline, tasks, comments, addendums,
-// referenced-by, related records.
-const CANVAS_TIE: Record<string, number> = {
-  [UNGROUPED_KEY]: 1,
-  __pipeline__: 2,
-  __tasks__: 3,
-  __comments__: 4,
-  __addendums__: 7,
-  __referenced_by__: 8,
-  __related_records__: 9
-}
+// sectionOrder): groups, Ungrouped, pipeline, tasks, comments, owners, PDF,
+// addendums, referenced-by / extension slots, related records.
+const CANVAS_TIE = new Map<string, number>([
+  [UNGROUPED_KEY, 1],
+  ['__pipeline__', 2],
+  ['__tasks__', 3],
+  ['__comments__', 4],
+  ['__owners__', 5],
+  ['__pdf__', 6],
+  ['__addendums__', 7],
+  ['__referenced_by__', 8],
+  ['__related_records__', 9]
+])
+const canvasTie = (key: string) => CANVAS_TIE.get(key) ?? (EXT_SLOT_RE.test(key) ? 8 : 0)
 
 export class LayoutOpError extends Error {
   op_index: number
@@ -298,7 +310,13 @@ export class LayoutOpError extends Error {
 }
 
 export function isCanvasSlot(p: { field: string; group_key: string | null }): boolean {
-  return p.group_key === null && (CANVAS_SLOT_KEYS as readonly string[]).includes(p.field)
+  if (p.group_key !== null) return false
+  return (
+    (CANVAS_SLOT_KEYS as readonly string[]).includes(p.field) ||
+    p.field === '__owners__' ||
+    p.field === '__pdf__' ||
+    EXT_SLOT_RE.test(p.field)
+  )
 }
 
 export function newPlacement(field: string, groupKey: string | null): PlacementRow {
@@ -357,18 +375,29 @@ export function ungroupedGroup(sort: number): GroupRow {
 
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0)
 
-/** Stable array order: groups by (parent, sort, key), placements by (group, sort, field). */
+// Rows without an id (not saved yet) come after saved rows of the same sort.
+const byId = (a: { id?: number }, b: { id?: number }) =>
+  (a.id ?? Number.MAX_SAFE_INTEGER) - (b.id ?? Number.MAX_SAFE_INTEGER)
+
+/** Stable array order: groups by (parent, sort, id, key), placements by (group, sort, id, field). */
 export function sortBundleRows<B extends { groups: GroupRow[]; placements: PlacementRow[] }>(
   bundle: B
 ): B {
   return {
     ...bundle,
     groups: [...bundle.groups].sort(
-      (a, b) => cmp(a.parent_key ?? '', b.parent_key ?? '') || a.sort - b.sort || cmp(a.key, b.key)
+      (a, b) =>
+        cmp(a.parent_key ?? '', b.parent_key ?? '') ||
+        a.sort - b.sort ||
+        byId(a, b) ||
+        cmp(a.key, b.key)
     ),
     placements: [...bundle.placements].sort(
       (a, b) =>
-        cmp(a.group_key ?? '', b.group_key ?? '') || a.sort - b.sort || cmp(a.field, b.field)
+        cmp(a.group_key ?? '', b.group_key ?? '') ||
+        a.sort - b.sort ||
+        byId(a, b) ||
+        cmp(a.field, b.field)
     )
   }
 }
@@ -386,7 +415,7 @@ function zoneMembers(d: Draft, groupKey: string | null): PlacementRow[] {
   return d.placements
     .map((p, i) => ({ p, i }))
     .filter(({ p }) => p.group_key === groupKey && !isCanvasSlot(p))
-    .sort((a, b) => a.p.sort - b.p.sort || a.i - b.i)
+    .sort((a, b) => a.p.sort - b.p.sort || byId(a.p, b.p) || a.i - b.i)
     .map(({ p }) => p)
 }
 
@@ -394,14 +423,15 @@ function zoneMembers(d: Draft, groupKey: string | null): PlacementRow[] {
 function groupMembers(d: Draft, parentKey: string | null): Member[] {
   const rows: Array<{ m: Member; tie: number; i: number }> = []
   d.groups.forEach((g, i) => {
-    if (g.parent_key === parentKey) rows.push({ m: g, tie: CANVAS_TIE[g.key] ?? 0, i })
+    if (g.parent_key === parentKey) rows.push({ m: g, tie: canvasTie(g.key), i })
   })
   if (parentKey === null)
     d.placements.forEach((p, i) => {
-      if (isCanvasSlot(p))
-        rows.push({ m: p, tie: CANVAS_TIE[p.field] ?? 0, i: d.groups.length + i })
+      if (isCanvasSlot(p)) rows.push({ m: p, tie: canvasTie(p.field), i: d.groups.length + i })
     })
-  return rows.sort((a, b) => a.m.sort - b.m.sort || a.tie - b.tie || a.i - b.i).map((r) => r.m)
+  return rows
+    .sort((a, b) => a.m.sort - b.m.sort || a.tie - b.tie || byId(a.m, b.m) || a.i - b.i)
+    .map((r) => r.m)
 }
 
 function setOrder(members: Member[]): void {
@@ -423,13 +453,15 @@ function renumberAll(d: Draft): void {
  * Apply ops in order to a copy of the bundle. Throws LayoutOpError naming the
  * failing op's index; the input bundle is never mutated.
  *
- * Slot rule: the six slot cards (CANVAS_SLOT_KEYS, group_key null) store
+ * Slot rule: slot cards (isCanvasSlot — the six CANVAS_SLOT_KEYS plus
+ * `__owners__`, `__pdf__` and `__ext_<key>__`, all with group_key null) store
  * their sort among the top-level groups, as the record page reads it — so
  * they are renumbered with top-level groups and `__ungrouped__` (ties:
- * groups < Ungrouped < pipeline < tasks < comments < addendums <
- * referenced-by < related records), never with the Ungrouped zone's fields,
- * and move with group_move { key: '__pipeline__', parent_key: null, index }.
- * Every other group_key-null placement belongs to the Ungrouped zone.
+ * groups < Ungrouped < pipeline < tasks < comments < owners < PDF <
+ * addendums < referenced-by = extension slots < related records, then row
+ * id), never with the Ungrouped zone's fields, and move with group_move
+ * { key: '__pipeline__', parent_key: null, index }. Every other
+ * group_key-null placement belongs to the Ungrouped zone.
  */
 export function applyLayoutOps(bundle: LayoutBundle, ops: LayoutOp[]): LayoutBundle {
   const d: Draft = {
@@ -474,6 +506,8 @@ function applyOne(d: Draft, op: LayoutOp, i: number): void {
   const findPlacement = (at: PlacementKey | undefined): PlacementRow => {
     if (!at || typeof at.field !== 'string') fail('A placement needs a field')
     const k = at as PlacementKey
+    if ((RESERVED_FIELDS as readonly string[]).includes(k.field))
+      fail(`"${k.field}" is a reserved name`)
     const row = d.placements.find(
       (p) => p.field === k.field && p.group_key === (k.group_key ?? null)
     )
@@ -509,6 +543,8 @@ function applyOne(d: Draft, op: LayoutOp, i: number): void {
   switch (op.op) {
     case 'place': {
       if (typeof op.field !== 'string' || !op.field) fail('place needs a field')
+      if ((RESERVED_FIELDS as readonly string[]).includes(op.field))
+        fail(`"${op.field}" is a reserved name`)
       const groupKey = op.group_key ?? null
       checkTarget(groupKey)
       if (d.placements.some((p) => p.field === op.field && p.group_key === groupKey))
@@ -574,7 +610,7 @@ function applyOne(d: Draft, op: LayoutOp, i: number): void {
     case 'group_move': {
       const parentKey = op.parent_key ?? null
       let row: Member
-      if (op.key === UNGROUPED_KEY || (CANVAS_SLOT_KEYS as readonly string[]).includes(op.key)) {
+      if (op.key === UNGROUPED_KEY || isCanvasSlot({ field: op.key, group_key: null })) {
         if (parentKey !== null) fail('This stays at the top level of the form')
         const found =
           op.key === UNGROUPED_KEY

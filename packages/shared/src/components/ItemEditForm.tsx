@@ -216,8 +216,8 @@ import type {
   SummaryEntry
 } from './item-edit/types'
 import { DesignDropZone, designWrap } from './layout-editor/DesignNode'
-import { DesignCanvas, type RefusedWrite } from './layout-editor/design-canvas'
-import type { DesignTarget, LayoutDesign } from './layout-editor/design-context'
+import { DesignCanvas } from './layout-editor/design-canvas'
+import type { DesignTarget, LayoutDesignProp } from './layout-editor/design-context'
 import {
   AccessDeniedPanel,
   AddendumPanel,
@@ -607,17 +607,7 @@ export interface ItemEditFormProps {
   initialRows?: Record<string, Array<Record<string, unknown>>>
   /** Layout editor canvas (spec §7.3): render this draft layout with the
    *  preview record's values, every placement selectable, nothing written. */
-  design?: ItemEditFormDesign
-}
-
-export interface ItemEditFormDesign {
-  /** The draft layout — rendered instead of GET /collection-layouts/active. */
-  layout: ActiveLayoutData
-  /** Preview record (its values, steps and rules); null/absent = a blank form. */
-  record?: Record<string, unknown> | null
-  context: LayoutDesign
-  /** Something on the canvas tried to write and was refused (tests, dev tooling). */
-  onRefusedWrite?: (w: RefusedWrite) => void
+  design?: LayoutDesignProp
 }
 
 export interface HeaderWidgetInfo {
@@ -5328,7 +5318,7 @@ function ItemEditFormView({
     // Design mode: switching tabs on the canvas leaves the record page's
     // remembered tab and the host's URL alone.
     if (designOn) {
-      bodyRef.current?.scrollTo({ top: 0 })
+      scrollBodyTop()
       return
     }
     try {
@@ -5345,7 +5335,13 @@ function ItemEditFormView({
     } catch {
       /* noop */
     }
-    bodyRef.current?.scrollTo({ top: 0 })
+    scrollBodyTop()
+  }
+  // Older engines and jsdom have no Element.scrollTo — a tab switch must
+  // never throw over it.
+  function scrollBodyTop() {
+    const el = bodyRef.current
+    if (typeof el?.scrollTo === 'function') el.scrollTo({ top: 0 })
   }
 
   const allSteps = useMemo<StepDef[]>(() => {
@@ -11575,7 +11571,7 @@ function ItemEditFormView({
                                                   )
                                                   if (ownerContainer) {
                                                     setContainerTab(ownerContainer, stepKey)
-                                                    bodyRef.current?.scrollTo({ top: 0 })
+                                                    scrollBodyTop()
                                                   } else {
                                                     setActiveTab(stepKey)
                                                   }

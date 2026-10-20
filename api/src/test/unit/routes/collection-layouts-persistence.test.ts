@@ -159,6 +159,7 @@ const fake = vi.hoisted(() => {
       for (const d of list) {
         const row: Row = { ...d }
         if (row.id == null) row.id = nextId++
+        this.checkContainer(row)
         this.rows().push(row)
         ids.push(Number(row.id))
       }
@@ -166,8 +167,16 @@ const fake = vi.hoisted(() => {
     }
     async update(patch: Row) {
       const rows = this.matched()
+      for (const r of rows) this.checkContainer({ ...r, ...patch })
       for (const r of rows) Object.assign(r, patch)
       return rows.length
+    }
+    // nivaro_field_groups.container_id must name an existing group (FK, 547).
+    checkContainer(row: Row) {
+      if (this.table !== 'nivaro_field_groups' || row.container_id == null) return
+      const ids = new Set([...this.rows().map((r) => String(r.id)), String(row.id)])
+      if (!ids.has(String(row.container_id)))
+        throw new Error(`FK conflict (547): container_id ${row.container_id} does not exist`)
     }
     async delete() {
       const rows = new Set(this.matched())
@@ -634,6 +643,36 @@ describe('restoreLayoutVersion', () => {
       [10, null],
       [12, null]
     ])
+  })
+
+  it('restore brings back a removed container with its tabs nested under the new id', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [layout({ id: 1, is_active: 1 })],
+      nivaro_field_groups: [
+        { id: 11, layout_id: 1, key: 'tabs', type: 'container', container_id: null, sort: 0 },
+        { id: 12, layout_id: 1, key: 't1', type: 'tab', container_id: 11, sort: 0 },
+        { id: 13, layout_id: 1, key: 't2', type: 'tab', container_id: 11, sort: 1 }
+      ],
+      nivaro_layout_field_assignments: [],
+      nivaro_layout_versions: []
+    })
+    await snapshotLayoutVersion(1, 'v1', 'u')
+    const version = fake.tables.nivaro_layout_versions[0]
+
+    // After the version: the container was removed (its tabs unhooked) and
+    // one tab removed too.
+    for (const g of fake.tables.nivaro_field_groups) g.container_id = null
+    fake.tables.nivaro_field_groups = fake.tables.nivaro_field_groups.filter((g) => g.id === 12)
+
+    await expect(restoreLayoutVersion(1, Number(version.id), 'u')).resolves.toEqual({
+      restored_assignments: 0,
+      restored_groups: 3
+    })
+    const groups = fake.tables.nivaro_field_groups.filter((g) => g.layout_id === 1)
+    const tabs = groups.find((g) => g.key === 'tabs')
+    expect(tabs?.id).not.toBe(11)
+    expect(groups.find((g) => g.key === 't1')?.container_id).toBe(tabs?.id)
+    expect(groups.find((g) => g.key === 't2')?.container_id).toBe(tabs?.id)
   })
 
   it('restore removes groups added after the version', async () => {

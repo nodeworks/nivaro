@@ -198,12 +198,42 @@ export async function restoreLayoutVersion(
     }
 
     // Groups upsert by id — assignments reference groups through key/sort.
+    // A group removed since the version comes back with a NEW identity id,
+    // so nesting is written in a second pass through old → current ids
+    // (container_id is a NO ACTION self-FK: an old id would fail with 547).
+    const idOf = new Map<number, number>()
     for (const g of snap.groups) {
-      const { id, created_at: _gca, ...cols } = g as { id?: number } & Record<string, unknown>
+      const {
+        id,
+        created_at: _gca,
+        container_id: _cid,
+        ...cols
+      } = g as { id?: number } & Record<string, unknown>
       if (id == null) continue
       const existing = await trx('nivaro_field_groups').where({ id }).first('id')
-      if (existing) await trx('nivaro_field_groups').where({ id }).update(cols)
-      else await trx('nivaro_field_groups').insert({ id: undefined, ...cols, layout_id: layoutId })
+      if (existing) {
+        await trx('nivaro_field_groups')
+          .where({ id })
+          .update({ ...cols, container_id: null })
+        idOf.set(Number(id), Number(id))
+      } else {
+        await trx('nivaro_field_groups').insert({
+          ...cols,
+          container_id: null,
+          layout_id: layoutId
+        })
+        const created = (await trx('nivaro_field_groups')
+          .where({ layout_id: layoutId, key: cols.key })
+          .orderBy('id', 'desc')
+          .first('id')) as { id: number }
+        idOf.set(Number(id), Number(created.id))
+      }
+    }
+    for (const g of snap.groups) {
+      if (g.id == null || g.container_id == null) continue
+      await trx('nivaro_field_groups')
+        .where({ id: idOf.get(Number(g.id)) })
+        .update({ container_id: idOf.get(Number(g.container_id)) ?? null })
     }
 
     // Assignments: bulk replace — they belong wholly to the layout.

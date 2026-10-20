@@ -7,7 +7,7 @@ import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
-import { activateLayout, whereLayoutType } from '../services/layout-activation.js'
+import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
 import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
 import { findLayoutReferences } from '../services/layout-references.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
@@ -1015,6 +1015,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'No fields to update' })
 
     await db.transaction(async (trx: Knex.Transaction) => {
+      await lockLayout(trx, id)
       if (Object.keys(patch).length > 0)
         await trx('nivaro_collection_layouts').where({ id }).update(patch)
       // is_active only changes through the activate rule (one default per
@@ -1945,6 +1946,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     }
     const rowOf = placementColumns
     await db.transaction(async (trx) => {
+      await lockLayout(trx, id)
       const existing = (await trx('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
         .select('id', 'field', 'group_key')) as Array<{

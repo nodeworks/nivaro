@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { lazy, type ReactNode, Suspense, useCallback, useMemo, useState } from 'react'
 import {
   DrilldownContext,
   type DrilldownTarget,
@@ -10,6 +10,8 @@ import {
 } from '../context'
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
+import { DesignCanvas } from './layout-editor/design-canvas'
+import type { LayoutDesignProp } from './layout-editor/design-context'
 import type { ReadViewLayout } from './RecordReadView'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 
@@ -62,7 +64,8 @@ export function RecordDrilldownSheet({
   stack: controlledStack,
   onPush,
   onPop,
-  onClose
+  onClose,
+  design
 }: {
   collection: string
   itemId: string
@@ -82,6 +85,10 @@ export function RecordDrilldownSheet({
   onPush?: (target: DrilldownTarget) => void
   onPop?: () => void
   onClose: () => void
+  /** Layout editor canvas: render this draft detail layout (not the fetched
+   *  one) with the preview record, inline at its sheet width instead of in a
+   *  modal sheet, with no Open record link and no host override view. */
+  design?: LayoutDesignProp
 }) {
   const qc = useQueryClient()
   const client = useNivaroClient()
@@ -96,7 +103,9 @@ export function RecordDrilldownSheet({
   // An empty controlled stack would leave nothing to render; the host unmounts
   // the sheet in that case, but fall back rather than crash if it lags a tick.
   const stack = controlled && controlledStack.length ? controlledStack : ownStack
-  const current = stack[stack.length - 1]
+  // Design mode renders the root target only: the draft layout and preview
+  // record belong to it, never to a nested level.
+  const current = design ? stack[0] : stack[stack.length - 1]
 
   const pushDrill = useCallback(
     (target: DrilldownTarget) => {
@@ -110,20 +119,21 @@ export function RecordDrilldownSheet({
     else setOwnStack((prev) => prev.slice(0, -1))
   }, [controlled, onPop])
 
-  const drillCtx = useMemo(() => ({ open: pushDrill }), [pushDrill])
+  // No drilling on the design canvas: relation values render as plain labels.
+  const drillCtx = useMemo(() => (design ? null : { open: pushDrill }), [design, pushDrill])
 
   // A host-registered override replaces this level's body entirely (and may
   // widen the sheet) — the breadcrumb strip and Open record link stay.
   const views = useDrilldownViews()
-  const customView = views[current.collection] ?? null
+  const customView = design ? null : (views[current.collection] ?? null)
 
   // The root record can render a pinned grouped layout (rootLayoutSlug) instead
   // of a resolved detail layout; nested drills always resolve detail layouts.
-  const useRootSlug = stack.length === 1 && !!rootLayoutSlug
+  const useRootSlug = !design && stack.length === 1 && !!rootLayoutSlug
 
-  const { data: detailLayout, isLoading: layoutLoading } = useQuery<DetailLayoutResponse | null>({
+  const { data: fetchedLayout, isLoading: layoutLoading } = useQuery<DetailLayoutResponse | null>({
     queryKey: ['drilldown-layout', current.collection, current.layoutId ?? null],
-    enabled: !useRootSlug,
+    enabled: !useRootSlug && !design,
     queryFn: () =>
       client
         .request<{ data: DetailLayoutResponse | null }>(
@@ -134,22 +144,125 @@ export function RecordDrilldownSheet({
         )
         .then((r) => r.data ?? null)
   })
+  // A draft's layout row may be null (ActiveLayoutData) — normalise it once.
+  const detailLayout = design
+    ? ({
+        ...design.layout,
+        layout: design.layout.layout ?? { id: 0, name: '', slug: null }
+      } as unknown as DetailLayoutResponse)
+    : fetchedLayout
 
   const effectiveSlug = useRootSlug
     ? (rootLayoutSlug ?? undefined)
     : (detailLayout?.layout.slug ?? undefined)
+
+  const sheetWidth = (detailLayout?.layout as { sheet_width?: number | null } | undefined)
+    ?.sheet_width
+
+  const crumb: ReactNode = (
+    <>
+      <span className='flex min-w-0 items-center gap-1.5'>
+        {stack.length > 1 && (
+          <button
+            type='button'
+            aria-label='Back'
+            onClick={popDrill}
+            className='shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200'
+          >
+            <ArrowLeft className='h-4 w-4' />
+          </button>
+        )}
+        <span className='truncate'>
+          {titleCase(current.collection)}
+          {!useRootSlug && detailLayout ? ` · ${detailLayout.layout.name}` : ''}
+        </span>
+      </span>
+      {!design && (
+        <button
+          type='button'
+          onClick={() => openItemPage({ collection: current.collection, itemId: current.itemId })}
+          className='flex shrink-0 items-center gap-1 text-[11px] font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
+        >
+          Open record <ExternalLink className='h-3 w-3' />
+        </button>
+      )}
+    </>
+  )
+
+  // overflow-hidden (not auto): ItemEditForm owns its scrolling — its body
+  // and summary rail each get an independent scrollbar, which only works
+  // when this parent constrains height instead of growing unbounded.
+  const body = (
+    <div className='nvr-tab-enter flex min-h-0 flex-1 flex-col overflow-hidden'>
+      {customView ? (
+        <DrilldownContext.Provider value={drillCtx}>
+          {customView.render({ itemId: String(current.itemId) })}
+        </DrilldownContext.Provider>
+      ) : layoutLoading && !useRootSlug ? (
+        loadingRows
+      ) : !useRootSlug && detailLayout?.layout.display_mode === 'read' ? (
+        // Read-only presentation — definition grids + tabbed child lists,
+        // no form inputs. Editing lives on the full record page.
+        <DrilldownContext.Provider value={drillCtx}>
+          <Suspense fallback={loadingRows}>
+            {design ? (
+              <RecordReadView collection={current.collection} design={design} />
+            ) : (
+              <RecordReadView
+                key={`${current.collection}:${current.itemId}:read`}
+                collection={current.collection}
+                itemId={current.itemId}
+                layoutData={detailLayout as unknown as ReadViewLayout}
+              />
+            )}
+          </Suspense>
+        </DrilldownContext.Provider>
+      ) : (
+        <DrilldownContext.Provider value={drillCtx}>
+          <Suspense fallback={loadingRows}>
+            <ItemEditForm
+              key={`${current.collection}:${current.itemId}:${effectiveSlug ?? 'default'}`}
+              collection={current.collection}
+              itemId={current.itemId}
+              layoutSlug={effectiveSlug}
+              onSaved={() => {
+                qc.invalidateQueries({ queryKey: ['queue-items'] })
+              }}
+              design={design}
+            />
+          </Suspense>
+        </DrilldownContext.Provider>
+      )}
+    </div>
+  )
+
+  // Design mode: the same strip and body in an inline frame at the layout's
+  // sheet width — a modal sheet would lock the editor's panels around it —
+  // inside DesignCanvas (a client that cannot write, no realtime).
+  if (design)
+    return (
+      <DesignCanvas design={design.context} onRefusedWrite={design.onRefusedWrite}>
+        <div
+          data-design-sheet
+          className='flex h-full min-h-0 flex-col gap-0 overflow-hidden rounded-lg border border-slate-200 bg-background shadow-sm dark:border-border'
+          style={{ width: sheetWidth ?? width ?? 640, maxWidth: '100%' }}
+        >
+          <div className='flex shrink-0 flex-col border-b border-slate-200 bg-slate-50 px-4 py-2 dark:border-border dark:bg-muted/30'>
+            <div className='flex items-center justify-between gap-2 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
+              {crumb}
+            </div>
+          </div>
+          {body}
+        </div>
+      </DesignCanvas>
+    )
 
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
       <SheetContent
         className='flex flex-col gap-0 overflow-hidden p-0'
         style={{
-          width:
-            customView?.width ??
-            current.width ??
-            (detailLayout?.layout as { sheet_width?: number | null } | undefined)?.sheet_width ??
-            width ??
-            640,
+          width: customView?.width ?? current.width ?? sheetWidth ?? width ?? 640,
           maxWidth: '96vw'
         }}
         // Escape means the same as Back: step down one level. Letting Radix
@@ -169,73 +282,11 @@ export function RecordDrilldownSheet({
             ItemEditForm's own header below, so repeating it here is noise. */}
         <SheetHeader className='shrink-0 border-b border-slate-200 bg-slate-50 px-4 py-2 dark:border-border dark:bg-muted/30'>
           <SheetTitle className='flex items-center justify-between gap-2 pr-6 text-[12px] font-medium text-slate-500 dark:text-muted-foreground'>
-            <span className='flex min-w-0 items-center gap-1.5'>
-              {stack.length > 1 && (
-                <button
-                  type='button'
-                  aria-label='Back'
-                  onClick={popDrill}
-                  className='shrink-0 rounded p-0.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700 dark:hover:bg-slate-800 dark:hover:text-slate-200'
-                >
-                  <ArrowLeft className='h-4 w-4' />
-                </button>
-              )}
-              <span className='truncate'>
-                {titleCase(current.collection)}
-                {!useRootSlug && detailLayout ? ` · ${detailLayout.layout.name}` : ''}
-              </span>
-            </span>
-            <button
-              type='button'
-              onClick={() =>
-                openItemPage({ collection: current.collection, itemId: current.itemId })
-              }
-              className='flex shrink-0 items-center gap-1 text-[11px] font-normal text-nvr-navy hover:underline dark:text-nvr-cyan'
-            >
-              Open record <ExternalLink className='h-3 w-3' />
-            </button>
+            {crumb}
           </SheetTitle>
         </SheetHeader>
 
-        {/* overflow-hidden (not auto): ItemEditForm owns its scrolling — its body
-            and summary rail each get an independent scrollbar, which only works
-            when this parent constrains height instead of growing unbounded. */}
-        <div className='nvr-tab-enter flex min-h-0 flex-1 flex-col overflow-hidden'>
-          {customView ? (
-            <DrilldownContext.Provider value={drillCtx}>
-              {customView.render({ itemId: String(current.itemId) })}
-            </DrilldownContext.Provider>
-          ) : layoutLoading && !useRootSlug ? (
-            loadingRows
-          ) : !useRootSlug && detailLayout?.layout.display_mode === 'read' ? (
-            // Read-only presentation — definition grids + tabbed child lists,
-            // no form inputs. Editing lives on the full record page.
-            <DrilldownContext.Provider value={drillCtx}>
-              <Suspense fallback={loadingRows}>
-                <RecordReadView
-                  key={`${current.collection}:${current.itemId}:read`}
-                  collection={current.collection}
-                  itemId={current.itemId}
-                  layoutData={detailLayout as unknown as ReadViewLayout}
-                />
-              </Suspense>
-            </DrilldownContext.Provider>
-          ) : (
-            <DrilldownContext.Provider value={drillCtx}>
-              <Suspense fallback={loadingRows}>
-                <ItemEditForm
-                  key={`${current.collection}:${current.itemId}:${effectiveSlug ?? 'default'}`}
-                  collection={current.collection}
-                  itemId={current.itemId}
-                  layoutSlug={effectiveSlug}
-                  onSaved={() => {
-                    qc.invalidateQueries({ queryKey: ['queue-items'] })
-                  }}
-                />
-              </Suspense>
-            </DrilldownContext.Provider>
-          )}
-        </div>
+        {body}
       </SheetContent>
     </Sheet>
   )

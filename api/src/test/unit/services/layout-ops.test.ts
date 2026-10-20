@@ -12,7 +12,15 @@ const fake = vi.hoisted(() => {
   const eq = (a: unknown, b: unknown) => String(a) === String(b)
   const q = (table: string) => {
     const conds: Cond[] = []
-    const rows = () => (tables[table] ?? []).filter((r) => conds.every((c) => c(r)))
+    let order: { col: string; desc: boolean } | null = null
+    const rows = () => {
+      const out = (tables[table] ?? []).filter((r) => conds.every((c) => c(r)))
+      if (order) {
+        const { col, desc } = order
+        out.sort((a, b) => (Number(a[col]) - Number(b[col])) * (desc ? -1 : 1))
+      }
+      return out
+    }
     const api: Record<string, unknown> = {
       where(a: Row | string, op?: string, v?: unknown) {
         if (typeof a === 'string') {
@@ -39,7 +47,8 @@ const fake = vi.hoisted(() => {
       select() {
         return api
       },
-      orderBy() {
+      orderBy(col: unknown, dir?: string) {
+        if (typeof col === 'string') order = { col, desc: dir === 'desc' }
         return api
       },
       first: async () => {
@@ -319,26 +328,32 @@ describe('POST /collection-layouts/:id/ops', () => {
 
   it('coalesces snapshots within 2 minutes per layout+user', async () => {
     const ago = (ms: number) => new Date(Date.now() - ms)
-    const move = {
+    const v = (version: number, layout_id: number, created_by: string, ms: number) => ({
+      id: version * 10 + layout_id,
+      version,
+      layout_id,
+      created_by,
+      created_at: ago(ms)
+    })
+    const move = (index: number) => ({
       op: 'move',
       from: { field: 'b', group_key: 'main' },
       to_group_key: 'main',
-      index: 0
+      index
+    })
+    const snapsFor = async (versions: Row[], index: number) => {
+      fake.tables.nivaro_layout_versions = versions
+      expect((await ops([move(index)])).statusCode).toBe(200)
+      return vi.mocked(snapshotLayoutVersion).mock.calls.length
     }
-    fake.tables.nivaro_layout_versions = [
-      { id: 1, layout_id: 1, created_by: 'test-admin', created_at: ago(60_000) }
-    ]
-    expect((await ops([move])).statusCode).toBe(200)
-    expect(vi.mocked(snapshotLayoutVersion)).not.toHaveBeenCalled()
-
-    fake.tables.nivaro_layout_versions = [
-      { id: 1, layout_id: 1, created_by: 'test-admin', created_at: ago(180_000) },
-      { id: 2, layout_id: 1, created_by: 'someone-else', created_at: ago(10_000) },
-      { id: 3, layout_id: 2, created_by: 'test-admin', created_at: ago(10_000) }
-    ]
-    const back = { ...move, index: 1 }
-    expect((await ops([back])).statusCode).toBe(200)
-    expect(vi.mocked(snapshotLayoutVersion)).toHaveBeenCalledTimes(1)
+    // The newest version is this user's, 60 s old: same burst, no snapshot.
+    expect(await snapsFor([v(1, 1, 'test-admin', 60_000), v(5, 2, 'x', 1_000)], 0)).toBe(0)
+    // Someone else saved since (newest is theirs): snapshot their state.
+    expect(
+      await snapsFor([v(1, 1, 'test-admin', 60_000), v(2, 1, 'someone-else', 10_000)], 1)
+    ).toBe(1)
+    // This user's newest version is older than 2 minutes: snapshot.
+    expect(await snapsFor([v(1, 1, 'test-admin', 180_000)], 0)).toBe(1)
   })
 
   it('moves one twin without touching the other', async () => {

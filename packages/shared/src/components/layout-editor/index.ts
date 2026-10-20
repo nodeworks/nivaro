@@ -1,6 +1,8 @@
+export { PdfCanvas, type PdfCanvasProps } from './canvases/PdfCanvas'
 export { dndRole, typedCollision } from './dnd/collision'
 export { LayoutDndProvider, NO_DND, useLayoutDnd } from './dnd/LayoutDndProvider'
 export { dropLabel, orderAfterDrop } from './dnd/order'
+export { HistoryPanel } from './HistoryPanel'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
