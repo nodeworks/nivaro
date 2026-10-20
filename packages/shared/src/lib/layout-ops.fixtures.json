@@ -17978,6 +17978,329 @@
       "error": {
         "op_index": 0
       }
+    },
+    {
+      "name": "table layout: fields go in the Apply values and Create with defaults forms",
+      "before": {
+        "layout": {
+          "id": 7,
+          "collection": "orders",
+          "name": "Lines grid",
+          "slug": "lines-grid",
+          "layout_type": "table",
+          "is_active": false,
+          "tab_mode": "tabs",
+          "accordion_mode": false,
+          "conditions": null,
+          "header_fields": null
+        },
+        "groups": [
+          {
+            "key": "__ungrouped__",
+            "label": "Ungrouped",
+            "type": "ungrouped",
+            "parent_key": null,
+            "sort": 0,
+            "icon": null,
+            "is_collapsed": false,
+            "tab_mode": null,
+            "hide_when_empty": false,
+            "visibility_mode": "always",
+            "summary_fields": null,
+            "summary_hide_empty": false,
+            "swap_config": null,
+            "skip_if_filled": null,
+            "content": null,
+            "content_tone": null,
+            "visible_when": null,
+            "hidden_for_roles": null,
+            "locked_for_roles": null,
+            "read_width": null
+          }
+        ],
+        "placements": [
+          {
+            "id": 1,
+            "field": "sku",
+            "group_key": null,
+            "sort": 0,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          },
+          {
+            "id": 2,
+            "field": "qty",
+            "group_key": null,
+            "sort": 1,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          },
+          {
+            "id": 3,
+            "field": "price",
+            "group_key": "__apply_values__",
+            "sort": 0,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          }
+        ]
+      },
+      "ops": [
+        {
+          "op": "place",
+          "field": "note",
+          "group_key": "__apply_values__",
+          "index": 0
+        },
+        {
+          "op": "move",
+          "from": {
+            "field": "qty",
+            "group_key": null
+          },
+          "to_group_key": "__create_with_defaults__",
+          "index": 0
+        }
+      ],
+      "after": {
+        "layout": {
+          "id": 7,
+          "collection": "orders",
+          "name": "Lines grid",
+          "slug": "lines-grid",
+          "layout_type": "table",
+          "is_active": false,
+          "tab_mode": "tabs",
+          "accordion_mode": false,
+          "conditions": null,
+          "header_fields": null
+        },
+        "groups": [
+          {
+            "key": "__ungrouped__",
+            "label": "Ungrouped",
+            "type": "ungrouped",
+            "parent_key": null,
+            "sort": 0,
+            "icon": null,
+            "is_collapsed": false,
+            "tab_mode": null,
+            "hide_when_empty": false,
+            "visibility_mode": "always",
+            "summary_fields": null,
+            "summary_hide_empty": false,
+            "swap_config": null,
+            "skip_if_filled": null,
+            "content": null,
+            "content_tone": null,
+            "visible_when": null,
+            "hidden_for_roles": null,
+            "locked_for_roles": null,
+            "read_width": null
+          }
+        ],
+        "placements": [
+          {
+            "id": 1,
+            "field": "sku",
+            "group_key": null,
+            "sort": 0,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          },
+          {
+            "field": "note",
+            "group_key": "__apply_values__",
+            "sort": 0,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          },
+          {
+            "id": 3,
+            "field": "price",
+            "group_key": "__apply_values__",
+            "sort": 1,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          },
+          {
+            "id": 2,
+            "field": "qty",
+            "group_key": "__create_with_defaults__",
+            "sort": 0,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          }
+        ]
+      }
+    },
+    {
+      "name": "error: Apply values is a table layout form only",
+      "before": {
+        "layout": {
+          "id": 7,
+          "collection": "orders",
+          "name": "Lines grid",
+          "slug": "lines-grid",
+          "layout_type": "grouped",
+          "is_active": false,
+          "tab_mode": "tabs",
+          "accordion_mode": false,
+          "conditions": null,
+          "header_fields": null
+        },
+        "groups": [
+          {
+            "key": "__ungrouped__",
+            "label": "Ungrouped",
+            "type": "ungrouped",
+            "parent_key": null,
+            "sort": 0,
+            "icon": null,
+            "is_collapsed": false,
+            "tab_mode": null,
+            "hide_when_empty": false,
+            "visibility_mode": "always",
+            "summary_fields": null,
+            "summary_hide_empty": false,
+            "swap_config": null,
+            "skip_if_filled": null,
+            "content": null,
+            "content_tone": null,
+            "visible_when": null,
+            "hidden_for_roles": null,
+            "locked_for_roles": null,
+            "read_width": null
+          }
+        ],
+        "placements": [
+          {
+            "id": 1,
+            "field": "sku",
+            "group_key": null,
+            "sort": 0,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          },
+          {
+            "id": 2,
+            "field": "qty",
+            "group_key": null,
+            "sort": 1,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          },
+          {
+            "id": 3,
+            "field": "price",
+            "group_key": "__apply_values__",
+            "sort": 0,
+            "label_override": null,
+            "is_visible": true,
+            "default_expanded": true,
+            "col_span": null,
+            "overrides": null,
+            "show_row_revisions": false,
+            "allow_revision_restore": true,
+            "lock_conditions": null,
+            "input_bindings": null,
+            "widget_id": null,
+            "show_approval_chain": false
+          }
+        ]
+      },
+      "ops": [
+        {
+          "op": "place",
+          "field": "note",
+          "group_key": "__apply_values__",
+          "index": 0
+        }
+      ],
+      "error": {
+        "op_index": 0
+      }
     }
   ]
 }

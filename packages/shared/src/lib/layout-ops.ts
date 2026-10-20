@@ -266,6 +266,12 @@ export const LAYOUT_PATCH_KEYS = [
 export const GROUP_TYPES = ['section', 'tab', 'metadata', 'container', 'content'] as const
 export const UNGROUPED_KEY = '__ungrouped__'
 export const HEADER_GROUP_KEY = '__header__'
+/** A table layout's two extra forms (Apply values, Create with defaults):
+ *  placements carry these keys with no group row, as the classic editor stored them. */
+export const TABLE_FORM_GROUP_KEYS: readonly string[] = [
+  '__apply_values__',
+  '__create_with_defaults__'
+]
 
 /** Slot cards: placed with group_key null, ordered among the top-level groups
  *  (with `__owners__`, `__pdf__` and `__ext_<key>__`, see isCanvasSlot). */
@@ -522,6 +528,7 @@ function applyOne(d: Draft, op: LayoutOp, i: number): void {
   }
   const checkTarget = (groupKey: string | null) => {
     if (groupKey === null || groupKey === HEADER_GROUP_KEY) return
+    if (d.layout.layout_type === 'table' && TABLE_FORM_GROUP_KEYS.includes(groupKey)) return
     const g = d.groups.find((x) => x.key === groupKey)
     if (!g || g.key === UNGROUPED_KEY) fail(`No group "${groupKey}"`)
     if ((g as GroupRow).type === 'container') fail('Fields go in the tabs of a container')
