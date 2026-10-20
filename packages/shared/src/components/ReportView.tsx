@@ -46,25 +46,6 @@ import {
   X
 } from 'lucide-react'
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import {
-  Area,
-  AreaChart,
-  Bar,
-  BarChart,
-  Cell,
-  ComposedChart,
-  Legend,
-  Line,
-  LineChart,
-  Pie,
-  PieChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Scatter,
-  Tooltip,
-  XAxis,
-  YAxis
-} from 'recharts'
 
 // Copy chart as image (#203): recharts renders SVG — serialize it, paint onto
 // a canvas over a white ground, and hand the PNG to the clipboard. Fails to a
@@ -159,12 +140,14 @@ import {
   useMyScopes
 } from '../lib/use-my-scopes'
 import { cn } from '../lib/utils'
+import { RechartsGate } from './charts/RechartsGate'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
 import { AddWidgetBar, WidgetConfigSheet, WidgetEditBar } from './ReportEditMode'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
+import { Skeleton } from './ui/skeleton'
 import { SimpleSelect } from './ui/SimpleSelect'
 
 /** The brand colour, through the token a host re-points (white-labelling). */
@@ -1016,7 +999,8 @@ export function QueryWidgetBody({
     return (
       <div className='flex min-h-0 flex-1 items-stretch gap-3'>
         <div className='relative min-h-[110px] min-w-0 flex-1'>
-          <ResponsiveContainer width='100%' height='100%'>
+          <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Cell, Pie, PieChart, ResponsiveContainer, Tooltip }) => <ResponsiveContainer width='100%' height='100%'>
             <PieChart>
               <Pie
                 data={donutData}
@@ -1049,7 +1033,7 @@ export function QueryWidgetBody({
                 formatter={(v) => tipFmt(v as number)}
               />
             </PieChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer>}</RechartsGate>
           <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
             <span className='text-[17px] font-semibold leading-none text-slate-900 dark:text-foreground'>
               {fmtCell(total, cfg.value_format ?? 'integer')}
@@ -1077,7 +1061,8 @@ export function QueryWidgetBody({
   if (cfg.display === 'line' || cfg.display === 'area') {
     return (
       <div className='min-h-[110px] min-w-0 flex-1'>
-        <ResponsiveContainer width='100%' height='100%'>
+        <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Area, AreaChart, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
           <AreaChart data={chartRows} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
             <XAxis
               dataKey={xField}
@@ -1113,7 +1098,7 @@ export function QueryWidgetBody({
               />
             ))}
           </AreaChart>
-        </ResponsiveContainer>
+        </ResponsiveContainer>}</RechartsGate>
         {segModal}
       </div>
     )
@@ -1123,7 +1108,8 @@ export function QueryWidgetBody({
   const stacked = cfg.display === 'stacked_bar'
   return (
     <div className='min-h-[110px] min-w-0 flex-1'>
-      <ResponsiveContainer width='100%' height='100%'>
+      <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Bar, BarChart, Cell, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
         <BarChart
           data={chartRows}
           layout={horizontal ? 'vertical' : 'horizontal'}
@@ -1186,7 +1172,7 @@ export function QueryWidgetBody({
             </Bar>
           ))}
         </BarChart>
-      </ResponsiveContainer>
+      </ResponsiveContainer>}</RechartsGate>
       {segModal}
     </div>
   )
@@ -2545,7 +2531,8 @@ const WidgetCard = memo(function WidgetCard({
             ]
             return (
               <div className='min-h-0 flex-1'>
-                <ResponsiveContainer width='100%' height='100%'>
+                <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ ComposedChart, Line, ResponsiveContainer, Scatter, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
                   <ComposedChart data={pts} margin={{ top: 6, right: 8, left: -6, bottom: 0 }}>
                     <XAxis
                       dataKey='x'
@@ -2574,7 +2561,7 @@ const WidgetCard = memo(function WidgetCard({
                       isAnimationActive={false}
                     />
                   </ComposedChart>
-                </ResponsiveContainer>
+                </ResponsiveContainer>}</RechartsGate>
               </div>
             )
           })()
@@ -2587,7 +2574,8 @@ const WidgetCard = memo(function WidgetCard({
           <p className='px-1 text-[12px] text-slate-400'>No data.</p>
         ) : (
           <div className='min-h-0 flex-1'>
-            <ResponsiveContainer width='100%' height='100%'>
+            <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
               <ComposedChart data={series} margin={{ top: 6, right: 4, left: -10, bottom: 0 }}>
                 <XAxis
                   dataKey='dim'
@@ -2630,7 +2618,7 @@ const WidgetCard = memo(function WidgetCard({
                   isAnimationActive={false}
                 />
               </ComposedChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}</RechartsGate>
           </div>
         )
     } else if (widget.type === 'metric') {
@@ -2915,7 +2903,8 @@ const WidgetCard = memo(function WidgetCard({
         body = (
           <div className='flex min-h-0 flex-1 items-stretch gap-3'>
             <div className='relative min-h-[110px] min-w-0 flex-1'>
-              <ResponsiveContainer width='100%' height='100%'>
+              <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Cell, Pie, PieChart, ResponsiveContainer, Tooltip }) => <ResponsiveContainer width='100%' height='100%'>
                 <PieChart>
                   <Pie
                     data={series}
@@ -2982,7 +2971,7 @@ const WidgetCard = memo(function WidgetCard({
                     itemStyle={{ color: '#e2e8f0' }}
                   />
                 </PieChart>
-              </ResponsiveContainer>
+              </ResponsiveContainer>}</RechartsGate>
               <div className='pointer-events-none absolute inset-0 flex flex-col items-center justify-center'>
                 <span className='text-[17px] font-semibold leading-none text-slate-900 dark:text-foreground'>
                   {total.toLocaleString()}
@@ -3009,7 +2998,8 @@ const WidgetCard = memo(function WidgetCard({
       } else if (widget.type === 'line') {
         body = (
           <div className='min-h-[110px] flex-1'>
-            <ResponsiveContainer width='100%' height='100%'>
+            <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Area, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
               <ComposedChart
                 data={series}
                 margin={{ top: 6, right: hasValue2 ? 4 : 8, left: -10, bottom: 0 }}
@@ -3123,14 +3113,15 @@ const WidgetCard = memo(function WidgetCard({
                   />
                 )}
               </ComposedChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}</RechartsGate>
           </div>
         )
       } else {
         const horizontal = widget.config?.orientation === 'horizontal'
         body = (
           <div className='min-h-[110px] flex-1'>
-            <ResponsiveContainer width='100%' height='100%'>
+            <RechartsGate
+ fallback={<Skeleton className='h-full w-full' aria-busy='true' />}>{({ Bar, Cell, ComposedChart, Line, ReferenceLine, ResponsiveContainer, Tooltip, XAxis, YAxis }) => <ResponsiveContainer width='100%' height='100%'>
               <ComposedChart
                 data={series}
                 layout={horizontal ? 'vertical' : 'horizontal'}
@@ -3243,7 +3234,7 @@ const WidgetCard = memo(function WidgetCard({
                   />
                 )}
               </ComposedChart>
-            </ResponsiveContainer>
+            </ResponsiveContainer>}</RechartsGate>
           </div>
         )
       }
