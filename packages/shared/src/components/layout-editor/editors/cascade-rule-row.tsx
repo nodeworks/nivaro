@@ -29,7 +29,7 @@ export function CascadeRuleRow({
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'
+            className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0 dark:bg-card dark:border-border'
           >
             {rule.parent_field ? (
               (parentFields.find((f) => f.value === rule.parent_field)?.label ?? rule.parent_field)
@@ -61,12 +61,12 @@ export function CascadeRuleRow({
           </Command>
         </PopoverContent>
       </Popover>
-      <span className='text-[10px] text-slate-400 shrink-0'>→</span>
+      <span className='text-[11px] text-slate-400 shrink-0'>→</span>
       <Popover open={cfOpen} onOpenChange={setCfOpen}>
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'
+            className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0 dark:bg-card dark:border-border'
           >
             {rule.child_field ? (
               (childFields.find((f) => f.value === rule.child_field)?.label ?? rule.child_field)
@@ -118,10 +118,10 @@ export function CascadeRuleRow({
           </button>
         </PopoverTrigger>
         <PopoverContent className='w-[420px] p-3 space-y-2' align='end'>
-          <p className='text-[11px] font-medium text-slate-700'>
+          <p className='text-[11px] font-medium text-slate-700 dark:text-foreground'>
             On unavailable — swap to a default
           </p>
-          <p className='text-[10px] text-slate-500'>
+          <p className='text-[11px] text-slate-500'>
             When the parent field is changed and a row’s value is no longer offered, re-point the
             row to the option that keeps <code>keep</code> from the old value and takes{' '}
             <code>replace</code> from the parent’s defaults (pinned_options entry shape). Row rules
@@ -153,9 +153,9 @@ export function CascadeRuleRow({
             placeholder={
               '{\n  "keep": ["sub_category"],\n  "replace": { "core_category": [ { "parent_field": "project", "parent_collection": "projects", "source_field": "default_core_category" } ] },\n  "label": "Category"\n}'
             }
-            className={`w-full rounded border bg-white px-2 py-1.5 font-mono text-[10.5px] leading-snug ${swapErr ? 'border-red-400' : 'border-slate-200'}`}
+            className={`w-full rounded border bg-white px-2 py-1.5 font-mono text-[11px] leading-snug dark:bg-card ${swapErr ? 'border-red-400' : 'border-slate-200 dark:border-border'}`}
           />
-          {swapErr && <p className='text-[10px] text-red-500'>{swapErr}</p>}
+          {swapErr && <p className='text-[11px] text-red-500'>{swapErr}</p>}
         </PopoverContent>
       </Popover>
       <button

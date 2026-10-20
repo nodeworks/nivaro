@@ -68,7 +68,7 @@ export function ColumnPresetRow({
   // relation removed, etc.) — surfaced as removable warning chips, never silently dropped.
   const staleTokens = preset.columns.filter((c) => !allOptions.some((o) => o.field === c))
   return (
-    <div className='space-y-1.5 rounded border border-slate-200 p-2'>
+    <div className='space-y-1.5 rounded border border-slate-200 p-2 dark:border-border'>
       <div className='flex items-center gap-1.5'>
         <Input
           value={preset.name}
@@ -104,7 +104,7 @@ export function ColumnPresetRow({
         <PopoverTrigger asChild>
           <button
             type='button'
-            className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400'
+            className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400 dark:bg-card dark:border-border'
           >
             <span
               className={cn(
@@ -147,7 +147,7 @@ export function ColumnPresetRow({
                           className={cn('h-3 w-3 shrink-0', checked ? 'opacity-100' : 'opacity-0')}
                         />
                         <span className='flex-1 truncate'>{f.label}</span>
-                        <span className='font-mono text-[9px] text-slate-400 shrink-0'>
+                        <span className='font-mono text-[11px] text-slate-400 shrink-0'>
                           {f.field}
                         </span>
                       </CommandItem>
@@ -165,7 +165,7 @@ export function ColumnPresetRow({
             <span
               key={token}
               title='Not in the current layout or relation set'
-              className='inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700'
+              className='inline-flex items-center gap-1 rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[11px] text-amber-700'
             >
               {token}
               <button
@@ -225,13 +225,13 @@ export function DrawerRelationRow({
   )
 
   return (
-    <div className='space-y-1.5 rounded border border-slate-200 p-2'>
+    <div className='space-y-1.5 rounded border border-slate-200 p-2 dark:border-border'>
       <div className='flex items-center gap-1.5'>
         <Popover open={fieldOpen} onOpenChange={setFieldOpen}>
           <PopoverTrigger asChild>
             <button
               type='button'
-              className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0'
+              className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0 dark:bg-card dark:border-border'
             >
               {entry.field ? (
                 (relationOptions.find((f) => f.value === entry.field)?.label ?? entry.field)
@@ -274,13 +274,13 @@ export function DrawerRelationRow({
         </button>
       </div>
       <div className='flex items-center gap-1.5'>
-        <span className='text-[10px] text-slate-400 shrink-0 w-6'>sum</span>
+        <span className='text-[11px] text-slate-400 shrink-0 w-6'>sum</span>
         <Popover open={sumOpen} onOpenChange={setSumOpen}>
           <PopoverTrigger asChild>
             <button
               type='button'
               disabled={!grandCollection}
-              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0 disabled:opacity-50 disabled:hover:border-slate-200'
+              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 disabled:opacity-50 disabled:hover:border-slate-200 dark:bg-card dark:border-border'
             >
               {entry.sumField ? (
                 (sumFieldOptions.find((f) => f.field === entry.sumField)?.label ?? entry.sumField)
@@ -324,12 +324,12 @@ export function DrawerRelationRow({
             </Command>
           </PopoverContent>
         </Popover>
-        <span className='text-[10px] text-slate-400 shrink-0 w-6'>cap</span>
+        <span className='text-[11px] text-slate-400 shrink-0 w-6'>cap</span>
         <Popover open={capOpen} onOpenChange={setCapOpen}>
           <PopoverTrigger asChild>
             <button
               type='button'
-              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[10px] text-left truncate hover:border-slate-400 min-w-0'
+              className='flex-1 h-6 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
             >
               {entry.capField ? (
                 (capFieldOptions.find((f) => f.field === entry.capField)?.label ?? entry.capField)

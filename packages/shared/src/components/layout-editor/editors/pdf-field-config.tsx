@@ -74,9 +74,7 @@ export function PdfFieldConfig({
 
   return (
     <div className='mt-1.5 space-y-1'>
-      <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>
-        Attach PDF to field
-      </p>
+      <p className='text-[11px] font-medium text-slate-400'>Attach PDF to field</p>
       <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button
@@ -123,7 +121,7 @@ export function PdfFieldConfig({
                   className='text-[11px]'
                 >
                   {f.field}
-                  <span className='ml-auto text-[10px] text-slate-400 truncate'>{f.junction}</span>
+                  <span className='ml-auto text-[11px] text-slate-400 truncate'>{f.junction}</span>
                 </CommandItem>
               ))}
             </CommandList>
@@ -131,9 +129,7 @@ export function PdfFieldConfig({
         </PopoverContent>
       </Popover>
       <div className='mt-2 space-y-1'>
-        <p className='text-[10px] font-medium text-slate-400 uppercase tracking-wide'>
-          Filename template
-        </p>
+        <p className='text-[11px] font-medium text-slate-400'>Filename template</p>
         <input
           type='text'
           value={filenameTemplate ?? ''}
@@ -141,7 +137,7 @@ export function PdfFieldConfig({
           placeholder='e.g. {{title}}-report'
           className='w-full rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 placeholder:text-slate-300 focus:border-nvr-cyan/50 focus:outline-none dark:border-border dark:bg-card dark:text-slate-200'
         />
-        <p className='text-[10px] text-slate-400'>
+        <p className='text-[11px] text-slate-400'>
           Use {'{{field}}'} tokens. Defaults to template name.
         </p>
       </div>

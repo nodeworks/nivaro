@@ -65,7 +65,7 @@ export function ReportWidgetConfigSection({
 
   return (
     <div className='space-y-1.5 border-t border-slate-100 pt-1.5 dark:border-border'>
-      <p className='text-[10px] font-medium text-slate-400'>Report widget</p>
+      <p className='text-[11px] font-medium text-slate-400'>Report widget</p>
       <Combobox
         value={reportId}
         onChange={(v) => {
@@ -91,18 +91,18 @@ export function ReportWidgetConfigSection({
           placeholder='Entity filter field'
           value={filterField}
           onChange={(e) => setFilterField(e.target.value)}
-          className='min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+          className='min-w-0 flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-1 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300 dark:bg-muted dark:border-border'
         />
         <button
           type='button'
           disabled={!reportId || !innerId || save.isPending}
           onClick={() => commit(reportId, innerId, filterField)}
-          className='shrink-0 rounded border border-slate-200 px-1.5 py-1 text-[10px] text-slate-500 hover:bg-muted disabled:opacity-40'
+          className='shrink-0 rounded border border-slate-200 px-1.5 py-1 text-[11px] text-slate-500 hover:bg-muted disabled:opacity-40 dark:border-border'
         >
           {save.isPending ? '…' : 'Apply'}
         </button>
       </div>
-      <p className='text-[9px] leading-snug text-slate-400'>
+      <p className='text-[11px] leading-snug text-slate-400'>
         Filter field scopes the report data by a record value (bind “Filter value” below, or name a
         field the record already carries).
       </p>

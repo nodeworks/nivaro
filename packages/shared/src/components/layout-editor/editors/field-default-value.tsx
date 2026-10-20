@@ -77,7 +77,7 @@ export function FieldDefaultValueSection({
 
   return (
     <div className='space-y-2'>
-      <p className='border-t border-slate-100 pt-2 text-[10px] font-semibold uppercase tracking-wider text-slate-400'>
+      <p className='border-t border-slate-100 pt-2 text-[11px] font-semibold text-slate-400 dark:border-border'>
         Default value
       </p>
       <FieldDefaultValueControl
@@ -89,7 +89,7 @@ export function FieldDefaultValueSection({
         settings={settings}
         abstractType={abstractType}
       />
-      <p className='text-[10.5px] leading-relaxed text-slate-400'>
+      <p className='text-[11px] leading-relaxed text-slate-400'>
         Pre-filled when creating a new record on this layout. Optional.
       </p>
     </div>
@@ -127,7 +127,7 @@ export function FieldDefaultValueControl({
             {ids.map((id) => (
               <span
                 key={String(id)}
-                className='inline-flex max-w-full items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700'
+                className='inline-flex max-w-full items-center gap-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] text-slate-700 dark:bg-muted dark:border-border dark:text-foreground'
               >
                 <span className='truncate'>
                   <RelationLabel relatedCollection={relatedCollection} id={id} />
@@ -169,7 +169,7 @@ export function FieldDefaultValueControl({
       <SimpleSelect
         value={value === true ? 'true' : value === false ? 'false' : ''}
         onChange={(v) => setValue(v === '' ? null : v === 'true')}
-        className='h-7 w-full rounded border-slate-200 bg-white px-1.5 py-1 text-[11px]'
+        className='h-7 w-full rounded border-slate-200 bg-white px-1.5 py-1 text-[11px] dark:bg-card dark:border-border'
         options={[
           { value: '', label: '—' },
           { value: 'true', label: 'Yes' },
@@ -202,7 +202,7 @@ export function FieldDefaultValueControl({
             const match = choices.find((c) => String(c.value) === raw)
             setValue(match?.value ?? raw)
           }}
-          className='h-7 w-full rounded border-slate-200 bg-white px-1.5 py-1 text-[11px]'
+          className='h-7 w-full rounded border-slate-200 bg-white px-1.5 py-1 text-[11px] dark:bg-card dark:border-border'
           options={[
             { value: '', label: '—' },
             ...choices.map((c) => ({ value: String(c.value), label: c.text ?? String(c.value) }))

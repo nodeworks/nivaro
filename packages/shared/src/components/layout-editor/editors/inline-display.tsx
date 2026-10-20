@@ -50,16 +50,14 @@ export function InlineDisplaySection({
     { value: 'boolean', label: 'Yes / No' }
   ]
   return (
-    <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5'>
-      <p className='text-[9px] font-semibold uppercase tracking-wider text-slate-400'>
-        Inline display
-      </p>
+    <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5 dark:border-border'>
+      <p className='text-[11px] font-semibold text-slate-400'>Inline display</p>
       <div className='flex gap-1 mt-1'>
         <button
           type='button'
           onClick={() => onSeparatorChange(null)}
           className={cn(
-            'flex-1 rounded border px-2 py-0.5 text-[10px]',
+            'flex-1 rounded border px-2 py-0.5 text-[11px]',
             separator === null
               ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
               : 'border-slate-200 text-slate-500 hover:border-slate-300'
@@ -71,7 +69,7 @@ export function InlineDisplaySection({
           type='button'
           onClick={() => onSeparatorChange(separator ?? ', ')}
           className={cn(
-            'flex-1 rounded border px-2 py-0.5 text-[10px]',
+            'flex-1 rounded border px-2 py-0.5 text-[11px]',
             separator !== null
               ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
               : 'border-slate-200 text-slate-500 hover:border-slate-300'
@@ -82,12 +80,12 @@ export function InlineDisplaySection({
       </div>
       {separator !== null && (
         <div className='flex items-center gap-1.5 mt-1'>
-          <span className='text-[10px] text-slate-400 shrink-0'>Separator</span>
+          <span className='text-[11px] text-slate-400 shrink-0'>Separator</span>
           <input
             type='text'
             value={separator}
             onChange={(e) => onSeparatorChange(e.target.value)}
-            className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan'
+            className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:bg-muted dark:border-border'
             placeholder=', '
           />
         </div>
@@ -103,7 +101,7 @@ export function InlineDisplaySection({
                 onChange(entries.map((e, j) => (j === i ? { ...e, line_break: !e.line_break } : e)))
               }
               className={cn(
-                'flex items-center gap-1 text-[10px] rounded px-1.5 py-0.5 border transition-colors',
+                'flex items-center gap-1 text-[11px] rounded px-1.5 py-0.5 border transition-colors',
                 entry.line_break
                   ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan'
                   : 'border-slate-200 text-slate-400 hover:border-slate-300 hover:text-slate-600'
@@ -142,7 +140,7 @@ export function InlineDisplaySection({
                   entries.map((en, j) => (j === i ? { ...en, label: e.target.value || null } : en))
                 )
               }
-              className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300'
+              className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300 dark:bg-muted dark:border-border'
             />
             <SimpleSelect
               value={entry.format ?? 'text'}
@@ -153,7 +151,7 @@ export function InlineDisplaySection({
                   )
                 )
               }
-              className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[10px] text-slate-600'
+              className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:bg-card dark:border-border dark:text-muted-foreground'
               options={FORMAT_OPTS.map((o) => ({ value: o.value, label: o.label }))}
             />
           </div>

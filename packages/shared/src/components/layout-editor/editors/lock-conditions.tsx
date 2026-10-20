@@ -17,12 +17,12 @@ export function RoleConditionRow({
   })
   const roles = rolesData ?? []
   return (
-    <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
-      {roles.length === 0 && <p className='text-[10px] text-slate-400'>No roles found.</p>}
+    <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1 dark:bg-muted dark:border-border'>
+      {roles.length === 0 && <p className='text-[11px] text-slate-400'>No roles found.</p>}
       {roles.map((r) => (
         <label
           key={r.id}
-          className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'
+          className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'
         >
           <input
             type='checkbox'
@@ -33,7 +33,7 @@ export function RoleConditionRow({
             }}
             className='rounded'
           />
-          <span className='text-slate-700'>{r.name}</span>
+          <span className='text-slate-700 dark:text-foreground'>{r.name}</span>
         </label>
       ))}
     </div>
@@ -80,21 +80,21 @@ export function PipelineStateConditionRow({
       <SimpleSelect
         value={pipelineId ?? ''}
         onChange={(v) => onPipelineChange(v || undefined)}
-        className='h-6 w-full rounded border-slate-200 bg-white px-1.5 py-0.5 text-[10px]'
+        className='h-6 w-full rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:bg-card dark:border-border'
         options={[
           { value: '', label: '— Select pipeline —' },
           ...bound.map((p) => ({ value: p.id, label: p.name }))
         ]}
       />
       {bound.length === 0 && (
-        <p className='text-[10px] text-slate-400'>No pipelines bound to this collection.</p>
+        <p className='text-[11px] text-slate-400'>No pipelines bound to this collection.</p>
       )}
       {pipelineId && states.length > 0 && (
-        <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1'>
+        <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1 dark:bg-muted dark:border-border'>
           {states.map((s) => (
             <label
               key={s.key}
-              className='flex items-center gap-1.5 text-[10px] cursor-pointer select-none'
+              className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'
             >
               <input
                 type='checkbox'
@@ -105,13 +105,13 @@ export function PipelineStateConditionRow({
                 }}
                 className='rounded'
               />
-              <span className='text-slate-700'>{s.label}</span>
+              <span className='text-slate-700 dark:text-foreground'>{s.label}</span>
             </label>
           ))}
         </div>
       )}
       {pipelineId && states.length === 0 && (
-        <p className='text-[10px] text-slate-400'>No states defined for this pipeline.</p>
+        <p className='text-[11px] text-slate-400'>No states defined for this pipeline.</p>
       )}
     </div>
   )

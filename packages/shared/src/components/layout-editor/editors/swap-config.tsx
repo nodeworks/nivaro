@@ -77,10 +77,10 @@ export function SwapConfigEditor({
   return (
     <div className='border-t border-slate-100 dark:border-border pt-3 space-y-2'>
       <p className='text-[11px] font-medium text-slate-600 dark:text-slate-300'>Field Swap</p>
-      <p className='text-[10px] text-slate-400'>
+      <p className='text-[11px] text-slate-400'>
         Toggle between a M2O picker and manual entry fields.
       </p>
-      <label className='flex items-center gap-2 text-[11px] text-slate-600'>
+      <label className='flex items-center gap-2 text-[11px] text-slate-600 dark:text-muted-foreground'>
         <input
           type='checkbox'
           checked={!!swapCfg?.enabled}
@@ -93,7 +93,7 @@ export function SwapConfigEditor({
         <div className='space-y-2 pl-1'>
           {/* Primary field */}
           <div>
-            <p className='text-[10px] text-slate-400 mb-1'>Primary field (M2O)</p>
+            <p className='text-[11px] text-slate-400 mb-1'>Primary field (M2O)</p>
             <button
               type='button'
               onClick={() => {
@@ -105,7 +105,7 @@ export function SwapConfigEditor({
               {swapCfg.primary_field ? (
                 <span className='flex-1 truncate'>
                   <span className='font-medium'>{fieldLabel(swapCfg.primary_field)}</span>{' '}
-                  <span className='font-mono text-[10px] text-slate-400'>
+                  <span className='font-mono text-[11px] text-slate-400'>
                     {swapCfg.primary_field}
                   </span>
                 </span>
@@ -140,12 +140,12 @@ export function SwapConfigEditor({
                           setPfOpen(false)
                         }}
                         className={[
-                          'w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2',
+                          'w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted dark:hover:bg-muted flex items-center justify-between gap-2',
                           swapCfg.primary_field === f.field ? 'bg-nvr-cyan/5 text-nvr-cyan' : ''
                         ].join(' ')}
                       >
                         <span className='font-medium truncate'>{fieldLabel(f.field)}</span>
-                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>
+                        <span className='font-mono text-[11px] text-slate-400 shrink-0'>
                           {f.type ?? ''}
                         </span>
                       </button>
@@ -157,7 +157,7 @@ export function SwapConfigEditor({
           </div>
           {/* Alternate fields */}
           <div>
-            <p className='text-[10px] text-slate-400 mb-1'>Alternate fields</p>
+            <p className='text-[11px] text-slate-400 mb-1'>Alternate fields</p>
             {altFields.length > 0 && (
               <div className='mb-1 space-y-1'>
                 {altFields.map((a) => (
@@ -173,7 +173,7 @@ export function SwapConfigEditor({
                         type='button'
                         onClick={() => setWidth(a.field, 1)}
                         className={[
-                          'px-1.5 py-0.5 text-[10px] font-medium transition-colors',
+                          'px-1.5 py-0.5 text-[11px] font-medium transition-colors',
                           a.width === 1
                             ? 'bg-nvr-cyan text-white'
                             : 'text-slate-400 hover:text-slate-600'
@@ -186,7 +186,7 @@ export function SwapConfigEditor({
                         type='button'
                         onClick={() => setWidth(a.field, 2)}
                         className={[
-                          'px-1.5 py-0.5 text-[10px] font-medium transition-colors border-l border-slate-200 dark:border-border',
+                          'px-1.5 py-0.5 text-[11px] font-medium transition-colors border-l border-slate-200 dark:border-border',
                           a.width === 2
                             ? 'bg-nvr-cyan text-white'
                             : 'text-slate-400 hover:text-slate-600'
@@ -243,10 +243,10 @@ export function SwapConfigEditor({
                           setAfSearch('')
                           setAfOpen(false)
                         }}
-                        className='w-full text-left px-3 py-1.5 text-[11px] hover:bg-slate-50 dark:hover:bg-muted flex items-center justify-between gap-2'
+                        className='w-full text-left px-3 py-1.5 text-[11px] hover:bg-muted dark:hover:bg-muted flex items-center justify-between gap-2'
                       >
                         <span className='font-medium truncate'>{fieldLabel(f.field)}</span>
-                        <span className='font-mono text-[10px] text-slate-400 shrink-0'>
+                        <span className='font-mono text-[11px] text-slate-400 shrink-0'>
                           {f.type ?? ''}
                         </span>
                       </button>
@@ -259,7 +259,7 @@ export function SwapConfigEditor({
           {/* Labels */}
           <div className='flex gap-2'>
             <div className='flex-1'>
-              <p className='text-[10px] text-slate-400 mb-1'>Toggle label</p>
+              <p className='text-[11px] text-slate-400 mb-1'>Toggle label</p>
               <input
                 type='text'
                 placeholder='Enter custom'
@@ -270,7 +270,7 @@ export function SwapConfigEditor({
               />
             </div>
             <div className='flex-1'>
-              <p className='text-[10px] text-slate-400 mb-1'>Back label</p>
+              <p className='text-[11px] text-slate-400 mb-1'>Back label</p>
               <input
                 type='text'
                 placeholder='Use saved'

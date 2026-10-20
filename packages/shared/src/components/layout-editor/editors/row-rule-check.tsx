@@ -105,7 +105,7 @@ export function RowRuleLint({
   const findings = useMemo(() => lintRowRules(rules, childFieldNames), [rules, childFieldNames])
   if (findings.length === 0)
     return (
-      <p className='text-[10px] text-emerald-700 dark:text-emerald-300'>
+      <p className='text-[11px] text-emerald-700 dark:text-emerald-300'>
         No conflicts between these rules.
       </p>
     )
@@ -118,7 +118,7 @@ export function RowRuleLint({
   return (
     <ul className='space-y-1' aria-label='Rule conflicts'>
       {findings.map((f, i) => (
-        <li key={i} className={cn('rounded px-2 py-1 text-[10.5px] leading-snug', tone(f.tone))}>
+        <li key={i} className={cn('rounded px-2 py-1 text-[11px] leading-snug', tone(f.tone))}>
           {f.text}
         </li>
       ))}
@@ -212,8 +212,10 @@ export function RowRuleTester({
   return (
     <div className='mt-2 rounded-md border border-slate-200 bg-slate-50/60 p-2 dark:border-border dark:bg-muted/30'>
       <div className='flex items-center justify-between'>
-        <Label className='text-[11px] text-slate-600'>Test rules against a record</Label>
-        <span className='text-[10px] text-slate-400'>
+        <Label className='text-[11px] text-slate-600 dark:text-muted-foreground'>
+          Test rules against a record
+        </Label>
+        <span className='text-[11px] text-slate-400'>
           Uses the rules as edited above · nothing is saved
         </span>
       </div>
@@ -247,7 +249,7 @@ export function RowRuleTester({
       {error && <p className='mt-1.5 text-[11px] text-red-600'>{error}</p>}
       {result && (
         <div className='mt-2 space-y-2'>
-          <div className='flex flex-wrap gap-x-4 gap-y-1 text-[10px] text-slate-500'>
+          <div className='flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-500'>
             <span>
               record{' '}
               <span className='font-mono text-slate-700 dark:text-slate-300'>
@@ -274,9 +276,9 @@ export function RowRuleTester({
             )}
           </div>
           <div className='overflow-x-auto rounded border border-slate-200 bg-white dark:border-border dark:bg-card'>
-            <table className='w-full text-[10.5px]'>
+            <table className='w-full text-[11px]'>
               <thead>
-                <tr className='text-left text-[9.5px] uppercase tracking-wide text-slate-400'>
+                <tr className='text-left text-[11px] text-slate-400'>
                   <th className='px-2 py-1'>#</th>
                   <th className='px-2 py-1'>Target</th>
                   <th className='px-2 py-1'>Trigger → value</th>
@@ -313,16 +315,14 @@ export function RowRuleTester({
             </table>
           </div>
           {Object.keys(result.changes).length > 0 ? (
-            <div className='text-[10.5px] text-slate-600 dark:text-slate-300'>
+            <div className='text-[11px] text-slate-600 dark:text-slate-300'>
               Would change:{' '}
               {Object.entries(result.changes)
                 .map(([k, c]) => `${k}: ${fmt(c.before)} → ${fmt(c.after)}`)
                 .join(' · ')}
             </div>
           ) : (
-            <div className='text-[10.5px] text-slate-500'>
-              No field would change on this record.
-            </div>
+            <div className='text-[11px] text-slate-500'>No field would change on this record.</div>
           )}
         </div>
       )}

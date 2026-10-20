@@ -46,7 +46,7 @@ export function LayoutPicker({
       <PopoverTrigger asChild>
         <button
           type='button'
-          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'
+          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-muted dark:border-border dark:bg-background dark:text-foreground'
         >
           <span className={selected ? '' : 'text-slate-400'}>
             {selected ? selected.name : 'Select layout…'}
@@ -90,7 +90,7 @@ export function LayoutPicker({
                   />
                   {l.name}
                   {l.slug && (
-                    <span className='ml-1.5 font-mono text-[10px] text-slate-400'>{l.slug}</span>
+                    <span className='ml-1.5 font-mono text-[11px] text-slate-400'>{l.slug}</span>
                   )}
                 </CommandItem>
               ))}

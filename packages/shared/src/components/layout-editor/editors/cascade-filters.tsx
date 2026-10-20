@@ -191,12 +191,12 @@ export function CascadeFiltersEditor({
                   className='space-y-2 rounded-md border border-nvr-cyan/40 bg-[#f6f8fa] p-2 dark:border-nvr-cyan/30 dark:bg-muted/40'
                 >
                   <div>
-                    <p className='mb-1 text-[10px] text-slate-500'>Parent field</p>
+                    <p className='mb-1 text-[11px] text-slate-500'>Parent field</p>
                     <Popover open={editPfOpen} onOpenChange={setEditPfOpen}>
                       <PopoverTrigger asChild>
                         <button
                           type='button'
-                          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'
+                          className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-muted dark:border-border dark:bg-background dark:text-foreground'
                         >
                           {(() => {
                             const sel = m2oFields.find((f) => f.field === editParentField)
@@ -204,7 +204,7 @@ export function CascadeFiltersEditor({
                               <span className='flex items-center gap-1.5'>
                                 {sel.label}
                                 {sel.kind === 'M2M' && (
-                                  <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                                  <span className='rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
                                     M2M
                                   </span>
                                 )}
@@ -242,7 +242,7 @@ export function CascadeFiltersEditor({
                                   />
                                   <span className='flex-1'>{item.label}</span>
                                   {item.kind === 'M2M' && (
-                                    <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                                    <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
                                       M2M
                                     </span>
                                   )}
@@ -255,7 +255,7 @@ export function CascadeFiltersEditor({
                     </Popover>
                   </div>
                   <div>
-                    <p className='mb-1 text-[10px] text-slate-500'>
+                    <p className='mb-1 text-[11px] text-slate-500'>
                       Filter column on
                       {relatedCollection ? ` ${relatedCollection}` : ' related table'}
                     </p>
@@ -264,7 +264,7 @@ export function CascadeFiltersEditor({
                         <PopoverTrigger asChild>
                           <button
                             type='button'
-                            className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-slate-50 dark:border-border dark:bg-background'
+                            className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-muted dark:border-border dark:bg-background'
                           >
                             <span
                               className={
@@ -325,7 +325,7 @@ export function CascadeFiltersEditor({
                     <button
                       type='button'
                       onClick={cancelEdit}
-                      className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100'
+                      className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-muted'
                     >
                       Cancel
                     </button>
@@ -348,9 +348,11 @@ export function CascadeFiltersEditor({
                 className='rounded-md border border-[#e2e8f0] bg-[#f6f8fa] px-3 py-2 dark:border-border dark:bg-muted/40'
               >
                 <div className='flex items-center gap-1.5'>
-                  <span className='text-[12px] font-medium text-slate-700'>{parentLabel}</span>
+                  <span className='text-[12px] font-medium text-slate-700 dark:text-foreground'>
+                    {parentLabel}
+                  </span>
                   {isM2MParent && (
-                    <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
+                    <span className='rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400'>
                       M2M
                     </span>
                   )}
@@ -373,13 +375,13 @@ export function CascadeFiltersEditor({
                 <div className='mt-1'>
                   <span className='font-mono text-[11px] text-[#6b7280]'>{rule.filter_column}</span>
                   {rule.filter_is_m2m && (
-                    <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'>
+                    <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-400'>
                       M2M filter
                     </span>
                   )}
                 </div>
                 <div className='mt-1.5 flex items-center gap-1.5'>
-                  <span className='text-[10px] text-slate-400'>Clear on parent change</span>
+                  <span className='text-[11px] text-slate-400'>Clear on parent change</span>
                   <span className='flex-1' />
                   <Switch
                     checked={rule.clear_on_parent_change}
@@ -388,7 +390,7 @@ export function CascadeFiltersEditor({
                   />
                 </div>
                 <div className='mt-1 flex items-center gap-1.5'>
-                  <span className='text-[10px] text-slate-400'>Clear if value unavailable</span>
+                  <span className='text-[11px] text-slate-400'>Clear if value unavailable</span>
                   <span className='flex-1' />
                   <Switch
                     checked={rule.clear_on_unavailable ?? false}
@@ -397,7 +399,7 @@ export function CascadeFiltersEditor({
                   />
                 </div>
                 <div className='mt-1 flex items-center gap-1.5'>
-                  <span className='text-[10px] text-slate-400'>
+                  <span className='text-[11px] text-slate-400'>
                     Show all options if parent not set
                   </span>
                   <span className='flex-1' />
@@ -409,7 +411,7 @@ export function CascadeFiltersEditor({
                 </div>
                 <div className='mt-1 flex items-center gap-1.5'>
                   <span
-                    className='text-[10px] text-slate-400'
+                    className='text-[11px] text-slate-400'
                     title="Picking this field fills the parent from the picked record's filter column — the cascade run in reverse. Scalar parents fill only when one value resolves; multi-select parents add every resolved link."
                   >
                     Also fill parent upstream on pick
@@ -445,12 +447,12 @@ export function CascadeFiltersEditor({
         >
           {/* parent field combobox */}
           <div>
-            <p className='mb-1 text-[10px] text-slate-500'>Parent field</p>
+            <p className='mb-1 text-[11px] text-slate-500'>Parent field</p>
             <Popover open={pfOpen} onOpenChange={setPfOpen}>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-slate-50 dark:border-border dark:bg-background'
+                  className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] text-slate-700 hover:bg-muted dark:border-border dark:bg-background dark:text-foreground'
                 >
                   {(() => {
                     const sel = m2oFields.find((f) => f.field === parentField)
@@ -458,7 +460,7 @@ export function CascadeFiltersEditor({
                       <span className='flex items-center gap-1.5'>
                         {sel.label}
                         {sel.kind === 'M2M' && (
-                          <span className='rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                          <span className='rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
                             M2M
                           </span>
                         )}
@@ -496,7 +498,7 @@ export function CascadeFiltersEditor({
                           />
                           <span className='flex-1'>{item.label}</span>
                           {item.kind === 'M2M' && (
-                            <span className='ml-1.5 rounded px-1 py-0.5 text-[9px] font-semibold bg-amber-100 text-amber-700'>
+                            <span className='ml-1.5 rounded px-1 py-0.5 text-[11px] font-semibold bg-amber-100 text-amber-700'>
                               M2M
                             </span>
                           )}
@@ -508,7 +510,7 @@ export function CascadeFiltersEditor({
               </PopoverContent>
             </Popover>
             {parentField && m2oFields.find((f) => f.field === parentField)?.kind === 'M2M' && (
-              <p className='mt-1 text-[10px] text-amber-600 dark:text-amber-400'>
+              <p className='mt-1 text-[11px] text-amber-600 dark:text-amber-400'>
                 M2M parent: the first staged selection's value is used as the filter.
               </p>
             )}
@@ -516,7 +518,7 @@ export function CascadeFiltersEditor({
 
           {/* filter column */}
           <div>
-            <p className='mb-1 text-[10px] text-slate-500'>
+            <p className='mb-1 text-[11px] text-slate-500'>
               Filter column on{relatedCollection ? ` ${relatedCollection}` : ' related table'}
             </p>
             {relatedFields.length > 0 ? (
@@ -524,7 +526,7 @@ export function CascadeFiltersEditor({
                 <PopoverTrigger asChild>
                   <button
                     type='button'
-                    className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-slate-50 dark:border-border dark:bg-background'
+                    className='flex h-7 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2 text-[11px] hover:bg-muted dark:border-border dark:bg-background'
                   >
                     <span className={filterColumn ? 'font-mono text-slate-700' : 'text-slate-400'}>
                       {filterColumn || 'Select column…'}
@@ -582,7 +584,9 @@ export function CascadeFiltersEditor({
                 onCheckedChange={setClearOnChange}
                 className='scale-75'
               />
-              <span className='text-[11px] text-slate-600'>Clear on parent change</span>
+              <span className='text-[11px] text-slate-600 dark:text-muted-foreground'>
+                Clear on parent change
+              </span>
             </div>
             <div className='flex items-center gap-2'>
               <Switch
@@ -590,7 +594,7 @@ export function CascadeFiltersEditor({
                 onCheckedChange={setClearOnUnavailable}
                 className='scale-75'
               />
-              <span className='text-[11px] text-slate-600'>
+              <span className='text-[11px] text-slate-600 dark:text-muted-foreground'>
                 Clear if value no longer in options
               </span>
             </div>
@@ -600,7 +604,9 @@ export function CascadeFiltersEditor({
                 onCheckedChange={setShowAllIfNoParent}
                 className='scale-75'
               />
-              <span className='text-[11px] text-slate-600'>Show all options if parent not set</span>
+              <span className='text-[11px] text-slate-600 dark:text-muted-foreground'>
+                Show all options if parent not set
+              </span>
             </div>
           </div>
           <div className='flex items-center gap-2'>
@@ -608,7 +614,7 @@ export function CascadeFiltersEditor({
             <button
               type='button'
               onClick={cancelAdd}
-              className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-slate-100'
+              className='rounded px-2 py-1 text-[12px] text-slate-500 hover:bg-muted'
             >
               Cancel
             </button>
