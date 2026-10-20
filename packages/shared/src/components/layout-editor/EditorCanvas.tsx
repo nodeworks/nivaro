@@ -1,18 +1,19 @@
-import { Table2 } from 'lucide-react'
-import type { ReactNode } from 'react'
-import type { LayoutBundle } from '../../lib/layout-ops'
+import type { ComponentProps, ReactNode } from 'react'
+import type { LayoutBundle, LayoutOp } from '../../lib/layout-ops'
 import { ItemEditForm } from '../ItemEditForm'
 import type { ActiveLayoutData } from '../item-edit/types'
 import { RecordReadView } from '../RecordReadView'
 import { PdfCanvas } from './canvases/PdfCanvas'
+import { TableColumnsCanvas } from './canvases/TableColumnsCanvas'
 import { type LayoutDesign, LayoutDesignContext } from './design-context'
+import { useOverviewFields } from './overview/overview-api'
 
 // The centre of the editor: the layout drawn by the renderer its type really
 // uses (spec §7.7) — the record form for forms and addendums, the read view
 // for summary and detail, the PDF sections for file layouts. Grid-column
-// (table) layouts keep the classic editor until their canvas lands.
+// (table) layouts get the column strip.
 
-export type CanvasRenderer = 'item-edit-form' | 'read-view' | 'pdf' | 'classic'
+export type CanvasRenderer = 'item-edit-form' | 'read-view' | 'pdf' | 'table'
 
 export function canvasRenderer(layoutType: string): CanvasRenderer {
   switch (layoutType) {
@@ -22,10 +23,15 @@ export function canvasRenderer(layoutType: string): CanvasRenderer {
     case 'file':
       return 'pdf'
     case 'table':
-      return 'classic'
+      return 'table'
     default:
       return 'item-edit-form'
   }
+}
+
+function TableWithFields(props: ComponentProps<typeof TableColumnsCanvas>) {
+  const { data: fields = [] } = useOverviewFields(props.collection)
+  return <TableColumnsCanvas {...props} fields={fields} />
 }
 
 export function EditorCanvas({
@@ -34,6 +40,7 @@ export function EditorCanvas({
   layout,
   record,
   design,
+  apply,
   onOpenClassic
 }: {
   collection: string
@@ -41,6 +48,7 @@ export function EditorCanvas({
   layout: ActiveLayoutData
   record: Record<string, unknown> | null
   design: LayoutDesign
+  apply: (ops: LayoutOp[], opts?: { label: string }) => void
   onOpenClassic?: () => void
 }) {
   const renderer = canvasRenderer(String(bundle.layout.layout_type ?? 'grouped'))
@@ -63,24 +71,18 @@ export function EditorCanvas({
     )
   else
     body = (
-      <div className='m-auto flex max-w-[420px] flex-col items-center gap-2 py-16 text-center'>
-        <Table2 className='h-6 w-6 text-slate-400' />
-        <p className='text-[13px] font-semibold text-slate-800 dark:text-foreground'>
-          Grid columns are edited in the classic editor for now
-        </p>
-        <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-          This layout sets the columns when the records show as a grid inside another record.
-        </p>
+      <LayoutDesignContext.Provider value={design}>
+        <TableWithFields bundle={bundle} apply={apply} collection={collection} />
         {onOpenClassic && (
           <button
             type='button'
             onClick={onOpenClassic}
-            className='mt-1 text-[12.5px] font-medium text-[#0089ad] underline-offset-2 hover:underline dark:text-nvr-cyan'
+            className='mx-4 mb-4 self-start text-[12.5px] font-medium text-[#0089ad] underline-offset-2 hover:underline dark:text-nvr-cyan'
           >
             Open in classic editor
           </button>
         )}
-      </div>
+      </LayoutDesignContext.Provider>
     )
   return (
     <div data-editor-canvas='' data-renderer={renderer} className='flex min-h-full flex-col'>
