@@ -10,6 +10,7 @@ import {
 import { cn } from '../../lib/utils'
 import type { DesignTarget, LayoutDesign } from './design-context'
 import { targetKey, useLayoutDesign } from './design-context'
+import { NO_DND, useDesignDndNode, useDesignDropBody } from './dnd/node'
 
 type ChildProps = {
   className?: string
@@ -85,19 +86,22 @@ export function DesignNode({
   [attr: `data-${string}` | `aria-${string}`]: unknown
 }) {
   const design = useLayoutDesign()
+  const parent = design?.inheritedFrom(target) ?? null
+  // The folded copy of a header tile (HeaderTiles) selects but never drags:
+  // one draggable per target. A folded tile in the row is out of sight: no
+  // drop target.
+  const copy = rest['data-design-copy'] !== undefined
+  const folded = rest['data-header-folded'] !== undefined
+  const locked = !design || !!parent || copy
+  // Always called, design or not: the hooks never change between renders.
+  const nd = useDesignDndNode(design?.dnd ?? NO_DND, target, { disabled: locked, noDrop: folded })
   if (!design) return <>{children}</>
 
   const key = targetKey(target)
   const selected = design.selected != null && targetKey(design.selected) === key
-  const parent = design.inheritedFrom(target)
-  // The folded copy of a header tile (HeaderTiles) selects but never drags:
-  // one draggable per target.
-  const copy = rest['data-design-copy'] !== undefined
-  const locked = !!parent || copy
-  const dndProps = design.dnd.draggableProps(target, locked ? { disabled: true } : undefined)
-  const dragProps = (locked ? {} : dndProps) as Props
-  const dragging = design.dnd.isDragging(target)
-  const slot = locked ? null : design.dnd.dropSlot(target)
+  const dragProps = (locked ? {} : nd.props) as Props
+  const dragging = nd.dragging
+  const slot = locked ? null : nd.slot
 
   const child = asChild && isValidElement(children) ? (children as ReactElement<ChildProps>) : null
   const childCls = child?.props.className ?? ''
@@ -149,7 +153,7 @@ export function DesignNode({
       aria-hidden
       data-design-drop-indicator={slot}
       className='pointer-events-none absolute z-30 rounded-full bg-nvr-cyan shadow-[0_0_0_2px_#fff] dark:shadow-[0_0_0_2px_#0f172a]'
-      style={design.dnd.dropIndicator?.(target) ?? FALLBACK_INDICATOR[slot]}
+      style={nd.indicator ?? FALLBACK_INDICATOR[slot]}
     />
   ) : null
 
@@ -205,6 +209,26 @@ export function useDesignWrap() {
   const design = useLayoutDesign()
   return (target: DesignTarget, node: ReactNode, opts?: DesignNodeOptions) =>
     designWrap(design, target, node, opts)
+}
+
+/**
+ * Makes the element it sits in (a tab, step or container-tab pane) a drop
+ * target for `groupKey`'s fields, and draws the drop line there. Renders a
+ * hidden span until a drop line shows.
+ */
+export function DesignDropBody({ groupKey }: { groupKey: string }) {
+  const { ref, slot, indicator } = useDesignDropBody(groupKey)
+  return (
+    <span
+      ref={ref}
+      aria-hidden
+      hidden={!slot}
+      data-design-drop-body={groupKey}
+      data-design-drop-indicator={slot ?? undefined}
+      className='pointer-events-none absolute z-30 rounded-full bg-nvr-cyan shadow-[0_0_0_2px_#fff] dark:shadow-[0_0_0_2px_#0f172a]'
+      style={slot ? (indicator ?? FALLBACK_INDICATOR[slot]) : undefined}
+    />
+  )
 }
 
 /** An empty section/tab/step body on the canvas: somewhere to drop fields. */

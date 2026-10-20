@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   applyLayoutOps,
   type GroupRow,
+  isCanvasSlot,
   type LayoutBundle,
   newGroup,
   newPlacement,
@@ -56,16 +57,14 @@ const field = (f: string, g: string | null): DesignTarget => ({
 const grp = (key: string): DesignTarget => ({ kind: 'group', key })
 const zone = (b: LayoutBundle, g: string | null) =>
   b.placements
-    .filter((p) => p.group_key === g && p.field !== '__pipeline__')
+    .filter((p) => p.group_key === g && !isCanvasSlot(p))
     .sort((x, y) => x.sort - y.sort)
     .map((p) => p.field)
 const top = (b: LayoutBundle, parent: string | null = null) =>
   [
     ...b.groups.filter((g) => g.parent_key === parent).map((g) => ({ k: g.key, s: g.sort })),
     ...(parent === null
-      ? b.placements
-          .filter((p) => p.field === '__pipeline__')
-          .map((p) => ({ k: p.field, s: p.sort }))
+      ? b.placements.filter((p) => isCanvasSlot(p)).map((p) => ({ k: p.field, s: p.sort }))
       : [])
   ]
     .sort((x, y) => x.s - y.s)
@@ -163,9 +162,23 @@ describe('orderAfterDrop', () => {
   })
 
   it('refuses a drop into a group that already holds the field', () => {
-    expect(orderAfterDrop(bundle, field('amount', 'g2'), grp('__header__'), 'after')).toEqual([])
     const twin = { ...bundle, placements: [...bundle.placements, place('a', 'g2', 3)] }
     expect(orderAfterDrop(twin, field('a', 'g1'), field('d', 'g2'), 'after')).toEqual([])
+    expect(orderAfterDrop(twin, field('a', 'g1'), grp('g2'), 'before')).toEqual([])
+    expect(orderAfterDrop(twin, field('a', 'g2'), grp('g1'), 'after')).toEqual([])
+    // Without the twin the same drops do move.
+    expect(orderAfterDrop(bundle, field('a', 'g1'), grp('g2'), 'before')).toHaveLength(1)
+  })
+
+  it('moves a field into an empty tab', () => {
+    const ops = orderAfterDrop(bundle, field('a', 'g1'), grp('t2'), 'after')
+    expect(ops).toEqual([
+      { op: 'move', from: { field: 'a', group_key: 'g1' }, to_group_key: 't2', index: 0 }
+    ])
+    expect(zone(applyLayoutOps(bundle, ops), 't2')).toEqual(['a'])
+    expect(orderAfterDrop(bundle, field('a', 'g1'), grp('t1'), 'after')).toEqual([
+      { op: 'move', from: { field: 'a', group_key: 'g1' }, to_group_key: 't1', index: 1 }
+    ])
   })
 
   it('refuses fields on containers and slot cards', () => {
@@ -231,5 +244,54 @@ describe('orderAfterDrop', () => {
     const order = zone(applyLayoutOps(tied, [{ op: 'layout_update', patch: {} }]), 'g1')
     const ops = orderAfterDrop(tied, field(order[0], 'g1'), field(order[2], 'g1'), 'after')
     expect(zone(applyLayoutOps(tied, ops), 'g1')).toEqual([order[1], order[2], order[0]])
+  })
+
+  describe('slot cards that live in the canvas order (owners, PDF, extension slots)', () => {
+    const withSlots: LayoutBundle = {
+      ...bundle,
+      placements: [
+        ...bundle.placements,
+        // A third Ungrouped field keeps zone indexes apart from canvas indexes.
+        place('u3', null, 2),
+        place('__owners__', 'g1', 3),
+        place('__pdf__', 'g2', 3),
+        place('__ext_acme__', 'g1', 4)
+      ]
+    }
+    const slot = (f: string, g: string | null): DesignTarget => ({
+      kind: 'slot',
+      field: f,
+      group_key: g
+    })
+
+    it.each([
+      ['__owners__', 'g1'],
+      ['__pdf__', 'g2'],
+      ['__ext_acme__', 'g1']
+    ])('%s leaving a section for Ungrouped lands beside the Ungrouped card', (f, g) => {
+      const below = orderAfterDrop(withSlots, slot(f, g), grp('__ungrouped__'), 'after')
+      expect(below).toEqual([
+        { op: 'move', from: { field: f, group_key: g }, to_group_key: null, index: 2 }
+      ])
+      const after = applyLayoutOps(withSlots, below)
+      expect(top(after).slice(0, 3)).toEqual(['g1', '__ungrouped__', f])
+      expect(zone(after, null)).toEqual(['u1', 'u2', 'u3'])
+      const above = orderAfterDrop(withSlots, slot(f, g), field('u3', null), 'before')
+      expect(top(applyLayoutOps(withSlots, above)).slice(0, 3)).toEqual(['g1', f, '__ungrouped__'])
+    })
+
+    it.each([
+      '__owners__',
+      '__pdf__',
+      '__ext_acme__'
+    ])('%s on the canvas reorders among the groups', (f) => {
+      const onCanvas: LayoutBundle = {
+        ...bundle,
+        placements: [...bundle.placements, place(f, null, 7)]
+      }
+      const ops = orderAfterDrop(onCanvas, slot(f, null), grp('g1'), 'before')
+      expect(ops).toEqual([{ op: 'group_move', key: f, parent_key: null, index: 0 }])
+      expect(top(applyLayoutOps(onCanvas, ops))[0]).toBe(f)
+    })
   })
 })

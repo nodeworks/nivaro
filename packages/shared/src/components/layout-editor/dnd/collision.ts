@@ -21,6 +21,8 @@ export type DndRole =
   | { kind: 'item'; zone: string | null }
   | { kind: 'header' }
   | { kind: 'group'; key: string; parent: string | null; body: boolean }
+  /** A tab / step / container-tab pane: takes fields for group `key`, nothing else. */
+  | { kind: 'body'; key: string }
 
 export type DropSide = 'before' | 'after'
 
@@ -65,11 +67,13 @@ export function dndRole(bundle: LayoutBundle, t: DesignTarget): DndRole | null {
 export function accepts(active: DndRole, over: DndRole): boolean {
   switch (active.kind) {
     case 'item':
-      return over.kind === 'item' || (over.kind === 'group' && over.body)
+      return over.kind === 'item' || over.kind === 'body' || (over.kind === 'group' && over.body)
     case 'header':
       return over.kind === 'header'
     case 'group':
       return over.kind === 'group' && over.parent === active.parent
+    case 'body':
+      return false
   }
 }
 
@@ -159,7 +163,8 @@ export const typedCollision: CollisionDetection = (args) => {
   if (!active) return []
   const p = args.pointerCoordinates ?? center(args.collisionRect)
   const list = candidates(args.droppableContainers, args.droppableRects, active)
-  const isBody = (x: Cand) => active.role.kind === 'item' && x.d.role.kind === 'group'
+  const isBody = (x: Cand) =>
+    active.role.kind === 'item' && (x.d.role.kind === 'group' || x.d.role.kind === 'body')
 
   const within = list
     .filter((x) => contains(x.r, p))
@@ -173,7 +178,7 @@ export const typedCollision: CollisionDetection = (args) => {
     if (!hit || edgeDistance(hit.r, p) > NEAR) return []
   }
 
-  if (isBody(hit) && hit.d.role.kind === 'group') {
+  if (isBody(hit) && (hit.d.role.kind === 'group' || hit.d.role.kind === 'body')) {
     const header = hit.d.headerHeight?.() ?? 0
     if (header > 0 && p.y < hit.r.top + header)
       return [collision(hit, { side: 'before', axis: 'y', body: true })]
@@ -206,10 +211,14 @@ export const typedKeyboardCoordinates: KeyboardCoordinateGetter = (event, ctx) =
   const filled = new Set(
     list.flatMap((x) => (x.d.role.kind === 'item' ? [x.d.role.zone ?? UNGROUPED_KEY] : []))
   )
+  // A tab's pane stands for the tab: one stop per empty tab.
+  const panes = new Set(list.flatMap((x) => (x.d.role.kind === 'body' ? [x.d.role.key] : [])))
   const stops = list
-    .filter(
-      (x) => data.role.kind !== 'item' || x.d.role.kind !== 'group' || !filled.has(x.d.role.key)
-    )
+    .filter((x) => {
+      if (data.role.kind !== 'item') return true
+      if (x.d.role.kind === 'group' && panes.has(x.d.role.key)) return false
+      return (x.d.role.kind !== 'group' && x.d.role.kind !== 'body') || !filled.has(x.d.role.key)
+    })
     .sort((a, b) => a.r.top - b.r.top || a.r.left - b.r.left)
   const p = center(collisionRect)
   const here = stops

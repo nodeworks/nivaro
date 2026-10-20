@@ -18,11 +18,12 @@ export interface LayoutDesign {
 }
 
 /**
- * Drag and drop for design nodes (LayoutDndProvider supplies the real one).
- * Every DesignNode calls `draggableProps` exactly once per render,
- * unconditionally — it may call React hooks (the provider's does), so a
- * canvas keeps one `dnd` for its whole life. `disabled` (inherited nodes, the
- * folded copy of a header tile) registers nothing.
+ * Drag and drop state for design nodes. Plain functions, no hooks: inside a
+ * LayoutDndProvider every DesignNode registers through the provider's store
+ * (useDesignDndNode) and these only answer questions; outside one (tests,
+ * hosts without drag and drop) DesignNode takes its props and state from
+ * here. `disabled` (inherited nodes, the folded copy of a header tile) asks
+ * for no drag props.
  */
 export interface DesignDnd {
   draggableProps(t: DesignTarget, opts?: { disabled?: boolean }): object

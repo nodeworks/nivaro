@@ -411,6 +411,11 @@ describe('ItemEditForm design mode', () => {
       })
       await settle(() => !!host.querySelector('[data-design-drop-zone]'))
       expect(host.querySelector('[data-design-drop-zone]')).not.toBeNull()
+      // The pane itself is the drop target for the tab's fields.
+      const body = host.querySelector('[data-design-drop-body="t3"]')
+      expect(body?.parentElement?.contains(host.querySelector('[data-design-drop-zone]'))).toBe(
+        true
+      )
       expect(onRefusedWrite).not.toHaveBeenCalled()
     })
   }

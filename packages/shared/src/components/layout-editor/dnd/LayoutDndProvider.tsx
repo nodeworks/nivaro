@@ -1,4 +1,5 @@
 import {
+  type Active,
   type Announcements,
   type Collision,
   DndContext,
@@ -6,13 +7,13 @@ import {
   type DragMoveEvent,
   DragOverlay,
   type DragStartEvent,
+  KeyboardCode,
   KeyboardSensor,
   MeasuringStrategy,
   type Modifier,
+  type Over,
   PointerSensor,
   type UniqueIdentifier,
-  useDraggable,
-  useDroppable,
   useSensor,
   useSensors
 } from '@dnd-kit/core'
@@ -24,26 +25,26 @@ import {
   type ReactNode,
   useCallback,
   useContext,
-  useId,
   useLayoutEffect,
   useMemo,
   useRef,
-  useState,
-  useSyncExternalStore
+  useState
 } from 'react'
 import { createPortal } from 'react-dom'
-import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
+import { type LayoutBundle, type LayoutOp, UNGROUPED_KEY } from '../../../lib/layout-ops'
 import { type DesignDnd, type DesignTarget, targetKey } from '../design-context'
 import {
   type DndNodeData,
   type DropHint,
-  type DropSide,
-  dndRole,
   nodeData,
   typedCollision,
   typedKeyboardCoordinates
 } from './collision'
-import { dropLabel, orderAfterDrop } from './order'
+import { DndStore, DndStoreContext, IDLE, NO_DND } from './node'
+
+export { NO_DND }
+
+import { dropLabel, landsOnCanvas, orderAfterDrop } from './order'
 
 // Drag and drop on the layout editor canvas (spec §7.5). Every DesignNode is
 // draggable and a drop target; what may land where is typedCollision's call,
@@ -52,130 +53,11 @@ import { dropLabel, orderAfterDrop } from './order'
 // a DragOverlay copy follows the pointer, and an insertion line (absolutely
 // placed, so no reflow) shows where it will land.
 
-type DragState = {
-  activeKey: string | null
-  overKey: string | null
-  side: DropSide | null
-  indicator: CSSProperties | null
-}
-const IDLE: DragState = { activeKey: null, overKey: null, side: null, indicator: null }
-
-class DndStore {
-  bundle: LayoutBundle | null = null
-  state: DragState = IDLE
-  /** Registered element → its pointer activator (dnd-kit's onPointerDown). */
-  activators = new WeakMap<Element, () => ((e: PointerEvent) => void) | undefined>()
-  /** Target key → registered element (the overlay copies it, the indicator measures it). */
-  nodes = new Map<string, HTMLElement>()
-  private subs = new Set<() => void>()
-
-  subscribe = (fn: () => void) => {
-    this.subs.add(fn)
-    return () => {
-      this.subs.delete(fn)
-    }
-  }
-
-  set(next: Partial<DragState>) {
-    const s = { ...this.state, ...next }
-    const cur = this.state
-    if (
-      s.activeKey === cur.activeKey &&
-      s.overKey === cur.overKey &&
-      s.side === cur.side &&
-      JSON.stringify(s.indicator) === JSON.stringify(cur.indicator)
-    )
-      return
-    this.state = s
-    for (const fn of this.subs) fn()
-  }
-
-  /** What one node renders from: a node re-renders only when its slice changes. */
-  slice(key: string): string {
-    const s = this.state
-    const over = s.overKey === key ? `${s.side}${JSON.stringify(s.indicator)}` : ''
-    return `${s.activeKey === key ? 1 : 0}|${over}`
-  }
-}
-
-const DndStoreContext = createContext<DndStore | null>(null)
-
-/** No drag and drop: nodes select but never move. */
-export const NO_DND: DesignDnd = {
-  draggableProps: () => ({}),
-  isDragging: () => false,
-  dropSlot: () => null
-}
-
 const DndApiContext = createContext<DesignDnd>(NO_DND)
 
 /** The `dnd` part of LayoutDesign, from the nearest LayoutDndProvider (NO_DND outside one). */
 export function useLayoutDnd(): DesignDnd {
   return useContext(DndApiContext)
-}
-
-const noSubscribe = () => () => {}
-
-// A section's header strip height, measured live: a field dropped there goes
-// first in the section.
-function headerHeight(el: HTMLElement | null): number {
-  if (!el) return 0
-  const header = Array.from(el.querySelectorAll('[data-design-group-header]')).find(
-    (h) => h.closest('[data-design-target]') === el
-  )
-  return header ? header.getBoundingClientRect().bottom - el.getBoundingClientRect().top : 0
-}
-
-// LayoutDesign.dnd.draggableProps: registers the node with dnd-kit as both a
-// draggable and a drop target. Called once per DesignNode render (a hook).
-function useDesignDndNode(t: DesignTarget, opts?: { disabled?: boolean }): object {
-  const store = useContext(DndStoreContext)
-  const key = targetKey(t)
-  const uid = useId()
-  const nodeRef = useRef<HTMLElement | null>(null)
-  const role = store?.bundle ? dndRole(store.bundle, t) : null
-  const disabled = !store || !role || !!opts?.disabled
-  // A disabled node never shares an id with the live one.
-  const id = disabled ? `${key}#${uid}` : key
-  const data: DndNodeData | undefined = role
-    ? {
-        target: t,
-        role,
-        headerHeight: role.kind === 'group' ? () => headerHeight(nodeRef.current) : undefined
-      }
-    : undefined
-  const drag = useDraggable({ id, data, disabled })
-  const drop = useDroppable({ id, data, disabled })
-  useSyncExternalStore(
-    store?.subscribe ?? noSubscribe,
-    () => store?.slice(key) ?? '',
-    () => ''
-  )
-  const listeners = useRef(drag.listeners)
-  listeners.current = drag.listeners
-  const setDrag = drag.setNodeRef
-  const setDrop = drop.setNodeRef
-  const ref = useCallback(
-    (el: HTMLElement | null) => {
-      const prev = nodeRef.current
-      if (prev && store?.nodes.get(key) === prev) store.nodes.delete(key)
-      nodeRef.current = el
-      setDrag(el)
-      setDrop(el)
-      if (el && store) {
-        store.nodes.set(key, el)
-        store.activators.set(
-          el,
-          () => listeners.current?.onPointerDown as ((e: PointerEvent) => void) | undefined
-        )
-      }
-    },
-    [key, setDrag, setDrop, store]
-  )
-  if (disabled) return {}
-  // The pointer activator is not spread here: LayoutDndProvider relays
-  // pointerdown to it (see `relay`). The keyboard one stays on the node.
-  return { ref, ...drag.attributes, onKeyDown: drag.listeners?.onKeyDown }
 }
 
 const BAR = 3
@@ -282,11 +164,18 @@ function OverlayCopy({ node }: { node: HTMLElement }) {
 
 type Overlay = { node: HTMLElement; host: HTMLElement; height: number; shift: Modifier }
 
+const UNGROUPED: DesignTarget = { kind: 'group', key: UNGROUPED_KEY }
 const MEASURING = { droppable: { strategy: MeasuringStrategy.Always } }
+// Space picks up (Enter keeps its click: a tab switches, a header selects).
+const KEYBOARD_CODES = {
+  start: [KeyboardCode.Space],
+  cancel: [KeyboardCode.Esc],
+  end: [KeyboardCode.Space, KeyboardCode.Enter, KeyboardCode.Tab]
+}
 const AUTO_SCROLL = { threshold: { x: 0.08, y: 0.15 }, acceleration: 12 }
 const INSTRUCTIONS = {
   draggable:
-    'Press space or enter to pick this up. Use the arrow keys to choose where it goes, then space or enter to drop it, or escape to cancel.'
+    'Press space to pick this up. Use the arrow keys to choose where it goes, then space or enter to drop it, or escape to cancel.'
 }
 
 export function LayoutDndProvider({
@@ -306,9 +195,11 @@ export function LayoutDndProvider({
   const applyRef = useRef(apply)
   applyRef.current = apply
 
+  // Nodes read the store through useDesignDndNode; these serve anything else
+  // that asks (an inspector, a toolbar).
   const dnd = useMemo<DesignDnd>(
     () => ({
-      draggableProps: useDesignDndNode,
+      draggableProps: () => ({}),
       isDragging: (t) => store.state.activeKey === targetKey(t),
       dropSlot: (t) => (store.state.overKey === targetKey(t) ? store.state.side : null),
       dropIndicator: (t) => (store.state.overKey === targetKey(t) ? store.state.indicator : null)
@@ -318,7 +209,10 @@ export function LayoutDndProvider({
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: typedKeyboardCoordinates })
+    useSensor(KeyboardSensor, {
+      coordinateGetter: typedKeyboardCoordinates,
+      keyboardCodes: KEYBOARD_CODES
+    })
   )
   const [overlay, setOverlay] = useState<Overlay | null>(null)
 
@@ -382,15 +276,51 @@ export function LayoutDndProvider({
     setOverlay({ node, host, height: Math.min(rect.height, OVERLAY_MAX_H), shift })
   }
 
-  const track = ({ active, over, collisions }: DragMoveEvent) => {
+  // One drop plan per (bundle, dragged, over, side): what the line shows is
+  // exactly what the drop will do.
+  const plans = useRef<{ bundle: LayoutBundle | null; map: Map<string, LayoutOp[]> }>({
+    bundle: null,
+    map: new Map()
+  })
+  const planFor = (
+    active: Active,
+    over: Over | null,
+    collisions: Collision[] | null
+  ): { a: DndNodeData; o: DndNodeData; hint: DropHint; ops: LayoutOp[] } | null => {
     const a = nodeData(active.data.current)
     const o = nodeData(over?.data.current)
     const hint = hintFor(collisions, over?.id)
-    if (!a || !o || !hint || targetKey(o.target) === targetKey(a.target)) {
+    const b = store.bundle
+    if (!a || !o || !hint || !b || !over) return null
+    if (plans.current.bundle !== b) plans.current = { bundle: b, map: new Map() }
+    const k = `${active.id}|${over.id}|${hint.side}`
+    let ops = plans.current.map.get(k)
+    if (!ops) {
+      ops = orderAfterDrop(b, a.target, o.target, hint.side)
+      plans.current.map.set(k, ops)
+    }
+    return { a, o, hint, ops }
+  }
+
+  const track = ({ active, over, collisions }: DragMoveEvent) => {
+    const plan = planFor(active, over, collisions)
+    // No line where a drop would do nothing.
+    if (!plan || plan.ops.length === 0 || !over) {
       store.set({ overKey: null, side: null, indicator: null })
       return
     }
-    const overKey = targetKey(o.target)
+    let { o, hint } = plan
+    let overKey = String(over.id)
+    // A slot leaving a section for the Ungrouped zone becomes a slot card
+    // beside the Ungrouped card: the line shows there.
+    if (store.bundle && landsOnCanvas(store.bundle, plan.a.target, o.target)) {
+      overKey = targetKey(UNGROUPED)
+      o = {
+        target: UNGROUPED,
+        role: { kind: 'group', key: UNGROUPED_KEY, parent: null, body: true }
+      }
+      hint = { side: hint.side, axis: 'y', body: false }
+    }
     const overWidth = store.nodes.get(overKey)?.getBoundingClientRect().width ?? 0
     const dragged = active.rect.current.initial?.width ?? null
     store.set({
@@ -401,14 +331,10 @@ export function LayoutDndProvider({
   }
 
   const onDragEnd = ({ active, over, collisions }: DragEndEvent) => {
-    const a = nodeData(active.data.current)
-    const o = nodeData(over?.data.current)
-    const hint = hintFor(collisions, over?.id)
+    const plan = planFor(active, over, collisions)
     const b = store.bundle
     reset()
-    if (!a || !o || !hint || !b) return
-    const ops = orderAfterDrop(b, a.target, o.target, hint.side)
-    if (ops.length) applyRef.current(ops, { label: dropLabel(b, a.target) })
+    if (plan?.ops.length && b) applyRef.current(plan.ops, { label: dropLabel(b, plan.a.target) })
   }
 
   // The canvas (DesignCanvas) cancels pointerdown in its capture phase so

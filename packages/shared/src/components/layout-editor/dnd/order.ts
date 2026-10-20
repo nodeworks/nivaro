@@ -83,6 +83,18 @@ function siblingFor(b: LayoutBundle, over: DndRole, parent: string | null): stri
 }
 
 /**
+ * A slot that would land in the Ungrouped zone but is a slot card there
+ * (isCanvasSlot: owners, PDF, extension slots): it goes into the canvas order
+ * beside the Ungrouped card, and that card is where the drop line shows.
+ */
+export function landsOnCanvas(bundle: LayoutBundle, active: DesignTarget, over: DesignTarget) {
+  if (active.kind !== 'slot' || active.group_key === null) return false
+  if (!isCanvasSlot({ field: active.field, group_key: null })) return false
+  const o = dndRole(bundle, over)
+  return (o?.kind === 'item' && o.zone === null) || (o?.kind === 'group' && o.key === UNGROUPED_KEY)
+}
+
+/**
  * The ops a drop of `active` over `over` makes, `pointer` saying which side
  * of `over` it lands on. Empty when the drop changes nothing or is not
  * allowed (a field onto a container or a slot card, a field into a group
@@ -116,6 +128,15 @@ export function orderAfterDrop(
   if (a.kind === 'item') {
     if (active.kind === 'group' || active.kind === 'header') return []
     const from = { field: active.field, group_key: a.zone }
+    if (landsOnCanvas(b, active, over)) {
+      // Owners / PDF / extension slots leaving a section for the Ungrouped
+      // zone become slot cards: placed in the canvas order beside the
+      // Ungrouped card (above it for `before`, below for `after`).
+      if (b.placements.some((p) => p.field === from.field && p.group_key === null)) return []
+      const u = siblings(b, null).indexOf(UNGROUPED_KEY)
+      if (u < 0) return []
+      return [{ op: 'move', from, to_group_key: null, index: u + after }]
+    }
     if (o.kind === 'item' && (over.kind === 'field' || over.kind === 'slot')) {
       return moveItem(b, from, o.zone, (rest) => {
         const i = rest.findIndex((p) => p.field === over.field)
@@ -129,6 +150,7 @@ export function orderAfterDrop(
   }
 
   // Groups, the Ungrouped zone and slot cards: reorder within the parent.
+  if (a.kind !== 'group') return []
   const order = siblings(b, a.parent)
   const overKey = siblingFor(b, o, a.parent)
   if (!overKey || overKey === a.key || !order.includes(a.key)) return []

@@ -2,7 +2,7 @@ import type { ClientRect, CollisionDetection, DroppableContainer } from '@dnd-ki
 import { describe, expect, it } from 'vitest'
 import { type LayoutBundle, newGroup, newPlacement, ungroupedGroup } from '../../../lib/layout-ops'
 import { type DesignTarget, targetKey } from '../design-context'
-import { type DndNodeData, type DropHint, dndRole, typedCollision } from './collision'
+import { type DndNodeData, type DndRole, type DropHint, dndRole, typedCollision } from './collision'
 
 const bundle: LayoutBundle = {
   layout: { id: 1, collection: 'orders' },
@@ -28,7 +28,7 @@ const rect = (left: number, top: number, width: number, height: number): ClientR
   bottom: top + height
 })
 
-type Node = { t: DesignTarget; r: ClientRect; header?: number }
+type Node = { t: DesignTarget; r: ClientRect; header?: number; role?: DndRole; id?: string }
 // g1 0-200 (header 40) holding a; g2 220-420 (header 40) holding d and e side by
 // side; empty g3 440-540; container c with tab buttons t1 | t2 at 560.
 const nodes: Node[] = [
@@ -46,20 +46,23 @@ const nodes: Node[] = [
 
 const dataOf = (n: Node): DndNodeData => ({
   target: n.t,
-  role: dndRole(bundle, n.t) ?? { kind: 'header' },
+  role: n.role ?? dndRole(bundle, n.t) ?? { kind: 'header' },
   headerHeight: n.header ? () => n.header as number : undefined
 })
 
 function args(
   active: DesignTarget,
   pointer: { x: number; y: number } | null,
-  collisionRect = rect(0, 0, 10, 10)
+  collisionRect = rect(0, 0, 10, 10),
+  extra: Node[] = []
 ): Parameters<CollisionDetection>[0] {
-  const containers = nodes.map(
+  const all = [...nodes, ...extra]
+  const idOf = (n: Node) => n.id ?? targetKey(n.t)
+  const containers = all.map(
     (n) =>
       ({
-        id: targetKey(n.t),
-        key: targetKey(n.t),
+        id: idOf(n),
+        key: idOf(n),
         disabled: false,
         data: { current: dataOf(n) },
         node: { current: null },
@@ -74,7 +77,7 @@ function args(
       rect: { current: { initial: activeNode.r, translated: activeNode.r } }
     },
     collisionRect,
-    droppableRects: new Map(nodes.map((n) => [targetKey(n.t), n.r])),
+    droppableRects: new Map(all.map((n) => [idOf(n), n.r])),
     droppableContainers: containers,
     pointerCoordinates: pointer
   }
@@ -116,6 +119,7 @@ describe('typedCollision', () => {
 
   it('fields never collide with containers or header tiles', () => {
     expect(hit(args(A, { x: 300, y: 700 }))).toBeNull()
+    expect(hit(args(A, { x: 300, y: 580 }))).toBeNull()
     expect(hit(args(A, { x: 50, y: -40 }))).toBeNull()
   })
 
@@ -148,5 +152,35 @@ describe('typedCollision', () => {
 
   it('without a pointer (keyboard) the dragged rect centre decides', () => {
     expect(hit(args(A, null, rect(300, 286, 10, 10)))?.id).toBe('field:e:g2')
+  })
+
+  // The open tab's pane (container c, 600-760) registers as a body for its tab.
+  const pane = (key: string): Node => ({
+    t: { kind: 'group', key },
+    r: rect(0, 600, 600, 160),
+    role: { kind: 'body', key },
+    id: `body:${key}`
+  })
+
+  it('a field over an empty tab pane goes into that tab', () => {
+    expect(hit(args(A, { x: 300, y: 700 }, undefined, [pane('t2')]))).toEqual({
+      id: 'body:t2',
+      hint: { side: 'after', axis: 'y', body: true }
+    })
+  })
+
+  it('a field in a tab pane far from its fields snaps to the nearest one', () => {
+    const tf: Node = {
+      t: { kind: 'field', field: 'tf', group_key: 't1' },
+      r: rect(20, 610, 270, 40)
+    }
+    expect(hit(args(A, { x: 550, y: 740 }, undefined, [pane('t1'), tf]))?.id).toBe('field:tf:t1')
+  })
+
+  it('groups and tabs never collide with a pane', () => {
+    const t1 = { kind: 'group', key: 't1' } as const
+    const g1 = { kind: 'group', key: 'g1' } as const
+    expect(hit(args(t1, { x: 300, y: 700 }, undefined, [pane('t2')]))).toBeNull()
+    expect(hit(args(g1, { x: 300, y: 700 }, undefined, [pane('t2')]))?.id).toBe('group:c')
   })
 })
