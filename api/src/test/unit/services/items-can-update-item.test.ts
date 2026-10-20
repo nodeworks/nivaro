@@ -7,7 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 // every where() is recorded so the row filter's presence can be checked.
 const rec = vi.hoisted(() => ({
   row: { id: 7 } as Record<string, unknown> | undefined,
-  wheres: [] as unknown[][]
+  wheres: [] as unknown[][],
+  columns: { id: {} } as Record<string, unknown>
 }))
 vi.mock('../../../db/index.js', () => {
   const chain = (): unknown =>
@@ -17,6 +18,7 @@ vi.mock('../../../db/index.js', () => {
           return (res: (v: unknown) => unknown, rej: (e: unknown) => unknown) =>
             Promise.resolve([]).then(res, rej)
         if (prop === 'first') return () => Promise.resolve(rec.row)
+        if (prop === 'columnInfo') return () => Promise.resolve(rec.columns)
         if (prop === 'where')
           return (...args: unknown[]) => {
             rec.wheres.push(args)
@@ -55,6 +57,11 @@ vi.mock('../../../services/tree-permissions.js', async (orig) => ({
   getTreePermission: vi.fn(async () => perm.tree)
 }))
 
+vi.mock('../../../middleware/workspace.js', async (orig) => ({
+  ...(await orig<object>()),
+  fetchDefaultWorkspaceId: vi.fn(async () => 'WS-DEFAULT')
+}))
+
 import { canUpdateItem } from '../../../services/items.js'
 
 const user = { id: 'U1', role: 'R1' } as never
@@ -62,6 +69,7 @@ const user = { id: 'U1', role: 'R1' } as never
 beforeEach(() => {
   rec.row = { id: 7 }
   rec.wheres = []
+  rec.columns = { id: {} }
   perm.canUpdate = true
   perm.tree = null
   perm.rowFilter = null
@@ -88,6 +96,20 @@ describe('canUpdateItem', () => {
     rec.row = undefined
     expect(await canUpdateItem(user, 'orders', '7')).toBe(false)
     expect(perm.appliedFilter).toBe(true)
+  })
+
+  it('scopes the record to the active workspace', async () => {
+    // A collection with a workspace column: a record outside the active
+    // (non-default) workspace is not one this person may update there.
+    rec.columns = { id: {}, workspace_id: {} }
+    rec.row = undefined
+    expect(await canUpdateItem(user, 'ws_orders', '7', 'WS-2')).toBe(false)
+    expect(rec.wheres).toContainEqual(['ws_orders.workspace_id', 'WS-2'])
+
+    rec.row = { id: 7 }
+    rec.wheres = []
+    expect(await canUpdateItem(user, 'ws_orders', '7', 'WS-2')).toBe(true)
+    expect(rec.wheres).toContainEqual(['ws_orders.workspace_id', 'WS-2'])
   })
 
   it('refuses system tables for non-admins and blank ids', async () => {

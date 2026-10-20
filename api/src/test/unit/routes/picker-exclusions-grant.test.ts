@@ -129,7 +129,10 @@ describe('pickerToggleRefusal — "Disable in pickers" for all users', () => {
 
   it('answers 404 for a record the person cannot see', async () => {
     state.visible = false
-    expect((await pickerToggleRefusal(member, 'orders', '7'))?.status).toBe(404)
+    expect((await pickerToggleRefusal(member, 'orders', '7', 'unit-order'))?.status).toBe(404)
+    // Decided before any form is looked at.
+    expect(state.resolveArgs).toHaveLength(0)
+    expect(state.pinArgs).toHaveLength(0)
   })
 })
 

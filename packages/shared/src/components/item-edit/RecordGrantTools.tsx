@@ -87,17 +87,20 @@ export interface ScheduleFieldOption {
 /**
  * "Schedule a change" — a More-menu row whose popover queues one field value
  * to apply at a chosen time (POST /scheduled-changes). Shown when the form
- * grants it (allow_schedule) or to administrators; the server still requires
- * update permission on the collection.
+ * grants it (allow_schedule) or to administrators; the server checks the same
+ * grant against the form this record opens with (`layoutSlug` = ?layout=),
+ * that the person may update this record and may update the chosen field.
  */
 export function ScheduleChangeButton({
   collection,
   itemId,
-  fields
+  fields,
+  layoutSlug
 }: {
   collection: string
   itemId: string
   fields: ScheduleFieldOption[]
+  layoutSlug?: string | null
 }) {
   const client = useNivaroClient()
   const [open, setOpen] = useState(false)
@@ -123,7 +126,8 @@ export function ScheduleChangeButton({
           change_type: 'field_update',
           changes: { [field]: value },
           // datetime-local is the viewer's local time; the API stores UTC.
-          scheduled_at: new Date(at).toISOString()
+          scheduled_at: new Date(at).toISOString(),
+          layout: layoutSlug ?? null
         })
       ),
     onSuccess: () => {

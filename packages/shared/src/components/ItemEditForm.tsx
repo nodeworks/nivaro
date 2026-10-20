@@ -9960,6 +9960,7 @@ function ItemEditFormView({
                                                 collection={collection}
                                                 itemId={String(itemId)}
                                                 fields={scheduleFields}
+                                                layoutSlug={layoutSlug ?? null}
                                               />
                                             )}
                                             <div data-nvr-menu-divider />
