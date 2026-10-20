@@ -219,6 +219,10 @@ import { DesignDropBody, DesignDropZone, designWrap } from './layout-editor/Desi
 import { DesignCanvas } from './layout-editor/design-canvas'
 import type { DesignTarget, LayoutDesignProp } from './layout-editor/design-context'
 import {
+  readDesignSummaryCollapsed,
+  writeDesignSummaryCollapsed
+} from './layout-editor/summary-pref'
+import {
   AccessDeniedPanel,
   AddendumPanel,
   CommentPanel,
@@ -4801,7 +4805,11 @@ function ItemEditFormView({
   const effectiveShowClone = layoutMeta ? !layoutMeta.disable_clone && showClone : showClone
   const effectiveShowDelete = layoutMeta ? !layoutMeta.disable_delete : true
   const accordionMode = !!layoutMeta?.accordion_mode
-  const [summaryCollapsed, setSummaryCollapsed] = useState(false)
+  // Design mode (layout editor): the rail eats canvas width, so its fold is
+  // remembered per person. Normal record pages always start open.
+  const [summaryCollapsed, setSummaryCollapsed] = useState(() =>
+    designOn ? readDesignSummaryCollapsed(authUserId) : false
+  )
   // Accordion mode: track the single open section group id (null = none open)
   const [openSectionId, setOpenSectionId] = useState<number | null>(null)
   const [swappedGroups, setSwappedGroups] = useState<Set<number>>(new Set())
@@ -11491,7 +11499,16 @@ function ItemEditFormView({
                                     <div className='flex shrink-0 border-l border-slate-200'>
                                       <button
                                         type='button'
-                                        onClick={() => setSummaryCollapsed((v) => !v)}
+                                        onClick={() => {
+                                          const next = !summaryCollapsed
+                                          setSummaryCollapsed(next)
+                                          if (designOn)
+                                            writeDesignSummaryCollapsed(authUserId, next)
+                                        }}
+                                        // Design mode swallows canvas clicks; this one passes.
+                                        data-design-pass={designOn ? '' : undefined}
+                                        data-summary-toggle={designOn ? '' : undefined}
+                                        aria-expanded={designOn ? !summaryCollapsed : undefined}
                                         title={
                                           summaryCollapsed ? 'Expand summary' : 'Collapse summary'
                                         }

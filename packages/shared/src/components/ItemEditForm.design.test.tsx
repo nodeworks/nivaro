@@ -116,6 +116,8 @@ function projectFake(assignments: Array<Record<string, unknown>>): CMSField[] {
 }
 
 let projectDelayMs = 0
+// The layout GET /collection-layouts/active answers; null = LAYOUT.
+let activeLayout: ActiveLayoutData | null = null
 
 function makeClient() {
   const calls: Cmd[] = []
@@ -125,7 +127,7 @@ function makeClient() {
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
       const p = cmd._path
-      if (p === '/collection-layouts/active') return { data: LAYOUT }
+      if (p === '/collection-layouts/active') return { data: activeLayout ?? LAYOUT }
       if (p === '/field-config/orders') return { data: FIELD_CONFIG }
       if (p === '/field-config/orders/project') {
         // Answer late, like a real round trip: the canvas must keep the last
@@ -195,6 +197,8 @@ beforeEach(() => {
 afterEach(() => {
   act(() => root.unmount())
   host.remove()
+  activeLayout = null
+  window.localStorage.clear()
 })
 
 async function settle(until: () => boolean) {
@@ -502,5 +506,66 @@ describe('ItemEditForm design mode', () => {
     } finally {
       projectDelayMs = 0
     }
+  })
+
+  describe('summary rail fold', () => {
+    const WITH_SUMMARY: ActiveLayoutData = {
+      ...LAYOUT,
+      layout: {
+        ...(LAYOUT.layout as NonNullable<ActiveLayoutData['layout']>),
+        summary_enabled: true
+      }
+    }
+    const KEY = 'nvr:layout-editor:summary-collapsed'
+    const toggle = () =>
+      host.querySelector<HTMLButtonElement>(
+        'button[title="Collapse summary"], button[title="Expand summary"]'
+      )
+    const press = async (b: HTMLButtonElement | null) => {
+      expect(b, 'summary toggle').toBeTruthy()
+      await act(async () => {
+        b?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      })
+    }
+
+    it('design mode: the toggle works on the canvas and the fold is remembered', async () => {
+      const design = { layout: WITH_SUMMARY, record: { ...RECORD }, context: makeDesign() }
+      await mount({ design }, () => !!toggle())
+      expect(toggle()?.hasAttribute('data-design-pass')).toBe(true)
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('true')
+      expect(window.localStorage.getItem(KEY)).toBeNull()
+
+      // The canvas swallows clicks; this one passes and folds the rail.
+      await press(toggle())
+      expect(toggle()?.getAttribute('title')).toBe('Expand summary')
+      expect(toggle()?.getAttribute('aria-expanded')).toBe('false')
+      expect(window.localStorage.getItem(KEY)).toBe('1')
+
+      // Opened again later: still folded.
+      act(() => root.unmount())
+      root = createRoot(host)
+      await mount({ design }, () => !!toggle())
+      expect(toggle()?.getAttribute('title')).toBe('Expand summary')
+
+      await press(toggle())
+      expect(toggle()?.getAttribute('title')).toBe('Collapse summary')
+      expect(window.localStorage.getItem(KEY)).toBeNull()
+    })
+
+    it('normal mode: starts open whatever the editor remembered, and remembers nothing', async () => {
+      activeLayout = WITH_SUMMARY
+      window.localStorage.setItem(KEY, '1')
+      await mount({ itemId: '1' }, () => !!toggle())
+      const b = toggle()
+      expect(b?.getAttribute('title')).toBe('Collapse summary')
+      expect(b?.hasAttribute('data-design-pass')).toBe(false)
+      expect(b?.hasAttribute('data-summary-toggle')).toBe(false)
+      expect(b?.hasAttribute('aria-expanded')).toBe(false)
+
+      window.localStorage.removeItem(KEY)
+      await press(b)
+      expect(toggle()?.getAttribute('title')).toBe('Expand summary')
+      expect(window.localStorage.getItem(KEY)).toBeNull()
+    })
   })
 })
