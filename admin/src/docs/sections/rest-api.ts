@@ -21,8 +21,15 @@ export const apiOverview: DocSection = {
         ['GET /api/auth/login', 'Start OIDC login — redirects to Microsoft.'],
         ['GET /api/auth/callback', 'OAuth2 callback — exchanges code, sets session cookie.'],
         ['POST /api/auth/logout', 'Destroys session and clears cookie.'],
-        ['GET /api/auth/me', 'Returns current user + role. 401 if unauthenticated.']
+        [
+          'GET /api/auth/me',
+          'Returns current user + role + `config_epoch` (the config-change counter; null in cloud mode). 401 if unauthenticated.'
+        ]
       ]
+    },
+    {
+      type: 'note',
+      text: 'The admin keeps metadata (collections, fields, relations, layouts, settings) in the browser between reloads so a reload paints at once and refreshes in the background. Records are never stored. The copy is keyed by person, `config_epoch` and app version, expires after 24 hours, and is wiped on sign-out or when a different person signs in. Headless hosts opt in with `<NivaroProvider persistMetadata={{ userId, epoch, version }}>` and call `wipeMetadataCache()` on sign-out.'
     },
     { type: 'h2', id: 'api-auth-token', text: 'Static token (scripts / SDK)' },
     {

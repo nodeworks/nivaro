@@ -14,6 +14,7 @@ import {
 import { extractSamlIdentity, getSaml, samlEnabled } from '../auth/saml.js'
 import { revokeSessions } from '../auth/session.js'
 import { config } from '../config.js'
+import { configEpochState } from '../db/config-epoch.js'
 import { db } from '../db/index.js'
 import { hasColumn } from '../lib/column-probe.js'
 import { authenticate, requireAdmin, requireAuth } from '../middleware/authenticate.js'
@@ -817,6 +818,9 @@ export async function authRoutes(app: FastifyInstance) {
         has_reports: await import('../services/team.js')
           .then((m) => m.hasReports(req.user!.id))
           .catch(() => false),
+        // The config epoch this process last saw (null in cloud mode / epoch watch off):
+        // clients key their persisted metadata cache on it (#2449).
+        config_epoch: configEpochState().seen,
         ...(req.masqueradeAdminId ? { masquerade: true } : {})
       }
     })

@@ -322,6 +322,8 @@ export {
   liveQueryMeta,
   liveRefetchInterval,
   MatrixEditor,
+  type MetadataIdentity,
+  type MetadataQueryClient,
   MyWorkView,
   maskInputsIn,
   matchScopeDimension,
@@ -458,6 +460,7 @@ export {
   resolveCollectionIcon,
   resolveNotificationTarget,
   resolveNotificationTargetFor,
+  restoreMetadata,
   rowHighlightClass,
   rowHighlightTextClass,
   rumRouteChange,
@@ -496,6 +499,7 @@ export {
   startApiVersionWatch,
   startAutofillRun,
   startHelpVideoWalk,
+  startMetadataPersistence,
   startRum,
   stuckText,
   TaskPanel,
@@ -608,6 +612,7 @@ export {
   type WalkStep,
   WidgetSlot,
   WorkflowPanel,
+  wipeMetadataCache,
   withClipKind,
   withGetCoalescing
 } from '@nivaro/shared'
