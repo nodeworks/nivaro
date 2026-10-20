@@ -52,7 +52,7 @@ export function InlineDisplaySection({
   return (
     <div className='mt-1.5 space-y-1.5 border-t border-slate-100 pt-1.5 dark:border-border'>
       <p className='text-[11px] font-semibold text-slate-400'>Inline display</p>
-      <div className='flex gap-1 mt-1'>
+      <div className='flex gap-1 mt-1' data-setting='field.inline_display.mode'>
         <button
           type='button'
           onClick={() => onSeparatorChange(null)}
@@ -79,7 +79,10 @@ export function InlineDisplaySection({
         </button>
       </div>
       {separator !== null && (
-        <div className='flex items-center gap-1.5 mt-1'>
+        <div
+          className='flex items-center gap-1.5 mt-1'
+          data-setting='field.inline_display.separator'
+        >
           <span className='text-[11px] text-slate-400 shrink-0'>Separator</span>
           <input
             type='text'
@@ -96,7 +99,8 @@ export function InlineDisplaySection({
           {separator !== null && i > 0 && (
             <button
               type='button'
-              title={entry.line_break ? 'Remove line break' : 'Start new line before this field'}
+              data-setting='field.inline_display.line_break'
+              data-tip={entry.line_break ? 'Remove line break' : 'Start new line before this field'}
               onClick={() =>
                 onChange(entries.map((e, j) => (j === i ? { ...e, line_break: !e.line_break } : e)))
               }
@@ -112,7 +116,7 @@ export function InlineDisplaySection({
             </button>
           )}
           <div className='flex items-center gap-1'>
-            <div className='flex-1 min-w-0'>
+            <div className='flex-1 min-w-0' data-setting='field.inline_display.fields'>
               <Combobox
                 value={entry.field}
                 onChange={(v) =>
@@ -133,6 +137,7 @@ export function InlineDisplaySection({
           <div className='flex gap-1'>
             <input
               type='text'
+              data-setting='field.inline_display.label'
               value={entry.label ?? ''}
               placeholder='Label…'
               onChange={(e) =>
@@ -142,18 +147,20 @@ export function InlineDisplaySection({
               }
               className='flex-1 rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan placeholder:text-slate-300 dark:bg-muted dark:border-border'
             />
-            <SimpleSelect
-              value={entry.format ?? 'text'}
-              onChange={(v) =>
-                onChange(
-                  entries.map((en, j) =>
-                    j === i ? { ...en, format: v === 'text' ? null : v } : en
+            <span className='contents' data-setting='field.inline_display.format'>
+              <SimpleSelect
+                value={entry.format ?? 'text'}
+                onChange={(v) =>
+                  onChange(
+                    entries.map((en, j) =>
+                      j === i ? { ...en, format: v === 'text' ? null : v } : en
+                    )
                   )
-                )
-              }
-              className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:bg-card dark:border-border dark:text-muted-foreground'
-              options={FORMAT_OPTS.map((o) => ({ value: o.value, label: o.label }))}
-            />
+                }
+                className='h-6 w-auto rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-slate-600 dark:bg-card dark:border-border dark:text-muted-foreground'
+                options={FORMAT_OPTS.map((o) => ({ value: o.value, label: o.label }))}
+              />
+            </span>
           </div>
         </div>
       ))}

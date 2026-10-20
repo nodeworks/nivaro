@@ -29,6 +29,7 @@ export function CascadeRuleRow({
         <PopoverTrigger asChild>
           <button
             type='button'
+            data-setting='field.parent_cascades.parent_field'
             className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0 dark:bg-card dark:border-border'
           >
             {rule.parent_field ? (
@@ -66,6 +67,7 @@ export function CascadeRuleRow({
         <PopoverTrigger asChild>
           <button
             type='button'
+            data-setting='field.parent_cascades.child_field'
             className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 focus:outline-none focus:ring-1 focus:ring-nvr-cyan min-w-0 dark:bg-card dark:border-border'
           >
             {rule.child_field ? (
@@ -111,7 +113,9 @@ export function CascadeRuleRow({
         <PopoverTrigger asChild>
           <button
             type='button'
-            title='On unavailable: swap the row to a default when the parent change orphans its value'
+            data-setting='field.parent_cascades.on_unavailable'
+            aria-label='When the value is no longer offered'
+            data-tip='On unavailable: swap the row to a default when the parent change orphans its value'
             className={`h-7 w-7 shrink-0 rounded border text-[11px] transition-colors ${hasSwap ? 'border-nvr-cyan bg-nvr-cyan/10 text-nvr-navy dark:text-nvr-cyan' : 'border-slate-200 text-slate-400 hover:border-slate-400 hover:text-slate-700'}`}
           >
             ⇄

@@ -80,7 +80,10 @@ export function SwapConfigEditor({
       <p className='text-[11px] text-slate-400'>
         Toggle between a M2O picker and manual entry fields.
       </p>
-      <label className='flex items-center gap-2 text-[11px] text-slate-600 dark:text-muted-foreground'>
+      <label
+        className='flex items-center gap-2 text-[11px] text-slate-600 dark:text-muted-foreground'
+        data-setting='group.swap_config.enabled'
+      >
         <input
           type='checkbox'
           checked={!!swapCfg?.enabled}
@@ -92,7 +95,7 @@ export function SwapConfigEditor({
       {swapCfg?.enabled && (
         <div className='space-y-2 pl-1'>
           {/* Primary field */}
-          <div>
+          <div data-setting='group.swap_config.primary_field'>
             <p className='text-[11px] text-slate-400 mb-1'>Primary field (M2O)</p>
             <button
               type='button'
@@ -156,7 +159,7 @@ export function SwapConfigEditor({
             )}
           </div>
           {/* Alternate fields */}
-          <div>
+          <div data-setting='group.swap_config.alternate_fields'>
             <p className='text-[11px] text-slate-400 mb-1'>Alternate fields</p>
             {altFields.length > 0 && (
               <div className='mb-1 space-y-1'>
@@ -258,7 +261,7 @@ export function SwapConfigEditor({
           </div>
           {/* Labels */}
           <div className='flex gap-2'>
-            <div className='flex-1'>
+            <div className='flex-1' data-setting='group.swap_config.toggle_label'>
               <p className='text-[11px] text-slate-400 mb-1'>Toggle label</p>
               <input
                 type='text'
@@ -269,7 +272,7 @@ export function SwapConfigEditor({
                 className='w-full h-6 rounded border border-slate-200 dark:border-border bg-white dark:bg-background px-2 text-[11px]'
               />
             </div>
-            <div className='flex-1'>
+            <div className='flex-1' data-setting='group.swap_config.back_label'>
               <p className='text-[11px] text-slate-400 mb-1'>Back label</p>
               <input
                 type='text'

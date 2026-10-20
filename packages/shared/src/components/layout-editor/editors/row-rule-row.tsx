@@ -1220,7 +1220,10 @@ export function RowRuleRow({
               </span>
               <div className='flex-1 min-w-0 space-y-1.5'>
                 {/* Trigger field + op */}
-                <div className='flex items-center gap-1.5'>
+                <div
+                  className='flex items-center gap-1.5'
+                  data-setting='field.row_rules.trigger_field'
+                >
                   <Popover open={tfOpen} onOpenChange={setTfOpen}>
                     <PopoverTrigger asChild>
                       <button
@@ -1301,24 +1304,29 @@ export function RowRuleRow({
                     </PopoverContent>
                   </Popover>
                   {!trfSeg1 && (
-                    <SelectButton
-                      value={(rule.trigger_op ?? 'nnull') as string}
-                      opts={[
-                        { value: 'nnull', label: 'has value' },
-                        { value: 'null', label: 'is empty' },
-                        { value: 'eq', label: 'equals' },
-                        { value: 'neq', label: '≠' },
-                        { value: 'in', label: 'in list' },
-                        { value: 'contains', label: 'contains' }
-                      ]}
-                      onChange={(v) => onChange({ ...rule, trigger_op: v })}
-                    />
+                    <span className='contents' data-setting='field.row_rules.trigger_op'>
+                      <SelectButton
+                        value={(rule.trigger_op ?? 'nnull') as string}
+                        opts={[
+                          { value: 'nnull', label: 'has value' },
+                          { value: 'null', label: 'is empty' },
+                          { value: 'eq', label: 'equals' },
+                          { value: 'neq', label: '≠' },
+                          { value: 'in', label: 'in list' },
+                          { value: 'contains', label: 'contains' }
+                        ]}
+                        onChange={(v) => onChange({ ...rule, trigger_op: v })}
+                      />
+                    </span>
                   )}
                 </div>
 
                 {/* Via related field — M2O drill-down */}
                 {isTriggerM2O && (
-                  <div className='flex items-center gap-1.5 flex-wrap'>
+                  <div
+                    className='flex items-center gap-1.5 flex-wrap'
+                    data-setting='field.row_rules.trigger_related_field'
+                  >
                     <span className='text-[11px] text-slate-400 shrink-0'>via:</span>
                     <Popover open={trfOpen} onOpenChange={setTrfOpen}>
                       <PopoverTrigger asChild>
@@ -1438,90 +1446,99 @@ export function RowRuleRow({
                       </>
                     )}
                     {showViaOp && (
-                      <SelectButton
-                        value={(rule.trigger_op ?? 'nnull') as string}
-                        opts={[
-                          { value: 'nnull', label: 'has value' },
-                          { value: 'null', label: 'is empty' },
-                          { value: 'eq', label: 'equals' },
-                          { value: 'neq', label: '≠' },
-                          { value: 'in', label: 'in list' },
-                          { value: 'contains', label: 'contains' }
-                        ]}
-                        onChange={(v) => onChange({ ...rule, trigger_op: v })}
-                      />
+                      <span className='contents' data-setting='field.row_rules.trigger_op'>
+                        <SelectButton
+                          value={(rule.trigger_op ?? 'nnull') as string}
+                          opts={[
+                            { value: 'nnull', label: 'has value' },
+                            { value: 'null', label: 'is empty' },
+                            { value: 'eq', label: 'equals' },
+                            { value: 'neq', label: '≠' },
+                            { value: 'in', label: 'in list' },
+                            { value: 'contains', label: 'contains' }
+                          ]}
+                          onChange={(v) => onChange({ ...rule, trigger_op: v })}
+                        />
+                      </span>
                     )}
                   </div>
                 )}
 
                 {/* Trigger value */}
-                {showTriggerValue &&
-                  (isViaIdOrEntity && relRelCollection ? (
-                    <ViaValuePicker
-                      collection={relRelCollection}
-                      value={rule.trigger_value ?? null}
-                      isMulti={rule.trigger_op === 'in'}
-                      onChange={(v) => onChange({ ...rule, trigger_value: v })}
-                    />
-                  ) : isParentTrigger && parentTriggerOneCollection ? (
-                    <ViaValuePicker
-                      collection={parentTriggerOneCollection}
-                      value={rule.trigger_value ?? null}
-                      isMulti={rule.trigger_op === 'in'}
-                      onChange={(v) => onChange({ ...rule, trigger_value: v })}
-                    />
-                  ) : (
-                    <input
-                      type='text'
-                      value={rule.trigger_value ?? ''}
-                      onChange={(e) => onChange({ ...rule, trigger_value: e.target.value || null })}
-                      placeholder={
-                        rule.trigger_op === 'in'
-                          ? 'val1, val2 (comma-separated)'
-                          : 'value (or $parent.field_name)'
-                      }
-                      className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:bg-card dark:border-border'
-                    />
-                  ))}
+                {showTriggerValue && (
+                  <div data-setting='field.row_rules.trigger_value'>
+                    {isViaIdOrEntity && relRelCollection ? (
+                      <ViaValuePicker
+                        collection={relRelCollection}
+                        value={rule.trigger_value ?? null}
+                        isMulti={rule.trigger_op === 'in'}
+                        onChange={(v) => onChange({ ...rule, trigger_value: v })}
+                      />
+                    ) : isParentTrigger && parentTriggerOneCollection ? (
+                      <ViaValuePicker
+                        collection={parentTriggerOneCollection}
+                        value={rule.trigger_value ?? null}
+                        isMulti={rule.trigger_op === 'in'}
+                        onChange={(v) => onChange({ ...rule, trigger_value: v })}
+                      />
+                    ) : (
+                      <input
+                        type='text'
+                        value={rule.trigger_value ?? ''}
+                        onChange={(e) =>
+                          onChange({ ...rule, trigger_value: e.target.value || null })
+                        }
+                        placeholder={
+                          rule.trigger_op === 'in'
+                            ? 'val1, val2 (comma-separated)'
+                            : 'value (or $parent.field_name)'
+                        }
+                        className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] focus:outline-none focus:ring-1 focus:ring-nvr-cyan dark:bg-card dark:border-border'
+                      />
+                    )}
+                  </div>
+                )}
 
                 {/* Extra OR triggers */}
-                {(rule.trigger_fields ?? []).map((tf, i) => (
-                  <div key={i} className='flex items-center gap-1'>
-                    <span className='text-[11px] text-slate-400 shrink-0 italic'>or</span>
-                    <OrTriggerPicker
-                      value={tf}
-                      fieldOpts={fieldOpts}
-                      onChange={(v) => {
-                        const next = [...(rule.trigger_fields ?? [])]
-                        next[i] = v
-                        onChange({ ...rule, trigger_fields: next })
-                      }}
-                    />
+                <div className='space-y-1.5' data-setting='field.row_rules.trigger_fields'>
+                  {(rule.trigger_fields ?? []).map((tf, i) => (
+                    <div key={i} className='flex items-center gap-1'>
+                      <span className='text-[11px] text-slate-400 shrink-0 italic'>or</span>
+                      <OrTriggerPicker
+                        value={tf}
+                        fieldOpts={fieldOpts}
+                        onChange={(v) => {
+                          const next = [...(rule.trigger_fields ?? [])]
+                          next[i] = v
+                          onChange({ ...rule, trigger_fields: next })
+                        }}
+                      />
+                      <button
+                        type='button'
+                        onClick={() =>
+                          onChange({
+                            ...rule,
+                            trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i)
+                          })
+                        }
+                        className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))}
+                  {rule.trigger_field && (
                     <button
                       type='button'
                       onClick={() =>
-                        onChange({
-                          ...rule,
-                          trigger_fields: (rule.trigger_fields ?? []).filter((_, j) => j !== i)
-                        })
+                        onChange({ ...rule, trigger_fields: [...(rule.trigger_fields ?? []), ''] })
                       }
-                      className='shrink-0 text-slate-300 hover:text-red-400 text-[11px] px-0.5'
+                      className='text-[11px] text-nvr-cyan hover:underline'
                     >
-                      ✕
+                      + or when another field changes
                     </button>
-                  </div>
-                ))}
-                {rule.trigger_field && (
-                  <button
-                    type='button'
-                    onClick={() =>
-                      onChange({ ...rule, trigger_fields: [...(rule.trigger_fields ?? []), ''] })
-                    }
-                    className='text-[11px] text-nvr-cyan hover:underline'
-                  >
-                    + or when another field changes
-                  </button>
-                )}
+                  )}
+                </div>
               </div>
             </div>
           </div>
@@ -1539,6 +1556,7 @@ export function RowRuleRow({
                     <PopoverTrigger asChild>
                       <button
                         type='button'
+                        data-setting='field.row_rules.target_field'
                         className='flex-1 h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 min-w-0 dark:bg-card dark:border-border'
                       >
                         {rule.target_field ? (
@@ -1577,25 +1595,27 @@ export function RowRuleRow({
                       </Command>
                     </PopoverContent>
                   </Popover>
-                  <SelectButton
-                    value={rule.target_type}
-                    opts={[
-                      { value: 'set', label: '= literal' },
-                      { value: 'pick', label: '= pick record' },
-                      { value: 'relation_field', label: '= from M2O' },
-                      { value: 'precedence', label: '= chain' },
-                      { value: 'clear', label: '= clear' },
-                      { value: 'lock', label: '🔒 lock (read-only while matched)' }
-                    ]}
-                    onChange={(v) =>
-                      onChange({
-                        ...rule,
-                        target_type: v as RowRuleItem['target_type'],
-                        target_value: null,
-                        sources: []
-                      })
-                    }
-                  />
+                  <span className='contents' data-setting='field.row_rules.target_type'>
+                    <SelectButton
+                      value={rule.target_type}
+                      opts={[
+                        { value: 'set', label: '= literal' },
+                        { value: 'pick', label: '= pick record' },
+                        { value: 'relation_field', label: '= from M2O' },
+                        { value: 'precedence', label: '= chain' },
+                        { value: 'clear', label: '= clear' },
+                        { value: 'lock', label: '🔒 lock (read-only while matched)' }
+                      ]}
+                      onChange={(v) =>
+                        onChange({
+                          ...rule,
+                          target_type: v as RowRuleItem['target_type'],
+                          target_value: null,
+                          sources: []
+                        })
+                      }
+                    />
+                  </span>
                 </div>
 
                 {/* Target value: relation_field combobox */}
@@ -1604,6 +1624,7 @@ export function RowRuleRow({
                     <PopoverTrigger asChild>
                       <button
                         type='button'
+                        data-setting='field.row_rules.target_value'
                         className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 dark:bg-card dark:border-border'
                       >
                         {rule.target_value ? (
@@ -1648,7 +1669,7 @@ export function RowRuleRow({
 
                 {/* Target value: literal input */}
                 {showTargetValue && !showRelatedCombobox && (
-                  <div className='flex gap-1'>
+                  <div className='flex gap-1' data-setting='field.row_rules.target_value'>
                     <input
                       type='text'
                       value={rule.target_value ?? ''}
@@ -1718,6 +1739,7 @@ export function RowRuleRow({
                       <PopoverTrigger asChild>
                         <button
                           type='button'
+                          data-setting='field.row_rules.target_value'
                           className='w-full h-7 rounded border border-slate-200 bg-white px-2 text-[11px] text-left truncate hover:border-slate-400 dark:bg-card dark:border-border'
                         >
                           {rule.target_value ? (
@@ -1784,7 +1806,7 @@ export function RowRuleRow({
 
                 {/* Precedence chain sources */}
                 {rule.target_type === 'precedence' && (
-                  <div className='space-y-1.5 pt-0.5'>
+                  <div className='space-y-1.5 pt-0.5' data-setting='field.row_rules.sources'>
                     <p className='text-[11px] text-slate-500 font-medium'>
                       Sources — first non-null wins:
                     </p>
@@ -1837,7 +1859,10 @@ export function RowRuleRow({
 
           {/* Footer */}
           <div className='border-t border-slate-100 px-2.5 py-1.5 bg-slate-50/50 dark:border-border'>
-            <label className='flex items-center gap-2 cursor-pointer'>
+            <label
+              className='flex items-center gap-2 cursor-pointer'
+              data-setting='field.row_rules.only_if_empty'
+            >
               <input
                 type='checkbox'
                 checked={!!rule.only_if_empty}
@@ -1849,7 +1874,10 @@ export function RowRuleRow({
               </span>
             </label>
             {rule.target_type !== 'lock' && (
-              <label className='mt-1 flex items-center gap-2 cursor-pointer'>
+              <label
+                className='mt-1 flex items-center gap-2 cursor-pointer'
+                data-setting='field.row_rules.seed_only'
+              >
                 <input
                   type='checkbox'
                   checked={!!rule.seed_only}
@@ -1858,7 +1886,7 @@ export function RowRuleRow({
                 />
                 <span
                   className='text-[11px] text-slate-600 dark:text-muted-foreground'
-                  title='The target is an input this rule only seeds when empty (a project default). Re-run rules never blanks it to re-derive, and Data Integrity never reports it as drift.'
+                  data-tip='The target is an input this rule only seeds when empty (a project default). Re-run rules never blanks it to re-derive, and Data Integrity never reports it as drift.'
                 >
                   Seed only — target is an input, never re-derived
                 </span>
@@ -1866,7 +1894,10 @@ export function RowRuleRow({
             )}
             {rule.target_type === 'lock' && (
               <div className='mt-1 space-y-1'>
-                <label className='flex items-center gap-2 cursor-pointer'>
+                <label
+                  className='flex items-center gap-2 cursor-pointer'
+                  data-setting='field.row_rules.except_admin'
+                >
                   <input
                     type='checkbox'
                     checked={rule.except_admin === true}
@@ -1880,12 +1911,13 @@ export function RowRuleRow({
                   />
                   <span
                     className='text-[11px] text-slate-600 dark:text-muted-foreground'
-                    title='Admins (role admin_access) keep editing the field — the lock binds everyone else, in the grid and on API writes.'
+                    data-tip='Admins (role admin_access) keep editing the field — the lock binds everyone else, in the grid and on API writes.'
                   >
                     Except admins — view only for non-admins
                   </span>
                 </label>
                 <input
+                  data-setting='field.row_rules.reason'
                   value={rule.reason ?? ''}
                   onChange={(e) => onChange({ ...rule, reason: e.target.value || null })}
                   placeholder='Lock message shown on hover (optional) — e.g. "set by the rules; ask an admin"'
@@ -1894,7 +1926,10 @@ export function RowRuleRow({
               </div>
             )}
             {rule.target_type !== 'lock' && (
-              <label className='mt-1 flex items-center gap-2 cursor-pointer'>
+              <label
+                className='mt-1 flex items-center gap-2 cursor-pointer'
+                data-setting='field.row_rules.on_update'
+              >
                 <input
                   type='checkbox'
                   checked={rule.on_update !== false}
@@ -1908,7 +1943,7 @@ export function RowRuleRow({
                 />
                 <span
                   className='text-[11px] text-slate-600 dark:text-muted-foreground'
-                  title='On by default: an API PATCH that changes one of this rule&apos;s trigger fields re-derives the target, the same way the form does on edit (a target the caller sent explicitly still wins). Untick to run this rule on creates only.'
+                  data-tip='On by default: an API PATCH that changes one of this rule&apos;s trigger fields re-derives the target, the same way the form does on edit (a target the caller sent explicitly still wins). Untick to run this rule on creates only.'
                 >
                   Re-run on API updates when a trigger field changes
                 </span>

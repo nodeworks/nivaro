@@ -71,6 +71,7 @@ export function ColumnPresetRow({
     <div className='space-y-1.5 rounded border border-slate-200 p-2 dark:border-border'>
       <div className='flex items-center gap-1.5'>
         <Input
+          data-setting='field.column_presets.name'
           value={preset.name}
           onChange={(e) => onChange({ ...preset, name: e.target.value })}
           placeholder='Preset name'
@@ -104,12 +105,13 @@ export function ColumnPresetRow({
         <PopoverTrigger asChild>
           <button
             type='button'
+            data-setting='field.column_presets.columns'
             className='w-full flex items-center justify-between rounded border border-slate-200 bg-white px-2 py-1.5 text-[11px] text-left hover:border-slate-400 dark:bg-card dark:border-border'
           >
             <span
               className={cn(
                 'truncate',
-                preset.columns.length ? 'text-slate-700' : 'text-slate-400'
+                preset.columns.length ? 'text-slate-700 dark:text-foreground' : 'text-slate-400'
               )}
             >
               {preset.columns.length
@@ -273,7 +275,7 @@ export function DrawerRelationRow({
           ✕
         </button>
       </div>
-      <div className='flex items-center gap-1.5'>
+      <div className='flex items-center gap-1.5' data-setting='field.drawer_relations.hint'>
         <span className='text-[11px] text-slate-400 shrink-0 w-6'>sum</span>
         <Popover open={sumOpen} onOpenChange={setSumOpen}>
           <PopoverTrigger asChild>

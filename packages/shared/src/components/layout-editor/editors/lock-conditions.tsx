@@ -77,20 +77,30 @@ export function PipelineStateConditionRow({
 
   return (
     <div className='space-y-1.5'>
-      <SimpleSelect
-        value={pipelineId ?? ''}
-        onChange={(v) => onPipelineChange(v || undefined)}
-        className='h-6 w-full rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:bg-card dark:border-border'
-        options={[
-          { value: '', label: '— Select pipeline —' },
-          ...bound.map((p) => ({ value: p.id, label: p.name }))
-        ]}
-      />
+      <div data-setting='field.lock_conditions.pipeline_id'>
+        <SimpleSelect
+          value={pipelineId ?? ''}
+          onChange={(v) => onPipelineChange(v || undefined)}
+          className='h-6 w-full rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:bg-card dark:border-border'
+          options={[
+            { value: '', label: '— Select pipeline —' },
+            ...bound.map((p) => ({ value: p.id, label: p.name }))
+          ]}
+        />
+      </div>
       {bound.length === 0 && (
         <p className='text-[11px] text-slate-400'>No pipelines bound to this collection.</p>
       )}
+      {!pipelineId && (
+        <p className='text-[11px] text-slate-400' data-setting='field.lock_conditions.state_keys'>
+          Pick a pipeline to choose its states.
+        </p>
+      )}
       {pipelineId && states.length > 0 && (
-        <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1 dark:bg-muted dark:border-border'>
+        <div
+          className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1 dark:bg-muted dark:border-border'
+          data-setting='field.lock_conditions.state_keys'
+        >
           {states.map((s) => (
             <label
               key={s.key}
@@ -111,7 +121,9 @@ export function PipelineStateConditionRow({
         </div>
       )}
       {pipelineId && states.length === 0 && (
-        <p className='text-[11px] text-slate-400'>No states defined for this pipeline.</p>
+        <p className='text-[11px] text-slate-400' data-setting='field.lock_conditions.state_keys'>
+          No states defined for this pipeline.
+        </p>
       )}
     </div>
   )

@@ -75,60 +75,64 @@ export function PdfFieldConfig({
   return (
     <div className='mt-1.5 space-y-1'>
       <p className='text-[11px] font-medium text-slate-400'>Attach PDF to field</p>
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type='button'
-            className='flex w-full items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-nvr-cyan/50 dark:border-border dark:bg-card dark:text-slate-200'
-          >
-            <span>
-              {selected ? (
-                selected.field
-              ) : (
-                <span className='text-slate-400'>Select file field…</span>
-              )}
-            </span>
-            <ChevronDown className='h-3 w-3 text-slate-400' />
-          </button>
-        </PopoverTrigger>
-        <PopoverContent className='w-56 p-0' align='start'>
-          <Command>
-            <CommandInput placeholder='Search fields…' className='text-[12px]' />
-            <CommandList>
-              <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
-                {fileFields.length === 0 ? 'No file M2M fields found' : 'No match'}
-              </CommandEmpty>
-              {value && (
-                <CommandItem
-                  value='__clear__'
-                  onSelect={() => {
-                    onChange(null)
-                    setOpen(false)
-                  }}
-                  className='text-[11px] text-slate-400'
-                >
-                  Clear
-                </CommandItem>
-              )}
-              {fileFields.map((f) => (
-                <CommandItem
-                  key={f.field}
-                  value={f.field}
-                  onSelect={() => {
-                    onChange(f.field)
-                    setOpen(false)
-                  }}
-                  className='text-[11px]'
-                >
-                  {f.field}
-                  <span className='ml-auto text-[11px] text-slate-400 truncate'>{f.junction}</span>
-                </CommandItem>
-              ))}
-            </CommandList>
-          </Command>
-        </PopoverContent>
-      </Popover>
-      <div className='mt-2 space-y-1'>
+      <div data-setting='pdf_button.attach_to_field'>
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <button
+              type='button'
+              className='flex w-full items-center justify-between rounded border border-slate-200 bg-white px-2 py-1 text-[11px] text-slate-700 hover:border-nvr-cyan/50 dark:border-border dark:bg-card dark:text-slate-200'
+            >
+              <span>
+                {selected ? (
+                  selected.field
+                ) : (
+                  <span className='text-slate-400'>Select file field…</span>
+                )}
+              </span>
+              <ChevronDown className='h-3 w-3 text-slate-400' />
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className='w-56 p-0' align='start'>
+            <Command>
+              <CommandInput placeholder='Search fields…' className='text-[12px]' />
+              <CommandList>
+                <CommandEmpty className='py-2 text-center text-[11px] text-slate-400'>
+                  {fileFields.length === 0 ? 'No file M2M fields found' : 'No match'}
+                </CommandEmpty>
+                {value && (
+                  <CommandItem
+                    value='__clear__'
+                    onSelect={() => {
+                      onChange(null)
+                      setOpen(false)
+                    }}
+                    className='text-[11px] text-slate-400'
+                  >
+                    Clear
+                  </CommandItem>
+                )}
+                {fileFields.map((f) => (
+                  <CommandItem
+                    key={f.field}
+                    value={f.field}
+                    onSelect={() => {
+                      onChange(f.field)
+                      setOpen(false)
+                    }}
+                    className='text-[11px]'
+                  >
+                    {f.field}
+                    <span className='ml-auto text-[11px] text-slate-400 truncate'>
+                      {f.junction}
+                    </span>
+                  </CommandItem>
+                ))}
+              </CommandList>
+            </Command>
+          </PopoverContent>
+        </Popover>
+      </div>
+      <div className='mt-2 space-y-1' data-setting='pdf_button.filename_template'>
         <p className='text-[11px] font-medium text-slate-400'>Filename template</p>
         <input
           type='text'
