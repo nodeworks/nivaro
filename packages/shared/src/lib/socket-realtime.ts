@@ -19,7 +19,8 @@ import { forgetSettledReads } from './request-gate'
  * - Missed-event catch-up: events carry `_seq`; after a reconnect the adapter sends its cursor
  *   (`catchup {cursor}`), replays `catchup:events` into the same listeners, and turns a
  *   `catchup:full` (the journal no longer covers the gap) into the `nvr:catchup-full` window event
- *   lists and records already reload on.
+ *   lists and records already reload on. The cursor starts at the server's `catchup:cursor`
+ *   (sent at sign-in), and `status().resumed` says how each reconnect resumed (#2450).
  * - `access:changed` with rooms taken away → `nvr:access-changed`; `config:update` →
  *   `nvr:config-update`; `client:force-refresh` → `nvr:force-refresh` (the window events admin's
  *   socket raises, so shared banners and forms behave the same in every host).
@@ -107,7 +108,7 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
   let lastSeq = 0
   let everAuthed = false
   let catchupTimer: ReturnType<typeof setTimeout> | null = null
-  let status: RealtimeStatus = { state: 'live', transport: null, refreshed: null }
+  let status: RealtimeStatus = { state: 'live', transport: null, refreshed: null, resumed: null }
   const statusListeners = new Set<(s: RealtimeStatus) => void>()
   const windowOn = (k: SocketRealtimeWindowEvent) => opts.windowEvents?.[k] !== false
 
@@ -116,7 +117,8 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
     if (
       next.state === status.state &&
       next.transport === status.transport &&
-      next.refreshed === status.refreshed
+      next.refreshed === status.refreshed &&
+      next.resumed === status.resumed
     )
       return
     status = next
@@ -124,10 +126,10 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
   }
   const transportName = (): RealtimeStatus['transport'] =>
     (socket?.io?.engine?.transport?.name as RealtimeStatus['transport'] | undefined) ?? null
-  const caughtUp = (refreshed: string | null) => {
+  const caughtUp = (refreshed: string | null, resumed: NonNullable<RealtimeStatus['resumed']>) => {
     if (catchupTimer) clearTimeout(catchupTimer)
     catchupTimer = null
-    setStatus({ state: 'live', transport: transportName(), refreshed })
+    setStatus({ state: 'live', transport: transportName(), refreshed, resumed })
   }
   const dispatch = (name: string, detail: unknown) => {
     if (typeof window === 'undefined') return
@@ -164,12 +166,24 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
         const cursor = lastSeq
         setStatus({ transport: transportName() })
         if (catchupTimer) clearTimeout(catchupTimer)
-        catchupTimer = setTimeout(() => caughtUp(null), opts.catchupTimeoutMs ?? 8000)
+        catchupTimer = setTimeout(() => caughtUp(null, 'unverified'), opts.catchupTimeoutMs ?? 8000)
         s.emit('catchup', { cursor })
       } else {
-        setStatus({ state: 'live', transport: transportName(), refreshed: null })
+        // A reconnect with no cursor could not replay its gap (#2450: the live-query bridge
+        // reconciles); a first connection has nothing to catch up on.
+        setStatus({
+          state: 'live',
+          transport: transportName(),
+          refreshed: null,
+          resumed: everAuthed && status.state === 'reconnecting' ? 'unverified' : null
+        })
       }
       everAuthed = true
+    })
+    // #2450 — the journal position at sign-in, so a reconnect replays from it even when no
+    // event reached this socket yet.
+    s.on('catchup:cursor', (p: { seq?: number }) => {
+      if (lastSeq === 0 && typeof p?.seq === 'number' && p.seq > 0) lastSeq = p.seq
     })
     s.on('disconnect', () => {
       if (catchupTimer) clearTimeout(catchupTimer)
@@ -189,13 +203,14 @@ export function createSocketRealtime(opts: SocketRealtimeOptions): SocketRealtim
           // Into the same listeners, as if it had arrived live.
           for (const l of s.listeners?.(ev.event) ?? []) l({ ...ev.payload, _seq: ev.seq })
         }
-        caughtUp(null)
+        caughtUp(null, 'replayed')
       }
     )
     s.on('catchup:full', () => {
       if (windowOn('catchupFull')) dispatch(WINDOW_EVENT_NAMES.catchupFull, {})
       caughtUp(
-        'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.'
+        'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.',
+        'reloaded'
       )
     })
     s.on('access:changed', (p: { rooms_left?: string[] }) => {

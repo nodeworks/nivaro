@@ -75,14 +75,15 @@ import {
   focusPopoutOpener,
   HelpVideoRecordingProvider,
   IncidentBanner,
-  JobsTray,
   isRecordPopout,
+  JobsTray,
   NavigationContext,
   NivaroProvider,
   OfflineBanner,
   RealtimeContext,
   RealtimeStatusBanner,
-  RecordOutboxHost
+  RecordOutboxHost,
+  useLiveQueryBridge
 } from '@nivaro/shared'
 import { AskPanelHost } from '@/components/ask-panel-host'
 import { BugReporter } from '@/components/bug-reporter'
@@ -878,6 +879,7 @@ export function AppLayout() {
         <CommandPalette />
         <KeyboardShortcuts />
         <ForceRefreshBanner />
+        <LiveQueryBridge />
         <SystemBusy />
         <AutofillChips />
         <JobsTrayHost />
@@ -951,6 +953,13 @@ function DbOutageBanner() {
       it recovers.
     </div>
   )
+}
+
+/** #2450 — socket events refresh the queries that say what they read (`meta.live`). */
+function LiveQueryBridge() {
+  // ForceRefreshBanner below already refetches every query on nvr:catchup-full.
+  useLiveQueryBridge({ reconcileOnCatchupFull: false })
+  return null
 }
 
 function ForceRefreshBanner() {

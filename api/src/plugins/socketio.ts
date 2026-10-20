@@ -837,6 +837,15 @@ export const socketioPlugin = fp(async (app: FastifyInstance) => {
       else if (bind.kind === 'masq') socket.join(masqRoom(bind.token))
       void joinTenantAllRoom()
       socket.emit('auth:ok', { userId: user.id })
+      // #2450 — the journal position now, so the client's first reconnect can replay from it
+      // even when no journaled event reached this socket (a quiet tab had no cursor and missed
+      // the gap). The client adopts it only while it holds no cursor of its own.
+      void import('../services/event-journal.js')
+        .then(({ currentSeq }) => currentSeq())
+        .then((seq) => {
+          if (seq != null && seq > 0 && socket.connected) socket.emit('catchup:cursor', { seq })
+        })
+        .catch(() => {})
     }
 
     // Authenticate the socket via the user's static token, or a short-lived

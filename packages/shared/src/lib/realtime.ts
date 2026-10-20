@@ -53,6 +53,12 @@ export interface RealtimeStatus {
   transport: 'websocket' | 'polling' | 'sse' | null
   /** Set once after a reconnect whose catch-up had to reload: what was refreshed. */
   refreshed?: string | null
+  /**
+   * #2450 — how the last reconnect resumed: `replayed` (the catch-up replayed every missed
+   * event), `reloaded` (catchup:full — `nvr:catchup-full` was raised) or `unverified` (no
+   * cursor, or no answer in time). Absent = unknown; the live-query bridge reconciles then.
+   */
+  resumed?: 'replayed' | 'reloaded' | 'unverified' | null
 }
 
 export interface RealtimeAdapter {
