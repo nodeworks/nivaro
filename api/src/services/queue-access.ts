@@ -9,6 +9,23 @@ import {
 } from './user-scopes.js'
 
 /**
+ * Who may open a queue at all (owner, administrator, or a shared queue open
+ * to everyone or to the viewer's role). routes/queues.ts canReadQueue is this
+ * for a request; the cache warm asks it for the person it reads as.
+ */
+export function canUserReadQueue(
+  queue: { owner?: string | null; is_shared?: boolean | number | null; role_id?: string | null },
+  user: Pick<User, 'id' | 'role'>,
+  isAdmin: boolean
+): boolean {
+  if (isAdmin) return true
+  if (queue.owner === user.id) return true
+  if (!queue.is_shared) return false
+  const userRole = user.role ?? null
+  return queue.role_id === null || queue.role_id === userRole
+}
+
+/**
  * Row access on queue reads.
  *
  * A queue lists records of its source collections. The list used to check
@@ -64,7 +81,11 @@ export function applyQueueGate(q: Knex.QueryBuilder, gate: QueueGate | null, use
  * Narrow a query over the materialized cache (`nivaro_queue_items as qi`):
  * rows of a gated collection stay only when their record passes the gate.
  */
-export function applyQueueGatesToCache(qb: Knex.QueryBuilder, gates: QueueGate[], user: User): void {
+export function applyQueueGatesToCache(
+  qb: Knex.QueryBuilder,
+  gates: QueueGate[],
+  user: User
+): void {
   for (const gate of gates) {
     if (gate.deny) {
       void qb.whereNot('qi.collection', gate.collection)
