@@ -11,6 +11,7 @@
  */
 import type { Knex } from 'knex'
 import type {
+  CacheWarmFn,
   ChatCommandDef,
   ExtensionApp,
   ExtensionContext,
@@ -435,6 +436,7 @@ export interface TestContext extends ExtensionContext {
     readinessChecks: ReadinessCheck[]
     tasks: OpsTaskDef[]
     tuningObservers: TuningObserverDef[]
+    cacheWarmers: Array<{ name: string; fn: CacheWarmFn; opts?: { budgetMs?: number } }>
     seeds: ConfigSeedDef[]
     schemaSteps: SchemaStepDef[]
     /** ctx.helpVideos: declared pages, starter packages, extra screens per starter video. */
@@ -555,6 +557,7 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     readinessChecks: [],
     tasks: [],
     tuningObservers: [],
+    cacheWarmers: [],
     seeds: [],
     schemaSteps: [],
     helpVideos: { pages: [], starters: [], contexts: [] },
@@ -737,6 +740,9 @@ export function createTestContext(opts: TestContextOptions = {}): TestContext {
     readiness: { registerCheck: (c) => registered.readinessChecks.push(c) },
     tasks: { register: (d) => registered.tasks.push(d) },
     tuning: { registerObserver: (d) => registered.tuningObservers.push(d) },
+    cache: {
+      registerWarm: (name, fn, opts) => registered.cacheWarmers.push({ name, fn, opts })
+    },
     seeds: { register: (d) => registered.seeds.push(d) },
     schema: { step: (id, d) => registered.schemaSteps.push({ id, ...d }) },
     helpVideos: {

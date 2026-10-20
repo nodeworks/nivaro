@@ -353,6 +353,11 @@ export const extContext: DocSection = {
           'cron',
           '{ schedule, unschedule }',
           'Recurring jobs. Paused/resumed when extension toggled.'
+        ],
+        [
+          'cache',
+          '{ registerWarm(name, fn, { budgetMs? }) }',
+          'An expensive READ of your own (fill your Redis cache, run the query that warms the database), run by the cache warm after a boot and at 06:30 on weekdays, after the core queries, inside the same time budget. `fn({ signal, budgetMs })` gets its own timeout (default 60 s, never more than the run has left); on timeout the signal aborts and the warm moves on. Errors are logged, never thrown. Must not write. Not run in cloud mode. Id = `<extension>:<name>`.'
         ]
       ]
     },

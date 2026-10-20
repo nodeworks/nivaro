@@ -123,6 +123,16 @@ export interface ChatCommandDef {
   ): Promise<{ post?: string; reply?: string } | void> | { post?: string; reply?: string } | void
 }
 
+/** What a cache warmer is handed (ctx.cache.registerWarm). */
+export interface CacheWarmContext {
+  /** Aborts when this warmer's time is up. */
+  signal: AbortSignal
+  /** Milliseconds this warmer may take. */
+  budgetMs: number
+}
+
+export type CacheWarmFn = (ctx: CacheWarmContext) => Promise<unknown> | unknown
+
 export interface ExtensionContext {
   app: ExtensionApp
   database: Knex
@@ -260,6 +270,18 @@ export interface ExtensionContext {
   tasks: { register(def: OpsTaskDef): void }
   /** Database tuning observers (#996). */
   tuning: { registerObserver(def: TuningObserverDef): void }
+  /** Cache warm (#2445): an expensive READ of the extension's own, run by the
+   *  core warm after a boot (once per cluster per version) and at 06:30 on
+   *  weekdays, after the core queries, inside the same time budget and the
+   *  heavy-job slot, holding one heavy-read slot. Each warmer gets its own
+   *  timeout (`budgetMs`, default 60 s, never more than the run has left);
+   *  on timeout `signal` aborts and the run moves on. Errors are logged, never
+   *  thrown. A warmer must not write — fill your own Redis cache, run the read
+   *  that warms the database — and should pass `budgetMs` to its statements
+   *  (`ctx.sql.runLong(sql, { timeoutMs })`). Not run in cloud mode. */
+  cache: {
+    registerWarm(name: string, fn: CacheWarmFn, opts?: { budgetMs?: number }): void
+  }
   /** Checked-in rows of a configuration collection, applied by a task —
    *  never at boot — with a drift report as its dry run. */
   seeds: { register(def: ConfigSeedDef): void }

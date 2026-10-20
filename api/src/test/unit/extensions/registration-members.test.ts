@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { registrationMembers } from '../../../extensions/loader.js'
+import { clearCacheWarmers, listCacheWarmers } from '../../../services/cache-warmers.js'
 import {
   listTuningObservers,
   unregisterTuningObservers
@@ -71,5 +72,34 @@ describe('registrationMembers', () => {
         extensionId: 't'
       }
     )
+  })
+
+  it('registers cache warmers under <extension>:<name> and skips a malformed one', () => {
+    clearCacheWarmers()
+    const owned: string[] = []
+    const noted: string[] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const m = registrationMembers(
+      'efp',
+      { app: {} as never, logger: {} as never, database: {} as never },
+      {
+        note: (c) => noted.push(c),
+        own: (kind, label) => owned.push(`${kind}: ${label}`),
+        cronPrefix: 'ext:efp:'
+      }
+    )
+    m.cache.registerWarm('budget-summary', async () => {}, { budgetMs: 30_000 })
+    // Never a throw out of register(): logged and skipped.
+    expect(() => m.cache.registerWarm('bad name!', async () => {})).not.toThrow()
+    expect(() => m.cache.registerWarm('x', 'nope' as never)).not.toThrow()
+    expect(() => m.cache.registerWarm('y', async () => {}, { budgetMs: -1 })).not.toThrow()
+    expect(listCacheWarmers().map((w) => [w.id, w.budgetMs])).toEqual([
+      ['efp:budget-summary', 30_000]
+    ])
+    expect(owned).toEqual(['cache_warmers: efp:budget-summary'])
+    expect(noted.every((n) => n === 'cache')).toBe(true)
+    expect(warn).toHaveBeenCalledTimes(3)
+    warn.mockRestore()
+    clearCacheWarmers()
   })
 })

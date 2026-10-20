@@ -24,15 +24,33 @@
  * one the route builds for every unrestricted viewer (customQueryCacheKey).
  * Every reader checks the query's access BEFORE it reads the cache, so a key
  * filled for an admin-only query is only ever served to an administrator.
- * Restricted allowances are never warmed (their key carries scope values), and
- * widget-render keys are not filled — they key on bound params only; a widget
- * gains only the warm database.
+ * Restricted allowances and widget-render keys are NOT filled here (their keys
+ * carry scope values / bound params only): the viewer phase
+ * (cache-warm-viewers.ts) fills them AS the people who use them, one person per
+ * scope signature, after this phase and inside the same budget. Extension
+ * warmers (ctx.cache.registerWarm, cache-warmers.ts) run last, same budget.
+ * Both run on usage-ranked runs only, and never in cloud mode (cq: keys carry
+ * no tenant prefix there, and a boot run has no tenant context).
  *
  * The owner-load report (viewer-independent, uncached, a pure read) is run
  * once when it was used. Queue worklists are NOT warmed: fetchQueueItems can
  * promote materialization and record empty-queue explanations (writes).
  */
 import type { Redis } from 'ioredis'
+import {
+  CACHE_WARM_MAX_VIEWERS,
+  pickViewerTargets,
+  runViewerTargets,
+  scopeSignature,
+  type ViewerPlan,
+  type ViewerQueryDef,
+  type ViewerTarget,
+  type ViewerUsageRow,
+  type ViewerWarmSummary,
+  type WarmViewer,
+  type WarmWidgetDef
+} from './cache-warm-viewers.js'
+import { runCacheWarmers, type WarmerOutcome } from './cache-warmers.js'
 import { cronTicksEnabled } from './cron-ticks.js'
 import {
   customQueryCachedAt,
@@ -87,6 +105,7 @@ export interface WarmQueryDef {
   sql_text: string
   cache_ttl: number | null
   warm_daily?: boolean | number | null
+  scope_params?: string | null
 }
 
 export interface WarmParamSetRow {
@@ -192,6 +211,10 @@ export interface CacheWarmSummary {
   ms: number
   budgetSpent: boolean
   targets: number
+  /** Widget renders + scoped execute calls, warmed as their viewers. */
+  viewers?: ViewerWarmSummary
+  /** Extension warmers (ctx.cache.registerWarm). */
+  warmers?: WarmerOutcome[]
 }
 
 export interface CacheWarmDeps {
@@ -212,6 +235,18 @@ export interface CacheWarmDeps {
   now: () => number
 }
 
+/** The viewer phase's reads and runs (cache-warm-viewers.ts). */
+export interface ViewerPhaseDeps {
+  /** Per-person use of widget renders and execute calls; null when the log could not be read. */
+  loadUsage: (since: Date) => Promise<ViewerUsageRow[] | null>
+  loadWidgets: (ids: string[]) => Promise<WarmWidgetDef[]>
+  /** Active accounts only, with admin flag + scope signature. */
+  loadViewers: (ids: string[]) => Promise<WarmViewer[]>
+  loadWidgetParamSets: () => Promise<WarmParamSetRow[]>
+  plan: (t: ViewerTarget, query: ViewerQueryDef) => Promise<ViewerPlan>
+  gate: <T>(flightKey: string, fn: () => Promise<T>) => Promise<{ value: T; shared: boolean }>
+}
+
 export interface CacheWarmOptions {
   redis?: {
     get(key: string): Promise<string | null>
@@ -222,6 +257,241 @@ export interface CacheWarmOptions {
   only?: 'warm_daily'
   log?: (summary: CacheWarmSummary, line: string) => void
   deps?: Partial<CacheWarmDeps>
+  /** false = skip the viewer phase. */
+  viewers?: Partial<ViewerPhaseDeps> | false
+  /** false = skip extension warmers; or a gate around each one (tests). */
+  warmers?: false | { gate?: <T>(fn: () => Promise<T>) => Promise<T> }
+  /** Defaults to CLOUD_META_DB_URL being set. */
+  cloud?: boolean
+}
+
+function decodeSegment(seg: string): string {
+  try {
+    return decodeURIComponent(seg)
+  } catch {
+    return seg
+  }
+}
+
+interface ApiLogUsageRow {
+  path: string
+  user: string | null
+  n: number | string
+}
+
+/**
+ * Seven days of the request log for the warm's three surfaces, by path AND
+ * person — ONE range scan per run, shared by the slug ranking and the viewer
+ * phase (memoized for 5 minutes). Development instances excluded.
+ */
+const usageMemo = new Map<string, { at: number; p: Promise<ApiLogUsageRow[] | null> }>()
+function apiLogUsage(since: Date): Promise<ApiLogUsageRow[] | null> {
+  const k = since.toISOString().slice(0, 15)
+  const hit = usageMemo.get(k)
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.p
+  const p = (async () => {
+    try {
+      const { db } = await import('../db/index.js')
+      const { runLongSql } = await import('./run-long.js')
+      const { instanceScope } = await import('./api-log-instances.js')
+      // Laptops and probes share the database: their rows are not usage.
+      const scope = await instanceScope({})
+      // A big range scan in the morning — its own timeout, never the 15 s default.
+      const qb = db('nivaro_api_logs')
+        // A plain ISO literal: knex inlines a Date in local time, the log is UTC.
+        .where('created_at', '>=', since.toISOString().slice(0, 19))
+        .where((w) =>
+          w
+            .where('path', 'like', '/api/custom-queries/%/execute')
+            .orWhere('path', 'like', '/api/widgets-internal/%/render')
+            .orWhere('path', '/api/reports/owner-load')
+        )
+      const sql = scope
+        .apply(qb)
+        .groupBy('path', 'user')
+        .select('path', 'user')
+        .count({ n: '*' })
+        .toQuery()
+      return await runLongSql<ApiLogUsageRow>(sql, { timeoutMs: 60_000 })
+    } catch {
+      return null
+    }
+  })()
+  usageMemo.clear()
+  usageMemo.set(k, { at: Date.now(), p })
+  return p
+}
+
+/** Per-person usage rows from the request log (anonymous rows dropped). */
+export function viewerUsageFromLog(rows: ApiLogUsageRow[]): ViewerUsageRow[] {
+  const out: ViewerUsageRow[] = []
+  for (const r of rows) {
+    if (!r.user) continue
+    const n = Number(r.n) || 0
+    const cq = /^\/api\/custom-queries\/([^/]+)\/execute$/.exec(r.path)
+    if (cq) {
+      out.push({ kind: 'query', target: decodeSegment(cq[1]), user: String(r.user), n })
+      continue
+    }
+    const w = /^\/api\/widgets-internal\/(\d+)\/render$/.exec(r.path)
+    if (w) out.push({ kind: 'widget', target: w[1], user: String(r.user), n })
+  }
+  return out
+}
+
+const defaultViewerDeps: ViewerPhaseDeps = {
+  async loadUsage(since) {
+    const rows = await apiLogUsage(since)
+    return rows ? viewerUsageFromLog(rows) : null
+  },
+  async loadWidgets(ids) {
+    if (!ids.length) return []
+    try {
+      const { db } = await import('../db/index.js')
+      return (await db('nivaro_widgets')
+        .whereIn('id', ids.slice(0, 500).map(Number))
+        .select('id', 'widget_type', 'config', 'is_active')) as WarmWidgetDef[]
+    } catch {
+      return []
+    }
+  },
+  async loadViewers(ids) {
+    if (!ids.length) return []
+    try {
+      const { db } = await import('../db/index.js')
+      const { selectInChunks } = await import('./db-batch.js')
+      const users = await selectInChunks(
+        ids,
+        500,
+        (chunk) =>
+          db('nivaro_users')
+            .whereIn('id', chunk)
+            .where({ status: 'active' })
+            .select('id', 'role') as Promise<Array<{ id: string; role: string | null }>>
+      )
+      const roleIds = [...new Set(users.map((u) => u.role).filter((r): r is string => !!r))]
+      const roles = roleIds.length
+        ? ((await db('nivaro_roles').whereIn('id', roleIds).select('id', 'admin_access')) as Array<{
+            id: string
+            admin_access: boolean | number | null
+          }>)
+        : []
+      const adminRole = new Set(
+        roles.filter((r) => !!r.admin_access).map((r) => String(r.id).toLowerCase())
+      )
+      const scopeRows = await selectInChunks(
+        users.map((u) => u.id),
+        500,
+        (chunk) =>
+          db('nivaro_user_scopes')
+            .whereIn('user', chunk)
+            .select('user', 'dimension', 'mode', 'values') as Promise<
+            Array<{ user: string; dimension: string; mode: string; values: string | null }>
+          >
+      )
+      const byUser = new Map<
+        string,
+        Array<{ dimension: string; mode: string; values: unknown[] }>
+      >()
+      for (const r of scopeRows) {
+        const k = String(r.user).toLowerCase()
+        const list = byUser.get(k) ?? []
+        list.push({
+          dimension: String(r.dimension),
+          mode: String(r.mode),
+          values: parseJson<unknown[]>(r.values) ?? []
+        })
+        byUser.set(k, list)
+      }
+      return users.map((u) => {
+        const isAdmin = !!u.role && adminRole.has(String(u.role).toLowerCase())
+        return {
+          id: String(u.id),
+          isAdmin,
+          signature: scopeSignature(isAdmin, byUser.get(String(u.id).toLowerCase()) ?? [])
+        }
+      })
+    } catch {
+      return []
+    }
+  },
+  async loadWidgetParamSets() {
+    try {
+      const { db } = await import('../db/index.js')
+      return (await db('nivaro_tuning_param_sets')
+        .where({ target_kind: 'widget' })
+        .select('target', 'params', 'seen_count', 'last_seen')) as WarmParamSetRow[]
+    } catch {
+      return []
+    }
+  },
+  async plan(t, query) {
+    if (t.surface === 'widget') {
+      const { planWidgetQuery, runWidgetSql, widgetFlightKey } = await import('./widget-query.js')
+      const p = await planWidgetQuery(query, t.params, t.as.id, t.as.isAdmin)
+      return {
+        cacheKey: p.cacheKey,
+        flightKey: widgetFlightKey(p.cacheKey),
+        ttl: p.cacheTtl,
+        run: (timeoutMs) => runWidgetSql(p.resolvedSql, timeoutMs)
+      }
+    }
+    const { buildFinalParams, execCustomQuerySql } = await import('./custom-query-exec.js')
+    const { applyScopeParams } = await import('./custom-query-scope.js')
+    const finalParams = buildFinalParams(
+      (parseJson<unknown[]>(query.params) ?? []) as never,
+      t.params
+    )
+    await applyScopeParams(query.scope_params ?? null, finalParams, t.as.id, t.as.isAdmin)
+    const key = customQueryCacheKey(query.slug, finalParams)
+    return {
+      cacheKey: key,
+      // The execute route's single-flight key is the cache key itself.
+      flightKey: key,
+      ttl: Number(query.cache_ttl) || 0,
+      run: (timeoutMs) => execCustomQuerySql(query.sql_text, finalParams, { timeoutMs })
+    }
+  },
+  async gate(flightKey, fn) {
+    const { sharedGatedRead } = await import('./read-gate.js')
+    return sharedGatedRead(flightKey, 'cache-warm', fn, { label: 'cache-warm' })
+  }
+}
+
+/** What the viewer phase would run. Never throws: an unreadable source means nothing to warm. */
+async function selectViewerTargets(
+  vdeps: ViewerPhaseDeps,
+  queries: WarmQueryDef[],
+  paramSets: WarmParamSetRow[],
+  now: number
+): Promise<ViewerTarget[]> {
+  const usage = await vdeps.loadUsage(new Date(now - USAGE_DAYS * 86_400_000)).catch(() => null)
+  if (!usage?.length) return []
+  // Most-used people first, capped.
+  const perUser = new Map<string, number>()
+  for (const u of usage) perUser.set(u.user, (perUser.get(u.user) ?? 0) + u.n)
+  const userIds = [...perUser]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, CACHE_WARM_MAX_VIEWERS)
+    .map(([id]) => id)
+  const widgetIds = [...new Set(usage.filter((u) => u.kind === 'widget').map((u) => u.target))]
+  const [viewers, widgets, widgetParamSets] = await Promise.all([
+    vdeps.loadViewers(userIds).catch(() => [] as WarmViewer[]),
+    vdeps.loadWidgets(widgetIds).catch(() => [] as WarmWidgetDef[]),
+    vdeps.loadWidgetParamSets().catch(() => [] as WarmParamSetRow[])
+  ])
+  return pickViewerTargets({
+    queries: queries as ViewerQueryDef[],
+    widgets,
+    usage,
+    viewers,
+    widgetParamSets,
+    queryParamSets: paramSets
+  })
+}
+
+function inCloudMode(opt?: boolean): boolean {
+  return opt ?? !!process.env.CLOUD_META_DB_URL
 }
 
 const defaultDeps: CacheWarmDeps = {
@@ -237,31 +507,15 @@ const defaultDeps: CacheWarmDeps = {
         'params',
         'sql_text',
         'cache_ttl',
-        'warm_daily'
+        'warm_daily',
+        'scope_params'
       )) as WarmQueryDef[]
   },
   async loadHits(since, queries) {
     try {
       const { db } = await import('../db/index.js')
-      const { runLongSql } = await import('./run-long.js')
-      const { instanceScope } = await import('./api-log-instances.js')
-      // Laptops and probes share the database: their rows are not usage.
-      const scope = await instanceScope({})
-      // Seven days of the request log is a big range scan in the morning — its
-      // own timeout, never the 15 s pool default.
-      const qb = db('nivaro_api_logs')
-        // A plain ISO literal: knex inlines a Date in local time, the log is UTC.
-        .where('created_at', '>=', since.toISOString().slice(0, 19))
-        .where((w) =>
-          w
-            .where('path', 'like', '/api/custom-queries/%/execute')
-            .orWhere('path', 'like', '/api/widgets-internal/%/render')
-            .orWhere('path', '/api/reports/owner-load')
-        )
-      const sql = scope.apply(qb).groupBy('path').select('path').count({ n: '*' }).toQuery()
-      const rows = await runLongSql<{ path: string; n: number | string }>(sql, {
-        timeoutMs: 60_000
-      })
+      const rows = await apiLogUsage(since)
+      if (!rows) return null
       const hits: SlugHits = new Map()
       const widgetHits = new Map<number, number>()
       let ownerLoad = 0
@@ -269,12 +523,7 @@ const defaultDeps: CacheWarmDeps = {
         const n = Number(r.n) || 0
         const cq = /^\/api\/custom-queries\/([^/]+)\/execute$/.exec(r.path)
         if (cq) {
-          let slug = cq[1]
-          try {
-            slug = decodeURIComponent(slug)
-          } catch {
-            /* keep the raw segment */
-          }
+          const slug = decodeSegment(cq[1])
           hits.set(slug, (hits.get(slug) ?? 0) + n)
           continue
         }
@@ -282,8 +531,8 @@ const defaultDeps: CacheWarmDeps = {
         if (w) widgetHits.set(Number(w[1]), (widgetHits.get(Number(w[1])) ?? 0) + n)
         else if (r.path === '/api/reports/owner-load') ownerLoad += n
       }
-      // A custom-query widget render counts toward its query's rank: its key is
-      // not filled (bound params only), but the same SQL warms what it reads.
+      // A custom-query widget render counts toward its query's rank: the same
+      // SQL warms what it reads (the viewer phase fills the widget's own key).
       if (widgetHits.size) {
         const widgets = (await db('nivaro_widgets')
           .whereIn('id', [...widgetHits.keys()].slice(0, 500))
@@ -346,6 +595,7 @@ async function selectTargets(
   queries: WarmQueryDef[]
   targets: WarmTarget[]
   ownerLoad: boolean
+  paramSets: WarmParamSetRow[]
 }> {
   const queries = await deps.loadQueries()
   const since = new Date(now - USAGE_DAYS * 86_400_000)
@@ -357,22 +607,76 @@ async function selectTargets(
     paramSets,
     only
   })
-  return { queries, targets, ownerLoad: !only && (usage?.ownerLoad ?? 0) > 0 }
+  return { queries, targets, ownerLoad: !only && (usage?.ownerLoad ?? 0) > 0, paramSets }
+}
+
+export interface CacheWarmPlan {
+  slugs: Array<{ slug: string; param_sets: number }>
+  owner_load: boolean
+  /** Viewer phase: per widget / scoped query, the signatures and runs it would compute. */
+  viewers?: Array<{
+    surface: 'widget' | 'query'
+    target: string
+    slug: string
+    signatures: number
+    people: number
+    runs: number
+  }>
+  warmers?: string[]
 }
 
 /** What a run would warm (the cron's dry run): slugs and how many param sets each. */
 export async function planCacheWarm(
-  opts: Pick<CacheWarmOptions, 'only' | 'deps'> = {}
-): Promise<{ slugs: Array<{ slug: string; param_sets: number }>; owner_load: boolean }> {
+  opts: Pick<CacheWarmOptions, 'only' | 'deps' | 'viewers' | 'cloud'> = {}
+): Promise<CacheWarmPlan> {
   const deps = { ...defaultDeps, ...opts.deps }
-  const { targets, ownerLoad } = await selectTargets(deps, opts.only, deps.now())
+  const now = deps.now()
+  const { queries, targets, ownerLoad, paramSets } = await selectTargets(deps, opts.only, now)
   const bySlug = new Map<string, number>()
   for (const t of targets)
     bySlug.set(t.slug, (bySlug.get(t.slug) ?? 0) + (t.kind === 'param-set' ? 1 : 0))
-  return {
+  const plan: CacheWarmPlan = {
     slugs: [...bySlug].map(([slug, param_sets]) => ({ slug, param_sets })),
     owner_load: ownerLoad
   }
+  if (opts.only || inCloudMode(opts.cloud)) return plan
+  if (opts.viewers !== false) {
+    const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
+    const vt = await selectViewerTargets(vdeps, queries, paramSets, now)
+    const agg = new Map<
+      string,
+      {
+        surface: 'widget' | 'query'
+        target: string
+        slug: string
+        sigs: Set<string>
+        people: number
+        runs: number
+      }
+    >()
+    for (const t of vt) {
+      const target = t.widgetId ?? t.slug
+      const k = `${t.surface}|${target}`
+      const a = agg.get(k) ?? {
+        surface: t.surface,
+        target,
+        slug: t.slug,
+        sigs: new Set(),
+        people: 0,
+        runs: 0
+      }
+      if (!a.sigs.has(t.as.signature)) {
+        a.sigs.add(t.as.signature)
+        a.people += t.members
+      }
+      a.runs++
+      agg.set(k, a)
+    }
+    plan.viewers = [...agg.values()].map(({ sigs, ...a }) => ({ ...a, signatures: sigs.size }))
+  }
+  const { listCacheWarmers } = await import('./cache-warmers.js')
+  plan.warmers = listCacheWarmers().map((w) => w.id)
+  return plan
 }
 
 /** Run the warm. Never throws for one query's failure; the summary counts it. */
@@ -394,7 +698,7 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
     targets: 0
   }
 
-  const { queries, targets, ownerLoad } = await selectTargets(deps, opts.only, started)
+  const { queries, targets, ownerLoad, paramSets } = await selectTargets(deps, opts.only, started)
   const bySlug = new Map(queries.map((q) => [q.slug, q]))
   summary.targets = targets.length
 
@@ -478,10 +782,53 @@ export async function runCacheWarm(opts: CacheWarmOptions = {}): Promise<CacheWa
     }
   }
 
+  // Usage-ranked runs only: the warm_daily list is the operator's, nothing else.
+  // Never in cloud mode: a boot/cron run has no tenant context there, and cq:
+  // keys carry no tenant prefix — a warmed entry could reach another tenant.
+  const cloud = inCloudMode(opts.cloud)
+  if (!daily && !cloud && opts.viewers !== false) {
+    const vdeps = { ...defaultViewerDeps, ...(opts.viewers || {}) }
+    try {
+      const vt = await selectViewerTargets(vdeps, queries, paramSets, deps.now())
+      summary.viewers = await runViewerTargets(vt, queries as ViewerQueryDef[], {
+        deadline,
+        deps: { plan: vdeps.plan, gate: vdeps.gate, now: deps.now },
+        redis: opts.redis,
+        seenKeys,
+        concurrency: opts.concurrency,
+        freshMs: CACHE_WARM_FRESH_MS,
+        queryTimeoutMs: CACHE_WARM_QUERY_TIMEOUT_MS
+      })
+      if (summary.viewers.budgetSpent) summary.budgetSpent = true
+    } catch {
+      /* the viewer phase never fails the warm */
+    }
+  }
+  if (!daily && !cloud && opts.warmers !== false) {
+    const gate =
+      opts.warmers?.gate ??
+      (async <T>(fn: () => Promise<T>) => {
+        const { withReadGate } = await import('./read-gate.js')
+        return withReadGate('cache-warm', fn, { label: 'cache-warm:extension' })
+      })
+    summary.warmers = await runCacheWarmers({ deadline, now: deps.now, gate })
+    if (summary.warmers.some((w) => w.status === 'skipped')) summary.budgetSpent = true
+  }
+
   summary.ms = deps.now() - started
+  const v = summary.viewers
+  const w = summary.warmers ?? []
+  const extra = [
+    v
+      ? `; viewers: ${v.warmed} warmed (${v.cached} cached, ${v.joined} joined) for ${v.signatures} scope signature(s), ${v.skipped} skipped, ${v.failed} failed of ${v.targets}`
+      : '',
+    w.length
+      ? `; extension warmers: ${w.filter((x) => x.status === 'ok').length} ok, ${w.filter((x) => x.status === 'failed').length} failed, ${w.filter((x) => x.status === 'timeout').length} timed out, ${w.filter((x) => x.status === 'skipped').length} skipped`
+      : ''
+  ].join('')
   opts.log?.(
     summary,
-    `cache warm${daily ? ' (warm_daily)' : ''}: ${summary.warmed} warmed (${summary.cached} cached), ${summary.skipped} skipped, ${summary.failed} failed of ${summary.targets} in ${summary.ms}ms${summary.budgetSpent ? ' — budget spent' : ''}`
+    `cache warm${daily ? ' (warm_daily)' : ''}: ${summary.warmed} warmed (${summary.cached} cached), ${summary.skipped} skipped, ${summary.failed} failed of ${summary.targets}${extra} in ${summary.ms}ms${summary.budgetSpent ? ' — budget spent' : ''}`
   )
   return summary
 }
