@@ -44,6 +44,9 @@ export interface DropHint {
   body: boolean
 }
 
+/** The two extra forms of a table layout: zones with no group row, fields only. */
+export const TABLE_FORM_ZONES: readonly string[] = ['__apply_values__', '__create_with_defaults__']
+
 export function dndRole(bundle: LayoutBundle, t: DesignTarget): DndRole | null {
   switch (t.kind) {
     case 'field':
@@ -56,6 +59,8 @@ export function dndRole(bundle: LayoutBundle, t: DesignTarget): DndRole | null {
       return { kind: 'header' }
     case 'group': {
       if (t.key === UNGROUPED_KEY) return { kind: 'group', key: t.key, parent: null, body: true }
+      if (TABLE_FORM_ZONES.includes(t.key))
+        return { kind: 'group', key: t.key, parent: null, body: true }
       const g = bundle.groups.find((x) => x.key === t.key)
       if (!g) return null
       return { kind: 'group', key: g.key, parent: g.parent_key, body: g.type !== 'container' }

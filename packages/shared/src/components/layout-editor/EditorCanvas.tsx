@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import type { ComponentProps, ReactNode } from 'react'
 import type { LayoutBundle, LayoutOp } from '../../lib/layout-ops'
 import { ItemEditForm } from '../ItemEditForm'
 import type { ActiveLayoutData } from '../item-edit/types'
@@ -6,6 +6,7 @@ import { RecordReadView } from '../RecordReadView'
 import { PdfCanvas } from './canvases/PdfCanvas'
 import { TableColumnsCanvas } from './canvases/TableColumnsCanvas'
 import { type LayoutDesign, LayoutDesignContext } from './design-context'
+import { useOverviewFields } from './overview/overview-api'
 
 // The centre of the editor: the layout drawn by the renderer its type really
 // uses (spec §7.7) — the record form for forms and addendums, the read view
@@ -26,6 +27,11 @@ export function canvasRenderer(layoutType: string): CanvasRenderer {
     default:
       return 'item-edit-form'
   }
+}
+
+function TableWithFields(props: ComponentProps<typeof TableColumnsCanvas>) {
+  const { data: fields = [] } = useOverviewFields(props.collection)
+  return <TableColumnsCanvas {...props} fields={fields} />
 }
 
 export function EditorCanvas({
@@ -66,7 +72,7 @@ export function EditorCanvas({
   else
     body = (
       <LayoutDesignContext.Provider value={design}>
-        <TableColumnsCanvas bundle={bundle} apply={apply} collection={collection} />
+        <TableWithFields bundle={bundle} apply={apply} collection={collection} />
         {onOpenClassic && (
           <button
             type='button'
