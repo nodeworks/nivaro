@@ -240,6 +240,22 @@ export async function buildServer() {
     // Readiness results are shared by every replica (and refreshed by one).
     const { setReadinessRedis } = await import('./services/readiness.js')
     setReadinessRedis(app.redis)
+    // Compiled permission cache (#2442, PERMISSION_CACHE=on): access versions live in Redis,
+    // and every pool that writes moves them on an access-table write — whether or not this
+    // process has the cache on, so a partly enabled fleet stays correct.
+    {
+      const { _backgroundDb, _staticDb } = await import('./db/index.js')
+      const { attachPermissionCacheSeam, setPermissionCacheRedis } = await import(
+        './services/permission-cache.js'
+      )
+      setPermissionCacheRedis(app.redis)
+      for (const k of [_staticDb, _backgroundDb]) {
+        attachPermissionCacheSeam(
+          (k as unknown as { client?: Parameters<typeof attachPermissionCacheSeam>[0] } | null)
+            ?.client
+        )
+      }
+    }
     // Idempotency keys: one store hook for the whole app (no-op without a claim).
     const { registerIdempotencyStore } = await import('./services/idempotency.js')
     registerIdempotencyStore(app)

@@ -20,6 +20,7 @@ import { authenticate, requireAdmin, requireAuth } from '../middleware/authentic
 import { INTERNAL_DISPATCH_HEADER, internalDispatchTokens } from '../plugins/api-logger.js'
 import { logActivity } from '../services/activity.js'
 import { cardLogoVersion, parseCardLogo } from '../services/help-video-card-logo.js'
+import { bumpUserAccessVersion } from '../services/permission-cache.js'
 import { recordLogin } from '../services/security.js'
 import {
   bindFromRequest,
@@ -840,6 +841,7 @@ export async function authRoutes(app: FastifyInstance) {
       JSON.stringify({ user_id: target.id, admin_id: req.user!.id })
     )
     void recordLogin(app, String(target.id), 'masquerade', req)
+    bumpUserAccessVersion(String(target.id))
     await logActivity({
       action: 'masquerade-start',
       user: req.user!.id,
@@ -868,6 +870,7 @@ export async function authRoutes(app: FastifyInstance) {
       return reply.code(400).send({ error: 'Not a masquerade session' })
     }
     await app.redis.del(`masq:${token}`)
+    bumpUserAccessVersion(String(req.user!.id))
     // #1719 — the View-as tab's sockets end with the masquerade, on every replica.
     endMasqueradeSockets(token)
     await logActivity({

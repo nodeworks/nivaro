@@ -5,6 +5,7 @@ import { ACCESS_PREFIX } from '../lib/oauth.js'
 import { touchMasqueradeMarker } from '../services/masquerade-marker.js'
 import { mcpOAuthEnabled, oauthAudienceRefusal } from '../services/mcp-config.js'
 import { resolveAccessToken } from '../services/oauth-store.js'
+import { notePrincipalKind } from '../services/permission-cache.js'
 import { scopeAllows, scopesAreOpen } from '../services/permissions.js'
 import { setTraceUser, span } from '../services/request-trace.js'
 import { callerBreakerCheck } from '../services/traffic-breaker.js'
@@ -339,6 +340,17 @@ export function checkApiKeyScope(req: FastifyRequest, action: string, collection
 
 // ─── Main authenticate middleware ─────────────────────────────────────────────
 
+/** Sign-in kind + the credential behind it (key, issuing admin, connected app). */
+function principalKind(req: FastifyRequest): string {
+  return [
+    req.authMethod ?? '-',
+    req.apiKeyId ?? req.apiKeySimulatedId ?? '',
+    req.masqueradeAdminId ?? '',
+    req.oauthClientId ?? '',
+    req.oauthGrantId ?? ''
+  ].join(':')
+}
+
 export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
   // Timed as its own phase (Traffic Map latency split, #1151); a pass-through outside a request.
   return span('auth', () => authenticateRequest(req, reply))
@@ -346,6 +358,8 @@ export async function authenticate(req: FastifyRequest, reply: FastifyReply) {
 
 async function authenticateRequest(req: FastifyRequest, reply: FastifyReply) {
   await authenticateIdentity(req, reply)
+  // The compiled permission cache keys every entry by how the request signed in.
+  if (req.user) notePrincipalKind(req.user, principalKind(req))
   // Traffic Map circuit breaker (#1157): a caller an admin paused or limited during an incident.
   // No breaker set = a size check; the verdict is kept on the request (authenticate can run twice).
   try {

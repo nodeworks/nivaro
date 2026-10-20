@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { cachedAccess, onPermissionCacheReset } from './permission-cache.js'
 import { timeAccess, timeAccessSync } from './request-trace.js'
 
 /**
@@ -586,6 +587,37 @@ export async function isAdminRole(roleId: string | null | undefined): Promise<bo
  * deny=false → no scoping applies. Called from items.ts on every read.
  */
 export async function getUserScopeEnforcement(
+  user: User,
+  collection: string
+): Promise<ScopeEnforcement> {
+  return cachedAccess(
+    user,
+    'scope',
+    collection,
+    () => buildUserScopeEnforcement(user, collection),
+    cloneEnforcement
+  )
+}
+
+function cloneEnforcement(v: ScopeEnforcement): ScopeEnforcement {
+  return structuredClone(v)
+}
+
+// The compiled permission cache (permission-cache.ts) is built from the
+// caches above; when another process moves an access version, they are
+// dropped too so a refill never reads a copy older than the move.
+onPermissionCacheReset((userId) => {
+  if (userId) {
+    bustUserScopeCache(userId)
+    return
+  }
+  bustUserScopeCache()
+  bustScopeDimensionCache()
+  bustScopePathCache()
+  roleAdminCache.clear()
+})
+
+async function buildUserScopeEnforcement(
   user: User,
   collection: string
 ): Promise<ScopeEnforcement> {
