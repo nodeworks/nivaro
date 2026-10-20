@@ -58,9 +58,13 @@ export default defineConfig({
     emptyOutDir: !process.env.VITE_WATCH,
     watch: process.env.VITE_WATCH ? { chokidar: { usePolling: true, interval: 300 } } : undefined,
     lib: {
-      entry: resolve(__dirname, 'src/index.ts'),
-      formats: ['es'],
-      fileName: 'index'
+      // A second entry for the layout editor (`@nivaro/react/layout-editor`):
+      // hosts import() it for admins only, so it stays out of the barrel.
+      entry: {
+        index: resolve(__dirname, 'src/index.ts'),
+        'layout-editor': resolve(__dirname, 'src/layout-editor.ts')
+      },
+      formats: ['es']
     },
     rollupOptions: {
       // Externalize all npm packages — only bundle @nivaro/shared source

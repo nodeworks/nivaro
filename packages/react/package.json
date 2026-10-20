@@ -11,6 +11,10 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./layout-editor": {
+      "import": "./dist/layout-editor.js",
+      "types": "./dist/layout-editor.d.ts"
+    },
     "./tailwind-preset": "./tailwind-preset.cjs",
     "./styles.css": "./styles.css",
     "./full.css": "./dist/full.css"
