@@ -1463,21 +1463,21 @@ export function RecordReadView({
         className='min-w-0 rounded-xl border border-slate-200 bg-white dark:border-slate-700/60 dark:bg-slate-900/40'
       >
         <h3
-          className={`group/rs flex items-center justify-between gap-2 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
+          className={`group/rs relative flex items-center justify-between gap-2 px-5 py-2.5 text-[11px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 ${
             isOpen(g) ? 'border-b border-slate-100 dark:border-slate-800' : ''
           }`}
         >
+          {/* A collapsible heading reads label · edit · chevron: the chevron stays on the
+              card's right edge like every other section's, and the toggle's hit area
+              (after:inset-0) still covers the whole heading, chevron included. */}
           {g.is_collapsed ? (
             <button
               type='button'
               onClick={() => toggleOpen(g.key)}
               aria-expanded={isOpen(g)}
-              className='flex min-w-0 flex-1 items-center justify-between text-left uppercase hover:text-slate-700 dark:hover:text-slate-200'
+              className='min-w-0 flex-1 text-left uppercase after:absolute after:inset-0 group-hover/rs:text-slate-700 dark:group-hover/rs:text-slate-200'
             >
-              <span>{g.label}</span>
-              <ChevronDown
-                className={`h-3.5 w-3.5 transition-transform ${isOpen(g) ? '' : '-rotate-90'}`}
-              />
+              {g.label}
             </button>
           ) : (
             <span className='min-w-0 flex-1'>{g.label}</span>
@@ -1489,10 +1489,16 @@ export function RecordReadView({
               onClick={() => onEditSection(g.key, scalars[0]?.field ?? grids[0]?.field ?? null)}
               title={`Edit ${g.label}`}
               aria-label={`Edit ${g.label}`}
-              className='-my-1 rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-100 hover:text-slate-700 focus-visible:opacity-100 group-hover/rs:opacity-100 dark:hover:bg-white/5 dark:hover:text-slate-200 motion-reduce:transition-none'
+              className='relative -my-1 rounded p-1 text-slate-400 opacity-0 transition-opacity hover:bg-slate-100 hover:text-slate-700 focus-visible:opacity-100 group-hover/rs:opacity-100 dark:hover:bg-white/5 dark:hover:text-slate-200 motion-reduce:transition-none'
             >
               <Pencil className='h-3 w-3' />
             </button>
+          )}
+          {g.is_collapsed && (
+            <ChevronDown
+              aria-hidden='true'
+              className={`pointer-events-none h-3.5 w-3.5 shrink-0 transition-transform group-hover/rs:text-slate-700 dark:group-hover/rs:text-slate-200 ${isOpen(g) ? '' : '-rotate-90'}`}
+            />
           )}
         </h3>
         {/* The body stays MOUNTED while collapsed (hidden, not unrendered): a
