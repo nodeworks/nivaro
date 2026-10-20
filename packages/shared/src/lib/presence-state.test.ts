@@ -43,6 +43,31 @@ describe('presencePlaceHref', () => {
   it('has no link without a path', () => {
     expect(presencePlaceHref(null, null, ADMIN, recordUrl, ADMIN)).toBeNull()
   })
+
+  it('never links a path the client made up', () => {
+    for (const bad of [
+      'javascript:alert(1)',
+      '//evil.test/x',
+      '/\\evil.test',
+      'https://evil.test/x',
+      '/ javascript:alert(1)'
+    ]) {
+      expect(presencePlaceHref(bad, null, ADMIN, recordUrl, PORTAL)).toBeNull()
+      expect(presencePlaceHref(bad, 'API', ADMIN, recordUrl, PORTAL)).toBeNull()
+    }
+    // a host record route that points off-site is refused too
+    const offsite = () => 'https://evil.test/r'
+    expect(presencePlaceHref('/records/workflows/42', null, ADMIN, offsite, PORTAL)).toBeNull()
+  })
+
+  it('encodes the record id it hands the host route', () => {
+    expect(
+      presencePlaceHref('/records/workflows/a%2Fb c', null, ADMIN, recordUrl, PORTAL)
+    ).toBeNull()
+    expect(presencePlaceHref('/records/workflows/a&b', null, ADMIN, recordUrl, PORTAL)).toBe(
+      '/r/workflows/a%26b'
+    )
+  })
 })
 
 describe('fullHref', () => {

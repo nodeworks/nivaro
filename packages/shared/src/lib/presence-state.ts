@@ -47,22 +47,42 @@ export function presencePlaceHref(
   recordUrl: ((collection: string, id: string) => string | null) | undefined,
   viewerOrigin: string | null
 ): string | null {
-  if (!path) return null
+  // current_path is written by the person's own client: only a plain same-site path may become
+  // a link (never `javascript:`, a protocol-relative `//host`, or a backslash browsers read as one)
+  if (!path || !path.startsWith('/') || path.startsWith('//') || /[\\\s]/.test(path)) return null
   const clean = path.split('#')[0]
   const rec = /^\/(?:records|collections)\/([A-Za-z0-9_]+)\/([^/?#]+)/.exec(clean)
-  if (rec && rec[2] !== 'new' && recordUrl) {
-    const url = recordUrl(rec[1], rec[2])
-    if (url) return url
-  }
+  let href: string | null = null
+  if (rec && rec[2] !== 'new' && recordUrl) href = recordUrl(rec[1], encodeURIComponent(rec[2]))
   const base = adminUrl?.replace(/\/$/, '') ?? ''
-  let onAdminHost = false
+  let adminOrigin: string | null = null
   try {
-    onAdminHost = !!base && !!viewerOrigin && new URL(base, viewerOrigin).origin === viewerOrigin
+    adminOrigin = base && viewerOrigin ? new URL(base, viewerOrigin).origin : null
   } catch {
-    onAdminHost = false
+    adminOrigin = null
   }
-  if (app && ADMIN_APPS.has(app)) return onAdminHost ? clean : base ? `${base}${clean}` : null
-  return onAdminHost ? null : clean
+  const onAdminHost = !!adminOrigin && adminOrigin === viewerOrigin
+  if (!href) {
+    if (app && ADMIN_APPS.has(app)) href = onAdminHost ? clean : base ? `${base}${clean}` : null
+    else href = onAdminHost ? null : clean
+  }
+  return safeHref(href, viewerOrigin, adminOrigin)
+}
+
+/** A link only when it resolves to http(s) on the viewer's own origin or the admin's. */
+function safeHref(
+  href: string | null,
+  viewerOrigin: string | null,
+  adminOrigin: string | null
+): string | null {
+  if (!href || !viewerOrigin) return null
+  try {
+    const u = new URL(href, viewerOrigin)
+    if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
+    return u.origin === viewerOrigin || u.origin === adminOrigin ? href : null
+  } catch {
+    return null
+  }
 }
 
 /** The full address a link goes to, for its tooltip. */
