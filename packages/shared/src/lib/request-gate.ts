@@ -354,7 +354,7 @@ const SETTLED_READ_PATHS =
  * only costs a re-read.
  */
 const NON_CONFIG_WRITES =
-  /^\/(record-views|item-locks|drafts|presence|rum|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade)$|items\/(?!nivaro_|directus_)[^/]+|users\/cards$|files\/verify$)/
+  /^\/(record-views|item-locks|drafts|presence|rum|comments|notifications|tasks|field-rules\/evaluate|chat\/(?!room-types)|field-config\/[^/]+\/(evaluate-visibility|evaluate-defaults|evaluate-lock|cascade|project)$|items\/(?!nivaro_|directus_)[^/]+|users\/cards$|files\/verify$)/
 
 function cannotChangeConfig(c: AnyCommand): boolean {
   const path = (c._path ?? '').split('?')[0]

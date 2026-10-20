@@ -1,0 +1,430 @@
+import type { Knex } from 'knex'
+import { db } from '../db/index.js'
+import { activateLayout } from './layout-activation.js'
+import {
+  applyLayoutOps,
+  type GroupRow,
+  LAYOUT_PATCH_KEYS,
+  type LayoutBundle,
+  type LayoutOp,
+  LayoutOpError,
+  type LayoutRow,
+  type PlacementPatch,
+  type PlacementRow,
+  sortBundleRows,
+  UNGROUPED_KEY,
+  ungroupedGroup
+} from './layout-ops-apply.js'
+import { type LayoutPatchBody, normalizeLayoutPatch, parseLayoutRow } from './layout-patch.js'
+import { layoutStateHash, snapshotLayoutVersion } from './layout-versions.js'
+
+export * from './layout-ops-apply.js'
+
+/**
+ * POST /collection-layouts/:id/ops — the layout editor's save path. The ops
+ * are applied in memory with the same pure function the editor runs
+ * (layout-ops-apply.ts), then only the difference is written, in one
+ * transaction, checked against the rev the editor last saw.
+ */
+
+/** The assignment row that stores the Ungrouped zone's canvas position. */
+export const UNGROUPED_POS_FIELD = '__ungrouped_pos__'
+
+/** One version per editing burst: no new snapshot while this user made one this recently. */
+export const SNAPSHOT_COALESCE_MS = 120_000
+
+// input_bindings / overrides arrive as objects from the editor but as the
+// stored JSON STRING from a GET → PUT round trip; stringifying a string
+// double-encodes it (every round trip stacks another layer), the editor's
+// parser then crashes on `.find` and the form loses its grid overrides.
+// Unwrap before storing, however deep the stack got.
+function unwrapJson(v: unknown): unknown {
+  let cur = v
+  for (let i = 0; i < 12 && typeof cur === 'string'; i++) {
+    try {
+      cur = JSON.parse(cur)
+    } catch {
+      break
+    }
+  }
+  return cur == null || cur === '' ? null : cur
+}
+
+export function serializeBindings(v: unknown): string | null {
+  const cur = unwrapJson(v)
+  return cur == null ? null : JSON.stringify(cur)
+}
+
+/** Assignment columns for one placement — shared by PUT /:id/assignments and the ops writer. */
+export function placementColumns(a: PlacementPatch & { group_key?: string | null; sort: number }) {
+  return {
+    group_key: a.group_key ?? null,
+    sort: a.sort,
+    label_override: a.label_override ?? null,
+    is_visible: a.is_visible === false ? 0 : 1,
+    default_expanded: a.default_expanded === false ? 0 : 1,
+    col_span: a.col_span ?? null,
+    overrides: serializeBindings(a.overrides),
+    show_row_revisions: a.show_row_revisions ? 1 : 0,
+    allow_revision_restore: a.allow_revision_restore === false ? 0 : 1,
+    lock_conditions: a.lock_conditions ?? null,
+    input_bindings: serializeBindings(a.input_bindings),
+    widget_id: a.widget_id ?? null,
+    show_approval_chain: a.show_approval_chain ? 1 : 0
+  }
+}
+
+function groupColumns(g: GroupRow) {
+  return {
+    label: g.label,
+    type: g.type,
+    icon: g.icon,
+    sort: g.sort,
+    is_collapsed: g.is_collapsed ? 1 : 0,
+    tab_mode: g.tab_mode,
+    hide_when_empty: g.hide_when_empty ? 1 : 0,
+    visibility_mode: g.visibility_mode,
+    summary_fields: g.summary_fields,
+    summary_hide_empty: g.summary_hide_empty ? 1 : 0,
+    swap_config: g.swap_config,
+    skip_if_filled: g.skip_if_filled,
+    content: g.content,
+    content_tone: g.content_tone,
+    visible_when: g.visible_when,
+    hidden_for_roles: g.hidden_for_roles,
+    locked_for_roles: g.locked_for_roles,
+    read_width: g.read_width
+  }
+}
+
+const placementKey = (field: string, groupKey: string | null | undefined) =>
+  `${field}\u0000${groupKey ?? ''}`
+const str = (v: unknown): string | null => (v == null ? null : String(v))
+const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+
+/** The layout as the editor edits it, with its current rev. null when it does not exist. */
+export async function loadLayoutBundle(
+  q: Knex | Knex.Transaction,
+  layoutId: number
+): Promise<LayoutBundle | null> {
+  const raw = (await q('nivaro_collection_layouts').where({ id: layoutId }).first()) as
+    | Record<string, unknown>
+    | undefined
+  if (!raw) return null
+  const layout = parseLayoutRow({ ...raw }) as LayoutRow
+  const groupRows = (await q('nivaro_field_groups')
+    .where({ layout_id: layoutId })
+    .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
+  const asgRows = (await q('nivaro_layout_field_assignments')
+    .where({ layout_id: layoutId })
+    .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
+
+  const keyById = new Map(groupRows.map((g) => [Number(g.id), String(g.key)]))
+  const groups: GroupRow[] = groupRows.map((g) => ({
+    id: Number(g.id),
+    key: String(g.key),
+    parent_key: g.container_id == null ? null : (keyById.get(Number(g.container_id)) ?? null),
+    sort: Number(g.sort ?? 0),
+    label: String(g.label ?? ''),
+    type: String(g.type ?? 'section'),
+    icon: str(g.icon),
+    is_collapsed: !!g.is_collapsed,
+    tab_mode: str(g.tab_mode),
+    hide_when_empty: !!g.hide_when_empty,
+    visibility_mode: str(g.visibility_mode),
+    summary_fields: str(g.summary_fields),
+    summary_hide_empty: !!g.summary_hide_empty,
+    swap_config: str(g.swap_config),
+    skip_if_filled: str(g.skip_if_filled),
+    content: str(g.content),
+    content_tone: str(g.content_tone),
+    visible_when: str(g.visible_when),
+    hidden_for_roles: str(g.hidden_for_roles),
+    locked_for_roles: str(g.locked_for_roles),
+    read_width: str(g.read_width)
+  }))
+
+  let ungroupedSort: number | null = null
+  const seen = new Set<string>()
+  const placements: PlacementRow[] = []
+  for (const a of asgRows) {
+    const field = String(a.field)
+    if (field === UNGROUPED_POS_FIELD) {
+      ungroupedSort ??= Number(a.sort ?? 0)
+      continue
+    }
+    const groupKey = a.group_key ? String(a.group_key) : null
+    const k = placementKey(field, groupKey)
+    if (seen.has(k)) continue // a leftover duplicate row; the writer removes it
+    seen.add(k)
+    placements.push({
+      id: Number(a.id),
+      field,
+      group_key: groupKey,
+      sort: Number(a.sort ?? 0),
+      label_override: str(a.label_override),
+      is_visible: a.is_visible == null ? true : !!a.is_visible,
+      default_expanded: a.default_expanded == null ? true : !!a.default_expanded,
+      col_span: a.col_span == null ? null : Number(a.col_span),
+      overrides: unwrapJson(a.overrides),
+      show_row_revisions: !!a.show_row_revisions,
+      allow_revision_restore: a.allow_revision_restore == null ? null : !!a.allow_revision_restore,
+      lock_conditions: str(a.lock_conditions),
+      input_bindings: unwrapJson(a.input_bindings),
+      widget_id: a.widget_id == null ? null : Number(a.widget_id),
+      show_approval_chain: !!a.show_approval_chain
+    })
+  }
+  // No stored position: where the record page puts the zone by default.
+  groups.push(
+    ungroupedGroup(
+      ungroupedSort ?? groups.filter((g) => g.type === 'section' || g.type === 'metadata').length
+    )
+  )
+
+  const rev = (await layoutStateHash(layoutId, q)) ?? ''
+  return { layout, ...sortBundleRows({ groups, placements }), rev }
+}
+
+/** Thrown when the merged settings fail validation at write time (rolls the batch back). */
+export class LayoutWriteError extends Error {
+  status: number
+  constructor(status: number, message: string) {
+    super(message)
+    this.status = status
+  }
+}
+
+async function writeLayoutSettings(
+  trx: Knex.Transaction,
+  layoutId: number,
+  raw: Record<string, unknown>,
+  before: LayoutRow,
+  after: LayoutRow
+): Promise<void> {
+  const changed: Record<string, unknown> = {}
+  for (const k of LAYOUT_PATCH_KEYS)
+    if (!same(after[k] ?? null, before[k] ?? null)) changed[k] = after[k] ?? null
+  const { is_active, ...settings } = changed
+  let patch: Record<string, unknown> = {}
+  if (Object.keys(settings).length > 0) {
+    const res = await normalizeLayoutPatch(
+      trx,
+      layoutId,
+      raw as { slug?: string | null; collection: string },
+      settings as LayoutPatchBody
+    )
+    if (res.error !== undefined) throw new LayoutWriteError(res.status, res.error)
+    patch = res.patch
+    if (Object.keys(patch).length > 0)
+      await trx('nivaro_collection_layouts').where({ id: layoutId }).update(patch)
+  }
+  // Same rule as PATCH: is_active only changes through the activate rule, and
+  // an active layout moved to another type takes that type's default with it.
+  const type = (patch.layout_type as string | undefined) ?? (raw.layout_type as string | null)
+  const typeChanged =
+    patch.layout_type !== undefined && patch.layout_type !== (raw.layout_type ?? 'grouped')
+  if (is_active === true || (is_active === undefined && typeChanged && raw.is_active))
+    await activateLayout(trx, {
+      id: layoutId,
+      collection: String(raw.collection),
+      layout_type: type
+    })
+  else if (is_active === false)
+    await trx('nivaro_collection_layouts').where({ id: layoutId }).update({ is_active: 0 })
+}
+
+async function writeGroups(
+  trx: Knex.Transaction,
+  layoutId: number,
+  collection: string,
+  before: GroupRow[],
+  after: GroupRow[]
+): Promise<void> {
+  const real = (gs: GroupRow[]) =>
+    new Map(gs.filter((g) => g.key !== UNGROUPED_KEY).map((g) => [g.key, g]))
+  const was = real(before)
+  const now = real(after)
+  const idByKey = new Map<string, number>()
+  for (const g of was.values()) if (g.id != null) idByKey.set(g.key, g.id)
+
+  // New groups first (unhooked), so every parent has an id to point at.
+  for (const g of now.values()) {
+    if (was.has(g.key)) continue
+    await trx('nivaro_field_groups').insert({
+      collection,
+      layout_id: layoutId,
+      key: g.key,
+      ...groupColumns(g),
+      container_id: null
+    })
+    const created = (await trx('nivaro_field_groups')
+      .where({ layout_id: layoutId, key: g.key })
+      .first('id')) as { id: number }
+    idByKey.set(g.key, Number(created.id))
+  }
+  for (const g of now.values()) {
+    const prev = was.get(g.key)
+    const containerId = g.parent_key == null ? null : (idByKey.get(g.parent_key) ?? null)
+    if (prev && same({ ...prev, id: undefined }, { ...g, id: undefined })) continue
+    if (!prev && containerId == null) continue
+    await trx('nivaro_field_groups')
+      .where({ id: idByKey.get(g.key) })
+      .update({ ...groupColumns(g), container_id: containerId })
+  }
+  // container_id is a NO ACTION self-FK (migration 096): unhook, then delete.
+  const goneIds = [...was.values()]
+    .filter((g) => !now.has(g.key))
+    .map((g) => idByKey.get(g.key))
+    .filter((id): id is number => id != null)
+  if (goneIds.length > 0) {
+    await trx('nivaro_field_groups')
+      .where({ layout_id: layoutId })
+      .whereIn('container_id', goneIds)
+      .update({ container_id: null })
+    await trx('nivaro_field_groups').whereIn('id', goneIds).delete()
+  }
+}
+
+async function writePlacements(
+  trx: Knex.Transaction,
+  layoutId: number,
+  before: LayoutBundle,
+  after: LayoutBundle
+): Promise<void> {
+  const pos = (b: LayoutBundle) => b.groups.find((g) => g.key === UNGROUPED_KEY)?.sort ?? 0
+  const wanted = new Map<string, PlacementRow>()
+  for (const p of after.placements) wanted.set(placementKey(p.field, p.group_key), p)
+  const was = new Map(before.placements.map((p) => [placementKey(p.field, p.group_key), p]))
+  const posKey = placementKey(UNGROUPED_POS_FIELD, null)
+
+  const existing = (await trx('nivaro_layout_field_assignments')
+    .where({ layout_id: layoutId })
+    .select('id', 'field', 'group_key')) as Array<{
+    id: number
+    field: string
+    group_key: string | null
+  }>
+  const rowIdByKey = new Map<string, number>()
+  const gone: number[] = []
+  for (const r of existing) {
+    const k = placementKey(r.field, r.group_key || null)
+    if ((wanted.has(k) || k === posKey) && !rowIdByKey.has(k)) rowIdByKey.set(k, r.id)
+    else gone.push(r.id)
+  }
+  for (let i = 0; i < gone.length; i += 1000)
+    await trx('nivaro_layout_field_assignments')
+      .whereIn('id', gone.slice(i, i + 1000))
+      .delete()
+
+  const posId = rowIdByKey.get(posKey)
+  if (posId == null)
+    await trx('nivaro_layout_field_assignments').insert({
+      layout_id: layoutId,
+      field: UNGROUPED_POS_FIELD,
+      group_key: null,
+      sort: pos(after)
+    })
+  else if (pos(after) !== pos(before))
+    await trx('nivaro_layout_field_assignments')
+      .where({ id: posId })
+      .update({ sort: pos(after) })
+
+  for (const [k, p] of wanted) {
+    const rowId = rowIdByKey.get(k)
+    const cols = placementColumns(p)
+    if (rowId == null) {
+      await trx('nivaro_layout_field_assignments').insert({
+        layout_id: layoutId,
+        field: p.field,
+        ...cols
+      })
+      continue
+    }
+    const prev = was.get(k)
+    if (prev && same(placementColumns(prev), cols)) continue
+    await trx('nivaro_layout_field_assignments').where({ id: rowId }).update(cols)
+  }
+}
+
+async function snapshottedRecently(
+  trx: Knex.Transaction,
+  layoutId: number,
+  userId: string | null | undefined
+): Promise<boolean> {
+  if (!userId) return false
+  const recent = await trx('nivaro_layout_versions')
+    .where({ layout_id: layoutId, created_by: userId })
+    .where('created_at', '>=', new Date(Date.now() - SNAPSHOT_COALESCE_MS))
+    .first('id')
+  return !!recent
+}
+
+export type LayoutOpsResult =
+  | { status: 200; bundle: LayoutBundle; changed: boolean }
+  | { status: 409; bundle: LayoutBundle }
+  | { status: 400; error: string; op_index?: number }
+  | { status: 404 }
+
+/**
+ * Apply an ops batch: all-or-nothing, in one transaction, refused with the
+ * fresh bundle when the layout changed since `baseRev`.
+ */
+export async function runLayoutOps(
+  layoutId: number,
+  input: { ops: LayoutOp[]; base_rev: string; note?: string | null },
+  userId?: string | null
+): Promise<LayoutOpsResult> {
+  return db.transaction(async (trx: Knex.Transaction): Promise<LayoutOpsResult> => {
+    // Writers of one layout queue here, so the second sees the first's rev.
+    await trx.raw(
+      'SELECT id FROM nivaro_collection_layouts WITH (UPDLOCK, HOLDLOCK) WHERE id = ?',
+      [layoutId]
+    )
+    const raw = (await trx('nivaro_collection_layouts').where({ id: layoutId }).first()) as
+      | Record<string, unknown>
+      | undefined
+    const before = raw ? await loadLayoutBundle(trx, layoutId) : null
+    if (!raw || !before) return { status: 404 }
+    if (before.rev !== input.base_rev) return { status: 409, bundle: before }
+
+    let after: LayoutBundle
+    try {
+      after = applyLayoutOps(before, input.ops)
+    } catch (err) {
+      if (err instanceof LayoutOpError)
+        return { status: 400, error: err.message, op_index: err.op_index }
+      throw err
+    }
+    for (const [i, op] of input.ops.entries()) {
+      if (op.op !== 'layout_update') continue
+      const res = await normalizeLayoutPatch(
+        trx,
+        layoutId,
+        raw as { slug?: string | null; collection: string },
+        op.patch as LayoutPatchBody
+      )
+      if (res.error !== undefined) return { status: 400, error: res.error, op_index: i }
+    }
+
+    const unchanged =
+      same(before.layout, after.layout) &&
+      same(before.groups, after.groups) &&
+      same(before.placements, after.placements)
+    if (unchanged) return { status: 200, bundle: before, changed: false }
+
+    if (!(await snapshottedRecently(trx, layoutId, userId)))
+      await snapshotLayoutVersion(
+        layoutId,
+        input.note?.trim() || 'before layout edit',
+        userId ?? null,
+        trx
+      )
+    await writeLayoutSettings(trx, layoutId, raw, before.layout, after.layout)
+    await writeGroups(trx, layoutId, String(raw.collection), before.groups, after.groups)
+    await writePlacements(trx, layoutId, before, after)
+
+    const fresh = (await loadLayoutBundle(trx, layoutId)) as LayoutBundle
+    return { status: 200, bundle: fresh, changed: true }
+  })
+}

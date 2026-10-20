@@ -136,7 +136,12 @@ const schema = z.object({
   STORAGE_DRIVER: z.enum(['local']).default('local'),
   STORAGE_LOCAL_ROOT: z.string().default('./uploads'),
 
-  ANTHROPIC_API_KEY: z.string().optional()
+  ANTHROPIC_API_KEY: z.string().optional(),
+
+  // Shown on the Layouts overview and editor on instances whose layout config
+  // is overwritten by promote:config (staging: "Layouts here are replaced
+  // every night from development. Make lasting changes on development.").
+  LAYOUT_EDIT_WARNING: z.string().optional()
 })
 
 const parsed = schema.safeParse(process.env)

@@ -73,7 +73,18 @@ import {
   verticalListSortingStrategy
 } from '@dnd-kit/sortable'
 import { CSS as DndCSS } from '@dnd-kit/utilities'
-import { DataGuideCard, seedQuickPickerSteps } from '@nivaro/shared'
+import {
+  CollectionFieldPicker,
+  CollectionFieldPickerPanel,
+  DataGuideCard,
+  FieldPicker,
+  FieldPickerPanel,
+  IconPicker,
+  type PickedField,
+  RelationLabel,
+  RelationPicker,
+  seedQuickPickerSteps
+} from '@nivaro/shared'
 import {
   createContext,
   type ReactNode,
@@ -89,19 +100,9 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { BulkActionsPicker, BulkActionsSection } from '@/components/bulk-actions-section'
 import { DisplayTemplateEditor } from '@/components/display-template-editor'
-import {
-  CollectionFieldPicker,
-  CollectionFieldPickerPanel,
-  FieldPicker,
-  FieldPickerPanel,
-  type PickedField
-} from '@/components/field-picker'
 import { FormulaBuilder, RawFormulaEditor } from '@/components/formula-builder'
-import { IconPicker } from '@/components/icon-picker'
 import { PagePresence } from '@/components/page-presence'
 import { type QuickFilterDef, QuickFiltersEditor } from '@/components/quick-filters-editor'
-import { RelationLabel } from '@/components/relation-label'
-import { RelationPicker } from '@/components/relation-picker'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'

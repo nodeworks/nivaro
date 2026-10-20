@@ -25,6 +25,7 @@ import {
   X
 } from 'lucide-react'
 import {
+  type ReactElement,
   type ReactNode,
   useCallback,
   useContext,
@@ -214,6 +215,9 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
+import { DesignDropZone, designWrap } from './layout-editor/DesignNode'
+import { DesignCanvas, type RefusedWrite } from './layout-editor/design-canvas'
+import type { DesignTarget, LayoutDesign } from './layout-editor/design-context'
 import {
   AccessDeniedPanel,
   AddendumPanel,
@@ -601,6 +605,19 @@ export interface ItemEditFormProps {
    *  from another one (workflow lines from a purchase order's lines) cannot
    *  hand them over through initialValues. */
   initialRows?: Record<string, Array<Record<string, unknown>>>
+  /** Layout editor canvas (spec §7.3): render this draft layout with the
+   *  preview record's values, every placement selectable, nothing written. */
+  design?: ItemEditFormDesign
+}
+
+export interface ItemEditFormDesign {
+  /** The draft layout — rendered instead of GET /collection-layouts/active. */
+  layout: ActiveLayoutData
+  /** Preview record (its values, steps and rules); null/absent = a blank form. */
+  record?: Record<string, unknown> | null
+  context: LayoutDesign
+  /** Something on the canvas tried to write and was refused (tests, dev tooling). */
+  onRefusedWrite?: (w: RefusedWrite) => void
 }
 
 export interface HeaderWidgetInfo {
@@ -1207,7 +1224,21 @@ function ApiProvenanceChip({
   )
 }
 
-export function ItemEditForm({
+/**
+ * The record form. With `design` (the layout editor's canvas) the whole form —
+ * its own hooks included — runs inside DesignCanvas: a client that cannot
+ * write, no realtime, inert inputs, selectable shells.
+ */
+export function ItemEditForm(props: ItemEditFormProps) {
+  if (!props.design) return <ItemEditFormView {...props} />
+  return (
+    <DesignCanvas design={props.design.context} onRefusedWrite={props.design.onRefusedWrite}>
+      <ItemEditFormView {...props} />
+    </DesignCanvas>
+  )
+}
+
+function ItemEditFormView({
   collection,
   itemId: itemIdProp,
   layoutSlug: layoutSlugProp,
@@ -1243,8 +1274,15 @@ export function ItemEditForm({
   initialImportResult,
   initialValues,
   initialLinks,
-  initialRows
+  initialRows,
+  design
 }: ItemEditFormProps) {
+  const designOn = design != null
+  const designCtx = design?.context ?? null
+  // Canvas "show hidden": hidden fields and rule-hidden tabs/steps stay on
+  // the canvas, faint, so they can still be selected.
+  const showHiddenDesign = !!designCtx?.showHidden
+  // Design mode: DesignCanvas above hands down a client that cannot write.
   const client = useNivaroClient()
   const readRow = useRecordReader()
   const fetchCfg = useApiFetchConfig()
@@ -1256,11 +1294,13 @@ export function ItemEditForm({
   const [viewAsOpen, setViewAsOpen] = useState(false)
   const layoutSlug = viewAs.preview?.layout?.slug ?? layoutSlugProp
   const qc = useQueryClient()
-  const itemId = itemIdProp ?? 'new'
-  const isNew = !itemIdProp || itemIdProp === 'new'
+  const designRecordId = design?.record?.id != null ? String(design.record.id) : undefined
+  const itemIdIn = itemIdProp ?? (designOn ? designRecordId : undefined)
+  const itemId = itemIdIn ?? 'new'
+  const isNew = !itemIdIn || itemIdIn === 'new'
 
   // ── Data fetching ──────────────────────────────────────────────────────────
-  const { data: activeLayoutData } = useQuery<ActiveLayoutData | null>({
+  const { data: fetchedLayoutData } = useQuery<ActiveLayoutData | null>({
     queryKey: ['active-layout', collection, layoutSlug ?? null, itemId],
     queryFn: () =>
       client
@@ -1272,8 +1312,10 @@ export function ItemEditForm({
         )
         .then((r) => r.data)
         .catch(() => null),
-    staleTime: 60_000
+    staleTime: 60_000,
+    enabled: !designOn
   })
+  const activeLayoutData = designOn ? design.layout : fetchedLayoutData
 
   const layoutId = activeLayoutData?.layout?.id ?? null
 
@@ -1292,22 +1334,38 @@ export function ItemEditForm({
         .then((r) => r.data)
         .catch(() => null),
     staleTime: 60_000,
-    enabled: !isNew
+    enabled: !isNew && !designOn
   })
 
+  // Design mode: the editor's DRAFT placements, formatted by the server
+  // exactly as GET formats a saved layout (POST …/project only reads).
+  const designAssignments = designOn ? design.layout.assignments : null
   const {
     data: fieldConfig,
     isLoading: fieldsLoading,
     isFetched: fieldConfigFetched
   } = useQuery<CMSField[]>({
-    queryKey: ['field-config', collection, layoutId],
+    queryKey: designAssignments
+      ? ['layout-editor', 'field-config', collection, designAssignments]
+      : ['field-config', collection, layoutId],
     queryFn: () =>
-      client
-        .request<{ data: CMSField[] }>(
-          get(`/field-config/${collection}`, layoutId ? { layout_id: String(layoutId) } : undefined)
-        )
-        .then((r) => r.data ?? []),
+      designAssignments
+        ? client
+            .request<{ data: CMSField[] }>(
+              post(`/field-config/${collection}/project`, { assignments: designAssignments })
+            )
+            .then((r) => r.data ?? [])
+        : client
+            .request<{ data: CMSField[] }>(
+              get(
+                `/field-config/${collection}`,
+                layoutId ? { layout_id: String(layoutId) } : undefined
+              )
+            )
+            .then((r) => r.data ?? []),
     staleTime: 60_000,
+    // A draft edit re-asks; the canvas keeps the last answer meanwhile.
+    placeholderData: designAssignments ? (prev: CMSField[] | undefined) => prev : undefined,
     // Wait for the layout either way, not just when a slug pins one. Without
     // this the field config fetched immediately with layoutId = null — the
     // LAYOUT-LESS default field set — painted that, then refetched under a new
@@ -1469,7 +1527,7 @@ export function ItemEditForm({
     setRecordGone(null)
   }, [collection, itemId])
   const {
-    data: itemData,
+    data: fetchedItemData,
     isLoading: itemLoading,
     error: itemLoadError
   } = useQuery<Record<string, unknown>>({
@@ -1478,7 +1536,7 @@ export function ItemEditForm({
       client
         .request<{ data: Record<string, unknown> }>(get(`/items/${collection}/${itemId}`))
         .then((r) => r.data),
-    enabled: !isNew && !recordGone,
+    enabled: !isNew && !recordGone && !designOn,
     staleTime: 30_000,
     // 403/404 are access verdicts, not transient — retrying just delays the
     // AccessDeniedPanel explanation.
@@ -1490,6 +1548,8 @@ export function ItemEditForm({
       return failureCount < 2
     }
   })
+  // Design mode: the preview record stands in for the fetched one.
+  const itemData = designOn ? (design.record ?? undefined) : fetchedItemData
   const itemLoadDenied = (() => {
     if (isNew || !itemLoadError) return false
     const status =
@@ -1596,7 +1656,9 @@ export function ItemEditForm({
   // the toggle settle immediately; otherwise wait for colMeta (the rules) and
   // the resolution. The body renders a skeleton until then.
   const summaryModeSettled =
-    isNew || (colMeta !== undefined && (!summaryRules || summaryResolvedKey === summaryRecordKey))
+    designOn ||
+    isNew ||
+    (colMeta !== undefined && (!summaryRules || summaryResolvedKey === summaryRecordKey))
   // ── Unsaved-draft recovery (#1) ────────────────────────────────────────────
   // The dirty draft (scalar diffs + staged rows/edits/deletes + junction
   // staging) is persisted to IndexedDB per collection:record:user, ~800ms
@@ -1605,7 +1667,7 @@ export function ItemEditForm({
   const recoveryKey = draftKey(collection, itemId, authUserId)
   const [recovery, setRecovery] = useState<
     { state: 'checking' } | { state: 'offer'; draft: StoredDraft } | { state: 'none' }
-  >({ state: 'checking' })
+  >({ state: designOn ? 'none' : 'checking' })
   const recoveryRef = useRef(recovery)
   recoveryRef.current = recovery
   // The key the last completed check was for. The auth user id can arrive a
@@ -2719,7 +2781,8 @@ export function ItemEditForm({
   const recordReady = isNew || !!itemData
   // biome-ignore lint/correctness/useExhaustiveDependencies: readiness, not identity, re-runs the check
   useEffect(() => {
-    if (!recordReady) return
+    // Design mode never looks for (or, with no check, persists) drafts.
+    if (!recordReady || designOn) return
     if (recoveryCheckedKey === recoveryKey) return
     let cancelled = false
     // #24 — the server copy (another device) competes with the local one; the
@@ -3695,6 +3758,7 @@ export function ItemEditForm({
   // fresh at fire time.
   const evaluateFieldRulesForChange = useCallback(
     (field: string, explicitValue?: unknown) => {
+      if (designOn) return
       const rules = rulesForTriggerField(fieldRules, field)
       if (rules.length === 0) return
       const existingTimer = fieldRuleTimersRef.current[field]
@@ -3722,7 +3786,7 @@ export function ItemEditForm({
           .catch(() => {})
       }, 300)
     },
-    [fieldRules, collection, client, getM2MEffectiveIds, applyFieldRuleResults]
+    [designOn, fieldRules, collection, client, getM2MEffectiveIds, applyFieldRuleResults]
   )
 
   // M2M alias triggers never flow through handleFieldChange (they commit via
@@ -3781,6 +3845,8 @@ export function ItemEditForm({
   const relockOnEditRef = useRef<null | (() => void)>(null)
   const handleFieldChange = useCallback(
     (field: string, value: unknown) => {
+      // Design mode: inputs are inert.
+      if (designOn) return
       // No-op guard: editors can emit a change with an IDENTICAL value (rich
       // text normalizing on mount is the classic) — that must not dirty the
       // form, or a freshly loaded record claims unsaved changes with nothing
@@ -3831,7 +3897,7 @@ export function ItemEditForm({
       // Upstream cascades: a pick fills its own cascade parents in reverse.
       if (!isEmpty) upstreamCascadesRef.current(field, value)
     },
-    [fieldConfig, evaluateFieldRulesForChange, runCrossDefaults]
+    [designOn, fieldConfig, evaluateFieldRulesForChange, runCrossDefaults]
   )
 
   const [fieldCounts, setFieldCounts] = useState<Record<string, number>>({})
@@ -3947,7 +4013,12 @@ export function ItemEditForm({
   // only acquired once the opening mode has settled on Edit, released when
   // the person flips to Summary, re-acquired on the way back.
   const lockEnabled =
-    showLockBanner && !isNew && !!colMeta?.item_locking_enabled && summaryModeSettled && !readMode
+    !designOn &&
+    showLockBanner &&
+    !isNew &&
+    !!colMeta?.item_locking_enabled &&
+    summaryModeSettled &&
+    !readMode
   const {
     lockHolder,
     acquired: lockAcquired,
@@ -4693,9 +4764,23 @@ export function ItemEditForm({
     () =>
       groups.filter(
         (g) =>
-          g.type === 'tab' && !g.container_id && stepVisible(g as { visible_when?: string | null })
+          g.type === 'tab' &&
+          !g.container_id &&
+          (showHiddenDesign || stepVisible(g as { visible_when?: string | null }))
       ),
-    [groups, stepVisible]
+    [groups, stepVisible, showHiddenDesign]
+  )
+  // Tabs/steps kept only because the canvas shows hidden things.
+  const designHiddenTabs = useMemo(
+    () =>
+      showHiddenDesign
+        ? new Set(
+            tabGroups
+              .filter((g) => !stepVisible(g as { visible_when?: string | null }))
+              .map((g) => g.key)
+          )
+        : undefined,
+    [showHiddenDesign, tabGroups, stepVisible]
   )
   // All tabs regardless of container — used for SummaryPanel coverage
   const allTabGroups = useMemo(
@@ -5240,6 +5325,12 @@ export function ItemEditForm({
       next.add(k)
       return next
     })
+    // Design mode: switching tabs on the canvas leaves the record page's
+    // remembered tab and the host's URL alone.
+    if (designOn) {
+      bodyRef.current?.scrollTo({ top: 0 })
+      return
+    }
     try {
       localStorage.setItem(`nvr_tab_${collection}`, k)
     } catch {
@@ -7662,7 +7753,7 @@ export function ItemEditForm({
   const summaryResolvedFor = useRef<string | null>(null)
   useEffect(() => {
     const key = summaryRecordKey
-    if (summaryResolvedFor.current === key || isNew || !summaryRules) return
+    if (summaryResolvedFor.current === key || isNew || !summaryRules || designOn) return
     if (summaryNeedsRole && currentUserData === undefined && !currentUserError) return
     if (summaryNeedsState && pipelineInstanceData === undefined && !pipelineInstanceError) return
     // A rule on the record's own values (#737) waits for the record.
@@ -7680,6 +7771,7 @@ export function ItemEditForm({
     setSummaryResolvedKey(key)
   }, [
     summaryRecordKey,
+    designOn,
     isNew,
     summaryRules,
     summaryNeedsRole,
@@ -7743,6 +7835,49 @@ export function ItemEditForm({
     lockReasons,
     applyToLines,
     openRelated: (c: string, id: string) => itemNav.open({ collection: c, itemId: id })
+  }
+
+  // ── Design mode shells ─────────────────────────────────────────────────────
+  // Every placement/group gets a selectable DesignNode in the layout editor's
+  // canvas; without `design` each helper hands its node back untouched.
+  const dwrap = (
+    t: DesignTarget,
+    node: ReactNode,
+    opts?: { asChild?: boolean; pass?: boolean; inline?: boolean }
+  ) => designWrap(designCtx, t, node, opts)
+  const dwrapEl = (t: DesignTarget, el: ReactElement, opts?: { asChild?: boolean }) =>
+    dwrap(t, el, opts) as ReactElement
+  const slotTarget = (field: string): DesignTarget => ({
+    kind: 'slot',
+    field,
+    group_key: assignments.find((a) => a.field === field)?.group_key ?? null
+  })
+  const designHidden = (f: CMSField, ruleVisible = true) =>
+    showHiddenDesign && (f.hidden || !ruleVisible)
+  const faint = (hidden: boolean, node: ReactNode) =>
+    hidden ? (
+      <div data-design-hidden='' className='opacity-40'>
+        {node}
+      </div>
+    ) : (
+      node
+    )
+  const fieldTarget = (f: CMSField): DesignTarget => ({
+    kind: 'field',
+    field: f.field,
+    group_key: f.group_key ?? null
+  })
+  // Section-mode rows: the row div becomes the shell of whatever it holds.
+  // The ungrouped zone shells itself (renderUngrouped is also used by tabs).
+  const sectionShell = (item: FieldGroup | string, key: string | number) => {
+    const content = renderSectionItem(item)
+    const el = <div key={key}>{content}</div>
+    if (content == null || item === '__ungrouped__') return el
+    return dwrap(
+      typeof item === 'string' ? slotTarget(item) : { kind: 'group', key: item.key },
+      el,
+      { asChild: true }
+    )
   }
 
   function renderSentinel(key: string) {
@@ -7908,9 +8043,18 @@ export function ItemEditForm({
   }
 
   function renderUngrouped() {
-    const visible = ungroupedFields.filter((f) => !f.hidden)
+    const visible = showHiddenDesign
+      ? allFields.filter(
+          (f) =>
+            !f.group_key &&
+            !SYSTEM_FIELDS.has(f.field) &&
+            !isSentinelKey(f.field) &&
+            (layoutId === null || f.layout_assigned !== false)
+        )
+      : ungroupedFields.filter((f) => !f.hidden)
     if (visible.length === 0) return null
-    return (
+    return dwrap(
+      { kind: 'group', key: '__ungrouped__' },
       <div
         key='__ungrouped__'
         className='nvr-section-enter rounded-xl border border-slate-200 bg-white px-5 py-5'
@@ -7932,23 +8076,28 @@ export function ItemEditForm({
                         !r.junction_field
                     )?.one_collection ?? null)
                   : null
-              return (
+              return dwrap(
+                fieldTarget(f),
                 <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                  <FieldRow
-                    field={f}
-                    draft={effectiveDraft}
-                    onChange={handleFieldChange}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    error={validationErrors[f.field]}
-                    autoFillTick={autoFillTicks[f.field]}
-                    visible={true}
-                    locked={isReadOnly || addendumViewId !== 'original'}
-                    layoutAiEnabled={layoutAiEnabled}
-                    renderField={renderField}
-                    onCountChange={handleM2MCountChange}
-                  />
+                  {faint(
+                    designHidden(f),
+                    <FieldRow
+                      field={f}
+                      draft={effectiveDraft}
+                      onChange={handleFieldChange}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      error={validationErrors[f.field]}
+                      autoFillTick={autoFillTicks[f.field]}
+                      visible={true}
+                      forceVisible={designHidden(f) || undefined}
+                      locked={isReadOnly || addendumViewId !== 'original'}
+                      layoutAiEnabled={layoutAiEnabled}
+                      renderField={renderField}
+                      onCountChange={handleM2MCountChange}
+                    />
+                  )}
                   {inlineEntries?.length && hasVal && inlineRelCollection && (
                     <InlineDisplay
                       relCollection={inlineRelCollection}
@@ -7957,12 +8106,14 @@ export function ItemEditForm({
                       separator={inlineSeparator}
                     />
                   )}
-                </div>
+                </div>,
+                { asChild: true }
               )
             })
           }
         </GridContainer>
-      </div>
+      </div>,
+      { asChild: true }
     )
   }
 
@@ -7995,7 +8146,9 @@ export function ItemEditForm({
     const activeIsSwapped = activeSwapCfg?.enabled
       ? swappedGroups.has(activeChild?.id ?? -1)
       : false
-    const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter((f) => !f.hidden)
+    const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter(
+      (f) => showHiddenDesign || !f.hidden
+    )
     // PDF slot: check if assigned to the active child tab or to the container itself
     const pdfInContainer =
       !isNew &&
@@ -8054,21 +8207,25 @@ export function ItemEditForm({
           />
         ) : (
           <div className='flex border-b border-slate-100'>
-            {children.map((g) => (
-              <button
-                key={g.key}
-                type='button'
-                onClick={() => setContainerTab(c, g.key)}
-                className={cn(
-                  'px-5 py-3 text-sm font-medium transition-colors',
-                  g.key === activeKey
-                    ? 'border-b-2 border-nvr-cyan text-nvr-cyan'
-                    : 'text-slate-500 hover:text-slate-700'
-                )}
-              >
-                {g.label}
-              </button>
-            ))}
+            {children.map((g) =>
+              dwrap(
+                { kind: 'group', key: g.key },
+                <button
+                  key={g.key}
+                  type='button'
+                  onClick={() => setContainerTab(c, g.key)}
+                  className={cn(
+                    'px-5 py-3 text-sm font-medium transition-colors',
+                    g.key === activeKey
+                      ? 'border-b-2 border-nvr-cyan text-nvr-cyan'
+                      : 'text-slate-500 hover:text-slate-700'
+                  )}
+                >
+                  {g.label}
+                </button>,
+                { asChild: true, pass: true }
+              )
+            )}
           </div>
         )}
         <div className='px-5 py-5'>
@@ -8182,28 +8339,36 @@ export function ItemEditForm({
                       </div>
                     </div>
                   ) : undefined
-                return (
+                return dwrap(
+                  fieldTarget(f),
                   <div
                     key={f.field}
                     style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}
                   >
-                    <FieldRow
-                      field={f}
-                      draft={effectiveDraft}
-                      onChange={handleFieldChange}
-                      relations={relations}
-                      collection={collection}
-                      itemId={itemId}
-                      error={validationErrors[f.field]}
-                      autoFillTick={autoFillTicks[f.field]}
-                      visible={visibleFields.has(f.field) || !visibleFields.size}
-                      locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
-                      layoutAiEnabled={layoutAiEnabled}
-                      renderField={renderField}
-                      onCountChange={handleM2MCountChange}
-                      swapButton={swapToggleBtn}
-                      swapContent={swapContentNode}
-                    />
+                    {faint(
+                      designHidden(f, visibleFields.has(f.field) || !visibleFields.size),
+                      <FieldRow
+                        field={f}
+                        draft={effectiveDraft}
+                        onChange={handleFieldChange}
+                        relations={relations}
+                        collection={collection}
+                        itemId={itemId}
+                        error={validationErrors[f.field]}
+                        autoFillTick={autoFillTicks[f.field]}
+                        visible={visibleFields.has(f.field) || !visibleFields.size}
+                        forceVisible={
+                          designHidden(f, visibleFields.has(f.field) || !visibleFields.size) ||
+                          undefined
+                        }
+                        locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
+                        layoutAiEnabled={layoutAiEnabled}
+                        renderField={renderField}
+                        onCountChange={handleM2MCountChange}
+                        swapButton={swapToggleBtn}
+                        swapContent={swapContentNode}
+                      />
+                    )}
                     {inlineEntries?.length && hasVal && inlineRelCollection && (
                       <InlineDisplay
                         relCollection={inlineRelCollection}
@@ -8212,11 +8377,18 @@ export function ItemEditForm({
                         separator={inlineSeparator}
                       />
                     )}
-                  </div>
+                  </div>,
+                  { asChild: true }
                 )
               })
             }
           </GridContainer>
+          {designOn &&
+            activeFields.length === 0 &&
+            !pdfInContainer &&
+            !widgetSlots.some((ws) => (ws.group_key ?? null) === activeChild.key) && (
+              <DesignDropZone />
+            )}
           {widgetSlots
             .filter((ws) => (ws.group_key ?? null) === activeChild.key)
             .map((ws) => {
@@ -8231,7 +8403,8 @@ export function ItemEditForm({
               } catch {
                 /* noop */
               }
-              return (
+              return dwrap(
+                slotTarget(ws.field),
                 <div key={ws.field} className='mt-4'>
                   <WidgetSlot
                     widgetId={ws.widget_id as number}
@@ -8242,37 +8415,43 @@ export function ItemEditForm({
                     label={ws.label_override ?? undefined}
                     defaultExpanded={ws.default_expanded ?? true}
                   />
-                </div>
+                </div>,
+                { asChild: true }
               )
             })}
-          {pdfInContainer && (
-            <div className='mt-4 flex items-center gap-2'>
-              <button
-                type='button'
-                onClick={() => void handleGenerateAndAttach()}
-                disabled={pdfAttaching || !pdfAttachField}
-                title={!pdfAttachField ? 'Configure PDF field in Data Model → Layouts' : undefined}
-                className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
-              >
-                <svg
-                  xmlns='http://www.w3.org/2000/svg'
-                  viewBox='0 0 24 24'
-                  fill='none'
-                  stroke='currentColor'
-                  strokeWidth='2'
-                  strokeLinecap='round'
-                  strokeLinejoin='round'
-                  className='h-3.5 w-3.5'
+          {pdfInContainer &&
+            dwrap(
+              slotTarget('__pdf__'),
+              <div className='mt-4 flex items-center gap-2'>
+                <button
+                  type='button'
+                  onClick={() => void handleGenerateAndAttach()}
+                  disabled={pdfAttaching || !pdfAttachField}
+                  title={
+                    !pdfAttachField ? 'Configure PDF field in Data Model → Layouts' : undefined
+                  }
+                  className='inline-flex items-center gap-1.5 rounded-md border border-nvr-cyan/40 bg-nvr-cyan/10 px-3 py-1.5 text-[12px] font-medium text-nvr-navy hover:bg-nvr-cyan/20 disabled:cursor-not-allowed disabled:opacity-40 dark:text-nvr-cyan'
                 >
-                  <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
-                  <polyline points='14 2 14 8 20 8' />
-                  <line x1='9' y1='13' x2='15' y2='13' />
-                  <line x1='9' y1='17' x2='13' y2='17' />
-                </svg>
-                {pdfAttaching ? 'Generating…' : pdfSlot?.label_override?.trim() || 'Generate PDF'}
-              </button>
-            </div>
-          )}
+                  <svg
+                    xmlns='http://www.w3.org/2000/svg'
+                    viewBox='0 0 24 24'
+                    fill='none'
+                    stroke='currentColor'
+                    strokeWidth='2'
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    className='h-3.5 w-3.5'
+                  >
+                    <path d='M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z' />
+                    <polyline points='14 2 14 8 20 8' />
+                    <line x1='9' y1='13' x2='15' y2='13' />
+                    <line x1='9' y1='17' x2='13' y2='17' />
+                  </svg>
+                  {pdfAttaching ? 'Generating…' : pdfSlot?.label_override?.trim() || 'Generate PDF'}
+                </button>
+              </div>,
+              { asChild: true }
+            )}
           {c.tab_mode === 'steps' &&
             children.length > 1 &&
             (() => {
@@ -8377,7 +8556,14 @@ export function ItemEditForm({
     const ownersHere = ownersInGroup && ownersGroupKey === g.key && showPipeline
     const pdfHere = pdfInGroup && pdfGroupKey === g.key && !isNew
     const widgetsHere = widgetSlots.filter((ws) => (ws.group_key ?? null) === g.key)
-    if (groupFields.length === 0 && !ownersHere && !pdfHere && widgetsHere.length === 0) return null
+    if (
+      groupFields.length === 0 &&
+      !ownersHere &&
+      !pdfHere &&
+      widgetsHere.length === 0 &&
+      !designOn
+    )
+      return null
     const accordionActive = accordionMode && g.type !== 'tab'
     return (
       <GroupSection
@@ -8451,7 +8637,7 @@ export function ItemEditForm({
       <div className='nvr-stagger space-y-4'>
         {sectionOrder.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return <div key={key ?? i}>{renderSectionItem(item)}</div>
+          return sectionShell(item, key ?? i)
         })}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel
@@ -8526,7 +8712,7 @@ export function ItemEditForm({
           ? ungroupedFields
           : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
         : (groupedMap[tabKey] ?? [])
-    ).filter((f) => !f.hidden)
+    ).filter((f) => showHiddenDesign || !f.hidden)
     const ownersHere = ownersInGroup && ownersGroupKey === tabKey && showPipeline
     const pdfHere = pdfInGroup && pdfGroupKey === tabKey && !isNew
     const widgetsHereTab = widgetSlots.filter((ws) => (ws.group_key ?? null) === tabKey)
@@ -8567,14 +8753,16 @@ export function ItemEditForm({
             tabItems.map((item) => {
               if (item._t === 'owners') {
                 const span = item.slot.col_span ?? 12
-                return (
+                return dwrap(
+                  slotTarget('__owners__'),
                   <div key='__owners__' style={{ gridColumn: `span ${span}` }}>
                     <OwnersInline
                       collection={collection}
                       itemId={itemId}
                       label={item.slot.label_override || 'Owners'}
                     />
-                  </div>
+                  </div>,
+                  { asChild: true }
                 )
               }
               if (item._t === 'pdf') {
@@ -8582,7 +8770,8 @@ export function ItemEditForm({
                 const span = item.slot.col_span ?? 12
                 const label = item.slot.label_override?.trim() || 'Generate PDF'
                 const notConfigured = !pdfAttachField
-                return (
+                return dwrap(
+                  slotTarget('__pdf__'),
                   <div key='__pdf__' style={{ gridColumn: `span ${span}` }}>
                     <button
                       type='button'
@@ -8608,13 +8797,15 @@ export function ItemEditForm({
                       </svg>
                       {pdfAttaching ? 'Generating…' : label}
                     </button>
-                  </div>
+                  </div>,
+                  { asChild: true }
                 )
               }
               if (item._t === 'widget') {
                 if (!item.slot.widget_id) return null
                 const span = item.slot.col_span ?? 12
-                return (
+                return dwrap(
+                  slotTarget(item.slot.field),
                   <div key={item.slot.field} style={{ gridColumn: `span ${span}` }}>
                     <WidgetSlot
                       widgetId={item.slot.widget_id}
@@ -8623,7 +8814,8 @@ export function ItemEditForm({
                       label={item.slot.label_override ?? undefined}
                       defaultExpanded={item.slot.default_expanded ?? true}
                     />
-                  </div>
+                  </div>,
+                  { asChild: true }
                 )
               }
               const f = item.f
@@ -8641,23 +8833,28 @@ export function ItemEditForm({
                         !r.junction_field
                     )?.one_collection ?? null)
                   : null
-              return (
+              return dwrap(
+                fieldTarget(f),
                 <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                  <FieldRow
-                    field={f}
-                    draft={effectiveDraft}
-                    onChange={handleFieldChange}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    error={validationErrors[f.field]}
-                    autoFillTick={autoFillTicks[f.field]}
-                    visible={true}
-                    locked={isReadOnly || addendumViewId !== 'original'}
-                    layoutAiEnabled={layoutAiEnabled}
-                    renderField={renderField}
-                    onCountChange={handleM2MCountChange}
-                  />
+                  {faint(
+                    designHidden(f),
+                    <FieldRow
+                      field={f}
+                      draft={effectiveDraft}
+                      onChange={handleFieldChange}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      error={validationErrors[f.field]}
+                      autoFillTick={autoFillTicks[f.field]}
+                      visible={true}
+                      forceVisible={designHidden(f) || undefined}
+                      locked={isReadOnly || addendumViewId !== 'original'}
+                      layoutAiEnabled={layoutAiEnabled}
+                      renderField={renderField}
+                      onCountChange={handleM2MCountChange}
+                    />
+                  )}
                   {inlineEntries?.length && hasVal && inlineRelCollection && (
                     <InlineDisplay
                       relCollection={inlineRelCollection}
@@ -8666,11 +8863,13 @@ export function ItemEditForm({
                       separator={inlineSeparator}
                     />
                   )}
-                </div>
+                </div>,
+                { asChild: true }
               )
             })
           }
         </GridContainer>
+        {designOn && tabItems.length === 0 && <DesignDropZone />}
       </div>
     )
   }
@@ -8692,23 +8891,29 @@ export function ItemEditForm({
               const fc = allFields.find((field) => field.field === f)
               return fc?.group_key === t.key || (!fc?.group_key && t.key === '__general__')
             })
-            return (
+            const tabButton = (
               <button
                 key={t.key}
                 type='button'
                 data-tab-key={t.key}
+                data-design-hidden={designHiddenTabs?.has(t.key) ? '' : undefined}
                 onClick={() => setActiveTab(t.key)}
                 className={cn(
                   'whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 border-transparent transition-colors flex items-center gap-1.5',
                   activeTab === t.key
                     ? 'text-primary'
-                    : 'text-muted-foreground hover:text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                  designHiddenTabs?.has(t.key) && 'opacity-40'
                 )}
               >
                 {t.label}
                 {hasErr && <span className='h-1.5 w-1.5 rounded-full bg-destructive' />}
               </button>
             )
+            // "General" collects ungrouped + section fields — not a group.
+            return t.key === '__general__'
+              ? tabButton
+              : dwrap({ kind: 'group', key: t.key }, tabButton, { asChild: true, pass: true })
           })}
           {tabIndicator && (
             <span
@@ -8721,7 +8926,7 @@ export function ItemEditForm({
         {renderTabContent(activeTab)}
         {sectionOrder
           .filter((item) => typeof item === 'string' && item !== '__ungrouped__')
-          .map((item) => renderSentinel(item as string))}
+          .map((item) => dwrap(slotTarget(item as string), renderSentinel(item as string)))}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel
             collection={pipelineCollection}
@@ -8873,10 +9078,11 @@ export function ItemEditForm({
       <div className='nvr-stagger space-y-4 min-w-0 flex-1'>
         {preTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
+          return sectionShell(item as FieldGroup | string, key ?? i)
         })}
         <StepsBar
           steps={allSteps}
+          hiddenSteps={designHiddenTabs}
           active={activeTab}
           completed={completedSteps}
           dirtySteps={dirtySteps}
@@ -8892,7 +9098,7 @@ export function ItemEditForm({
         {renderTabContent(activeTab, true)}
         {postTabItems.map((item, i) => {
           const key = typeof item === 'string' ? item : (item as FieldGroup).key
-          return <div key={key ?? i}>{renderSectionItem(item as FieldGroup | string)}</div>
+          return sectionShell(item as FieldGroup | string, key ?? i)
         })}
         {!pipelineSlot && showPipeline && (
           <PipelinePanel
@@ -9017,7 +9223,7 @@ export function ItemEditForm({
   // Title derivation is duplicated inline (the display consts are declared
   // after the early returns) — same hooks-order constraint.
   useEffect(() => {
-    if (isNew || !documentTitle) return
+    if (isNew || !documentTitle || designOn) return
     const t =
       itemData && colMeta?.display_template
         ? applyDisplayTemplate(colMeta.display_template, itemData as Record<string, unknown>)
@@ -9028,7 +9234,7 @@ export function ItemEditForm({
     return () => {
       document.title = prev
     }
-  }, [itemData, colMeta, collection, isNew, documentTitle])
+  }, [itemData, colMeta, collection, isNew, documentTitle, designOn])
 
   // ── Lost access while open (#1925, F7) ────────────────────────────────────
   // No fields, no cached values, no unsaved edits — RecordLiveSync dropped
@@ -9069,7 +9275,12 @@ export function ItemEditForm({
   // reload painted the empty form shell (comments/tasks slot chrome included)
   // for the layout round-trip, THEN swapped to the loader. isFetched is false
   // through both phases.
-  const isLoading = !fieldConfigFetched || (!isNew && itemLoading)
+  // Design mode: each draft edit is a new field-config query whose isFetched
+  // starts false while the previous answer stays on screen (placeholderData) —
+  // only the very first answer may show the loader, or every edit would swap
+  // the canvas for it and remount the form.
+  const fieldConfigReady = designOn ? fieldConfig !== undefined : fieldConfigFetched
+  const isLoading = !fieldConfigReady || (!isNew && itemLoading)
   if (isLoading) {
     // A big, centered loading state — the sparse two-skeleton layout read as a
     // blank page for the first second on record open.
@@ -9310,7 +9521,7 @@ export function ItemEditForm({
                                             />
                                           )}
                                           {/* Admin-only: the route 403s everyone else anyway. */}
-                                          {isAdmin && !isNew && itemId && (
+                                          {isAdmin && !isNew && itemId && !designOn && (
                                             <RecordViewersChip
                                               collection={collection}
                                               itemId={String(itemId)}
@@ -10560,7 +10771,8 @@ export function ItemEditForm({
                                                   const w = item.data
                                                   const isBtnGroup =
                                                     headerWidgetTypes[w.field] === 'button-group'
-                                                  return (
+                                                  return dwrapEl(
+                                                    { kind: 'header', field: w.field },
                                                     <div
                                                       key={w.field}
                                                       // A widget may hold several figures side by side (a budget pair), so
@@ -10604,12 +10816,14 @@ export function ItemEditForm({
                                                             <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                           </button>
                                                         ))}
-                                                    </div>
+                                                    </div>,
+                                                    { asChild: true }
                                                   )
                                                 }
                                                 const f = item.data
                                                 if (f.field === '__owners__') {
-                                                  return (
+                                                  return dwrapEl(
+                                                    { kind: 'header', field: '__owners__' },
                                                     <div
                                                       key='__owners__'
                                                       // Empty roster reads as an empty cell (dim, folds first).
@@ -10648,7 +10862,8 @@ export function ItemEditForm({
                                                           <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                         </button>
                                                       )}
-                                                    </div>
+                                                    </div>,
+                                                    { asChild: true }
                                                   )
                                                 }
                                                 // M2M alias fields have no draft column — their value is the
@@ -10763,7 +10978,8 @@ export function ItemEditForm({
                                                   (Array.isArray(raw) && raw.length === 0)
                                                 const isPill = f.displayAs === 'pill'
                                                 const isTag = f.displayAs === 'tag'
-                                                return (
+                                                return dwrapEl(
+                                                  { kind: 'header', field: f.field },
                                                   <div
                                                     key={f.field}
                                                     data-header-field={f.field}
@@ -10945,7 +11161,8 @@ export function ItemEditForm({
                                                         <Copy className='h-3 w-3 text-slate-300 dark:text-slate-600 hover:text-slate-500 dark:hover:text-slate-400' />
                                                       </button>
                                                     )}
-                                                  </div>
+                                                  </div>,
+                                                  { asChild: true }
                                                 )
                                               })
                                             const foldedCells = headerDense ? headerFolded : []
@@ -11088,7 +11305,7 @@ export function ItemEditForm({
                                       recap, and an EMPTY sibling inside this space-y stack still
                                       costs a 16px gap above the next banner (the "more top
                                       padding than side padding"). */}
-                                    {!isNew && itemId && (
+                                    {!isNew && itemId && !designOn && (
                                       <RecordRecapStrip
                                         collection={collection}
                                         itemId={String(itemId)}
@@ -11096,6 +11313,8 @@ export function ItemEditForm({
                                     )}
                                     {!isNew &&
                                       itemId &&
+                                      // Design mode: the live check stores its result.
+                                      !designOn &&
                                       !activeLayoutData?.layout?.hide_integrity_banner &&
                                       // Summary mode marks the affected fields instead —
                                       // the banner would only push the record down.
@@ -11144,7 +11363,7 @@ export function ItemEditForm({
                                         />
                                       </div>
                                     )}
-                                    {!isNew && (
+                                    {!isNew && !designOn && (
                                       <RecordLiveSync
                                         collection={collection}
                                         itemId={String(itemId)}

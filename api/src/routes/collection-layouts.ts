@@ -1,10 +1,29 @@
 import { randomUUID } from 'crypto'
 import type { FastifyInstance } from 'fastify'
+import type { Knex } from 'knex'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
+import { activateLayout, whereLayoutType } from '../services/layout-activation.js'
+import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
+import { findLayoutReferences } from '../services/layout-references.js'
+import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
+import {
+  isLayoutType,
+  LAYOUT_TYPES,
+  type LayoutPatchBody,
+  normalizeLayoutPatch,
+  parseConditions,
+  parseDefaultValues,
+  parseLayoutRow,
+  parseQuickPicker,
+  parseRecordConditions,
+  type RecordConditionRule,
+  slugify
+} from '../services/layout-patch.js'
 import {
   diffLayoutVersions,
   getLayoutVersion,
@@ -18,68 +37,7 @@ import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
 
-type LayoutConditions = { role_ids?: string[] } | null
-
-export type RecordConditionRule = { field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }
-
-// Safely parse the conditions JSON text column into an object (or null).
-function parseConditions(raw: unknown): LayoutConditions {
-  if (raw == null) return null
-  if (typeof raw === 'object') return raw as LayoutConditions
-  if (typeof raw !== 'string') return null
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as LayoutConditions) : null
-  } catch {
-    return null
-  }
-}
-
-// Safely parse the record_conditions JSON text column into a rule array (or null).
-function parseRecordConditions(raw: unknown): RecordConditionRule[] | null {
-  if (raw == null) return null
-  if (Array.isArray(raw)) return raw as RecordConditionRule[]
-  if (typeof raw !== 'string') return null
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as RecordConditionRule[]) : null
-  } catch {
-    return null
-  }
-}
-
-// Safely parse the default_values JSON text column into a plain object (or null).
-/** JSON string[] of relation fields the quick picker walks; anything else = none. */
-function parseQuickPicker(raw: unknown): string[] | null {
-  if (raw == null) return null
-  let v: unknown = raw
-  if (typeof v === 'string') {
-    try {
-      v = JSON.parse(v)
-    } catch {
-      return null
-    }
-  }
-  if (!Array.isArray(v)) return null
-  const steps = v.filter(
-    (s): s is string => typeof s === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s)
-  )
-  return steps.length ? [...new Set(steps)] : null
-}
-
-function parseDefaultValues(raw: unknown): Record<string, unknown> | null {
-  if (raw == null) return null
-  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
-  if (typeof raw !== 'string') return null
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
-  } catch {
-    return null
-  }
-}
+export { parseConditions, parseRecordConditions, type RecordConditionRule, slugify }
 
 // Does every rule match the given record? eq/neq compare via
 // String(raw ?? '') === String(value) (tolerant of numeric/string mismatches,
@@ -96,18 +54,31 @@ export function matchesRecordConditions(
   })
 }
 
-const FIELD_IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
-
-/** Every layout_type the form knows how to render. 'summary' (2026-09-14) =
- *  the read-only presentation Summary mode shows instead of the grouped
- *  layout; activation is type-scoped like the rest. */
-const LAYOUT_TYPES = ['grouped', 'table', 'file', 'addendum', 'detail', 'summary'] as const
+/** The first free slug for `base` in `collection`: base, base_2, base_3, … */
+export async function nextFreeSlug(
+  collection: string,
+  base: string,
+  trx?: Knex | Knex.Transaction
+): Promise<string> {
+  const q = trx ?? db
+  const root = slugify(base) || 'layout'
+  const rows = (await q('nivaro_collection_layouts')
+    .where({ collection })
+    .whereNotNull('slug')
+    .select('slug')) as Array<{ slug: string }>
+  const taken = new Set(rows.map((r) => String(r.slug).toLowerCase()))
+  if (!taken.has(root)) return root
+  for (let n = 2; ; n++) {
+    if (!taken.has(`${root}_${n}`)) return `${root}_${n}`
+  }
+}
 
 /** Layout settings a clone carries over — every column except identity
- *  (id/collection/name/slug/sort/is_active/created_at), the type (the clone
- *  request may change it) and parent inheritance (a clone is a copy, not a
- *  child). */
+ *  (id/collection/name/slug/sort/is_active/created_at) and the type (the
+ *  clone request may change it). parent_layout_id is carried: a copy of a
+ *  child inherits from the same parent, so it renders the same form. */
 const CLONE_CARRIED_COLUMNS = [
+  'parent_layout_id',
   'disable_comments',
   'disable_tasks',
   'tab_mode',
@@ -155,41 +126,6 @@ const CLONE_CARRIED_COLUMNS = [
   'changes_tray'
 ] as const
 
-// Validate a PATCH body's record_conditions array; returns an error string
-// (naming the offending index) or null when valid.
-function validateRecordConditions(rules: unknown): string | null {
-  if (!Array.isArray(rules)) return 'record_conditions must be an array'
-  for (let i = 0; i < rules.length; i++) {
-    const rule = rules[i] as Record<string, unknown> | null
-    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
-      return `record_conditions[${i}] must be an object`
-    }
-    if (typeof rule.field !== 'string' || !FIELD_IDENTIFIER_RE.test(rule.field)) {
-      return `record_conditions[${i}].field must be a valid field identifier`
-    }
-    if (rule.op !== 'eq' && rule.op !== 'neq' && rule.op !== 'nnull') {
-      return `record_conditions[${i}].op must be one of eq, neq, nnull`
-    }
-    if ((rule.op === 'eq' || rule.op === 'neq') && rule.value === undefined) {
-      return `record_conditions[${i}].value is required for op ${rule.op}`
-    }
-  }
-  return null
-}
-
-// Validate a PATCH body's default_values object; returns an error string
-// (naming the offending key) or null when valid.
-function validateDefaultValues(values: unknown): string | null {
-  if (!values || typeof values !== 'object' || Array.isArray(values)) {
-    return 'default_values must be an object'
-  }
-  for (const key of Object.keys(values as Record<string, unknown>)) {
-    if (!FIELD_IDENTIFIER_RE.test(key))
-      return `default_values.${key} is not a valid field identifier`
-  }
-  return null
-}
-
 // Fetch the DB-ordered layout candidates for a collection (is_active desc,
 // sort asc — the idiom both role- and record-condition tie-breaking rely on).
 async function fetchLayoutsForCollection(collection: string) {
@@ -235,7 +171,7 @@ function collectRecordConditionFields(layouts: Record<string, unknown>[]): strin
  * admin, and the next allowed layout for everyone else). Empty/absent list =
  * open to all. Admins always pass.
  */
-function roleAllows(
+export function roleAllows(
   row: Record<string, unknown>,
   userRoleId: string | null | undefined,
   isAdmin: boolean
@@ -248,23 +184,54 @@ function roleAllows(
   return roleIds.some((r) => String(r).toUpperCase() === want)
 }
 
-function pickBestLayout(
+/** Why a layout won resolution — the overview's reason vocabulary. */
+export type PickReason = {
+  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use'
+  rules?: RecordConditionRule[]
+  role_ids?: string[]
+  role_names?: string[]
+  type_use?: string
+}
+export type PickCheck = { layout_id: number; matched: boolean; why: string }
+export type PickResult = {
+  row: Record<string, unknown> | null
+  reason: PickReason | null
+  checked: PickCheck[]
+}
+
+export function pickBestLayout(
   allCandidates: Record<string, unknown>[],
   userRoleId: string | null | undefined,
   record: Record<string, unknown> | null,
   isAdmin = false
 ) {
+  return pickBestLayoutTraced(allCandidates, userRoleId, record, isAdmin).row
+}
+
+/**
+ * pickBestLayout with its working shown: the winner, the step that chose it
+ * and one line per candidate (in candidate order) saying what its check found.
+ * The one implementation — /active, /explain and preview-as-role all call it.
+ */
+export function pickBestLayoutTraced(
+  allCandidates: Record<string, unknown>[],
+  userRoleId: string | null | undefined,
+  record: Record<string, unknown> | null,
+  isAdmin = false
+): PickResult {
   // Role-restricted layouts leave the candidate set entirely for non-listed
   // roles — before record conditions, before the default fallback.
   const layouts = allCandidates.filter((row) => roleAllows(row, userRoleId, isAdmin))
-  if (layouts.length === 0) return null
 
   const fallbackPool: typeof layouts = []
+  const recordMatched = new Set<Record<string, unknown>>()
+  const roleListed = new Set<Record<string, unknown>>()
   let bestRecordMatch: { row: (typeof layouts)[number]; matches: number } | null = null
   for (const row of layouts) {
     const rules = parseRecordConditions(row.record_conditions)
     if (rules) {
       if (record && matchesRecordConditions(rules, record)) {
+        recordMatched.add(row)
         const matches = rules.length
         if (!bestRecordMatch || matches > bestRecordMatch.matches)
           bestRecordMatch = { row, matches }
@@ -273,23 +240,191 @@ function pickBestLayout(
     }
     fallbackPool.push(row)
   }
-  if (bestRecordMatch) return bestRecordMatch.row
 
-  if (userRoleId) {
+  let picked: Record<string, unknown> | null = null
+  let reason: PickReason | null = null
+  if (bestRecordMatch) {
+    picked = bestRecordMatch.row
+    reason = {
+      kind: 'record_rule',
+      rules: parseRecordConditions(picked.record_conditions) ?? []
+    }
+  }
+
+  if (!picked && userRoleId) {
     let best: { row: (typeof layouts)[number]; matches: number } | null = null
     for (const row of fallbackPool) {
       const cond = parseConditions(row.conditions)
       const roleIds = cond?.role_ids
       if (Array.isArray(roleIds) && roleIds.includes(userRoleId)) {
+        roleListed.add(row)
         const matches = roleIds.length
         if (!best || matches > best.matches) best = { row, matches }
       }
     }
-    if (best) return best.row
+    if (best) {
+      picked = best.row
+      reason = { kind: 'role', role_ids: parseConditions(picked.conditions)?.role_ids ?? [] }
+    }
   }
 
   // Fall back to the active (default) layout, else the first by sort.
-  return fallbackPool.find((l) => l.is_active) ?? fallbackPool[0] ?? null
+  if (!picked) {
+    picked = fallbackPool.find((l) => l.is_active) ?? fallbackPool[0] ?? null
+    if (picked) reason = { kind: picked.is_active ? 'default' : 'fallback' }
+  }
+
+  const winnerName = picked ? `“${String(picked.name ?? picked.id)}”` : ''
+  const checked = allCandidates.map((row): PickCheck => {
+    const layout_id = Number(row.id)
+    if (row === picked) {
+      const why =
+        reason?.kind === 'record_rule'
+          ? 'Its record rules match'
+          : reason?.kind === 'role'
+            ? 'Listed for this role'
+            : reason?.kind === 'default'
+              ? 'The default form'
+              : allCandidates.some((c) => c.is_active)
+                ? 'First in order among the forms this role can open'
+                : 'First in order (no form is marked default)'
+      return { layout_id, matched: true, why }
+    }
+    if (!layouts.includes(row))
+      return { layout_id, matched: false, why: 'Restricted to other roles' }
+    if (parseRecordConditions(row.record_conditions)) {
+      if (!record)
+        return { layout_id, matched: false, why: 'Has record rules; no saved record to test them' }
+      if (recordMatched.has(row))
+        return { layout_id, matched: true, why: `Its record rules match, but ${winnerName} wins` }
+      return { layout_id, matched: false, why: 'Its record rules do not match' }
+    }
+    if (bestRecordMatch)
+      return { layout_id, matched: false, why: 'A form with record rules matched first' }
+    if (roleListed.has(row))
+      return { layout_id, matched: true, why: `Listed for this role, but ${winnerName} wins` }
+    return { layout_id, matched: false, why: `Not the default; ${winnerName} is used` }
+  })
+
+  return { row: picked, reason, checked }
+}
+
+/**
+ * The /active resolution, step for step: slug pin → grouped candidates →
+ * the record (only the columns rules name) → pickBestLayoutTraced. `role` is
+ * the caller's role; admins (isAdmin) get no role preference, as on /active.
+ */
+export async function resolveLayout(opts: {
+  collection: string
+  slug?: string | null
+  item?: string | null
+  role: string | null
+  isAdmin: boolean
+}): Promise<PickResult> {
+  const { collection, slug, item, role, isAdmin } = opts
+  // Explicit slug pins a specific layout (any type — detail layouts use this
+  // for drill-down rendering), bypassing role- and record-conditional resolution.
+  let pinned: Record<string, unknown> | undefined | null
+  const slugChecks: PickCheck[] = []
+  if (slug) {
+    pinned = await db('nivaro_collection_layouts').where({ collection, slug }).first()
+    // A pinned slug the caller's role may not open (queue row_click,
+    // ?layout= links, CBV) silently falls through to normal resolution.
+    if (pinned && !roleAllows(pinned, role, isAdmin)) {
+      slugChecks.push({
+        layout_id: Number(pinned.id),
+        matched: false,
+        why: 'Its link name was asked for, but it is restricted to other roles'
+      })
+      pinned = null
+    }
+  }
+  if (pinned) {
+    return {
+      row: pinned,
+      reason: { kind: 'slug' },
+      checked: [{ layout_id: Number(pinned.id), matched: true, why: 'Opened by its link name' }]
+    }
+  }
+
+  // Admins always see the default layout (no conditional override).
+  const userRoleId = isAdmin ? null : role
+  const layouts = await fetchLayoutsForCollection(collection)
+
+  // An unknown/missing item id, or a collection that isn't a registered
+  // nivaro_collections entry, resolves to no record — falls through to
+  // the role/default path exactly like the no-item case. The registry
+  // gate stops `collection` (a caller-supplied query param) from ever
+  // being used as an arbitrary table identifier, and the select below is
+  // restricted to exactly the fields the candidate layouts' rules
+  // reference, so this can't become a column-value probing oracle.
+  let record: Record<string, unknown> | null = null
+  if (item) {
+    const registered = await db('nivaro_collections').where({ collection }).first()
+    if (registered) {
+      const columns = [...new Set(['id', ...collectRecordConditionFields(layouts)])]
+      record =
+        (await db(collection)
+          .where({ id: item })
+          .select(columns)
+          .first()
+          .catch(() => null)) ?? null
+    }
+  }
+  const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin)
+  return { ...res, checked: [...slugChecks, ...res.checked] }
+}
+
+// Columns every record carries that a form never shows.
+const SEED_SKIP_FIELDS = new Set([
+  'id',
+  'user_created',
+  'user_updated',
+  'date_created',
+  'date_updated'
+])
+
+/**
+ * Seed a new layout for "Create first form": one section "Main" holding every
+ * non-hidden field of the collection in nivaro field order. System columns
+ * and presentation/group pseudo fields (no value of their own) are left out;
+ * relation alias fields stay — they render as grids and pickers.
+ */
+export async function seedLayoutFields(
+  layout: { id: number; collection: string },
+  trx: Knex | Knex.Transaction
+) {
+  const fields = (await trx('nivaro_fields')
+    .where({ collection: layout.collection })
+    .select('field', 'hidden', 'type', 'interface')
+    .orderBy([
+      { column: 'sort', order: 'asc' },
+      { column: 'id', order: 'asc' }
+    ])) as Array<{ field: string; hidden: unknown; type: string | null; interface: string | null }>
+  const pseudo = (v: string | null) => /^(group-|presentation-)/.test(v ?? '')
+  const keep = fields.filter(
+    (f) => !f.hidden && !SEED_SKIP_FIELDS.has(f.field) && !pseudo(f.type) && !pseudo(f.interface)
+  )
+  await trx('nivaro_field_groups').insert({
+    collection: layout.collection,
+    key: 'main',
+    label: 'Main',
+    type: 'section',
+    sort: 0,
+    is_collapsed: 0,
+    layout_id: Number(layout.id)
+  })
+  const rows = keep.map((f, i) => ({
+    layout_id: Number(layout.id),
+    field: f.field,
+    group_key: 'main',
+    sort: i,
+    is_visible: 1
+  }))
+  // 5 bindings a row: stay well under the ~2100 parameter cap.
+  for (let i = 0; i < rows.length; i += 200) {
+    await trx('nivaro_layout_field_assignments').insert(rows.slice(i, i + 200))
+  }
 }
 
 let driftCheckRegistered = false
@@ -330,10 +465,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const role = await db('nivaro_roles').where({ id: role_id }).first('id', 'name', 'admin_access')
     if (!role) return reply.code(404).send({ error: 'Role not found' })
 
-    const layouts = (await db('nivaro_collection_layouts')
-      .where({ collection, layout_type: 'grouped' })
-      .orderBy('sort')) as Record<string, unknown>[]
-    const picked = pickBestLayout(layouts, String(role_id), null, !!role.admin_access)
+    // The live path exactly: same candidates (grouped or legacy NULL, is_active
+    // desc, sort asc) and an admin role gets no role preference, as on /active.
+    const { row: picked } = await resolveLayout({
+      collection,
+      role: String(role_id),
+      isAdmin: !!role.admin_access
+    })
+    const layouts = (await fetchLayoutsForCollection(collection)) as Record<string, unknown>[]
     const recordConditional = layouts.filter((l) => parseRecordConditions(l.record_conditions))
 
     // Field permissions via a synthetic user — the permission-simulator
@@ -382,6 +521,103 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     })
   })
 
+  // ─── Overview + explain (layout editor) ──────────────────────────────────
+  // "Which form does each kind of record get?" — every layout of the
+  // collection, sectioned and ordered as /active checks them, with what
+  // references each one. Admin-only, like the editor it opens.
+  app.get('/overview', { preHandler: requireAdmin }, async (req, reply) => {
+    const { collection } = req.query as { collection?: string }
+    if (!collection) return reply.code(400).send({ error: 'collection is required' })
+
+    const layouts = (await db('nivaro_collection_layouts')
+      .where({ collection })
+      .orderByRaw('is_active desc, sort asc, id asc')
+      .select(
+        'id',
+        'name',
+        'layout_type',
+        'slug',
+        'is_active',
+        'sort',
+        'conditions',
+        'record_conditions',
+        'create_label',
+        'create_hidden',
+        'tab_mode'
+      )) as OverviewLayoutInput[]
+    const ids = layouts.map((l) => Number(l.id))
+    const [groups, assignments, roles, refs] = await Promise.all([
+      ids.length
+        ? db('nivaro_field_groups')
+            .whereIn('layout_id', ids)
+            .select('id', 'key', 'type', 'container_id', 'tab_mode', 'layout_id')
+        : [],
+      ids.length
+        ? db('nivaro_layout_field_assignments')
+            .whereIn('layout_id', ids)
+            .select('layout_id', 'field', 'group_key', 'is_visible')
+        : [],
+      db('nivaro_roles').select('id', 'name'),
+      findLayoutReferences(collection)
+    ])
+    for (const l of layouts) {
+      l.groups = groups.filter((g: { layout_id: number }) => Number(g.layout_id) === Number(l.id))
+      l.assignments = assignments.filter(
+        (a: { layout_id: number }) => Number(a.layout_id) === Number(l.id)
+      )
+    }
+    return reply.send({
+      data: {
+        rows: buildLayoutOverview(layouts, refs, roles),
+        warning: config.LAYOUT_EDIT_WARNING ?? null
+      }
+    })
+  })
+
+  // Which layout a saved record opens with, and why — the /active resolution
+  // itself (resolveLayout), with each candidate's check. role_id tests as that
+  // role (an admin role gets no role preference, as live); none = as an admin.
+  app.get('/explain', { preHandler: requireAdmin }, async (req, reply) => {
+    const { collection, item, role_id, slug } = req.query as {
+      collection?: string
+      item?: string
+      role_id?: string
+      slug?: string
+    }
+    if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    let role: string | null = req.user?.role ?? null
+    let isAdmin = true
+    if (role_id) {
+      const r = await db('nivaro_roles').where({ id: role_id }).first('id', 'admin_access')
+      if (!r) return reply.code(404).send({ error: 'Role not found' })
+      role = String(r.id)
+      isAdmin = !!r.admin_access
+    }
+    const res = await resolveLayout({ collection, slug, item, role, isAdmin })
+    let reason = res.reason
+    if (reason?.role_ids?.length) {
+      const names = new Map(
+        (
+          (await db('nivaro_roles').whereIn('id', reason.role_ids).select('id', 'name')) as Array<{
+            id: string
+            name: string
+          }>
+        ).map((r) => [String(r.id).toUpperCase(), r.name])
+      )
+      reason = {
+        ...reason,
+        role_names: reason.role_ids.map((id) => names.get(id.toUpperCase()) ?? id)
+      }
+    }
+    return reply.send({
+      data: {
+        layout_id: res.row ? Number(res.row.id) : null,
+        reason,
+        checked: res.checked
+      }
+    })
+  })
+
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
     const { collection, slug, item } = req.query as {
@@ -391,42 +627,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
-    // Explicit slug pins a specific layout (any type — detail layouts use this
-    // for drill-down rendering), bypassing role- and record-conditional resolution.
-    let layout: Record<string, unknown> | undefined | null
-    if (slug) {
-      layout = await db('nivaro_collection_layouts').where({ collection, slug }).first()
-      // A pinned slug the caller's role may not open (queue row_click,
-      // ?layout= links, CBV) silently falls through to normal resolution.
-      if (layout && !roleAllows(layout, req.user?.role ?? null, !!req.isAdmin)) layout = null
-    }
-    if (!layout) {
-      // Admins always see the default layout (no conditional override).
-      const userRoleId = req.isAdmin ? null : (req.user?.role ?? null)
-      const layouts = await fetchLayoutsForCollection(collection)
-
-      // An unknown/missing item id, or a collection that isn't a registered
-      // nivaro_collections entry, resolves to no record — falls through to
-      // the role/default path exactly like the no-item case. The registry
-      // gate stops `collection` (a caller-supplied query param) from ever
-      // being used as an arbitrary table identifier, and the select below is
-      // restricted to exactly the fields the candidate layouts' rules
-      // reference, so this can't become a column-value probing oracle.
-      let record: Record<string, unknown> | null = null
-      if (item) {
-        const registered = await db('nivaro_collections').where({ collection }).first()
-        if (registered) {
-          const columns = [...new Set(['id', ...collectRecordConditionFields(layouts)])]
-          record =
-            (await db(collection)
-              .where({ id: item })
-              .select(columns)
-              .first()
-              .catch(() => null)) ?? null
-        }
-      }
-      layout = pickBestLayout(layouts, userRoleId, record, !!req.isAdmin)
-    }
+    const { row: layout } = await resolveLayout({
+      collection,
+      slug,
+      item,
+      role: req.user?.role ?? null,
+      isAdmin: !!req.isAdmin
+    })
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
     layout.conditions = parseConditions(layout.conditions)
@@ -615,10 +822,19 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: { layout, groups, assignments } })
   })
 
-  // GET /collection-layouts?collection=x[&active=true]
+  // GET /collection-layouts?collection=x[&active=true][&layout_type=grouped]
   app.get('/', { preHandler: authenticate }, async (req, reply) => {
-    const { collection, active } = req.query as { collection?: string; active?: string }
+    const { collection, active, layout_type } = req.query as {
+      collection?: string
+      active?: string
+      layout_type?: string
+    }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    if (layout_type !== undefined && !isLayoutType(layout_type)) {
+      return reply
+        .code(400)
+        .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
+    }
 
     let q = db('nivaro_collection_layouts')
       .where({ collection })
@@ -650,6 +866,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'allow_schedule',
         'allow_disable_pickers',
         'layout_type',
+        'parent_layout_id',
         'row_order_field',
         'pdf_theme',
         'pdf_template_id',
@@ -678,6 +895,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         'hide_empty'
       )
     if (active === 'true') q = q.where({ is_active: 1 })
+    if (layout_type) q = whereLayoutType(q, layout_type)
 
     // Non-admins never see role-restricted layouts they cannot open (New-item
     // menus, queue builders, drill pickers all read this list).
@@ -698,9 +916,21 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
   // POST /collection-layouts
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
-    const body = req.body as { collection: string; name: string }
+    const body = req.body as {
+      collection: string
+      name: string
+      slug?: string | null
+      layout_type?: string
+      /** "Create first form": one "Main" section holding every visible field. */
+      seed_fields?: boolean
+    }
     if (!body.collection || !body.name)
       return reply.code(400).send({ error: 'collection and name are required' })
+    if (body.layout_type !== undefined && !isLayoutType(body.layout_type)) {
+      return reply
+        .code(400)
+        .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
+    }
 
     const maxSortRow = await db('nivaro_collection_layouts')
       .where({ collection: body.collection })
@@ -708,12 +938,29 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .first()
     const maxSort = (maxSortRow?.m as number | null) ?? -1
 
+    // Every layout gets a machine name: without one it can't be opened by
+    // ?layout=, offered in New-item menus or named by queues and grids.
+    const slug = await nextFreeSlug(body.collection, body.slug || body.name)
+
+    // Create and seed are one transaction: a failed seed leaves no empty
+    // layout behind (and no name clash for the retry).
+    let created: Record<string, unknown> & { id: number; collection: string }
     try {
-      await db('nivaro_collection_layouts').insert({
-        collection: body.collection,
-        name: body.name,
-        is_active: 0,
-        sort: maxSort + 1
+      created = await db.transaction(async (trx) => {
+        await trx('nivaro_collection_layouts').insert({
+          collection: body.collection,
+          name: body.name,
+          slug,
+          ...(body.layout_type ? { layout_type: body.layout_type } : {}),
+          is_active: 0,
+          sort: maxSort + 1
+        })
+        const row = await trx('nivaro_collection_layouts')
+          .where({ collection: body.collection, name: body.name })
+          .orderBy('id', 'desc')
+          .first()
+        if (body.seed_fields === true && row) await seedLayoutFields(row, trx)
+        return row
       })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''
@@ -722,10 +969,6 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       }
       throw err
     }
-    const created = await db('nivaro_collection_layouts')
-      .where({ collection: body.collection, name: body.name })
-      .orderBy('id', 'desc')
-      .first()
 
     await logActivity({
       action: 'create',
@@ -762,175 +1005,33 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
 
-    const body = req.body as Partial<{
-      name: string
-      slug: string | null
-      create_label: string | null
-      create_hidden: boolean
-      sort: number
-      is_active: boolean
-      disable_comments: boolean
-      disable_tasks: boolean
-      tab_mode: string
-      validate_before_next: boolean
-      summary_enabled: boolean
-      summary_show_all: boolean
-      ai_enabled: boolean
-      conditions: { role_ids?: string[] } | null
-      allow_clone: boolean
-      allow_schedule: boolean
-      allow_disable_pickers: boolean
-      layout_type: string
-      addendum_layout_id: number | null
-      workflow_template_id: string | null
-      single_active_addendum: boolean
-      addendum_default_view: boolean
-      record_conditions: RecordConditionRule[] | null
-      default_values: Record<string, unknown> | null
-      display_mode: string | null
-      parent_layout_id: number | null
-      hide_integrity_banner: boolean
-      hide_sla_banner: boolean
-      changes_tray: boolean
-      dossier_enabled: boolean
-      dossier_label: string | null
-      quick_picker: string[] | null
-      sheet_width: number | null
-      header_fields: string[] | null
-      hide_empty: boolean
-    }>
+    const body = req.body as LayoutPatchBody
+    const normalized = await normalizeLayoutPatch(db, id, existing, body)
+    if (normalized.error !== undefined)
+      return reply.code(normalized.status).send({ error: normalized.error })
+    const patch = normalized.patch
 
-    if (body.record_conditions !== undefined && body.record_conditions !== null) {
-      const err = validateRecordConditions(body.record_conditions)
-      if (err) return reply.code(400).send({ error: err })
-    }
-    if (body.default_values !== undefined && body.default_values !== null) {
-      const err = validateDefaultValues(body.default_values)
-      if (err) return reply.code(400).send({ error: err })
-    }
-
-    const patch: Record<string, unknown> = {}
-    if (body.name !== undefined) patch.name = body.name
-    if (body.slug !== undefined) patch.slug = body.slug ?? null
-    if (body.create_label !== undefined) patch.create_label = body.create_label ?? null
-    if (body.create_hidden !== undefined) patch.create_hidden = body.create_hidden ? 1 : 0
-    if (body.sort !== undefined) patch.sort = body.sort
-    if (body.is_active !== undefined) patch.is_active = body.is_active ? 1 : 0
-    if (body.disable_comments !== undefined) patch.disable_comments = body.disable_comments ? 1 : 0
-    if (body.disable_tasks !== undefined) patch.disable_tasks = body.disable_tasks ? 1 : 0
-    if (body.tab_mode !== undefined) patch.tab_mode = body.tab_mode
-    if (body.parent_layout_id !== undefined) {
-      // Layout inheritance (#424): one level only, same collection, never self.
-      if (body.parent_layout_id === null) patch.parent_layout_id = null
-      else {
-        const parent = await db('nivaro_collection_layouts')
-          .where({ id: Number(body.parent_layout_id) })
-          .first('id', 'collection', 'parent_layout_id')
-        const self = await db('nivaro_collection_layouts')
-          .where({ id: Number(id) })
-          .first('collection')
-        if (
-          !parent ||
-          parent.collection !== self?.collection ||
-          Number(parent.id) === Number(id) ||
-          parent.parent_layout_id
-        ) {
-          return reply
-            .code(400)
-            .send({ error: 'Parent must be a same-collection layout with no parent of its own' })
-        }
-        patch.parent_layout_id = Number(body.parent_layout_id)
-      }
-    }
-    if (body.layout_type !== undefined) {
-      if (!LAYOUT_TYPES.includes(body.layout_type as (typeof LAYOUT_TYPES)[number])) {
-        return reply
-          .code(400)
-          .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
-      }
-      patch.layout_type = body.layout_type
-    }
-    if (body.validate_before_next !== undefined)
-      patch.validate_before_next = body.validate_before_next ? 1 : 0
-    if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
-    if (body.summary_show_all !== undefined) patch.summary_show_all = body.summary_show_all ? 1 : 0
-    if (body.ai_enabled !== undefined) patch.ai_enabled = body.ai_enabled ? 1 : 0
-    if (body.conditions !== undefined)
-      patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
-    if (body.allow_clone !== undefined) patch.allow_clone = body.allow_clone ? 1 : 0
-    if (body.allow_schedule !== undefined) patch.allow_schedule = body.allow_schedule ? 1 : 0
-    if (body.allow_disable_pickers !== undefined)
-      patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
-    if (body.addendum_layout_id !== undefined)
-      patch.addendum_layout_id = body.addendum_layout_id ?? null
-    if (body.workflow_template_id !== undefined)
-      patch.workflow_template_id = body.workflow_template_id ?? null
-    if (body.single_active_addendum !== undefined)
-      patch.single_active_addendum = body.single_active_addendum ? 1 : 0
-    if (body.addendum_default_view !== undefined)
-      patch.addendum_default_view = body.addendum_default_view ? 1 : 0
-    if (body.record_conditions !== undefined)
-      patch.record_conditions =
-        body.record_conditions == null ? null : JSON.stringify(body.record_conditions)
-    if (body.default_values !== undefined)
-      patch.default_values =
-        body.default_values == null ? null : JSON.stringify(body.default_values)
-    if (body.display_mode !== undefined) patch.display_mode = body.display_mode ?? null
-    if (body.hide_integrity_banner !== undefined)
-      patch.hide_integrity_banner = body.hide_integrity_banner === true
-    if (body.dossier_enabled !== undefined) patch.dossier_enabled = body.dossier_enabled === true
-    if (body.dossier_label !== undefined)
-      patch.dossier_label = body.dossier_label?.trim().slice(0, 100) || null
-    if (body.hide_sla_banner !== undefined) patch.hide_sla_banner = body.hide_sla_banner === true
-    if (body.changes_tray !== undefined) patch.changes_tray = body.changes_tray === true
-    if (body.quick_picker !== undefined) {
-      if (body.quick_picker !== null && !Array.isArray(body.quick_picker))
-        return reply
-          .code(400)
-          .send({ error: 'quick_picker must be an array of field names or null' })
-      const steps = parseQuickPicker(body.quick_picker)
-      if (body.quick_picker !== null && body.quick_picker.length > 0 && !steps)
-        return reply.code(400).send({ error: 'quick_picker entries must be field names' })
-      if (steps && steps.length > 20)
-        return reply.code(400).send({ error: 'quick_picker allows at most 20 steps' })
-      patch.quick_picker = steps ? JSON.stringify(steps) : null
-    }
-    // Read-view presentation (migration 302): sheet width, header band, hide empty.
-    if (body.sheet_width !== undefined) {
-      if (body.sheet_width === null) patch.sheet_width = null
-      else {
-        const w = Number(body.sheet_width)
-        if (!Number.isFinite(w) || w < 320 || w > 2000)
-          return reply.code(400).send({ error: 'sheet_width must be 320–2000 px or null' })
-        patch.sheet_width = Math.round(w)
-      }
-    }
-    if (body.header_fields !== undefined) {
-      if (body.header_fields !== null && !Array.isArray(body.header_fields))
-        return reply
-          .code(400)
-          .send({ error: 'header_fields must be an array of field names or null' })
-      const hf = parseQuickPicker(body.header_fields)
-      if (body.header_fields !== null && body.header_fields.length > 0 && !hf)
-        return reply.code(400).send({ error: 'header_fields entries must be field names' })
-      if (hf && hf.length > 8)
-        return reply.code(400).send({ error: 'header_fields allows at most 8 fields' })
-      patch.header_fields = hf ? JSON.stringify(hf) : null
-    }
-    if (body.hide_empty !== undefined) patch.hide_empty = body.hide_empty === true
-
-    if (Object.keys(patch).length === 0)
+    if (Object.keys(patch).length === 0 && body.is_active === undefined)
       return reply.code(400).send({ error: 'No fields to update' })
 
-    await db('nivaro_collection_layouts').where({ id }).update(patch)
-    const updated = await db('nivaro_collection_layouts').where({ id }).first()
-    updated.conditions = parseConditions(updated.conditions)
-    updated.record_conditions = parseRecordConditions(updated.record_conditions)
-    updated.default_values = parseDefaultValues(updated.default_values)
-    updated.quick_picker = parseQuickPicker(updated.quick_picker)
-    updated.header_fields = parseQuickPicker(updated.header_fields)
-    updated.hide_empty = !!updated.hide_empty
-    updated.changes_tray = !!updated.changes_tray
+    await db.transaction(async (trx: Knex.Transaction) => {
+      if (Object.keys(patch).length > 0)
+        await trx('nivaro_collection_layouts').where({ id }).update(patch)
+      // is_active only changes through the activate rule (one default per
+      // type). An active layout moved to another type takes that type's
+      // default with it, so the new type never ends up with two.
+      const type = (patch.layout_type as string | undefined) ?? existing.layout_type
+      const typeChanged =
+        patch.layout_type !== undefined && patch.layout_type !== (existing.layout_type ?? 'grouped')
+      if (
+        body.is_active === true ||
+        (body.is_active === undefined && typeChanged && existing.is_active)
+      )
+        await activateLayout(trx, { id, collection: existing.collection, layout_type: type })
+      else if (body.is_active === false)
+        await trx('nivaro_collection_layouts').where({ id }).update({ is_active: 0 })
+    })
+    const updated = parseLayoutRow(await db('nivaro_collection_layouts').where({ id }).first())
 
     await logActivity({
       action: 'update',
@@ -942,7 +1043,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: updated })
   })
 
-  // DELETE /collection-layouts/:id — blocked if it is the only layout for the collection
+  // DELETE /collection-layouts/:id — blocked if it is the only layout for the
+  // collection, or while another layout or an addendum still points at it.
   app.delete('/:id', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
     const existing = await db('nivaro_collection_layouts').where({ id }).first()
@@ -957,30 +1059,84 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     if (count <= 1)
       return reply.code(409).send({ error: 'Cannot delete the only layout for a collection' })
 
-    // If deleting the active layout, promote the next one of the SAME type first
-    // (activation is type-scoped — grouped and detail defaults are independent).
-    if (existing.is_active) {
-      const layoutType = existing.layout_type ?? 'grouped'
-      const next = await db('nivaro_collection_layouts')
-        .where({ collection: existing.collection, layout_type: layoutType })
+    // References first: the delete used to remove groups and assignments and
+    // only then fail on the addendum FK, leaving an empty layout behind.
+    const [addendumOf, childrenOf, addendums] = await Promise.all([
+      db('nivaro_collection_layouts')
+        .where({ addendum_layout_id: Number(id) })
         .whereNot({ id: Number(id) })
-        .orderBy('sort', 'asc')
-        .first('id')
-      if (next) {
-        await db('nivaro_collection_layouts')
-          .where({ collection: existing.collection, layout_type: layoutType })
-          .update({ is_active: 0 })
-        await db('nivaro_collection_layouts').where({ id: next.id }).update({ is_active: 1 })
-      }
+        .select('id', 'name'),
+      db('nivaro_collection_layouts')
+        .where({ parent_layout_id: Number(id) })
+        .whereNot({ id: Number(id) })
+        .select('id', 'name'),
+      db('nivaro_addendums')
+        .where({ addendum_layout_id: Number(id) })
+        .select('id', 'title', 'parent_collection', 'parent_id')
+        .limit(50)
+    ])
+    const references = [
+      ...(addendumOf as Array<{ id: number; name: string }>).map((r) => ({
+        kind: 'layout_addendum',
+        id: r.id,
+        label: r.name
+      })),
+      ...(childrenOf as Array<{ id: number; name: string }>).map((r) => ({
+        kind: 'layout_parent',
+        id: r.id,
+        label: r.name
+      })),
+      ...(
+        addendums as Array<{
+          id: string
+          title: string | null
+          parent_collection: string
+          parent_id: string
+        }>
+      ).map((r) => ({
+        kind: 'addendum',
+        id: r.id,
+        label: r.title || `Addendum on ${r.parent_collection} ${r.parent_id}`
+      }))
+    ]
+    if (references.length > 0) {
+      return reply.code(409).send({
+        error: 'This layout is still in use. Point these at another layout first.',
+        references
+      })
     }
 
-    await db('nivaro_layout_field_assignments')
-      .where({ layout_id: Number(id) })
-      .delete()
-    await db('nivaro_field_groups')
-      .where({ layout_id: Number(id) })
-      .delete()
-    await db('nivaro_collection_layouts').where({ id }).delete()
+    // One transaction: promote the next default, then assignments → groups →
+    // layout. Version history is kept (migration 456 dropped the cascade).
+    await db.transaction(async (trx: Knex.Transaction) => {
+      // Deleting the active layout promotes the next one of the SAME type
+      // (activation is type-scoped — grouped and detail defaults are independent).
+      // File layouts are independent PDF buttons — nothing to promote.
+      const layoutType = existing.layout_type ?? 'grouped'
+      if (existing.is_active && layoutType !== 'file') {
+        const next = await whereLayoutType(
+          trx('nivaro_collection_layouts').where({ collection: existing.collection }),
+          layoutType
+        )
+          .whereNot({ id: Number(id) })
+          .orderBy('sort', 'asc')
+          .first('id')
+        if (next) {
+          await activateLayout(trx, {
+            id: next.id,
+            collection: existing.collection,
+            layout_type: layoutType
+          })
+        }
+      }
+      await trx('nivaro_layout_field_assignments')
+        .where({ layout_id: Number(id) })
+        .delete()
+      await trx('nivaro_field_groups')
+        .where({ layout_id: Number(id) })
+        .delete()
+      await trx('nivaro_collection_layouts').where({ id }).delete()
+    })
     await logActivity({
       action: 'delete',
       user: req.user?.id,
@@ -999,11 +1155,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     // Activation is scoped to the layout's type: one active 'grouped' layout
     // (ItemEdit default) and one active 'detail' layout (drill-down default)
-    // coexist per collection.
-    await db('nivaro_collection_layouts')
-      .where({ collection: existing.collection, layout_type: existing.layout_type ?? 'grouped' })
-      .update({ is_active: 0 })
-    await db('nivaro_collection_layouts').where({ id }).update({ is_active: 1 })
+    // coexist per collection; file layouts may have several on.
+    await db.transaction((trx: Knex.Transaction) => activateLayout(trx, existing))
 
     const updated = await db('nivaro_collection_layouts').where({ id }).first()
     await logActivity({
@@ -1547,7 +1700,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const source = await db('nivaro_collection_layouts').where({ id }).first()
     if (!source) return reply.code(404).send({ error: 'Not found' })
 
-    const body = req.body as { name: string; layout_type?: string }
+    const body = req.body as { name: string; slug?: string | null; layout_type?: string }
     if (!body.name) return reply.code(400).send({ error: 'name is required' })
     // A clone may land as another TYPE (grouped → summary is how a Summary
     // layout starts life: the same groups and fields, rendered read-only).
@@ -1573,13 +1726,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     for (const col of CLONE_CARRIED_COLUMNS) {
       if (col in source && source[col] !== undefined) carried[col] = source[col]
     }
+    const slug = await nextFreeSlug(source.collection, body.slug || body.name)
     try {
       await db('nivaro_collection_layouts').insert({
         ...carried,
         collection: source.collection,
         name: body.name,
         layout_type: body.layout_type ?? source.layout_type ?? 'grouped',
-        slug: null,
+        slug,
         is_active: 0,
         sort: maxSort + 1
       })
@@ -1744,24 +1898,6 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: result })
   })
 
-  // input_bindings / overrides arrive as objects from the editor but as the
-  // stored JSON STRING from a GET → PUT round trip; stringifying a string
-  // double-encodes it (every round trip stacks another layer), the editor's
-  // parser then crashes on `.find` and the form loses its grid overrides.
-  // Unwrap before storing, however deep the stack got.
-  const serializeBindings = (v: unknown): string | null => {
-    let cur = v
-    for (let i = 0; i < 12 && typeof cur === 'string'; i++) {
-      try {
-        cur = JSON.parse(cur)
-      } catch {
-        break
-      }
-    }
-    if (cur == null || cur === '') return null
-    return JSON.stringify(cur)
-  }
-
   // PUT /collection-layouts/:id/assignments — bulk replace
   app.put('/:id/assignments', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -1789,49 +1925,47 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         input_bindings?: unknown
         widget_id?: number | null
         show_approval_chain?: boolean
-        hide_actions_when_collapsed?: boolean
       }>
     }
     if (!Array.isArray(body.assignments))
       return reply.code(400).send({ error: 'assignments array required' })
 
-    // Upsert by (layout_id, field) (#774): a save used to DELETE every row and
+    // Upsert by (layout_id, field, group_key): a field may sit in two groups
+    // (header strip + body) and both placements survive. (#774): a save used to DELETE every row and
     // re-insert, so assignment ids churned on each 400ms auto-save (version
     // restores had to match by field, and any column the insert map forgot —
     // hide_actions_when_collapsed — was silently dropped). Rows keep their
     // id now; only what left the payload is deleted; every column is carried.
+    const keyOf = (field: string, groupKey: string | null | undefined) =>
+      `${field}\u0000${groupKey ?? ''}`
     const wanted = new Map<string, (typeof body.assignments)[number]>()
     for (const a of body.assignments) {
       if (!a || typeof a.field !== 'string' || !a.field) continue
-      wanted.set(a.field, a) // a field named twice: the last entry wins
+      wanted.set(keyOf(a.field, a.group_key), a) // same pair named twice: the last entry wins
     }
-    const rowOf = (a: (typeof body.assignments)[number]) => ({
-      group_key: a.group_key ?? null,
-      sort: a.sort,
-      label_override: a.label_override ?? null,
-      is_visible: a.is_visible === false ? 0 : 1,
-      default_expanded: a.default_expanded === false ? 0 : 1,
-      col_span: a.col_span ?? null,
-      overrides: serializeBindings(a.overrides),
-      show_row_revisions: a.show_row_revisions ? 1 : 0,
-      allow_revision_restore: a.allow_revision_restore === false ? 0 : 1,
-      lock_conditions: a.lock_conditions ?? null,
-      input_bindings: serializeBindings(a.input_bindings),
-      widget_id: a.widget_id ?? null,
-      show_approval_chain: a.show_approval_chain ? 1 : 0,
-      hide_actions_when_collapsed: a.hide_actions_when_collapsed ? 1 : 0
-    })
+    const rowOf = placementColumns
     await db.transaction(async (trx) => {
       const existing = (await trx('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
-        .select('id', 'field')) as Array<{ id: number; field: string }>
-      const byField = new Map(existing.map((r) => [r.field, r.id]))
-      const gone = existing.filter((r) => !wanted.has(r.field)).map((r) => r.id)
+        .select('id', 'field', 'group_key')) as Array<{
+        id: number
+        field: string
+        group_key: string | null
+      }>
+      const byKey = new Map<string, number>()
+      const gone: number[] = []
+      for (const r of existing) {
+        const k = keyOf(r.field, r.group_key)
+        // A leftover duplicate of the same pair goes; the first row keeps its id.
+        if (wanted.has(k) && !byKey.has(k)) byKey.set(k, r.id)
+        else gone.push(r.id)
+      }
       if (gone.length > 0) {
         await trx('nivaro_layout_field_assignments').whereIn('id', gone).delete()
       }
-      for (const [field, a] of wanted) {
-        const rowId = byField.get(field)
+      for (const [k, a] of wanted) {
+        const field = a.field
+        const rowId = byKey.get(k)
         if (rowId != null) {
           await trx('nivaro_layout_field_assignments').where({ id: rowId }).update(rowOf(a))
         } else {
@@ -1875,5 +2009,51 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       )
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
+  })
+
+  // ─── Layout editor save model: bundle + atomic ops ────────────────────────
+  // GET /collection-layouts/:id/bundle — the layout, its groups and placements
+  // as the editor edits them, with the rev its next ops batch must name.
+  app.get('/:id/bundle', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const bundle = await loadLayoutBundle(db, Number(id))
+    if (!bundle) return reply.code(404).send({ error: 'Not found' })
+    return reply.send(bundle)
+  })
+
+  // POST /collection-layouts/:id/ops — { ops, base_rev, note? } applied all or
+  // nothing; 409 { error: 'stale', bundle } when the layout changed since
+  // base_rev, 400 { error, op_index } when an op is refused.
+  app.post('/:id/ops', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as { ops?: unknown; base_rev?: unknown; note?: unknown }
+    if (!Array.isArray(body.ops)) return reply.code(400).send({ error: 'ops array required' })
+    if (body.ops.length > 500) return reply.code(400).send({ error: 'At most 500 ops per batch' })
+    if (typeof body.base_rev !== 'string')
+      return reply.code(400).send({ error: 'base_rev required' })
+    const result = await runLayoutOps(
+      Number(id),
+      {
+        ops: body.ops,
+        base_rev: body.base_rev,
+        note: typeof body.note === 'string' ? body.note : null
+      },
+      req.user?.id
+    )
+    if (result.status === 404) return reply.code(404).send({ error: 'Not found' })
+    if (result.status === 409)
+      return reply.code(409).send({ error: 'stale', bundle: result.bundle })
+    if (result.status === 400)
+      return reply.code(400).send({ error: result.error, op_index: result.op_index })
+    if (result.changed)
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection: 'nivaro_collection_layouts',
+        item: id,
+        comment: `layout editor: ${body.ops.length} change(s)`,
+        req
+      })
+    return reply.send(result.bundle)
   })
 }
