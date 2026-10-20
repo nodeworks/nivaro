@@ -174,6 +174,24 @@ export function renderMetrics(extras: MetricsExtras = {}): string {
     )
     out.push(`nivaro_db_pool_wait_p95_seconds ${num(pressure.wait_p95_ms / 1000)}`)
   }
+  // #1321 — the background pool crons and imports run on (absent when off).
+  const bgPool = poolNow('background')
+  if (bgPool) {
+    metric('nivaro_db_background_pool_used', 'gauge', 'Background-pool connections checked out.')
+    out.push(`nivaro_db_background_pool_used ${bgPool.used}`)
+    metric(
+      'nivaro_db_background_pool_pending',
+      'gauge',
+      'Background work waiting for a database connection.'
+    )
+    out.push(`nivaro_db_background_pool_pending ${bgPool.pending}`)
+    metric(
+      'nivaro_db_background_pool_max',
+      'gauge',
+      'Background pool ceiling (DB_POOL_BACKGROUND_MAX).'
+    )
+    out.push(`nivaro_db_background_pool_max ${bgPool.max}`)
+  }
 
   if (extras.cronLeader !== undefined && extras.cronLeader !== null) {
     metric('nivaro_cron_leader', 'gauge', '1 when this process holds the scheduler lease.')

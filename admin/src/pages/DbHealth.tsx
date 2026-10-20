@@ -234,6 +234,15 @@ export function DbHealthPage() {
       peak_pending: number
       max: number
     }
+    /** #1321 — the pool crons, imports and warms run on; null = they share the main pool. */
+    background?: {
+      used: number
+      max: number
+      pending_acquires: number
+      held: Array<{ held_ms: number; hint: string | null }>
+      pressure: { wait_p95_ms: number; saturated_pct: number; acquires: number; peak_used: number }
+    } | null
+    total_max?: number
   }>('/ops-db/pool')
   const velocity =
     useOps<Array<{ collection: string; action: string; day: string; n: number }>>(
@@ -424,14 +433,36 @@ export function DbHealthPage() {
                     {rt.event_loop_lag_ms.max_1m} ms
                   </b>
                 </div>
-                <div>
-                  <span className='text-slate-400'>Pool</span>
+                <div data-pool='main'>
+                  <span className='text-slate-400'>
+                    {poolDetail.data?.data?.background ? 'Pool · requests' : 'Pool'}
+                  </span>
                   <br />
                   <b className={rt.pool.pending_acquires > 0 ? 'text-amber-600' : ''}>
                     {rt.pool.used}/{rt.pool.max} used
                     {rt.pool.pending_acquires > 0 ? ` · ${rt.pool.pending_acquires} waiting` : ''}
                   </b>
                 </div>
+                {(() => {
+                  const bg = poolDetail.data?.data?.background
+                  if (!bg) return null
+                  const busy = bg.pending_acquires > 0
+                  return (
+                    <div data-pool='background' data-pool-bg-used={bg.used}>
+                      <span className='text-slate-400'>Pool · background jobs</span>
+                      <br />
+                      <b className={busy ? 'text-amber-600 dark:text-amber-400' : ''}>
+                        {bg.used}/{bg.max} used
+                        {busy ? ` · ${bg.pending_acquires} waiting` : ''}
+                      </b>
+                      <span className='block text-[11px] text-slate-400'>
+                        p95 wait {bg.pressure.wait_p95_ms}ms · peak {bg.pressure.peak_used}/{bg.max}{' '}
+                        · {num(poolDetail.data?.data?.total_max ?? rt.pool.max + bg.max)}{' '}
+                        connections at most
+                      </span>
+                    </div>
+                  )
+                })()}
                 {(() => {
                   const pr = poolDetail.data?.data?.pressure
                   if (!pr) return null
@@ -959,18 +990,26 @@ export function DbHealthPage() {
               sub='Pool connections currently checked out, attributed to the request holding them (#304 · this replica)'
             >
               <MiniTable
-                head={['Held for', 'Request']}
-                rows={(
-                  (poolDetail.data?.data?.held ?? []) as Array<{
-                    held_ms: number
-                    hint: string | null
-                  }>
-                ).map((h) => [
-                  `${(h.held_ms / 1000).toFixed(1)}s`,
-                  <code key='h' className='font-mono text-[11px]'>
-                    {h.hint ?? '(background job / cron)'}
-                  </code>
-                ])}
+                head={
+                  poolDetail.data?.data?.background
+                    ? ['Held for', 'Pool', 'Request']
+                    : ['Held for', 'Request']
+                }
+                rows={[
+                  ...(poolDetail.data?.data?.held ?? []).map((h) => ({ ...h, pool: 'requests' })),
+                  ...(poolDetail.data?.data?.background?.held ?? []).map((h) => ({
+                    ...h,
+                    pool: 'background'
+                  }))
+                ]
+                  .sort((a, b) => b.held_ms - a.held_ms)
+                  .map((h) => [
+                    `${(h.held_ms / 1000).toFixed(1)}s`,
+                    ...(poolDetail.data?.data?.background ? [h.pool] : []),
+                    <code key='h' className='font-mono text-[11px]'>
+                      {h.hint ?? '(background job / cron)'}
+                    </code>
+                  ])}
               />
             </Panel>
           </div>

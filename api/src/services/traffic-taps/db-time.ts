@@ -16,7 +16,7 @@
  * frame (every 5 s): { people, integrations, cron, import, flow, other } ms over the last minute.
  * snapshot: DbTimeSplit for the window.
  */
-import { _staticDb, db, dbRead } from '../../db/index.js'
+import { _backgroundDb, _staticDb, db, dbRead } from '../../db/index.js'
 import { getApp } from '../io-holder.js'
 import { currentTraceCaller, requestMeasure } from '../request-trace.js'
 import { MinuteCounter } from '../traffic-ring.js'
@@ -145,7 +145,7 @@ export function noteBackground(
 export function startDbTimeTiming(): void {
   if (process.env.CLOUD_META_DB_URL) return
   try {
-    for (const k of [_staticDb, dbRead]) {
+    for (const k of [_staticDb, _backgroundDb, dbRead]) {
       const client = (k as unknown as { client?: { on?: unknown } } | undefined)?.client
       if (client && typeof client.on === 'function')
         attachBackgroundTiming(client as Parameters<typeof attachBackgroundTiming>[0])

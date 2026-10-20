@@ -1,4 +1,5 @@
-import { db } from '../db/index.js'
+import { _backgroundDb, _staticDb, db } from '../db/index.js'
+import type { PoolName } from '../db/pool-context.js'
 import { currentRequestHint } from './request-trace.js'
 
 /**
@@ -7,14 +8,16 @@ import { currentRequestHint } from './request-trace.js'
  * (the trace ALS's URL hint; crons show as null). Connections held past 30s
  * are reported with their holder, which turns "the pool is exhausted" into
  * "these two routes are holding connections".
+ *
+ * #1321 — tracked per pool: 'main' (interactive requests) and 'background'
+ * (crons, imports, warms; only when DB_POOL_BACKGROUND_MAX > 0). Every reader
+ * defaults to 'main', the pool a person waits on.
  */
 
 interface Held {
   at: number
   hint: string | null
 }
-
-const held = new Map<unknown, Held>()
 
 // ─── Pool pressure (#493) ────────────────────────────────────────────────────
 // Saturation was invisible until measured by hand: identical 80ms statements
@@ -29,14 +32,24 @@ const held = new Map<unknown, Held>()
 const WINDOW_MS = 5 * 60_000
 const SAMPLE_MS = 5_000
 
-const pendingAcquire = new Map<unknown, number>()
-const waits: Array<{ at: number; ms: number }> = []
-const samples: Array<{ at: number; used: number; pending: number; saturated: boolean }> = []
+interface Tracker {
+  held: Map<unknown, Held>
+  pendingAcquire: Map<unknown, number>
+  waits: Array<{ at: number; ms: number }>
+  samples: Array<{ at: number; used: number; pending: number; saturated: boolean }>
+  attached: TarnPool | null
+}
+
+function tracker(): Tracker {
+  return { held: new Map(), pendingAcquire: new Map(), waits: [], samples: [], attached: null }
+}
+
+const trackers: Record<PoolName, Tracker> = { main: tracker(), background: tracker() }
 let sampler: NodeJS.Timeout | null = null
 
-function prune(now: number): void {
-  while (waits.length && waits[0].at < now - WINDOW_MS) waits.shift()
-  while (samples.length && samples[0].at < now - WINDOW_MS) samples.shift()
+function prune(t: Tracker, now: number): void {
+  while (t.waits.length && t.waits[0].at < now - WINDOW_MS) t.waits.shift()
+  while (t.samples.length && t.samples[0].at < now - WINDOW_MS) t.samples.shift()
 }
 
 function percentile(sorted: number[], p: number): number {
@@ -58,23 +71,24 @@ export interface PoolPressure {
   max: number
 }
 
-export function poolPressure(): PoolPressure {
+export function poolPressure(which: PoolName = 'main'): PoolPressure {
   const now = Date.now()
-  prune(now)
-  const sorted = waits.map((w) => w.ms).sort((a, b) => a - b)
-  const pool = poolOf()
+  const t = trackers[which]
+  prune(t, now)
+  const sorted = t.waits.map((w) => w.ms).sort((a, b) => a - b)
+  const pool = poolOf(which)
   const max = pool?.max ?? 0
   return {
     window_s: WINDOW_MS / 1000,
-    acquires: waits.length,
+    acquires: t.waits.length,
     wait_p50_ms: Math.round(percentile(sorted, 0.5)),
     wait_p95_ms: Math.round(percentile(sorted, 0.95)),
     wait_max_ms: Math.round(sorted[sorted.length - 1] ?? 0),
-    saturated_pct: samples.length
-      ? Math.round((samples.filter((s) => s.saturated).length / samples.length) * 100)
+    saturated_pct: t.samples.length
+      ? Math.round((t.samples.filter((s) => s.saturated).length / t.samples.length) * 100)
       : 0,
-    peak_used: samples.reduce((m, s) => Math.max(m, s.used), 0),
-    peak_pending: samples.reduce((m, s) => Math.max(m, s.pending), 0),
+    peak_used: t.samples.reduce((m, s) => Math.max(m, s.used), 0),
+    peak_pending: t.samples.reduce((m, s) => Math.max(m, s.pending), 0),
     max
   }
 }
@@ -82,13 +96,17 @@ export function poolPressure(): PoolPressure {
 interface TarnPool {
   on: (ev: string, fn: (...a: unknown[]) => void) => void
   numUsed?: () => number
+  numFree?: () => number
   numPendingAcquires?: () => number
+  numPendingCreates?: () => number
   max?: number
 }
 
-/** The pool's counters right now (null = no tarn pool, e.g. in tests). */
-export function poolNow(): { used: number; pending: number; max: number } | null {
-  const pool = poolOf()
+/** The pool's counters right now (null = no tarn pool, e.g. in tests, or the background pool is off). */
+export function poolNow(
+  which: PoolName = 'main'
+): { used: number; pending: number; max: number } | null {
+  const pool = poolOf(which)
   if (!pool) return null
   return {
     used: pool.numUsed?.() ?? 0,
@@ -97,51 +115,94 @@ export function poolNow(): { used: number; pending: number; max: number } | null
   }
 }
 
-function poolOf(): TarnPool | null {
-  const pool = (db?.client as unknown as { pool?: TarnPool } | undefined)?.pool
+/** Full tarn counters for one pool — /ops-db/pool, /ops/runtime, the health detail. */
+export function poolCounters(which: PoolName = 'main'): {
+  used: number
+  free: number
+  pending_acquires: number
+  pending_creates: number
+  max: number
+} | null {
+  const pool = poolOf(which)
+  if (!pool) return null
+  return {
+    used: pool.numUsed?.() ?? 0,
+    free: pool.numFree?.() ?? 0,
+    pending_acquires: pool.numPendingAcquires?.() ?? 0,
+    pending_creates: pool.numPendingCreates?.() ?? 0,
+    max: pool.max ?? 0
+  }
+}
+
+/** True when this process runs a separate background pool (DB_POOL_BACKGROUND_MAX > 0, self-hosted). */
+export function backgroundPoolEnabled(): boolean {
+  return poolOf('background') !== null
+}
+
+function tarnOf(k: unknown): TarnPool | null {
+  const pool = (k as { client?: { pool?: TarnPool } } | null | undefined)?.client?.pool
   return pool && typeof pool.on === 'function' ? pool : null
 }
 
-export function startPoolAttribution(): void {
-  const pool = poolOf()
-  if (!pool) return
+function poolOf(which: PoolName): TarnPool | null {
+  if (which === 'background') return _backgroundDb ? tarnOf(_backgroundDb) : null
+  // Cloud mode: the request's tenant pool (resolved by the db proxy); self-hosted:
+  // the main pool explicitly, whatever pool the caller itself is bound to.
+  return process.env.CLOUD_META_DB_URL ? tarnOf(db) : tarnOf(_staticDb)
+}
+
+function attach(which: PoolName): void {
+  const t = trackers[which]
+  const pool = poolOf(which)
+  if (!pool || t.attached === pool) return
+  t.attached = pool
   pool.on('acquireRequest', (eventId: unknown) => {
-    pendingAcquire.set(eventId, performance.now())
+    t.pendingAcquire.set(eventId, performance.now())
   })
   pool.on('acquireFail', (eventId: unknown) => {
-    pendingAcquire.delete(eventId)
+    t.pendingAcquire.delete(eventId)
   })
   pool.on('acquireSuccess', (eventId: unknown, resource: unknown) => {
-    const started = pendingAcquire.get(eventId)
+    const started = t.pendingAcquire.get(eventId)
     if (started !== undefined) {
-      pendingAcquire.delete(eventId)
-      waits.push({ at: Date.now(), ms: performance.now() - started })
+      t.pendingAcquire.delete(eventId)
+      t.waits.push({ at: Date.now(), ms: performance.now() - started })
     }
-    held.set(resource, { at: Date.now(), hint: currentRequestHint() })
+    t.held.set(resource, { at: Date.now(), hint: currentRequestHint() })
   })
-  if (!sampler) {
-    sampler = setInterval(() => {
-      const p = poolOf()
-      if (!p) return
-      const used = p.numUsed?.() ?? 0
-      const pending = p.numPendingAcquires?.() ?? 0
-      const max = p.max ?? 0
-      samples.push({ at: Date.now(), used, pending, saturated: max > 0 && used >= max })
-      prune(Date.now())
-    }, SAMPLE_MS)
-    sampler.unref()
-  }
   pool.on('release', (resource: unknown) => {
-    held.delete(resource)
+    t.held.delete(resource)
   })
   pool.on('destroySuccess', (_eventId: unknown, resource: unknown) => {
-    held.delete(resource)
+    t.held.delete(resource)
   })
 }
 
-export function heldConnections(): Array<{ held_ms: number; hint: string | null }> {
+export function startPoolAttribution(): void {
+  attach('main')
+  attach('background')
+  if (!sampler) {
+    sampler = setInterval(() => {
+      for (const which of ['main', 'background'] as const) {
+        const p = poolOf(which)
+        if (!p) continue
+        const t = trackers[which]
+        const used = p.numUsed?.() ?? 0
+        const pending = p.numPendingAcquires?.() ?? 0
+        const max = p.max ?? 0
+        t.samples.push({ at: Date.now(), used, pending, saturated: max > 0 && used >= max })
+        prune(t, Date.now())
+      }
+    }, SAMPLE_MS)
+    sampler.unref()
+  }
+}
+
+export function heldConnections(
+  which: PoolName = 'main'
+): Array<{ held_ms: number; hint: string | null }> {
   const now = Date.now()
-  return [...held.values()]
+  return [...trackers[which].held.values()]
     .map((h) => ({ held_ms: now - h.at, hint: h.hint }))
     .filter((h) => h.held_ms > 1000)
     .sort((a, b) => b.held_ms - a.held_ms)

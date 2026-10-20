@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify'
 import { DEAD_COLUMNS } from '../db/dead-columns.js'
 import { isMssql } from '../db/dialect.js'
-import { db } from '../db/index.js'
+import { _backgroundDb, _staticDb, db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { registerReadinessCheck } from '../services/readiness.js'
@@ -30,25 +30,30 @@ async function dmv<T>(fn: () => Promise<T>): Promise<{ data: T } | { unavailable
   }
 }
 
-/** knex/tarn pool stats — used by /health/detailed and the pool monitor cron too. */
-export function poolStats(): {
+/** knex/tarn pool stats — used by /health/detailed and the pool monitor cron too.
+ *  #1321 — 'main' is the interactive pool (always, even when the caller runs on
+ *  the background pool); 'background' is zero-shaped (max 0) when that pool is off. */
+export function poolStats(which: 'main' | 'background' = 'main'): {
   used: number
   free: number
   pending_acquires: number
   pending_creates: number
   max: number
 } {
-  const pool = (
-    db.client as unknown as {
-      pool?: {
-        numUsed: () => number
-        numFree: () => number
-        numPendingAcquires: () => number
-        numPendingCreates: () => number
-        max: number
-      }
-    }
-  ).pool
+  type Tarn = {
+    numUsed: () => number
+    numFree: () => number
+    numPendingAcquires: () => number
+    numPendingCreates: () => number
+    max: number
+  }
+  const k =
+    which === 'background'
+      ? _backgroundDb
+      : process.env.CLOUD_META_DB_URL
+        ? db // cloud: the request's tenant pool, via the proxy
+        : _staticDb
+  const pool = (k as unknown as { client?: { pool?: Tarn } } | null)?.client?.pool
   if (!pool) return { used: 0, free: 0, pending_acquires: 0, pending_creates: 0, max: 0 }
   return {
     used: pool.numUsed(),
@@ -507,8 +512,21 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // requests are holding connections and for how long.
   app.get('/pool', async (_req, reply) => {
     const { heldConnections, poolPressure } = await import('../services/pool-attribution.js')
+    // #1321 — the top level stays the main (interactive) pool, as before;
+    // `background` is the second pool crons and imports run on (null when
+    // DB_POOL_BACKGROUND_MAX is 0 and they share the main one).
+    const main = poolStats('main')
+    const bg = _backgroundDb ? poolStats('background') : null
     return reply.send({
-      data: { ...poolStats(), held: heldConnections(), pressure: poolPressure() }
+      data: {
+        ...main,
+        held: heldConnections('main'),
+        pressure: poolPressure('main'),
+        background: bg
+          ? { ...bg, held: heldConnections('background'), pressure: poolPressure('background') }
+          : null,
+        total_max: main.max + (bg?.max ?? 0)
+      }
     })
   })
 

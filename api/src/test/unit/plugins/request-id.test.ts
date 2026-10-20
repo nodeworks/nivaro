@@ -20,7 +20,7 @@ vi.mock('../../../db/index.js', () => {
     delete: async () => 0
   }
   const db = Object.assign(() => builder, { raw: async () => [] })
-  return { db, _staticDb: {}, dbRead: {} }
+  return { db, _staticDb: {}, _backgroundDb: null, dbRead: {} }
 })
 vi.mock('../../../lib/column-probe.js', () => ({
   hasColumn: async (_t: string, c: string) => columns.has(c)

@@ -29,7 +29,15 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
 
   // #234 — this process, right now.
   app.get('/runtime', async (_req, reply) => {
-    return reply.send({ data: { ...runtimeStats(), pool: poolStats() } })
+    const bg = poolStats('background')
+    return reply.send({
+      data: {
+        ...runtimeStats(),
+        pool: poolStats('main'),
+        // #1321 — null when background work shares the main pool
+        background_pool: bg.max > 0 ? bg : null
+      }
+    })
   })
 
   // #297 — every registered API process (Redis-backed, 90s TTL).

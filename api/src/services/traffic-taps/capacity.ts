@@ -17,7 +17,7 @@
  */
 
 import { isMssql } from '../../db/dialect.js'
-import { db } from '../../db/index.js'
+import { _staticDb, db } from '../../db/index.js'
 import { hasColumn } from '../../lib/column-probe.js'
 import { runLongSql } from '../run-long.js'
 import { instanceKey } from '../settings-overrides.js'
@@ -54,7 +54,8 @@ interface TarnPool {
   max?: number
 }
 function pool(): TarnPool | null {
-  const p = (db.client as unknown as { pool?: TarnPool }).pool
+  // The interactive (main) pool: #1321's background pool is not the capacity a request sees.
+  const p = (_staticDb?.client as unknown as { pool?: TarnPool } | undefined)?.pool
   return p && typeof p === 'object' ? p : null
 }
 const poolSamples: Array<{ at: number; used: number; pending: number; rps: number }> = []
