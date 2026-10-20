@@ -249,7 +249,7 @@
     "tab_or_section": "How it's laid out",
     "scope": "form",
     "status": "fix",
-    "layout_types": ["grouped", "file", "detail", "summary"]
+    "layout_types": ["grouped", "file", "detail", "summary", "table"]
   },
   {
     "key": "layout.row_order_field",
@@ -761,7 +761,7 @@
     "home": "add_panel",
     "tab_or_section": "Fields",
     "scope": "form",
-    "status": "keep",
+    "status": "fix",
     "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
   },
   {
@@ -2587,7 +2587,7 @@
     "label": "Inline confirm naming affected layouts before an every-form save",
     "home": "inspector",
     "tab_or_section": "All tabs",
-    "scope": "field",
+    "scope": "form",
     "status": "add",
     "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
   },

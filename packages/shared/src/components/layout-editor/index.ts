@@ -18,13 +18,15 @@ export {
 export { dndRole, typedCollision } from './dnd/collision'
 export { LayoutDndProvider, NO_DND, useLayoutDnd } from './dnd/LayoutDndProvider'
 export { dropLabel, orderAfterDrop } from './dnd/order'
+export * from './editors'
 export { HistoryPanel } from './HistoryPanel'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
   useLayoutEditorHost
 } from './host'
-export type { FormSettingsProps, InspectorProps } from './inspector-slot'
+export { Inspector, type InspectorProps } from './inspector/Inspector'
+export type { FormSettingsProps } from './inspector-slot'
 export { LayoutEditor, type LayoutEditorProps } from './LayoutEditor'
 export {
   type ChoiceLabels,
@@ -57,6 +59,7 @@ export {
 export { IconPicker } from './pickers/icon-picker'
 export { RelationLabel } from './pickers/relation-label'
 export { RelationPicker } from './pickers/relation-picker'
+export * from './settings'
 export {
   type ApplyOptions,
   CONFLICT_MESSAGE,
@@ -65,4 +68,3 @@ export {
   layoutDraftKeys,
   useLayoutDraft
 } from './useLayoutDraft'
-export * from './settings'

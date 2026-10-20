@@ -124,7 +124,7 @@ export const SETTINGS: SettingDef[] = [
     section: 'layout',
     label: 'One section open at a time',
     effect: 'Opening a section closes the others.',
-    types: RECORD_VIEWS
+    types: [...RECORD_VIEWS, 'table']
   },
   {
     key: 'layout.row_order_field',
