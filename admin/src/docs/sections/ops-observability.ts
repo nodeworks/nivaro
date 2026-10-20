@@ -233,7 +233,11 @@ export const opsConsoleDocs: DocSection = {
         'Cancel — deleting an active window turns maintenance mode off immediately. The smoke check can also be run by hand at any time from the same card.'
       ]
     },
-    { type: 'h2', id: 'ops-console-restart', text: 'Restart, follow-user, heap snapshot, CPU profile' },
+    {
+      type: 'h2',
+      id: 'ops-console-restart',
+      text: 'Restart, follow-user, heap snapshot, CPU profile'
+    },
     {
       type: 'ul',
       items: [
@@ -327,7 +331,7 @@ export const deploysVersionsDocs: DocSection = {
         '`GET /api/ready` answers 200.',
         '`GET /api/preflight` does not fail.',
         '`POST /api/ops-runtime/smoke?strict=1` passes.',
-        'The readiness score is no lower than a snapshot taken just before the deployments were pushed. It is read again once after a minute before the stage fails.'
+        'The readiness score is no lower than a snapshot taken just before the deployments were pushed. Both reads run every check live (`GET /api/readiness?fresh=1`). It is read again once after a minute before the stage fails.'
       ]
     },
     {
@@ -357,6 +361,20 @@ GET /api/environments/env-presence         → every registered API, compared`
     {
       type: 'p',
       text: 'A custom front end reports its build with `setClientBuild` / `installPageContextFetch({ build })`. A tab that reports nothing groups as "Not reported"; builds named `dev` are never judged old.'
+    },
+    { type: 'h2', id: 'deploys-readiness-cache', text: 'How fresh the readiness scorecard is' },
+    {
+      type: 'p',
+      text: 'A plain `GET /api/readiness` (the dashboard card, the Go-Live Readiness page) answers from the stored result of each check, at once. Every check carries `computed_at` (when it ran) and `stale`; the report carries `computed_at` (its oldest result), `stale`, `refreshing` and `fresh`. A result older than its window is shown as it was, flagged stale, and one background refresh re-runs it, six checks at a time (`READINESS_REFRESH_CONCURRENCY`) on one process per cluster (a Redis lock), and the finished scorecard reaches open pages over the live-ops socket.'
+    },
+    {
+      type: 'ul',
+      items: [
+        "Window: 5 minutes (`READINESS_TTL_MS`). A heavy check — one that declares `cost: 'heavy'`, or whose last run took 2 seconds or more — gets 30 minutes (`READINESS_HEAVY_TTL_MS`). A check can set its own `ttlMs` on registration.",
+        'Results are stored per tenant and per API version, so a deploy starts empty. A deployed instance evaluates them about 15 seconds after boot (`CACHE_WARM`, which follows the cron switch when unset). Until a check has run on this version it reads `pending`, and the score stays empty until none is pending.',
+        '`?fresh=1` (administrators) runs every check live. It is shared: a second fresh read joins one already running, and one within 10 seconds of a finished run gets that run. The page’s Re-run checks button, the release gate and the daily score snapshot use it.',
+        'A check that takes longer than two minutes reports an error rather than holding the scorecard.'
+      ]
     },
     { type: 'h2', id: 'deploys-readiness', text: 'Readiness checks for the deploy shape' },
     {

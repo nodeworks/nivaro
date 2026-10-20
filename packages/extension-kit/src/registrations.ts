@@ -260,6 +260,14 @@ export interface ReadinessCheck {
   /** Grouping header on the scorecard (e.g. 'Data', 'Integrations'). */
   group?: string
   run: () => Promise<ReadinessResult>
+  /** How long a result stays current before a read refreshes it in the
+   *  background (ms). Unset: 5 minutes, or 30 minutes for a heavy check.
+   *  `/api/readiness?fresh=1` always runs every check live. */
+  ttlMs?: number
+  /** 'heavy' = a scan worth running at most every 30 minutes (unless `ttlMs`
+   *  says otherwise). A check whose last run took 2 s or more counts as heavy
+   *  whether it says so or not. */
+  cost?: 'light' | 'heavy'
   /** Optional automatic fix. Runs as a BACKGROUND job with server-held
    *  progress, so the admin can navigate away and come back. */
   remediation?: {
