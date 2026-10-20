@@ -1,38 +1,142 @@
 import * as Icons from 'lucide-react'
 import { ChevronDown, Search, X } from 'lucide-react'
 import { type ReactNode, useState } from 'react'
-import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { cn } from '@/lib/utils'
+import { cn } from '../../../lib/utils'
+import { Button } from '../../ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 
 // Curated set of icons useful in a CMS context
 const ICON_NAMES = [
-  'Activity', 'AlignLeft', 'Archive', 'ArrowRight', 'AtSign',
-  'Award', 'BarChart', 'BarChart2', 'Bell', 'Bookmark',
-  'Book', 'BookOpen', 'Box', 'Briefcase', 'Building',
-  'Building2', 'Calendar', 'Camera', 'Check', 'CheckCircle',
-  'ChevronRight', 'Circle', 'Clipboard', 'Clock', 'Cloud',
-  'Code', 'Code2', 'Cpu', 'CreditCard', 'Database',
-  'DollarSign', 'Download', 'Edit', 'Edit2', 'ExternalLink',
-  'Eye', 'EyeOff', 'File', 'FileText', 'Files',
-  'Film', 'Filter', 'Flag', 'Flame', 'Folder',
-  'FolderOpen', 'Globe', 'GraduationCap', 'Grid', 'Hammer',
-  'Heart', 'HelpCircle', 'History', 'Home', 'Image',
-  'Inbox', 'Info', 'Key', 'Laptop', 'Layers',
-  'Layout', 'LayoutDashboard', 'Link', 'List', 'Lock',
-  'LogIn', 'Mail', 'Map', 'MapPin', 'Maximize',
-  'MessageCircle', 'MessageSquare', 'Mic', 'Minimize', 'Monitor',
-  'Moon', 'Music', 'Navigation', 'Network', 'Package',
-  'Paperclip', 'Pencil', 'Phone', 'PieChart', 'Pin',
-  'Plus', 'Printer', 'RefreshCw', 'RotateCcw', 'Save',
-  'Search', 'Send', 'Settings', 'Settings2', 'Share2',
-  'Shield', 'ShoppingBag', 'ShoppingCart', 'Sliders', 'SlidersHorizontal',
-  'Smartphone', 'Star', 'Sun', 'Table', 'Tag',
-  'Tags', 'Target', 'Terminal', 'Timer', 'Trash2',
-  'TrendingUp', 'Trophy', 'Truck', 'Unlock', 'Upload',
-  'User', 'UserCheck', 'UserCircle', 'UserPlus', 'Users',
-  'Video', 'Wallet', 'Wifi', 'Workflow', 'Wrench',
-  'X', 'Zap', 'ZoomIn', 'GitBranch', 'GitMerge',
+  'Activity',
+  'AlignLeft',
+  'Archive',
+  'ArrowRight',
+  'AtSign',
+  'Award',
+  'BarChart',
+  'BarChart2',
+  'Bell',
+  'Bookmark',
+  'Book',
+  'BookOpen',
+  'Box',
+  'Briefcase',
+  'Building',
+  'Building2',
+  'Calendar',
+  'Camera',
+  'Check',
+  'CheckCircle',
+  'ChevronRight',
+  'Circle',
+  'Clipboard',
+  'Clock',
+  'Cloud',
+  'Code',
+  'Code2',
+  'Cpu',
+  'CreditCard',
+  'Database',
+  'DollarSign',
+  'Download',
+  'Edit',
+  'Edit2',
+  'ExternalLink',
+  'Eye',
+  'EyeOff',
+  'File',
+  'FileText',
+  'Files',
+  'Film',
+  'Filter',
+  'Flag',
+  'Flame',
+  'Folder',
+  'FolderOpen',
+  'Globe',
+  'GraduationCap',
+  'Grid',
+  'Hammer',
+  'Heart',
+  'HelpCircle',
+  'History',
+  'Home',
+  'Image',
+  'Inbox',
+  'Info',
+  'Key',
+  'Laptop',
+  'Layers',
+  'Layout',
+  'LayoutDashboard',
+  'Link',
+  'List',
+  'Lock',
+  'LogIn',
+  'Mail',
+  'Map',
+  'MapPin',
+  'Maximize',
+  'MessageCircle',
+  'MessageSquare',
+  'Mic',
+  'Minimize',
+  'Monitor',
+  'Moon',
+  'Music',
+  'Navigation',
+  'Network',
+  'Package',
+  'Paperclip',
+  'Pencil',
+  'Phone',
+  'PieChart',
+  'Pin',
+  'Plus',
+  'Printer',
+  'RefreshCw',
+  'RotateCcw',
+  'Save',
+  'Search',
+  'Send',
+  'Settings',
+  'Settings2',
+  'Share2',
+  'Shield',
+  'ShoppingBag',
+  'ShoppingCart',
+  'Sliders',
+  'SlidersHorizontal',
+  'Smartphone',
+  'Star',
+  'Sun',
+  'Table',
+  'Tag',
+  'Tags',
+  'Target',
+  'Terminal',
+  'Timer',
+  'Trash2',
+  'TrendingUp',
+  'Trophy',
+  'Truck',
+  'Unlock',
+  'Upload',
+  'User',
+  'UserCheck',
+  'UserCircle',
+  'UserPlus',
+  'Users',
+  'Video',
+  'Wallet',
+  'Wifi',
+  'Workflow',
+  'Wrench',
+  'X',
+  'Zap',
+  'ZoomIn',
+  'GitBranch',
+  'GitMerge'
 ]
 
 function toPascal(name: string) {
@@ -43,7 +147,7 @@ function toPascal(name: string) {
 }
 
 function toDash(pascal: string) {
-  return pascal.replace(/([A-Z])/g, (m, l, i) => (i > 0 ? `-${l.toLowerCase()}` : l.toLowerCase()))
+  return pascal.replace(/([A-Z])/g, (_m, l, i) => (i > 0 ? `-${l.toLowerCase()}` : l.toLowerCase()))
 }
 
 function getIcon(name: string): React.ElementType | null {
@@ -54,7 +158,7 @@ export function IconPicker({
   value,
   onChange,
   className,
-  trigger,
+  trigger
 }: {
   value: string
   onChange: (v: string) => void
@@ -102,6 +206,7 @@ export function IconPicker({
         <div className='mb-2.5 flex items-center gap-1.5 rounded-md border border-slate-200 bg-slate-50 px-2 py-1 dark:border-slate-700 dark:bg-slate-900'>
           <Search className='h-3.5 w-3.5 shrink-0 text-slate-400' />
           <input
+            // biome-ignore lint/a11y/noAutofocus: opens a search popover; focus belongs in the box
             autoFocus
             className='min-w-0 flex-1 bg-transparent text-[12px] outline-none placeholder:text-slate-400'
             placeholder='Search icons…'
@@ -134,8 +239,7 @@ export function IconPicker({
                 }}
                 className={cn(
                   'flex items-center justify-center rounded p-1.5 transition-colors hover:bg-slate-100 dark:hover:bg-slate-800',
-                  selected &&
-                    'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan',
+                  selected && 'bg-nvr-cyan/10 text-nvr-navy dark:bg-nvr-cyan/20 dark:text-nvr-cyan'
                 )}
               >
                 <IC className='h-[15px] w-[15px]' />
@@ -143,9 +247,7 @@ export function IconPicker({
             )
           })}
           {filtered.length === 0 && (
-            <p className='col-span-8 py-6 text-center text-[12px] text-slate-400'>
-              No icons found
-            </p>
+            <p className='col-span-8 py-6 text-center text-[12px] text-slate-400'>No icons found</p>
           )}
         </div>
 

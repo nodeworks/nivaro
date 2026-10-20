@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { useGoBack } from '@/lib/nav'
 import { toast } from 'sonner'
-import { CollectionFieldPicker } from '@/components/field-picker'
+import { CollectionFieldPicker } from '@nivaro/shared'
 import { Button } from '@/components/ui/button'
 import {
   Command,

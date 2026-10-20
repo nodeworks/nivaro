@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronDown } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
-import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { api } from '@/lib/api'
-import { extractTemplateFields, renderDisplayTemplate } from '@/lib/relations'
+import { useNivaroClient } from '../../../context'
+import { get } from '../../../lib/commands'
+import { extractTemplateFields, renderDisplayTemplate } from '../../pipeline/relations'
+import { Input } from '../../ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { ScrollArea } from '../../ui/scroll-area'
 
 interface RelationPickerProps {
   relatedCollection: string
@@ -24,6 +25,7 @@ export function RelationPicker({
   extraFilter,
   placeholder
 }: RelationPickerProps) {
+  const client = useNivaroClient()
   const [open, setOpen] = useState(false)
   const [searchInput, setSearchInput] = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -44,7 +46,8 @@ export function RelationPicker({
 
   const { data: colMeta, isError: colError } = useQuery({
     queryKey: ['collection-meta', relatedCollection],
-    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
+    queryFn: () =>
+      client.request<{ data: any }>(get(`/collections/${relatedCollection}`)).then((r) => r.data),
     staleTime: 10 * 60 * 1000,
     retry: false,
     enabled: !isUserRelation
@@ -61,8 +64,10 @@ export function RelationPicker({
     queryKey: ['relation-item', relatedCollection, String(value)],
     queryFn: async () => {
       const url = isUserRelation ? `/users/${value}` : `/items/${relatedCollection}/${value}`
-      const res = await api.get(url, { params: isUserRelation ? undefined : { fields: '*' } })
-      return res.data.data as Record<string, unknown>
+      const res = await client.request<{ data: Record<string, unknown> }>(
+        get(url, isUserRelation ? undefined : { fields: '*' })
+      )
+      return res.data
     },
     enabled: hasValue,
     staleTime: 30 * 60 * 1000,
@@ -74,23 +79,30 @@ export function RelationPicker({
     ? (colMeta?.picker_filter as Record<string, unknown> | null | undefined)
     : null
   const clauses = [pickerFilter, extraFilter].filter(Boolean) as Record<string, unknown>[]
-  const filterParam = clauses.length > 0
-    ? JSON.stringify(clauses.length === 1 ? clauses[0] : { _and: clauses })
-    : undefined
+  const filterParam =
+    clauses.length > 0
+      ? JSON.stringify(clauses.length === 1 ? clauses[0] : { _and: clauses })
+      : undefined
 
   const { data: searchResults, isLoading: searchLoading } = useQuery({
     queryKey: ['relation-search', relatedCollection, searchFields, debouncedSearch, filterParam],
     queryFn: async () => {
       if (isUserRelation) {
-        const res = await api.get('/users', {
-          params: { limit: 200, search: debouncedSearch || undefined }
-        })
-        return (res.data.data ?? []) as Record<string, unknown>[]
+        const res = await client.request<{ data?: Record<string, unknown>[] }>(
+          get('/users', { limit: 200, search: debouncedSearch || undefined })
+        )
+        return res.data ?? []
       }
-      const res = await api.get(`/items/${relatedCollection}`, {
-        params: { limit: 200, fields: searchFields, search: debouncedSearch || undefined, filter: filterParam, picker: '1' }
-      })
-      return (res.data.data ?? []) as Record<string, unknown>[]
+      const res = await client.request<{ data?: Record<string, unknown>[] }>(
+        get(`/items/${relatedCollection}`, {
+          limit: 200,
+          fields: searchFields,
+          search: debouncedSearch || undefined,
+          filter: filterParam,
+          picker: '1'
+        })
+      )
+      return res.data ?? []
     },
     enabled: open,
     staleTime: 30 * 1000
@@ -163,31 +175,33 @@ export function RelationPicker({
             )}
 
             {!searchLoading &&
-              [...(searchResults ?? [])].sort((a, b) =>
-                renderDisplayTemplate(displayTemplate, a).localeCompare(
-                  renderDisplayTemplate(displayTemplate, b)
+              [...(searchResults ?? [])]
+                .sort((a, b) =>
+                  renderDisplayTemplate(displayTemplate, a).localeCompare(
+                    renderDisplayTemplate(displayTemplate, b)
+                  )
                 )
-              ).map((item) => {
-                const itemId = item.id
-                const label = renderDisplayTemplate(displayTemplate, item)
-                const isSelected = String(itemId) === String(value)
-                return (
-                  <button
-                    type='button'
-                    key={String(itemId)}
-                    onClick={() => {
-                      onChange(itemId)
-                      setOpen(false)
-                    }}
-                    className='flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-slate-50 cursor-pointer rounded-md w-full text-left'
-                  >
-                    <Check
-                      className={`h-3.5 w-3.5 shrink-0 ${isSelected ? 'text-nvr-cyan' : 'text-transparent'}`}
-                    />
-                    <span className='truncate text-slate-800'>{label}</span>
-                  </button>
-                )
-              })}
+                .map((item) => {
+                  const itemId = item.id
+                  const label = renderDisplayTemplate(displayTemplate, item)
+                  const isSelected = String(itemId) === String(value)
+                  return (
+                    <button
+                      type='button'
+                      key={String(itemId)}
+                      onClick={() => {
+                        onChange(itemId)
+                        setOpen(false)
+                      }}
+                      className='flex items-center gap-2 px-3 py-2 text-[13px] hover:bg-slate-50 cursor-pointer rounded-md w-full text-left'
+                    >
+                      <Check
+                        className={`h-3.5 w-3.5 shrink-0 ${isSelected ? 'text-nvr-cyan' : 'text-transparent'}`}
+                      />
+                      <span className='truncate text-slate-800'>{label}</span>
+                    </button>
+                  )
+                })}
           </div>
         </ScrollArea>
       </PopoverContent>

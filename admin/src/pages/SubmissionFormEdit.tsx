@@ -16,7 +16,7 @@ import {
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router'
 import { toast } from 'sonner'
-import { CollectionFieldPickerPanel, type PickedField } from '@/components/field-picker'
+import { CollectionFieldPickerPanel, type PickedField } from '@nivaro/shared'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
