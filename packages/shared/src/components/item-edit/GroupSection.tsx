@@ -12,7 +12,7 @@ import {
 import { get, post } from '../../lib/commands'
 import { useRecordReader } from '../../lib/record-loader'
 import { choiceLabel, cn, titleCase } from '../../lib/utils'
-import { designWrap } from '../layout-editor/DesignNode'
+import { DesignDropZone, designWrap } from '../layout-editor/DesignNode'
 import { type DesignTarget, useLayoutDesign } from '../layout-editor/design-context'
 import { UserAvatar } from '../UserAvatar'
 import {
@@ -1313,15 +1313,7 @@ export function GroupSection({
             }
             items.sort((a, b) => a.sort - b.sort)
 
-            if (design && items.length === 0)
-              return (
-                <div
-                  data-design-drop-zone=''
-                  className='flex h-16 items-center justify-center rounded-lg border border-dashed border-slate-300 text-[12px] text-slate-400 dark:border-slate-600 dark:text-slate-500'
-                >
-                  Drop fields here
-                </div>
-              )
+            if (design && items.length === 0) return <DesignDropZone />
 
             return displayOnly ? (
               <div ref={gridRef} className='grid grid-cols-12 gap-x-6 gap-y-3'>

@@ -139,3 +139,15 @@ export function useDesignWrap() {
   return (target: DesignTarget, node: ReactNode, opts?: DesignNodeOptions) =>
     designWrap(design, target, node, opts)
 }
+
+/** An empty section/tab/step body on the canvas: somewhere to drop fields. */
+export function DesignDropZone() {
+  return (
+    <div
+      data-design-drop-zone=''
+      className='flex h-16 items-center justify-center rounded-lg border border-dashed border-slate-300 text-[12px] text-slate-400 dark:border-slate-600 dark:text-slate-500'
+    >
+      Drop fields here
+    </div>
+  )
+}

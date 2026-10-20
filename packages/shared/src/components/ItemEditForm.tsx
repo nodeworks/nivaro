@@ -215,12 +215,8 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { designWrap } from './layout-editor/DesignNode'
-import {
-  DesignCanvas,
-  designReadOnlyClient,
-  projectDesignFieldConfig
-} from './layout-editor/design-canvas'
+import { DesignDropZone, designWrap } from './layout-editor/DesignNode'
+import { DesignCanvas, type RefusedWrite } from './layout-editor/design-canvas'
 import type { DesignTarget, LayoutDesign } from './layout-editor/design-context'
 import {
   AccessDeniedPanel,
@@ -620,6 +616,8 @@ export interface ItemEditFormDesign {
   /** Preview record (its values, steps and rules); null/absent = a blank form. */
   record?: Record<string, unknown> | null
   context: LayoutDesign
+  /** Something on the canvas tried to write and was refused (tests, dev tooling). */
+  onRefusedWrite?: (w: RefusedWrite) => void
 }
 
 export interface HeaderWidgetInfo {
@@ -1226,7 +1224,21 @@ function ApiProvenanceChip({
   )
 }
 
-export function ItemEditForm({
+/**
+ * The record form. With `design` (the layout editor's canvas) the whole form —
+ * its own hooks included — runs inside DesignCanvas: a client that cannot
+ * write, no realtime, inert inputs, selectable shells.
+ */
+export function ItemEditForm(props: ItemEditFormProps) {
+  if (!props.design) return <ItemEditFormView {...props} />
+  return (
+    <DesignCanvas design={props.design.context} onRefusedWrite={props.design.onRefusedWrite}>
+      <ItemEditFormView {...props} />
+    </DesignCanvas>
+  )
+}
+
+function ItemEditFormView({
   collection,
   itemId: itemIdProp,
   layoutSlug: layoutSlugProp,
@@ -1267,12 +1279,11 @@ export function ItemEditForm({
 }: ItemEditFormProps) {
   const designOn = design != null
   const designCtx = design?.context ?? null
-  const baseClient = useNivaroClient()
-  // Design mode reads like the record page but can never write.
-  const client = useMemo(
-    () => (designOn ? designReadOnlyClient(baseClient) : baseClient),
-    [designOn, baseClient]
-  )
+  // Canvas "show hidden": hidden fields and rule-hidden tabs/steps stay on
+  // the canvas, faint, so they can still be selected.
+  const showHiddenDesign = !!designCtx?.showHidden
+  // Design mode: DesignCanvas above hands down a client that cannot write.
+  const client = useNivaroClient()
   const readRow = useRecordReader()
   const fetchCfg = useApiFetchConfig()
   const { isAdmin, userId: authUserId } = useContext(ItemEditAuthContext)
@@ -1326,19 +1337,35 @@ export function ItemEditForm({
     enabled: !isNew && !designOn
   })
 
+  // Design mode: the editor's DRAFT placements, formatted by the server
+  // exactly as GET formats a saved layout (POST …/project only reads).
+  const designAssignments = designOn ? design.layout.assignments : null
   const {
-    data: fetchedFieldConfig,
+    data: fieldConfig,
     isLoading: fieldsLoading,
     isFetched: fieldConfigFetched
   } = useQuery<CMSField[]>({
-    queryKey: ['field-config', collection, layoutId],
+    queryKey: designAssignments
+      ? ['layout-editor', 'field-config', collection, designAssignments]
+      : ['field-config', collection, layoutId],
     queryFn: () =>
-      client
-        .request<{ data: CMSField[] }>(
-          get(`/field-config/${collection}`, layoutId ? { layout_id: String(layoutId) } : undefined)
-        )
-        .then((r) => r.data ?? []),
+      designAssignments
+        ? client
+            .request<{ data: CMSField[] }>(
+              post(`/field-config/${collection}/project`, { assignments: designAssignments })
+            )
+            .then((r) => r.data ?? [])
+        : client
+            .request<{ data: CMSField[] }>(
+              get(
+                `/field-config/${collection}`,
+                layoutId ? { layout_id: String(layoutId) } : undefined
+              )
+            )
+            .then((r) => r.data ?? []),
     staleTime: 60_000,
+    // A draft edit re-asks; the canvas keeps the last answer meanwhile.
+    placeholderData: designAssignments ? (prev: CMSField[] | undefined) => prev : undefined,
     // Wait for the layout either way, not just when a slug pins one. Without
     // this the field config fetched immediately with layoutId = null — the
     // LAYOUT-LESS default field set — painted that, then refetched under a new
@@ -1348,15 +1375,6 @@ export function ItemEditForm({
     // asking".
     enabled: activeLayoutData !== undefined
   })
-  // Design mode places fields the way the editor's draft does.
-  const designAssignments = designOn ? design.layout.assignments : null
-  const fieldConfig = useMemo(
-    () =>
-      fetchedFieldConfig && designAssignments
-        ? projectDesignFieldConfig(fetchedFieldConfig, designAssignments)
-        : fetchedFieldConfig,
-    [fetchedFieldConfig, designAssignments]
-  )
 
   const { data: relations = [], isFetched: relationsFetched } = useQuery<CMSRelation[]>({
     queryKey: ['relations', collection],
@@ -4746,9 +4764,23 @@ export function ItemEditForm({
     () =>
       groups.filter(
         (g) =>
-          g.type === 'tab' && !g.container_id && stepVisible(g as { visible_when?: string | null })
+          g.type === 'tab' &&
+          !g.container_id &&
+          (showHiddenDesign || stepVisible(g as { visible_when?: string | null }))
       ),
-    [groups, stepVisible]
+    [groups, stepVisible, showHiddenDesign]
+  )
+  // Tabs/steps kept only because the canvas shows hidden things.
+  const designHiddenTabs = useMemo(
+    () =>
+      showHiddenDesign
+        ? new Set(
+            tabGroups
+              .filter((g) => !stepVisible(g as { visible_when?: string | null }))
+              .map((g) => g.key)
+          )
+        : undefined,
+    [showHiddenDesign, tabGroups, stepVisible]
   )
   // All tabs regardless of container — used for SummaryPanel coverage
   const allTabGroups = useMemo(
@@ -5293,6 +5325,12 @@ export function ItemEditForm({
       next.add(k)
       return next
     })
+    // Design mode: switching tabs on the canvas leaves the record page's
+    // remembered tab and the host's URL alone.
+    if (designOn) {
+      bodyRef.current?.scrollTo({ top: 0 })
+      return
+    }
     try {
       localStorage.setItem(`nvr_tab_${collection}`, k)
     } catch {
@@ -7814,6 +7852,16 @@ export function ItemEditForm({
     field,
     group_key: assignments.find((a) => a.field === field)?.group_key ?? null
   })
+  const designHidden = (f: CMSField, ruleVisible = true) =>
+    showHiddenDesign && (f.hidden || !ruleVisible)
+  const faint = (hidden: boolean, node: ReactNode) =>
+    hidden ? (
+      <div data-design-hidden='' className='opacity-40'>
+        {node}
+      </div>
+    ) : (
+      node
+    )
   const fieldTarget = (f: CMSField): DesignTarget => ({
     kind: 'field',
     field: f.field,
@@ -7995,7 +8043,15 @@ export function ItemEditForm({
   }
 
   function renderUngrouped() {
-    const visible = ungroupedFields.filter((f) => !f.hidden)
+    const visible = showHiddenDesign
+      ? allFields.filter(
+          (f) =>
+            !f.group_key &&
+            !SYSTEM_FIELDS.has(f.field) &&
+            !isSentinelKey(f.field) &&
+            (layoutId === null || f.layout_assigned !== false)
+        )
+      : ungroupedFields.filter((f) => !f.hidden)
     if (visible.length === 0) return null
     return dwrap(
       { kind: 'group', key: '__ungrouped__' },
@@ -8023,21 +8079,25 @@ export function ItemEditForm({
               return dwrap(
                 fieldTarget(f),
                 <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                  <FieldRow
-                    field={f}
-                    draft={effectiveDraft}
-                    onChange={handleFieldChange}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    error={validationErrors[f.field]}
-                    autoFillTick={autoFillTicks[f.field]}
-                    visible={true}
-                    locked={isReadOnly || addendumViewId !== 'original'}
-                    layoutAiEnabled={layoutAiEnabled}
-                    renderField={renderField}
-                    onCountChange={handleM2MCountChange}
-                  />
+                  {faint(
+                    designHidden(f),
+                    <FieldRow
+                      field={f}
+                      draft={effectiveDraft}
+                      onChange={handleFieldChange}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      error={validationErrors[f.field]}
+                      autoFillTick={autoFillTicks[f.field]}
+                      visible={true}
+                      forceVisible={designHidden(f) || undefined}
+                      locked={isReadOnly || addendumViewId !== 'original'}
+                      layoutAiEnabled={layoutAiEnabled}
+                      renderField={renderField}
+                      onCountChange={handleM2MCountChange}
+                    />
+                  )}
                   {inlineEntries?.length && hasVal && inlineRelCollection && (
                     <InlineDisplay
                       relCollection={inlineRelCollection}
@@ -8086,7 +8146,9 @@ export function ItemEditForm({
     const activeIsSwapped = activeSwapCfg?.enabled
       ? swappedGroups.has(activeChild?.id ?? -1)
       : false
-    const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter((f) => !f.hidden)
+    const activeFields = (groupedMap[activeChild?.key ?? ''] ?? []).filter(
+      (f) => showHiddenDesign || !f.hidden
+    )
     // PDF slot: check if assigned to the active child tab or to the container itself
     const pdfInContainer =
       !isNew &&
@@ -8283,23 +8345,30 @@ export function ItemEditForm({
                     key={f.field}
                     style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}
                   >
-                    <FieldRow
-                      field={f}
-                      draft={effectiveDraft}
-                      onChange={handleFieldChange}
-                      relations={relations}
-                      collection={collection}
-                      itemId={itemId}
-                      error={validationErrors[f.field]}
-                      autoFillTick={autoFillTicks[f.field]}
-                      visible={visibleFields.has(f.field) || !visibleFields.size}
-                      locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
-                      layoutAiEnabled={layoutAiEnabled}
-                      renderField={renderField}
-                      onCountChange={handleM2MCountChange}
-                      swapButton={swapToggleBtn}
-                      swapContent={swapContentNode}
-                    />
+                    {faint(
+                      designHidden(f, visibleFields.has(f.field) || !visibleFields.size),
+                      <FieldRow
+                        field={f}
+                        draft={effectiveDraft}
+                        onChange={handleFieldChange}
+                        relations={relations}
+                        collection={collection}
+                        itemId={itemId}
+                        error={validationErrors[f.field]}
+                        autoFillTick={autoFillTicks[f.field]}
+                        visible={visibleFields.has(f.field) || !visibleFields.size}
+                        forceVisible={
+                          designHidden(f, visibleFields.has(f.field) || !visibleFields.size) ||
+                          undefined
+                        }
+                        locked={lockedFields.has(f.field) || addendumViewId !== 'original'}
+                        layoutAiEnabled={layoutAiEnabled}
+                        renderField={renderField}
+                        onCountChange={handleM2MCountChange}
+                        swapButton={swapToggleBtn}
+                        swapContent={swapContentNode}
+                      />
+                    )}
                     {inlineEntries?.length && hasVal && inlineRelCollection && (
                       <InlineDisplay
                         relCollection={inlineRelCollection}
@@ -8314,6 +8383,12 @@ export function ItemEditForm({
               })
             }
           </GridContainer>
+          {designOn &&
+            activeFields.length === 0 &&
+            !pdfInContainer &&
+            !widgetSlots.some((ws) => (ws.group_key ?? null) === activeChild.key) && (
+              <DesignDropZone />
+            )}
           {widgetSlots
             .filter((ws) => (ws.group_key ?? null) === activeChild.key)
             .map((ws) => {
@@ -8637,7 +8712,7 @@ export function ItemEditForm({
           ? ungroupedFields
           : [...ungroupedFields, ...sectionGroups.flatMap((g) => groupedMap[g.key] ?? [])]
         : (groupedMap[tabKey] ?? [])
-    ).filter((f) => !f.hidden)
+    ).filter((f) => showHiddenDesign || !f.hidden)
     const ownersHere = ownersInGroup && ownersGroupKey === tabKey && showPipeline
     const pdfHere = pdfInGroup && pdfGroupKey === tabKey && !isNew
     const widgetsHereTab = widgetSlots.filter((ws) => (ws.group_key ?? null) === tabKey)
@@ -8761,21 +8836,25 @@ export function ItemEditForm({
               return dwrap(
                 fieldTarget(f),
                 <div key={f.field} style={{ gridColumn: `span ${resolveColSpan(f.options, cw)}` }}>
-                  <FieldRow
-                    field={f}
-                    draft={effectiveDraft}
-                    onChange={handleFieldChange}
-                    relations={relations}
-                    collection={collection}
-                    itemId={itemId}
-                    error={validationErrors[f.field]}
-                    autoFillTick={autoFillTicks[f.field]}
-                    visible={true}
-                    locked={isReadOnly || addendumViewId !== 'original'}
-                    layoutAiEnabled={layoutAiEnabled}
-                    renderField={renderField}
-                    onCountChange={handleM2MCountChange}
-                  />
+                  {faint(
+                    designHidden(f),
+                    <FieldRow
+                      field={f}
+                      draft={effectiveDraft}
+                      onChange={handleFieldChange}
+                      relations={relations}
+                      collection={collection}
+                      itemId={itemId}
+                      error={validationErrors[f.field]}
+                      autoFillTick={autoFillTicks[f.field]}
+                      visible={true}
+                      forceVisible={designHidden(f) || undefined}
+                      locked={isReadOnly || addendumViewId !== 'original'}
+                      layoutAiEnabled={layoutAiEnabled}
+                      renderField={renderField}
+                      onCountChange={handleM2MCountChange}
+                    />
+                  )}
                   {inlineEntries?.length && hasVal && inlineRelCollection && (
                     <InlineDisplay
                       relCollection={inlineRelCollection}
@@ -8790,6 +8869,7 @@ export function ItemEditForm({
             })
           }
         </GridContainer>
+        {designOn && tabItems.length === 0 && <DesignDropZone />}
       </div>
     )
   }
@@ -8816,12 +8896,14 @@ export function ItemEditForm({
                 key={t.key}
                 type='button'
                 data-tab-key={t.key}
+                data-design-hidden={designHiddenTabs?.has(t.key) ? '' : undefined}
                 onClick={() => setActiveTab(t.key)}
                 className={cn(
                   'whitespace-nowrap px-4 py-2.5 text-sm font-medium border-b-2 border-transparent transition-colors flex items-center gap-1.5',
                   activeTab === t.key
                     ? 'text-primary'
-                    : 'text-muted-foreground hover:text-foreground'
+                    : 'text-muted-foreground hover:text-foreground',
+                  designHiddenTabs?.has(t.key) && 'opacity-40'
                 )}
               >
                 {t.label}
@@ -9000,6 +9082,7 @@ export function ItemEditForm({
         })}
         <StepsBar
           steps={allSteps}
+          hiddenSteps={designHiddenTabs}
           active={activeTab}
           completed={completedSteps}
           dirtySteps={dirtySteps}
@@ -9223,7 +9306,7 @@ export function ItemEditForm({
       : title
   const canDelete = !isNew && isAdmin && effectiveShowDelete
 
-  const form = (
+  return (
     <ReimportHandlerContext.Provider
       value={isNew ? null : (handleReimportParsed as import('../context').ReimportHandler)}
     >
@@ -11225,6 +11308,8 @@ export function ItemEditForm({
                                     )}
                                     {!isNew &&
                                       itemId &&
+                                      // Design mode: the live check stores its result.
+                                      !designOn &&
                                       !activeLayoutData?.layout?.hide_integrity_banner &&
                                       // Summary mode marks the affected fields instead —
                                       // the banner would only push the record down.
@@ -11559,13 +11644,6 @@ export function ItemEditForm({
         </AddendumO2MContext.Provider>
       </RelationPathDataContext.Provider>
     </ReimportHandlerContext.Provider>
-  )
-  return designCtx ? (
-    <DesignCanvas client={client} design={designCtx}>
-      {form}
-    </DesignCanvas>
-  ) : (
-    form
   )
 }
 

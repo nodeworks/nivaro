@@ -1,36 +1,54 @@
 import type { NivaroClient } from '@nivaro/sdk'
-import type { ReactNode, SyntheticEvent } from 'react'
-import { NivaroProvider } from '../../context'
+import { type ReactNode, type SyntheticEvent, useMemo, useRef } from 'react'
+import { NivaroProvider, useNivaroClient } from '../../context'
 import { RealtimeContext } from '../../lib/realtime'
-import type { CMSField, SlotAssignment } from '../item-edit/types'
 import { type LayoutDesign, LayoutDesignContext } from './design-context'
 
 // The layout editor's canvas is the real record form in design mode
 // (spec §7.3). This module holds what design mode needs around it: a client
-// that cannot write, a canvas shell that keeps inputs inert, and the
-// projection of fetched field metadata onto the editor's draft placements.
+// that cannot write and a canvas shell that keeps inputs inert.
 
-/** POSTs that only read (a widget render, a child summary, a preview). */
+/** POSTs that only read (a widget render, a child summary, a preview, the
+ *  draft layout's field rows). */
 const READ_ONLY_POSTS =
-  /^\/(widgets-internal\/[^/]+\/render|items\/[^/]+\/[^/]+\/child-summary|items\/[^/]+\/auto-id-preview|pipelines\/instance\/[^/]+\/owners\/batch|addendums\/summary|at-risk\/evaluate|items\/batch-read|users\/cards)$/
+  /^\/(field-config\/[^/]+\/project|widgets-internal\/[^/]+\/render|items\/[^/]+\/[^/]+\/child-summary|items\/[^/]+\/auto-id-preview|pipelines\/instance\/[^/]+\/owners\/batch|addendums\/summary|at-risk\/evaluate|items\/batch-read|users\/cards)$/
 
 type AnyCommand = { _method?: string; _path?: string }
 
 export function isDesignAllowedRequest(c: AnyCommand): boolean {
   const method = (c._method ?? 'GET').toUpperCase()
   if (method === 'GET') return true
-  return method === 'POST' && READ_ONLY_POSTS.test(c._path ?? '')
+  return method === 'POST' && READ_ONLY_POSTS.test((c._path ?? '').split('?')[0])
 }
 
-/** A client whose writes are refused before they leave the browser. */
-export function designReadOnlyClient(client: NivaroClient): NivaroClient {
+/** What a refused call tried: `{method, path}` (GraphQL/upload/import name themselves). */
+export type RefusedWrite = { method: string; path: string }
+
+const refused = () => Promise.reject(new Error('Layout preview: changes are not saved'))
+
+/**
+ * A client whose writes are refused before they leave the browser. GraphQL,
+ * file upload and import parsing are refused whole (a mutation or a stored
+ * file is a write). `onRefused` hears every refused attempt.
+ */
+export function designReadOnlyClient(
+  client: NivaroClient,
+  onRefused?: (w: RefusedWrite) => void
+): NivaroClient {
   return new Proxy(client, {
     get(target, prop, receiver) {
       if (prop === 'request')
-        return <T,>(command: unknown): Promise<T> =>
-          isDesignAllowedRequest(command as AnyCommand)
-            ? target.request<T>(command as never)
-            : Promise.reject(new Error('Layout preview: changes are not saved'))
+        return <T,>(command: unknown): Promise<T> => {
+          const c = command as AnyCommand
+          if (isDesignAllowedRequest(c)) return target.request<T>(command as never)
+          onRefused?.({ method: (c._method ?? 'GET').toUpperCase(), path: c._path ?? '' })
+          return refused()
+        }
+      if (prop === 'graphql' || prop === 'upload' || prop === 'importParse')
+        return () => {
+          onRefused?.({ method: String(prop), path: '' })
+          return refused()
+        }
       const v = Reflect.get(target, prop, receiver)
       return typeof v === 'function' ? v.bind(target) : v
     }
@@ -52,14 +70,19 @@ const editableTarget = (e: SyntheticEvent) => {
  * swallowed unless the element is marked data-design-pass (tab switches).
  */
 export function DesignCanvas({
-  client,
   design,
+  onRefusedWrite,
   children
 }: {
-  client: NivaroClient
   design: LayoutDesign
+  /** Something inside tried to write (and was refused) — tests, dev tooling. */
+  onRefusedWrite?: (w: RefusedWrite) => void
   children: ReactNode
 }) {
+  const base = useNivaroClient()
+  const refusedRef = useRef(onRefusedWrite)
+  refusedRef.current = onRefusedWrite
+  const client = useMemo(() => designReadOnlyClient(base, (w) => refusedRef.current?.(w)), [base])
   const block = (e: SyntheticEvent) => {
     e.preventDefault()
     e.stopPropagation()
@@ -105,82 +128,4 @@ export function DesignCanvas({
       </RealtimeContext.Provider>
     </NivaroProvider>
   )
-}
-
-function parseOverrides(raw: SlotAssignment['overrides']): Record<string, unknown> | null {
-  if (!raw) return null
-  if (typeof raw === 'object') return raw
-  try {
-    const v = JSON.parse(raw)
-    return v && typeof v === 'object' ? (v as Record<string, unknown>) : null
-  } catch {
-    return null
-  }
-}
-
-/**
- * GET /field-config answers for the SAVED layout. The canvas shows the
- * editor's DRAFT, so re-place every field the way the draft does: one row per
- * draft placement (a field placed twice gets two rows), the placement's
- * group/sort/width/label/overrides applied the way the server applies them;
- * fields the draft does not place come back unassigned. Slot keys (`__…`)
- * are not fields and are skipped; a field the server sent no row for cannot
- * render and is skipped too.
- */
-export function projectDesignFieldConfig(
-  fetched: CMSField[],
-  assignments: SlotAssignment[]
-): CMSField[] {
-  const byField = new Map<string, CMSField[]>()
-  for (const f of fetched) {
-    const list = byField.get(f.field)
-    if (list) list.push(f)
-    else byField.set(f.field, [f])
-  }
-  const placed = new Set<string>()
-  const out: CMSField[] = []
-  for (const a of assignments) {
-    if (!a.field || a.field.startsWith('__')) continue
-    const rows = byField.get(a.field)
-    if (!rows) continue
-    placed.add(a.field)
-    const group = a.group_key ?? null
-    const base = rows.find((r) => (r.group_key ?? null) === group) ?? rows[0]
-    const ov = parseOverrides(a.overrides)
-    let options =
-      base.options && typeof base.options === 'object'
-        ? { ...(base.options as Record<string, unknown>) }
-        : base.options
-    if (typeof options === 'object' && options) delete options.col_span
-    if (a.col_span != null)
-      options = {
-        ...(typeof options === 'object' && options ? options : {}),
-        col_span: a.col_span
-      }
-    if (ov?.options && typeof ov.options === 'object')
-      options = {
-        ...(typeof options === 'object' && options ? options : {}),
-        ...(ov.options as Record<string, unknown>)
-      }
-    out.push({
-      ...base,
-      options,
-      label: ov?.label !== undefined ? (ov.label as string | null) : base.label,
-      note: ov?.note !== undefined ? (ov.note as string | null) : base.note,
-      hidden: ov?.hidden !== undefined ? !!ov.hidden : base.hidden,
-      required: ov?.required !== undefined ? !!ov.required : base.required,
-      readonly: ov?.readonly !== undefined ? base.readonly || !!ov.readonly : base.readonly,
-      placeholder:
-        ov?.placeholder !== undefined ? (ov.placeholder as string | null) : base.placeholder,
-      group_key: group,
-      sort: a.sort,
-      layout_assigned: true,
-      _overrides: ov
-    })
-  }
-  for (const [name, rows] of byField) {
-    if (placed.has(name)) continue
-    out.push({ ...rows[0], group_key: null, layout_assigned: false, _overrides: null })
-  }
-  return out
 }

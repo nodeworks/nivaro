@@ -56,6 +56,8 @@ const REQUIRED_ROUTES: Array<{ method: string; path: string }> = [
 
   // Field config — ItemEditForm schema fetch
   { method: 'GET', path: '/api/field-config/:collection' },
+  // Layout editor canvas: a draft's field rows (ItemEditForm design mode)
+  { method: 'POST', path: '/api/field-config/:collection/project' },
 
   // Pipelines — instance panel + owners (PipelinePanel, queue sheet)
   { method: 'GET', path: '/api/pipelines/instance/:collection/:item' },

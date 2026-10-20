@@ -79,7 +79,41 @@ const FIELD_CONFIG: CMSField[] = [
 
 const RECORD = { id: 1, title: 'First order', amount: '12.50', notes: 'Rush', status: 'open' }
 
-type Cmd = { _method?: string; _path: string; _params?: Record<string, unknown> }
+type Cmd = {
+  _method?: string
+  _path: string
+  _params?: Record<string, unknown>
+  _body?: { assignments?: Array<Record<string, unknown>> }
+}
+
+// The server's POST /field-config/:col/project, reduced to what these
+// fixtures use: one row per placement, overrides.hidden applied, unplaced
+// fields unassigned.
+const BASE: Record<string, CMSField> = Object.fromEntries(
+  [
+    field('title', 'Title'),
+    field('amount', 'Amount'),
+    field('notes', 'Notes'),
+    field('status', 'Status')
+  ].map((f) => [f.field, f])
+)
+function projectFake(assignments: Array<Record<string, unknown>>): CMSField[] {
+  const placed = assignments.filter((a) => !String(a.field).startsWith('__'))
+  const rows = placed.map((a) => {
+    const ov = (a.overrides ?? null) as { hidden?: boolean } | null
+    return {
+      ...BASE[String(a.field)],
+      group_key: (a.group_key as string | null) ?? null,
+      sort: Number(a.sort),
+      hidden: ov?.hidden ?? false,
+      layout_assigned: true
+    }
+  })
+  const names = new Set(placed.map((a) => a.field))
+  for (const f of Object.values(BASE))
+    if (!names.has(f.field)) rows.push({ ...f, group_key: null, layout_assigned: false })
+  return rows
+}
 
 function makeClient() {
   const calls: Cmd[] = []
@@ -91,6 +125,8 @@ function makeClient() {
       const p = cmd._path
       if (p === '/collection-layouts/active') return { data: LAYOUT }
       if (p === '/field-config/orders') return { data: FIELD_CONFIG }
+      if (p === '/field-config/orders/project')
+        return { data: projectFake(cmd._body?.assignments ?? []) }
       if (p === '/collections/orders') return { data: { display_name: 'Orders' } }
       if (p === '/items/orders/1') return { data: RECORD }
       // Writes and touches answer nothing; reads an empty list (panels, tasks,
@@ -140,6 +176,7 @@ window.matchMedia ??= ((q: string) => ({
   dispatchEvent: () => false
 })) as typeof window.matchMedia
 Element.prototype.scrollIntoView ??= () => {}
+g.CSS ??= { escape: (v: string) => v }
 
 let root: Root
 let host: HTMLDivElement
@@ -166,7 +203,10 @@ async function settle(until: () => boolean) {
   })
 }
 
-async function mount(props: Partial<Parameters<typeof ItemEditForm>[0]> = {}) {
+async function mount(
+  props: Partial<Parameters<typeof ItemEditForm>[0]> = {},
+  ready: () => boolean = () => host.querySelectorAll('[data-field]').length >= 3
+) {
   const { client, calls } = makeClient()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   await act(async () => {
@@ -178,14 +218,18 @@ async function mount(props: Partial<Parameters<typeof ItemEditForm>[0]> = {}) {
       </QueryClientProvider>
     )
   })
-  await settle(() => host.querySelectorAll('[data-field]').length >= 3)
+  await settle(ready)
   return { calls }
 }
 
 const fieldOrder = () =>
   [...host.querySelectorAll('[data-field]')].map((el) => el.getAttribute('data-field'))
+// Every non-GET that reached the network except the draft-rows read.
 const writes = (calls: Cmd[]) =>
-  calls.filter((c) => (c._method ?? 'GET').toUpperCase() !== 'GET').map((c) => c._path)
+  calls
+    .filter((c) => (c._method ?? 'GET').toUpperCase() !== 'GET')
+    .map((c) => c._path)
+    .filter((p) => p !== '/field-config/orders/project')
 
 describe('ItemEditForm design mode', () => {
   it('normal mode output unchanged', async () => {
@@ -199,12 +243,22 @@ describe('ItemEditForm design mode', () => {
 
   it('design mode renders the passed layout and never calls write endpoints', async () => {
     const record = { ...RECORD }
+    // Hears every write ATTEMPT, before the read-only client refuses it — so
+    // the form's own gates (recap touch, live sync, drafts, locks, rules) are
+    // what this test checks, not just the client.
+    const onRefusedWrite = vi.fn()
     const { calls } = await mount({
-      design: { layout: LAYOUT, record, context: makeDesign() }
+      design: { layout: LAYOUT, record, context: makeDesign(), onRefusedWrite }
     })
     expect(fieldOrder()).toEqual(['title', 'amount', 'notes'])
     expect(calls.some((c) => c._path === '/collection-layouts/active')).toBe(false)
     expect(calls.some((c) => c._path === '/items/orders/1')).toBe(false)
+    // The draft's placements go to the server's formatter, as they are.
+    const project = calls.filter((c) => c._path === '/field-config/orders/project')
+    expect(project.length).toBeGreaterThan(0)
+    expect(project[0]._method).toBe('POST')
+    expect(project[0]._body?.assignments).toEqual(LAYOUT.assignments)
+    expect(calls.some((c) => c._path === '/field-config/orders')).toBe(false)
     // Values come from the preview record.
     const title = host.querySelector('[data-field="title"] input') as HTMLInputElement | null
     expect(title?.value).toBe('First order')
@@ -229,6 +283,7 @@ describe('ItemEditForm design mode', () => {
     }
     await settle(() => false)
     expect(writes(calls)).toEqual([])
+    expect(onRefusedWrite).not.toHaveBeenCalled()
   })
 
   it('design mode wraps each placement in a DesignNode', async () => {
@@ -297,5 +352,70 @@ describe('ItemEditForm design mode', () => {
     const amount = host.querySelector('[data-design-target="field:amount:main"]')
     expect(amount).not.toBeNull()
     expect(amount?.querySelector('[data-design-hidden]')).not.toBeNull()
+  })
+  // Tabs/steps: Details holds a hidden field, Later is hidden by its
+  // visible_when (the record's status is open), Empty holds nothing.
+  const tabsLayout = (mode: 'tabs' | 'steps'): ActiveLayoutData => ({
+    layout: { ...(LAYOUT.layout as NonNullable<ActiveLayoutData['layout']>), tab_mode: mode },
+    groups: [
+      { ...group(11, 't1', 'Details', 0), type: 'tab' },
+      {
+        ...group(12, 't2', 'Later', 1),
+        type: 'tab',
+        visible_when: JSON.stringify([{ field: 'status', op: 'eq', value: 'closed' }])
+      } as FieldGroup,
+      { ...group(13, 't3', 'Empty', 2), type: 'tab' }
+    ],
+    assignments: [
+      { field: 'title', sort: 0, group_key: 't1', is_visible: true },
+      { field: 'amount', sort: 1, group_key: 't1', is_visible: true, overrides: { hidden: true } },
+      { field: 'notes', sort: 0, group_key: 't2', is_visible: true }
+    ],
+    ungrouped_sort: 99
+  })
+
+  for (const mode of ['tabs', 'steps'] as const) {
+    it(`${mode}: hidden fields and rule-hidden ${mode} stay faint; an empty one is a drop zone`, async () => {
+      const onRefusedWrite = vi.fn()
+      await mount(
+        {
+          design: {
+            layout: tabsLayout(mode),
+            record: { ...RECORD },
+            context: makeDesign({ showHidden: true }),
+            onRefusedWrite
+          }
+        },
+        () => !!host.querySelector('[data-field="title"]')
+      )
+      // The hidden field in the active tab shows as a faint placeholder.
+      const amount = host.querySelector('[data-design-target="field:amount:t1"]')
+      expect(amount?.querySelector('[data-design-hidden] [data-field="amount"]')).not.toBeNull()
+      // The visible_when tab is kept, faint, and selectable.
+      const later = host.querySelector('[data-design-target="group:t2"]')
+      expect(later).not.toBeNull()
+      expect(later?.hasAttribute('data-design-hidden')).toBe(true)
+      // Clicking the Empty tab switches to it (and selects it): a drop zone.
+      const empty = host.querySelector('[data-design-target="group:t3"]') as HTMLElement
+      const button = (
+        empty.matches('button') ? empty : empty.querySelector('button')
+      ) as HTMLElement
+      await act(async () => {
+        button.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+      })
+      await settle(() => !!host.querySelector('[data-design-drop-zone]'))
+      expect(host.querySelector('[data-design-drop-zone]')).not.toBeNull()
+      expect(onRefusedWrite).not.toHaveBeenCalled()
+    })
+  }
+
+  it(`tabs: without showHidden the rule-hidden tab and hidden field stay out`, async () => {
+    await mount(
+      { design: { layout: tabsLayout('tabs'), record: { ...RECORD }, context: makeDesign() } },
+      () => !!host.querySelector('[data-field="title"]')
+    )
+    expect(host.querySelector('[data-design-target="group:t2"]')).toBeNull()
+    expect(host.querySelector('[data-field="amount"]')).toBeNull()
+    expect(host.querySelector('[data-design-hidden]')).toBeNull()
   })
 })
