@@ -549,7 +549,8 @@ describe('ItemEditForm design mode', () => {
 
       await press(toggle())
       expect(toggle()?.getAttribute('title')).toBe('Collapse summary')
-      expect(window.localStorage.getItem(KEY)).toBeNull()
+      // Opening is a choice too: a narrow canvas will not fold it again.
+      expect(window.localStorage.getItem(KEY)).toBe('0')
     })
 
     it('normal mode: starts open whatever the editor remembered, and remembers nothing', async () => {
