@@ -23,6 +23,7 @@ import { Redis } from 'ioredis'
 import { _staticDb, db } from '../db/index.js'
 import { metadataQueryCacheStats } from '../db/metadata-query-cache.js'
 import {
+  bodyTouchesAccess,
   notePermissionStatement,
   notePrincipalKind,
   permissionCacheStats,
@@ -137,6 +138,13 @@ async function main() {
   console.log(
     `${users.length} active users, ${roles.length} roles, ${allCollections.length} collections (${sample.length} sampled for everyone, all for one user per role)`
   )
+
+  if (process.argv.includes('--mixed-only')) {
+    await mixedLoadProbe(users, sample)
+    await redis.quit()
+    await db.destroy()
+    process.exit(0)
+  }
 
   // ── 1. uncached reference answers ──────────────────────────────────────────
   setPermissionCacheEnabled(false)
@@ -289,46 +297,7 @@ async function main() {
   const on = await probe(true)
   console.log('one list read (can + fields + row filter + scopes):', { off, on_warm: on })
 
-  // ── 6. warm under mixed load: report-procedure EXECs between item reads ─────
-  // The statements are only CLASSIFIED (bodies read with OBJECT_DEFINITION), never run.
-  setPermissionCacheEnabled(true)
-  setPermissionCacheProcLookup(async (name) => {
-    const rows = (await db.raw('SELECT OBJECT_DEFINITION(OBJECT_ID(?)) AS body', [name])) as Array<{
-      body: string | null
-    }>
-    return rows?.[0]?.body ?? null
-  })
-  const procNames = (
-    (await db.raw(
-      "SELECT TOP 40 s.name + '.' + p.name AS name FROM sys.procedures p JOIN sys.schemas s ON s.schema_id = p.schema_id ORDER BY p.name"
-    )) as Array<{ name: string }>
-  ).map((r) => r.name)
-  const mixUsers = users.slice(0, 100)
-  const mixStatements = procNames.map((n) => `INSERT INTO #rows EXEC ${n} @p0, @p1`)
-  // First look at every procedure (unknown = may change access, once).
-  for (const sql of mixStatements) notePermissionStatement(sql, false)
-  await new Promise((r) => setTimeout(r, 2_000))
-  const before = permissionCacheStats()
-  let flagged = 0
-  const mixStart = performance.now()
-  for (let round = 0; round < 5; round++) {
-    for (const [i, base] of mixUsers.entries()) {
-      if (notePermissionStatement(mixStatements[i % mixStatements.length], false)) flagged++
-      notePermissionStatement(mixStatements[i % mixStatements.length], true)
-      await listReadWork({ ...base } as User, sample[i % sample.length])
-    }
-  }
-  const after = permissionCacheStats()
-  const delta = (k: string) => Number(after[k]) - Number(before[k])
-  console.log('warm under mixed load (5 rounds × 100 people, one report EXEC per read):', {
-    procedures: procNames.length,
-    statements_that_bumped: flagged,
-    resets: delta('resets'),
-    bumps: delta('bumps'),
-    hits: delta('hits'),
-    misses: delta('misses'),
-    ms: Math.round(performance.now() - mixStart)
-  })
+  await mixedLoadProbe(users, sample)
 
   console.log(
     `\nRESULT: ${compared} comparisons, ${mismatches} mismatches, ${executed} executed reads; cold ${passStatements[0]} / warm ${passStatements[1]} round trips`
@@ -336,6 +305,68 @@ async function main() {
   await redis.quit()
   await db.destroy()
   process.exit(mismatches === 0 ? 0 : 1)
+}
+
+/**
+ * Warm under mixed load: report-procedure EXECs between item reads. The statements are only
+ * CLASSIFIED (bodies read with OBJECT_DEFINITION), never run. Procedures whose body may
+ * touch access inputs are counted and left out of the mix: running one must move the version.
+ */
+async function mixedLoadProbe(users: User[], sample: string[]): Promise<void> {
+  setPermissionCacheEnabled(true)
+  const body = async (name: string) => {
+    const rows = (await db.raw('SELECT OBJECT_DEFINITION(OBJECT_ID(?)) AS body', [name])) as Array<{
+      body: string | null
+    }>
+    return rows?.[0]?.body ?? null
+  }
+  setPermissionCacheProcLookup(body)
+  const all = (
+    (await db.raw(
+      "SELECT s.name + '.' + p.name AS name FROM sys.procedures p JOIN sys.schemas s ON s.schema_id = p.schema_id ORDER BY p.name"
+    )) as Array<{ name: string }>
+  ).map((r) => r.name)
+  const reports: string[] = []
+  let touching = 0
+  for (const name of all) {
+    if (bodyTouchesAccess(await body(name))) touching++
+    else if (reports.length < 40) reports.push(name)
+  }
+  const mixUsers = users.slice(0, 100)
+  const mixStatements = reports.map((n) => `INSERT INTO #rows EXEC ${n} @p0, @p1`)
+  // First look at every procedure (unknown = may change access, once each).
+  for (const sql of mixStatements) notePermissionStatement(sql, false)
+  await new Promise((r) => setTimeout(r, 3_000))
+  // Warm the people's entries, then measure.
+  for (const [i, base] of mixUsers.entries())
+    await listReadWork({ ...base } as User, sample[i % sample.length])
+  const before = permissionCacheStats()
+  let flagged = 0
+  let sentRoundTrips = roundTrips()
+  const mixStart = performance.now()
+  for (let round = 0; round < 5; round++) {
+    for (const [i, base] of mixUsers.entries()) {
+      const sql = mixStatements[i % mixStatements.length]
+      if (notePermissionStatement(sql, false)) flagged++
+      notePermissionStatement(sql, true)
+      await listReadWork({ ...base } as User, sample[i % sample.length])
+    }
+  }
+  sentRoundTrips = roundTrips() - sentRoundTrips
+  const after = permissionCacheStats()
+  const delta = (k: string) => Number(after[k]) - Number(before[k])
+  console.log('warm under mixed load (5 rounds × 100 people, one report EXEC per item read):', {
+    procedures: all.length,
+    may_touch_access: touching,
+    report_procedures_in_mix: reports.length,
+    statements_that_bumped: flagged,
+    resets: delta('resets'),
+    bumps: delta('bumps'),
+    hits: delta('hits'),
+    misses: delta('misses'),
+    round_trips: sentRoundTrips,
+    ms: Math.round(performance.now() - mixStart)
+  })
 }
 
 /** What items.ts readByQuery asks per list read (plus the expanded relations ask again). */
