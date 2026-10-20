@@ -6,6 +6,7 @@ export {
   LayoutEditorHostContext,
   useLayoutEditorHost
 } from './host'
+export { Inspector, type InspectorProps } from './inspector/Inspector'
 export {
   CollectionFieldPicker,
   CollectionFieldPickerPanel,

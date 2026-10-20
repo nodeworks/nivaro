@@ -1,0 +1,617 @@
+// @vitest-environment jsdom
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { act } from 'react'
+import { createRoot, type Root } from 'react-dom/client'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { NivaroProvider } from '../../../context'
+import {
+  type GroupRow,
+  type LayoutBundle,
+  newGroup,
+  newPlacement,
+  type PlacementRow
+} from '../../../lib/layout-ops'
+import type { DesignTarget } from '../design-context'
+import { LayoutEditorHostContext } from '../host'
+import parityRows from '../parity-keys.json'
+import { Inspector } from './Inspector'
+import { CONDITION_OPS } from './kit'
+
+;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+
+// ── Fixture: an `orders` collection with every kind of field ────────────────
+
+const FIELDS = [
+  { field: 'id', type: 'integer', label: null, interface: null },
+  {
+    field: 'title',
+    type: 'string',
+    label: 'Title',
+    interface: 'input',
+    options: { input_mask: 'AAA' }
+  },
+  { field: 'status', type: 'string', label: 'Status', interface: 'input' },
+  {
+    field: 'amount',
+    type: 'decimal',
+    label: 'Amount',
+    interface: 'input',
+    options: { format: 'currency', currency: 'USD' }
+  },
+  { field: 'due', type: 'datetime', label: 'Due', interface: 'datetime' },
+  {
+    field: 'vendor',
+    type: 'integer',
+    label: 'Vendor',
+    interface: 'relation-picker',
+    dependency_config: {
+      cascade_filters: [
+        {
+          parent_field: 'region',
+          filter_column: 'region_id',
+          clear_on_parent_change: true,
+          show_all_if_no_parent: true
+        }
+      ]
+    }
+  },
+  { field: 'region', type: 'integer', label: 'Region', interface: 'relation-picker' },
+  { field: 'total', type: 'decimal', label: 'Total', interface: 'input', computed_type: 'rollup' },
+  {
+    field: 'lines',
+    type: 'alias',
+    label: 'Lines',
+    interface: 'inline-table',
+    options: {
+      column_presets: [
+        { name: 'Short', columns: ['qty'] },
+        { name: 'Long', columns: ['qty', 'note'] }
+      ]
+    }
+  },
+  { field: 'grid_lines', type: 'alias', label: 'Grid lines', interface: 'inline-grid' }
+]
+
+const RELATIONS = [
+  {
+    many_collection: 'orders',
+    many_field: 'vendor',
+    one_collection: 'vendors',
+    one_field: null,
+    junction_field: null
+  },
+  {
+    many_collection: 'orders',
+    many_field: 'region',
+    one_collection: 'regions',
+    one_field: null,
+    junction_field: null
+  },
+  {
+    many_collection: 'order_lines',
+    many_field: 'order',
+    one_collection: 'orders',
+    one_field: 'lines',
+    junction_field: null
+  },
+  {
+    many_collection: 'order_grid',
+    many_field: 'order',
+    one_collection: 'orders',
+    one_field: 'grid_lines',
+    junction_field: null
+  },
+  {
+    many_collection: 'orders_tags',
+    many_field: 'orders_id',
+    one_collection: 'orders',
+    one_field: 'tags',
+    junction_field: 'tags_id'
+  },
+  {
+    many_collection: 'orders_tags',
+    many_field: 'tags_id',
+    one_collection: 'tags',
+    one_field: null,
+    junction_field: 'orders_id'
+  },
+  {
+    many_collection: 'orders_files',
+    many_field: 'orders_id',
+    one_collection: 'orders',
+    one_field: 'attachments',
+    junction_field: 'nivaro_files_id'
+  },
+  {
+    many_collection: 'orders_files',
+    many_field: 'nivaro_files_id',
+    one_collection: 'nivaro_files',
+    one_field: null,
+    junction_field: 'orders_id'
+  }
+]
+
+const CHILD_FIELDS = [
+  { field: 'id', type: 'integer', label: null },
+  { field: 'product', type: 'integer', label: 'Product', interface: 'relation-picker' },
+  { field: 'qty', type: 'integer', label: 'Qty' },
+  { field: 'note', type: 'string', label: 'Note' },
+  { field: 'status', type: 'string', label: 'Status' },
+  { field: 'amount', type: 'decimal', label: 'Amount' }
+]
+
+const CHILD_RELATIONS = [
+  {
+    many_collection: 'order_lines',
+    many_field: 'product',
+    one_collection: 'products',
+    one_field: null,
+    junction_field: null
+  },
+  {
+    many_collection: 'order_lines',
+    many_field: 'order',
+    one_collection: 'orders',
+    one_field: 'lines',
+    junction_field: null
+  },
+  {
+    many_collection: 'allocations',
+    many_field: 'line',
+    one_collection: 'order_lines',
+    one_field: 'allocations',
+    junction_field: null
+  }
+]
+
+const binding = (key: string, value: unknown) => ({
+  key,
+  binding_type: 'static',
+  binding_value: typeof value === 'string' ? value : JSON.stringify(value)
+})
+
+const place = (field: string, group: string | null, extra: Partial<PlacementRow> = {}) => ({
+  ...newPlacement(field, group),
+  ...extra
+})
+const group = (
+  key: string,
+  type: string,
+  parent: string | null,
+  extra: Partial<GroupRow> = {}
+) => ({
+  ...newGroup(key, key.replace('_', ' '), type, parent),
+  ...extra
+})
+
+const LINES_OPTIONS = {
+  parent_cascades: [{ parent_field: 'vendor', child_field: 'product' }],
+  unique_by: ['product'],
+  drawer_relations: ['allocations'],
+  row_rules: [
+    {
+      trigger_field: 'product',
+      trigger_op: 'eq',
+      trigger_value: '7',
+      trigger_fields: ['qty'],
+      target_field: 'note',
+      target_type: 'set',
+      target_value: 'a',
+      sort: 0
+    },
+    {
+      trigger_field: 'qty',
+      target_field: 'note',
+      target_type: 'precedence',
+      sources: [
+        { source_type: 'relation_field', source_field: 'product', source_related_field: 'name' }
+      ],
+      sort: 1
+    },
+    { trigger_field: 'status', target_field: 'qty', target_type: 'lock', sort: 2 }
+  ]
+}
+
+function makeBundle(layout: Record<string, unknown> = {}): LayoutBundle {
+  return {
+    layout: {
+      id: 7,
+      collection: 'orders',
+      name: 'Order form',
+      is_active: false,
+      layout_type: 'grouped',
+      ...layout
+    },
+    rev: 'r1',
+    groups: [
+      group('main', 'section', null, {
+        summary_fields: JSON.stringify([{ field: 'lines', agg: 'sum', agg_field: 'amount' }]),
+        swap_config: JSON.stringify({
+          enabled: true,
+          primary_field: 'vendor',
+          alternate_fields: []
+        })
+      }),
+      group('steps', 'container', null, { tab_mode: 'steps' }),
+      group('step_one', 'tab', 'steps'),
+      group('note_block', 'content', null, { content: 'Read this', content_tone: 'info' })
+    ],
+    placements: [
+      place('title', 'main'),
+      place('amount', 'main'),
+      place('due', 'main'),
+      place('vendor', 'main', {
+        overrides: { interface: 'relation-grouped' },
+        input_bindings: [
+          binding('__inline_display__', {
+            fields: [
+              { field: 'name', label: null, format: null },
+              { field: 'code', label: 'Code', format: 'date' }
+            ],
+            separator: ', '
+          })
+        ],
+        lock_conditions: JSON.stringify([
+          { type: 'pipeline_state', state_keys: [] },
+          { type: 'role', role_ids: [] }
+        ])
+      }),
+      place('total', 'main'),
+      place('tags', 'main', { overrides: { options: { max_values: 2 } } }),
+      place('attachments', 'main', { overrides: { interface: 'files-m2m' } }),
+      place('lines', 'main', { overrides: { options: LINES_OPTIONS }, show_row_revisions: true }),
+      place('grid_lines', 'main'),
+      place('status', 'step_one'),
+      place('__pipeline__', null),
+      place('__pdf__', 'main'),
+      place('__widget_5__', 'main', { widget_id: 5 }),
+      place('title', '__header__'),
+      place('__subtitle__', null, {
+        input_bindings: [
+          binding('__subtitle_config__', {
+            fields: [{ field: 'status', label: 'Status' }],
+            separator: ' | '
+          })
+        ]
+      })
+    ]
+  }
+}
+
+const PARENT: LayoutBundle = {
+  layout: { id: 3, collection: 'orders', name: 'Base order', is_active: true },
+  rev: 'p1',
+  groups: [group('shipping', 'section', null)],
+  placements: [place('region', 'shipping', { col_span: 6 })]
+}
+
+// ── Harness ─────────────────────────────────────────────────────────────────
+
+type Cmd = { _method?: string; _path: string; _params?: Record<string, unknown>; _body?: unknown }
+
+function makeClient() {
+  const calls: Cmd[] = []
+  const client = {
+    request: vi.fn(async (cmd: Cmd) => {
+      calls.push(cmd)
+      const p = cmd._path
+      if (cmd._method === 'PATCH') return { data: { ok: true } }
+      if (p === '/collections/orders') return { data: { fields: FIELDS, relations: RELATIONS } }
+      if (p === '/collections/order_lines')
+        return { data: { fields: CHILD_FIELDS, relations: CHILD_RELATIONS } }
+      if (p.startsWith('/collections/')) return { data: { fields: [], relations: [] } }
+      if (p === '/field-config/order_lines') return { data: CHILD_FIELDS }
+      if (p === '/field-config/orders') return { data: FIELDS }
+      if (p.startsWith('/field-config/')) return { data: [] }
+      if (p === '/data-model/relations/for/order_lines') return { data: CHILD_RELATIONS }
+      if (p === '/data-model/relations/for/orders') return { data: RELATIONS }
+      if (p.startsWith('/data-model/relations/for/')) return { data: [] }
+      if (p.endsWith('/impact'))
+        return {
+          data: [
+            { source: 'layout', label: "Layout 'Other form'", detail: 'field assignment' },
+            { source: 'queue-source', label: "Queue 'Open orders'", detail: 'extra field' }
+          ],
+          total: 2
+        }
+      if (p === '/roles') return { data: [{ id: 'r-1', name: 'Buyer' }] }
+      if (p === '/pipelines') return { data: [] }
+      if (p === '/widgets-internal')
+        return {
+          data: [{ id: 5, name: 'Spend', widget_type: 'report_widget', config: { report_id: 1 } }]
+        }
+      if (p === '/collection-layouts/3/bundle') return PARENT
+      if (p === '/collection-layouts') return { data: [] }
+      return { data: [] }
+    })
+  }
+  return { client, calls }
+}
+
+let root: Root
+let host: HTMLDivElement
+beforeEach(() => {
+  host = document.createElement('div')
+  document.body.appendChild(host)
+  root = createRoot(host)
+})
+afterEach(() => {
+  act(() => root.unmount())
+  host.remove()
+  document.body.innerHTML = ''
+})
+
+async function settle(ms = 120) {
+  for (let i = 0; i < ms / 10; i++) {
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 10))
+    })
+  }
+}
+
+async function mount(
+  target: DesignTarget | null,
+  opts: {
+    bundle?: LayoutBundle
+    inheritedFrom?: string | null
+    navigate?: (to: string) => void
+  } = {}
+) {
+  const { client, calls } = makeClient()
+  const apply = vi.fn()
+  const flush = vi.fn()
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  await act(async () => {
+    root.render(
+      <QueryClientProvider client={qc}>
+        <NivaroProvider client={client as never}>
+          <LayoutEditorHostContext.Provider
+            value={{
+              isAdmin: true,
+              navigate: opts.navigate ?? (() => {}),
+              warning: null,
+              recordLink: () => ''
+            }}
+          >
+            <Inspector
+              bundle={opts.bundle ?? makeBundle()}
+              target={target}
+              apply={apply}
+              flush={flush}
+              collection='orders'
+              inheritedFrom={opts.inheritedFrom}
+            />
+          </LayoutEditorHostContext.Provider>
+        </NivaroProvider>
+      </QueryClientProvider>
+    )
+  })
+  await settle()
+  return { apply, flush, calls }
+}
+
+const settingsIn = () =>
+  [...host.querySelectorAll('[data-setting]')].map((e) => e.getAttribute('data-setting') as string)
+
+async function click(el: Element | null | undefined) {
+  expect(el, 'element to click').toBeTruthy()
+  await act(async () => {
+    ;(el as HTMLElement).click()
+  })
+  await settle(60)
+}
+
+/** Every control on every tab (row rules expanded). */
+async function collectAll(): Promise<string[]> {
+  const out = new Set(settingsIn())
+  const tabs = [...host.querySelectorAll('[data-inspector-tab]')].map((t) =>
+    t.getAttribute('data-inspector-tab')
+  )
+  for (const t of tabs) {
+    await click(host.querySelector(`[data-inspector-tab="${t}"]`))
+    for (const h of [...host.querySelectorAll('[role="button"][aria-expanded="false"]')])
+      await click(h)
+    for (const k of settingsIn()) out.add(k)
+  }
+  return [...out]
+}
+
+const field = (f: string, g: string | null = 'main'): DesignTarget => ({
+  kind: 'field',
+  field: f,
+  group_key: g
+})
+
+interface ParityRow {
+  key: string
+  home: string | null
+  status: string
+  layout_types: string[]
+}
+
+describe('Inspector', () => {
+  it('every parity-map row with home Inspector renders a control', async () => {
+    const seen = new Set<string>()
+    const grouped: DesignTarget[] = [
+      ...[
+        'title',
+        'amount',
+        'due',
+        'vendor',
+        'total',
+        'tags',
+        'attachments',
+        'lines',
+        'grid_lines'
+      ].map((f) => field(f)),
+      { kind: 'group', key: 'main' },
+      { kind: 'group', key: 'steps' },
+      { kind: 'group', key: 'step_one' },
+      { kind: 'group', key: 'note_block' },
+      { kind: 'slot', field: '__pipeline__', group_key: null },
+      { kind: 'slot', field: '__pdf__', group_key: 'main' },
+      { kind: 'slot', field: '__widget_5__', group_key: 'main' },
+      { kind: 'header', field: 'title' },
+      { kind: 'header', field: '__subtitle__' }
+    ]
+    for (const t of grouped) {
+      await mount(t)
+      for (const k of await collectAll()) seen.add(k)
+    }
+    // Addendum-only settings
+    await mount(field('title'), { bundle: makeBundle({ layout_type: 'addendum' }) })
+    for (const k of await collectAll()) seen.add(k)
+    // An inherited placement
+    await mount(field('region', 'shipping'), {
+      bundle: { ...makeBundle({ parent_layout_id: 3 }) },
+      inheritedFrom: 'Base order'
+    })
+    for (const k of settingsIn()) seen.add(k)
+    // The every-form confirm opens on a global change
+    await mount(field('amount'))
+    await click(
+      [...host.querySelectorAll('[data-setting="field.format"] button')].find(
+        (b) => b.textContent === 'Decimal'
+      )
+    )
+    for (const k of settingsIn()) seen.add(k)
+
+    const required = (parityRows as ParityRow[]).filter(
+      (r) => r.home === 'inspector' && r.status !== 'retired'
+    )
+    expect(required.length).toBeGreaterThan(170)
+    const missing = required.map((r) => r.key).filter((k) => !seen.has(k))
+    expect(missing).toEqual([])
+  }, 60_000)
+
+  it('global key asks before saving and lists affected layouts', async () => {
+    const { apply, calls } = await mount(field('amount'))
+    await click(
+      [...host.querySelectorAll('[data-setting="field.format"] button')].find(
+        (b) => b.textContent === 'Decimal'
+      )
+    )
+    expect(calls.some((c) => c._method === 'PATCH')).toBe(false)
+    const confirm = host.querySelector('[data-global-confirm]')
+    expect(confirm?.textContent).toContain("Layout 'Other form'")
+    expect(confirm?.textContent).toContain('every form')
+
+    await click(host.querySelector('[data-global-save]'))
+    const patch = calls.find((c) => c._method === 'PATCH')
+    expect(patch?._path).toBe('/field-config/orders/amount')
+    expect(patch?._body).toEqual({ options: { format: 'decimal', currency: 'USD' } })
+    expect(apply).not.toHaveBeenCalled()
+    expect(host.querySelector('[data-global-confirm]')).toBeNull()
+  })
+
+  it('cancelling a global change writes nothing', async () => {
+    const { calls } = await mount(field('amount'))
+    await click(
+      [...host.querySelectorAll('[data-setting="field.format"] button')].find(
+        (b) => b.textContent === 'Integer'
+      )
+    )
+    await click(host.querySelector('[data-global-cancel]'))
+    expect(calls.some((c) => c._method === 'PATCH')).toBe(false)
+    expect(host.querySelector('[data-global-confirm]')).toBeNull()
+  })
+
+  it('layout-local key emits one op', async () => {
+    const { apply } = await mount(field('title'))
+    await click(host.querySelector('[data-inspector-tab="rules"]'))
+    await click(host.querySelector('[data-setting="field.required"] [role="switch"]'))
+    expect(apply).toHaveBeenCalledTimes(1)
+    const [ops, opts] = apply.mock.calls[0]
+    expect(ops).toEqual([
+      {
+        op: 'update_placement',
+        at: { field: 'title', group_key: 'main' },
+        patch: { overrides: { required: true } }
+      }
+    ])
+    expect(opts.label).toBe('Make Title required')
+  })
+
+  it('types text as one coalesced setting and sends it on blur', async () => {
+    const { apply, flush } = await mount(field('title'))
+    const input = host.querySelector('[data-setting="field.label"] input') as HTMLInputElement
+    await act(async () => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      set?.call(input, 'Subject')
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    const [ops, opts] = apply.mock.calls.at(-1) ?? []
+    expect(ops[0].patch).toEqual({ overrides: { label: 'Subject' } })
+    expect(opts).toEqual({ label: 'Rename Title', text: true })
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    })
+    expect(flush).toHaveBeenCalled()
+  })
+
+  it('default-form-only label shows on a non-default layout', async () => {
+    await mount(field('lines'))
+    await click(host.querySelector('[data-inspector-tab="grid"]'))
+    const rules = host.querySelector('[data-setting="field.row_rules"]')
+    expect(rules?.textContent).toContain('Enforced on the default form only')
+
+    await mount(field('lines'), { bundle: makeBundle({ is_active: true }) })
+    await click(host.querySelector('[data-inspector-tab="grid"]'))
+    expect(host.textContent).not.toContain('Enforced on the default form only')
+  })
+
+  it('offers prefill from the record on addendum layouts only', async () => {
+    await mount(field('title'), { bundle: makeBundle({ layout_type: 'addendum' }) })
+    await click(host.querySelector('[data-inspector-tab="rules"]'))
+    expect(host.querySelector('[data-setting="field.prefill_from_parent"]')).not.toBeNull()
+
+    await mount(field('title'))
+    await click(host.querySelector('[data-inspector-tab="rules"]'))
+    expect(host.querySelector('[data-setting="field.prefill_from_parent"]')).toBeNull()
+  })
+
+  it('inherited placements are read-only with Override here and Edit in parent', async () => {
+    const navigate = vi.fn()
+    const { apply } = await mount(field('region', 'shipping'), {
+      bundle: makeBundle({ parent_layout_id: 3 }),
+      inheritedFrom: 'Base order',
+      navigate
+    })
+    expect(host.textContent).toContain('Base order')
+    expect(host.querySelector('[aria-disabled="true"] fieldset[disabled]')).not.toBeNull()
+
+    await click(host.querySelector('[data-override-here]'))
+    const [ops] = apply.mock.calls[0]
+    expect(ops.map((o: { op: string }) => o.op)).toEqual(['group_create', 'place'])
+    expect(ops[1]).toMatchObject({ field: 'region', group_key: 'shipping', patch: { col_span: 6 } })
+
+    await click(host.querySelector('[data-edit-in-parent]'))
+    expect(navigate).toHaveBeenCalledWith('/data-model/orders?layout=3')
+  })
+
+  it('condition builders offer only the ops the server evaluates', async () => {
+    expect(CONDITION_OPS.map((o) => o.value)).toEqual(['eq', 'neq', 'nnull'])
+    const b = makeBundle()
+    b.groups = b.groups.map((g) =>
+      g.key === 'step_one'
+        ? { ...g, visible_when: JSON.stringify([{ field: 'status', op: 'eq', value: 'open' }]) }
+        : g
+    )
+    const { apply } = await mount({ kind: 'group', key: 'step_one' }, { bundle: b })
+    const rows = host.querySelectorAll('[data-setting="group.visible_when"] [data-condition-row]')
+    expect(rows).toHaveLength(1)
+    // A new row waits until it names a field: nothing is saved yet.
+    await click(
+      [...host.querySelectorAll('button')].find((x) => x.textContent === '+ Add condition')
+    )
+    expect(
+      host.querySelectorAll('[data-setting="group.visible_when"] [data-condition-row]')
+    ).toHaveLength(2)
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('says what to do when nothing is selected', async () => {
+    await mount(null)
+    expect(host.textContent).toContain('Select a field, section or panel')
+  })
+})
