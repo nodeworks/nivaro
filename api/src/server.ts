@@ -240,6 +240,9 @@ export async function buildServer() {
     // Readiness results are shared by every replica (and refreshed by one).
     const { setReadinessRedis } = await import('./services/readiness.js')
     setReadinessRedis(app.redis)
+    // #2441 — configuration reads shared across processes (a fresh replica starts warm).
+    const { setMetadataL2Redis } = await import('./db/metadata-l2.js')
+    setMetadataL2Redis(app.redis)
     // Idempotency keys: one store hook for the whole app (no-op without a claim).
     const { registerIdempotencyStore } = await import('./services/idempotency.js')
     registerIdempotencyStore(app)

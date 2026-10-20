@@ -51,7 +51,13 @@ export async function opsRuntimeRoutes(app: FastifyInstance) {
 
   // #236 — in-process caches (PER REPLICA — the UI says so).
   app.get('/caches', async (_req, reply) => {
-    return reply.send({ data: listCaches(), epoch: configEpochState() })
+    const { metadataL2Stats } = await import('../db/metadata-l2.js')
+    return reply.send({
+      data: listCaches(),
+      epoch: configEpochState(),
+      // #2441 — the shared metadata level is cluster-wide (Redis), unlike the caches above.
+      metadata_l2: metadataL2Stats()
+    })
   })
   // Clears here at once and moves the configuration epoch, so every other
   // process on this database clears within its poll (5 seconds).

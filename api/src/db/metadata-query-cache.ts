@@ -20,11 +20,16 @@
  *
  * mssql only: the cached form is rebuilt into the driver's raw row shape, and
  * that shape is dialect-specific. Other dialects run untouched.
+ *
+ * #2441 — a miss here asks a shared second level in Redis before the database
+ * (db/metadata-l2.ts), keyed by the configuration epoch, so a process that just
+ * started reads what another process already read.
  */
 
 import { isConfigWrite, noteConfigWrite } from './config-epoch.js'
-import { isOwnerWrite, ownersChanged } from './owner-signal.js'
+import { metadataL2Get, metadataL2Put, setMetadataL2PrimaryScope } from './metadata-l2.js'
 import { opsTopicsOfWrite, raiseOpsWrite } from './ops-signal.js'
+import { isOwnerWrite, ownersChanged } from './owner-signal.js'
 
 const TABLES = new Set([
   'nivaro_relations',
@@ -93,6 +98,18 @@ export function isCacheableRead(sql: string): boolean {
     seen++
   }
   return seen > 0
+}
+
+/**
+ * Exported for tests: knex's own `columnInfo()` read. It carries an `output`
+ * formatter (statements with one are otherwise never cached), but the
+ * formatter only reads the raw rows' values, which the cached form rebuilds
+ * exactly. #2441: column lists are a large share of a cold process's reads.
+ */
+const COLUMN_INFO_RE =
+  /^select \[COLUMN_NAME\], \[COLUMN_DEFAULT\], \[DATA_TYPE\], \[CHARACTER_MAXIMUM_LENGTH\], \[IS_NULLABLE\] from INFORMATION_SCHEMA\.COLUMNS where table_name = @p0 and table_catalog = @p1(?: and table_schema = (?:@p2|'dbo'))?$/
+export function isColumnInfoRead(sql: string): boolean {
+  return COLUMN_INFO_RE.test(sql)
 }
 
 /** Exported for tests: does this statement invalidate the cache? */
@@ -175,6 +192,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
   const proto = Object.getPrototypeOf(client) as DriverClient & { [PATCHED]?: boolean }
   if (!proto || proto[PATCHED] || typeof proto._query !== 'function') return
   proto[PATCHED] = true
+  setMetadataL2PrimaryScope(scopeOf(client))
   const original = proto._query
 
   proto._query = function patched(this: DriverClient, connection: unknown, query: QueryObj) {
@@ -208,7 +226,12 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     }
 
     const inTransaction = !!(connection as { __knexTxId?: unknown } | null)?.__knexTxId
-    if (!ENABLED || inTransaction || query.output || !isCacheableRead(sql)) {
+    if (
+      !ENABLED ||
+      inTransaction ||
+      (query.output && !isColumnInfoRead(sql)) ||
+      !isCacheableRead(sql)
+    ) {
       return original.call(this, connection, query)
     }
     const key = keyOf(this, query)
@@ -247,26 +270,43 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     shared.catch(() => {})
     inflight.set(key, shared)
 
-    return original.call(this, connection, query).then(
-      (done) => {
-        inflight.delete(key)
-        const rows = reduce(done.response)
-        if (rows) {
-          if (startedAt === generation) {
-            if (cache.size >= MAX_ENTRIES) cache.clear()
-            cache.set(key, { at: Date.now(), rows })
+    const scope = scopeOf(this)
+    const fromDatabase = (epoch: number | null) =>
+      original.call(this, connection, query).then(
+        (done) => {
+          inflight.delete(key)
+          const rows = reduce(done.response)
+          if (rows) {
+            if (startedAt === generation) {
+              if (cache.size >= MAX_ENTRIES) cache.clear()
+              cache.set(key, { at: Date.now(), rows })
+              // Shared level: only under the epoch the lookup began on (put re-checks it).
+              if (epoch != null) void metadataL2Put(scope, key, epoch, rows)
+            }
+            settle(rows)
+          } else {
+            fail(new Error('uncacheable response'))
           }
-          settle(rows)
-        } else {
-          fail(new Error('uncacheable response'))
+          return done
+        },
+        (err) => {
+          inflight.delete(key)
+          fail(err)
+          throw err
         }
-        return done
-      },
-      (err) => {
+      )
+
+    return metadataL2Get(scope, key).then((found) => {
+      // A local write while Redis answered: what it holds may predate the write.
+      if (found.rows && startedAt === generation) {
         inflight.delete(key)
-        fail(err)
-        throw err
+        if (cache.size >= MAX_ENTRIES) cache.clear()
+        cache.set(key, { at: Date.now(), rows: found.rows })
+        settle(found.rows)
+        query.response = rebuild(found.rows)
+        return query
       }
-    )
+      return fromDatabase(startedAt === generation ? found.epoch : null)
+    })
   }
 }

@@ -16386,7 +16386,7 @@ POST /api/search/semantic/reindex
         <!-- ════ OBSERVABILITY ════ -->
 
         <!-- API ANALYTICS -->
-        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"},{"id":"api-analytics-widget-timing","label":"Per-widget timing on dashboards"}]'>
+        <div class="doc-section" id="s-api-analytics" data-toc='[{"id":"api-analytics","label":"API Analytics"},{"id":"api-analytics-traces","label":"Slow requests: round trips, N+1s, the real plan"},{"id":"config-read-cache","label":"Configuration read cache"},{"id":"config-read-cache-shared","label":"Shared across processes (Redis)"},{"id":"cache-epoch","label":"Caches across processes"},{"id":"api-analytics-hooks","label":"Hook timings"},{"id":"api-analytics-replay","label":"Replaying a logged request"},{"id":"api-analytics-index-advisor","label":"Index advisor"},{"id":"api-analytics-inbound","label":"Inbound integrations"},{"id":"api-analytics-dependencies","label":"Partner dependencies"},{"id":"api-analytics-widget-timing","label":"Per-widget timing on dashboards"}]'>
           <!-- SYNC:api-analytics -->
           <h1 class="doc-h1" id="api-analytics">API Analytics</h1>
           <p class="doc-p">Every API request is sampled into <code class="doc-code">nivaro_api_logs</code>, a ring buffer retaining 14 days of traffic. The /api-analytics page visualises it: request volume timeseries, p50/p95 latency, error rate, and the slowest/most-hit endpoints.</p>
@@ -16410,6 +16410,17 @@ POST /api/search/semantic/reindex
             <li>Any schema change (ALTER, CREATE, DROP) clears it too, since column lists move.</li>
             <li><code class="doc-code">GET /api/ops-db/metadata-cache</code> reports entries, hits, misses, reads that shared an in-flight statement, and how often a write cleared it.</li>
             <li><code class="doc-code">METADATA_QUERY_CACHE=off</code> turns it off; <code class="doc-code">METADATA_QUERY_CACHE_TTL_MS</code> sets the lifetime. SQL Server only.</li>
+          </ul>
+          <h3 class="doc-h3" id="config-read-cache-shared">Shared across processes (Redis)</h3>
+          <p class="doc-p">A process that just started has nothing in memory, so it used to rebuild every collection, field list, relation, layout and column list one database round trip at a time; the GraphQL schema alone is a few hundred reads. Configuration reads now go to a second level in Redis before the database, so a fresh replica or a restart reads what another process already read. Each entry is keyed by the configuration number (<code class="doc-code">nivaro_cache_epochs</code>), the API version, the tenant and the database: a configuration change moves the number, and everything stored before it can no longer be reached. Nothing has to delete it; it expires after its lifetime.</p>
+          <ul class="doc-ul">
+            <li>The process that makes a configuration change skips the shared level until its own move of the number has landed, so it never reads back what it just replaced. A clear made after the change (saving in the Data Model, Clear on the Caches card) also drops the entries this process keyed on.</li>
+            <li>Only reads of the primary database are shared. A read replica can lag the number, so its reads stay in memory only.</li>
+            <li>Redis slow, down or erroring: the read goes to the database, the error is counted and the shared level rests for 5 seconds. Nothing fails because of it.</li>
+            <li>An edit that does not move the number (a raw UPDATE from SQL Server Management Studio) stays invisible for up to the shared lifetime, not the 30 seconds of the in-memory cache. Clear all caches on the Caches card afterwards: it moves the number.</li>
+            <li>Off when the number is off (<code class="doc-code">CACHE_EPOCH=off</code>) and in cloud mode.</li>
+            <li><code class="doc-code">GET /api/ops-db/metadata-cache</code> (under <code class="doc-code">l2</code>) and <code class="doc-code">GET /api/ops-runtime/caches</code> (under <code class="doc-code">metadata_l2</code>) report hits, misses, bytes read and written, the largest entry, entries skipped for size, errors and skips.</li>
+            <li><code class="doc-code">METADATA_L2=off</code> turns it off; <code class="doc-code">METADATA_L2_TTL_S</code> sets the lifetime (default 600), <code class="doc-code">METADATA_L2_MAX_BYTES</code> the largest compressed entry kept (default 262144), <code class="doc-code">METADATA_L2_TIMEOUT_MS</code> how long a read waits for Redis (default 150).</li>
           </ul>
           <h2 class="doc-h2" id="cache-epoch">Caches across processes</h2>
           <ul class="doc-ul">

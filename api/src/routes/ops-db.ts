@@ -534,7 +534,9 @@ export async function opsDbRoutes(app: FastifyInstance) {
   // shared an in-flight statement, and how often a write cleared it.
   app.get('/metadata-cache', async (_req, reply) => {
     const { metadataQueryCacheStats } = await import('../db/metadata-query-cache.js')
-    return reply.send({ data: metadataQueryCacheStats() })
+    const { metadataL2Stats } = await import('../db/metadata-l2.js')
+    // #2441 — `l2`: the shared Redis level under it (hits, misses, bytes, skips, errors).
+    return reply.send({ data: { ...metadataQueryCacheStats(), l2: metadataL2Stats() } })
   })
 
   // #213 — data velocity: rows created/changed per day per collection.
