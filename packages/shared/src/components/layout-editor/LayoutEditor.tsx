@@ -4,7 +4,12 @@ import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } fro
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import { HEADER_GROUP_KEY, type LayoutBundle, UNGROUPED_KEY } from '../../lib/layout-ops'
+import {
+  HEADER_GROUP_KEY,
+  type LayoutBundle,
+  type LayoutOp,
+  UNGROUPED_KEY
+} from '../../lib/layout-ops'
 import { cn } from '../../lib/utils'
 import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
@@ -185,6 +190,7 @@ function Canvas({
   selected,
   onSelect,
   showHidden,
+  apply,
   onOpenClassic
 }: {
   collection: string
@@ -195,6 +201,7 @@ function Canvas({
   selected: DesignTarget | null
   onSelect: (t: DesignTarget) => void
   showHidden: boolean
+  apply: (ops: LayoutOp[], opts?: { label: string }) => void
   onOpenClassic?: () => void
 }) {
   const dnd = useEditorDnd()
@@ -220,6 +227,7 @@ function Canvas({
       layout={layout}
       record={record}
       design={design}
+      apply={apply}
       onOpenClassic={onOpenClassic}
     />
   )
@@ -404,6 +412,7 @@ export function LayoutEditor({
                 selected={selected}
                 onSelect={onSelect}
                 showHidden={showHidden}
+                apply={draft.apply}
                 onOpenClassic={onOpenClassic ? () => onOpenClassic(currentId) : undefined}
               />
             </EditorDndProvider>
