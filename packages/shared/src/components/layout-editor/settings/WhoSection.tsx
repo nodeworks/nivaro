@@ -5,8 +5,8 @@ import { LAYOUT_TYPES } from '../overview/OverviewActions'
 import { useRoleNames } from '../overview/overview-api'
 import { quietText, Segmented, Setting, smallBtn } from './controls'
 import { changeLabel, flag, type SectionProps } from './section-props'
-import { useFieldSources } from './settings-api'
-import type { LayoutKind } from './settings-registry'
+import { useCollectionLayoutList, useFieldSources } from './settings-api'
+import { type LayoutKind, layoutKindOf } from './settings-registry'
 import { TextSetting } from './TextSetting'
 import { ToggleSetting } from './ToggleSetting'
 
@@ -114,10 +114,20 @@ function KindSetting(props: SectionProps) {
   const change = (to: LayoutKind) =>
     props.set({ layout_type: to }, `Change kind to ${kindLabel(to)}`)
   const isDefault = flag(layout.is_active)
-  // Through the draft like every other setting, so it is one undoable step and
-  // the refetch after it does not wipe undo. The server applies it through the
-  // type-scoped activate rule (the previous default of this kind steps down).
-  const makeDefault = () => props.set({ is_active: true }, 'Make default')
+  // Through the draft, so the save does not wipe undo; the server applies it
+  // through the type-scoped activate rule (the previous default of this kind
+  // steps down). Not an undo step: its inverse would leave the kind with no
+  // default instead of bringing the previous one back — hence the confirm.
+  const [confirmDefault, setConfirmDefault] = useState(false)
+  const layouts = useCollectionLayoutList(props.collection)
+  const current = layouts.find(
+    (l) => l.id !== Number(layout.id) && layoutKindOf(l) === kind && flag(l.is_active)
+  )
+  const noun = kind === 'grouped' ? 'form' : `${kindLabel(kind).toLowerCase()} layout`
+  const makeDefault = () => {
+    props.set({ is_active: true }, 'Make default', { undoable: false })
+    setConfirmDefault(false)
+  }
 
   return (
     <Setting k='layout.layout_type'>
@@ -164,13 +174,43 @@ function KindSetting(props: SectionProps) {
               This is the default {kindLabel(kind).toLowerCase()} layout: records no rule or role
               catches use it.
             </span>
+          ) : confirmDefault ? (
+            <div
+              data-make-default-confirm
+              className='w-full rounded-md border border-amber-300 bg-amber-50 p-2 text-[12px] text-amber-900 dark:border-amber-400/30 dark:bg-amber-400/10 dark:text-amber-200'
+            >
+              <p>
+                {current ? (
+                  <>
+                    <strong className='font-semibold'>{current.name}</strong> stops being the
+                    default {noun} for records no rule catches.
+                  </>
+                ) : (
+                  <>No {noun} is the default yet; this one becomes it.</>
+                )}{' '}
+                This cannot be undone with Undo.
+              </p>
+              <div className='mt-1.5 flex gap-1.5'>
+                <button
+                  type='button'
+                  data-action='make-default-confirm'
+                  className={smallBtn}
+                  onClick={makeDefault}
+                >
+                  Yes, make default
+                </button>
+                <button type='button' className={smallBtn} onClick={() => setConfirmDefault(false)}>
+                  Cancel
+                </button>
+              </div>
+            </div>
           ) : (
             <>
               <button
                 type='button'
                 data-action='make-default'
                 className={smallBtn}
-                onClick={makeDefault}
+                onClick={() => setConfirmDefault(true)}
               >
                 Make default
               </button>

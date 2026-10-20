@@ -96,6 +96,7 @@ interface Fixture {
   /** null = the table route fails (a collection without a table). */
   columns?: unknown[] | null
   relations?: unknown[]
+  layouts?: unknown[]
 }
 
 function makeClient(fx: Fixture = {}) {
@@ -133,7 +134,7 @@ function makeClient(fx: Fixture = {}) {
           ]
         }
       if (p === '/collection-layouts')
-        return { data: [{ id: 5, name: 'Order form', layout_type: 'grouped' }] }
+        return { data: fx.layouts ?? [{ id: 5, name: 'Order form', layout_type: 'grouped' }] }
       if (p === '/pipelines') return { data: [{ id: 'wf1', name: 'Change orders' }] }
       if (p === '/pdf-templates') return { data: [{ id: 3, name: 'Invoice' }] }
       if (p === '/collection-layouts/5/versions')
@@ -429,18 +430,41 @@ describe('FormSettings', () => {
     )
   })
 
-  it('Make default is one draft op, found by searching "default"', async () => {
-    const { calls, apply } = await mount(bundleOf('detail'))
+  it('Make default asks first, naming the current default, then sends one non-undoable op', async () => {
+    const { calls, apply } = await mount(bundleOf('detail'), {
+      fixture: {
+        layouts: [
+          { id: 5, name: 'Order form', layout_type: 'detail', is_active: false },
+          { id: 8, name: 'Order drill-down', layout_type: 'detail', is_active: true },
+          { id: 9, name: 'Main form', layout_type: 'grouped', is_active: true }
+        ]
+      }
+    })
     await click(q('[data-action="make-default"]'))
+    expect(apply).not.toHaveBeenCalled()
+    await settle(
+      () => !!q('[data-make-default-confirm]')?.textContent?.includes('Order drill-down')
+    )
+    const confirm = q('[data-make-default-confirm]')?.textContent ?? ''
+    expect(confirm).toContain('Order drill-down stops being the default detail layout')
+    expect(confirm).not.toContain('Main form')
+    await click(q('[data-action="make-default-confirm"]'))
+    expect(apply).toHaveBeenCalledTimes(1)
     expect(apply).toHaveBeenCalledWith([{ op: 'layout_update', patch: { is_active: true } }], {
-      label: 'Make default'
+      label: 'Make default',
+      undoable: false
     })
     expect(calls.some((c) => c._path.endsWith('/activate'))).toBe(false)
+    expect(q('[data-make-default-confirm]')).toBeNull()
+  })
+
+  it('search finds Make default by "default"', async () => {
+    await mount(bundleOf('grouped'))
     await type(q('[data-settings-search]'), 'default')
     expect(q('[data-action="make-default"]')).not.toBeNull()
   })
 
-  it('Make default keeps undo (it goes through the draft, not a refetch)', async () => {
+  it('Make default leaves undo as it was', async () => {
     const start = bundleOf('grouped')
     let rev = 1
     const engine = new LayoutDraftEngine({
@@ -451,14 +475,20 @@ describe('FormSettings', () => {
     })
     engine.receive(start)
     await mount(start, { apply: (ops, o) => engine.apply(ops, o) })
-    await click(q('[data-action="make-default"]'))
+    await click(setting('layout.disable_tasks')?.querySelector('[role="switch"]') ?? null)
     await settle(() => engine.getView().status === 'saved')
+    expect(engine.getView().undoLabel).toBe('Turn on Hide tasks')
+
+    await click(q('[data-action="make-default"]'))
+    await click(q('[data-action="make-default-confirm"]'))
+    await settle(
+      () =>
+        engine.getView().status === 'saved' && engine.getView().bundle?.layout.is_active === true
+    )
     const saved = engine.getView().bundle as LayoutBundle
-    expect(saved.layout.is_active).toBe(true)
-    // The query cache echoes the saved bundle back: same rev, undo stays.
     engine.receive(saved)
     expect(engine.getView().canUndo).toBe(true)
-    expect(engine.getView().undoLabel).toBe('Make default')
+    expect(engine.getView().undoLabel).toBe('Turn on Hide tasks')
   })
 
   it('says the Dossier switch does nothing off the default form', async () => {

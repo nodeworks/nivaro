@@ -338,6 +338,35 @@ describe('useLayoutDraft', () => {
     expect(draft.canUndo).toBe(true)
   })
 
+  it('a batch applied with undoable: false is saved but pushes no undo step', async () => {
+    const server = fakeServer()
+    await mount(server.client)
+    act(() =>
+      draft.apply([{ op: 'remove', at: { field: 'status', group_key: 'main' } }], {
+        label: 'Remove Status'
+      })
+    )
+    await settle(() => draft.status === 'saved')
+    act(() => draft.undo())
+    await settle(() => draft.status === 'saved' && server.posts.length === 2)
+    expect(draft.canRedo).toBe(true)
+
+    act(() =>
+      draft.apply([{ op: 'layout_update', patch: { tab_mode: 'steps' } }], {
+        label: 'Make default',
+        undoable: false
+      })
+    )
+    expect(draft.bundle?.layout.tab_mode).toBe('steps')
+    await settle(() => draft.status === 'saved' && server.posts.length === 3)
+    expect(server.current.layout.tab_mode).toBe('steps')
+    expect(server.posts[2].note).toBe('Make default')
+    // Nothing to undo (the earlier step was undone) and the redo stack is untouched.
+    expect(draft.canUndo).toBe(false)
+    expect(draft.canRedo).toBe(true)
+    expect(draft.redoLabel).toBe('Remove Status')
+  })
+
   it('debounces text edits into one op', async () => {
     const server = fakeServer()
     await mount(server.client)

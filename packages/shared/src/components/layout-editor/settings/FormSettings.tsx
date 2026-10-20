@@ -67,8 +67,11 @@ export function FormSettings({
       layout: bundle.layout as Record<string, unknown>,
       kind,
       collection,
-      set: (patch: LayoutPatch, label: string) =>
-        apply([{ op: 'layout_update', patch }], { label }),
+      set: (patch: LayoutPatch, label: string, opts?: { undoable?: boolean }) =>
+        apply(
+          [{ op: 'layout_update', patch }],
+          opts?.undoable === false ? { label, undoable: false } : { label }
+        ),
       setText: (patch: LayoutPatch, label: string) =>
         apply([{ op: 'layout_update', patch }], { label, text: true }),
       flush: doFlush

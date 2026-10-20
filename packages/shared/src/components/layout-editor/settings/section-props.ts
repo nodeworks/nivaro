@@ -8,8 +8,8 @@ export interface SectionProps {
   layout: Record<string, unknown>
   kind: LayoutKind
   collection: string
-  /** One `layout_update` op, one undo step labelled in plain words. */
-  set(patch: LayoutPatch, label: string): void
+  /** One `layout_update` op, one undo step labelled in plain words (`undoable: false` = no step). */
+  set(patch: LayoutPatch, label: string, opts?: { undoable?: boolean }): void
   /** Typing: coalesced per setting and sent after a pause; call flush() on blur. */
   setText(patch: LayoutPatch, label: string): void
   flush(): void
