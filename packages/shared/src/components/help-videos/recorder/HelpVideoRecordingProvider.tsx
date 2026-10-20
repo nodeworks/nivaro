@@ -13,7 +13,7 @@ import { useNavigation } from '../../../context'
 import { modalHostOf } from '../../ui/popover'
 import { helpVideoKeys } from '../api'
 import type { HelpVideoContext, HelpVideoDto } from '../types'
-import { useHelpVideosPath } from '../viewer/HelpVideoSheet'
+import { useHelpVideosPath } from '../viewer/useHelpVideosPath'
 import { HelpVideoWalkHost } from '../walk/HelpVideoWalk'
 import { HelpVideoRecorder } from './HelpVideoRecorder'
 import {

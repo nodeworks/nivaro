@@ -224,7 +224,6 @@ export {
   type RemoteFieldChange
 } from './components/item-edit/FieldAffordances'
 export { FieldRenderer } from './components/item-edit/FieldRenderer'
-export { UserChip, UserRosterCluster } from './components/item-edit/GroupSection'
 export { buildCascadeFilter, seedQuickPickerSteps } from './components/item-edit/helpers'
 export { InlineTableField } from './components/item-edit/InlineTableField'
 export {
@@ -254,6 +253,7 @@ export {
 export { RecordRecapStrip } from './components/item-edit/RecordRecapStrip'
 export { RecordSubscribeButton } from './components/item-edit/RecordSubscribeButton'
 export { RelationCombobox } from './components/item-edit/RelationCombobox'
+export { UserChip, UserRosterCluster } from './components/item-edit/UserChip'
 export { JobsTray } from './components/JobsTray'
 export type { JsonMapEditorConfig } from './components/JsonMapEditor'
 export { JsonMapEditor } from './components/JsonMapEditor'

@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import { useRequiredList } from '../api'
 import type { HelpVideoDto, MyLearningPathDto } from '../types'
 import { isGettingReady, listMeta } from './format'
-import { HelpVideoSheet } from './HelpVideoSheet'
+import { LazyHelpVideoSheet } from './LazyHelpVideoSheet'
 import { continueVideo, pathProgressLabel } from './paths'
 
 export function RequiredVideosCard({ className }: { className?: string }) {
@@ -110,7 +110,7 @@ export function RequiredVideosCard({ className }: { className?: string }) {
           </ul>
         </section>
       )}
-      <HelpVideoSheet
+      <LazyHelpVideoSheet
         videoId={watching?.videoId ?? null}
         open={!!watching}
         onOpenChange={(o) => !o && setWatching(null)}

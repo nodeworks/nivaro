@@ -2,7 +2,7 @@ import { ChevronLeft, ChevronRight, MousePointerClick, X } from 'lucide-react'
 import { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigation } from '../../../context'
-import { HelpVideoSheet } from '../viewer/HelpVideoSheet'
+import { LazyHelpVideoSheet } from '../viewer/LazyHelpVideoSheet'
 import {
   claimWalkHost,
   endHelpVideoWalk,
@@ -190,7 +190,7 @@ function WalkOverlay({ walk }: { walk: Walk }) {
 
   if (walk.watching) {
     return (
-      <HelpVideoSheet
+      <LazyHelpVideoSheet
         videoId={walk.videoId}
         open
         startAtMs={step.edited_ms}

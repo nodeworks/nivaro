@@ -15,7 +15,12 @@
     "./styles.css": "./styles.css",
     "./full.css": "./dist/full.css"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "*.css",
+    "./dist/shared/lib/field-interfaces.js",
+    "./dist/shared/lib/layout-slots.js",
+    "./dist/hooks/useSessionRecorder.js"
+  ],
   "files": [
     "dist",
     "tailwind-preset.cjs",

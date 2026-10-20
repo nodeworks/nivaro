@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, ExternalLink } from 'lucide-react'
-import { useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
 import {
   DrilldownContext,
   type DrilldownTarget,
@@ -10,9 +10,16 @@ import {
 } from '../context'
 import { get } from '../lib/commands'
 import { titleCase } from '../lib/utils'
-import { ItemEditForm } from './ItemEditForm'
-import { type ReadViewLayout, RecordReadView } from './RecordReadView'
+import type { ReadViewLayout } from './RecordReadView'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
+
+// The form and the read view load the first time a drill-down opens, not with
+// every screen that can open one (a dashboard tile, a list cell): between them
+// they are most of the record renderer.
+const ItemEditForm = lazy(() => import('./ItemEditForm').then((m) => ({ default: m.ItemEditForm })))
+const RecordReadView = lazy(() =>
+  import('./RecordReadView').then((m) => ({ default: m.RecordReadView }))
+)
 
 // Drill-down sheet: a detailed view of any record, rendered by the SAME
 // ItemEditForm that powers ItemEdit — so tabs, containers, field widths
@@ -27,6 +34,17 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from './ui/sheet'
 // Consumes the HOST's NivaroProvider / ItemEditAuthContext / NavigationContext
 // (ItemEdit and QueueWorklist both render this inside their own provider
 // trees) — it does not stand up its own client or auth context.
+
+const loadingRows = (
+  <div className='space-y-2 px-4 py-3'>
+    {[0, 1, 2, 3, 4, 5].map((i) => (
+      <div
+        key={i}
+        className='h-8 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
+      />
+    ))}
+  </div>
+)
 
 interface DetailLayoutResponse {
   layout: { id: number; name: string; slug: string | null; display_mode?: string | null }
@@ -188,36 +206,33 @@ export function RecordDrilldownSheet({
               {customView.render({ itemId: String(current.itemId) })}
             </DrilldownContext.Provider>
           ) : layoutLoading && !useRootSlug ? (
-            <div className='space-y-2 px-4 py-3'>
-              {[0, 1, 2, 3, 4, 5].map((i) => (
-                <div
-                  key={i}
-                  className='h-8 animate-pulse rounded bg-slate-100 dark:bg-[hsl(var(--nvr-skeleton))]'
-                />
-              ))}
-            </div>
+            loadingRows
           ) : !useRootSlug && detailLayout?.layout.display_mode === 'read' ? (
             // Read-only presentation — definition grids + tabbed child lists,
             // no form inputs. Editing lives on the full record page.
             <DrilldownContext.Provider value={drillCtx}>
-              <RecordReadView
-                key={`${current.collection}:${current.itemId}:read`}
-                collection={current.collection}
-                itemId={current.itemId}
-                layoutData={detailLayout as unknown as ReadViewLayout}
-              />
+              <Suspense fallback={loadingRows}>
+                <RecordReadView
+                  key={`${current.collection}:${current.itemId}:read`}
+                  collection={current.collection}
+                  itemId={current.itemId}
+                  layoutData={detailLayout as unknown as ReadViewLayout}
+                />
+              </Suspense>
             </DrilldownContext.Provider>
           ) : (
             <DrilldownContext.Provider value={drillCtx}>
-              <ItemEditForm
-                key={`${current.collection}:${current.itemId}:${effectiveSlug ?? 'default'}`}
-                collection={current.collection}
-                itemId={current.itemId}
-                layoutSlug={effectiveSlug}
-                onSaved={() => {
-                  qc.invalidateQueries({ queryKey: ['queue-items'] })
-                }}
-              />
+              <Suspense fallback={loadingRows}>
+                <ItemEditForm
+                  key={`${current.collection}:${current.itemId}:${effectiveSlug ?? 'default'}`}
+                  collection={current.collection}
+                  itemId={current.itemId}
+                  layoutSlug={effectiveSlug}
+                  onSaved={() => {
+                    qc.invalidateQueries({ queryKey: ['queue-items'] })
+                  }}
+                />
+              </Suspense>
             </DrilldownContext.Provider>
           )}
         </div>

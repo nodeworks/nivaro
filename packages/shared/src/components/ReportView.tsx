@@ -45,7 +45,7 @@ import {
   TrendingUp,
   X
 } from 'lucide-react'
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 
 // Copy chart as image (#203): recharts renders SVG — serialize it, paint onto
 // a canvas over a white ground, and hand the PNG to the clipboard. Fails to a
@@ -142,13 +142,19 @@ import {
 import { cn } from '../lib/utils'
 import { RechartsGate } from './charts/RechartsGate'
 import { RecordDrilldownSheet } from './RecordDrilldownSheet'
-import { AddWidgetBar, WidgetConfigSheet, WidgetEditBar } from './ReportEditMode'
 import { TipLayer } from './TipLayer'
 import { Button } from './ui/button'
 import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { Skeleton } from './ui/skeleton'
 import { SimpleSelect } from './ui/SimpleSelect'
+
+// The layout editor loads when someone first edits a report, not with every
+// screen that shows one.
+const loadEditMode = () => import('./ReportEditMode')
+const AddWidgetBar = lazy(() => loadEditMode().then((m) => ({ default: m.AddWidgetBar })))
+const WidgetConfigSheet = lazy(() => loadEditMode().then((m) => ({ default: m.WidgetConfigSheet })))
+const WidgetEditBar = lazy(() => loadEditMode().then((m) => ({ default: m.WidgetEditBar })))
 
 /** The brand colour, through the token a host re-points (white-labelling). */
 const BRAND = 'rgb(var(--nvr-cyan-rgb, 0 206 255))'
@@ -4425,10 +4431,12 @@ export function ReportView({
       )}
       {editMode && draftWidgets && (
         <div className='mb-3'>
-          <AddWidgetBar
-            maxY={Math.max(0, ...draftWidgets.map((w) => (w.y ?? 0) + (w.h ?? 1)))}
-            onAdd={(w) => setDraftWidgets((prev) => [...(prev ?? []), w])}
-          />
+          <Suspense fallback={null}>
+            <AddWidgetBar
+              maxY={Math.max(0, ...draftWidgets.map((w) => (w.y ?? 0) + (w.h ?? 1)))}
+              onAdd={(w) => setDraftWidgets((prev) => [...(prev ?? []), w])}
+            />
+          </Suspense>
         </div>
       )}
       {widgets.length === 0 && !editMode ? (
@@ -4479,21 +4487,23 @@ export function ReportView({
               ) : (
                 <>
                   {editMode && (
-                    <WidgetEditBar
-                      widget={w}
-                      onConfigure={() => setConfiguring(w.id)}
-                      onDelete={() =>
-                        setDraftWidgets((prev) => (prev ?? []).filter((x) => x.id !== w.id))
-                      }
-                      onResize={(dw, dh) =>
-                        patchWidget({
-                          ...w,
-                          w: Math.min(12, Math.max(2, (w.w || 4) + dw)),
-                          h: Math.min(8, Math.max(1, (w.h || 2) + dh))
-                        })
-                      }
-                      onMove={(dir) => moveWidget(w.id, dir)}
-                    />
+                    <Suspense fallback={null}>
+                      <WidgetEditBar
+                        widget={w}
+                        onConfigure={() => setConfiguring(w.id)}
+                        onDelete={() =>
+                          setDraftWidgets((prev) => (prev ?? []).filter((x) => x.id !== w.id))
+                        }
+                        onResize={(dw, dh) =>
+                          patchWidget({
+                            ...w,
+                            w: Math.min(12, Math.max(2, (w.w || 4) + dw)),
+                            h: Math.min(8, Math.max(1, (w.h || 2) + dh))
+                          })
+                        }
+                        onMove={(dir) => moveWidget(w.id, dir)}
+                      />
+                    </Suspense>
                   )}
                   <WidgetCard
                     reportId={reportId}
@@ -4525,12 +4535,14 @@ export function ReportView({
         </div>
       )}
       {editMode && configuring && draftWidgets?.some((w) => w.id === configuring) && (
-        <WidgetConfigSheet
-          widget={draftWidgets.find((w) => w.id === configuring) as ReportWidget}
-          allWidgets={draftWidgets}
-          onChange={patchWidget}
-          onClose={() => setConfiguring(null)}
-        />
+        <Suspense fallback={null}>
+          <WidgetConfigSheet
+            widget={draftWidgets.find((w) => w.id === configuring) as ReportWidget}
+            allWidgets={draftWidgets}
+            onChange={patchWidget}
+            onClose={() => setConfiguring(null)}
+          />
+        </Suspense>
       )}
       <TipLayer />
       {!outerDrill && drillStack?.length ? (

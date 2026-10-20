@@ -13,7 +13,7 @@ import {
   X,
   Zap
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../context'
 import { del, get, post } from '../../lib/commands'
@@ -42,10 +42,14 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '../ui/
 import { deniedToastAction, isAccessRefusal, WhyOwnersButton } from './AccessInsights'
 import { BranchLanes, type BranchLanesData } from './BranchLanes'
 import { SlaClockLine } from './SlaClock'
-import {
-  TransitionRequirementsDialog,
-  type TransitionRequirementsPayload
-} from './TransitionRequirementsDialog'
+import type { TransitionRequirementsPayload } from './TransitionRequirementsDialog'
+
+// Opens only when a transition needs answers first; loads then.
+const TransitionRequirementsDialog = lazy(() =>
+  import('./TransitionRequirementsDialog').then((m) => ({
+    default: m.TransitionRequirementsDialog
+  }))
+)
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -2200,24 +2204,26 @@ function PipelinePanelInner({
         )}
       </div>
       {requirementsDialog && (
-        <TransitionRequirementsDialog
-          key={requirementsDialog.revision}
-          payload={requirementsDialog.payload}
-          isRetry={requirementsDialog.revision > 1}
-          onSubmitted={() =>
-            // mutateAsync so the dialog can stay busy until the transition
-            // settles; the mutation's own onError/onSuccess handle the outcome.
-            executeTransition
-              .mutateAsync({
-                transition_id: requirementsDialog.transitionId,
-                comment: requirementsDialog.comment,
-                reviewed: true
-              })
-              .catch(() => undefined)
-          }
-          executing={executeTransition.isPending}
-          onClose={() => setRequirementsDialog(null)}
-        />
+        <Suspense fallback={null}>
+          <TransitionRequirementsDialog
+            key={requirementsDialog.revision}
+            payload={requirementsDialog.payload}
+            isRetry={requirementsDialog.revision > 1}
+            onSubmitted={() =>
+              // mutateAsync so the dialog can stay busy until the transition
+              // settles; the mutation's own onError/onSuccess handle the outcome.
+              executeTransition
+                .mutateAsync({
+                  transition_id: requirementsDialog.transitionId,
+                  comment: requirementsDialog.comment,
+                  reviewed: true
+                })
+                .catch(() => undefined)
+            }
+            executing={executeTransition.isPending}
+            onClose={() => setRequirementsDialog(null)}
+          />
+        </Suspense>
       )}
     </>
   )
@@ -2595,24 +2601,26 @@ function PipelineTransitionButtonsInner({
         </div>
       )}
       {requirementsDialog && (
-        <TransitionRequirementsDialog
-          key={requirementsDialog.revision}
-          payload={requirementsDialog.payload}
-          isRetry={requirementsDialog.revision > 1}
-          onSubmitted={() =>
-            // mutateAsync so the dialog can stay busy until the transition
-            // settles; the mutation's own onError/onSuccess handle the outcome.
-            executeTransition
-              .mutateAsync({
-                transition_id: requirementsDialog.transitionId,
-                comment: requirementsDialog.comment,
-                reviewed: true
-              })
-              .catch(() => undefined)
-          }
-          executing={executeTransition.isPending}
-          onClose={() => setRequirementsDialog(null)}
-        />
+        <Suspense fallback={null}>
+          <TransitionRequirementsDialog
+            key={requirementsDialog.revision}
+            payload={requirementsDialog.payload}
+            isRetry={requirementsDialog.revision > 1}
+            onSubmitted={() =>
+              // mutateAsync so the dialog can stay busy until the transition
+              // settles; the mutation's own onError/onSuccess handle the outcome.
+              executeTransition
+                .mutateAsync({
+                  transition_id: requirementsDialog.transitionId,
+                  comment: requirementsDialog.comment,
+                  reviewed: true
+                })
+                .catch(() => undefined)
+            }
+            executing={executeTransition.isPending}
+            onClose={() => setRequirementsDialog(null)}
+          />
+        </Suspense>
       )}
     </div>
   )
