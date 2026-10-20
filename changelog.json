@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-10-20T05:26:57.604Z",
+  "generated_at": "2026-10-20T17:33:41.959Z",
   "releases": [
+    {
+      "version": "0.2.73",
+      "tag": "v0.2.73",
+      "date": "2026-10-20T13:33:30-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Item action choices: never send the extension's error text",
+              "hash": "4fbf3d25"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Item actions: a choose step to pick one option before running",
+              "hash": "4dca377b"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Release image: installs read trimmed manifests; caches route shows the permission cache",
+              "hash": "d501e4a6"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.2.72",
       "tag": "v0.2.72",
-      "date": "2026-10-20T01:26:43-04:00",
+      "date": "2026-10-20T01:26:57-04:00",
       "sections": [
         {
           "label": "Documentation",
