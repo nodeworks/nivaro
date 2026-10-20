@@ -29,7 +29,8 @@ interface DiffDto {
   total: number
 }
 
-const versionsKey = (id: number) => ['layout-editor', 'versions', id] as const
+/** The versions list; the editor refreshes it after every save. */
+export const versionsKey = (id: number) => ['layout-editor', 'versions', id] as const
 const bundleKey = (id: number) => ['layout-editor', 'bundle', id] as const
 
 function fmt(v: unknown): string {

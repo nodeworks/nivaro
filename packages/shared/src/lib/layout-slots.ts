@@ -45,6 +45,11 @@ export function getLayoutSlot(key: string | null | undefined): LayoutSlotPlugin 
   return registry.get(key) ?? null
 }
 
+/** Every registered slot key, for pickers that offer them (the layout editor's Add panel). */
+export function listLayoutSlots(): string[] {
+  return [...registry.keys()].sort()
+}
+
 /** Extract the slot key from an assignment field name, or null. */
 export function extSlotKey(field: string): string | null {
   const m = field.match(/^__ext_([a-z][a-z0-9-]{1,60})__$/)
