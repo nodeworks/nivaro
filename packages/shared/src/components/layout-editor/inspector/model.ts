@@ -6,6 +6,7 @@ import {
   type GroupPatch,
   type GroupRow,
   HEADER_GROUP_KEY,
+  isCanvasSlot,
   type LayoutBundle,
   type LayoutOp,
   type LayoutRow,
@@ -449,4 +450,46 @@ export function groupFields(bundle: LayoutBundle, key: string): string[] {
   return bundle.placements
     .filter((p) => p.group_key && keys.has(p.group_key) && !p.field.startsWith('__'))
     .map((p) => p.field)
+}
+
+/**
+ * The record page draws slot cards without a row after every section and slot
+ * row, in this order (ItemEditForm renderSectionMode).
+ */
+export const ROWLESS_SLOT_ORDER = [
+  '__pipeline__',
+  '__tasks__',
+  '__related_records__',
+  '__referenced_by__',
+  '__comments__',
+  '__addendums__'
+]
+
+/**
+ * Ops that give a slot without a row its first row, where it is drawn now:
+ * after the top-level sections and slot rows, with rows for the rowless slots
+ * drawn before it (so renaming Comments does not lift it above Tasks). In a
+ * section: the end of that section.
+ */
+export function placeSlotOps(
+  bundle: LayoutBundle,
+  field: string,
+  groupKey: string | null,
+  patch: PlacementPatch
+): LayoutOp[] {
+  if (groupKey !== null) {
+    const n = bundle.placements.filter((p) => p.group_key === groupKey).length
+    return [{ op: 'place', field, group_key: groupKey, index: n, patch }]
+  }
+  const top =
+    bundle.groups.filter((g) => g.parent_key === null).length +
+    bundle.placements.filter(isCanvasSlot).length
+  const at = ROWLESS_SLOT_ORDER.indexOf(field)
+  const before = (at < 0 ? [] : ROWLESS_SLOT_ORDER.slice(0, at)).filter(
+    (f) => !bundle.placements.some((p) => p.field === f && p.group_key === null)
+  )
+  return [
+    ...before.map((f, i): LayoutOp => ({ op: 'place', field: f, group_key: null, index: top + i })),
+    { op: 'place', field, group_key: null, index: top + before.length, patch }
+  ]
 }

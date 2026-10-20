@@ -15,7 +15,7 @@ import {
   Toggle,
   useInspectorEnv
 } from './kit'
-import { readOverrides, withKey } from './model'
+import { placeSlotOps, readOverrides, withKey } from './model'
 import { useLayoutsOf } from './PickerTab'
 
 export const WIDTHS = [
@@ -44,7 +44,8 @@ export function slotName(field: string): string {
 
 /**
  * Writes one slot's columns: an update when the slot has a row on this
- * layout, else a place (slots show by default without one).
+ * layout, else its first row where it is drawn now (slots show by default
+ * without one — see placeSlotOps).
  */
 export function useSlotWriter(field: string, groupKey: string | null, row: PlacementRow | null) {
   const env = useInspectorEnv()
@@ -52,7 +53,7 @@ export function useSlotWriter(field: string, groupKey: string | null, row: Place
     env.apply(
       row
         ? [{ op: 'update_placement', at: { field, group_key: groupKey }, patch }]
-        : [{ op: 'place', field, group_key: groupKey, index: Number.MAX_SAFE_INTEGER, patch }],
+        : placeSlotOps(env.bundle, field, groupKey, patch),
       { label, text }
     )
 }

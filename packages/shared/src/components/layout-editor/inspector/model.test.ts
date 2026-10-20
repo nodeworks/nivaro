@@ -13,6 +13,7 @@ import {
   isDefaultForm,
   layoutGrids,
   overridePlacementOps,
+  placeSlotOps,
   relatedCollectionOf,
   relKindOf,
   subtitleOf,
@@ -188,5 +189,64 @@ describe('inspector model', () => {
     expect(row?.col_span).toBe(6)
     expect(row?.overrides).toEqual({ required: true })
     expect(next.groups.find((g) => g.key === 'shipping')?.label).toBe('Shipping')
+  })
+})
+
+describe('placeSlotOps', () => {
+  // Record page order: sections and slot rows by sort, then the slots without
+  // a row in a fixed order (pipeline, tasks, related, referenced-by, comments…).
+  const bundle = (): LayoutBundle => ({
+    layout: { id: 1, collection: 'orders', name: 'Form' },
+    rev: 'r',
+    groups: [
+      { ...newGroup('main', 'Main', 'section', null), sort: 0 },
+      { ...newGroup('more', 'More', 'section', null), sort: 1 }
+    ],
+    placements: [
+      { ...newPlacement('title', 'main'), sort: 0 },
+      { ...newPlacement('__pipeline__', null), sort: 2 }
+    ]
+  })
+  const topOrder = (b: LayoutBundle) =>
+    [
+      ...b.groups.filter((g) => g.parent_key === null).map((g) => ({ k: g.key, s: g.sort })),
+      ...b.placements
+        .filter((p) => p.group_key === null && p.field.startsWith('__'))
+        .map((p) => ({ k: p.field, s: p.sort }))
+    ]
+      .sort((a, b) => a.s - b.s)
+      .map((x) => x.k)
+
+  it('a rowless Comments keeps its place: after the rows, behind the rowless slots before it', () => {
+    const b = bundle()
+    const ops = placeSlotOps(b, '__comments__', null, { label_override: 'Notes' })
+    const next = applyLayoutOps(b, ops)
+    // Tasks, Related and Referenced-by rendered above Comments without rows; they keep that.
+    expect(topOrder(next)).toEqual([
+      'main',
+      'more',
+      '__pipeline__',
+      '__tasks__',
+      '__related_records__',
+      '__referenced_by__',
+      '__comments__'
+    ])
+    expect(next.placements.find((p) => p.field === '__comments__')?.label_override).toBe('Notes')
+    expect(ops.at(-1)).toMatchObject({ op: 'place', field: '__comments__' })
+  })
+
+  it('a rowless first slot needs no other rows', () => {
+    const b = { ...bundle(), placements: [{ ...newPlacement('title', 'main'), sort: 0 }] }
+    const ops = placeSlotOps(b, '__pipeline__', null, { is_visible: false })
+    expect(ops).toHaveLength(1)
+    expect(topOrder(applyLayoutOps(b, ops))).toEqual(['main', 'more', '__pipeline__'])
+  })
+
+  it('a slot in a section goes to the end of that section', () => {
+    const b = bundle()
+    const ops = placeSlotOps(b, '__pdf__', 'main', { col_span: 6 })
+    expect(ops).toEqual([
+      { op: 'place', field: '__pdf__', group_key: 'main', index: 1, patch: { col_span: 6 } }
+    ])
   })
 })

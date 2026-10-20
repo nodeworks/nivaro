@@ -13,7 +13,6 @@ import {
 import { cn, titleCase } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
-import { useLayoutEditorHost } from '../host'
 import { type ApplyOptions, parseBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
 import {
@@ -54,7 +53,7 @@ export interface InspectorProps {
   collection: string
   /** Parent layout name when the target comes from it; defaults to the canvas design context. */
   inheritedFrom?: string | null
-  /** "Edit in <parent>": opens that layout. Defaults to host.navigate. */
+  /** "Edit in <parent>": opens that layout. Without it the button is not shown. */
   openLayout?: (layoutId: number) => void
 }
 
@@ -97,7 +96,6 @@ function useParentBundle(parentId: number | null, enabled: boolean) {
 export function Inspector(props: InspectorProps) {
   const { bundle, target, apply, collection } = props
   const design = useLayoutDesign()
-  const host = useLayoutEditorHost()
   const env: InspectorEnv = useMemo(
     () => ({
       bundle,
@@ -177,15 +175,11 @@ export function Inspector(props: InspectorProps) {
             >
               Override here
             </button>
-            {parentId != null && (
+            {parentId != null && props.openLayout && (
               <button
                 type='button'
                 data-edit-in-parent=''
-                onClick={() =>
-                  props.openLayout
-                    ? props.openLayout(parentId)
-                    : host.navigate(`/data-model/${collection}?layout=${parentId}`)
-                }
+                onClick={() => props.openLayout?.(parentId)}
                 className='rounded-md border border-slate-200 px-2.5 py-1 text-[12px] hover:bg-muted dark:border-border'
               >
                 Edit in {name}
@@ -194,7 +188,8 @@ export function Inspector(props: InspectorProps) {
           </div>
         </div>
         <InspectorEnvContext.Provider value={roEnv}>
-          <div className='pointer-events-none opacity-60' aria-disabled='true'>
+          {/* Tabs still switch; the controls sit in a disabled fieldset and writes go nowhere. */}
+          <div data-inherited-view='' className='opacity-70'>
             {parentGroup ? (
               <GroupInspector group={parentGroup} readOnly />
             ) : parentRow ? (

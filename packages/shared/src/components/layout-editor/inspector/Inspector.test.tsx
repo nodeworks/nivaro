@@ -679,14 +679,26 @@ describe('Inspector', () => {
   })
 
   it('inherited placements are read-only with Override here and Edit in parent', async () => {
-    const navigate = vi.fn()
+    const openLayout = vi.fn()
     const { apply } = await mount(field('region', 'shipping'), {
       bundle: makeBundle({ parent_layout_id: 3 }),
       inheritedFrom: 'Base order',
-      navigate
+      openLayout
     })
     expect(host.textContent).toContain('Base order')
-    expect(host.querySelector('[aria-disabled="true"] fieldset[disabled]')).not.toBeNull()
+    expect(host.querySelector('[data-inherited-view] fieldset[disabled]')).not.toBeNull()
+
+    // Tabs still switch so the parent's settings can be read.
+    await click(host.querySelector('[data-inspector-tab="rules"]'))
+    expect(host.querySelector('[data-inspector-tab="rules"]')?.getAttribute('aria-selected')).toBe(
+      'true'
+    )
+    // …but nothing inside can be changed (the fieldset disables it).
+    expect(
+      host.querySelector('[data-setting="field.required"] [role="switch"]')?.matches(':disabled')
+    ).toBe(true)
+    await click(host.querySelector('[data-setting="field.required"] [role="switch"]'))
+    expect(apply).not.toHaveBeenCalled()
 
     await click(host.querySelector('[data-override-here]'))
     const [ops] = apply.mock.calls[0]
@@ -694,7 +706,34 @@ describe('Inspector', () => {
     expect(ops[1]).toMatchObject({ field: 'region', group_key: 'shipping', patch: { col_span: 6 } })
 
     await click(host.querySelector('[data-edit-in-parent]'))
-    expect(navigate).toHaveBeenCalledWith('/data-model/orders?layout=3')
+    expect(openLayout).toHaveBeenCalledWith(3)
+  })
+
+  it('hides Edit in parent when the host cannot open layouts', async () => {
+    await mount(field('region', 'shipping'), {
+      bundle: makeBundle({ parent_layout_id: 3 }),
+      inheritedFrom: 'Base order'
+    })
+    expect(host.querySelector('[data-override-here]')).not.toBeNull()
+    expect(host.querySelector('[data-edit-in-parent]')).toBeNull()
+  })
+
+  it('a slot without a row gets its first row where it is drawn now', async () => {
+    const { apply } = await mount({ kind: 'slot', field: '__comments__', group_key: null })
+    const input = host.querySelector(
+      '[data-setting="slot.label_override"] input'
+    ) as HTMLInputElement
+    await typeInto(input, 'Notes')
+    const [ops] = apply.mock.calls.at(-1) ?? []
+    // The fixture has a pipeline row; tasks, related and referenced-by draw before Comments.
+    expect(ops.map((o: { field: string }) => o.field)).toEqual([
+      '__tasks__',
+      '__related_records__',
+      '__referenced_by__',
+      '__comments__'
+    ])
+    expect(ops.at(-1)).toMatchObject({ op: 'place', patch: { label_override: 'Notes' } })
+    expect(ops.every((o: { index: number }) => o.index < 100)).toBe(true)
   })
 
   it('condition builders offer only the ops the server evaluates', async () => {
