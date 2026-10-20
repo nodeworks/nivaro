@@ -23,8 +23,14 @@ import { versionsKey } from './HistoryPanel'
 import { useLayoutEditorHost } from './host'
 import { FormSettings, Inspector } from './inspector-slot'
 import { LayoutsRail } from './LayoutsRail'
-import { choiceLabelsFrom, type DescribeField, type Segment } from './overview/describe-conditions'
-import { useInvalidateLayouts, useLayoutOverview, useOverviewFields } from './overview/overview-api'
+import type { DescribeField, Segment } from './overview/describe-conditions'
+import {
+  useApproxRecordCount,
+  useInvalidateLayouts,
+  useLayoutOverview,
+  useOverviewFields,
+  useRuleChoiceLabels
+} from './overview/overview-api'
 import { purposeSegments, Sentence } from './overview/purpose'
 import type { OverviewRow } from './overview/types'
 import { useRolePreview } from './settings/settings-api'
@@ -244,21 +250,29 @@ function Canvas({
 
 /** Overlay mode (record page): which layout this is and which records get it (spec §7.4). */
 function EditingBanner({
+  collection,
   name,
   row,
+  rows,
   fields,
   onDone
 }: {
+  collection: string
   name: string
   row: OverviewRow | undefined
+  rows: OverviewRow[]
   fields: DescribeField[]
   onDone: () => void
 }) {
+  const choices = useRuleChoiceLabels(collection, fields, rows)
+  const { data: count } = useApproxRecordCount(collection, row, rows)
   const segs: Segment[] = !row
     ? []
     : row.section === 'forms' && (row.reason.kind === 'default' || row.reason.kind === 'fallback')
       ? [{ text: 'used by every record no rule catches' }]
-      : purposeSegments(row, fields, choiceLabelsFrom(fields))
+      : purposeSegments(row, fields, choices)
+  if (segs.length > 0 && typeof count === 'number')
+    segs.push({ text: ` (≈ ${count.toLocaleString()} ${count === 1 ? 'record' : 'records'})` })
   return (
     <div
       data-editing-banner=''
@@ -401,7 +415,16 @@ export function LayoutEditor({
         onBack={onBack}
         backLabel={overlay ? 'Back to record' : 'Layouts'}
       />
-      {overlay && <EditingBanner name={layoutName} row={row} fields={fields} onDone={onBack} />}
+      {overlay && (
+        <EditingBanner
+          collection={collection}
+          name={layoutName}
+          row={row}
+          rows={overview?.rows ?? []}
+          fields={fields}
+          onDone={onBack}
+        />
+      )}
       {warning && (
         <div
           role='note'

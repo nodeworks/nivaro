@@ -238,7 +238,11 @@ vi.mock('../../../services/activity.js', () => ({ logActivity: vi.fn(async () =>
 
 vi.mock('../../../db/index.js', () => ({ db: fake.db }))
 
-import { collectionLayoutsRoutes, nextFreeSlug } from '../../../routes/collection-layouts.js'
+import {
+  collectionLayoutsRoutes,
+  nextFreeSlug,
+  slugBaseFromName
+} from '../../../routes/collection-layouts.js'
 import { restoreLayoutVersion, snapshotLayoutVersion } from '../../../services/layout-versions.js'
 
 function buildApp() {
@@ -486,6 +490,7 @@ describe('nextFreeSlug', () => {
     expect(await nextFreeSlug('c', 'Main')).toBe('main_3')
     expect(await nextFreeSlug('c', 'Fresh Form')).toBe('fresh_form')
     expect(await nextFreeSlug('c', 'Ünit—Order')).toBe('unit_order')
+    expect(slugBaseFromName('zz-verify Drill-Columns')).toBe('zz_verify_drill_columns')
     expect(await nextFreeSlug('c', '***')).toBe('layout')
   })
 })
@@ -521,6 +526,7 @@ describe('POST /collection-layouts/:id/clone', () => {
     expect(created.allow_clone).toBeUndefined()
     expect(created.addendum_lock_fields).toBeUndefined()
     expect(created.is_active).toBe(0)
+    expect(created.create_hidden).toBe(1)
     expect(
       fake.tables.nivaro_layout_field_assignments.filter((a) => a.layout_id === created.id)
     ).toHaveLength(1)

@@ -250,7 +250,7 @@ describe('LayoutOverview', () => {
     expect(headings).toEqual(['forms', 'link_only', 'other_views', 'unused'])
     const t = text()
     expect(t).toContain('Forms people fill in — checked in this order')
-    expect(t).toContain('Opened by a link or button only')
+    expect(t).toContain('Opened by a link, a button or the New menu')
     expect(t).toContain('Other views of the same record')
     expect(t).toContain('Unused')
 
@@ -357,6 +357,32 @@ describe('LayoutOverview', () => {
       seed_fields: true
     })
     expect(onCreate).toHaveBeenCalledWith('grouped', 101)
+    // The first form is made the default so the overview never says none is marked.
+    expect(
+      calls.some((c) => c._method === 'POST' && c._path === '/collection-layouts/101/activate')
+    ).toBe(true)
+  })
+
+  it('never offers to delete the only layout of a collection', async () => {
+    const only = [
+      { ...IR_ROWS[2], section: 'forms' as const, reason: { kind: 'default' as const } }
+    ]
+    const { client } = makeClient(only)
+    await mount(client)
+    await settle(() => text().includes(only[0].name))
+    const row = document.querySelector(`[data-layout-row="${only[0].layout_id}"]`) as HTMLElement
+    await click(button('Layout actions', row))
+    const del = document.querySelector('[role=menuitem][disabled]') as HTMLElement | null
+    expect(del?.textContent).toContain('Delete')
+    expect(del?.getAttribute('data-tip')).toContain('only form for this collection')
+  })
+
+  it('does not call a form on the New menu link-only', async () => {
+    const { client } = makeClient(IR_ROWS)
+    await mount(client)
+    await settle(() => text().includes('Warehouse Submission'))
+    const hidden = document.querySelector('[data-layout-row="58"]') as HTMLElement
+    expect(hidden.textContent).toContain('link only')
   })
 
   it('opens a layout from its name', async () => {

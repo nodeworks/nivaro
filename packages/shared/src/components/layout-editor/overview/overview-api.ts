@@ -1,10 +1,12 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback } from 'react'
+import { useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useMemo } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { renderDisplayTemplate, USER_SYSTEM_COLS, userDisplayLabel } from '../../pipeline/relations'
 import { collectionMetaKey, useCollectionBody } from '../collection-meta'
-import type { DescribeField } from './describe-conditions'
-import type { ExplainResponse, OverviewReference, OverviewResponse } from './types'
+import { type ChoiceLabels, choiceLabelsFrom, type DescribeField } from './describe-conditions'
+import { recordCountFilter } from './record-count'
+import type { ExplainResponse, OverviewReference, OverviewResponse, OverviewRow } from './types'
 
 export const overviewKeys = {
   overview: (collection: string) => ['layout-editor', 'overview', collection] as const,
@@ -126,4 +128,118 @@ export function apiFailure(err: unknown, fallback: string): ApiFailure {
     ? (body.references as OverviewReference[]).filter((r) => r && typeof r.label === 'string')
     : []
   return { status, message, references }
+}
+
+/** "≈ N records" for a row: one limit-1 read for the total. null while unknown or when not countable. */
+export function useApproxRecordCount(
+  collection: string,
+  row: OverviewRow | undefined,
+  rows: OverviewRow[],
+  enabled = true
+) {
+  const client = useNivaroClient()
+  const filter = row ? recordCountFilter(row, rows) : null
+  return useQuery<number | null>({
+    queryKey: ['layout-editor', 'record-count', collection, filter],
+    queryFn: () =>
+      client
+        .request<{ total?: number | null }>(
+          get(`/items/${collection}`, {
+            limit: 1,
+            ...(filter && Object.keys(filter).length ? { filter: JSON.stringify(filter) } : {})
+          })
+        )
+        .then((r) => (typeof r?.total === 'number' ? r.total : null)),
+    enabled: enabled && !!row && filter != null,
+    staleTime: 60_000,
+    retry: false
+  })
+}
+
+/**
+ * Choice labels for the rule sentences, plus the label of every record a rule
+ * names through a many-to-one field ("Type of Workflow is PUB Request", not
+ * "is 2"). Until a label loads, the sentence keeps the stored value.
+ */
+export function useRuleChoiceLabels(
+  collection: string,
+  fields: DescribeField[],
+  rows: OverviewRow[]
+): ChoiceLabels {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const { data: relations = [] } = useCollectionBody(collection, {
+    select: (b) => (Array.isArray(b?.relations) ? b.relations : [])
+  })
+  const base = useMemo(() => choiceLabelsFrom(fields), [fields])
+
+  const wanted = useMemo(() => {
+    const out = new Map<string, { field: string; value: string; related: string }>()
+    for (const row of rows) {
+      for (const rule of row.reason.rules ?? []) {
+        if (rule.op !== 'eq' && rule.op !== 'neq') continue
+        if (rule.value == null || rule.value === '' || base[rule.field]) continue
+        if (typeof rule.value === 'string' && rule.value.includes('{{')) continue
+        const rel = relations.find(
+          (r: {
+            many_collection?: string
+            many_field?: string
+            one_collection?: string
+            junction_field?: unknown
+          }) =>
+            r.many_collection === collection &&
+            r.many_field === rule.field &&
+            r.junction_field == null &&
+            !!r.one_collection
+        )
+        if (!rel?.one_collection) continue
+        const value = String(rule.value)
+        out.set(`${rule.field}:${value}`, { field: rule.field, value, related: rel.one_collection })
+      }
+    }
+    return [...out.values()]
+  }, [rows, relations, base, collection])
+
+  const results = useQueries({
+    queries: wanted.map((w) => ({
+      queryKey: ['layout-editor', 'rule-label', w.related, w.value],
+      queryFn: async (): Promise<string | null> => {
+        const isUser = USER_SYSTEM_COLS.has(w.related)
+        const item = await client
+          .request<{ data: Record<string, unknown> }>(
+            isUser
+              ? get(`/users/${w.value}`)
+              : get(`/items/${w.related}/${w.value}`, { fields: '*' })
+          )
+          .then((r) => r.data)
+        if (!item) return null
+        if (isUser) return userDisplayLabel(item)
+        const meta = await qc.fetchQuery({
+          queryKey: overviewKeys.meta(w.related),
+          queryFn: () =>
+            client
+              .request<{ data: { display_template?: string | null } }>(
+                get(`/collections/${w.related}`)
+              )
+              .then((r) => r.data),
+          staleTime: 5 * 60_000
+        })
+        return renderDisplayTemplate(meta?.display_template ?? null, item) || null
+      },
+      staleTime: 30 * 60_000,
+      retry: false
+    }))
+  })
+
+  // A string key: the results array is new every render, its labels are what matter.
+  const labelKey = JSON.stringify(results.map((r) => r.data ?? null))
+  return useMemo(() => {
+    const labels = JSON.parse(labelKey) as Array<string | null>
+    const out: ChoiceLabels = { ...base }
+    wanted.forEach((w, i) => {
+      const label = labels[i]
+      if (label) out[w.field] = { ...(out[w.field] ?? {}), [w.value]: label }
+    })
+    return out
+  }, [base, wanted, labelKey])
 }

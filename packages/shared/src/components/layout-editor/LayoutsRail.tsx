@@ -2,8 +2,7 @@ import { SlidersHorizontal } from 'lucide-react'
 import { useMemo } from 'react'
 import { cn } from '../../lib/utils'
 import { Skeleton } from '../ui/skeleton'
-import { choiceLabelsFrom } from './overview/describe-conditions'
-import { useLayoutOverview, useOverviewFields } from './overview/overview-api'
+import { useLayoutOverview, useOverviewFields, useRuleChoiceLabels } from './overview/overview-api'
 import { Pill, purposeSegments, rowPill, Sentence } from './overview/purpose'
 import type { OverviewSection } from './overview/types'
 
@@ -34,8 +33,8 @@ export function LayoutsRail({
 }) {
   const { data, isLoading } = useLayoutOverview(collection)
   const { data: fields = [] } = useOverviewFields(collection)
-  const choices = useMemo(() => choiceLabelsFrom(fields), [fields])
-  const rows = data?.rows ?? []
+  const rows = useMemo(() => data?.rows ?? [], [data])
+  const choices = useRuleChoiceLabels(collection, fields, rows)
 
   return (
     <nav data-editor-rail='' aria-label='Layouts' className='flex flex-col gap-0.5 px-2 pb-4'>

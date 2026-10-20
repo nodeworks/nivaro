@@ -54,6 +54,14 @@ export function matchesRecordConditions(
   })
 }
 
+/** A slug base from a layout NAME: letters, digits and _ only (an explicit slug keeps its dashes). */
+export function slugBaseFromName(name: string): string {
+  return slugify(name)
+    .replace(/-+/g, '_')
+    .replace(/_{2,}/g, '_')
+    .replace(/^_+|_+$/g, '')
+}
+
 /** The first free slug for `base` in `collection`: base, base_2, base_3, … */
 export async function nextFreeSlug(
   collection: string,
@@ -978,7 +986,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     // Every layout gets a machine name: without one it can't be opened by
     // ?layout=, offered in New-item menus or named by queues and grids.
-    const slug = await nextFreeSlug(body.collection, body.slug || body.name)
+    const slug = await nextFreeSlug(body.collection, body.slug || slugBaseFromName(body.name))
 
     // Create and seed are one transaction: a failed seed leaves no empty
     // layout behind (and no name clash for the retry).
@@ -1765,7 +1773,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     for (const col of CLONE_CARRIED_COLUMNS) {
       if (col in source && source[col] !== undefined) carried[col] = source[col]
     }
-    const slug = await nextFreeSlug(source.collection, body.slug || body.name)
+    const slug = await nextFreeSlug(source.collection, body.slug || slugBaseFromName(body.name))
     try {
       await db('nivaro_collection_layouts').insert({
         ...carried,
@@ -1773,6 +1781,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
         name: body.name,
         layout_type: body.layout_type ?? source.layout_type ?? 'grouped',
         slug,
+        // A copy never joins the collection's New menu on its own; the admin opts in.
+        create_hidden: 1,
         is_active: 0,
         sort: maxSort + 1
       })

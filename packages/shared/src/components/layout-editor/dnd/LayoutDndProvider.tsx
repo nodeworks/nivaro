@@ -134,6 +134,21 @@ export function designClone(node: HTMLElement): HTMLElement {
     for (const a of ['data-design-target', 'data-selected', 'data-drop-slot', 'id'])
       el.removeAttribute(a)
   }
+  // The dragging dim and a step's chevron shape belong to the form, not the
+  // preview: a step or tab copies as a plain, readable card.
+  copy.classList.remove('opacity-40')
+  if (copy.style.clipPath) {
+    copy.style.clipPath = 'none'
+    copy.style.transform = 'none'
+    copy.style.overflow = 'visible'
+    copy.style.borderRadius = '0'
+    copy.style.height = '100%'
+    for (const el of Array.from(copy.querySelectorAll<HTMLElement>('*')))
+      if (el.style.clipPath) {
+        el.style.clipPath = 'none'
+        el.style.borderRadius = '0'
+      }
+  }
   for (const el of Array.from(copy.querySelectorAll('[data-design-drop-indicator]'))) el.remove()
   for (const a of ['role', 'tabindex', 'aria-describedby', 'aria-pressed', 'aria-hidden'])
     copy.removeAttribute(a)

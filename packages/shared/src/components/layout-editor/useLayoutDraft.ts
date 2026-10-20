@@ -99,6 +99,23 @@ export interface SaveFailure {
   bundle: LayoutBundle | null
 }
 
+/**
+ * The ops refusals name raw keys (`No group "inv_basic"`); the top bar shows a
+ * sentence an admin can read instead. Anything unrecognised passes through.
+ */
+export function humanizeOpError(message: string): string {
+  if (/^No group "/.test(message)) return 'That section is no longer on this form'
+  if (/^"[^"]*" is not placed in /.test(message)) return 'That field is no longer where it was'
+  if (/^"[^"]*" is already in /.test(message)) return 'That field is already there'
+  if (/^"[^"]*" is not on this form/.test(message)) return 'That item is no longer on this form'
+  if (/^"[^"]*" is not a container/.test(message)) return 'Tabs can only go inside a tab group'
+  if (/^"[^"]*" is a reserved name/.test(message)) return 'That name is reserved'
+  if (/^A group "[^"]*" already exists/.test(message))
+    return 'A section with that key already exists'
+  if (/^Unknown setting "/.test(message)) return 'That setting can’t be saved on this form'
+  return message
+}
+
 /** SDK errors carry `status` + `response` (body); axios nests `response.status` / `response.data`. */
 export function parseSaveFailure(
   err: unknown,
@@ -118,7 +135,7 @@ export function parseSaveFailure(
     (typeof body?.message === 'string' && body.message) ||
     (typeof e?.message === 'string' && e.message) ||
     fallback
-  return { status, message, bundle: parseBundle(body?.bundle) }
+  return { status, message: humanizeOpError(message), bundle: parseBundle(body?.bundle) }
 }
 
 // ── Inverse ops ─────────────────────────────────────────────────────────────

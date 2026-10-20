@@ -338,7 +338,7 @@ export function AddPanel({
         <>
           <p className={head}>Layout</p>
           <Row
-            title={sectionLabel}
+            title={sectionLabel.charAt(0).toUpperCase() + sectionLabel.slice(1)}
             sub={`A new ${sectionLabel.toLowerCase()} after the selection`}
             attrs={{ 'data-add-section': '' }}
             aside={<LayoutPanelTop className='h-3.5 w-3.5 text-slate-400' />}

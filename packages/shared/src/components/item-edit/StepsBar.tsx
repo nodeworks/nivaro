@@ -92,6 +92,7 @@ export function StepsBar({
         const step = (
           <div
             key={s.key}
+            data-design-tab=''
             data-design-hidden={hiddenSteps?.has(s.key) ? '' : undefined}
             className={cn('relative min-w-0 flex-1', hiddenSteps?.has(s.key) && 'opacity-40')}
             style={{
