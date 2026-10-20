@@ -4,7 +4,7 @@ import { useRef, useState } from 'react'
 import { Button } from '../../ui/button'
 import { helpVideoKeys, useMyLearningPaths } from '../api'
 import type { MyLearningPathDto } from '../types'
-import { HelpVideoSheet } from './HelpVideoSheet'
+import { LazyHelpVideoSheet } from './LazyHelpVideoSheet'
 import { continueVideo, pathProgressLabel, pathsHeading } from './paths'
 
 /**
@@ -129,7 +129,7 @@ export function LearningPathCard({ className }: { className?: string }) {
           </ul>
         </section>
       )}
-      <HelpVideoSheet
+      <LazyHelpVideoSheet
         videoId={watching?.videoId ?? null}
         open={!!watching}
         onOpenChange={(o) => {

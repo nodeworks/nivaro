@@ -8,7 +8,7 @@ import { useLiveOps } from '../../lib/live-ops'
 import { cn } from '../../lib/utils'
 import { RelationCombobox } from '../item-edit/RelationCombobox'
 import { DelegationCard } from '../ProfileView'
-import { UserChip } from '../item-edit/GroupSection'
+import { UserChip } from '../item-edit/UserChip'
 
 /**
  * Delegation console — one page for absence coverage: who is out, who is

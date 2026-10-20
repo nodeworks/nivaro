@@ -36,11 +36,7 @@ import { MiniPanel, PipContents, preparePipDocument, StageSlot } from './MiniPla
 import { handOver, hasDocumentPip, MINI_INITIAL, MINI_PANEL, miniReducer } from './miniPlayer'
 import { resolveMomentStart } from './moments'
 import { UpNextList } from './UpNext'
-
-export function useHelpVideosPath(): (query?: string) => string {
-  const nav = useNavigation()
-  return (query = '') => `${nav.helpVideosPath ?? '/help-videos'}${query}`
-}
+import { useHelpVideosPath } from './useHelpVideosPath'
 
 const rowButton =
   'flex w-full items-center gap-3 px-3 py-2 text-left transition-colors duration-150 hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-nvr-cyan motion-reduce:transition-none'

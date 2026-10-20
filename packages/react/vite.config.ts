@@ -1,12 +1,36 @@
 import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, relative, resolve } from 'node:path'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
 import dts from 'vite-plugin-dts'
 
 const pkg = JSON.parse(readFileSync(resolve(__dirname, 'package.json'), 'utf8')) as {
   version?: string
+  sideEffects: string[]
 }
+
+const reactSrc = resolve(__dirname, 'src')
+const sharedSrc = resolve(__dirname, '../shared/src')
+
+// Where a preserved module lands in dist: this package's src at the root (so
+// dist/index.js stays the entry), @nivaro/shared's inlined source under
+// shared/, and rollup's virtual helpers under _virtual/.
+function modulePath(id: string | null): string {
+  const file = (id ?? '').replace(/\0/g, '').replace(/\?.*$/, '')
+  const strip = (p: string) => p.replace(/\.(tsx?|jsx?|mjs)$/, '')
+  if (file.startsWith(`${reactSrc}/`)) return strip(relative(reactSrc, file))
+  if (file.startsWith(`${sharedSrc}/`)) return `shared/${strip(relative(sharedSrc, file))}`
+  return `_virtual/${strip(basename(file)).replace(/[^\w.-]/g, '_')}`
+}
+
+// The modules that must run when imported (they register on window or into
+// a shared registry at load). package.json `sideEffects` lists them for the
+// consumer's bundler; the build reads the same list so it never emits a bare
+// `import './x.js'` for a module with nothing to run — a consumer walking the
+// import graph would otherwise see every barrel neighbour as a dependency.
+const effectful = new Set(
+  pkg.sideEffects.filter((p) => p.startsWith('./dist/')).map((p) => p.slice('./dist/'.length))
+)
 
 export default defineConfig({
   // The package version, stamped on recorded chunks as their build (#1368).
@@ -46,8 +70,17 @@ export default defineConfig({
         !id.startsWith('\0') &&
         id !== '@nivaro/shared' &&
         !id.startsWith('@nivaro/shared/'),
+      treeshake: {
+        moduleSideEffects: (id, external) => external || effectful.has(`${modulePath(id)}.js`)
+      },
+      // One file per source module, so a consumer's bundler tree-shakes and
+      // code-splits the package like its own code: a screen that is only
+      // reached through a lazy route takes its @nivaro/react modules with it
+      // instead of every app downloading the whole package up front. As one
+      // ~6.5 MB module it could only ever land in a single chunk.
       output: {
-        preserveModules: false
+        preserveModules: true,
+        entryFileNames: (chunk) => `${modulePath(chunk.facadeModuleId)}.js`
       }
     }
   },

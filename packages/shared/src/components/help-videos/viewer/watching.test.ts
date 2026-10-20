@@ -26,7 +26,6 @@ vi.mock('../recorder/HelpVideoRecordingProvider', () => ({
   useHelpVideoRecording: () => ({ start: () => true, active: false, fallback: null })
 }))
 vi.mock('./HelpVideoSheet', () => ({
-  useHelpVideosPath: () => () => '/help-videos',
   HelpVideoSheet: (p: { open: boolean }) =>
     p.open ? createElement('div', { 'data-sheet': '' }) : null
 }))
@@ -53,6 +52,9 @@ function mount(node: () => ReturnType<typeof createElement>) {
   return { el, render, root }
 }
 
+// The sheet is lazy: let its import resolve and the retry render land.
+const settle = () => act(async () => await new Promise((r) => setTimeout(r, 0)))
+
 afterEach(() => {
   document.body.replaceChildren()
   registerPage.mockClear()
@@ -61,12 +63,13 @@ afterEach(() => {
 })
 
 describe('RequiredVideosCard', () => {
-  it('keeps the sheet mounted after the list comes back empty while someone is watching', () => {
+  it('keeps the sheet mounted after the list comes back empty while someone is watching', async () => {
     required = [vid('a')]
     const h = mount(() => createElement(RequiredVideosCard))
     act(() => {
       ;(h.el.querySelector('[data-hv-required="a"]') as HTMLElement).click()
     })
+    await settle()
     expect(document.querySelector('[data-sheet]')).not.toBeNull()
     // 18 of 20 buckets seen: the server stops listing it.
     required = []

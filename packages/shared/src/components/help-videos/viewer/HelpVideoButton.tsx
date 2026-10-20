@@ -10,7 +10,8 @@ import { useHelpVideoUpload } from '../upload/HelpVideoUpload'
 import { registerHelpVideoPage } from '../walk/store'
 import { collectPageLabels } from '../walk/target'
 import { isGettingReady, listMeta, progressLabel, showButton } from './format'
-import { HelpVideoSheet, useHelpVideosPath } from './HelpVideoSheet'
+import { LazyHelpVideoSheet } from './LazyHelpVideoSheet'
+import { useHelpVideosPath } from './useHelpVideosPath'
 
 const focusRing =
   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan motion-reduce:transition-none'
@@ -239,7 +240,7 @@ export function HelpVideoButton({
           </PopoverContent>
         </Popover>
       )}
-      <HelpVideoSheet
+      <LazyHelpVideoSheet
         videoId={watching}
         open={!!watching}
         onOpenChange={(o) => !o && setWatching(null)}
