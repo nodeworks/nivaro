@@ -29,19 +29,22 @@ interface Snapshot {
   assignments: Array<Record<string, unknown>>
 }
 
-async function buildSnapshot(layoutId: number): Promise<Snapshot | null> {
-  const layout = (await db('nivaro_collection_layouts').where({ id: layoutId }).first()) as
+async function buildSnapshot(
+  layoutId: number,
+  q: Knex | Knex.Transaction = db
+): Promise<Snapshot | null> {
+  const layout = (await q('nivaro_collection_layouts').where({ id: layoutId }).first()) as
     | Record<string, unknown>
     | undefined
   if (!layout) return null
-  const [groups, assignments] = await Promise.all([
-    db('nivaro_field_groups').where({ layout_id: layoutId }).orderBy('sort') as Promise<
-      Array<Record<string, unknown>>
-    >,
-    db('nivaro_layout_field_assignments').where({ layout_id: layoutId }).orderBy('sort') as Promise<
-      Array<Record<string, unknown>>
-    >
-  ])
+  // id breaks sort ties so the same state always hashes the same (rows of
+  // different groups share sort values; the hash is the editor's rev).
+  const groups = (await q('nivaro_field_groups')
+    .where({ layout_id: layoutId })
+    .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
+  const assignments = (await q('nivaro_layout_field_assignments')
+    .where({ layout_id: layoutId })
+    .orderBy([{ column: 'sort' }, { column: 'id' }])) as Array<Record<string, unknown>>
   return { layout, groups, assignments }
 }
 
@@ -63,18 +66,30 @@ function hashSnapshot(snap: Snapshot): string {
     .digest('hex')
 }
 
+/** The layout's current state as one hash — the layout editor's `rev`.
+ *  null when the layout does not exist. */
+export async function layoutStateHash(
+  layoutId: number,
+  trx?: Knex | Knex.Transaction
+): Promise<string | null> {
+  const snap = await buildSnapshot(layoutId, trx ?? db)
+  return snap ? hashSnapshot(snap) : null
+}
+
 /** Capture the CURRENT state as a new version (deduped). Never throws. */
 export async function snapshotLayoutVersion(
   layoutId: number,
   note: string,
-  userId?: string | null
+  userId?: string | null,
+  trx?: Knex | Knex.Transaction
 ): Promise<void> {
+  const q = trx ?? db
   try {
-    const snap = await buildSnapshot(layoutId)
+    const snap = await buildSnapshot(layoutId, q)
     if (!snap) return
     const hash = hashSnapshot(snap)
 
-    const latest = (await db('nivaro_layout_versions')
+    const latest = (await q('nivaro_layout_versions')
       .where({ layout_id: layoutId })
       .orderBy('version', 'desc')
       .first()) as { version: number; snapshot: string } | undefined
@@ -86,7 +101,7 @@ export async function snapshotLayoutVersion(
       }
     }
 
-    await db('nivaro_layout_versions').insert({
+    await q('nivaro_layout_versions').insert({
       layout_id: layoutId,
       version: (latest?.version ?? 0) + 1,
       snapshot: JSON.stringify(snap),
@@ -97,13 +112,13 @@ export async function snapshotLayoutVersion(
 
     // Prune beyond KEEP — the debounced editor would otherwise grow a version
     // per editing burst forever.
-    const versions = (await db('nivaro_layout_versions')
+    const versions = (await q('nivaro_layout_versions')
       .where({ layout_id: layoutId })
       .orderBy('version', 'desc')
       .select('id', 'version')) as Array<{ id: number; version: number }>
     if (versions.length > KEEP) {
       const dropIds = versions.slice(KEEP).map((v) => v.id)
-      await db('nivaro_layout_versions').whereIn('id', dropIds).delete()
+      await q('nivaro_layout_versions').whereIn('id', dropIds).delete()
     }
   } catch (err) {
     console.warn(`layout version snapshot failed for layout ${layoutId}:`, err)

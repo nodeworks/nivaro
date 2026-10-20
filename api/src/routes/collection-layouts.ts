@@ -7,6 +7,20 @@ import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, whereLayoutType } from '../services/layout-activation.js'
+import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
+import {
+  isLayoutType,
+  LAYOUT_TYPES,
+  type LayoutPatchBody,
+  normalizeLayoutPatch,
+  parseConditions,
+  parseDefaultValues,
+  parseLayoutRow,
+  parseQuickPicker,
+  parseRecordConditions,
+  type RecordConditionRule,
+  slugify
+} from '../services/layout-patch.js'
 import {
   diffLayoutVersions,
   getLayoutVersion,
@@ -20,68 +34,7 @@ import { can } from '../services/permissions.js'
 import { registerReadinessCheck } from '../services/readiness.js'
 import { getStorage, getStorageProviderName } from '../services/storage/index.js'
 
-type LayoutConditions = { role_ids?: string[] } | null
-
-export type RecordConditionRule = { field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }
-
-// Safely parse the conditions JSON text column into an object (or null).
-function parseConditions(raw: unknown): LayoutConditions {
-  if (raw == null) return null
-  if (typeof raw === 'object') return raw as LayoutConditions
-  if (typeof raw !== 'string') return null
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' ? (parsed as LayoutConditions) : null
-  } catch {
-    return null
-  }
-}
-
-// Safely parse the record_conditions JSON text column into a rule array (or null).
-function parseRecordConditions(raw: unknown): RecordConditionRule[] | null {
-  if (raw == null) return null
-  if (Array.isArray(raw)) return raw as RecordConditionRule[]
-  if (typeof raw !== 'string') return null
-  try {
-    const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? (parsed as RecordConditionRule[]) : null
-  } catch {
-    return null
-  }
-}
-
-// Safely parse the default_values JSON text column into a plain object (or null).
-/** JSON string[] of relation fields the quick picker walks; anything else = none. */
-function parseQuickPicker(raw: unknown): string[] | null {
-  if (raw == null) return null
-  let v: unknown = raw
-  if (typeof v === 'string') {
-    try {
-      v = JSON.parse(v)
-    } catch {
-      return null
-    }
-  }
-  if (!Array.isArray(v)) return null
-  const steps = v.filter(
-    (s): s is string => typeof s === 'string' && /^[A-Za-z_][A-Za-z0-9_]*$/.test(s)
-  )
-  return steps.length ? [...new Set(steps)] : null
-}
-
-function parseDefaultValues(raw: unknown): Record<string, unknown> | null {
-  if (raw == null) return null
-  if (typeof raw === 'object' && !Array.isArray(raw)) return raw as Record<string, unknown>
-  if (typeof raw !== 'string') return null
-  try {
-    const parsed = JSON.parse(raw)
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
-  } catch {
-    return null
-  }
-}
+export { type RecordConditionRule, slugify }
 
 // Does every rule match the given record? eq/neq compare via
 // String(raw ?? '') === String(value) (tolerant of numeric/string mismatches,
@@ -96,30 +49,6 @@ export function matchesRecordConditions(
     if (rule.op === 'eq') return String(raw ?? '') === String(rule.value)
     return String(raw ?? '') !== String(rule.value)
   })
-}
-
-const FIELD_IDENTIFIER_RE = /^[a-zA-Z_][a-zA-Z0-9_]*$/
-
-/** Every layout_type the form knows how to render. 'summary' (2026-09-14) =
- *  the read-only presentation Summary mode shows instead of the grouped
- *  layout; activation is type-scoped like the rest. */
-const LAYOUT_TYPES = ['grouped', 'table', 'file', 'addendum', 'detail', 'summary'] as const
-
-const isLayoutType = (t: unknown): t is (typeof LAYOUT_TYPES)[number] =>
-  LAYOUT_TYPES.includes(t as (typeof LAYOUT_TYPES)[number])
-
-/** A layout's machine name: lowercase letters, digits, `_` and `-` (the dash
- *  form is what migration 092 backfilled; new slugs use `_`). '' when nothing
- *  usable is left. */
-export function slugify(raw: string): string {
-  return raw
-    .normalize('NFD')
-    .replace(/\p{M}/gu, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '_')
-    .replace(/_{2,}/g, '_')
-    .replace(/^[_-]+|[_-]+$/g, '')
-    .slice(0, 200)
 }
 
 /** The first free slug for `base` in `collection`: base, base_2, base_3, … */
@@ -140,10 +69,6 @@ export async function nextFreeSlug(
     if (!taken.has(`${root}_${n}`)) return `${root}_${n}`
   }
 }
-
-const PDF_THEMES = ['classic', 'minimal', 'executive', 'custom'] as const
-const PDF_PAGE_SIZES = ['A4', 'Letter'] as const
-const PDF_ORIENTATIONS = ['portrait', 'landscape'] as const
 
 /** Layout settings a clone carries over — every column except identity
  *  (id/collection/name/slug/sort/is_active/created_at) and the type (the
@@ -197,41 +122,6 @@ const CLONE_CARRIED_COLUMNS = [
   'hide_empty',
   'changes_tray'
 ] as const
-
-// Validate a PATCH body's record_conditions array; returns an error string
-// (naming the offending index) or null when valid.
-function validateRecordConditions(rules: unknown): string | null {
-  if (!Array.isArray(rules)) return 'record_conditions must be an array'
-  for (let i = 0; i < rules.length; i++) {
-    const rule = rules[i] as Record<string, unknown> | null
-    if (!rule || typeof rule !== 'object' || Array.isArray(rule)) {
-      return `record_conditions[${i}] must be an object`
-    }
-    if (typeof rule.field !== 'string' || !FIELD_IDENTIFIER_RE.test(rule.field)) {
-      return `record_conditions[${i}].field must be a valid field identifier`
-    }
-    if (rule.op !== 'eq' && rule.op !== 'neq' && rule.op !== 'nnull') {
-      return `record_conditions[${i}].op must be one of eq, neq, nnull`
-    }
-    if ((rule.op === 'eq' || rule.op === 'neq') && rule.value === undefined) {
-      return `record_conditions[${i}].value is required for op ${rule.op}`
-    }
-  }
-  return null
-}
-
-// Validate a PATCH body's default_values object; returns an error string
-// (naming the offending key) or null when valid.
-function validateDefaultValues(values: unknown): string | null {
-  if (!values || typeof values !== 'object' || Array.isArray(values)) {
-    return 'default_values must be an object'
-  }
-  for (const key of Object.keys(values as Record<string, unknown>)) {
-    if (!FIELD_IDENTIFIER_RE.test(key))
-      return `default_values.${key} is not a valid field identifier`
-  }
-  return null
-}
 
 // Fetch the DB-ordered layout candidates for a collection (is_active desc,
 // sort asc — the idiom both role- and record-condition tie-breaking rely on).
@@ -832,250 +722,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     await snapshotLayoutVersion(Number(id), 'before settings change', req.user?.id)
 
-    const body = req.body as Partial<{
-      name: string
-      slug: string | null
-      create_label: string | null
-      create_hidden: boolean
-      sort: number
-      is_active: boolean
-      disable_comments: boolean
-      disable_tasks: boolean
-      tab_mode: string
-      validate_before_next: boolean
-      summary_enabled: boolean
-      summary_hide_empty: boolean
-      ai_enabled: boolean
-      accordion_mode: boolean
-      disable_revisions: boolean
-      disable_clone: boolean
-      disable_delete: boolean
-      row_order_field: string | null
-      pdf_theme: string | null
-      pdf_template_id: number | null
-      pdf_cover_enabled: boolean
-      pdf_cover_title_field: string | null
-      pdf_cover_subtitle: string | null
-      pdf_show_logo: boolean
-      pdf_page_size: string
-      pdf_orientation: string
-      pdf_button_label: string | null
-      conditions: { role_ids?: string[] } | null
-      allow_schedule: boolean
-      allow_disable_pickers: boolean
-      layout_type: string
-      addendum_layout_id: number | null
-      workflow_template_id: string | null
-      single_active_addendum: boolean
-      addendum_default_view: boolean
-      record_conditions: RecordConditionRule[] | null
-      default_values: Record<string, unknown> | null
-      display_mode: string | null
-      parent_layout_id: number | null
-      hide_integrity_banner: boolean
-      hide_sla_banner: boolean
-      changes_tray: boolean
-      dossier_enabled: boolean
-      dossier_label: string | null
-      quick_picker: string[] | null
-      sheet_width: number | null
-      header_fields: string[] | null
-      hide_empty: boolean
-    }>
-
-    if (body.record_conditions !== undefined && body.record_conditions !== null) {
-      const err = validateRecordConditions(body.record_conditions)
-      if (err) return reply.code(400).send({ error: err })
-    }
-    if (body.default_values !== undefined && body.default_values !== null) {
-      const err = validateDefaultValues(body.default_values)
-      if (err) return reply.code(400).send({ error: err })
-    }
-
-    const patch: Record<string, unknown> = {}
-    if (body.name !== undefined) patch.name = body.name
-    // A slug re-sent unchanged stays as stored: migration 092 kept characters
-    // like ( & / that slugify would rewrite, and nothing cascades a rename to
-    // ?layout= links, queue item_layout or grid layout_slug references.
-    if (body.slug !== undefined && body.slug === existing.slug) patch.slug = existing.slug
-    else if (body.slug !== undefined) {
-      if (body.slug == null || body.slug === '') patch.slug = null
-      else {
-        const slug = slugify(String(body.slug))
-        if (!slug) return reply.code(400).send({ error: 'slug must contain letters or digits' })
-        const others = (await db('nivaro_collection_layouts')
-          .where({ collection: existing.collection })
-          .whereNot({ id: Number(id) })
-          .whereNotNull('slug')
-          .select('slug')) as Array<{ slug: string }>
-        if (others.some((o) => String(o.slug).toLowerCase() === slug))
-          return reply
-            .code(409)
-            .send({ error: `Another layout of this collection already uses the slug "${slug}"` })
-        patch.slug = slug
-      }
-    }
-    if (body.create_label !== undefined) patch.create_label = body.create_label ?? null
-    if (body.create_hidden !== undefined) patch.create_hidden = body.create_hidden ? 1 : 0
-    if (body.sort !== undefined) patch.sort = body.sort
-    if (body.disable_comments !== undefined) patch.disable_comments = body.disable_comments ? 1 : 0
-    if (body.disable_tasks !== undefined) patch.disable_tasks = body.disable_tasks ? 1 : 0
-    if (body.tab_mode !== undefined) patch.tab_mode = body.tab_mode
-    if (body.parent_layout_id !== undefined) {
-      // Layout inheritance (#424): one level only, same collection, never self.
-      if (body.parent_layout_id === null) patch.parent_layout_id = null
-      else {
-        const parent = await db('nivaro_collection_layouts')
-          .where({ id: Number(body.parent_layout_id) })
-          .first('id', 'collection', 'parent_layout_id')
-        const self = await db('nivaro_collection_layouts')
-          .where({ id: Number(id) })
-          .first('collection')
-        if (
-          !parent ||
-          parent.collection !== self?.collection ||
-          Number(parent.id) === Number(id) ||
-          parent.parent_layout_id
-        ) {
-          return reply
-            .code(400)
-            .send({ error: 'Parent must be a same-collection layout with no parent of its own' })
-        }
-        patch.parent_layout_id = Number(body.parent_layout_id)
-      }
-    }
-    if (body.layout_type !== undefined) {
-      if (!LAYOUT_TYPES.includes(body.layout_type as (typeof LAYOUT_TYPES)[number])) {
-        return reply
-          .code(400)
-          .send({ error: `layout_type must be one of ${LAYOUT_TYPES.join(', ')}` })
-      }
-      patch.layout_type = body.layout_type
-    }
-    if (body.validate_before_next !== undefined)
-      patch.validate_before_next = body.validate_before_next ? 1 : 0
-    if (body.summary_enabled !== undefined) patch.summary_enabled = body.summary_enabled ? 1 : 0
-    if (body.ai_enabled !== undefined) patch.ai_enabled = body.ai_enabled ? 1 : 0
-    if (body.conditions !== undefined)
-      patch.conditions = body.conditions == null ? null : JSON.stringify(body.conditions)
-    if (body.allow_schedule !== undefined) patch.allow_schedule = body.allow_schedule ? 1 : 0
-    if (body.allow_disable_pickers !== undefined)
-      patch.allow_disable_pickers = body.allow_disable_pickers ? 1 : 0
-    if (body.addendum_layout_id !== undefined)
-      patch.addendum_layout_id = body.addendum_layout_id ?? null
-    if (body.workflow_template_id !== undefined)
-      patch.workflow_template_id = body.workflow_template_id ?? null
-    if (body.single_active_addendum !== undefined)
-      patch.single_active_addendum = body.single_active_addendum ? 1 : 0
-    if (body.addendum_default_view !== undefined)
-      patch.addendum_default_view = body.addendum_default_view ? 1 : 0
-    if (body.record_conditions !== undefined)
-      patch.record_conditions =
-        body.record_conditions == null ? null : JSON.stringify(body.record_conditions)
-    if (body.default_values !== undefined)
-      patch.default_values =
-        body.default_values == null ? null : JSON.stringify(body.default_values)
-    if (body.display_mode !== undefined) patch.display_mode = body.display_mode ?? null
-    if (body.hide_integrity_banner !== undefined)
-      patch.hide_integrity_banner = body.hide_integrity_banner === true
-    if (body.dossier_enabled !== undefined) patch.dossier_enabled = body.dossier_enabled === true
-    if (body.dossier_label !== undefined)
-      patch.dossier_label = body.dossier_label?.trim().slice(0, 100) || null
-    if (body.hide_sla_banner !== undefined) patch.hide_sla_banner = body.hide_sla_banner === true
-    if (body.changes_tray !== undefined) patch.changes_tray = body.changes_tray === true
-    if (body.quick_picker !== undefined) {
-      if (body.quick_picker !== null && !Array.isArray(body.quick_picker))
-        return reply
-          .code(400)
-          .send({ error: 'quick_picker must be an array of field names or null' })
-      const steps = parseQuickPicker(body.quick_picker)
-      if (body.quick_picker !== null && body.quick_picker.length > 0 && !steps)
-        return reply.code(400).send({ error: 'quick_picker entries must be field names' })
-      if (steps && steps.length > 20)
-        return reply.code(400).send({ error: 'quick_picker allows at most 20 steps' })
-      patch.quick_picker = steps ? JSON.stringify(steps) : null
-    }
-    // Read-view presentation (migration 302): sheet width, header band, hide empty.
-    if (body.sheet_width !== undefined) {
-      if (body.sheet_width === null) patch.sheet_width = null
-      else {
-        const w = Number(body.sheet_width)
-        if (!Number.isFinite(w) || w < 320 || w > 2000)
-          return reply.code(400).send({ error: 'sheet_width must be 320–2000 px or null' })
-        patch.sheet_width = Math.round(w)
-      }
-    }
-    if (body.header_fields !== undefined) {
-      if (body.header_fields !== null && !Array.isArray(body.header_fields))
-        return reply
-          .code(400)
-          .send({ error: 'header_fields must be an array of field names or null' })
-      const hf = parseQuickPicker(body.header_fields)
-      if (body.header_fields !== null && body.header_fields.length > 0 && !hf)
-        return reply.code(400).send({ error: 'header_fields entries must be field names' })
-      if (hf && hf.length > 8)
-        return reply.code(400).send({ error: 'header_fields allows at most 8 fields' })
-      patch.header_fields = hf ? JSON.stringify(hf) : null
-    }
-    if (body.hide_empty !== undefined) patch.hide_empty = body.hide_empty === true
-
-    // Settings the renderers read that this route used to drop.
-    for (const key of [
-      'summary_hide_empty',
-      'accordion_mode',
-      'disable_revisions',
-      'disable_clone',
-      'disable_delete',
-      'pdf_cover_enabled',
-      'pdf_show_logo'
-    ] as const) {
-      if (body[key] !== undefined) patch[key] = body[key] ? 1 : 0
-    }
-    if (body.row_order_field !== undefined) {
-      const f = body.row_order_field
-      if (f == null || f === '') patch.row_order_field = null
-      else if (typeof f !== 'string' || !FIELD_IDENTIFIER_RE.test(f) || f.length > 255)
-        return reply.code(400).send({ error: 'row_order_field must be a field name or null' })
-      else patch.row_order_field = f
-    }
-    if (body.pdf_theme !== undefined) {
-      if (body.pdf_theme === null) patch.pdf_theme = null
-      else if (!PDF_THEMES.includes(body.pdf_theme as (typeof PDF_THEMES)[number]))
-        return reply.code(400).send({ error: `pdf_theme must be one of ${PDF_THEMES.join(', ')}` })
-      else patch.pdf_theme = body.pdf_theme
-    }
-    if (body.pdf_template_id !== undefined) {
-      const t = body.pdf_template_id
-      if (t === null) patch.pdf_template_id = null
-      else if (!Number.isInteger(Number(t)) || Number(t) <= 0)
-        return reply.code(400).send({ error: 'pdf_template_id must be a template id or null' })
-      else patch.pdf_template_id = Number(t)
-    }
-    if (body.pdf_cover_title_field !== undefined) {
-      const f = body.pdf_cover_title_field
-      if (f == null || f === '') patch.pdf_cover_title_field = null
-      else if (typeof f !== 'string' || !FIELD_IDENTIFIER_RE.test(f) || f.length > 255)
-        return reply.code(400).send({ error: 'pdf_cover_title_field must be a field name or null' })
-      else patch.pdf_cover_title_field = f
-    }
-    if (body.pdf_cover_subtitle !== undefined)
-      patch.pdf_cover_subtitle = body.pdf_cover_subtitle?.trim() ? body.pdf_cover_subtitle : null
-    if (body.pdf_page_size !== undefined) {
-      if (!PDF_PAGE_SIZES.includes(body.pdf_page_size as (typeof PDF_PAGE_SIZES)[number]))
-        return reply
-          .code(400)
-          .send({ error: `pdf_page_size must be one of ${PDF_PAGE_SIZES.join(', ')}` })
-      patch.pdf_page_size = body.pdf_page_size
-    }
-    if (body.pdf_orientation !== undefined) {
-      if (!PDF_ORIENTATIONS.includes(body.pdf_orientation as (typeof PDF_ORIENTATIONS)[number]))
-        return reply
-          .code(400)
-          .send({ error: `pdf_orientation must be one of ${PDF_ORIENTATIONS.join(', ')}` })
-      patch.pdf_orientation = body.pdf_orientation
-    }
-    if (body.pdf_button_label !== undefined)
-      patch.pdf_button_label = body.pdf_button_label?.trim().slice(0, 100) || null
+    const body = req.body as LayoutPatchBody
+    const normalized = await normalizeLayoutPatch(db, id, existing, body)
+    if (normalized.error !== undefined)
+      return reply.code(normalized.status).send({ error: normalized.error })
+    const patch = normalized.patch
 
     if (Object.keys(patch).length === 0 && body.is_active === undefined)
       return reply.code(400).send({ error: 'No fields to update' })
@@ -1097,14 +748,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       else if (body.is_active === false)
         await trx('nivaro_collection_layouts').where({ id }).update({ is_active: 0 })
     })
-    const updated = await db('nivaro_collection_layouts').where({ id }).first()
-    updated.conditions = parseConditions(updated.conditions)
-    updated.record_conditions = parseRecordConditions(updated.record_conditions)
-    updated.default_values = parseDefaultValues(updated.default_values)
-    updated.quick_picker = parseQuickPicker(updated.quick_picker)
-    updated.header_fields = parseQuickPicker(updated.header_fields)
-    updated.hide_empty = !!updated.hide_empty
-    updated.changes_tray = !!updated.changes_tray
+    const updated = parseLayoutRow(await db('nivaro_collection_layouts').where({ id }).first())
 
     await logActivity({
       action: 'update',
@@ -1971,24 +1615,6 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     return reply.send({ data: result })
   })
 
-  // input_bindings / overrides arrive as objects from the editor but as the
-  // stored JSON STRING from a GET → PUT round trip; stringifying a string
-  // double-encodes it (every round trip stacks another layer), the editor's
-  // parser then crashes on `.find` and the form loses its grid overrides.
-  // Unwrap before storing, however deep the stack got.
-  const serializeBindings = (v: unknown): string | null => {
-    let cur = v
-    for (let i = 0; i < 12 && typeof cur === 'string'; i++) {
-      try {
-        cur = JSON.parse(cur)
-      } catch {
-        break
-      }
-    }
-    if (cur == null || cur === '') return null
-    return JSON.stringify(cur)
-  }
-
   // PUT /collection-layouts/:id/assignments — bulk replace
   app.put('/:id/assignments', { preHandler: requireAdmin }, async (req, reply) => {
     const { id } = req.params as { id: string }
@@ -2034,21 +1660,7 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       if (!a || typeof a.field !== 'string' || !a.field) continue
       wanted.set(keyOf(a.field, a.group_key), a) // same pair named twice: the last entry wins
     }
-    const rowOf = (a: (typeof body.assignments)[number]) => ({
-      group_key: a.group_key ?? null,
-      sort: a.sort,
-      label_override: a.label_override ?? null,
-      is_visible: a.is_visible === false ? 0 : 1,
-      default_expanded: a.default_expanded === false ? 0 : 1,
-      col_span: a.col_span ?? null,
-      overrides: serializeBindings(a.overrides),
-      show_row_revisions: a.show_row_revisions ? 1 : 0,
-      allow_revision_restore: a.allow_revision_restore === false ? 0 : 1,
-      lock_conditions: a.lock_conditions ?? null,
-      input_bindings: serializeBindings(a.input_bindings),
-      widget_id: a.widget_id ?? null,
-      show_approval_chain: a.show_approval_chain ? 1 : 0
-    })
+    const rowOf = placementColumns
     await db.transaction(async (trx) => {
       const existing = (await trx('nivaro_layout_field_assignments')
         .where({ layout_id: Number(id) })
@@ -2114,5 +1726,51 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       )
       .orderBy('sort', 'asc')
     return reply.send({ data: rows })
+  })
+
+  // ─── Layout editor save model: bundle + atomic ops ────────────────────────
+  // GET /collection-layouts/:id/bundle — the layout, its groups and placements
+  // as the editor edits them, with the rev its next ops batch must name.
+  app.get('/:id/bundle', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const bundle = await loadLayoutBundle(db, Number(id))
+    if (!bundle) return reply.code(404).send({ error: 'Not found' })
+    return reply.send(bundle)
+  })
+
+  // POST /collection-layouts/:id/ops — { ops, base_rev, note? } applied all or
+  // nothing; 409 { error: 'stale', bundle } when the layout changed since
+  // base_rev, 400 { error, op_index } when an op is refused.
+  app.post('/:id/ops', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const body = (req.body ?? {}) as { ops?: unknown; base_rev?: unknown; note?: unknown }
+    if (!Array.isArray(body.ops)) return reply.code(400).send({ error: 'ops array required' })
+    if (body.ops.length > 500) return reply.code(400).send({ error: 'At most 500 ops per batch' })
+    if (typeof body.base_rev !== 'string')
+      return reply.code(400).send({ error: 'base_rev required' })
+    const result = await runLayoutOps(
+      Number(id),
+      {
+        ops: body.ops,
+        base_rev: body.base_rev,
+        note: typeof body.note === 'string' ? body.note : null
+      },
+      req.user?.id
+    )
+    if (result.status === 404) return reply.code(404).send({ error: 'Not found' })
+    if (result.status === 409)
+      return reply.code(409).send({ error: 'stale', bundle: result.bundle })
+    if (result.status === 400)
+      return reply.code(400).send({ error: result.error, op_index: result.op_index })
+    if (result.changed)
+      await logActivity({
+        action: 'update',
+        user: req.user?.id,
+        collection: 'nivaro_collection_layouts',
+        item: id,
+        comment: `layout editor: ${body.ops.length} change(s)`,
+        req
+      })
+    return reply.send(result.bundle)
   })
 }
