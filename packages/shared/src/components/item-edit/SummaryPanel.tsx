@@ -136,7 +136,7 @@ function useDisplayTemplate(collection: string | null | undefined) {
 }
 
 /** M2O value: the related record's label, not its primary key. */
-function M2OSummaryValue({ collection, id }: { collection: string; id: unknown }) {
+export function M2OSummaryValue({ collection, id }: { collection: string; id: unknown }) {
   const template = useDisplayTemplate(collection)
   return (
     <RelatedItemLabel collection={collection} id={id} displayTemplate={template ?? undefined} />

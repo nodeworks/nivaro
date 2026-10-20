@@ -201,7 +201,7 @@ let formulaCtxHydrated = false
 import { type FindableField, FindInRecordButton } from './item-edit/FindInRecord'
 import { RecordViewersChip } from './item-edit/RecordViewersChip'
 import { StepsBar } from './item-edit/StepsBar'
-import { SummaryPanel } from './item-edit/SummaryPanel'
+import { M2OSummaryValue, SummaryPanel } from './item-edit/SummaryPanel'
 import type {
   ActiveLayoutData,
   CMSField,
@@ -657,9 +657,41 @@ function formatHeaderFieldValue(value: unknown, format: string): string {
 // plus staged relation links and queued grid rows. Also the debugging tool for
 // phantom-dirty reports: whatever appears here is what flipped the flag.
 
-function UnsavedInspector({
+/** One side of a change, as people read it: a related record's label (never its
+ *  id), a choice's text, Yes/No — the raw value only for plain fields. */
+function ChangeValue({
+  value,
+  field,
+  m2oTarget
+}: {
+  value: unknown
+  field: CMSField | null
+  m2oTarget: string | null
+}) {
+  if (value === null || value === undefined || value === '') return <>empty</>
+  if (typeof value === 'boolean') return <>{value ? 'Yes' : 'No'}</>
+  if (m2oTarget && (typeof value === 'string' || typeof value === 'number'))
+    return <M2OSummaryValue collection={m2oTarget} id={value} />
+  const choices = parseJson<{ choices?: Array<{ text?: string; value?: unknown }> }>(
+    field?.options
+  )?.choices
+  if (Array.isArray(choices) && choices.length > 0) {
+    const values = Array.isArray(value) ? value : [value]
+    const texts = values.map((v) => {
+      const c = choices.find((ch) => String(ch.value) === String(v))
+      return c?.text ? choiceLabel(c.text) : String(v)
+    })
+    return <>{texts.join(', ')}</>
+  }
+  const str = typeof value === 'object' ? JSON.stringify(value) : String(value)
+  return <>{str.length > 60 ? `${str.slice(0, 60)}…` : str}</>
+}
+
+export function UnsavedInspector({
   open,
   onClose,
+  collection,
+  relations,
   fieldConfig,
   draft,
   initial,
@@ -670,6 +702,8 @@ function UnsavedInspector({
 }: {
   open: boolean
   onClose: () => void
+  collection: string
+  relations: CMSRelation[]
   fieldConfig: CMSField[] | undefined
   draft: Record<string, unknown>
   initial: Record<string, unknown>
@@ -679,32 +713,54 @@ function UnsavedInspector({
   pendingDeleteCount: number
 }) {
   if (!open) return null
-  const fmt = (v: unknown): string => {
-    if (v === null || v === undefined || v === '') return 'empty'
-    if (typeof v === 'boolean') return v ? 'Yes' : 'No'
-    const str = typeof v === 'object' ? JSON.stringify(v) : String(v)
-    return str.length > 60 ? `${str.slice(0, 60)}…` : str
-  }
-  const rows: Array<{ label: string; from: string; to: string }> = []
-  const known = new Set<string>()
+  const m2oTarget = (field: string): string | null =>
+    relations.find(
+      (r) => r.many_collection === collection && r.many_field === field && !r.junction_field
+    )?.one_collection ?? null
+  const fieldLabel = (key: string, f?: CMSField | null) =>
+    f?.label || titleCase(key.replace(/_/g, ' '))
+  const byField = new Map((fieldConfig ?? []).map((f) => [f.field, f]))
+  const rows: Array<{ key: string; label: string; from: unknown; to: unknown }> = []
   for (const f of fieldConfig ?? []) {
-    known.add(f.field)
     if (valuesEqual(draft[f.field], initial[f.field])) continue
     if (draft[f.field] === undefined) continue
     rows.push({
-      label: f.label || titleCase(f.field.replace(/_/g, ' ')),
-      from: fmt(initial[f.field]),
-      to: fmt(draft[f.field])
+      key: f.field,
+      label: fieldLabel(f.field, f),
+      from: initial[f.field],
+      to: draft[f.field]
     })
   }
   // Draft keys the field config doesn't know (machine columns) still count.
   for (const k of Object.keys(draft)) {
-    if (known.has(k) || k.startsWith('__')) continue
+    if (byField.has(k) || k.startsWith('__')) continue
     if (valuesEqual(draft[k], initial[k])) continue
-    rows.push({ label: k, from: fmt(initial[k]), to: fmt(draft[k]) })
+    rows.push({ key: k, label: k, from: initial[k], to: draft[k] })
   }
-  const linkCount = [...m2mLinks.values()].reduce((n, ids) => n + ids.length, 0)
-  const unlinkCount = [...m2mUnlinks.values()].reduce((n, ids) => n + ids.size, 0)
+  // Staged links are keyed by the alias field; the records they add live in the
+  // collection on the junction's other leg.
+  const linkTarget = (key: string): string | null => {
+    const r = relations.find((rel) => rel.one_collection === collection && rel.one_field === key)
+    if (!r) return null
+    return (
+      relations.find((c) => c.many_collection === r.many_collection && c.id !== r.id)
+        ?.one_collection ?? null
+    )
+  }
+  const linkGroups = [...m2mLinks.entries()]
+    .filter(([, ids]) => ids.length > 0)
+    .map(([key, ids]) => ({
+      key,
+      label: fieldLabel(key, byField.get(key)),
+      ids,
+      target: linkTarget(key)
+    }))
+  const unlinkGroups = [...m2mUnlinks.entries()]
+    .filter(([, ids]) => ids.size > 0)
+    .map(([key, ids]) => ({ key, label: fieldLabel(key, byField.get(key)), count: ids.size }))
+  const linkCount = linkGroups.reduce((n, g) => n + g.ids.length, 0)
+  const unlinkCount = unlinkGroups.reduce((n, g) => n + g.count, 0)
+  const LINK_PREVIEW = 5
   return (
     <div
       className='absolute right-0 top-full z-[110] mt-1.5 w-[360px] rounded-lg border border-slate-200 bg-white p-3 shadow-lg dark:border-border dark:bg-card'
@@ -734,21 +790,55 @@ function UnsavedInspector({
         </p>
       ) : (
         <div className='max-h-[300px] space-y-1.5 overflow-y-auto'>
-          {rows.map((r) => (
-            <div key={r.label} className='text-[11.5px]'>
-              <span className='font-medium text-slate-700 dark:text-slate-200'>{r.label}</span>
-              <p className='break-words text-slate-500 dark:text-slate-400'>
-                <span className='text-rose-500 line-through'>{r.from}</span>{' '}
-                <span className='text-emerald-600 dark:text-emerald-400'>{r.to}</span>
+          {rows.map((r) => {
+            const f = byField.get(r.key) ?? null
+            const target = m2oTarget(r.key)
+            return (
+              <div key={r.key} className='text-[11.5px]'>
+                <span className='font-medium text-slate-700 dark:text-slate-200'>{r.label}</span>
+                <p className='break-words text-slate-500 dark:text-slate-400'>
+                  <span className='text-rose-500 line-through'>
+                    <ChangeValue value={r.from} field={f} m2oTarget={target} />
+                  </span>{' '}
+                  <span className='text-emerald-600 dark:text-emerald-400'>
+                    <ChangeValue value={r.to} field={f} m2oTarget={target} />
+                  </span>
+                </p>
+              </div>
+            )
+          })}
+          {linkGroups.map((g) => (
+            <div key={`link:${g.key}`} className='text-[11.5px]'>
+              <span className='font-medium text-slate-700 dark:text-slate-200'>{g.label}</span>
+              <p className='break-words text-emerald-600 dark:text-emerald-400'>
+                {g.target ? (
+                  <>
+                    +{' '}
+                    {g.ids.slice(0, LINK_PREVIEW).map((id, i) => (
+                      <span key={String(id)}>
+                        {i > 0 && ', '}
+                        <M2OSummaryValue collection={g.target as string} id={id} />
+                      </span>
+                    ))}
+                    {g.ids.length > LINK_PREVIEW && (
+                      <span className='text-slate-500 dark:text-slate-400'>
+                        {' '}
+                        and {g.ids.length - LINK_PREVIEW} more
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  `${g.ids.length} to add`
+                )}
               </p>
             </div>
           ))}
-          {linkCount > 0 && (
-            <p className='text-[11.5px] text-slate-500'>{linkCount} relation link(s) staged</p>
-          )}
-          {unlinkCount > 0 && (
-            <p className='text-[11.5px] text-slate-500'>{unlinkCount} relation removal(s) staged</p>
-          )}
+          {unlinkGroups.map((g) => (
+            <div key={`unlink:${g.key}`} className='text-[11.5px]'>
+              <span className='font-medium text-slate-700 dark:text-slate-200'>{g.label}</span>
+              <p className='text-rose-500'>{g.count} to remove</p>
+            </div>
+          ))}
           {pendingRowCount > 0 && (
             <p className='text-[11.5px] text-slate-500'>{pendingRowCount} grid row(s) queued</p>
           )}
@@ -10137,6 +10227,8 @@ export function ItemEditForm({
                                           <UnsavedInspector
                                             open={inspectorOpen && isDirty}
                                             onClose={() => setInspectorOpen(false)}
+                                            collection={collection}
+                                            relations={relations}
                                             fieldConfig={fieldConfig}
                                             draft={draft}
                                             initial={initialDataRef.current}
