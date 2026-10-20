@@ -419,6 +419,8 @@ function checkWrites(ctx: CheckContext): RawFinding[] {
   for (let m = re.exec(masked); m; m = re.exec(masked)) {
     const verb = m[1].toUpperCase()
     const at = m.index
+    // `@delete bit` (a parameter), `t.update`, `[delete]`: a name, not a statement
+    if (/[@.[#$\w]/.test(masked[at - 1] ?? '')) continue
     const prev = wordBefore(masked, at)
     if (prev === 'THEN' || prev === 'NOT') continue // MERGE actions (WHEN … THEN UPDATE / DELETE)
     const target = splitName(m[2])
@@ -443,6 +445,27 @@ function checkWrites(ctx: CheckContext): RawFinding[] {
     if (topLevel(/\bJOIN\b/) && topLevel(/\bON\b/)) continue
     if (aliasIsTemp(stmt, target.name)) continue
     const label = `${target.schema ? `${target.schema}.` : ''}${target.name}`
+    // A DELETE that empties a table the same module then INSERTs into again is the
+    // clear-and-refill pattern of a scratch table: still reported, but as info.
+    const refill =
+      verb === 'DELETE' &&
+      new RegExp(
+        String.raw`\bINSERT\s+(?:INTO\s+)?(?:\[?\w+\]?\.)?\[?${esc(target.name)}\]?(?![\w$#@])`,
+        'i'
+      ).test(masked.slice(end))
+    if (refill) {
+      out.push({
+        check_key: 'write-without-where',
+        severity: 'info',
+        line: lineAt(sql, at),
+        snippet: snippetAt(sql, at, end),
+        anchor: anchorOf(masked, at, end),
+        message: `DELETE on ${label} clears every row before it is filled again (a scratch table)`,
+        detail: { verb, target_schema: target.schema, target_table: target.name, refill: true },
+        suggested_fix: `If ${label} is only this procedure's scratch space, a #temp table avoids two runs at once overwriting each other; otherwise TRUNCATE TABLE says the intent. Mark as expected if it is deliberate.`
+      })
+      continue
+    }
     out.push({
       check_key: 'write-without-where',
       severity: 'critical',

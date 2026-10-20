@@ -154,6 +154,26 @@ WHEN NOT MATCHED THEN INSERT (invoice_id) VALUES (source.invoice_id);`
 })
 
 describe('writes without WHERE', () => {
+  it('ignores names that only contain the word (a @delete parameter, t.update)', () => {
+    expect(
+      keys(
+        'CREATE PROCEDURE dbo.forecast_orphans @delete bit = 0 AS SELECT t.update FROM t WHERE 1 = 1'
+      )
+    ).not.toContain('write-without-where')
+  })
+  it('reports clear-and-refill of a scratch table as info, not critical', () => {
+    const found = checkObject(
+      proc(
+        'DELETE FROM temp_forecast; INSERT INTO temp_forecast (a) SELECT a FROM forecasts WHERE a > 0'
+      ),
+      catalog
+    ).filter((f) => f.check_key === 'write-without-where')
+    expect(found.map((f) => f.severity)).toEqual(['info'])
+    const plain = checkObject(proc('DELETE FROM forecasts'), catalog).filter(
+      (f) => f.check_key === 'write-without-where'
+    )
+    expect(plain.map((f) => f.severity)).toEqual(['critical'])
+  })
   it('flags UPDATE and DELETE with no WHERE', () => {
     expect(keys('UPDATE dbo.invoices SET notes = NULL')).toContain('write-without-where')
     expect(keys('DELETE FROM invoices;')).toContain('write-without-where')

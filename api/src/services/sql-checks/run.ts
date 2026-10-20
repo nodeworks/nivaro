@@ -354,14 +354,14 @@ export function applyFigures(
   if (nulls === 0) return { ...f, severity: 'warning', detail }
   const extra =
     fig.extra_rows > 0
-      ? `; ${fig.extra_rows.toLocaleString('en-US')} extra rows already sit in NULL-key groups`
+      ? `; ${fig.extra_rows.toLocaleString('en-US')} extra ${fig.extra_rows === 1 ? 'row already sits' : 'rows already sit'} in NULL-key groups`
       : ''
   return {
     ...f,
     severity: 'critical',
     detail,
     message:
-      `${f.message} — ${nulls.toLocaleString('en-US')} rows hold NULL keys now${extra}`.slice(
+      `${f.message} — ${nulls.toLocaleString('en-US')} ${nulls === 1 ? 'row holds a NULL key' : 'rows hold NULL keys'} now${extra}`.slice(
         0,
         500
       )
