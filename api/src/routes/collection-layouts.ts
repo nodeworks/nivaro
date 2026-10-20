@@ -894,7 +894,11 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
 
     const patch: Record<string, unknown> = {}
     if (body.name !== undefined) patch.name = body.name
-    if (body.slug !== undefined) {
+    // A slug re-sent unchanged stays as stored: migration 092 kept characters
+    // like ( & / that slugify would rewrite, and nothing cascades a rename to
+    // ?layout= links, queue item_layout or grid layout_slug references.
+    if (body.slug !== undefined && body.slug === existing.slug) patch.slug = existing.slug
+    else if (body.slug !== undefined) {
       if (body.slug == null || body.slug === '') patch.slug = null
       else {
         const slug = slugify(String(body.slug))

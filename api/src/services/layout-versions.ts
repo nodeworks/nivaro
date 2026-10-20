@@ -171,7 +171,16 @@ export async function restoreLayoutVersion(
       .where({ layout_id: layoutId })
       .select('id')) as Array<{ id: number }>
     const laterIds = currentGroups.map((g) => Number(g.id)).filter((gid) => !keepGroupIds.has(gid))
-    if (laterIds.length > 0) await trx('nivaro_field_groups').whereIn('id', laterIds).delete()
+    if (laterIds.length > 0) {
+      // container_id is a NO ACTION self-FK (migration 096): a kept group
+      // moved into a later container would block the delete. Unhook first;
+      // the upsert below writes the snapshot's container_id back.
+      await trx('nivaro_field_groups')
+        .where({ layout_id: layoutId })
+        .whereIn('container_id', laterIds)
+        .update({ container_id: null })
+      await trx('nivaro_field_groups').whereIn('id', laterIds).delete()
+    }
 
     // Groups upsert by id — assignments reference groups through key/sort.
     for (const g of snap.groups) {

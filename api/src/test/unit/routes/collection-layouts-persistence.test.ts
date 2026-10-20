@@ -171,7 +171,17 @@ const fake = vi.hoisted(() => {
     }
     async delete() {
       const rows = new Set(this.matched())
-      tables[this.table] = (tables[this.table] ?? []).filter((r) => !rows.has(r))
+      const left = (tables[this.table] ?? []).filter((r) => !rows.has(r))
+      // nivaro_field_groups.container_id is a NO ACTION self-FK (migration 096).
+      if (this.table === 'nivaro_field_groups') {
+        const gone = new Set([...rows].map((r) => String(r.id)))
+        const blocked = left.find((r) => r.container_id != null && gone.has(String(r.container_id)))
+        if (blocked)
+          throw new Error(
+            `FK conflict: group ${blocked.id} has container_id ${blocked.container_id}`
+          )
+      }
+      tables[this.table] = left
       return rows.size
     }
     // biome-ignore lint/suspicious/noThenProperty: knex builders are thenables
@@ -345,6 +355,19 @@ describe('PATCH /collection-layouts/:id', () => {
     expect(rowOf(2).slug).toBeNull()
     // Its own slug re-sent unchanged is fine.
     expect((await call('PATCH', '/1', { slug: 'main' })).statusCode).toBe(200)
+  })
+
+  it('PATCH leaves a legacy slug re-sent unchanged as stored', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [layout({ id: 1, slug: 'Cost (Q1)/R&D' }), layout({ id: 2 })]
+    })
+    const res = await call('PATCH', '/1', { slug: 'Cost (Q1)/R&D', name: 'Cost form' })
+    expect(res.statusCode).toBe(200)
+    expect(rowOf(1).slug).toBe('Cost (Q1)/R&D')
+    expect(rowOf(1).name).toBe('Cost form')
+    // Changing it does normalise.
+    expect((await call('PATCH', '/1', { slug: 'Cost (Q2)' })).statusCode).toBe(200)
+    expect(rowOf(1).slug).toBe('cost_q2')
   })
 })
 
@@ -578,6 +601,41 @@ describe('DELETE /collection-layouts/:id', () => {
 })
 
 describe('restoreLayoutVersion', () => {
+  it('restore unhooks kept groups from a later container before removing it', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [layout({ id: 1, is_active: 1 })],
+      nivaro_field_groups: [
+        { id: 10, layout_id: 1, key: 'general', container_id: null, sort: 0 },
+        { id: 12, layout_id: 1, key: 'costs', container_id: null, sort: 1 }
+      ],
+      nivaro_layout_field_assignments: [],
+      nivaro_layout_versions: []
+    })
+    await snapshotLayoutVersion(1, 'v1', 'u')
+    const version = fake.tables.nivaro_layout_versions[0]
+
+    // After the version: a tab container (11) and both sections moved into it.
+    fake.tables.nivaro_field_groups.push({
+      id: 11,
+      layout_id: 1,
+      key: 'tabs',
+      type: 'tabs',
+      container_id: null,
+      sort: 2
+    })
+    for (const g of fake.tables.nivaro_field_groups) if (g.id !== 11) g.container_id = 11
+
+    await expect(restoreLayoutVersion(1, Number(version.id), 'u')).resolves.toEqual({
+      restored_assignments: 0,
+      restored_groups: 2
+    })
+    const groups = fake.tables.nivaro_field_groups.filter((g) => g.layout_id === 1)
+    expect(groups.map((g) => [g.id, g.container_id])).toEqual([
+      [10, null],
+      [12, null]
+    ])
+  })
+
   it('restore removes groups added after the version', async () => {
     fake.reset({
       nivaro_collection_layouts: [layout({ id: 1, is_active: 1 }), layout({ id: 2 })],
