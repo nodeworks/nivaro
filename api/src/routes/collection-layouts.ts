@@ -1,12 +1,15 @@
 import { randomUUID } from 'crypto'
 import type { FastifyInstance } from 'fastify'
 import type { Knex } from 'knex'
+import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, whereLayoutType } from '../services/layout-activation.js'
+import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
+import { findLayoutReferences } from '../services/layout-references.js'
 import {
   diffLayoutVersions,
   getLayoutVersion,
@@ -25,7 +28,7 @@ type LayoutConditions = { role_ids?: string[] } | null
 export type RecordConditionRule = { field: string; op: 'eq' | 'neq' | 'nnull'; value?: unknown }
 
 // Safely parse the conditions JSON text column into an object (or null).
-function parseConditions(raw: unknown): LayoutConditions {
+export function parseConditions(raw: unknown): LayoutConditions {
   if (raw == null) return null
   if (typeof raw === 'object') return raw as LayoutConditions
   if (typeof raw !== 'string') return null
@@ -38,7 +41,7 @@ function parseConditions(raw: unknown): LayoutConditions {
 }
 
 // Safely parse the record_conditions JSON text column into a rule array (or null).
-function parseRecordConditions(raw: unknown): RecordConditionRule[] | null {
+export function parseRecordConditions(raw: unknown): RecordConditionRule[] | null {
   if (raw == null) return null
   if (Array.isArray(raw)) return raw as RecordConditionRule[]
   if (typeof raw !== 'string') return null
@@ -278,7 +281,7 @@ function collectRecordConditionFields(layouts: Record<string, unknown>[]): strin
  * admin, and the next allowed layout for everyone else). Empty/absent list =
  * open to all. Admins always pass.
  */
-function roleAllows(
+export function roleAllows(
   row: Record<string, unknown>,
   userRoleId: string | null | undefined,
   isAdmin: boolean
@@ -291,23 +294,54 @@ function roleAllows(
   return roleIds.some((r) => String(r).toUpperCase() === want)
 }
 
-function pickBestLayout(
+/** Why a layout won resolution — the overview's reason vocabulary. */
+export type PickReason = {
+  kind: 'record_rule' | 'role' | 'default' | 'fallback' | 'slug' | 'type_use'
+  rules?: RecordConditionRule[]
+  role_ids?: string[]
+  role_names?: string[]
+  type_use?: string
+}
+export type PickCheck = { layout_id: number; matched: boolean; why: string }
+export type PickResult = {
+  row: Record<string, unknown> | null
+  reason: PickReason | null
+  checked: PickCheck[]
+}
+
+export function pickBestLayout(
   allCandidates: Record<string, unknown>[],
   userRoleId: string | null | undefined,
   record: Record<string, unknown> | null,
   isAdmin = false
 ) {
+  return pickBestLayoutTraced(allCandidates, userRoleId, record, isAdmin).row
+}
+
+/**
+ * pickBestLayout with its working shown: the winner, the step that chose it
+ * and one line per candidate (in candidate order) saying what its check found.
+ * The one implementation — /active, /explain and preview-as-role all call it.
+ */
+export function pickBestLayoutTraced(
+  allCandidates: Record<string, unknown>[],
+  userRoleId: string | null | undefined,
+  record: Record<string, unknown> | null,
+  isAdmin = false
+): PickResult {
   // Role-restricted layouts leave the candidate set entirely for non-listed
   // roles — before record conditions, before the default fallback.
   const layouts = allCandidates.filter((row) => roleAllows(row, userRoleId, isAdmin))
-  if (layouts.length === 0) return null
 
   const fallbackPool: typeof layouts = []
+  const recordMatched = new Set<Record<string, unknown>>()
+  const roleListed = new Set<Record<string, unknown>>()
   let bestRecordMatch: { row: (typeof layouts)[number]; matches: number } | null = null
   for (const row of layouts) {
     const rules = parseRecordConditions(row.record_conditions)
     if (rules) {
       if (record && matchesRecordConditions(rules, record)) {
+        recordMatched.add(row)
         const matches = rules.length
         if (!bestRecordMatch || matches > bestRecordMatch.matches)
           bestRecordMatch = { row, matches }
@@ -316,23 +350,188 @@ function pickBestLayout(
     }
     fallbackPool.push(row)
   }
-  if (bestRecordMatch) return bestRecordMatch.row
 
-  if (userRoleId) {
+  let picked: Record<string, unknown> | null = null
+  let reason: PickReason | null = null
+  if (bestRecordMatch) {
+    picked = bestRecordMatch.row
+    reason = {
+      kind: 'record_rule',
+      rules: parseRecordConditions(picked.record_conditions) ?? []
+    }
+  }
+
+  if (!picked && userRoleId) {
     let best: { row: (typeof layouts)[number]; matches: number } | null = null
     for (const row of fallbackPool) {
       const cond = parseConditions(row.conditions)
       const roleIds = cond?.role_ids
       if (Array.isArray(roleIds) && roleIds.includes(userRoleId)) {
+        roleListed.add(row)
         const matches = roleIds.length
         if (!best || matches > best.matches) best = { row, matches }
       }
     }
-    if (best) return best.row
+    if (best) {
+      picked = best.row
+      reason = { kind: 'role', role_ids: parseConditions(picked.conditions)?.role_ids ?? [] }
+    }
   }
 
   // Fall back to the active (default) layout, else the first by sort.
-  return fallbackPool.find((l) => l.is_active) ?? fallbackPool[0] ?? null
+  if (!picked) {
+    picked = fallbackPool.find((l) => l.is_active) ?? fallbackPool[0] ?? null
+    if (picked) reason = { kind: picked.is_active ? 'default' : 'fallback' }
+  }
+
+  const winnerName = picked ? `“${String(picked.name ?? picked.id)}”` : ''
+  const checked = allCandidates.map((row): PickCheck => {
+    const layout_id = Number(row.id)
+    if (row === picked) {
+      const why =
+        reason?.kind === 'record_rule'
+          ? 'Its record rules match'
+          : reason?.kind === 'role'
+            ? 'Listed for this role'
+            : reason?.kind === 'default'
+              ? 'The default form'
+              : 'First in order (no form is marked default)'
+      return { layout_id, matched: true, why }
+    }
+    if (!layouts.includes(row))
+      return { layout_id, matched: false, why: 'Restricted to other roles' }
+    if (parseRecordConditions(row.record_conditions)) {
+      if (!record)
+        return { layout_id, matched: false, why: 'Has record rules; no saved record to test them' }
+      if (recordMatched.has(row))
+        return { layout_id, matched: true, why: `Its record rules match, but ${winnerName} wins` }
+      return { layout_id, matched: false, why: 'Its record rules do not match' }
+    }
+    if (bestRecordMatch)
+      return { layout_id, matched: false, why: 'A form with record rules matched first' }
+    if (roleListed.has(row))
+      return { layout_id, matched: true, why: `Listed for this role, but ${winnerName} wins` }
+    return { layout_id, matched: false, why: `Not the default; ${winnerName} is used` }
+  })
+
+  return { row: picked, reason, checked }
+}
+
+/**
+ * The /active resolution, step for step: slug pin → grouped candidates →
+ * the record (only the columns rules name) → pickBestLayoutTraced. `role` is
+ * the caller's role; admins (isAdmin) get no role preference, as on /active.
+ */
+export async function resolveLayout(opts: {
+  collection: string
+  slug?: string | null
+  item?: string | null
+  role: string | null
+  isAdmin: boolean
+}): Promise<PickResult> {
+  const { collection, slug, item, role, isAdmin } = opts
+  // Explicit slug pins a specific layout (any type — detail layouts use this
+  // for drill-down rendering), bypassing role- and record-conditional resolution.
+  let pinned: Record<string, unknown> | undefined | null
+  const slugChecks: PickCheck[] = []
+  if (slug) {
+    pinned = await db('nivaro_collection_layouts').where({ collection, slug }).first()
+    // A pinned slug the caller's role may not open (queue row_click,
+    // ?layout= links, CBV) silently falls through to normal resolution.
+    if (pinned && !roleAllows(pinned, role, isAdmin)) {
+      slugChecks.push({
+        layout_id: Number(pinned.id),
+        matched: false,
+        why: 'Its link name was asked for, but it is restricted to other roles'
+      })
+      pinned = null
+    }
+  }
+  if (pinned) {
+    return {
+      row: pinned,
+      reason: { kind: 'slug' },
+      checked: [{ layout_id: Number(pinned.id), matched: true, why: 'Opened by its link name' }]
+    }
+  }
+
+  // Admins always see the default layout (no conditional override).
+  const userRoleId = isAdmin ? null : role
+  const layouts = await fetchLayoutsForCollection(collection)
+
+  // An unknown/missing item id, or a collection that isn't a registered
+  // nivaro_collections entry, resolves to no record — falls through to
+  // the role/default path exactly like the no-item case. The registry
+  // gate stops `collection` (a caller-supplied query param) from ever
+  // being used as an arbitrary table identifier, and the select below is
+  // restricted to exactly the fields the candidate layouts' rules
+  // reference, so this can't become a column-value probing oracle.
+  let record: Record<string, unknown> | null = null
+  if (item) {
+    const registered = await db('nivaro_collections').where({ collection }).first()
+    if (registered) {
+      const columns = [...new Set(['id', ...collectRecordConditionFields(layouts)])]
+      record =
+        (await db(collection)
+          .where({ id: item })
+          .select(columns)
+          .first()
+          .catch(() => null)) ?? null
+    }
+  }
+  const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin)
+  return { ...res, checked: [...slugChecks, ...res.checked] }
+}
+
+// Columns every record carries that a form never shows.
+const SEED_SKIP_FIELDS = new Set([
+  'id',
+  'user_created',
+  'user_updated',
+  'date_created',
+  'date_updated'
+])
+
+/**
+ * Seed a new layout for "Create first form": one section "Main" holding every
+ * non-hidden field of the collection in nivaro field order. System columns
+ * and presentation/group pseudo fields (no value of their own) are left out;
+ * relation alias fields stay — they render as grids and pickers.
+ */
+export async function seedLayoutFields(layout: { id: number; collection: string }) {
+  const fields = (await db('nivaro_fields')
+    .where({ collection: layout.collection })
+    .select('field', 'hidden', 'type', 'interface')
+    .orderBy([
+      { column: 'sort', order: 'asc' },
+      { column: 'id', order: 'asc' }
+    ])) as Array<{ field: string; hidden: unknown; type: string | null; interface: string | null }>
+  const pseudo = (v: string | null) => /^(group-|presentation-)/.test(v ?? '')
+  const keep = fields.filter(
+    (f) => !f.hidden && !SEED_SKIP_FIELDS.has(f.field) && !pseudo(f.type) && !pseudo(f.interface)
+  )
+  await db.transaction(async (trx) => {
+    await trx('nivaro_field_groups').insert({
+      collection: layout.collection,
+      key: 'main',
+      label: 'Main',
+      type: 'section',
+      sort: 0,
+      is_collapsed: 0,
+      layout_id: Number(layout.id)
+    })
+    const rows = keep.map((f, i) => ({
+      layout_id: Number(layout.id),
+      field: f.field,
+      group_key: 'main',
+      sort: i,
+      is_visible: 1
+    }))
+    // 5 bindings a row: stay well under the ~2100 parameter cap.
+    for (let i = 0; i < rows.length; i += 200) {
+      await trx('nivaro_layout_field_assignments').insert(rows.slice(i, i + 200))
+    }
+  })
 }
 
 let driftCheckRegistered = false
@@ -373,10 +572,14 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     const role = await db('nivaro_roles').where({ id: role_id }).first('id', 'name', 'admin_access')
     if (!role) return reply.code(404).send({ error: 'Role not found' })
 
-    const layouts = (await db('nivaro_collection_layouts')
-      .where({ collection, layout_type: 'grouped' })
-      .orderBy('sort')) as Record<string, unknown>[]
-    const picked = pickBestLayout(layouts, String(role_id), null, !!role.admin_access)
+    // The live path exactly: same candidates (grouped or legacy NULL, is_active
+    // desc, sort asc) and an admin role gets no role preference, as on /active.
+    const { row: picked } = await resolveLayout({
+      collection,
+      role: String(role_id),
+      isAdmin: !!role.admin_access
+    })
+    const layouts = (await fetchLayoutsForCollection(collection)) as Record<string, unknown>[]
     const recordConditional = layouts.filter((l) => parseRecordConditions(l.record_conditions))
 
     // Field permissions via a synthetic user — the permission-simulator
@@ -425,6 +628,103 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     })
   })
 
+  // ─── Overview + explain (layout editor) ──────────────────────────────────
+  // "Which form does each kind of record get?" — every layout of the
+  // collection, sectioned and ordered as /active checks them, with what
+  // references each one. Admin-only, like the editor it opens.
+  app.get('/overview', { preHandler: requireAdmin }, async (req, reply) => {
+    const { collection } = req.query as { collection?: string }
+    if (!collection) return reply.code(400).send({ error: 'collection is required' })
+
+    const layouts = (await db('nivaro_collection_layouts')
+      .where({ collection })
+      .orderByRaw('is_active desc, sort asc, id asc')
+      .select(
+        'id',
+        'name',
+        'layout_type',
+        'slug',
+        'is_active',
+        'sort',
+        'conditions',
+        'record_conditions',
+        'create_label',
+        'create_hidden',
+        'tab_mode'
+      )) as OverviewLayoutInput[]
+    const ids = layouts.map((l) => Number(l.id))
+    const [groups, assignments, roles, refs] = await Promise.all([
+      ids.length
+        ? db('nivaro_field_groups')
+            .whereIn('layout_id', ids)
+            .select('id', 'key', 'type', 'container_id', 'tab_mode', 'layout_id')
+        : [],
+      ids.length
+        ? db('nivaro_layout_field_assignments')
+            .whereIn('layout_id', ids)
+            .select('layout_id', 'field', 'group_key', 'is_visible')
+        : [],
+      db('nivaro_roles').select('id', 'name'),
+      findLayoutReferences(collection)
+    ])
+    for (const l of layouts) {
+      l.groups = groups.filter((g: { layout_id: number }) => Number(g.layout_id) === Number(l.id))
+      l.assignments = assignments.filter(
+        (a: { layout_id: number }) => Number(a.layout_id) === Number(l.id)
+      )
+    }
+    return reply.send({
+      data: {
+        rows: buildLayoutOverview(layouts, refs, roles),
+        warning: config.LAYOUT_EDIT_WARNING ?? null
+      }
+    })
+  })
+
+  // Which layout a saved record opens with, and why — the /active resolution
+  // itself (resolveLayout), with each candidate's check. role_id tests as that
+  // role (an admin role gets no role preference, as live); none = as an admin.
+  app.get('/explain', { preHandler: requireAdmin }, async (req, reply) => {
+    const { collection, item, role_id, slug } = req.query as {
+      collection?: string
+      item?: string
+      role_id?: string
+      slug?: string
+    }
+    if (!collection) return reply.code(400).send({ error: 'collection is required' })
+    let role: string | null = req.user?.role ?? null
+    let isAdmin = true
+    if (role_id) {
+      const r = await db('nivaro_roles').where({ id: role_id }).first('id', 'admin_access')
+      if (!r) return reply.code(404).send({ error: 'Role not found' })
+      role = String(r.id)
+      isAdmin = !!r.admin_access
+    }
+    const res = await resolveLayout({ collection, slug, item, role, isAdmin })
+    let reason = res.reason
+    if (reason?.role_ids?.length) {
+      const names = new Map(
+        (
+          (await db('nivaro_roles').whereIn('id', reason.role_ids).select('id', 'name')) as Array<{
+            id: string
+            name: string
+          }>
+        ).map((r) => [String(r.id).toUpperCase(), r.name])
+      )
+      reason = {
+        ...reason,
+        role_names: reason.role_ids.map((id) => names.get(id.toUpperCase()) ?? id)
+      }
+    }
+    return reply.send({
+      data: {
+        layout_id: res.row ? Number(res.row.id) : null,
+        reason,
+        checked: res.checked
+      }
+    })
+  })
+
   // GET /collection-layouts/active?collection=x — MUST be before /:id
   app.get('/active', { preHandler: authenticate }, async (req, reply) => {
     const { collection, slug, item } = req.query as {
@@ -434,42 +734,13 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     }
     if (!collection) return reply.code(400).send({ error: 'collection is required' })
 
-    // Explicit slug pins a specific layout (any type — detail layouts use this
-    // for drill-down rendering), bypassing role- and record-conditional resolution.
-    let layout: Record<string, unknown> | undefined | null
-    if (slug) {
-      layout = await db('nivaro_collection_layouts').where({ collection, slug }).first()
-      // A pinned slug the caller's role may not open (queue row_click,
-      // ?layout= links, CBV) silently falls through to normal resolution.
-      if (layout && !roleAllows(layout, req.user?.role ?? null, !!req.isAdmin)) layout = null
-    }
-    if (!layout) {
-      // Admins always see the default layout (no conditional override).
-      const userRoleId = req.isAdmin ? null : (req.user?.role ?? null)
-      const layouts = await fetchLayoutsForCollection(collection)
-
-      // An unknown/missing item id, or a collection that isn't a registered
-      // nivaro_collections entry, resolves to no record — falls through to
-      // the role/default path exactly like the no-item case. The registry
-      // gate stops `collection` (a caller-supplied query param) from ever
-      // being used as an arbitrary table identifier, and the select below is
-      // restricted to exactly the fields the candidate layouts' rules
-      // reference, so this can't become a column-value probing oracle.
-      let record: Record<string, unknown> | null = null
-      if (item) {
-        const registered = await db('nivaro_collections').where({ collection }).first()
-        if (registered) {
-          const columns = [...new Set(['id', ...collectRecordConditionFields(layouts)])]
-          record =
-            (await db(collection)
-              .where({ id: item })
-              .select(columns)
-              .first()
-              .catch(() => null)) ?? null
-        }
-      }
-      layout = pickBestLayout(layouts, userRoleId, record, !!req.isAdmin)
-    }
+    const { row: layout } = await resolveLayout({
+      collection,
+      slug,
+      item,
+      role: req.user?.role ?? null,
+      isAdmin: !!req.isAdmin
+    })
     if (!layout) return reply.code(404).send({ error: 'No layout found' })
 
     layout.conditions = parseConditions(layout.conditions)
@@ -757,6 +1028,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       name: string
       slug?: string | null
       layout_type?: string
+      /** "Create first form": one "Main" section holding every visible field. */
+      seed_fields?: boolean
     }
     if (!body.collection || !body.name)
       return reply.code(400).send({ error: 'collection and name are required' })
@@ -796,6 +1069,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       .where({ collection: body.collection, name: body.name })
       .orderBy('id', 'desc')
       .first()
+
+    if (body.seed_fields === true && created) await seedLayoutFields(created)
 
     await logActivity({
       action: 'create',
