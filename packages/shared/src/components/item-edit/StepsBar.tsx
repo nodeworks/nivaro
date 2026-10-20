@@ -1,5 +1,6 @@
 import { Check } from 'lucide-react'
 import { cn } from '../../lib/utils'
+import { useDesignWrap } from '../layout-editor/DesignNode'
 import type { StepDef } from './types'
 
 type StepState = 'active' | 'done' | 'error' | 'inactive'
@@ -65,6 +66,8 @@ export function StepsBar({
   onStepClick: (k: string) => void
   embedded?: boolean
 }) {
+  // Layout editor canvas: a step selects its group and still switches to it.
+  const designWrap = useDesignWrap()
   return (
     <div
       className={cn(
@@ -83,7 +86,7 @@ export function StepsBar({
         const hasError = state === 'error'
         const borderRadius = getBorderRadius(isFirst, isLast)
 
-        return (
+        const step = (
           <div
             key={s.key}
             className='relative min-w-0 flex-1'
@@ -179,6 +182,10 @@ export function StepsBar({
             </button>
           </div>
         )
+        // "General" and other synthetic steps are not layout groups.
+        return s.key.startsWith('__')
+          ? step
+          : designWrap({ kind: 'group', key: s.key }, step, { asChild: true, pass: true })
       })}
     </div>
   )
