@@ -1,3 +1,4 @@
+export { HistoryPanel } from './HistoryPanel'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
