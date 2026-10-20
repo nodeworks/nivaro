@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
-import { titleCase } from '../../../lib/utils'
+import { cn, titleCase } from '../../../lib/utils'
 import { FieldDefaultValueControl } from '../editors/field-default-value'
 import { PipelineStateConditionRow, RoleConditionRow } from '../editors/lock-conditions'
+import { tintCard } from '../panel-style'
 import { useFieldCtx } from './field-context'
 import { AddButton, Choice, Section, Segmented, Setting, TextInput, Toggle } from './kit'
 import {
@@ -140,7 +141,7 @@ export function RulesTab() {
             <div
               // biome-ignore lint/suspicious/noArrayIndexKey: conditions are positional
               key={i}
-              className='space-y-3 rounded-md bg-slate-50 p-3 dark:bg-muted/50'
+              className={cn(tintCard, 'space-y-3 p-3')}
             >
               <div className='flex items-center gap-1.5'>
                 <div className='flex-1' data-setting='field.lock_conditions.type'>
@@ -291,7 +292,7 @@ export function RulesTab() {
 
       {atlQualifies && (
         <Section title='Apply to lines'>
-          <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+          <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
             A button beside the field copies its value into one column of every line of a grid.
           </p>
           <Setting

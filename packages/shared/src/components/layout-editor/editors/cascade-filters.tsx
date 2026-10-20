@@ -14,6 +14,7 @@ import { Input } from '../../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Switch } from '../../ui/switch'
 import { useCollectionBody } from '../collection-meta'
+import { tintCard } from '../panel-style'
 
 export interface CascadeFilterRule {
   parent_field: string
@@ -177,17 +178,17 @@ export function CascadeFiltersEditor({
               return (
                 <div
                   key={idx}
-                  className='space-y-3 rounded-md bg-slate-50 p-3 ring-1 ring-nvr-cyan/40 dark:bg-muted/50 dark:ring-nvr-cyan/30'
+                  className={cn(tintCard, 'space-y-3 p-3 ring-nvr-cyan/40 dark:ring-nvr-cyan/30')}
                 >
                   <div>
-                    <p className='mb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    <p className='mb-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
                       Parent field
                     </p>
                     <Popover open={editPfOpen} onOpenChange={setEditPfOpen}>
                       <PopoverTrigger asChild>
                         <button
                           type='button'
-                          className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-700 hover:bg-muted dark:border-border dark:bg-background dark:text-foreground'
+                          className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 hover:bg-muted dark:border-border dark:bg-background dark:text-foreground'
                         >
                           {(() => {
                             const sel = m2oFields.find((f) => f.field === editParentField)
@@ -246,7 +247,7 @@ export function CascadeFiltersEditor({
                     </Popover>
                   </div>
                   <div data-setting='field.cascade_filters.filter_column'>
-                    <p className='mb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+                    <p className='mb-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
                       Filter column on
                       {relatedCollection ? ` ${relatedCollection}` : ' related table'}
                     </p>
@@ -255,7 +256,7 @@ export function CascadeFiltersEditor({
                         <PopoverTrigger asChild>
                           <button
                             type='button'
-                            className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] hover:bg-muted dark:border-border dark:bg-background'
+                            className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] hover:bg-muted dark:border-border dark:bg-background'
                           >
                             <span
                               className={
@@ -334,7 +335,7 @@ export function CascadeFiltersEditor({
             }
 
             return (
-              <div key={idx} className='space-y-2 rounded-md bg-slate-50 p-3 dark:bg-muted/50'>
+              <div key={idx} className={cn(tintCard, 'space-y-2 p-3')}>
                 <div
                   className='flex items-center gap-1.5'
                   data-setting='field.cascade_filters.parent_field'
@@ -455,19 +456,19 @@ export function CascadeFiltersEditor({
 
       {adding && (
         <div
-          className='space-y-3 rounded-md bg-slate-50 p-3 dark:bg-muted/50'
+          className={cn(tintCard, 'space-y-3 p-3')}
           style={{ transition: 'opacity 150ms ease-out' }}
         >
           {/* parent field combobox */}
           <div>
-            <p className='mb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            <p className='mb-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
               Parent field
             </p>
             <Popover open={pfOpen} onOpenChange={setPfOpen}>
               <PopoverTrigger asChild>
                 <button
                   type='button'
-                  className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-700 hover:bg-muted dark:border-border dark:bg-background dark:text-foreground'
+                  className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] text-slate-700 hover:bg-muted dark:border-border dark:bg-background dark:text-foreground'
                 >
                   {(() => {
                     const sel = m2oFields.find((f) => f.field === parentField)
@@ -533,7 +534,7 @@ export function CascadeFiltersEditor({
 
           {/* filter column */}
           <div data-setting='field.cascade_filters.filter_column'>
-            <p className='mb-1.5 text-[11.5px] text-slate-500 dark:text-muted-foreground'>
+            <p className='mb-1.5 text-[12px] text-slate-500 dark:text-muted-foreground'>
               Filter column on{relatedCollection ? ` ${relatedCollection}` : ' related table'}
             </p>
             {relatedFields.length > 0 ? (
@@ -541,7 +542,7 @@ export function CascadeFiltersEditor({
                 <PopoverTrigger asChild>
                   <button
                     type='button'
-                    className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] hover:bg-muted dark:border-border dark:bg-background'
+                    className='flex h-8 w-full items-center justify-between rounded-md border border-slate-200 bg-white px-2.5 text-[13px] hover:bg-muted dark:border-border dark:bg-background'
                   >
                     <span className={filterColumn ? 'font-mono text-slate-700' : 'text-slate-400'}>
                       {filterColumn || 'Select column…'}

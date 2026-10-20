@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, ChevronDown, ChevronRight, Globe2 } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, Globe2, X } from 'lucide-react'
 import { createContext, type ReactNode, useContext, useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
@@ -237,7 +237,7 @@ export function EnforcementNote({ className }: { className?: string }) {
     <p
       data-setting='inspector.enforcement_note'
       data-enforcement=''
-      className={cn('text-[11.5px] leading-snug text-amber-700 dark:text-amber-300', className)}
+      className={cn('text-[12px] leading-snug text-amber-700 dark:text-amber-300', className)}
       data-tip='The server applies this from the active grouped layout. On this form it only works in the browser.'
     >
       {DEFAULT_FORM_ONLY}
@@ -502,18 +502,21 @@ export function Choice({
   options,
   onChange,
   ariaLabel,
-  disabled
+  disabled,
+  unknownLabel = (v: string) => v
 }: {
   value: string
   options: Array<{ value: string; label: string }>
   onChange: (v: string) => void
   ariaLabel?: string
   disabled?: boolean
+  /** How a stored value this list does not offer is named. */
+  unknownLabel?: (value: string) => string
 }) {
   // A stored value this list does not offer still shows (and is kept) until changed.
   const shown =
     value && !options.some((o) => o.value === value)
-      ? [...options, { value, label: value }]
+      ? [...options, { value, label: unknownLabel(value) }]
       : options
   return (
     <SimpleSelect
@@ -591,13 +594,13 @@ export function JsonInput({
           commit()
         }}
         className={cn(
-          'w-full rounded-md border bg-white px-2.5 py-1.5 font-mono text-[11.5px] leading-snug text-foreground placeholder:text-slate-400 focus:outline-none dark:bg-background',
+          'w-full rounded-md border bg-white px-2.5 py-1.5 font-mono text-[12px] leading-snug text-foreground placeholder:text-slate-400 focus:outline-none dark:bg-background',
           error
             ? 'border-red-400 dark:border-red-500'
             : 'border-slate-200 focus:border-nvr-cyan dark:border-border'
         )}
       />
-      {error && <p className='text-[11.5px] text-red-600 dark:text-red-400'>{error}</p>}
+      {error && <p className='text-[12px] text-red-600 dark:text-red-400'>{error}</p>}
     </div>
   )
 }
@@ -793,10 +796,11 @@ export function ConditionBuilder({
             <button
               type='button'
               aria-label='Remove condition'
+              data-tip='Remove condition'
               onClick={() => onChange(value.filter((_, j) => j !== i))}
-              className='shrink-0 px-1 text-[12px] text-slate-400 hover:text-red-500'
+              className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded text-slate-500 transition-colors hover:bg-slate-100 hover:text-red-600 dark:hover:bg-muted dark:hover:text-red-400'
             >
-              ✕
+              <X className='h-3.5 w-3.5' />
             </button>
           </div>
         )

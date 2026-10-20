@@ -106,7 +106,7 @@ export function WidgetInspector({ row }: { row: PlacementRow }) {
               const value = typeof b?.binding_value === 'string' ? b.binding_value : ''
               return (
                 <div key={inp.key} className='space-y-1'>
-                  <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                  <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
                     {inp.label}
                   </p>
                   <Segmented

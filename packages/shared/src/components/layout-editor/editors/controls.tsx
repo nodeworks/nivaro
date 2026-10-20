@@ -37,7 +37,7 @@ export function Combobox({
           role='combobox'
           aria-expanded={open}
           disabled={disabled}
-          className='h-8 w-full justify-between rounded-md border-slate-200 bg-white px-2.5 text-[12.5px] font-normal dark:border-border dark:bg-background'
+          className='h-8 w-full justify-between rounded-md border-slate-200 bg-white px-2.5 text-[13px] font-normal dark:border-border dark:bg-background'
         >
           {/* A stored value outside the list still shows, as its key. */}
           <span

@@ -113,7 +113,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
       </Setting>
       <Setting k='group.icon' label='Icon' effect='Shown before the section title.'>
         <IconPicker
-          className='h-8 rounded-md border-slate-200 bg-white px-2.5 text-[12.5px] hover:bg-white dark:border-border dark:bg-background dark:hover:bg-background'
+          className='h-8 rounded-md border-slate-200 bg-white px-2.5 text-[13px] hover:bg-white dark:border-border dark:bg-background dark:hover:bg-background'
           value={group.icon ?? ''}
           onChange={(v) => update({ icon: v || null }, `Change the icon of ${name}`)}
         />
@@ -339,7 +339,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
             effect='A short summary while the section is closed.'
           >
             {placed.length === 0 ? (
-              <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+              <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
                 Place fields in {name} first.
               </p>
             ) : (
@@ -373,7 +373,7 @@ export function GroupInspector({ group, readOnly }: { group: GroupRow; readOnly?
                         />
                         <span className='flex-1 truncate'>{label}</span>
                         {isO2M && (
-                          <span className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+                          <span className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
                             list
                           </span>
                         )}

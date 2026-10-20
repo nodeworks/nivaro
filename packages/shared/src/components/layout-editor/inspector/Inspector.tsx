@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { MousePointerClick } from 'lucide-react'
-import { type ReactNode, useMemo, useState } from 'react'
+import { type ReactNode, useId, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import {
@@ -12,10 +12,11 @@ import {
   type PlacementRow,
   UNGROUPED_KEY
 } from '../../../lib/layout-ops'
-import { titleCase } from '../../../lib/utils'
+import { cn, titleCase } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
-import { PanelBody, PanelHeader, PanelTabs } from '../panel-frame'
+import { PanelBody, PanelHeader, PanelTabs, tabId, tabPanelId } from '../panel-frame'
+import { tintCard } from '../panel-style'
 import { slotName } from '../slot-names'
 import { type ApplyOptions, parseBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
@@ -146,7 +147,7 @@ export function Inspector(props: InspectorProps) {
       <Shell>
         <div className='flex flex-1 flex-col items-center justify-center gap-2 px-8 pb-16 text-center'>
           <MousePointerClick className='h-5 w-5 text-slate-400' />
-          <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+          <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>
             Select a field, section or panel on the form to change it.
           </p>
         </div>
@@ -170,10 +171,7 @@ export function Inspector(props: InspectorProps) {
       if (ops.length) apply(ops, { label: `Override ${titleOf(target)} on this form` })
     }
     const notice = (
-      <div
-        data-setting='inspector.inherited_override'
-        className='space-y-2.5 rounded-md bg-slate-50 p-3 dark:bg-muted/60'
-      >
+      <div data-setting='inspector.inherited_override' className={cn(tintCard, 'space-y-2.5 p-3')}>
         <p className='text-[12px] leading-snug text-slate-700 dark:text-foreground'>
           This comes from <span className='font-medium'>{name}</span>. Change it there for every
           form built on it, or override it on this form only.
@@ -228,7 +226,7 @@ export function Inspector(props: InspectorProps) {
           <>
             <PanelHeader title={titleOf(target)} />
             <PanelBody>
-              <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+              <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>
                 {titleOf(target)} is not on this form any more.
               </p>
             </PanelBody>
@@ -534,14 +532,13 @@ function FieldInspector({
     { key: 'advanced', label: 'Advanced' }
   ]
   const [tab, setTab] = useState<TabKey>('look')
+  const tabsId = useId()
   const active = tabs.some((t) => t.key === tab) ? tab : 'look'
   // Tabs still switch in a read-only (inherited) view; the fieldset disables the controls.
   const tabBody = (
     <fieldset disabled={readOnly} className='min-w-0'>
       {!meta ? (
-        <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
-          Loading the field…
-        </p>
+        <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>Loading the field…</p>
       ) : active === 'look' ? (
         <LookTab />
       ) : active === 'rules' ? (
@@ -565,6 +562,8 @@ function FieldInspector({
           sub={<KeyLine words={meta ? fieldKindWords(info) : undefined} k={row.field} />}
         >
           <PanelTabs
+            idBase={tabsId}
+            label={`Settings of ${info.label}`}
             tabs={tabs}
             active={active}
             onChange={(t) => {
@@ -573,7 +572,11 @@ function FieldInspector({
             }}
           />
         </PanelHeader>
-        <PanelBody>
+        {/* Keyed by tab: a new tab opens at its top, not where the last one was scrolled. */}
+        <PanelBody
+          key={active}
+          tabpanel={{ id: tabPanelId(tabsId), labelledBy: tabId(tabsId, active) }}
+        >
           {notice}
           {readOnly ? (
             <div data-inherited-view='' className='opacity-70'>

@@ -1,5 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
+import { cn } from '../../../lib/utils'
 import { SimpleSelect } from '../../ui/SimpleSelect'
+import { inputBase, tintCard } from '../panel-style'
 import { useEditorApi } from './editor-api'
 
 export function RoleConditionRow({
@@ -17,12 +19,12 @@ export function RoleConditionRow({
   })
   const roles = rolesData ?? []
   return (
-    <div className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1 dark:bg-muted dark:border-border'>
-      {roles.length === 0 && <p className='text-[11px] text-slate-400'>No roles found.</p>}
+    <div className={cn(tintCard, 'space-y-1 px-2.5 py-2')}>
+      {roles.length === 0 && <p className='text-[12px] text-slate-500'>No roles found.</p>}
       {roles.map((r) => (
         <label
           key={r.id}
-          className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'
+          className='flex items-center gap-1.5 text-[12px] cursor-pointer select-none'
         >
           <input
             type='checkbox'
@@ -81,7 +83,7 @@ export function PipelineStateConditionRow({
         <SimpleSelect
           value={pipelineId ?? ''}
           onChange={(v) => onPipelineChange(v || undefined)}
-          className='h-6 w-full rounded border-slate-200 bg-white px-1.5 py-0.5 text-[11px] dark:bg-card dark:border-border'
+          className={cn(inputBase, 'focus:ring-0 focus:ring-offset-0')}
           options={[
             { value: '', label: '— Select pipeline —' },
             ...bound.map((p) => ({ value: p.id, label: p.name }))
@@ -89,20 +91,20 @@ export function PipelineStateConditionRow({
         />
       </div>
       {bound.length === 0 && (
-        <p className='text-[11px] text-slate-400'>No pipelines bound to this collection.</p>
+        <p className='text-[12px] text-slate-500'>No pipelines bound to this collection.</p>
       )}
       {!pipelineId && (
-        <p className='text-[11px] text-slate-400'>Pick a pipeline to choose its states.</p>
+        <p className='text-[12px] text-slate-500'>Pick a pipeline to choose its states.</p>
       )}
       {pipelineId && states.length > 0 && (
         <div
-          className='rounded border border-slate-100 bg-slate-50 px-2 py-1.5 space-y-1 dark:bg-muted dark:border-border'
+          className={cn(tintCard, 'space-y-1 px-2.5 py-2')}
           data-setting='field.lock_conditions.state_keys'
         >
           {states.map((s) => (
             <label
               key={s.key}
-              className='flex items-center gap-1.5 text-[11px] cursor-pointer select-none'
+              className='flex items-center gap-1.5 text-[12px] cursor-pointer select-none'
             >
               <input
                 type='checkbox'
@@ -119,7 +121,7 @@ export function PipelineStateConditionRow({
         </div>
       )}
       {pipelineId && states.length === 0 && (
-        <p className='text-[11px] text-slate-400'>No states defined for this pipeline.</p>
+        <p className='text-[12px] text-slate-500'>No states defined for this pipeline.</p>
       )}
     </div>
   )

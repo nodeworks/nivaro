@@ -1,8 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { CornerDownLeft, Plus, X } from 'lucide-react'
-import { cn } from '../../../lib/utils'
+import { cn, titleCase } from '../../../lib/utils'
 import { SimpleSelect } from '../../ui/SimpleSelect'
-import { effectText, inputBase, segOption } from '../panel-style'
+import { effectText, inputBase, segOption, tintCard } from '../panel-style'
 import { Combobox } from './controls'
 import { useEditorApi } from './editor-api'
 
@@ -43,7 +43,18 @@ export function InlineDisplaySection({
   })
   const fieldOptions = (relFields as Array<{ field: string; label?: string }>)
     .filter((f) => !f.field.startsWith('__'))
-    .map((f) => ({ value: f.field, label: f.label || f.field }))
+    .map((f) => ({ value: f.field, label: f.label || titleCase(f.field) }))
+  // A path into the picked record's own links ("unit_type.name") is named hop by
+  // hop: "Unit Type → Name". Only the first hop's label is known here.
+  const pathLabel = (path: string) => {
+    const [first, ...rest] = path.split('.')
+    const head = fieldOptions.find((o) => o.value === first)?.label ?? titleCase(first)
+    return [head, ...rest.map((r) => titleCase(r))].join(' → ')
+  }
+  const optionsFor = (value: string) =>
+    value && !fieldOptions.some((o) => o.value === value)
+      ? [...fieldOptions, { value, label: pathLabel(value) }]
+      : fieldOptions
   const FORMAT_OPTS = [
     { value: 'text', label: 'Text' },
     { value: 'date', label: 'Date' },
@@ -92,7 +103,7 @@ export function InlineDisplaySection({
         <ul className='space-y-2'>
           {entries.map((entry, i) => (
             // biome-ignore lint/suspicious/noArrayIndexKey: stable config order
-            <li key={i} className='space-y-2 rounded-md bg-slate-50 p-2.5 dark:bg-muted/50'>
+            <li key={i} className={cn(tintCard, 'space-y-2 p-2.5')}>
               {separator !== null && i > 0 && (
                 <button
                   type='button'
@@ -103,7 +114,7 @@ export function InlineDisplaySection({
                   }
                   onClick={() => setEntry(i, { line_break: !entry.line_break })}
                   className={cn(
-                    'inline-flex h-6 items-center gap-1 rounded px-1.5 text-[11.5px] transition-colors',
+                    'inline-flex h-6 items-center gap-1 rounded px-1.5 text-[12px] transition-colors',
                     entry.line_break
                       ? 'bg-nvr-cyan/10 font-medium text-slate-900 dark:text-foreground'
                       : 'text-slate-500 hover:bg-slate-100 hover:text-slate-800 dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-foreground'
@@ -118,7 +129,7 @@ export function InlineDisplaySection({
                   <Combobox
                     value={entry.field}
                     onChange={(v) => setEntry(i, { field: v })}
-                    options={fieldOptions}
+                    options={optionsFor(entry.field)}
                     placeholder='Pick a field…'
                   />
                 </div>

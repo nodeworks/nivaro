@@ -1,7 +1,8 @@
-import { Plus, Trash2 } from 'lucide-react'
+import { ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { choiceLabelsFrom, describeConditions } from '../overview/describe-conditions'
+import { tintCard } from '../panel-style'
 import { inputCls, PickList, quietText, Segmented } from '../settings/controls'
 import {
   fieldOptions as labelledOptions,
@@ -35,8 +36,11 @@ export function RecordConditionsEditor({
   columns,
   relations,
   onChange,
-  onBlur
+  onBlur,
+  json = true
 }: {
+  /** false: the host shows the JSON fold itself (RecordConditionsJson), e.g. after the effect line. */
+  json?: boolean
   collection: string
   /** Stored record_conditions (array or JSON text). */
   value: unknown
@@ -101,7 +105,7 @@ export function RecordConditionsEditor({
                 // biome-ignore lint/suspicious/noArrayIndexKey: rows have no id; order is stable
                 key={i}
                 data-rule-row={i}
-                className='flex flex-wrap items-center gap-1.5 rounded-md border border-slate-200 bg-white p-1.5 dark:border-border dark:bg-card'
+                className={cn(tintCard, 'flex flex-wrap items-center gap-1.5 p-2')}
               >
                 <PickList
                   ariaLabel='Rule field'
@@ -154,7 +158,7 @@ export function RecordConditionsEditor({
                   type='button'
                   aria-label='Remove rule'
                   onClick={() => commit(rows.filter((_, j) => j !== i))}
-                  className='ml-auto rounded p-1 text-slate-400 hover:bg-muted hover:text-[#9c2f47] dark:hover:text-[#f08aa1]'
+                  className='ml-auto rounded p-1 text-slate-500 hover:bg-muted hover:text-red-600 dark:hover:text-red-400'
                 >
                   <Trash2 className='h-3.5 w-3.5' />
                 </button>
@@ -167,7 +171,7 @@ export function RecordConditionsEditor({
         <button
           type='button'
           onClick={() => setRows((r) => [...r, { field: '', op: 'eq', value: '' }])}
-          className='inline-flex items-center gap-1 text-[12px] font-medium text-slate-600 hover:text-nvr-navy dark:text-muted-foreground dark:hover:text-nvr-cyan'
+          className='inline-flex items-center gap-1 text-[12px] font-medium text-sky-700 hover:underline dark:text-nvr-cyan'
         >
           <Plus className='h-3.5 w-3.5' />
           Add rule
@@ -193,12 +197,32 @@ export function RecordConditionsEditor({
           .
         </p>
       )}
-      <AdvancedJson
-        value={complete}
-        validate={validateRules}
-        onApply={(rules) => onChange(rules as RecordRule[] | null, { text: false })}
-      />
+      {json && (
+        <AdvancedJson
+          value={complete}
+          validate={validateRules}
+          onApply={(rules) => onChange(rules as RecordRule[] | null, { text: false })}
+        />
+      )}
     </div>
+  )
+}
+
+/** The rules as JSON, folded: for hosts that place it themselves. */
+export function RecordConditionsJson({
+  value,
+  onApply
+}: {
+  /** Stored record_conditions (array or JSON text). */
+  value: unknown
+  onApply: (rules: RecordRule[] | null) => void
+}) {
+  return (
+    <AdvancedJson
+      value={rulesFromRows(rowsFromRules(value))}
+      validate={validateRules}
+      onApply={(rules) => onApply(rules as RecordRule[] | null)}
+    />
   )
 }
 
@@ -222,7 +246,7 @@ export function AdvancedJson({
   value,
   validate,
   onApply,
-  label = 'Advanced: edit as JSON'
+  label = 'Edit as JSON'
 }: {
   value: unknown
   validate: (v: unknown) => string | null
@@ -238,14 +262,18 @@ export function AdvancedJson({
     setError(null)
   }, [shown])
   return (
-    <details
-      open={open}
-      onToggle={(e) => setOpen((e.currentTarget as HTMLDetailsElement).open)}
-      className='text-[12px]'
-    >
-      <summary className='cursor-pointer select-none text-slate-500 dark:text-muted-foreground'>
+    <div className='text-[12px]'>
+      <button
+        type='button'
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className='-mx-1 inline-flex items-center gap-1 rounded px-1 font-medium text-slate-600 hover:bg-slate-100 hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan/50 dark:hover:bg-muted dark:hover:text-foreground'
+      >
+        <ChevronRight
+          className={cn('h-3.5 w-3.5 transition-transform duration-150', open && 'rotate-90')}
+        />
         {label}
-      </summary>
+      </button>
       {open && (
         <div className='mt-1.5 space-y-1'>
           <textarea
@@ -267,11 +295,11 @@ export function AdvancedJson({
               onApply(parsed)
             }}
             rows={Math.min(10, Math.max(3, text.split('\n').length))}
-            className={cn(inputCls, 'h-auto py-1.5 font-mono text-[11.5px]')}
+            className={cn(inputCls, 'h-auto py-1.5 font-mono text-[12px]')}
           />
           {error && <p className='text-[12px] text-[#9c2f47] dark:text-[#f08aa1]'>{error}</p>}
         </div>
       )}
-    </details>
+    </div>
   )
 }

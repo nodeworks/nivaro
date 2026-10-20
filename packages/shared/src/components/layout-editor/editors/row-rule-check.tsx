@@ -5,6 +5,7 @@ import type { CMSRelation } from '../../pipeline/types'
 import { Button } from '../../ui/button'
 import { Input } from '../../ui/input'
 import { Label } from '../../ui/label'
+import { tintCard } from '../panel-style'
 import { useEditorApi } from './editor-api'
 import type { RowRuleItem } from './row-rule-row'
 
@@ -210,12 +211,12 @@ export function RowRuleTester({
           ? 'text-slate-500 bg-slate-100 dark:bg-white/5 dark:text-slate-400'
           : 'text-amber-700 bg-amber-50 dark:bg-amber-400/10 dark:text-amber-300'
   return (
-    <div className='mt-2 space-y-2 rounded-md bg-slate-50 p-3 dark:bg-muted/50'>
+    <div className={cn(tintCard, 'mt-2 space-y-2 p-3')}>
       <div className='space-y-0.5'>
         <Label className='text-[12px] font-medium text-slate-800 dark:text-foreground'>
           Test rules against a record
         </Label>
-        <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+        <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
           Uses the rules as edited above. Nothing is saved.
         </p>
       </div>
@@ -223,7 +224,7 @@ export function RowRuleTester({
         <Input
           value={recordId}
           onChange={(e) => setRecordId(e.target.value)}
-          placeholder={`${childCollection} id`}
+          placeholder='Row id'
           className='h-7 min-w-0 flex-1 basis-28 text-[12px]'
           onKeyDown={(e) => {
             if (e.key === 'Enter') void run()
@@ -232,7 +233,7 @@ export function RowRuleTester({
         <Input
           value={changedField}
           onChange={(e) => setChangedField(e.target.value)}
-          placeholder='changed field (optional)'
+          placeholder='Changed field (optional)'
           className='h-7 min-w-0 flex-1 basis-36 text-[12px]'
           title='Simulate a live edit of this field; blank = the create-time pass where every rule gets its chance'
         />

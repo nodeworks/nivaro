@@ -7,7 +7,7 @@ import { cn } from '../../../lib/utils'
 import { HistoryPanel } from '../HistoryPanel'
 import { useLayoutEditorHost } from '../host'
 import { useRoleNames } from '../overview/overview-api'
-import { labelText } from '../panel-style'
+import { labelText, tintCard } from '../panel-style'
 import { RelationPicker } from '../pickers/relation-picker'
 import { PickList, quietText, Setting, smallBtn, useSettingVisible } from './controls'
 import type { SectionProps } from './section-props'
@@ -127,7 +127,7 @@ function PreviewRoleSetting({
       }
     >
       {roleId && (
-        <div data-role-preview className='rounded-md bg-slate-50 p-3 text-[12px] dark:bg-muted/50'>
+        <div data-role-preview className={cn(tintCard, 'p-3 text-[12px]')}>
           {isFetching && !preview ? (
             <p className={quietText}>Checking…</p>
           ) : preview ? (

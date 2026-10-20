@@ -98,7 +98,7 @@ export function SlotInspector({
       )}
       {field === '__pipeline__' && (
         <Section title='Action buttons'>
-          <p className='text-[11.5px] leading-snug text-slate-500 dark:text-muted-foreground'>
+          <p className='text-[12px] leading-snug text-slate-500 dark:text-muted-foreground'>
             The header can already show the transition buttons; hide them here to avoid doubles.
           </p>
           <Toggle
@@ -210,7 +210,7 @@ export function SlotInspector({
         </Setting>
       )}
       {!isCard && field !== '__pdf__' && (groupKey === null || groupKey === HEADER_GROUP_KEY) && (
-        <p className='text-[12.5px] text-slate-500 dark:text-muted-foreground'>
+        <p className='text-[13px] text-slate-500 dark:text-muted-foreground'>
           {name} has no settings beyond its place.
         </p>
       )}
