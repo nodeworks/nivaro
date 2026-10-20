@@ -4,10 +4,12 @@ import { cn } from '../../../lib/utils'
 import { choiceLabelsFrom, describeConditions } from '../overview/describe-conditions'
 import { inputCls, PickList, quietText, Segmented } from '../settings/controls'
 import {
-  fieldLabel,
-  isStoredField,
+  fieldOptions as labelledOptions,
   parseFieldOptions,
-  type SettingsField
+  type SettingsField,
+  type SettingsRelation,
+  storedFieldNames,
+  type TableColumn
 } from '../settings/settings-api'
 import {
   RECORD_RULE_OP_LABELS,
@@ -27,14 +29,22 @@ import {
  * Raw JSON sits behind Advanced.
  */
 export function RecordConditionsEditor({
+  collection,
   value,
   fields,
+  columns,
+  relations,
   onChange,
   onBlur
 }: {
+  collection: string
   /** Stored record_conditions (array or JSON text). */
   value: unknown
   fields: SettingsField[]
+  /** The table's physical columns: a rule may test a column that has no field row. */
+  columns: TableColumn[]
+  /** Relation aliases have no value on the record to test. */
+  relations: SettingsRelation[]
   /** `text` = a value being typed: the caller coalesces and sends after a pause or on blur. */
   onChange: (rules: RecordRule[] | null, opts: { text: boolean }) => void
   onBlur?: () => void
@@ -48,14 +58,10 @@ export function RecordConditionsEditor({
     )
   }, [value])
 
-  const ruleFields = useMemo(() => fields.filter(isStoredField), [fields])
   const choiceLabels = useMemo(() => choiceLabelsFrom(fields), [fields])
   const fieldOptions = useMemo(
-    () =>
-      ruleFields
-        .map((f) => ({ value: f.field, label: fieldLabel(fields, f.field), hint: f.field }))
-        .sort((a, b) => a.label.localeCompare(b.label)),
-    [ruleFields, fields]
+    () => labelledOptions(fields, storedFieldNames(collection, fields, columns, relations)),
+    [collection, fields, columns, relations]
   )
 
   const commit = (next: RecordRuleRow[], text = false) => {

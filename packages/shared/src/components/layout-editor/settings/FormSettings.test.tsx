@@ -4,8 +4,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { NivaroProvider } from '../../../context'
-import type { LayoutBundle, LayoutOp } from '../../../lib/layout-ops'
-import type { ApplyOptions } from '../useLayoutDraft'
+import { applyLayoutOps, type LayoutBundle, type LayoutOp } from '../../../lib/layout-ops'
+import { type ApplyOptions, LayoutDraftEngine } from '../useLayoutDraft'
 import { FormSettings } from './FormSettings'
 import type { LayoutKind } from './settings-registry'
 
@@ -83,7 +83,22 @@ async function settle(until: () => boolean) {
   }
 }
 
-function makeClient() {
+const COLUMNS = [
+  { name: 'id', data_type: 'int' },
+  { name: 'status', data_type: 'nvarchar' },
+  { name: 'line_no', data_type: 'int' },
+  { name: 'title', data_type: 'nvarchar' },
+  { name: 'is_rush', data_type: 'bit' }
+]
+
+interface Fixture {
+  fields?: unknown[]
+  /** null = the table route fails (a collection without a table). */
+  columns?: unknown[] | null
+  relations?: unknown[]
+}
+
+function makeClient(fx: Fixture = {}) {
   const calls: Cmd[] = []
   const client = {
     url: '',
@@ -91,8 +106,25 @@ function makeClient() {
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
       const p = cmd._path
-      if (p === '/field-config/orders') return { data: FIELDS }
-      if (p === '/data-model/relations/for/orders') return { data: [] }
+      if (p === '/field-config/orders') return { data: fx.fields ?? FIELDS }
+      if (p === '/data-model/relations/for/orders') return { data: fx.relations ?? [] }
+      if (p === '/data-model/orders') {
+        if (fx.columns === null) throw Object.assign(new Error('Not found'), { status: 404 })
+        return { data: { name: 'orders', columns: fx.columns ?? COLUMNS } }
+      }
+      if (p === '/collection-layouts/preview-as-role')
+        return {
+          data: {
+            role: { id: 'r-fin', name: 'Finance', admin_access: false },
+            can_read: true,
+            can_update: true,
+            layout: { id: 5, name: 'Order form', is_active: true },
+            hidden_fields: ['title'],
+            readonly_fields: [],
+            record_conditional_layouts: [],
+            note: null
+          }
+        }
       if (p === '/roles')
         return {
           data: [
@@ -135,23 +167,37 @@ function makeClient() {
 
 async function mount(
   bundle: LayoutBundle,
-  opts: { apply?: (ops: LayoutOp[], o?: ApplyOptions) => void; flush?: () => void } = {}
+  opts: {
+    apply?: (ops: LayoutOp[], o?: ApplyOptions) => void
+    flush?: () => void
+    onPreviewRole?: (p: unknown) => void
+    fixture?: Fixture
+  } = {}
 ) {
-  const { client, calls } = makeClient()
+  const { client, calls } = makeClient(opts.fixture)
   const apply = vi.fn(opts.apply ?? (() => {}))
   const flush = vi.fn(opts.flush ?? (() => {}))
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  await act(async () => {
-    root.render(
-      <QueryClientProvider client={qc}>
-        <NivaroProvider client={client as never}>
-          <FormSettings bundle={bundle} apply={apply} flush={flush} collection='orders' />
-        </NivaroProvider>
-      </QueryClientProvider>
-    )
-  })
+  const render = async (b: LayoutBundle) => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={qc}>
+          <NivaroProvider client={client as never}>
+            <FormSettings
+              bundle={b}
+              apply={apply}
+              flush={flush}
+              collection='orders'
+              onPreviewRole={opts.onPreviewRole}
+            />
+          </NivaroProvider>
+        </QueryClientProvider>
+      )
+    })
+  }
+  await render(bundle)
   await settle(() => !!document.querySelector('[data-setting="tool.version_restore"]'))
-  return { apply, flush, calls, qc }
+  return { apply, flush, calls, qc, rerender: render }
 }
 
 const q = (sel: string) => document.querySelector(sel)
@@ -194,15 +240,22 @@ async function option(label: string): Promise<HTMLElement> {
 }
 
 describe('FormSettings', () => {
+  // Rows whose control comes from the host app; with no host slot they say so.
+  const HOST_SLOT_ROWS = ['tool.describe', 'tool.ai_review']
+  const CONTROL = 'input, button, textarea, a, [role="switch"]'
+
   it.each(
     KINDS
   )('renders a control for every form settings parity row on a %s layout', async (kind) => {
     await mount(bundleOf(kind))
-    const missing = formRows
-      .filter((r) => r.layout_types.includes(kind))
-      .map((r) => r.key)
-      .filter((key) => !setting(key))
-    expect(missing).toEqual([])
+    const keys = formRows.filter((r) => r.layout_types.includes(kind)).map((r) => r.key)
+    expect(keys.filter((key) => !setting(key))).toEqual([])
+    const withoutControl = keys.filter((key) => {
+      const el = setting(key) as HTMLElement
+      return !el.matches(CONTROL) && !el.querySelector(CONTROL)
+    })
+    expect(withoutControl.filter((k) => !HOST_SLOT_ROWS.includes(k))).toEqual([])
+    for (const k of withoutControl) expect(setting(k)?.textContent).toContain('Not offered')
   })
 
   it('offers no retired setting', async () => {
@@ -244,21 +297,56 @@ describe('FormSettings', () => {
     )
   })
 
-  it('typing is coalesced and blur flushes it', async () => {
+  it('a text setting saves once, on blur, and flushes', async () => {
     const { apply, flush } = await mount(bundleOf('grouped'))
     const input = setting('layout.create_label')?.querySelector('input') ?? null
     await type(input, 'New order')
-    expect(apply).toHaveBeenLastCalledWith(
-      [{ op: 'layout_update', patch: { create_label: 'New order' } }],
-      { label: 'Change New-menu label', text: true }
-    )
+    expect(apply).not.toHaveBeenCalled()
     await blur(input)
+    expect(apply).toHaveBeenCalledTimes(1)
+    expect(apply).toHaveBeenCalledWith(
+      [{ op: 'layout_update', patch: { create_label: 'New order' } }],
+      { label: 'Change New-menu label' }
+    )
     expect(flush).toHaveBeenCalled()
   })
 
-  it('link names keep only what the server stores', async () => {
+  it('a save the server trims never rewrites what is being typed', async () => {
+    const { apply, rerender } = await mount(bundleOf('file'))
+    const input = setting('layout.pdf_button_label')?.querySelector('input') as HTMLInputElement
+    await type(input, 'a ')
+    // Someone's save comes back trimmed while the admin is still typing.
+    await rerender(bundleOf('file', { pdf_button_label: 'a' }))
+    expect(input.value).toBe('a ')
+    await type(input, 'a b')
+    expect(input.value).toBe('a b')
+    expect(apply).not.toHaveBeenCalled()
+    await blur(input)
+    expect(apply).toHaveBeenLastCalledWith(
+      [{ op: 'layout_update', patch: { pdf_button_label: 'a b' } }],
+      { label: 'Change Button label' }
+    )
+  })
+
+  it('Escape puts the saved value back and saves nothing', async () => {
+    const { apply } = await mount(bundleOf('grouped', { create_label: 'New order' }))
+    const input = setting('layout.create_label')?.querySelector('input') as HTMLInputElement
+    await type(input, 'Something else')
+    await act(async () => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    })
+    await blur(input)
+    expect(input.value).toBe('New order')
+    expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('link names are sanitised as typed and only sent on blur', async () => {
     const { apply } = await mount(bundleOf('grouped'))
-    await type(setting('layout.slug')?.querySelector('input') ?? null, 'Unit Order!')
+    const input = setting('layout.slug')?.querySelector('input') ?? null
+    await type(input, 'Unit Order!')
+    expect((input as HTMLInputElement).value).toBe('unit_order_')
+    expect(apply).not.toHaveBeenCalled()
+    await blur(input)
     expect(apply.mock.calls.at(-1)?.[0]).toEqual([
       { op: 'layout_update', patch: { slug: 'unit_order_' } }
     ])
@@ -341,13 +429,133 @@ describe('FormSettings', () => {
     )
   })
 
-  it('Make default calls the type-scoped activate route', async () => {
+  it('Make default is one draft op, found by searching "default"', async () => {
     const { calls, apply } = await mount(bundleOf('detail'))
     await click(q('[data-action="make-default"]'))
-    await settle(() => calls.some((c) => c._path === '/collection-layouts/5/activate'))
-    const call = calls.find((c) => c._path === '/collection-layouts/5/activate')
-    expect(call?._method).toBe('POST')
-    expect(apply).not.toHaveBeenCalled()
+    expect(apply).toHaveBeenCalledWith([{ op: 'layout_update', patch: { is_active: true } }], {
+      label: 'Make default'
+    })
+    expect(calls.some((c) => c._path.endsWith('/activate'))).toBe(false)
+    await type(q('[data-settings-search]'), 'default')
+    expect(q('[data-action="make-default"]')).not.toBeNull()
+  })
+
+  it('Make default keeps undo (it goes through the draft, not a refetch)', async () => {
+    const start = bundleOf('grouped')
+    let rev = 1
+    const engine = new LayoutDraftEngine({
+      send: async (ops, _base) => ({ ...applyLayoutOps(start, ops), rev: `r${++rev}` }),
+      saved: () => {},
+      reload: () => {},
+      notify: () => {}
+    })
+    engine.receive(start)
+    await mount(start, { apply: (ops, o) => engine.apply(ops, o) })
+    await click(q('[data-action="make-default"]'))
+    await settle(() => engine.getView().status === 'saved')
+    const saved = engine.getView().bundle as LayoutBundle
+    expect(saved.layout.is_active).toBe(true)
+    // The query cache echoes the saved bundle back: same rev, undo stays.
+    engine.receive(saved)
+    expect(engine.getView().canUndo).toBe(true)
+    expect(engine.getView().undoLabel).toBe('Make default')
+  })
+
+  it('says the Dossier switch does nothing off the default form', async () => {
+    await mount(bundleOf('detail'))
+    const row = setting('layout.dossier_enabled')
+    expect(row?.textContent).toMatch(/No effect on this kind of layout/)
+    expect(row?.querySelector('[role="switch"]')?.hasAttribute('disabled')).toBe(true)
+    act(() => root.unmount())
+    root = createRoot(host)
+    await mount(bundleOf('grouped', { is_active: false }))
+    expect(setting('layout.dossier_enabled')?.textContent).toMatch(/while this form is the default/)
+    act(() => root.unmount())
+    root = createRoot(host)
+    await mount(bundleOf('grouped', { is_active: true }))
+    expect(setting('layout.dossier_enabled')?.textContent).not.toMatch(/No effect|while this form/)
+  })
+
+  it('preview as role reports to the canvas and clears on unmount', async () => {
+    const onPreviewRole = vi.fn()
+    await mount(bundleOf('grouped'), { onPreviewRole })
+    await click(
+      setting('tool.preview_as_role')?.querySelector('[aria-label="Preview as role"]') ?? null
+    )
+    await click(await option('Finance'))
+    await settle(() => onPreviewRole.mock.calls.some((c) => c[0] != null))
+    expect(setting('tool.preview_as_role')?.textContent).toContain('1 field hidden')
+    act(() => root.unmount())
+    root = createRoot(host)
+    expect(onPreviewRole).toHaveBeenLastCalledWith(null)
+  })
+
+  it('rule and starting-value fields: real columns without a field row, no aliases or virtual fields', async () => {
+    await mount(bundleOf('grouped'), {
+      fixture: {
+        fields: [
+          ...FIELDS,
+          { field: 'lines', label: 'Lines', type: 'string' },
+          { field: 'virtual_total', label: 'Virtual total', type: 'decimal' }
+        ],
+        columns: [...COLUMNS, { name: 'legacy_code', data_type: 'nvarchar' }],
+        relations: [
+          {
+            many_collection: 'order_lines',
+            many_field: 'order_id',
+            one_collection: 'orders',
+            one_field: 'lines',
+            junction_field: null
+          }
+        ]
+      }
+    })
+    const box = setting('layout.record_conditions')
+    await click(
+      Array.from(box?.querySelectorAll('button') ?? []).find(
+        (b) => b.textContent?.trim() === 'Add rule'
+      ) ?? null
+    )
+    await click(box?.querySelector('[aria-label="Rule field"]') ?? null)
+    await settle(() => !!findOption('Status'))
+    const labels = Array.from(document.querySelectorAll('[role="option"] span:first-of-type')).map(
+      (o) => o.textContent
+    )
+    expect(labels).toContain('Legacy Code')
+    expect(labels).toContain('Status')
+    expect(labels).not.toContain('Lines')
+    expect(labels).not.toContain('Virtual total')
+  })
+
+  it('without the table route, a string-typed alias is still left out (judged by relation)', async () => {
+    await mount(bundleOf('grouped'), {
+      fixture: {
+        fields: [...FIELDS, { field: 'lines', label: 'Lines', type: 'string' }],
+        columns: null,
+        relations: [
+          {
+            many_collection: 'order_lines',
+            many_field: 'order_id',
+            one_collection: 'orders',
+            one_field: 'lines',
+            junction_field: null
+          }
+        ]
+      }
+    })
+    const box = setting('layout.default_values')
+    await click(
+      Array.from(box?.querySelectorAll('button') ?? []).find(
+        (b) => b.textContent?.trim() === 'Add a starting value'
+      ) ?? null
+    )
+    await click(box?.querySelector('[aria-label="Starting value field"]') ?? null)
+    await settle(() => !!findOption('Status'))
+    const labels = Array.from(document.querySelectorAll('[role="option"] span:first-of-type')).map(
+      (o) => o.textContent
+    )
+    expect(labels).toContain('Title')
+    expect(labels).not.toContain('Lines')
   })
 
   it('PDF layouts have no Make default; the PDF switch saves is_active', async () => {

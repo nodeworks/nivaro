@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { useApiFetchConfig } from '../../../context'
 import { PickList, quietText, Segmented, Setting, smallBtn, Toggle } from './controls'
 import { changeLabel, flag, type SectionProps, toggleLabel } from './section-props'
-import { fieldLabel, isStoredField, usePdfTemplates, useSettingsFields } from './settings-api'
+import { fieldOptions, storedFieldNames, useFieldSources, usePdfTemplates } from './settings-api'
 import { TextSetting } from './TextSetting'
 import { ToggleSetting } from './ToggleSetting'
 
@@ -18,17 +18,17 @@ const THEMES: Array<{ value: Theme; label: string }> = [
 
 export function PdfSection(props: SectionProps) {
   const { layout, collection } = props
-  const fields = useSettingsFields(collection)
+  const { fields, columns, relations } = useFieldSources(collection)
   const templates = usePdfTemplates(collection, true)
   const theme = (
     THEMES.some((t) => t.value === layout.pdf_theme) ? layout.pdf_theme : 'classic'
   ) as Theme
   const templateId = layout.pdf_template_id == null ? null : String(layout.pdf_template_id)
   const coverOn = layout.pdf_cover_enabled == null ? true : flag(layout.pdf_cover_enabled)
-  const titleOptions = fields
-    .filter(isStoredField)
-    .map((f) => ({ value: f.field, label: fieldLabel(fields, f.field), hint: f.field }))
-    .sort((a, b) => a.label.localeCompare(b.label))
+  const titleOptions = fieldOptions(
+    fields,
+    storedFieldNames(collection, fields, columns, relations)
+  )
   const exportOn = flag(layout.is_active)
 
   return (

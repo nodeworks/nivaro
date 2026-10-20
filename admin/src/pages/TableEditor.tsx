@@ -77,10 +77,10 @@ import {
   CollectionFieldPicker,
   CollectionFieldPickerPanel,
   DataGuideCard,
+  DefaultValuesEditor,
   FieldPicker,
   FieldPickerPanel,
   IconPicker,
-  DefaultValuesEditor,
   type PickedField,
   QuickPickerStepsEditor,
   ReadPresentationEditor,
@@ -18533,8 +18533,11 @@ function LayoutsTab({
                       </div>
                       <RecordConditionsEditor
                         key={`rc-${selected.id}`}
+                        collection={tableName}
                         value={selected.record_conditions}
                         fields={layoutFieldMeta}
+                        columns={dbColumns}
+                        relations={layoutRelations}
                         onBlur={flushLayoutText}
                         onChange={(rules, opts) =>
                           patchSelectedLayout({ record_conditions: rules }, opts)
@@ -18559,6 +18562,7 @@ function LayoutsTab({
                         collection={tableName}
                         value={selected.default_values}
                         fields={layoutFieldMeta}
+                        columns={dbColumns}
                         relations={layoutRelations}
                         onBlur={flushLayoutText}
                         onChange={(values, opts) =>

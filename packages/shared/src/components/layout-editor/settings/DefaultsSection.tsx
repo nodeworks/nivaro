@@ -6,7 +6,7 @@ import {
 } from '../editors/QuickPickerStepsEditor'
 import { quietText, Setting, smallBtn } from './controls'
 import { changeLabel, type SectionProps } from './section-props'
-import { useSettingsFields, useSettingsRelations } from './settings-api'
+import { useFieldSources } from './settings-api'
 
 function stepsOf(raw: unknown): string[] {
   let v = raw
@@ -22,8 +22,7 @@ function stepsOf(raw: unknown): string[] {
 
 export function DefaultsSection(props: SectionProps) {
   const { layout, collection } = props
-  const fields = useSettingsFields(collection)
-  const relations = useSettingsRelations(collection)
+  const { fields, columns, relations } = useFieldSources(collection)
   const steps = stepsOf(layout.quick_picker)
   const setSteps = (next: string[], label: string) =>
     props.set({ quick_picker: next.length ? next.slice(0, QUICK_PICKER_MAX) : null }, label)
@@ -35,6 +34,7 @@ export function DefaultsSection(props: SectionProps) {
           collection={collection}
           value={layout.default_values}
           fields={fields}
+          columns={columns}
           relations={relations}
           onBlur={props.flush}
           onChange={(values, { text }) =>

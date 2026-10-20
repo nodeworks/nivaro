@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { ExternalLink } from 'lucide-react'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { cn } from '../../../lib/utils'
@@ -91,9 +91,13 @@ function PreviewRoleSetting({ collection, onPreviewRole }: ToolsSectionProps) {
   const { data: roles = [] } = useRoleNames(true)
   const [roleId, setRoleId] = useState<string | null>(null)
   const { data: preview = null, isFetching } = useRolePreview(collection, roleId)
+  const report = useRef(onPreviewRole)
+  report.current = onPreviewRole
   useEffect(() => {
-    onPreviewRole?.(roleId ? preview : null)
-  }, [roleId, preview, onPreviewRole])
+    report.current?.(roleId ? preview : null)
+  }, [roleId, preview])
+  // Leaving Form settings (or the editor) ends the preview: the canvas marks go too.
+  useEffect(() => () => report.current?.(null), [])
   return (
     <Setting
       k='tool.preview_as_role'

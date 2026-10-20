@@ -34,6 +34,7 @@ export interface LayoutListRow {
 
 export const settingsKeys = {
   relations: (c: string) => ['layout-editor', 'relations', c] as const,
+  columns: (c: string) => ['layout-editor', 'columns', c] as const,
   layouts: (c: string, type?: string) => ['layout-editor', 'layouts', c, type ?? 'all'] as const,
   pipelines: () => ['layout-editor', 'pipelines'] as const,
   pdfTemplates: (c: string) => ['layout-editor', 'pdf-templates', c] as const,
@@ -43,9 +44,33 @@ export const settingsKeys = {
 const rows = <T>(r: { data?: T[] } | null | undefined): T[] =>
   Array.isArray(r?.data) ? (r?.data as T[]) : []
 
+/** Field rows, physical columns and relations — what the field lists are built from. */
+export function useFieldSources(collection: string) {
+  const fields = useSettingsFields(collection)
+  const columns = useTableColumns(collection)
+  const relations = useSettingsRelations(collection)
+  return { fields, columns, relations }
+}
+
 export function useSettingsFields(collection: string) {
   const q = useOverviewFields(collection)
   return (q.data ?? []) as SettingsField[]
+}
+
+/** The table's physical columns; [] for a collection with no table (virtual) or on error. */
+export function useTableColumns(collection: string) {
+  const client = useNivaroClient()
+  return (
+    useQuery<TableColumn[]>({
+      queryKey: settingsKeys.columns(collection),
+      queryFn: () =>
+        client
+          .request<{ data: { columns?: TableColumn[] } | null }>(get(`/data-model/${collection}`))
+          .then((r) => (Array.isArray(r?.data?.columns) ? r.data.columns : []))
+          .catch(() => []),
+      staleTime: 60_000
+    }).data ?? []
+  )
 }
 
 export function useSettingsRelations(collection: string) {
@@ -145,17 +170,85 @@ export function fieldLabel(fields: SettingsField[], name: string): string {
   return label?.trim() ? label.trim() : titleCase(name)
 }
 
-const NUMERIC = new Set(['integer', 'biginteger', 'bigint', 'decimal', 'float', 'double'])
-export const isNumericField = (f: SettingsField) => NUMERIC.has(String(f.type ?? '').toLowerCase())
+const NUMERIC = new Set([
+  'integer',
+  'biginteger',
+  'bigint',
+  'int',
+  'smallint',
+  'tinyint',
+  'decimal',
+  'numeric',
+  'float',
+  'double',
+  'real',
+  'money'
+])
 
-/** Columns stored on the record (relation aliases have no column). */
-export const isStoredField = (f: SettingsField) =>
-  !String(f.type ?? '')
-    .toLowerCase()
-    .startsWith('alias') &&
-  f.type !== 'o2m' &&
-  f.type !== 'm2m' &&
-  !f.field.includes('.')
+/** A physical column of the collection's table (GET /data-model/:table). */
+export interface TableColumn {
+  name: string
+  data_type?: string | null
+}
+
+/**
+ * Fields that are relation aliases (O2M / M2M / M2A): the field the relation's
+ * "one" side names on this collection. Judged by relation, never by type —
+ * legacy alias fields are typed 'string'.
+ */
+export function relationAliasNames(collection: string, relations: SettingsRelation[]): Set<string> {
+  const out = new Set<string>()
+  for (const r of relations)
+    if (r.one_collection === collection && r.one_field) out.add(r.one_field)
+  return out
+}
+
+/**
+ * Fields stored on the record: every physical column (with or without a field
+ * row), plus field rows that are neither relation aliases nor dotted / alias-typed
+ * virtual fields. With the columns known, a field row without a column is
+ * virtual and left out.
+ */
+export function storedFieldNames(
+  collection: string,
+  fields: SettingsField[],
+  columns: TableColumn[],
+  relations: SettingsRelation[]
+): string[] {
+  if (columns.length) return columns.map((c) => c.name)
+  const aliases = relationAliasNames(collection, relations)
+  const t = (f: SettingsField) => String(f.type ?? '').toLowerCase()
+  return fields
+    .filter(
+      (f) =>
+        !f.field.includes('.') &&
+        !aliases.has(f.field) &&
+        !t(f).startsWith('alias') &&
+        t(f) !== 'o2m' &&
+        t(f) !== 'm2m'
+    )
+    .map((f) => f.field)
+}
+
+/** Stored number fields (row order): the column's SQL type when known, else the field type. */
+export function numericFieldNames(
+  collection: string,
+  fields: SettingsField[],
+  columns: TableColumn[],
+  relations: SettingsRelation[]
+): string[] {
+  const isNum = (t: unknown) => NUMERIC.has(String(t ?? '').toLowerCase())
+  if (columns.length) return columns.filter((c) => isNum(c.data_type)).map((c) => c.name)
+  const stored = new Set(storedFieldNames(collection, fields, columns, relations))
+  return fields.filter((f) => stored.has(f.field) && isNum(f.type)).map((f) => f.field)
+}
+
+/** Labelled pick options for field names, by label. */
+export function fieldOptions(fields: SettingsField[], names: string[]) {
+  return names
+    .map((n) => ({ value: n, label: fieldLabel(fields, n), hint: n }))
+    .sort((a, b) => a.label.localeCompare(b.label))
+}
 
 export function parseFieldOptions(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === 'object') return raw as Record<string, unknown>

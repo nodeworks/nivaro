@@ -1,16 +1,11 @@
-import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { toast } from 'sonner'
-import { useNivaroClient } from '../../../context'
-import { post } from '../../../lib/commands'
 import { RecordConditionsEditor } from '../editors/RecordConditionsEditor'
 import { RolesPicker } from '../editors/RolesPicker'
 import { LAYOUT_TYPES } from '../overview/OverviewActions'
-import { apiFailure, overviewKeys, useRoleNames } from '../overview/overview-api'
-import { layoutDraftKeys } from '../useLayoutDraft'
+import { useRoleNames } from '../overview/overview-api'
 import { quietText, Segmented, Setting, smallBtn } from './controls'
 import { changeLabel, flag, type SectionProps } from './section-props'
-import { useSettingsFields } from './settings-api'
+import { useFieldSources } from './settings-api'
 import type { LayoutKind } from './settings-registry'
 import { TextSetting } from './TextSetting'
 import { ToggleSetting } from './ToggleSetting'
@@ -41,7 +36,7 @@ function roleIdsOf(conditions: unknown): string[] {
 
 export function WhoSection(props: SectionProps) {
   const { layout, collection } = props
-  const fields = useSettingsFields(collection)
+  const { fields, columns, relations } = useFieldSources(collection)
   const { data: roles = [] } = useRoleNames(true)
   const roleIds = roleIdsOf(layout.conditions)
   return (
@@ -49,8 +44,11 @@ export function WhoSection(props: SectionProps) {
       <KindSetting {...props} />
       <Setting k='layout.record_conditions'>
         <RecordConditionsEditor
+          collection={collection}
           value={layout.record_conditions}
           fields={fields}
+          columns={columns}
+          relations={relations}
           onBlur={props.flush}
           onChange={(rules, { text }) =>
             (text ? props.setText : props.set)(
@@ -110,30 +108,16 @@ export function WhoSection(props: SectionProps) {
 }
 
 function KindSetting(props: SectionProps) {
-  const { layout, kind, bundle, collection } = props
-  const client = useNivaroClient()
-  const qc = useQueryClient()
+  const { layout, kind, bundle } = props
   const [confirm, setConfirm] = useState<LayoutKind | null>(null)
-  const [activating, setActivating] = useState(false)
   const placed = bundle.placements.length + bundle.groups.length
   const change = (to: LayoutKind) =>
     props.set({ layout_type: to }, `Change kind to ${kindLabel(to)}`)
   const isDefault = flag(layout.is_active)
-
-  const makeDefault = async () => {
-    setActivating(true)
-    try {
-      await client.request(post(`/collection-layouts/${bundle.layout.id}/activate`))
-      toast.success(`${String(layout.name ?? 'Layout')} is now the default ${kindLabel(kind)}`)
-      void qc.invalidateQueries({ queryKey: layoutDraftKeys.bundle(bundle.layout.id) })
-      void qc.invalidateQueries({ queryKey: overviewKeys.overview(collection) })
-      void qc.invalidateQueries({ queryKey: ['layout-editor', 'layouts', collection] })
-    } catch (err) {
-      toast.error(apiFailure(err, 'Could not make this layout the default').message)
-    } finally {
-      setActivating(false)
-    }
-  }
+  // Through the draft like every other setting, so it is one undoable step and
+  // the refetch after it does not wipe undo. The server applies it through the
+  // type-scoped activate rule (the previous default of this kind steps down).
+  const makeDefault = () => props.set({ is_active: true }, 'Make default')
 
   return (
     <Setting k='layout.layout_type'>
@@ -186,10 +170,9 @@ function KindSetting(props: SectionProps) {
                 type='button'
                 data-action='make-default'
                 className={smallBtn}
-                disabled={activating}
                 onClick={makeDefault}
               >
-                {activating ? 'Making default…' : 'Make default'}
+                Make default
               </button>
               <span className={quietText}>
                 Records no rule or role catches would open with this layout.

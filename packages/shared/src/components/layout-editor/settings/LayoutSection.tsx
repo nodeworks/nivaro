@@ -1,6 +1,6 @@
 import { PickList, quietText, Segmented, Setting, Toggle } from './controls'
 import { changeLabel, type SectionProps, toggleLabel } from './section-props'
-import { fieldLabel, isNumericField, useSettingsFields } from './settings-api'
+import { fieldOptions, numericFieldNames, useFieldSources } from './settings-api'
 import { ToggleSetting } from './ToggleSetting'
 
 export function LayoutSection(props: SectionProps) {
@@ -30,12 +30,10 @@ export function LayoutSection(props: SectionProps) {
 }
 
 function RowOrderSetting(props: SectionProps) {
-  const fields = useSettingsFields(props.collection)
-  const numeric = fields.filter(isNumericField)
+  const { fields, columns, relations } = useFieldSources(props.collection)
+  const numeric = numericFieldNames(props.collection, fields, columns, relations)
   const current = props.layout.row_order_field ? String(props.layout.row_order_field) : null
-  const options = numeric
-    .map((f) => ({ value: f.field, label: fieldLabel(fields, f.field), hint: f.field }))
-    .sort((a, b) => a.label.localeCompare(b.label))
+  const options = fieldOptions(fields, numeric)
   return (
     <Setting
       k='layout.row_order_field'

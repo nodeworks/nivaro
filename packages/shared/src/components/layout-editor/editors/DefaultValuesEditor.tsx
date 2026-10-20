@@ -6,10 +6,11 @@ import { RelationPicker } from '../pickers/relation-picker'
 import { inputCls, PickList, quietText, Segmented } from '../settings/controls'
 import {
   fieldLabel,
-  isStoredField,
   parseFieldOptions,
   type SettingsField,
-  type SettingsRelation
+  type SettingsRelation,
+  storedFieldNames,
+  type TableColumn
 } from '../settings/settings-api'
 import { type DefaultValueRow, defaultsFromRows, rowsFromDefaults, sameJson } from './layout-rows'
 
@@ -169,13 +170,14 @@ export function LayoutDefaultValueInput({
   )
 }
 
-/** Field names a starting value may target: stored columns plus M2M aliases (they stage links). */
+/** Field names a starting value may target: stored fields plus M2M aliases (they stage links). */
 export function defaultValueFields(
   collection: string,
   fields: SettingsField[],
+  columns: TableColumn[],
   relations: SettingsRelation[]
 ): string[] {
-  const names = fields.filter(isStoredField).map((f) => f.field)
+  const names = storedFieldNames(collection, fields, columns, relations)
   for (const r of relations) {
     if (r.one_collection === collection && r.junction_field != null) {
       const alias = r.one_field ?? r.many_collection
@@ -193,6 +195,7 @@ export function DefaultValuesEditor({
   collection,
   value,
   fields,
+  columns,
   relations,
   onChange,
   onBlur
@@ -200,6 +203,8 @@ export function DefaultValuesEditor({
   collection: string
   value: unknown
   fields: SettingsField[]
+  /** The table's physical columns: a default may target a column with no field row. */
+  columns: TableColumn[]
   relations: SettingsRelation[]
   onChange: (values: Record<string, unknown> | null, opts: { text: boolean }) => void
   onBlur?: () => void
@@ -212,8 +217,8 @@ export function DefaultValuesEditor({
   }, [value])
 
   const names = useMemo(
-    () => defaultValueFields(collection, fields, relations),
-    [collection, fields, relations]
+    () => defaultValueFields(collection, fields, columns, relations),
+    [collection, fields, columns, relations]
   )
   const commit = (next: DefaultValueRow[], text = false) => {
     setRows(next)

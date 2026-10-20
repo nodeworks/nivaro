@@ -34,6 +34,8 @@ export interface SettingDef {
   /** One plain sentence: what changes for the people using the form. */
   effect: string
   types: LayoutKind[]
+  /** Extra words the search box matches (controls inside the row the label does not name). */
+  keywords?: string
 }
 
 /** In the order an admin thinks about a form (spec §7.2). */
@@ -61,7 +63,8 @@ export const SETTINGS: SettingDef[] = [
     label: 'Kind of layout',
     effect:
       'Decides where this layout is used: the record form, read mode, a drill-down, a PDF, an addendum or grid columns.',
-    types: ALL
+    types: ALL,
+    keywords: 'make default fallback active'
   },
   {
     key: 'layout.record_conditions',
@@ -144,14 +147,15 @@ export const SETTINGS: SettingDef[] = [
     section: 'buttons',
     label: 'Dossier button',
     effect:
-      'Adds a Dossier button on saved records: one PDF with values, workflow history, comments and tasks.',
+      "Adds a Dossier button on saved records: one PDF with values, workflow history, comments and tasks. Only the default form's switch counts.",
     types: RECORD_VIEWS
   },
   {
     key: 'layout.dossier_label',
     section: 'buttons',
     label: 'Dossier button label',
-    effect: 'Text on the Dossier button. Empty shows “Dossier”.',
+    effect:
+      "Text on the Dossier button. Empty shows “Dossier”. Only the default form's label counts.",
     types: RECORD_VIEWS
   },
   {
@@ -491,7 +495,7 @@ export function layoutKindOf(layout: object | null | undefined): LayoutKind {
 export function matchesQuery(def: SettingDef, query: string): boolean {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   if (words.length === 0) return true
-  const hay = `${def.label} ${def.effect} ${def.key}`.toLowerCase()
+  const hay = `${def.label} ${def.effect} ${def.key} ${def.keywords ?? ''}`.toLowerCase()
   return words.every((w) => hay.includes(w))
 }
 
