@@ -210,3 +210,121 @@ describe('RecordDrilldownSheet design mode', () => {
     expect(targets(host)).toContain('field:amount:main')
   })
 })
+
+// Relation fixtures: an M2O owner, an O2M lines grid and an M2M tags alias.
+const REL_FIELDS = [
+  ...FIELDS,
+  { field: 'owner', type: 'integer', label: 'Owner' },
+  { field: 'lines', type: 'alias', label: 'Lines' },
+  { field: 'tags', type: 'alias', label: 'Tags' }
+]
+const REL_RELATIONS = [
+  { many_collection: 'units', many_field: 'owner', one_collection: 'people' },
+  { many_collection: 'lines', many_field: 'unit_id', one_collection: 'units', one_field: 'lines' },
+  {
+    many_collection: 'units_tags',
+    many_field: 'units_id',
+    one_collection: 'units',
+    one_field: 'tags',
+    junction_field: 'tags_id'
+  }
+]
+const relAssign = (field: string, sort: number) => ({
+  field,
+  group_key: 'main',
+  sort,
+  label_override: null,
+  is_visible: true
+})
+const REL_LAYOUT = {
+  ...LAYOUT,
+  assignments: [
+    ...LAYOUT.assignments,
+    relAssign('owner', 6),
+    relAssign('lines', 7),
+    relAssign('tags', 8)
+  ]
+}
+
+function relClient() {
+  const calls: Array<{ method: string; path: string }> = []
+  const client = {
+    request: vi.fn(async (cmd: { _method?: string; _path?: string }) => {
+      calls.push({ method: cmd._method ?? 'GET', path: cmd._path ?? '' })
+      if (cmd._path === '/collections/units')
+        return { data: { fields: REL_FIELDS, relations: REL_RELATIONS } }
+      if (cmd._path === '/collections/people') return { data: { fields: [], relations: [] } }
+      if (cmd._path === '/items/people/9') return { data: { id: 9, name: 'Ada Owner' } }
+      return { data: null }
+    })
+  } as unknown as NivaroClient
+  return { client, calls }
+}
+
+describe('design mode fixes', () => {
+  it('sheet renders a draft whose layout row is null', async () => {
+    const { client } = mockClient()
+    const nullLayout = { layout: null, groups: LAYOUT.groups, assignments: LAYOUT.assignments }
+    await mount(
+      client,
+      <RecordDrilldownSheet
+        collection='units'
+        itemId='5'
+        onClose={() => {}}
+        design={{
+          layout: nullLayout as unknown as ActiveLayoutData,
+          record: RECORD,
+          context: design()
+        }}
+      />
+    )
+    const frame = host.querySelector('[data-design-sheet]') as HTMLElement
+    expect(frame).not.toBeNull()
+    expect(frame.textContent).toContain('Units')
+  })
+
+  it('a relation value on the sheet canvas never drills', async () => {
+    const { client, calls } = relClient()
+    await mount(
+      client,
+      <RecordDrilldownSheet
+        collection='units'
+        itemId='5'
+        onClose={() => {}}
+        design={{
+          layout: REL_LAYOUT as unknown as ActiveLayoutData,
+          record: { ...RECORD, owner: 9 },
+          context: design()
+        }}
+      />
+    )
+    const owner = host.querySelector('[data-design-target="field:owner:main"]') as HTMLElement
+    expect(owner.textContent).toContain('Ada Owner')
+    // Plain label, not a drill button.
+    expect(owner.querySelector('button')).toBeNull()
+    await act(async () => owner.querySelector('dd')?.click())
+    expect(host.querySelector('[aria-label="Back"]')).toBeNull()
+    expect(host.textContent).toContain('Draft pump')
+    expect(calls.some((c) => c.path.startsWith('/collection-layouts'))).toBe(false)
+  })
+
+  it('no child or link reads without a preview record', async () => {
+    const { client, calls } = relClient()
+    await mount(
+      client,
+      <RecordReadView
+        collection='units'
+        design={{
+          layout: REL_LAYOUT as unknown as ActiveLayoutData,
+          record: null,
+          context: design()
+        }}
+      />
+    )
+    expect(targets(host)).toContain('field:lines:main')
+    expect(targets(host)).toContain('field:tags:main')
+    expect(calls.some((c) => c.path.startsWith('/items/lines'))).toBe(false)
+    expect(calls.some((c) => c.path.startsWith('/items/units_tags'))).toBe(false)
+    expect(calls.some((c) => c.path.startsWith('/collections/units_tags'))).toBe(false)
+  })
+})

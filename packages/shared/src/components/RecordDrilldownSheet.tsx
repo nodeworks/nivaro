@@ -115,7 +115,9 @@ export function RecordDrilldownSheet({
   // An empty controlled stack would leave nothing to render; the host unmounts
   // the sheet in that case, but fall back rather than crash if it lags a tick.
   const stack = controlled && controlledStack.length ? controlledStack : ownStack
-  const current = stack[stack.length - 1]
+  // Design mode renders the root target only: the draft layout and preview
+  // record belong to it, never to a nested level.
+  const current = design ? stack[0] : stack[stack.length - 1]
 
   const pushDrill = useCallback(
     (target: DrilldownTarget) => {
@@ -129,7 +131,8 @@ export function RecordDrilldownSheet({
     else setOwnStack((prev) => prev.slice(0, -1))
   }, [controlled, onPop])
 
-  const drillCtx = useMemo(() => ({ open: pushDrill }), [pushDrill])
+  // No drilling on the design canvas: relation values render as plain labels.
+  const drillCtx = useMemo(() => (design ? null : { open: pushDrill }), [design, pushDrill])
 
   // A host-registered override replaces this level's body entirely (and may
   // widen the sheet) — the breadcrumb strip and Open record link stay.
@@ -153,7 +156,13 @@ export function RecordDrilldownSheet({
         )
         .then((r) => r.data ?? null)
   })
-  const detailLayout = design ? (design.layout as unknown as DetailLayoutResponse) : fetchedLayout
+  // A draft's layout row may be null (ActiveLayoutData) — normalise it once.
+  const detailLayout = design
+    ? ({
+        ...design.layout,
+        layout: design.layout.layout ?? { id: 0, name: '', slug: null }
+      } as unknown as DetailLayoutResponse)
+    : fetchedLayout
 
   const effectiveSlug = useRootSlug
     ? (rootLayoutSlug ?? undefined)

@@ -1,7 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { ChevronDown, Pencil } from 'lucide-react'
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
+import { DrilldownContext, useApiFetchConfig, useDrilldown, useNivaroClient } from '../context'
 import { useDebounced } from '../hooks/useDebounced'
 import { get } from '../lib/commands'
 import { useLiveRecord } from '../lib/live'
@@ -1382,6 +1382,8 @@ export function RecordReadView({
     const f = fieldByName.get(a.field)
     const ov = parseOverrides(a.overrides)
     const m2m = aliasChild(a.field)
+    // Design canvas without a preview record: no parent to read links for.
+    if (design && !itemId && m2m?.junction_field) return <Empty />
     if (m2m?.junction_field && m2m.many_collection && m2m.many_field)
       return (
         <M2MValue
@@ -1437,6 +1439,7 @@ export function RecordReadView({
     const ov = parseOverrides(a.overrides)
     const rel = aliasChild(a.field)
     if (!rel?.many_collection || !rel.many_field) return null
+    if (design && !itemId) return <p className='py-3 text-[12px] text-slate-400'>No records</p>
     const ovOpts = (ov.options ?? {}) as {
       layout_id?: number
       column_presets?: ColumnPreset[]
@@ -1822,7 +1825,10 @@ export function RecordReadView({
     </div>
   )
   return design ? (
-    <LayoutDesignContext.Provider value={design.context}>{view}</LayoutDesignContext.Provider>
+    // No drilling from the canvas: relation values render as plain labels.
+    <LayoutDesignContext.Provider value={design.context}>
+      <DrilldownContext.Provider value={null}>{view}</DrilldownContext.Provider>
+    </LayoutDesignContext.Provider>
   ) : (
     view
   )
