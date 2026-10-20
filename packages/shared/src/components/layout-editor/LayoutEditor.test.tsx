@@ -160,7 +160,8 @@ function makeClient() {
       if (p === '/field-config/orders') return { data: project(stored.placements as never) }
       if (p === '/field-config/orders/project')
         return { data: project((cmd._body?.assignments ?? []) as never) }
-      if (p === '/collections/orders') return { data: { display_name: 'Orders' } }
+      if (p === '/collections/orders')
+        return { data: { display_name: 'Orders', fields: Object.values(FIELDS) } }
       if (p === '/widgets-internal' && widgetsFail) throw new Error('Server unavailable')
       if (method !== 'GET') return { data: null }
       return { data: [] }
@@ -326,15 +327,49 @@ describe('LayoutEditor', () => {
   it('selecting a field opens its inspector', async () => {
     await mount()
     click(document.querySelector('[data-design-target="field:title:main"]'))
-    await settle(() => !!document.querySelector('[data-editor-inspector] h3'))
+    await settle(() => !!document.querySelector('[data-editor-inspector] [data-setting]'))
     const insp = document.querySelector('[data-editor-inspector]')
-    expect(insp?.textContent).toContain('Title')
-    expect(insp?.textContent).toContain('Main')
+    expect(insp?.querySelector('h2')?.textContent).toBe('Title')
+    expect(insp?.querySelector('[data-inspector]')).not.toBeNull()
     expect(
       document
         .querySelector('[data-design-target="field:title:main"]')
         ?.getAttribute('data-selected')
     ).toBe('true')
+  })
+
+  it('a field selected on the canvas opens the real inspector; a new label saves one op', async () => {
+    const { calls } = await mount()
+    click(document.querySelector('[data-design-target="field:title:main"]'))
+    await settle(
+      () => !!document.querySelector('[data-editor-inspector] [data-setting="field.label"]')
+    )
+    const insp = document.querySelector('[data-editor-inspector]') as HTMLElement
+    expect(insp.querySelector('[data-inspector-tab="look"]')?.getAttribute('aria-selected')).toBe(
+      'true'
+    )
+    const input = insp.querySelector('[data-setting="field.label"] input') as HTMLInputElement
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+      Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set?.call(
+        input,
+        'Subject'
+      )
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    })
+    await act(async () => {
+      input.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+    })
+    await settle(() => opsCalls(calls).length > 0)
+    expect(opsCalls(calls)).toEqual([
+      [
+        {
+          op: 'update_placement',
+          at: { field: 'title', group_key: 'main' },
+          patch: { overrides: { label: 'Subject' } }
+        }
+      ]
+    ])
   })
 
   it('add panel marks placed fields and adds after selection (emits one place op)', async () => {
@@ -438,13 +473,15 @@ describe('LayoutEditor', () => {
     await settle(() => !!document.querySelector('[data-add-field="vendor"]'))
     click(document.querySelector('[data-add-field="vendor"]'))
     await settle(() => opsCalls(calls).length === 1)
-    await settle(() => !!document.querySelector('[data-editor-inspector] h3'))
-    expect(document.querySelector('[data-editor-inspector] h3')?.textContent).toBe('Vendor name')
+    await settle(
+      () => document.querySelector('[data-editor-inspector] h2')?.textContent === 'Vendor name'
+    )
+    expect(document.querySelector('[data-editor-inspector] h2')?.textContent).toBe('Vendor name')
     const undo = document.querySelector('[aria-label="Undo"]') as HTMLButtonElement
     await settle(() => !undo.disabled)
     click(undo)
-    await settle(() => !document.querySelector('[data-editor-inspector] h3'))
-    expect(document.querySelector('[data-editor-inspector] h3')).toBeNull()
+    await settle(() => !document.querySelector('[data-editor-inspector] h2'))
+    expect(document.querySelector('[data-editor-inspector] h2')).toBeNull()
     await settle(() => opsCalls(calls).length === 2)
     const redo = document.querySelector('[aria-label="Redo"]') as HTMLButtonElement
     await settle(
@@ -526,8 +563,10 @@ describe('LayoutEditor', () => {
     expect(opsCalls(calls)).toEqual([
       [{ op: 'place', field: 'vendor', group_key: 'main', index: 1 }]
     ])
-    await settle(() => !!document.querySelector('[data-editor-inspector] h3'))
-    expect(document.querySelector('[data-editor-inspector] h3')?.textContent).toBe('Vendor name')
+    await settle(
+      () => document.querySelector('[data-editor-inspector] h2')?.textContent === 'Vendor name'
+    )
+    expect(document.querySelector('[data-editor-inspector] h2')?.textContent).toBe('Vendor name')
     expect(document.querySelector('[aria-label="Undo"]')?.getAttribute('data-tip')).toContain(
       'Add Vendor name'
     )
@@ -679,9 +718,9 @@ describe('LayoutEditor', () => {
     expect(node('field:notes:extra')).toBeNull()
     click(node('field:amount:main'))
     await settle(
-      () => document.querySelector('[data-editor-inspector] h3')?.textContent === 'Amount'
+      () => document.querySelector('[data-editor-inspector] h2')?.textContent === 'Amount'
     )
-    expect(document.querySelector('[data-editor-inspector] h3')?.textContent).toBe('Amount')
+    expect(document.querySelector('[data-editor-inspector] h2')?.textContent).toBe('Amount')
     // Preview off: no marks.
     click(document.querySelector('[data-rail-settings]'))
     await settle(() => !!roleSetting())

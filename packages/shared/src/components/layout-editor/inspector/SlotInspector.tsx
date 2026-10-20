@@ -5,6 +5,7 @@ import {
   type PlacementRow
 } from '../../../lib/layout-ops'
 import { PdfFieldConfig } from '../editors/pdf-field-config'
+import { slotName } from '../slot-names'
 import {
   Buffered,
   Choice,
@@ -24,23 +25,6 @@ export const WIDTHS = [
   { value: '4', label: '⅓' },
   { value: '3', label: '¼' }
 ]
-
-export const SLOT_NAMES: Record<string, string> = {
-  __pipeline__: 'Pipeline',
-  __comments__: 'Comments',
-  __tasks__: 'Tasks',
-  __addendums__: 'Addendums',
-  __referenced_by__: 'Referenced by',
-  __related_records__: 'Related records',
-  __owners__: 'Owners',
-  __pdf__: 'PDF button'
-}
-
-export function slotName(field: string): string {
-  const ext = /^__ext_(.+)__$/.exec(field)
-  if (ext) return `Extension slot ${ext[1]}`
-  return SLOT_NAMES[field] ?? field
-}
 
 /**
  * Writes one slot's columns: an update when the slot has a row on this

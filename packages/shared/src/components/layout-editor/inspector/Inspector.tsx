@@ -13,6 +13,7 @@ import {
 import { cn, titleCase } from '../../../lib/utils'
 import { TipLayer } from '../../TipLayer'
 import { type DesignTarget, targetKey, useLayoutDesign } from '../design-context'
+import { slotName } from '../slot-names'
 import { type ApplyOptions, parseBundle } from '../useLayoutDraft'
 import { AdvancedTab } from './AdvancedTab'
 import {
@@ -39,7 +40,7 @@ import {
 } from './model'
 import { PickerTab } from './PickerTab'
 import { RulesTab } from './RulesTab'
-import { SlotInspector, slotName } from './SlotInspector'
+import { SlotInspector } from './SlotInspector'
 import { SubtitleInspector } from './SubtitleInspector'
 import { WidgetInspector } from './WidgetInspector'
 

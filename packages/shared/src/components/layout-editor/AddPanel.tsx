@@ -17,8 +17,8 @@ import { fieldSpot, placeOp, sectionOp, slotSpot } from './add-target'
 import type { DesignTarget } from './design-context'
 import type { AddSource } from './dnd/collision'
 import { useAddDragSource } from './dnd/node'
-import { slotName } from './inspector-slot'
 import { useOverviewFields } from './overview/overview-api'
+import { slotName } from './slot-names'
 import type { ApplyOptions } from './useLayoutDraft'
 
 // "+ Add": everything that can go on the form — the collection's fields by
