@@ -219,6 +219,7 @@ import { settingsRoutes } from './settings.js'
 import { setupRoutes } from './setup.js'
 import { shareLinksRoutes } from './share-links.js'
 import { slaRoutes } from './sla.js'
+import { sqlChecksRoutes } from './sql-checks.js'
 import { sqlScratchpadRoutes } from './sql-scratchpad.js'
 import { ssoProviderRoutes } from './sso-providers.js'
 import { stagedImportRoutes } from './staged-imports.js'
@@ -430,6 +431,7 @@ export async function registerRoutes(app: FastifyInstance) {
   await app.register(connectionReportRoutes, { prefix: '/connection-reports' })
   await app.register(indexAdvisorRoutes, { prefix: '/index-advisor' })
   await app.register(dbTuningRoutes, { prefix: '/db-tuning' })
+  await app.register(sqlChecksRoutes, { prefix: '/sql-checks' })
   await app.register(securityRoutes, { prefix: '/security' })
   await app.register(securitySelfRoutes, { prefix: '/security' })
   await app.register(configHealthRoutes, { prefix: '/config-health' })

@@ -2078,6 +2078,27 @@ export async function buildServer() {
           }
         }
       )
+      // #2562 — nightly SQL checks: every module's definition (plus stored import bodies and
+      // custom queries) checked for NULL-unsafe MERGE keys, writes without WHERE, transactions
+      // without XACT_ABORT, local-time clocks and more; findings tracked across runs.
+      app.cron.schedule(
+        'sql-checks',
+        '30 3 * * *',
+        async () => {
+          const { nightlyEnabled, readSqlCheckSettings } = await import(
+            './services/sql-checks/settings.js'
+          )
+          if (!nightlyEnabled(await readSqlCheckSettings())) return
+          const { runSqlChecks, runSummary } = await import('./services/sql-checks/run.js')
+          app.log.info(`sql-checks: ${runSummary(await runSqlChecks({ trigger: 'cron' }))}`)
+        },
+        {
+          heavy: true,
+          idempotent: 'safe',
+          description:
+            "Nightly 03:30 — reads every procedure, function, view and trigger definition (plus import definitions' stored procedure bodies and custom queries), checks them for NULL-unsafe MERGE keys (with live NULL and duplicate counts), writes without WHERE, transactions without XACT_ABORT, local-time clocks, NOT IN over nullable columns and SELECT * on wide tables, optionally lints them through the SQLFluff sidecar (SQL_LINT_URL), and records findings on SQL checks. Reads only. Runs when SQL checks are turned on (setting, or SQL_CHECKS=on)."
+        }
+      )
       app.cron.schedule(
         'db-tuning-watch',
         '55 * * * *',

@@ -231,13 +231,16 @@ function declaredColumnNames(raw: string): string[] {
 export function DefinitionsPanel({
   definitions,
   runCounts,
-  isLoading
+  isLoading,
+  initialKey = null
 }: {
   definitions: ImportDefinition[]
   /** Runs per import key — a definition's history is the main thing that makes
    *  it recognisable, and the reason deactivating beats deleting. */
   runCounts: Record<string, number>
   isLoading?: boolean
+  /** Opens this definition once the list has loaded (a deep link). */
+  initialKey?: string | null
 }) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -245,6 +248,14 @@ export function DefinitionsPanel({
   const [search, setSearch] = useState('')
   const [draft, setDraft] = useState<Draft>(toDraft(null))
   const [error, setError] = useState<string | null>(null)
+  // a deep link opens its definition once, when the list first holds it
+  const [linked, setLinked] = useState(false)
+  useEffect(() => {
+    if (linked || !initialKey || !definitions.length) return
+    const hit = definitions.find((d) => d.key === initialKey)
+    if (hit) setSelectedId(hit.id)
+    setLinked(true)
+  }, [linked, initialKey, definitions])
 
   // Processors an extension registered on this instance (files that span
   // several collections). A definition naming one that is NOT registered here

@@ -78,6 +78,8 @@ export interface ImportConsoleProps {
   initialRunId?: number | null
   /** Fires when a staged run's detail opens or closes. */
   onRunOpen?: (id: number | null) => void
+  /** Deep link into a definition by key (admin /imports?definition=import_workflows). */
+  initialDefinitionKey?: string | null
 }
 
 export type ConsoleTab = 'runs' | 'collection' | 'definitions'
@@ -221,7 +223,8 @@ export function ImportConsole({
   initialJobId,
   onJobOpen,
   initialRunId = null,
-  onRunOpen
+  onRunOpen,
+  initialDefinitionKey = null
 }: ImportConsoleProps) {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -232,6 +235,7 @@ export function ImportConsole({
 
   const [tab, setTab] = useState<ConsoleTab>(() => {
     if (initialJobId) return 'collection'
+    if (initialDefinitionKey && isAdmin) return 'definitions'
     return defaultTab !== 'runs' && !isAdmin ? 'runs' : defaultTab
   })
   const [status, setStatus] = useState<ImportRunStatus | 'all'>('all')
@@ -607,6 +611,7 @@ export function ImportConsole({
           definitions={definitions}
           runCounts={runCounts}
           isLoading={definitionsQuery.isLoading}
+          initialKey={initialDefinitionKey}
         />
       ) : (
         <>

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Check, Copy, Database, Loader2, Play, Plus, RefreshCw, Search, Sparkles, Trash2 } from 'lucide-react'
 import { useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router'
 import { toast } from 'sonner'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -94,7 +95,9 @@ function paramInputType(sqlType: string): 'number' | 'date' | 'text' {
 export function ProceduresPage() {
   const qc = useQueryClient()
   const [search, setSearch] = useState('')
-  const [selected, setSelected] = useState<string | null>(null)
+  // ?name= opens a procedure straight away (links from SQL checks)
+  const [searchParams] = useSearchParams()
+  const [selected, setSelected] = useState<string | null>(() => searchParams.get('name'))
   const [creating, setCreating] = useState(false)
   const [newName, setNewName] = useState('')
 

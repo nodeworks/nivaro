@@ -233,6 +233,10 @@ export const RUNTIME_TABLES: string[] = [
   'nivaro_traffic_investigations',
   'nivaro_tuning_proposals',
   'nivaro_tuning_param_sets',
+  'nivaro_sql_check_runs', //          nightly SQL checks (migration 455) — per database
+  'nivaro_sql_check_findings',
+  'nivaro_sql_check_events',
+  'nivaro_sql_check_fixes',
   'nivaro_session_events',
   'nivaro_replay_clips', // session replay library (migration 422) — per environment, like its recordings
   'nivaro_replay_shares', // replay share links (migration 422)

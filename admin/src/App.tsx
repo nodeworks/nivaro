@@ -203,6 +203,7 @@ const NotificationAnalytics = lazy(() => import('@/pages/NotificationAnalytics')
 const DelegationConsole = lazy(() => import('@/pages/DelegationConsole'))
 const OpsTasks = lazy(() => import('@/pages/OpsTasks'))
 const DbTuning = lazy(() => import('@/pages/DbTuning'))
+const SqlChecks = lazy(() => import('@/pages/SqlChecks'))
 const Sequences = lazy(() => import('@/pages/Sequences'))
 const SqlScratchpad = lazy(() => import('@/pages/SqlScratchpad'))
 const RevisionSearch = lazy(() => import('@/pages/RevisionSearch'))
@@ -686,6 +687,7 @@ export default function App() {
                   <Route path='ops-console' element={<OpsConsolePage />} />
                   <Route path='ops-tasks' element={<OpsTasks />} />
                   <Route path='db-tuning' element={<DbTuning />} />
+                  <Route path='sql-checks' element={<SqlChecks />} />
                   <Route path='ops-redis' element={<OpsRedisPage />} />
                   <Route path='cron-timeline' element={<CronTimelinePage />} />
                   <Route path='user-groups' element={<UserGroupsPage />} />

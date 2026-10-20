@@ -46,6 +46,7 @@ export function ImportsPage() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
   const runParam = Number(searchParams.get('run'))
+  const definitionParam = searchParams.get('definition')
   const { user } = useAuth()
 
   const client = useMemo(() => createNivaro(window.location.origin), [])
@@ -72,6 +73,7 @@ export function ImportsPage() {
                 defaultTab={id ? 'collection' : 'runs'}
                 initialJobId={id && id !== 'new' ? id : null}
                 initialRunId={Number.isInteger(runParam) && runParam > 0 ? runParam : null}
+                initialDefinitionKey={definitionParam}
                 onRunOpen={(runId) =>
                   setSearchParams(
                     (prev) => {

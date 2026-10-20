@@ -572,6 +572,7 @@
           <a class="docs-nav-item" data-section="realtime-load-test" href="#realtime-load-test">Realtime Load Test</a>
           <a class="docs-nav-item" data-section="db-health" href="#db-health">DB &amp; Runtime Health</a>
           <a class="docs-nav-item" data-section="db-tuning" href="#db-tuning">Database Tuning</a>
+          <a class="docs-nav-item" data-section="sql-checks" href="#sql-checks">SQL Checks</a>
           <a class="docs-nav-item" data-section="ops-console" href="#ops-console">Ops Console</a>
           <a class="docs-nav-item" data-section="ops-assistant" href="#ops-assistant">Ops Assistant</a>
           <a class="docs-nav-item" data-section="deploys-versions" href="#deploys-versions">Deploys &amp; Versions</a>
@@ -17583,6 +17584,64 @@ GET   /api/db-tuning/settings
 PATCH /api/db-tuning/settings                 { enabled?, ai_rewrites?, min_estimate_ms_per_day?, … }</code></pre>
           <p class="doc-p">Admins only. A refusal answers 409 (400 for a malformed change) with a code: <code class="doc-code">TUNING_STALE</code>, <code class="doc-code">TUNING_REPLICATED</code> (with the target and the statements), <code class="doc-code">TUNING_NOT_APPLICABLE</code>, <code class="doc-code">TUNING_INVALID</code>, <code class="doc-code">TUNING_DISABLED</code> or <code class="doc-code">TUNING_RUNNING</code>.</p>
           <!-- /SYNC:db-tuning -->
+        </div>
+
+        <div class="doc-section" id="s-sql-checks" data-toc='[{"id":"sql-checks","label":"SQL Checks"},{"id":"sql-checks-checks","label":"What it checks"},{"id":"sql-checks-page","label":"The page"},{"id":"sql-checks-settings","label":"Settings and schedule"},{"id":"sql-checks-sqlfluff","label":"SQLFluff sidecar"},{"id":"sql-checks-fixes","label":"Logging a fix from a script"},{"id":"sql-checks-api","label":"API"}]'>
+          <!-- SYNC:sql-checks -->
+          <h1 class="doc-h1" id="sql-checks">SQL Checks</h1>
+          <p class="doc-p">The SQL checks page at /sql-checks (Operations → Health) checks the SQL that runs against the database for mistakes that corrupt or slow data. It reads every procedure, function, view and trigger definition from the database itself (sys.sql_modules), plus the SQL bodies Nivaro keeps in its own tables: import definitions’ stored procedure bodies and custom queries. Findings are tracked across runs, so a finding has a history: when it first appeared, how many runs saw it, and when it went away. Checks only read; nothing is changed by a run. Admins only; SQL Server only.</p>
+          <h2 class="doc-h2" id="sql-checks-checks">What it checks</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Check</th><th>Severity</th><th>What it finds</th></tr></thead>
+            <tbody><tr><tr><td>MERGE on a nullable key</td><td>Critical when the key holds NULLs now, else warning</td><td>A MERGE whose ON clause compares a nullable target column with = and no NULL-safe form (ISNULL / COALESCE, an IS NULL pair, IS NOT DISTINCT FROM, INTERSECT). NULL never equals NULL, so those rows are inserted again on every run. With live counts on, the finding shows how many rows hold NULL keys and how many extra rows already sit in NULL-key groups.</td></tr>
+              <tr><td>MERGE source may repeat a key</td><td>Warning</td><td>A MERGE source with no ROW_NUMBER / GROUP BY / DISTINCT and no unique index on the joined columns. A repeated key stops the whole MERGE.</td></tr>
+              <tr><td>Write without WHERE</td><td>Critical</td><td>An UPDATE or DELETE with no top-level WHERE and no JOIN predicate. Temp tables, table variables and MERGE actions are ignored.</td></tr>
+              <tr><td>Transaction without XACT_ABORT</td><td>Warning</td><td>BEGIN TRAN in a module with no SET XACT_ABORT ON and no CATCH that rolls back on @@TRANCOUNT: a failed statement can leave the transaction open on a pooled connection.</td></tr>
+              <tr><td>Local-time clock</td><td>Info</td><td>GETDATE() / SYSDATETIME() calls (one finding per object, with the count and lines).</td></tr>
+              <tr><td>NOT IN over a nullable column</td><td>Warning</td><td>NOT IN (SELECT col …) where col is nullable and the subquery does not filter NULLs.</td></tr>
+              <tr><td>SELECT * on a wide table</td><td>Info</td><td>SELECT * from a table with max-length text or binary columns.</td></tr>
+              <tr><td>Import body differs from deployed</td><td>Warning (info when not deployed)</td><td>An import definition whose stored procedure body differs from the deployed procedure of the same name (comments, whitespace and the CREATE / ALTER verb are ignored), or names a procedure the database does not have.</td></tr>
+              <tr><td>SQLFluff rule</td><td>Info</td><td>Correctness rules from SQLFluff (ambiguous references RF01/RF02, AM01–AM07, unused CTEs ST03, subqueries in joins ST05) when a SQLFluff sidecar is configured. Layout and style rules are dropped.</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">The checks are pattern checks over T-SQL with comments and string literals blanked out, not a full parser: each prefers missing a case to raising a wrong one. A finding that is intended (a procedure that clears a work table on purpose) is marked as expected with a note; it stays out of the open count until someone reopens it.</div>
+          <h2 class="doc-h2" id="sql-checks-page">The page</h2>
+          <ul class="doc-ul">
+            <li>Header: open critical / warning / info counts, the last run (when, how long, whether SQLFluff ran), Run now (two clicks) and Settings.</li>
+            <li>Findings: filter by status, severity and check, or search. The detail shows the statement with line numbers, why it matters, the live figures, the suggested fix with a Copy button, the history (opened, resolved, reopened, marked as expected) and a link to the editor: /procedures for a procedure, the custom query editor, or the import definition in the Imports console (/imports?definition=&lt;key&gt;).</li>
+            <li>Trends: open findings per run by severity, new and resolved per run, open findings by check and the objects with the most.</li>
+            <li>Fixes: cleanups and guard indexes logged by fix scripts, and “Procedure changed” rows Nivaro logs itself when a run finds that findings went away because their procedure or query was edited.</li>
+            <li>Runs: every run with its duration, counts, SQLFluff status and errors.</li>
+            <li>DB &amp; Runtime Health shows a strip linking here while critical findings are open.</li>
+          </ul>
+          <h2 class="doc-h2" id="sql-checks-settings">Settings and schedule</h2>
+          <p class="doc-p">Settings live on the page (nivaro_settings.sql_checks): run nightly (off by default), count NULL keys and copies (reads the tables a MERGE writes; tables over the row cap, 5,000,000 by default, are skipped), the per-table count timeout (120 s), and whether to check import definitions and custom queries. The nightly run is the <code class="doc-code">sql-checks</code> job at 03:30 (Background Jobs can move it); it only ticks on deployed instances. SQL_CHECKS=on or off in the server environment forces the nightly run on or off whatever the setting says, for databases rebuilt nightly from another one (the setting would be wiped); the page then shows the switch as set by the server’s configuration. Run now always works.</p>
+          <h2 class="doc-h2" id="sql-checks-sqlfluff">SQLFluff sidecar</h2>
+          <p class="doc-p">SQL_LINT_URL points at a small service running SQLFluff with the T-SQL dialect; SQL_LINT_TOKEN is its bearer token (a secret: SQL_LINT_TOKEN_FILE works, and the environment viewer masks it). Each module’s text is sent on its own, never any data: POST {SQL_LINT_URL}/lint with {sql, dialect: "tsql"} answers {violations: [{code, line, description}], parse_errors}. A busy sidecar (503) is retried with a short backoff; a refused token (401), a sidecar that stays busy or does not answer marks the run’s SQLFluff as unavailable and keeps the other checks; a per-module timeout (504) skips that module only. SQLFluff findings resolve only in runs where SQLFluff answered.</p>
+          <h2 class="doc-h2" id="sql-checks-fixes">Logging a fix from a script</h2>
+          <p class="doc-p">A script that repairs data (removes copies, adds a guard index) logs what it did so the page can show it next to the findings: insert into nivaro_sql_check_fixes directly, or POST /api/sql-checks/fixes as an administrator (an admin’s API key works).</p>
+          <pre class="doc-pre"><code>{
+  "action": "cleanup",
+  "check_key": "merge-null-key",
+  "target_table": "workflows_files",
+  "rows_affected": 273657,
+  "backup_table": "zz_backup_workflows_files_20261019",
+  "detail": { "kept": "newest row per key" },
+  "run_by": "fix-null-key-copies"
+}</code></pre>
+          <p class="doc-p">action is cleanup, proc_fix, guard_index or other.</p>
+          <h2 class="doc-h2" id="sql-checks-api">API</h2>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Route</th><th>What it does</th></tr></thead>
+            <tbody><tr><tr><td>GET /api/sql-checks/summary</td><td>Open counts by severity and check, the last run, the trend over the last 30 runs, top objects, settings and whether a run is going.</td></tr>
+              <tr><td>POST /api/sql-checks/run</td><td>Starts a run in the background (202 with run_id); 409 while one is running.</td></tr>
+              <tr><td>GET /api/sql-checks/runs · /runs/:id</td><td>Run history (paged) and one run with its stats.</td></tr>
+              <tr><td>GET /api/sql-checks/findings</td><td>Findings; filters status (open, accepted, resolved, all), severity, check, object, q; page and limit.</td></tr>
+              <tr><td>GET /api/sql-checks/findings/:id</td><td>One finding with its statement, figures, suggested fix and event history.</td></tr>
+              <tr><td>PATCH /api/sql-checks/findings/:id</td><td>{status: "accepted", note} marks it as expected (a note is required); {status: "open"} reopens one marked as expected.</td></tr>
+              <tr><td>GET · POST /api/sql-checks/fixes</td><td>The fix log (paged); log a fix from a script.</td></tr>
+              <tr><td>GET · PATCH /api/sql-checks/settings</td><td>Read and change the settings (strict: unknown keys and bad values are refused with every problem named).</td></tr></tr></tbody>
+          </table></div>
+          <!-- /SYNC:sql-checks -->
         </div>
 
         <div class="doc-section" id="s-ops-console" data-toc='[{"id":"ops-console","label":"Ops Console"},{"id":"ops-console-crons","label":"Scheduled jobs: pause, override, revert"},{"id":"ops-console-logs","label":"Log tail and log alert rules"},{"id":"ops-console-incident","label":"Incident timeline, clock audit, environment"},{"id":"ops-console-migrations","label":"Migrations card"},{"id":"ops-console-maintenance","label":"Maintenance mode and windows"},{"id":"ops-console-restart","label":"Restart, follow-user, heap snapshot, CPU profile"}]'>
