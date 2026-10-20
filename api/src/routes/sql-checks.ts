@@ -2,7 +2,13 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { applyFix, FixError, proposalFor, revertFix } from '../services/sql-checks/apply.js'
+import {
+  applyFix,
+  compileProposal,
+  FixError,
+  proposalFor,
+  revertFix
+} from '../services/sql-checks/apply.js'
 import { CHECK_KEYS, SEVERITIES } from '../services/sql-checks/checkers.js'
 import {
   EVENTS,
@@ -384,7 +390,7 @@ export async function sqlChecksRoutes(app: FastifyInstance): Promise<void> {
     req
   })
 
-  /** The proposed fix for a finding (#2563): diff, risks, compile result. Changes nothing. */
+  /** The proposed fix for a finding (#2563): diff and risks. Reads only; no compile here. */
   app.get<{ Params: { id: string } }>('/findings/:id/proposal', async (req, reply) => {
     const id = Number(req.params.id)
     if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
@@ -394,6 +400,26 @@ export async function sqlChecksRoutes(app: FastifyInstance): Promise<void> {
       return fixFailure(reply, err)
     }
   })
+
+  /**
+   * Compile the proposal in a rolled-back transaction. A POST: it takes a schema lock on the
+   * procedure (up to 5 s), so it goes through the same write guards as any other change.
+   */
+  app.post<{ Params: { id: string }; Body: { new_definition_hash?: string } | null }>(
+    '/findings/:id/proposal/compile',
+    async (req, reply) => {
+      const id = Number(req.params.id)
+      if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
+      const hash = String(req.body?.new_definition_hash ?? '')
+      if (!/^[0-9a-f]{64}$/.test(hash))
+        return reply.code(400).send({ error: 'new_definition_hash is required' })
+      try {
+        return { data: await compileProposal(id, hash) }
+      } catch (err) {
+        return fixFailure(reply, err)
+      }
+    }
+  )
 
   /** Apply the proposed fix (the hash ties it to the preview the person saw). */
   app.post<{

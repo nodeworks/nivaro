@@ -14,7 +14,11 @@ import {
 import { parseRecalcRollups } from '../services/import-rollups.js'
 import { hasRunReports, parseRunReport, rebuildRunReport } from '../services/import-run-report.js'
 import { executeRevert, planRevert } from '../services/import-run-revert.js'
-import { importBodyTargetsOwn, snapshotImportDefinition } from '../services/procedure-deploy.js'
+import {
+  deployProcedure,
+  importBodyTargetsOwn,
+  snapshotImportDefinition
+} from '../services/procedure-deploy.js'
 import { describeStagingTables, purgeStagingTable } from '../services/staged-import-purge.js'
 import { rehearseProcedureImport } from '../services/staged-import-rehearsal.js'
 import {
@@ -118,7 +122,7 @@ export async function stagedImportRoutes(app: FastifyInstance) {
         })
       }
       try {
-        await db.raw(body)
+        await deployProcedure(body)
       } catch (err) {
         return reply.code(400).send({ error: `Deploy failed: ${(err as Error).message}` })
       }

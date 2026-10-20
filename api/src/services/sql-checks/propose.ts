@@ -33,6 +33,8 @@ export interface ProposalResult {
   manual_reason?: string
   risky: boolean
   reasons: string[]
+  /** Worth knowing but not a reason to stop (no extra confirmation). */
+  notes: string[]
   edits: Edit[]
   newDefinition: string | null
 }
@@ -53,6 +55,7 @@ const manual = (reason: string): ProposalResult => ({
   manual_reason: reason,
   risky: false,
   reasons: [],
+  notes: [],
   edits: [],
   newDefinition: null
 })
@@ -103,6 +106,64 @@ export function procBodyStart(masked: string): number {
   return -1
 }
 
+const HEAD_RE = new RegExp(
+  String.raw`\b(?:CREATE|ALTER)\s+(?:OR\s+ALTER\s+)?PROC(?:EDURE)?\s+(${IDENT}(?:\s*\.\s*${IDENT})?)`,
+  'i'
+)
+
+/** The name a procedure's CREATE / ALTER header carries (offsets in the original text), or null. */
+export function procHeaderName(
+  sql: string
+): { schema: string | null; name: string; start: number; end: number } | null {
+  const masked = maskSql(sql)
+  const m = HEAD_RE.exec(masked)
+  if (!m) return null
+  const start = m.index + m[0].length - m[1].length
+  const end = m.index + m[0].length
+  const { schema, name } = splitName(sql.slice(start, end))
+  return { schema, name, start, end }
+}
+
+const bracket = (s: string) => `[${s.replace(/]/g, ']]')}]`
+
+/**
+ * The definition with its header naming exactly `[schema].[name]`. A procedure renamed with
+ * sp_rename keeps its old name in sys.sql_modules, and a header without a schema lands in the
+ * login's default schema: deploying either text as written could create or replace ANOTHER
+ * object. Null when there is no procedure header to rewrite.
+ */
+export function withExplicitName(sql: string, schema: string | null, name: string): string | null {
+  const h = procHeaderName(sql)
+  if (!h) return null
+  return `${sql.slice(0, h.start)}${bracket(schema ?? 'dbo')}.${bracket(name)}${sql.slice(h.end)}`
+}
+
+/**
+ * What changes when XACT_ABORT ON is added to a body that handles its own errors: every error
+ * then dooms the transaction (error 3930 on the next write or COMMIT), so a CATCH that commits, or
+ * code that reads XACT_STATE() / @@ERROR to carry on, behaves differently.
+ */
+export function xactAbortRisks(masked: string): string[] {
+  const reasons: string[] = []
+  for (const m of masked.matchAll(/\bBEGIN\s+CATCH\b([\s\S]*?)\bEND\s+CATCH\b/gi)) {
+    if (/\bCOMMIT\b/i.test(m[1])) {
+      reasons.push(
+        'A CATCH block commits. With XACT_ABORT ON the transaction is already doomed there, so that COMMIT fails (error 3930) instead of keeping the work done so far.'
+      )
+      break
+    }
+  }
+  if (/\bXACT_STATE\s*\(\s*\)/i.test(masked))
+    reasons.push(
+      'The procedure checks XACT_STATE(). With XACT_ABORT ON an error leaves it at -1 (doomed) rather than 1, so a branch that carries on when it is 1 no longer runs.'
+    )
+  if (/@@ERROR\b/i.test(masked))
+    reasons.push(
+      'The procedure reads @@ERROR to carry on after a failed statement. With XACT_ABORT ON the first error ends the batch and rolls back, so that recovery code never runs.'
+    )
+  return reasons
+}
+
 export function proposeXactAbort(sql: string): ProposalResult {
   const masked = maskSql(sql)
   if (/\bSET\s+XACT_ABORT\s+ON\b/i.test(masked))
@@ -128,11 +189,13 @@ export function proposeXactAbort(sql: string): ProposalResult {
     indent = sameLine || pos >= sql.length ? `${indentAt(sql, at)}    ` : indentAt(sql, pos)
   }
   const edit: Edit = { at: insertAt, remove: 0, insert: `\n${indent}SET XACT_ABORT ON;` }
+  const reasons = xactAbortRisks(masked)
   return {
     proposable: true,
     class: 'xact-abort',
-    risky: false,
-    reasons: [],
+    risky: reasons.length > 0,
+    reasons,
+    notes: [],
     edits: [edit],
     newDefinition: applyEdits(sql, [edit])
   }
@@ -171,6 +234,7 @@ export function proposeMergeNullSafe(sql: string, finding: FindingForFix): Propo
     target_table?: string
     nullable_columns?: string[]
     extra_rows?: number
+    table_rows?: number | null
   }
   const nullable = new Set((d.nullable_columns ?? []).map((c) => c.toLowerCase()))
   if (!d.target_table || !nullable.size)
@@ -207,28 +271,33 @@ export function proposeMergeNullSafe(sql: string, finding: FindingForFix): Propo
     if (!tgt || other.alias === target)
       return manual('Each ON comparison must pair a target column with a source column.')
     if (!nullable.has(tgt.column)) continue
-    // splice with the ORIGINAL text of both references (same offsets as the masked text)
+    // wrap the pair as written (comments inside it stay): ( <pair> OR (l IS NULL AND r IS NULL))
     const base = merge.onStart + p.start
-    const lead = m[1].length
-    const trail = m[4].length
-    const spanStart = base + lead
-    const spanEnd = merge.onStart + p.end - trail
-    const left = sql.slice(base + text.indexOf(m[2]), base + text.indexOf(m[2]) + m[2].length)
-    const rightAt = text.indexOf(m[3], text.indexOf(m[2]) + m[2].length)
+    const spanStart = base + m[1].length
+    const spanEnd = merge.onStart + p.end - m[4].length
+    const leftAt = text.indexOf(m[2])
+    const left = sql.slice(base + leftAt, base + leftAt + m[2].length)
+    const rightAt = text.indexOf(m[3], leftAt + m[2].length)
     const right = sql.slice(base + rightAt, base + rightAt + m[3].length)
+    edits.push({ at: spanStart, remove: 0, insert: '(' })
     edits.push({
-      at: spanStart,
-      remove: spanEnd - spanStart,
-      insert: `(${left} = ${right} OR (${left} IS NULL AND ${right} IS NULL))`
+      at: spanEnd,
+      remove: 0,
+      insert: ` OR (${left} IS NULL AND ${right} IS NULL))`
     })
     fixed.push(tgt.column)
   }
   if (!edits.length) return manual('No nullable key column is compared with a plain equality.')
+  const rows = typeof d.table_rows === 'number' ? d.table_rows : null
+  const notes = [
+    `The OR form can stop SQL Server from seeking an index on ${fixed.join(', ')} and make it scan ${rows != null ? `the ${rows.toLocaleString('en-US')}-row` : 'the'} target instead; on a large table, watch this import's run time after the change.`
+  ]
   return {
     proposable: true,
     class: 'merge-null-safe',
     risky: false,
     reasons: [],
+    notes,
     edits,
     newDefinition: applyEdits(sql, edits)
   }

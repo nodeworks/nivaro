@@ -163,14 +163,21 @@ export interface Proposal {
   manual_reason?: string
   risky: boolean
   reasons: string[]
+  /** Worth knowing, no extra confirmation needed. */
+  notes: string[]
   diff: DiffHunk[]
   unified: string
   current_hash: string
   new_definition_hash: string | null
-  compile: { ok: boolean; error?: string; skipped?: boolean } | null
   target: { type: ObjectType; label: string; kind: 'module' | 'import_definition' }
   deploys: boolean
   note: string
+}
+
+export interface CompileResult {
+  ok: boolean
+  error?: string
+  skipped?: boolean
 }
 
 export interface ApplyOutcome {
@@ -192,6 +199,7 @@ export interface PageFixDetail {
   reverted?: boolean
   reverted_at?: string
   reverted_by?: string
+  applied_definition_hash?: string
   deployed?: boolean
   kind?: 'module' | 'import_definition'
   diff?: DiffHunk[]
@@ -230,47 +238,54 @@ const DIFF_SR: Record<DiffLine['type'], string> = { ' ': '', '-': 'removed: ', '
 /** Line diff with old / new line numbers; the +/- sign carries the meaning, colour only helps. */
 export function DiffView({ hunks, label }: { hunks: DiffHunk[]; label: string }) {
   return (
-    <figure className='m-0 grid gap-1'>
+    <figure className='m-0 grid min-w-0 gap-1'>
       <figcaption className='sr-only'>{label}</figcaption>
-      <pre className='m-0 max-h-[360px] overflow-auto rounded-md border border-slate-200 bg-white p-0 text-[11.5px] leading-[1.55] dark:border-border dark:bg-card'>
-        <code className='block min-w-max py-1'>
-          {hunks.map((h, hi) => (
-            // biome-ignore lint/suspicious/noArrayIndexKey: hunks are a fixed list, never reordered
-            <span key={hi} className='block'>
-              {hi > 0 && (
-                <span aria-hidden='true' className='block px-3 text-muted-foreground'>
-                  ⋯
-                </span>
-              )}
-              {h.lines.map((l, li) => (
-                <span
-                  // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list of diff lines
-                  key={li}
-                  className={cn('block whitespace-pre pr-3', DIFF_ROW[l.type])}
-                >
+      <section
+        aria-label={label}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a scroll box must take focus to be scrolled from the keyboard
+        tabIndex={0}
+        className='max-h-[360px] overflow-auto rounded-md border border-slate-200 bg-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan dark:border-border dark:bg-card'
+      >
+        <pre className='m-0 p-0 text-[11.5px] leading-[1.55]'>
+          <code className='block min-w-max py-1'>
+            {hunks.map((h, hi) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: hunks are a fixed list, never reordered
+              <span key={hi} className='block'>
+                {hi > 0 && (
+                  <span aria-hidden='true' className='block px-3 text-muted-foreground'>
+                    ⋯
+                  </span>
+                )}
+                {h.lines.map((l, li) => (
                   <span
-                    aria-hidden='true'
-                    className='inline-block w-10 select-none pr-2 text-right text-muted-foreground'
+                    // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list of diff lines
+                    key={li}
+                    className={cn('block whitespace-pre pr-3', DIFF_ROW[l.type])}
                   >
-                    {l.old_no ?? ''}
+                    <span
+                      aria-hidden='true'
+                      className='inline-block w-10 select-none pr-2 text-right text-muted-foreground'
+                    >
+                      {l.old_no ?? ''}
+                    </span>
+                    <span
+                      aria-hidden='true'
+                      className='inline-block w-10 select-none pr-2 text-right text-muted-foreground'
+                    >
+                      {l.new_no ?? ''}
+                    </span>
+                    <span aria-hidden='true' className='inline-block w-4 select-none'>
+                      {l.type === ' ' ? '' : l.type}
+                    </span>
+                    <span className='sr-only select-none'>{DIFF_SR[l.type]}</span>
+                    {l.text}
                   </span>
-                  <span
-                    aria-hidden='true'
-                    className='inline-block w-10 select-none pr-2 text-right text-muted-foreground'
-                  >
-                    {l.new_no ?? ''}
-                  </span>
-                  <span aria-hidden='true' className='inline-block w-4 select-none'>
-                    {l.type === ' ' ? '' : l.type}
-                  </span>
-                  <span className='sr-only'>{DIFF_SR[l.type]}</span>
-                  {l.text}
-                </span>
-              ))}
-            </span>
-          ))}
-        </code>
-      </pre>
+                ))}
+              </span>
+            ))}
+          </code>
+        </pre>
+      </section>
     </figure>
   )
 }

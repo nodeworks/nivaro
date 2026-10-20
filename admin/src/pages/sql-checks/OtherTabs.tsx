@@ -306,7 +306,7 @@ function PageFix({ row }: { row: FixRow }) {
             {showDiff ? 'Hide diff' : 'View diff'}
           </button>
         )}
-        {d.applied && !d.reverted && (
+        {(d.applied || !!d.rollback_error) && !d.reverted && !!d.applied_definition_hash && (
           <Button
             size='sm'
             variant='outline'
@@ -321,7 +321,15 @@ function PageFix({ row }: { row: FixRow }) {
               revert.mutate()
             }}
           >
-            {revert.isPending ? 'Reverting…' : armed ? 'Click again to revert' : 'Revert'}
+            {revert.isPending
+              ? 'Restoring…'
+              : armed
+                ? d.applied
+                  ? 'Click again to revert'
+                  : 'Click again to restore'
+                : d.applied
+                  ? 'Revert'
+                  : 'Restore previous version'}
           </Button>
         )}
       </div>

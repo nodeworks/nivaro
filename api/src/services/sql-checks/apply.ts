@@ -4,18 +4,25 @@
  * itself is pure (propose.ts); this file reads the current definition, compiles the proposal in a
  * rolled-back transaction, deploys it through the one procedure deploy path
  * (services/procedure-deploy.ts), re-checks the object at once and puts the previous definition
- * back when the re-check is worse. Every apply / rollback / revert is a `proc_fix` row in
+ * back when the re-check is worse. Every apply / put-back / revert is a `proc_fix` row in
  * nivaro_sql_check_fixes whose detail keeps the previous definition, so it can be undone.
  *
- * Import definitions' stored bodies are only rewritten (with a version snapshot), never deployed
- * from here: their own Deploy button does that, after a person has looked.
+ * Safety:
+ *  - every text that is deployed names its target explicitly when the header does not (a renamed
+ *    procedure keeps its old name in sys.sql_modules; a header without a schema lands in the
+ *    login's default schema), so a deploy can never create or replace another object;
+ *  - read, hash-compare and CREATE OR ALTER happen on ONE connection under an exclusive
+ *    application lock per procedure (`sp_getapplock`, so it holds across replicas): nothing can
+ *    change the procedure between the check and the deploy, and a put-back / revert only runs
+ *    while the procedure is still exactly what this page deployed;
+ *  - stored import bodies are only rewritten (conditionally on being unchanged), never deployed.
  */
 import type { FastifyRequest } from 'fastify'
 import { isMssql } from '../../db/dialect.js'
 import { db } from '../../db/index.js'
 import { logActivity } from '../activity.js'
 import {
-  deployProcedure,
+  deployOn,
   liveProcedureDefinition,
   sha256,
   snapshotImportDefinition,
@@ -29,9 +36,11 @@ import {
   diffForEdits,
   type FindingForFix,
   type ProposalResult,
+  procHeaderName,
   proposeFix,
   recheckVerdict,
-  unifiedDiff
+  unifiedDiff,
+  withExplicitName
 } from './propose.js'
 import { EVENTS, FINDINGS, FIXES, loadCatalog } from './run.js'
 import { canonicalDefinition } from './tokenizer.js'
@@ -72,7 +81,7 @@ const parse = (v: unknown): Record<string, unknown> | null => {
   }
 }
 
-const objectLabel = (f: Pick<FindingRecord, 'object_schema' | 'object_name'>) =>
+const objectLabel = (f: { object_schema: string | null; object_name: string }) =>
   `${f.object_schema ? `${f.object_schema}.` : ''}${f.object_name}`
 
 async function loadFinding(id: number): Promise<FindingRecord> {
@@ -136,6 +145,21 @@ async function hasSourceDupes(f: FindingRecord): Promise<boolean> {
   return !!row
 }
 
+/**
+ * The text that is compiled / deployed for a procedure: its header names `[schema].[name]` of the
+ * finding's object unless it already names exactly that (renamed procedures and schema-less
+ * headers are rewritten; see the file header). Null when it has no procedure header.
+ */
+export function deployText(sql: string, schema: string | null, name: string): string | null {
+  const h = procHeaderName(sql)
+  if (!h) return null
+  const same =
+    h.name.toLowerCase() === name.toLowerCase() &&
+    h.schema != null &&
+    h.schema.toLowerCase() === (schema ?? 'dbo').toLowerCase()
+  return same ? sql : withExplicitName(sql, schema, name)
+}
+
 export interface CompileResult {
   ok: boolean
   error?: string
@@ -170,6 +194,55 @@ export async function compileCheck(definition: string): Promise<CompileResult> {
   )
 }
 
+const nq = (s: string) => `N'${s.replace(/'/g, "''")}'`
+const bracket = (s: string) => `[${s.replace(/]/g, ']]')}]`
+
+/**
+ * Read → hash-compare → CREATE OR ALTER → read back, on one connection, holding an exclusive
+ * application lock on the procedure for the whole sequence. Refuses (409) when the procedure is
+ * no longer the text the caller saw (`expectHash`). Returns the definition SQL Server now holds.
+ */
+export async function guardedDeploy(
+  target: { schema: string | null; name: string },
+  expectHash: string,
+  text: string
+): Promise<string> {
+  if (!isMssql(db)) throw new FixError(409, 'Fixes are applied on SQL Server only.')
+  const qualified = `${bracket(target.schema ?? 'dbo')}.${bracket(target.name)}`
+  const resource =
+    `sqlcheck:${(target.schema ?? 'dbo').toLowerCase()}.${target.name.toLowerCase()}`.slice(0, 255)
+  const read = `SELECT m.definition FROM sys.sql_modules m WHERE m.object_id = OBJECT_ID(${nq(qualified)}, N'P')`
+  return withLongConnection(
+    async (c) => {
+      const [lock] = await c.run<{ r: number }>(
+        `DECLARE @r int; EXEC @r = sp_getapplock @Resource = ${nq(resource)}, @LockMode = 'Exclusive', @LockOwner = 'Session', @LockTimeout = 15000; SELECT @r AS r`
+      )
+      if (!(Number(lock?.r) >= 0))
+        throw new FixError(
+          409,
+          'Another change to this procedure is in progress. Try again shortly.'
+        )
+      try {
+        const [cur] = await c.run<{ definition: string | null }>(read)
+        if (!cur?.definition || sha256(cur.definition) !== expectHash)
+          throw new FixError(
+            409,
+            'The procedure changed since it was read. Look at the proposed fix again.',
+            'SQL_CHECK_FIX_STALE'
+          )
+        await deployOn(c, text)
+        const [after] = await c.run<{ definition: string | null }>(read)
+        return after?.definition ?? ''
+      } finally {
+        await c
+          .run(`EXEC sp_releaseapplock @Resource = ${nq(resource)}, @LockOwner = 'Session'`)
+          .catch(() => c.discard())
+      }
+    },
+    { timeoutMs: 150_000 }
+  )
+}
+
 export interface ProposalOut {
   finding_id: number
   proposable: boolean
@@ -177,25 +250,24 @@ export interface ProposalOut {
   manual_reason?: string
   risky: boolean
   reasons: string[]
+  notes: string[]
   diff: DiffHunk[]
   unified: string
   current_hash: string
   new_definition_hash: string | null
-  compile: CompileResult | null
   target: { type: ObjectType; label: string; kind: Current['kind'] }
   deploys: boolean
   note: string
 }
 
-async function build(
-  f: FindingRecord,
-  withCompile: boolean
-): Promise<{ out: ProposalOut; current: Current; proposal: ProposalResult }> {
+async function build(f: FindingRecord): Promise<{
+  out: ProposalOut
+  current: Current
+  proposal: ProposalResult
+}> {
   const current = await currentDefinition(f)
   const proposal = proposeFix(current.sql, forFix(f), { sourceDupes: await hasSourceDupes(f) })
   const diff = proposal.proposable ? diffForEdits(current.sql, proposal.edits) : []
-  const compile =
-    withCompile && proposal.newDefinition ? await compileCheck(proposal.newDefinition) : null
   return {
     current,
     proposal,
@@ -206,11 +278,11 @@ async function build(
       manual_reason: proposal.manual_reason,
       risky: proposal.risky,
       reasons: proposal.reasons,
+      notes: proposal.notes,
       diff,
       unified: diff.length ? unifiedDiff(diff, objectLabel(f)) : '',
       current_hash: sha256(current.sql),
       new_definition_hash: proposal.newDefinition ? sha256(proposal.newDefinition) : null,
-      compile,
       target: { type: f.object_type, label: objectLabel(f), kind: current.kind },
       deploys: current.kind === 'module',
       note:
@@ -221,11 +293,41 @@ async function build(
   }
 }
 
-/** GET /findings/:id/proposal */
+/** The text compiled for a proposal: what would be deployed (or stored). */
+function compileTextFor(f: FindingRecord, current: Current, newDefinition: string): string {
+  if (current.kind === 'module') {
+    const t = deployText(newDefinition, f.object_schema, f.object_name)
+    if (!t) throw new FixError(409, 'The definition has no procedure header to deploy.')
+    return t
+  }
+  return newDefinition
+}
+
+/** GET /findings/:id/proposal — diff and risks only; nothing touches the database's objects. */
 export async function proposalFor(findingId: number): Promise<ProposalOut> {
   const f = await loadFinding(findingId)
   if (f.status === 'resolved') throw new FixError(409, 'This finding is already resolved.')
-  return (await build(f, true)).out
+  return (await build(f)).out
+}
+
+/**
+ * POST /findings/:id/proposal/compile — compile the proposal in a rolled-back transaction (takes
+ * a schema lock on the procedure for up to 5 s, so it is a POST, never a GET).
+ */
+export async function compileProposal(
+  findingId: number,
+  newDefinitionHash: string
+): Promise<CompileResult> {
+  const f = await loadFinding(findingId)
+  const { current, proposal, out } = await build(f)
+  if (!proposal.newDefinition) throw new FixError(409, 'No fix can be proposed for this finding.')
+  if (out.new_definition_hash !== newDefinitionHash)
+    throw new FixError(
+      409,
+      'The definition changed since the preview. Look at the proposed fix again.',
+      'SQL_CHECK_FIX_STALE'
+    )
+  return compileCheck(compileTextFor(f, current, proposal.newDefinition))
 }
 
 const inFlight = new Set<string>()
@@ -258,35 +360,54 @@ async function recordFix(row: {
   return Number(typeof r === 'object' && r ? (r as { id: unknown }).id : r)
 }
 
+interface SyncedBody {
+  key: string
+  previous_body: string
+  previous_hash: string | null
+  previous_deployed_at: string | null
+  synced_hash: string
+}
+
 /** Import definitions whose stored body is the definition that was just replaced. */
 async function syncImportBodies(
   procName: string,
   previous: string,
   applied: string,
   who: Who
-): Promise<Array<{ key: string; previous_body: string }>> {
+): Promise<SyncedBody[]> {
   if (!(await db.schema.hasTable('nivaro_import_definitions'))) return []
   const rows = (await db('nivaro_import_definitions')
     .whereRaw('LOWER(??) = ?', ['procedure', procName.toLowerCase()])
     .whereNotNull('procedure_body')
-    .select('id', 'key', 'procedure_body')) as Array<{
+    .select('id', 'key', 'procedure_body', 'procedure_hash', 'procedure_deployed_at')) as Array<{
     id: number
     key: string
     procedure_body: string
+    procedure_hash: string | null
+    procedure_deployed_at: Date | string | null
   }>
-  const synced: Array<{ key: string; previous_body: string }> = []
+  const synced: SyncedBody[] = []
   const body = toCreateOrAlter(applied)
   for (const r of rows) {
     if (canonicalDefinition(r.procedure_body) !== canonicalDefinition(previous)) continue
     await snapshotImportDefinition(r.key, 'before SQL checks fix', who.userId)
-    await db('nivaro_import_definitions')
+    const n = await db('nivaro_import_definitions')
       .where('id', r.id)
+      .where('procedure_body', r.procedure_body)
       .update({
         procedure_body: body,
         procedure_hash: sha256(body),
         procedure_deployed_at: new Date()
       })
-    synced.push({ key: r.key, previous_body: r.procedure_body })
+    if (!n) continue // changed in the meantime: leave it
+    synced.push({
+      key: r.key,
+      previous_body: r.procedure_body,
+      previous_hash: r.procedure_hash,
+      previous_deployed_at:
+        r.procedure_deployed_at == null ? null : new Date(r.procedure_deployed_at).toISOString(),
+      synced_hash: sha256(body)
+    })
   }
   return synced
 }
@@ -313,7 +434,7 @@ export async function applyFix(opts: {
     throw new FixError(409, 'A fix for this object is already being applied.')
   inFlight.add(lockKey)
   try {
-    const { current, proposal, out } = await build(f, false)
+    const { current, proposal, out } = await build(f)
     if (!proposal.proposable || !proposal.newDefinition)
       throw new FixError(409, proposal.manual_reason ?? 'No fix can be proposed for this finding.')
     if (out.new_definition_hash !== opts.newDefinitionHash)
@@ -324,7 +445,8 @@ export async function applyFix(opts: {
       )
     if (proposal.risky && !opts.confirmRisky)
       throw new FixError(400, 'This fix needs the extra confirmation (see the warnings).')
-    const compile = await compileCheck(proposal.newDefinition)
+    const text = compileTextFor(f, current, proposal.newDefinition)
+    const compile = await compileCheck(text)
     if (!compile.ok)
       throw new FixError(422, `The proposed definition does not compile: ${compile.error}`)
 
@@ -382,9 +504,16 @@ export async function applyFix(opts: {
         'before SQL checks fix',
         opts.who.userId
       )
-      await db('nivaro_import_definitions')
+      const n = await db('nivaro_import_definitions')
         .where('id', f.object_ref)
+        .where('procedure_body', current.sql)
         .update({ procedure_body: proposal.newDefinition })
+      if (!n)
+        throw new FixError(
+          409,
+          'The stored body changed since it was read. Look at the proposed fix again.',
+          'SQL_CHECK_FIX_STALE'
+        )
       const fixId = await recordFix({
         check_key: f.check_key,
         target,
@@ -408,10 +537,13 @@ export async function applyFix(opts: {
       return { fix_id: fixId, applied: true, rolled_back: false, deployed: false }
     }
 
-    // a procedure: deploy, re-check what SQL Server now holds, roll back when it got worse
+    // a procedure: deploy under the lock, re-check what SQL Server now holds, put back when worse
+    const targetObj = { schema: f.object_schema, name: f.object_name }
+    let applied: string
     try {
-      await deployProcedure(proposal.newDefinition)
+      applied = await guardedDeploy(targetObj, sha256(current.sql), text)
     } catch (e) {
+      if (e instanceof FixError) throw e
       const fixId = await recordFix({
         check_key: f.check_key,
         target,
@@ -419,19 +551,20 @@ export async function applyFix(opts: {
         who: opts.who
       })
       await audit('sql-check-proc-fix-failed', f, (e as Error).message, opts.who)
-      throw Object.assign(new FixError(422, `Deploy failed: ${(e as Error).message}`), { fixId })
+      throw new FixError(422, `Deploy failed: ${(e as Error).message} (fix #${fixId})`)
     }
-    const applied = (await liveProcedureDefinition(f.object_schema, f.object_name)) ?? ''
     const after = checkObject(obj(applied), catalog)
     const verdict = applied
       ? recheckVerdict(before, after, f.check_key)
       : { ok: false, reason: 'the procedure could not be read back after the deploy' }
     if (!verdict.ok) {
       let rollbackError: string | undefined
+      const putBack = deployText(current.sql, f.object_schema, f.object_name)
       try {
-        await deployProcedure(current.sql)
+        if (!putBack) throw new Error('the previous definition has no procedure header')
+        await guardedDeploy(targetObj, sha256(applied), putBack)
       } catch (e) {
-        rollbackError = (e as Error).message
+        rollbackError = e instanceof Error ? e.message : String(e)
       }
       const fixId = await recordFix({
         check_key: f.check_key,
@@ -442,6 +575,8 @@ export async function applyFix(opts: {
           rolled_back: !rollbackError,
           rollback_reason: verdict.reason,
           rollback_error: rollbackError,
+          // what is in place when the put-back failed: Restore checks it is still this
+          applied_definition_hash: rollbackError ? sha256(applied) : undefined,
           recheck: { before: before.length, after: after.length }
         },
         who: opts.who
@@ -451,7 +586,10 @@ export async function applyFix(opts: {
         event: 'fix_undone',
         at: new Date(),
         by: opts.who.userId,
-        note: `Fix put back automatically: ${verdict.reason}`.slice(0, 500)
+        note: (rollbackError
+          ? `Fix made things worse (${verdict.reason}); putting the old version back failed`
+          : `Fix put back automatically: ${verdict.reason}`
+        ).slice(0, 500)
       })
       await audit(
         'sql-check-proc-fix-rollback',
@@ -462,7 +600,8 @@ export async function applyFix(opts: {
       if (rollbackError)
         throw new FixError(
           500,
-          `The fix made things worse (${verdict.reason}) and putting the previous definition back failed: ${rollbackError}. Restore it from the Fixes tab or the Procedures page.`
+          `The fix made things worse (${verdict.reason}) and putting the previous version back failed: ${rollbackError}. Use “Restore previous version” on fix #${fixId} in the Fixes tab, or the Procedures page.`,
+          'SQL_CHECK_FIX_ROLLBACK_FAILED'
         )
       return {
         fix_id: fixId,
@@ -519,47 +658,94 @@ async function audit(action: string, f: FindingRecord, comment: string, who: Who
   })
 }
 
-/** POST /fixes/:id/revert — put the previous definition back. */
-export async function revertFix(fixId: number, who: Who): Promise<{ reverted: true }> {
+interface FixDetail {
+  source?: string
+  applied?: boolean
+  rollback_error?: string
+  reverted?: boolean
+  kind?: Current['kind']
+  finding_id?: number
+  object?: { type: ObjectType; schema: string | null; name: string; ref: string | null }
+  previous_definition?: string
+  applied_definition_hash?: string
+  import_previous_bodies?: SyncedBody[]
+}
+
+/** Whether a fixes row can be reverted from the page (pure). */
+export function revertable(d: FixDetail | null): boolean {
+  return (
+    !!d &&
+    d.source === 'sql-checks-page' &&
+    !d.reverted &&
+    !!d.object &&
+    !!d.previous_definition &&
+    !!d.applied_definition_hash &&
+    (d.applied === true || !!d.rollback_error)
+  )
+}
+
+/**
+ * POST /fixes/:id/revert — put the previous definition back: an applied fix, or one whose
+ * automatic put-back failed. Refused when the object is no longer what the fix left in place.
+ */
+export async function revertFix(
+  fixId: number,
+  who: Who
+): Promise<{ reverted: true; skipped_import_bodies: string[] }> {
   const row = (await db(FIXES).where('id', fixId).first()) as
-    | { id: number; detail: string | null; target_object: string | null; check_key: string | null }
+    | { id: number; detail: string | null; target_object: string | null }
     | undefined
   if (!row) throw new FixError(404, 'Not found')
-  const d = parse(row.detail) as {
-    source?: string
-    applied?: boolean
-    reverted?: boolean
-    kind?: Current['kind']
-    finding_id?: number
-    object?: { type: ObjectType; schema: string | null; name: string; ref: string | null }
-    previous_definition?: string
-    applied_definition_hash?: string
-    import_previous_bodies?: Array<{ key: string; previous_body: string }>
-  } | null
-  if (d?.source !== 'sql-checks-page' || !d.applied || !d.object || !d.previous_definition)
+  const d = parse(row.detail) as FixDetail | null
+  if (!d || !revertable(d)) {
+    if (d?.reverted) throw new FixError(409, 'This fix was already reverted.')
     throw new FixError(409, 'Only a fix applied from this page can be reverted here.')
-  if (d.reverted) throw new FixError(409, 'This fix was already reverted.')
+  }
+  const obj = d.object as NonNullable<FixDetail['object']>
+  const previous = d.previous_definition as string
   const key = `rev|${fixId}`
   if (inFlight.has(key)) throw new FixError(409, 'Already reverting.')
   inFlight.add(key)
+  const skipped: string[] = []
   try {
     if (d.kind === 'module') {
-      const live = await liveProcedureDefinition(d.object.schema, d.object.name)
-      if (!live || sha256(live) !== d.applied_definition_hash)
-        throw new FixError(
-          409,
-          'The procedure changed after this fix, so putting the old version back would undo someone else’s change. Compare it on the Procedures page instead.'
+      const text = deployText(previous, obj.schema, obj.name)
+      if (!text) throw new FixError(409, 'The previous definition has no procedure header.')
+      try {
+        await guardedDeploy(
+          { schema: obj.schema, name: obj.name },
+          d.applied_definition_hash as string,
+          text
         )
-      await deployProcedure(d.previous_definition)
+      } catch (e) {
+        if (e instanceof FixError && e.code === 'SQL_CHECK_FIX_STALE')
+          throw new FixError(
+            409,
+            'The procedure changed after this fix, so putting the old version back would undo someone else’s change. Compare it on the Procedures page instead.'
+          )
+        throw e
+      }
       for (const s of d.import_previous_bodies ?? []) {
+        const cur = (await db('nivaro_import_definitions')
+          .where('key', s.key)
+          .first('procedure_body')) as { procedure_body: string | null } | undefined
+        if (!cur?.procedure_body || sha256(cur.procedure_body) !== s.synced_hash) {
+          skipped.push(s.key) // edited since the fix: theirs stays
+          continue
+        }
         await snapshotImportDefinition(s.key, 'before reverting a SQL checks fix', who.userId)
         await db('nivaro_import_definitions')
           .where('key', s.key)
-          .update({ procedure_body: s.previous_body })
+          .where('procedure_body', cur.procedure_body)
+          .update({
+            procedure_body: s.previous_body,
+            procedure_hash: s.previous_hash,
+            procedure_deployed_at: s.previous_deployed_at ? new Date(s.previous_deployed_at) : null
+          })
       }
     } else {
       const cur = (await db('nivaro_import_definitions')
-        .where('id', d.object.ref)
+        .where('id', obj.ref)
         .first('key', 'procedure_body')) as
         | { key: string; procedure_body: string | null }
         | undefined
@@ -570,8 +756,9 @@ export async function revertFix(fixId: number, who: Who): Promise<{ reverted: tr
         )
       await snapshotImportDefinition(cur.key, 'before reverting a SQL checks fix', who.userId)
       await db('nivaro_import_definitions')
-        .where('id', d.object.ref)
-        .update({ procedure_body: d.previous_definition })
+        .where('id', obj.ref)
+        .where('procedure_body', cur.procedure_body)
+        .update({ procedure_body: previous })
     }
     await db(FIXES)
       .where('id', fixId)
@@ -580,7 +767,8 @@ export async function revertFix(fixId: number, who: Who): Promise<{ reverted: tr
           ...d,
           reverted: true,
           reverted_at: new Date().toISOString(),
-          reverted_by: who.label
+          reverted_by: who.label,
+          revert_skipped_import_bodies: skipped.length ? skipped : undefined
         })
       })
     if (d.finding_id) {
@@ -602,7 +790,7 @@ export async function revertFix(fixId: number, who: Who): Promise<{ reverted: tr
       comment: `${row.target_object ?? ''}: previous definition restored`.slice(0, 1000),
       req: who.req
     })
-    return { reverted: true }
+    return { reverted: true, skipped_import_bodies: skipped }
   } finally {
     inFlight.delete(key)
   }

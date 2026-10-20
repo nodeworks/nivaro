@@ -95,12 +95,13 @@ export const sqlChecksDocs: DocSection = {
     {
       type: 'ul',
       items: [
-        'The preview changes nothing: it shows the diff with old and new line numbers, and compiles the new definition inside a transaction that is rolled back.',
+        'The preview changes nothing: it shows the diff with old and new line numbers. The compile check is a separate POST (it holds a schema lock on the procedure for up to 5 seconds) that compiles the new definition inside a transaction that is rolled back.',
+        'Adding XACT_ABORT is marked risky when the procedure commits in a CATCH block or reads XACT_STATE() or @@ERROR to carry on after an error: with XACT_ABORT ON those paths behave differently (error 3930). A NULL-safe ON carries a note that the OR form can turn an index seek into a scan on a large table.',
         'A NULL-safe ON is marked risky when copies already sit in NULL-key groups (one incoming row then updates all of them) or when the MERGE source may repeat a key (SQL Server would stop the whole MERGE). A risky fix needs an extra confirmation.',
         'Apply (two clicks) sends the preview’s hash; if the definition changed since the preview it is refused (409) and the preview is rebuilt.',
-        'A procedure is changed with CREATE OR ALTER through the same path as the Procedures page, then checked again at once. If the re-check reports anything new, or the finding is still there, the previous definition is put back automatically and the panel says why.',
+        'A procedure is changed with CREATE OR ALTER through the same path as the Procedures page, on one connection that holds an exclusive application lock on that procedure (so two servers cannot change it at once) and re-reads it first: if it changed since the preview, nothing is deployed. The deployed text always names the procedure itself (a renamed procedure, or a header without a schema, is rewritten to [schema].[name]). It is then checked again at once; if the re-check reports anything new, or the finding is still there, the previous definition is put back automatically (only while the procedure is still exactly what the fix deployed) and the panel says why.',
         'An import definition whose stored body was identical to the procedure gets the new body too (with a version snapshot). A finding on a stored body that differs from the deployed procedure only changes the stored body; deploy it from the import definition.',
-        'Every apply, automatic put-back and revert is a “Procedure changed” row on the Fixes tab with the diff; Revert (two clicks) restores the previous definition, and is refused when the procedure changed again after the fix.'
+        'Every apply, automatic put-back and revert is a “Procedure changed” row on the Fixes tab with the diff; Revert (two clicks) restores the previous definition, and is refused when the procedure changed again after the fix. When an automatic put-back itself failed, the row offers Restore previous version. Import definition bodies that were synced are put back only if nobody edited them since, with their deployed hash and time.'
       ]
     },
     {
@@ -145,7 +146,11 @@ export const sqlChecksDocs: DocSection = {
         ],
         [
           'GET /api/sql-checks/findings/:id/proposal',
-          'The proposed fix: {proposable, class, risky, reasons, diff, unified, new_definition_hash, compile}. Changes nothing.'
+          'The proposed fix: {proposable, class, risky, reasons, notes, diff, unified, new_definition_hash}. Changes nothing and compiles nothing.'
+        ],
+        [
+          'POST /api/sql-checks/findings/:id/proposal/compile',
+          '{new_definition_hash} compiles the previewed text in a rolled-back transaction: {ok, error?}.'
         ],
         [
           'POST /api/sql-checks/findings/:id/apply',
@@ -153,7 +158,7 @@ export const sqlChecksDocs: DocSection = {
         ],
         [
           'POST /api/sql-checks/fixes/:id/revert',
-          'Restores the definition a fix from the page replaced; 409 when the procedure changed after the fix.'
+          'Restores the definition a fix from the page replaced (also after a failed automatic put-back); 409 when the procedure changed after the fix. Answers {reverted, skipped_import_bodies}.'
         ],
         ['GET · POST /api/sql-checks/fixes', 'The fix log (paged); log a fix from a script.'],
         [
