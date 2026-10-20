@@ -274,7 +274,8 @@ export function PickerTab() {
                   'field.group_field',
                   'group_field',
                   v || undefined,
-                  `Group the ${name} options`
+                  `Group the ${name} options`,
+                  v
                 )
               }
             />
@@ -294,7 +295,8 @@ export function PickerTab() {
                   'field.option_field',
                   'option_field',
                   v || undefined,
-                  `Change the ${name} options`
+                  `Change the ${name} options`,
+                  v
                 )
               }
             />
@@ -317,14 +319,16 @@ export function PickerTab() {
               ctx.proposeGlobal(
                 'field.cascade_filters',
                 next,
-                {
-                  dependency_config: withKey(
-                    globalDependency,
-                    'cascade_filters',
-                    next.length ? next : undefined
-                  )
-                },
-                `Change how ${name} options are narrowed`
+                `Change how ${name} options are narrowed`,
+                (d) => ({
+                  ...d,
+                  dependency_config:
+                    withKey(
+                      d.dependency_config,
+                      'cascade_filters',
+                      next.length ? next : undefined
+                    ) ?? {}
+                })
               )
             }
           />
@@ -373,7 +377,8 @@ export function PickerTab() {
                   'field.pending_save',
                   'pending_save',
                   v || undefined,
-                  `Change when ${name} files save`
+                  `Change when ${name} files save`,
+                  v
                 )
               }
             />

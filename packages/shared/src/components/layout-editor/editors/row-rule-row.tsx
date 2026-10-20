@@ -120,7 +120,8 @@ export function ViaValuePicker({
     : []
 
   const { data: collectionMeta } = useQuery<{ display_template?: string | null }>({
-    queryKey: ['collection-meta', collection],
+    // Namespaced: ['collection-meta', c] holds other shapes elsewhere.
+    queryKey: ['layout-editor', 'collection-row', collection],
     queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data ?? {}),
     enabled: !!collection,
     staleTime: 5 * 60_000

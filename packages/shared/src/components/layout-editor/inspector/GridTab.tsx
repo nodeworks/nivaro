@@ -322,23 +322,18 @@ export function GridTab() {
     'field.default_preset',
     typeof g.default_preset === 'string' ? g.default_preset : ''
   )
-  const proposePresets = (next: ColumnPresetItem[]) =>
-    ctx.proposeGlobal(
+  const proposePresets = (next: ColumnPresetItem[]) => {
+    const valid = next
+      .filter((p) => p.name.trim() && p.columns.length)
+      .map((p) => ({ name: p.name.trim(), columns: p.columns }))
+    ctx.proposeGlobalOption(
       'field.column_presets',
-      next,
-      {
-        options: (() => {
-          const valid = next
-            .filter((p) => p.name.trim() && p.columns.length)
-            .map((p) => ({ name: p.name.trim(), columns: p.columns }))
-          const o: Obj = { ...g }
-          if (valid.length) o.column_presets = valid
-          else delete o.column_presets
-          return o
-        })()
-      },
-      `Change the column presets of ${name}`
+      'column_presets',
+      valid.length ? valid : undefined,
+      `Change the column presets of ${name}`,
+      next
     )
+  }
 
   // Column preset picker: the child layout's display columns + drawer relation members.
   const childToParent = childRels.find(
@@ -449,7 +444,8 @@ export function GridTab() {
               'field.grid_show_totals',
               'grid_show_totals',
               v || undefined,
-              `Change the totals of ${name}`
+              `Change the totals of ${name}`,
+              v
             )
           }
         />
@@ -864,7 +860,8 @@ export function GridTab() {
                       'field.default_preset',
                       'default_preset',
                       v || undefined,
-                      `Change the opening columns of ${name}`
+                      `Change the opening columns of ${name}`,
+                      v
                     )
                   }
                 />

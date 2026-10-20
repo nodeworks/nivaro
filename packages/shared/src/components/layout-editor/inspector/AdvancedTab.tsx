@@ -1,9 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
+import { useContext } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import type { CascadeFilterRule } from '../editors/cascade-filters'
 import { useFieldCtx } from './field-context'
-import { DraftInput, JsonInput, Section, Setting, Toggle, useGlobalValue } from './kit'
+import {
+  DraftInput,
+  GlobalWriterContext,
+  JsonInput,
+  Section,
+  Setting,
+  Toggle,
+  useGlobalValue
+} from './kit'
 import { asArray, withKey } from './model'
 
 /** Stored option keys that have no editor yet — kept and editable as JSON. */
@@ -63,8 +72,10 @@ export function AdvancedTab() {
     staleTime: 60_000
   })
 
+  // Raw cascade rows show the pending draft, so a change waits beside the others.
+  const draftDependency = useContext(GlobalWriterContext)?.draft.dependency_config
   const cascades = asArray<CascadeFilterRule & Record<string, unknown>>(
-    globalDependency.cascade_filters
+    (draftDependency ?? globalDependency).cascade_filters
   )
   const proposeCascade = (
     settingKey: string,
@@ -72,15 +83,15 @@ export function AdvancedTab() {
     key: string,
     value: unknown,
     label: string
-  ) => {
-    const next = cascades.map((r, j) => (j === i ? (withKey(r, key, value) ?? {}) : r))
-    ctx.proposeGlobal(
-      settingKey,
-      value,
-      { dependency_config: withKey(globalDependency, 'cascade_filters', next) },
-      label
-    )
-  }
+  ) =>
+    ctx.proposeGlobal(settingKey, value, label, (d) => {
+      const rows = asArray<Record<string, unknown>>(d.dependency_config.cascade_filters)
+      const next = rows.map((r, j) => (j === i ? (withKey(r, key, value) ?? {}) : r))
+      return {
+        ...d,
+        dependency_config: withKey(d.dependency_config, 'cascade_filters', next) ?? {}
+      }
+    })
 
   return (
     <div className='space-y-4'>
@@ -138,8 +149,13 @@ export function AdvancedTab() {
               ctx.proposeGlobal(
                 'field.deprecated',
                 v,
-                { deprecated: v, ...(v ? {} : { deprecation_note: null }) },
-                v ? `Deprecate ${name}` : `Stop deprecating ${name}`
+                v ? `Deprecate ${name}` : `Stop deprecating ${name}`,
+                (d) => ({
+                  ...d,
+                  columns: v
+                    ? { ...d.columns, deprecated: true }
+                    : { ...d.columns, deprecated: false, deprecation_note: null }
+                })
               )
             }
           />
@@ -152,8 +168,8 @@ export function AdvancedTab() {
                 ctx.proposeGlobal(
                   'field.deprecation_note',
                   v,
-                  { deprecation_note: v || null },
-                  `Change the deprecation note of ${name}`
+                  `Change the deprecation note of ${name}`,
+                  (d) => ({ ...d, columns: { ...d.columns, deprecation_note: v || null } })
                 )
               }
             />

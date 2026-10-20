@@ -18,6 +18,8 @@ import { Inspector } from './Inspector'
 import { CONDITION_OPS } from './kit'
 
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
+// jsdom has no scrollIntoView; the choice lists call it on open.
+Element.prototype.scrollIntoView ??= () => {}
 
 // ── Fixture: an `orders` collection with every kind of field ────────────────
 
@@ -721,5 +723,106 @@ describe('Inspector', () => {
       expect(apply).not.toHaveBeenCalled()
       expect(host.textContent).toContain('Not valid JSON')
     })
+  })
+
+  describe('every-form changes wait together', () => {
+    const fmtButton = (label: string) =>
+      [...host.querySelectorAll('[data-setting="field.format"] button')].find(
+        (b) => b.textContent === label
+      )
+
+    it('format then currency: one confirm saves both', async () => {
+      const b = makeBundle()
+      const { calls } = await mount(field('amount'), {
+        bundle: b
+      })
+      // Stored: currency USD. Switch to Decimal, then back to Currency and type EUR.
+      await click(fmtButton('Integer'))
+      await click(fmtButton('Currency'))
+      const cur = host.querySelector('[data-setting="field.currency"] input') as HTMLInputElement
+      expect(cur).not.toBeNull()
+      await typeInto(cur, 'EUR')
+      // The currency box stayed mounted while typing and shows what was typed.
+      expect(host.querySelector('[data-setting="field.currency"] input')).toBe(cur)
+      expect(cur.value).toBe('EUR')
+      // One confirm, under the setting changed last, listing every change.
+      const confirms = host.querySelectorAll('[data-global-confirm]')
+      expect(confirms).toHaveLength(1)
+      expect(
+        confirms[0].parentElement?.closest('[data-setting]')?.getAttribute('data-setting')
+      ).toBe('field.currency')
+      expect(confirms[0].querySelectorAll('[data-global-changes] li')).toHaveLength(2)
+      await click(host.querySelector('[data-global-save]'))
+      const patches = calls.filter((c) => c._method === 'PATCH')
+      expect(patches).toHaveLength(1)
+      expect(patches[0]._body).toEqual({ options: { format: 'currency', currency: 'EUR' } })
+    })
+
+    it('a format change survives a later grid-footer change', async () => {
+      const { calls } = await mount(field('amount'))
+      await click(fmtButton('Decimal'))
+      // The format control keeps showing the pending value.
+      expect(fmtButton('Decimal')?.getAttribute('aria-pressed')).toBe('true')
+      expect(host.querySelector('[data-setting="field.currency"]')).toBeNull()
+      await click(host.querySelector('[data-setting="field.aggregate"] button'))
+      await click(
+        [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Sum')
+      )
+      expect(fmtButton('Decimal')?.getAttribute('aria-pressed')).toBe('true')
+      await click(host.querySelector('[data-global-save]'))
+      const patch = calls.find((c) => c._method === 'PATCH')
+      expect(patch?._body).toEqual({
+        options: { format: 'decimal', currency: 'USD', aggregate: 'SUM' }
+      })
+    })
+
+    it('deprecated then a note: both columns save', async () => {
+      const { calls } = await mount(field('title'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      await click(host.querySelector('[data-setting="field.deprecated"] [role="switch"]'))
+      const note = host.querySelector(
+        '[data-setting="field.deprecation_note"] input'
+      ) as HTMLInputElement
+      await typeInto(note, 'use subject')
+      expect(
+        host
+          .querySelector('[data-setting="field.deprecated"] [role="switch"]')
+          ?.getAttribute('aria-checked')
+      ).toBe('true')
+      expect(host.querySelectorAll('[data-global-confirm]')).toHaveLength(1)
+      await click(host.querySelector('[data-global-save]'))
+      const patches = calls.filter((c) => c._method === 'PATCH')
+      expect(patches).toHaveLength(1)
+      expect(patches[0]._body).toEqual({ deprecated: true, deprecation_note: 'use subject' })
+    })
+
+    it('cancel drops every pending change', async () => {
+      await mount(field('amount'))
+      await click(fmtButton('Integer'))
+      await click(fmtButton('Currency'))
+      await click(host.querySelector('[data-global-cancel]'))
+      expect(fmtButton('Currency')?.getAttribute('aria-pressed')).toBe('true')
+      expect(host.querySelector('[data-global-confirm]')).toBeNull()
+    })
+  })
+
+  it('reads collection meta under its own key and leaves other shapes alone', async () => {
+    const { qc } = await mount(field('title'))
+    expect(qc.getQueryData(['layout-editor', 'collection-meta', 'orders'])).toMatchObject({
+      label: 'Orders'
+    })
+    expect(qc.getQueryData(['collection-meta', 'orders'])).toBeUndefined()
+  })
+
+  it('names the collection by its label in the every-form confirm', async () => {
+    await mount(field('amount'))
+    await click(
+      [...host.querySelectorAll('[data-setting="field.format"] button')].find(
+        (b) => b.textContent === 'Decimal'
+      )
+    )
+    const confirm = host.querySelector('[data-global-confirm]')
+    expect(confirm?.textContent).toContain('Forms of Orders')
+    expect(confirm?.textContent).toContain('the Orders list')
   })
 })

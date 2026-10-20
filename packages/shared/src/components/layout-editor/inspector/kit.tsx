@@ -42,25 +42,36 @@ export function useInspectorEnv(): InspectorEnv {
 
 // ── Global (every-form) writes wait for an inline confirm ───────────────────
 
+/** nivaro_fields as it will be saved: what is stored plus every pending change. */
+export interface GlobalDraft {
+  options: Record<string, unknown>
+  dependency_config: Record<string, unknown>
+  /** Other columns (deprecated, deprecation_note). */
+  columns: Record<string, unknown>
+}
+
 export interface GlobalPending {
-  /** Parity key of the setting being changed. */
+  /** Parity key of the setting changed last: the confirm shows under it. */
   key: string
-  /** What the control shows while the confirm is open. */
-  value: unknown
+  /** What each changed control shows while the confirm is open, by parity key. */
+  values: Record<string, unknown>
+  /** Plain words, one per changed setting: "Show Amount as currency". */
+  labels: string[]
   /** Body of PATCH /field-config/:collection/:field. */
   patch: Record<string, unknown>
-  /** Plain words: "Show Amount as currency". */
-  label: string
 }
 
 export interface GlobalWriter {
   collection: string
+  collectionLabel: string
   field: string
   fieldLabel: string
   pending: GlobalPending | null
+  draft: GlobalDraft
   saving: boolean
   error: string | null
-  propose(p: GlobalPending): void
+  /** Merge one change into the pending patch (one confirm for all of them). */
+  propose(key: string, value: unknown, label: string, change: (d: GlobalDraft) => GlobalDraft): void
   cancel(): void
   confirm(): void
 }
@@ -70,7 +81,8 @@ export const GlobalWriterContext = createContext<GlobalWriter | null>(null)
 /** The value a global control shows: the proposal while it waits, else what is stored. */
 export function useGlobalValue<T>(key: string, stored: T): T {
   const w = useContext(GlobalWriterContext)
-  return w?.pending?.key === key ? (w.pending.value as T) : stored
+  const values = w?.pending?.values
+  return values && key in values ? (values[key] as T) : stored
 }
 
 interface FieldImpact {
@@ -112,17 +124,24 @@ export function GlobalConfirm() {
       <p className='font-medium'>
         This changes {w.fieldLabel} on every form that shows it, not just this one.
       </p>
+      {pending.labels.length > 1 && (
+        <ul data-global-changes='' className='list-disc space-y-0.5 pl-4 text-[11px]'>
+          {pending.labels.map((l) => (
+            <li key={l}>{l}</li>
+          ))}
+        </ul>
+      )}
       {isLoading ? (
         <p className='text-[11px] opacity-80'>Finding where {w.fieldLabel} is used…</p>
       ) : (
         <div className='space-y-1 text-[11px]'>
           {shown.length > 0 && (
             <p>
-              Forms of <span className='font-mono'>{w.collection}</span>: {shown.join(', ')}
+              Forms of {w.collectionLabel}: {shown.join(', ')}
               {layouts.length > shown.length && ` and ${layouts.length - shown.length} more`}
             </p>
           )}
-          <p>Also the {w.collection} list and any API reader of this field.</p>
+          <p>Also the {w.collectionLabel} list and any API reader of this field.</p>
           {others.length > 0 && (
             <p className='opacity-80'>
               Other references: {others.slice(0, 5).join(', ')}

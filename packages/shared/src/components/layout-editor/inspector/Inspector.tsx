@@ -29,6 +29,7 @@ import { HeaderItemInspector } from './HeaderItemInspector'
 import { GlobalWriterContext, type InspectorEnv, InspectorEnvContext, useInspectorEnv } from './kit'
 import { LookTab } from './LookTab'
 import {
+  asObject,
   describeField,
   findPlacement,
   isDefaultForm,
@@ -310,14 +311,23 @@ function HeaderItem({ row }: { row: PlacementRow }) {
   )
 }
 
-const EMPTY_META: CollectionMeta = { fields: [], relations: [] }
+const EMPTY_META: CollectionMeta = { fields: [], relations: [], label: '' }
 
 function FieldInspector({ row, readOnly }: { row: PlacementRow; readOnly: boolean }) {
   const env = useInspectorEnv()
   const { data: meta } = useCollectionMeta(env.collection)
   const m = meta ?? EMPTY_META
   const info = describeField(row.field, m.fields, m.relations, row)
-  const writer = useGlobalWriter(env.collection, row.field, info.label)
+  const writer = useGlobalWriter({
+    collection: env.collection,
+    collectionLabel: m.label || titleCase(env.collection),
+    field: row.field,
+    fieldLabel: info.label,
+    stored: {
+      options: asObject(info.global?.options),
+      dependency_config: asObject(info.global?.dependency_config)
+    }
+  })
   const ctx = useFieldCtxValue({ env, row, meta: m, writer, readOnly })
   const showPicker =
     info.relKind === 'M2O' ||

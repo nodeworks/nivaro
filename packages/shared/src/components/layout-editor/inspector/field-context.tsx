@@ -4,8 +4,9 @@ import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { get, patch as patchCmd } from '../../../lib/commands'
 import type { PlacementKey, PlacementPatch, PlacementRow } from '../../../lib/layout-ops'
+import { titleCase } from '../../../lib/utils'
 import { parseSaveFailure } from '../useLayoutDraft'
-import type { GlobalPending, GlobalWriter, InspectorEnv } from './kit'
+import type { GlobalDraft, GlobalPending, GlobalWriter, InspectorEnv } from './kit'
 import {
   asObject,
   describeField,
@@ -23,18 +24,37 @@ import {
 export interface CollectionMeta {
   fields: GlobalFieldRow[]
   relations: RelationRow[]
+  /** The collection's display name. */
+  label: string
 }
 
-/** GET /collections/:c — the field rows (global settings) and relations. Same
- *  key and shape as the shared pickers' `collection-meta` reads. */
+/** The key of the inspector's GET /collections/:c read. Namespaced: other
+ *  readers keep different shapes under ['collection-meta', c]. */
+export const collectionMetaKey = (collection: string | null | undefined) => [
+  'layout-editor',
+  'collection-meta',
+  collection
+]
+
+/** GET /collections/:c — the field rows (global settings), relations and name. */
 export function useCollectionMeta(collection: string | null | undefined) {
   const client = useNivaroClient()
   return useQuery<CollectionMeta>({
-    queryKey: ['collection-meta', collection],
+    queryKey: collectionMetaKey(collection),
     queryFn: () =>
       client
-        .request<{ data: CollectionMeta }>(get(`/collections/${collection}`))
-        .then((r) => ({ fields: r.data?.fields ?? [], relations: r.data?.relations ?? [] })),
+        .request<{
+          data: {
+            fields?: GlobalFieldRow[]
+            relations?: RelationRow[]
+            display_name?: string | null
+          }
+        }>(get(`/collections/${collection}`))
+        .then((r) => ({
+          fields: r.data?.fields ?? [],
+          relations: r.data?.relations ?? [],
+          label: r.data?.display_name || titleCase(collection ?? '')
+        })),
     enabled: !!collection,
     staleTime: 60_000
   })
@@ -60,9 +80,24 @@ export interface FieldCtx {
   /** Several option keys in one op (undefined removes a key). */
   setOptions(patch: Obj, label: string, text?: boolean): void
   setPlacement(patch: PlacementPatch, label: string, text?: boolean): void
-  /** Propose an every-form option change; saved after the inline confirm. */
-  proposeGlobalOption(settingKey: string, optionKey: string, value: unknown, label: string): void
-  proposeGlobal(settingKey: string, value: unknown, patch: Obj, label: string): void
+  /** Propose an every-form option change; saved after the inline confirm.
+   *  `shown` (default: value) is what the control shows meanwhile. */
+  proposeGlobalOption(
+    settingKey: string,
+    optionKey: string,
+    value: unknown,
+    label: string,
+    shown?: unknown
+  ): void
+  /** Same for a dependency_config key. */
+  proposeGlobalDependency(settingKey: string, depKey: string, value: unknown, label: string): void
+  /** Any every-form change, built on the pending draft. */
+  proposeGlobal(
+    settingKey: string,
+    shown: unknown,
+    label: string,
+    change: (d: GlobalDraft) => GlobalDraft
+  ): void
 }
 
 export const FieldCtxContext = createContext<FieldCtx | null>(null)
@@ -73,31 +108,65 @@ export function useFieldCtx(): FieldCtx {
   return ctx
 }
 
-/** Writes nivaro_fields after the inline confirm. Outside undo by design (spec §9.11). */
-export function useGlobalWriter(
-  collection: string,
-  field: string,
+/** Writes nivaro_fields after the inline confirm. Outside undo by design (spec §9.11).
+ *  Every-form changes made before saving merge into one patch: options and
+ *  dependency_config are rebuilt from what is stored plus each change, so a
+ *  format then a currency both save. */
+export function useGlobalWriter({
+  collection,
+  collectionLabel,
+  field,
+  fieldLabel,
+  stored
+}: {
+  collection: string
+  collectionLabel: string
+  field: string
   fieldLabel: string
-): GlobalWriter {
+  /** nivaro_fields.options / dependency_config as stored. */
+  stored: { options: Obj; dependency_config: Obj }
+}): GlobalWriter {
   const client = useNivaroClient()
   const qc = useQueryClient()
-  const [pending, setPending] = useState<GlobalPending | null>(null)
+  const [changes, setChanges] = useState<{
+    draft: GlobalDraft
+    values: Record<string, unknown>
+    labels: Record<string, string>
+    key: string
+  } | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const base: GlobalDraft = { ...stored, columns: {} }
+  const draft = changes?.draft ?? base
+  const pending: GlobalPending | null = changes
+    ? {
+        key: changes.key,
+        values: changes.values,
+        labels: Object.values(changes.labels),
+        patch: globalPatch(stored, changes.draft)
+      }
+    : null
   return {
     collection,
+    collectionLabel,
     field,
     fieldLabel,
     pending,
+    draft,
     saving,
     error,
-    propose: (p) => {
+    propose: (key, value, label, change) => {
       setError(null)
-      setPending(p)
+      setChanges((prev) => ({
+        draft: change(prev?.draft ?? base),
+        values: { ...prev?.values, [key]: value },
+        labels: { ...prev?.labels, [key]: label },
+        key
+      }))
     },
     cancel: () => {
       setError(null)
-      setPending(null)
+      setChanges(null)
     },
     confirm: () => {
       if (!pending) return
@@ -108,17 +177,30 @@ export function useGlobalWriter(
           patchCmd(`/field-config/${collection}/${encodeURIComponent(field)}`, pending.patch)
         )
         .then(() => {
-          setPending(null)
-          toast.success(`${pending.label} — saved for every form`)
-          // Every read of this collection's field rows (canvas, pickers, lists).
-          return qc.invalidateQueries({
-            predicate: (q) => (q.queryKey as unknown[]).includes(collection)
-          })
+          setChanges(null)
+          toast.success(`${pending.labels.join('; ')} — saved for every form`)
+          return Promise.all([
+            qc.invalidateQueries({ queryKey: collectionMetaKey(collection) }),
+            qc.invalidateQueries({
+              queryKey: ['layout-editor', 'field-impact', collection, field]
+            })
+          ])
         })
         .catch((e) => setError(parseSaveFailure(e, 'The field could not be saved').message))
         .finally(() => setSaving(false))
     }
   }
+}
+
+/** PATCH /field-config body: only what differs from what is stored. */
+export function globalPatch(stored: { options: Obj; dependency_config: Obj }, d: GlobalDraft): Obj {
+  const out: Obj = { ...d.columns }
+  const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+  const orNull = (o: Obj) => (Object.keys(o).length ? o : null)
+  if (!same(d.options, stored.options)) out.options = orNull(d.options)
+  if (!same(d.dependency_config, stored.dependency_config))
+    out.dependency_config = orNull(d.dependency_config)
+  return out
 }
 
 export function useFieldCtxValue({
@@ -167,15 +249,18 @@ export function useFieldCtxValue({
         )
       },
       setPlacement: update,
-      proposeGlobalOption: (settingKey, optionKey, value, label) =>
-        writer.propose({
-          key: settingKey,
-          value,
-          label,
-          patch: { options: withKey(globalOptions, optionKey, value) }
-        }),
-      proposeGlobal: (settingKey, value, patch, label) =>
-        writer.propose({ key: settingKey, value, label, patch })
+      proposeGlobalOption: (settingKey, optionKey, value, label, shown = value) =>
+        writer.propose(settingKey, shown, label, (d) => ({
+          ...d,
+          options: withKey(d.options, optionKey, value) ?? {}
+        })),
+      proposeGlobalDependency: (settingKey, depKey, value, label) =>
+        writer.propose(settingKey, value, label, (d) => ({
+          ...d,
+          dependency_config: withKey(d.dependency_config, depKey, value) ?? {}
+        })),
+      proposeGlobal: (settingKey, shown, label, change) =>
+        writer.propose(settingKey, shown, label, change)
     }
   }, [env, row, meta, writer, readOnly])
 }

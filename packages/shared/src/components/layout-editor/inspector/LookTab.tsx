@@ -230,7 +230,8 @@ export function LookTab() {
                   'field.format',
                   'format',
                   v || undefined,
-                  `Show ${name} as ${FORMATS.find((f) => f.value === v)?.label.toLowerCase()}`
+                  `Show ${name} as ${FORMATS.find((f) => f.value === v)?.label.toLowerCase()}`,
+                  v
                 )
               }
             />
@@ -252,7 +253,8 @@ export function LookTab() {
                     'field.currency',
                     'currency',
                     v.trim().toUpperCase() || undefined,
-                    `Show ${name} in ${v.trim().toUpperCase() || 'USD'}`
+                    `Show ${name} in ${v.trim().toUpperCase() || 'USD'}`,
+                    v
                   )
                 }
               />
@@ -273,7 +275,8 @@ export function LookTab() {
                   'field.aggregate',
                   'aggregate',
                   v || undefined,
-                  `Change the grid footer of ${name}`
+                  `Change the grid footer of ${name}`,
+                  v
                 )
               }
             />
@@ -292,7 +295,8 @@ export function LookTab() {
                   'field.unit',
                   'unit',
                   v || undefined,
-                  `Set the unit of ${name}`
+                  `Set the unit of ${name}`,
+                  v
                 )
               }
             />
@@ -317,7 +321,8 @@ export function LookTab() {
                 'field.input_mask',
                 'input_mask',
                 v || undefined,
-                `Set the input mask of ${name}`
+                `Set the input mask of ${name}`,
+                v
               )
             }
           />
