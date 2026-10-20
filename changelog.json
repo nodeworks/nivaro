@@ -1,10 +1,76 @@
 {
-  "generated_at": "2026-10-20T00:22:48.120Z",
+  "generated_at": "2026-10-20T00:53:07.461Z",
   "releases": [
+    {
+      "version": "0.2.70",
+      "tag": "v0.2.70",
+      "date": "2026-10-19T20:52:53-04:00",
+      "sections": [
+        {
+          "label": "Documentation",
+          "entries": [
+            {
+              "section": "Documentation",
+              "scope": null,
+              "text": "regenerate docs.html and docs-index after the dashboard speed merges",
+              "hash": "204375a3"
+            }
+          ]
+        },
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks: no false WHERE finding on @delete parameters; scratch refills are info",
+              "hash": "49276469"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Queue and My Work reads batch their per-item passes (#1224)",
+              "hash": "303aef65"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "serve stored check results, run live only on fresh=1",
+              "hash": "32f0f5f8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Cache warm: widget entries and scoped viewers, as their viewers; extension warmers",
+              "hash": "5a0e1890"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Separate connection pool for background work (#1321)",
+              "hash": "eaa34912"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Per-widget timing on dashboards: widget RUM events and a slowest-widgets read",
+              "hash": "f59c54ee"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "TTL suggestions for slow uncached custom queries, cache hit column on Traffic Map (#2446)",
+              "hash": "d8ff23f2"
+            }
+          ]
+        }
+      ],
+      "count": 8
+    },
     {
       "version": "0.2.69",
       "tag": "v0.2.69",
-      "date": "2026-10-19T20:22:31-04:00",
+      "date": "2026-10-19T20:22:48-04:00",
       "sections": [
         {
           "label": "Other",
