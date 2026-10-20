@@ -131,7 +131,9 @@ export function isInvalidatingWrite(sql: string): boolean {
 export function clearMetadataQueryCache(): void {
   if (cache.size > 0 || inflight.size > 0) counters.busts++
   cache.clear()
-  // A read that started before the write must not store what it saw.
+  // A read that started before the write must not store what it saw, and a
+  // caller arriving now must not join it either.
+  inflight.clear()
   generation++
 }
 
@@ -262,8 +264,11 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     const running = inflight.get(key)
     if (running) {
       counters.shared++
+      const joinedAt = generation
       return running.then(
         (rows) => {
+          // A write landed while the shared read ran: ask again rather than take its rows.
+          if (joinedAt !== generation) return original.call(this, connection, query)
           query.response = rebuild(rows)
           return query
         },
@@ -289,7 +294,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     const fromDatabase = (gen: L2Gen | null) =>
       original.call(this, connection, query).then(
         (done) => {
-          inflight.delete(key)
+          if (inflight.get(key) === shared) inflight.delete(key)
           const rows = reduce(done.response)
           if (rows) {
             if (startedAt === generation) {
@@ -305,7 +310,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
           return done
         },
         (err) => {
-          inflight.delete(key)
+          if (inflight.get(key) === shared) inflight.delete(key)
           fail(err)
           throw err
         }
@@ -314,7 +319,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     return metadataL2Get(scope, key).then((found) => {
       // A local write while Redis answered: what it holds may predate the write.
       if (found.rows && startedAt === generation) {
-        inflight.delete(key)
+        if (inflight.get(key) === shared) inflight.delete(key)
         if (cache.size >= MAX_ENTRIES) cache.clear()
         cache.set(key, { at: Date.now(), rows: found.rows })
         settle(found.rows)

@@ -82,6 +82,24 @@ export const obsApiAnalytics: DocSection = {
         '`CACHE_EPOCH=off` turns the mechanism off; `CACHE_EPOCH_POLL_MS` sets the poll (default 5000). Self-hosted only.'
       ]
     },
+    { type: 'h2', id: 'permission-cache', text: 'Permission cache' },
+    {
+      type: 'p',
+      text: "Every list read asks the same permission questions: may this person read the collection, which fields, under which row filter, inside which User Scopes. Without the cache each answer is rebuilt from the role's policies on every call, several database round trips per collection and again for every expanded relation. With `PERMISSION_CACHE=on` each person's answers are kept in the process for a short time. It is off by default; turn it on for one environment (staging) first."
+    },
+    {
+      type: 'ul',
+      items: [
+        "What is kept: the role's decision for an action on a collection, the allowed field list, the row-filter conditions, the admin flag and the person's compiled User Scope filters. Records and user rows are never kept: who is signed in, their status and role, an API key, a connected app or a View-as session is still checked on every request.",
+        "Every entry belongs to one sign-in: the person, their role, how they signed in (session, token, API key, View-as, connected app), the key's scopes and row restrictions and the sandbox flag. Two people never share an entry, and neither do a person and the API key they own.",
+        'Any change to roles, policies, User Scopes, scope dimensions, relations, fields, collections or subtree permissions made through the app reaches every server at once: the write moves a shared access version in Redis (again when its transaction ends) and every entry built before it stops being used. So do table changes, procedures the app runs whose body may touch those tables, and procedures it has not looked at yet. Creating, changing, revoking or deleting an API key, and starting or ending View-as, move the person’s own version.',
+        'A change made outside the app (SQL run directly against the database, a job on the database server) cannot move the version. Entries never outlive `PERMISSION_CACHE_TTL_MS` (default 30 s, at most 60 s), so such a change is seen within that time. Clearing the Permission cache from Ops Console, Caches applies it at once on every server.',
+        'Turn it on for every server of an environment together. A server running without it still writes, and its changes reach the others through the configuration change number (about 7 s) rather than at once.',
+        'When Redis is unreachable or slow (over `PERMISSION_CACHE_REDIS_TIMEOUT_MS`, default 50 ms), or has lost its keys, the request is answered without the cache.',
+        '`PERMISSION_CACHE_MAX` bounds the entries per process (default 20000). Cloud mode always runs without the cache.',
+        '`pnpm --filter @nivaro/api run permission-cache:check` compares every active person’s answers with the cache on and off against a database (read only) and prints the round trips saved.'
+      ]
+    },
     { type: 'h2', id: 'api-analytics-hooks', text: 'Hook timings' },
     {
       type: 'p',

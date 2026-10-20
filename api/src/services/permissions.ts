@@ -1,6 +1,7 @@
 import type { Knex } from 'knex'
 import { db } from '../db/index.js'
 import type { Policy, Role, User } from '../types.js'
+import { type AccessCompute, cachedAccess } from './permission-cache.js'
 import { isSystemCollection, systemReadableColumns } from './system-collections.js'
 
 export type Action = 'create' | 'read' | 'update' | 'delete'
@@ -60,7 +61,24 @@ export async function getRowFilter(
   collection: string
 ): Promise<RowCondition[] | null> {
   if (!user.role) return null
+  return cachedAccess(
+    user,
+    'row-filter',
+    `${action}\u0001${collection}`,
+    () => roleRowFilter(user, action, collection),
+    cloneConditions
+  )
+}
 
+function cloneConditions(v: RowCondition[] | null): RowCondition[] | null {
+  return v === null ? null : structuredClone(v)
+}
+
+async function roleRowFilter(
+  user: User,
+  action: Action,
+  collection: string
+): Promise<RowCondition[] | null> {
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (!role || role.admin_access) return null
 
@@ -174,7 +192,21 @@ export async function can(user: User, action: Action, collection: string): Promi
     user.api_key_scope_denied = { action, collection }
     return false
   }
+  return cachedAccess(
+    user,
+    'can',
+    `${action}\u0001${collection}`,
+    () => roleCan(user, action, collection),
+    sameValue
+  )
+}
 
+function sameValue<T>(v: T): T {
+  return v
+}
+
+/** What the role's policies say (the part of can() after the key's own scopes). */
+async function roleCan(user: User, action: Action, collection: string): Promise<boolean> {
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (!role) return false
   if (role.admin_access) return true
@@ -255,7 +287,25 @@ export async function getAllowedFields(
   collection: string
 ): Promise<string[] | null> {
   if (!user.role) return []
+  return cachedAccess(
+    user,
+    'fields',
+    `${action}\u0001${collection}`,
+    (ctx) => roleAllowedFields(user, action, collection, ctx),
+    cloneFields
+  )
+}
 
+function cloneFields(v: string[] | null): string[] | null {
+  return v === null ? null : [...v]
+}
+
+async function roleAllowedFields(
+  user: User,
+  action: Action,
+  collection: string,
+  ctx?: AccessCompute
+): Promise<string[] | null> {
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   if (role?.admin_access) return null // null = all fields
 
@@ -272,10 +322,14 @@ export async function getAllowedFields(
   // A system table reads only its listed columns, narrowed further by the
   // policy's own list; one not listed reads nothing.
   const readable = action === 'read' ? await existingReadableColumns(collection) : []
+  // Built from the fallback column list (the column read failed): answer, never keep.
+  if (degradedColumns.has(readable)) ctx?.degraded()
   return fields === null ? readable : readable.filter((c) => fields.includes(c))
 }
 
 const readableColumnsCache = new Map<string, Promise<string[]>>()
+/** The fallback lists handed out when the column read failed. */
+const degradedColumns = new WeakSet<string[]>()
 
 /** The listed readable columns the table actually has (an older or
  *  self-hosted schema may lack some); learnt once per process. */
@@ -292,7 +346,9 @@ function existingReadableColumns(collection: string): Promise<string[]> {
       })
       .catch(() => {
         readableColumnsCache.delete(key)
-        return ['id']
+        const fallback = ['id']
+        degradedColumns.add(fallback)
+        return fallback
       })
     readableColumnsCache.set(key, hit)
   }
@@ -302,6 +358,10 @@ function existingReadableColumns(collection: string): Promise<string[]> {
 /** Whether the user's role is an administrator's. */
 export async function isAdminRole(user: User): Promise<boolean> {
   if (!user?.role) return false
+  return cachedAccess(user, 'admin', '', () => roleIsAdmin(user), sameValue)
+}
+
+async function roleIsAdmin(user: User): Promise<boolean> {
   const role = await db<Role>('nivaro_roles').where({ id: user.role }).first()
   return !!role?.admin_access
 }

@@ -1,5 +1,6 @@
 import { db } from '../db/index.js'
 import type { User } from '../types.js'
+import { cachedAccess, onPermissionCacheReset } from './permission-cache.js'
 import { timeAccess, timeAccessSync } from './request-trace.js'
 
 /**
@@ -65,6 +66,12 @@ function parseJson<T>(v: unknown): T | null {
 
 const TTL = 60_000
 
+/** Moved only by the compiled permission cache's reset (permission-cache.ts, flag on): a
+ *  fill whose read straddled a reset is answered but not kept. */
+let resetGen = 0
+/** The same, for one person's scope rows (a reset for one person leaves the rest alone). */
+const userResetGen = new Map<string, number>()
+
 let dimCache: { at: number; rows: ScopeDimension[] } | null = null
 export function bustScopeDimensionCache() {
   dimCache = null
@@ -73,10 +80,11 @@ export function bustScopeDimensionCache() {
 
 export async function listScopeDimensions(activeOnly = true): Promise<ScopeDimension[]> {
   if (!dimCache || Date.now() - dimCache.at > TTL) {
+    const g0 = resetGen
     const rows = (await db('nivaro_scope_dimensions').orderBy('name')) as Array<
       Record<string, unknown>
     >
-    dimCache = {
+    const fresh = {
       at: Date.now(),
       rows: rows.map((r) => ({
         id: Number(r.id),
@@ -91,6 +99,8 @@ export async function listScopeDimensions(activeOnly = true): Promise<ScopeDimen
         is_active: !!r.is_active
       }))
     }
+    if (g0 === resetGen) dimCache = fresh
+    return activeOnly ? fresh.rows.filter((d) => d.is_active) : fresh.rows
   }
   return activeOnly ? dimCache.rows.filter((d) => d.is_active) : dimCache.rows
 }
@@ -105,6 +115,8 @@ export async function getUserScopes(userId: string): Promise<UserScopeRow[]> {
   const key = userId.toLowerCase()
   const hit = userScopeCache.get(key)
   if (hit && Date.now() - hit.at < TTL) return hit.rows
+  const g0 = resetGen
+  const u0 = userResetGen.get(key) ?? 0
   const rows = (await db('nivaro_user_scopes').where({ user: userId })) as Array<
     Record<string, unknown>
   >
@@ -115,7 +127,8 @@ export async function getUserScopes(userId: string): Promise<UserScopeRow[]> {
     mode: r.mode === 'restrict' ? 'restrict' : 'default',
     values: parseJson<Array<string | number>>(r.values) ?? []
   }))
-  userScopeCache.set(key, { at: Date.now(), rows: parsed })
+  if (g0 === resetGen && u0 === (userResetGen.get(key) ?? 0))
+    userScopeCache.set(key, { at: Date.now(), rows: parsed })
   return parsed
 }
 
@@ -160,6 +173,7 @@ let adjCache: { at: number; adj: Map<string, Edge[]> } | null = null
 
 async function getAdjacency(): Promise<Map<string, Edge[]>> {
   if (adjCache && Date.now() - adjCache.at < TTL) return adjCache.adj
+  const g0 = resetGen
   const [rels, tableRows] = await Promise.all([
     db('nivaro_relations').select(
       'many_collection',
@@ -252,7 +266,7 @@ async function getAdjacency(): Promise<Map<string, Edge[]>> {
       `[user-scopes] ignoring relations to ${missing.size} non-existent table(s): ${[...missing].sort().join(', ')}`
     )
   }
-  adjCache = { at: Date.now(), adj }
+  if (g0 === resetGen) adjCache = { at: Date.now(), adj }
   return adj
 }
 
@@ -273,6 +287,7 @@ export async function resolveScopeHops(
 ): Promise<ScopeHop[] | null> {
   const key = `${collection}→${target}`
   if (pathCache.has(key)) return pathCache.get(key) ?? null
+  const g0 = resetGen
   const adj = await getAdjacency()
   const queue: Array<{ at: string; hops: ScopeHop[] }> = [{ at: collection, hops: [] }]
   const seen = new Set<string>([collection])
@@ -333,7 +348,7 @@ export async function resolveScopeHops(
       }
     }
   }
-  pathCache.set(key, found)
+  if (g0 === resetGen) pathCache.set(key, found)
   return found
 }
 
@@ -573,12 +588,17 @@ export async function isAdminRole(roleId: string | null | undefined): Promise<bo
   if (!roleId) return false
   const hit = roleAdminCache.get(roleId)
   if (hit && Date.now() - hit.at < TTL) return hit.admin
+  const g0 = resetGen
   const role = (await db('nivaro_roles').where({ id: roleId }).first()) as
     | { admin_access?: boolean }
     | undefined
   const admin = !!role?.admin_access
-  roleAdminCache.set(roleId, { at: Date.now(), admin })
+  if (g0 === resetGen) roleAdminCache.set(roleId, { at: Date.now(), admin })
   return admin
+}
+
+export function bustRoleAdminCache(): void {
+  roleAdminCache.clear()
 }
 
 /**
@@ -586,6 +606,41 @@ export async function isAdminRole(roleId: string | null | undefined): Promise<bo
  * deny=false → no scoping applies. Called from items.ts on every read.
  */
 export async function getUserScopeEnforcement(
+  user: User,
+  collection: string
+): Promise<ScopeEnforcement> {
+  return cachedAccess(
+    user,
+    'scope',
+    collection,
+    () => buildUserScopeEnforcement(user, collection),
+    cloneEnforcement
+  )
+}
+
+function cloneEnforcement(v: ScopeEnforcement): ScopeEnforcement {
+  return structuredClone(v)
+}
+
+// The compiled permission cache (permission-cache.ts) is built from the
+// caches above; when another process moves an access version, they are
+// dropped too so a refill never reads a copy older than the move.
+onPermissionCacheReset((userId) => {
+  if (userId) {
+    const key = userId.toLowerCase()
+    if (userResetGen.size >= 50_000) userResetGen.clear()
+    userResetGen.set(key, (userResetGen.get(key) ?? 0) + 1)
+    bustUserScopeCache(userId)
+    return
+  }
+  resetGen++
+  bustUserScopeCache()
+  bustScopeDimensionCache()
+  bustScopePathCache()
+  roleAdminCache.clear()
+})
+
+async function buildUserScopeEnforcement(
   user: User,
   collection: string
 ): Promise<ScopeEnforcement> {

@@ -243,6 +243,30 @@ export async function buildServer() {
     // #2441 — configuration reads shared across processes (a fresh replica starts warm).
     const { setMetadataL2Redis } = await import('./db/metadata-l2.js')
     setMetadataL2Redis(app.redis)
+    // Compiled permission cache (#2442, PERMISSION_CACHE=on): access versions live in Redis;
+    // every pool that writes moves them on an access-table write, a procedure that may
+    // touch one, and when a transaction that wrote one settles. Off: nothing is attached.
+    {
+      const pc = await import('./services/permission-cache.js')
+      if (pc.permissionCacheEnabled()) {
+        const { _backgroundDb, _staticDb } = await import('./db/index.js')
+        pc.setPermissionCacheRedis(app.redis)
+        for (const k of [_staticDb, _backgroundDb]) {
+          const client = (k as unknown as { client?: object } | null)?.client
+          pc.attachPermissionCacheSeam(client as Parameters<typeof pc.attachPermissionCacheSeam>[0])
+          pc.attachPermissionCacheCommitHook(client)
+        }
+        if (config.DB_CLIENT === 'mssql') {
+          pc.setPermissionCacheProcLookup(async (name) => {
+            const rows = (await _staticDb.raw('SELECT OBJECT_DEFINITION(OBJECT_ID(?)) AS body', [
+              name
+            ])) as Array<{ body: string | null }>
+            return rows?.[0]?.body ?? null
+          })
+        }
+        app.log.info('Permission cache on')
+      }
+    }
     // Idempotency keys: one store hook for the whole app (no-op without a claim).
     const { registerIdempotencyStore } = await import('./services/idempotency.js')
     registerIdempotencyStore(app)

@@ -14,6 +14,7 @@ import { bustContractCache } from './integration-contracts.js'
 import { bustMailTemplateOverrides } from './mail.js'
 import { bustMailBrandingCache } from './mail-branding.js'
 import { bustNotificationTemplateCache } from './notification-templates.js'
+import { clearPermissionCache, onPermissionCacheReset } from './permission-cache.js'
 import { clearPickerRuleCache } from './picker-rules.js'
 import { bustOwnerGroupCache } from './pipeline-engine.js'
 import { clearRelationLimitCache } from './relation-limits.js'
@@ -24,7 +25,12 @@ import { bustInstanceOverridesCache } from './settings-overrides.js'
 import { clearSlaZoneCache } from './sla-zones.js'
 import { bustTransitionGuardCache } from './transition-guard.js'
 import { clearTreePermissionCache } from './tree-permissions.js'
-import { bustScopeDimensionCache, bustScopePathCache, bustUserScopeCache } from './user-scopes.js'
+import {
+  bustRoleAdminCache,
+  bustScopeDimensionCache,
+  bustScopePathCache,
+  bustUserScopeCache
+} from './user-scopes.js'
 
 /**
  * Cache console wiring (#236): names the process's major in-memory caches so
@@ -77,11 +83,26 @@ export function registerKnownCaches(): void {
     'Configuration reads at the driver seam (relations, fields, rules, layouts, column lists)',
     clearMetadataQueryCache
   )
-  registerCache('user-scopes', 'User scope rows, scope dimensions and resolved scope paths', () => {
-    bustUserScopeCache()
-    bustScopeDimensionCache()
-    bustScopePathCache()
+  registerCache(
+    'permission-cache',
+    'Compiled permissions per person (PERMISSION_CACHE=on; also cleared by access versions)',
+    clearPermissionCache
+  )
+  // A permission entry rebuilt after another process moved the access version must not read
+  // a role row from this process's driver cache that predates the move.
+  onPermissionCacheReset((userId) => {
+    if (!userId) clearMetadataQueryCache()
   })
+  registerCache(
+    'user-scopes',
+    'User scope rows, scope dimensions, resolved scope paths and role admin flags',
+    () => {
+      bustUserScopeCache()
+      bustScopeDimensionCache()
+      bustScopePathCache()
+      bustRoleAdminCache()
+    }
+  )
   registerCache(
     'workflow-auto',
     'Workflow bindings and watched child collections for automatic transitions',

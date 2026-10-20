@@ -5,6 +5,7 @@ import { hasColumn } from '../lib/column-probe.js'
 import type { ApiKeyScope } from '../middleware/authenticate.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { bumpUserAccessVersion, permissionCacheEnabled } from '../services/permission-cache.js'
 
 interface ApiKeyBody {
   scope_restrictions?: Array<{ dimension: string; values: Array<string | number> }> | null
@@ -189,6 +190,8 @@ export async function apiKeysRoutes(app: FastifyInstance) {
 
     if (Object.keys(updates).length > 0) {
       await db('nivaro_api_keys').where({ id }).update(updates)
+      bumpUserAccessVersion(existing.user)
+      if (updates.user != null) bumpUserAccessVersion(String(updates.user))
       await logActivity({
         action: 'update',
         user: req.user?.id,
@@ -258,6 +261,7 @@ export async function apiKeysRoutes(app: FastifyInstance) {
     if (!existing) return reply.code(404).send({ error: 'API key not found' })
 
     await db('nivaro_api_keys').where({ id }).update({ is_active: false })
+    bumpUserAccessVersion(existing.user)
     await logActivity({ action: 'api_key_revoked', user: req.user?.id, req })
 
     const row = await db('nivaro_api_keys').where({ id }).first()
@@ -290,8 +294,12 @@ export async function apiKeysRoutes(app: FastifyInstance) {
   // Delete
   app.delete('/:id', async (req, reply) => {
     const { id } = req.params as { id: string }
+    const owner = permissionCacheEnabled()
+      ? ((await db('nivaro_api_keys').where({ id }).first('user')) as { user?: string } | undefined)
+      : undefined
     const deleted = await db('nivaro_api_keys').where({ id }).delete()
     if (!deleted) return reply.code(404).send({ error: 'API key not found' })
+    bumpUserAccessVersion(owner?.user)
     await logActivity({ action: 'api_key_deleted', user: req.user?.id, req })
     return reply.send({ ok: true })
   })

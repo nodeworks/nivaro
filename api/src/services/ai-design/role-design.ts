@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { db } from '../../db/index.js'
 import type { User } from '../../types.js'
+import { bumpAccessVersion } from '../permission-cache.js'
 import { applyRowFilter, parseRowFilter, type RowCondition } from '../permissions.js'
 import { type AiComplete, asArray, cleanText, parseJsonLoose } from './model.js'
 
@@ -515,5 +516,7 @@ export async function applyRoleProposal(
     for (let i = 0; i < rows.length; i += 100)
       await trx('nivaro_policies').insert(rows.slice(i, i + 100))
   })
+  // Committed now: the driver seam moved the access version at each insert, before commit.
+  bumpAccessVersion()
   return { id, policies: proposal.policies.length }
 }
