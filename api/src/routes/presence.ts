@@ -4,7 +4,12 @@ import { config } from '../config.js'
 import { db } from '../db/index.js'
 import { requireAdmin, requireAuth } from '../middleware/authenticate.js'
 import { activeMasquerades } from '../services/masquerade-marker.js'
-import { presenceRowIdle, stuckLabel, stuckMinutes } from '../services/presence-stuck.js'
+import {
+  presencePageLabel,
+  presenceRowIdle,
+  stuckLabel,
+  stuckMinutes
+} from '../services/presence-stuck.js'
 import { currentTenantKey, tenantScopedRoom } from '../services/tenant-rooms.js'
 import type { User } from '../types.js'
 
@@ -372,29 +377,9 @@ const IDLE_AFTER_MS = 5 * 60_000
  * an admin can jump from the online list straight into session replay.
  */
 
-/** collection name → a heading a person would recognise. */
-function titleCase(s: string): string {
-  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
-}
-
-/**
- * The page text for a presence row. A record page reads "Requests › REQ-1234" when the viewer
- * could read that record, and just "Requests" when not — never the raw id. Other routes read
- * as their first segment ("Sla Rules"), with the rest of the path dropped.
- */
-export function presencePageLabel(
-  path: string | null | undefined,
-  labels: Map<string, string>
-): string | null {
-  if (!path) return null
-  const m = /^\/(?:records|collections)\/([A-Za-z0-9_]+)(?:\/([^/?#]+))?/.exec(path)
-  if (m) {
-    const label = m[2] ? labels.get(`${m[1]}:${m[2]}`) : undefined
-    return label ? `${titleCase(m[1])} › ${label}` : titleCase(m[1])
-  }
-  const first = path.split('?')[0].split('/').filter(Boolean)[0]
-  return first ? titleCase(first.replace(/[-_]/g, ' ')) : 'Home'
-}
+// The page text lives with stuckLabel so the stuck chip and the page line name a place the
+// same way; re-exported for this route's callers.
+export { presencePageLabel } from '../services/presence-stuck.js'
 
 /**
  * "Requests › REQ-1234", not "Requests › 98765".

@@ -30,6 +30,48 @@ export function prettyPagePath(path: string | null | undefined): string | null {
     .join(' › ')
 }
 
+/** Presence `app` values the admin console writes: its heartbeat stamps 'API', page:at 'admin'. */
+const ADMIN_APPS = new Set(['API', 'admin'])
+
+/**
+ * Where a person's current page opens for this viewer. The path is a route in the PERSON's app,
+ * which may not be the viewer's: a record page goes through the host's own record route (the
+ * same record reads in admin and in a portal); an admin-console page opens on the admin SPA;
+ * any other page only when the viewer is in that same app. Null = shown as text only.
+ * `current_path` only reaches administrators, so nobody else gets a link.
+ */
+export function presencePlaceHref(
+  path: string | null | undefined,
+  app: string | null | undefined,
+  adminUrl: string | null | undefined,
+  recordUrl: ((collection: string, id: string) => string | null) | undefined,
+  viewerOrigin: string | null
+): string | null {
+  if (!path) return null
+  const clean = path.split('#')[0]
+  const rec = /^\/(?:records|collections)\/([A-Za-z0-9_]+)\/([^/?#]+)/.exec(clean)
+  if (rec && rec[2] !== 'new' && recordUrl) {
+    const url = recordUrl(rec[1], rec[2])
+    if (url) return url
+  }
+  const base = adminUrl?.replace(/\/$/, '') ?? ''
+  let onAdminHost = false
+  try {
+    onAdminHost = !!base && !!viewerOrigin && new URL(base, viewerOrigin).origin === viewerOrigin
+  } catch {
+    onAdminHost = false
+  }
+  if (app && ADMIN_APPS.has(app)) return onAdminHost ? clean : base ? `${base}${clean}` : null
+  return onAdminHost ? null : clean
+}
+
+/** The full address a link goes to, for its tooltip. */
+export function fullHref(href: string, origin?: string | null): string {
+  if (/^https?:\/\//i.test(href)) return href
+  const o = origin ?? (typeof window === 'undefined' ? '' : window.location.origin)
+  return `${o}${href}`
+}
+
 /** The one word for a person's presence: what the avatar dot and the status line say. */
 export type PresenceWord = 'online' | 'idle' | 'away' | 'offline'
 

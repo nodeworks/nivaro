@@ -41,6 +41,7 @@ describe('presence page labels', () => {
     // A record they cannot read: the collection title only, never the id.
     expect(presencePageLabel('/collections/salaries/123', labels)).toBe('Salaries')
     expect(presencePageLabel('/collections/salaries', labels)).toBe('Salaries')
+    expect(presencePageLabel('/records/salaries/new', labels)).toBe('Salaries › New')
   })
 
   it('reads other routes as their first segment', () => {

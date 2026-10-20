@@ -175,7 +175,37 @@ export async function stuckMinutes(
   return out
 }
 
-/** "CM26-80332" for a record page whose label resolved, else a readable path. */
+/** collection name → a heading a person would recognise. */
+function titleCase(s: string): string {
+  return s.replace(/[-_]/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+/**
+ * The page text for a presence row. A record page reads "Requests › REQ-1234" when the viewer
+ * could read that record, and just "Requests" when not — never the raw id. A new-record form
+ * reads "Requests › New". Other routes read as their first segment ("Sla Rules"), with the rest
+ * of the path dropped.
+ */
+export function presencePageLabel(
+  path: string | null | undefined,
+  labels: Map<string, string>
+): string | null {
+  if (!path) return null
+  const m = /^\/(?:records|collections)\/([A-Za-z0-9_]+)(?:\/([^/?#]+))?/.exec(path)
+  if (m) {
+    if (m[2] === 'new') return `${titleCase(m[1])} › New`
+    const label = m[2] ? labels.get(`${m[1]}:${m[2]}`) : undefined
+    return label ? `${titleCase(m[1])} › ${label}` : titleCase(m[1])
+  }
+  const first = path.split('?')[0].split('/').filter(Boolean)[0]
+  return first ? titleCase(first.replace(/[-_]/g, ' ')) : 'Home'
+}
+
+/**
+ * "CM26-80332" for a record page whose label resolved, else the same page text the presence
+ * line shows ("Workflows", "Workflows › New") — never the raw route, which read as a different
+ * place from the page line under the person's name.
+ */
 export function stuckLabel(
   path: string | null | undefined,
   recordLabels: Map<string, string>
@@ -186,8 +216,7 @@ export function stuckLabel(
     const label = recordLabels.get(`${m[1]}:${m[2]}`)
     if (label) return label
   }
-  const clean = path.split(/[?#]/)[0].replace(/\/+$/, '') || '/'
-  return clean.slice(0, 80)
+  return presencePageLabel(path, recordLabels)
 }
 
 /**

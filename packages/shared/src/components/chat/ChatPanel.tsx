@@ -46,7 +46,7 @@ import { toast } from 'sonner'
 import { useItemEditAuth, useNavigation, useNivaroClient } from '../../context'
 import { get, patch as patchCmd, post } from '../../lib/commands'
 import { batchTouches, LIVE_ASPECTS, useLiveRecord } from '../../lib/live'
-import { type StuckState, stuckText } from '../../lib/presence-state'
+import { fullHref, presencePlaceHref, type StuckState, stuckText } from '../../lib/presence-state'
 import { invalidateRecordTasks } from '../../lib/record-tasks'
 import { userCardQuery } from '../../lib/user-cards'
 import { cn, formatRelative, getDisplayTimezone } from '../../lib/utils'
@@ -4534,15 +4534,58 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                                 {px?.away ? 'Away' : idleLabel(idleSrc)}
                               </span>
                             )}
-                            {!isIdle && px?.stuck && (
-                              <span
-                                className='ml-1.5 rounded-full bg-orange-500/10 px-1.5 py-px text-[10px] font-medium text-orange-700 dark:text-orange-400'
-                                data-chat-stuck={px.stuck.minutes}
-                                title='At the keyboard, on the same page, nothing saved for ten minutes'
-                              >
-                                {stuckText(px.stuck)}
-                              </span>
-                            )}
+                            {!isIdle &&
+                              px?.stuck &&
+                              (() => {
+                                const stuck = px.stuck
+                                // The page line under the name already says where; the chip
+                                // repeating it as a second, differently-worded place read as
+                                // two places. It names the place only when no page line shows.
+                                const pageLine = presenceExtras.fields.includes('page')
+                                const href = presencePlaceHref(
+                                  px.current_path,
+                                  px.app,
+                                  presenceExtras.adminUrl,
+                                  cfg.recordUrl,
+                                  typeof window === 'undefined' ? null : window.location.origin
+                                )
+                                const tip = `${stuckText(stuck)} — at the keyboard, on the same page, nothing saved for ten minutes${href ? `\n${fullHref(href)}` : ''}`
+                                const text = stuckText(pageLine ? { ...stuck, label: null } : stuck)
+                                const cls =
+                                  'ml-1.5 rounded-full bg-orange-500/10 px-1.5 py-px text-[10px] font-medium text-orange-700 dark:text-orange-400'
+                                return href ? (
+                                  // biome-ignore lint/a11y/useSemanticElements: inside the row's DM button, where a nested <a> is invalid
+                                  <span
+                                    role='link'
+                                    tabIndex={0}
+                                    className={cn(cls, 'cursor-pointer hover:underline')}
+                                    data-chat-stuck={stuck.minutes}
+                                    data-tip={tip}
+                                    aria-label={`${text}: open the page`}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      openSession(href)
+                                    }}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter' || e.key === ' ') {
+                                        e.preventDefault()
+                                        e.stopPropagation()
+                                        openSession(href)
+                                      }
+                                    }}
+                                  >
+                                    {text}
+                                  </span>
+                                ) : (
+                                  <span
+                                    className={cls}
+                                    data-chat-stuck={stuck.minutes}
+                                    data-tip={tip}
+                                  >
+                                    {text}
+                                  </span>
+                                )
+                              })()}
                             {(() => {
                               const mq = presenceExtras.byUser.get(
                                 String(u.user_id).toUpperCase()
@@ -4627,18 +4670,59 @@ body[data-nvr-chat-pinned] [data-nvr-dock-aware] { margin-right: ${PINNED_WIDTH}
                                     {metaText}
                                   </span>
                                 )}
-                                {pageText && (
-                                  <span
-                                    className='flex items-start gap-1 text-[11px] text-slate-500 dark:text-slate-300'
-                                    data-chat-online-page
-                                    title={pageText}
-                                  >
-                                    <MapPin className='mt-[2px] h-3 w-3 shrink-0 text-slate-400' />
-                                    <span className='line-clamp-2 min-w-0 break-words'>
-                                      {pageText}
-                                    </span>
-                                  </span>
-                                )}
+                                {pageText &&
+                                  (() => {
+                                    const href = presencePlaceHref(
+                                      x?.current_path,
+                                      x?.app,
+                                      presenceExtras.adminUrl,
+                                      cfg.recordUrl,
+                                      typeof window === 'undefined' ? null : window.location.origin
+                                    )
+                                    const body = (
+                                      <>
+                                        <MapPin className='mt-[2px] h-3 w-3 shrink-0 text-slate-400' />
+                                        <span className='line-clamp-2 min-w-0 break-words'>
+                                          {pageText}
+                                        </span>
+                                      </>
+                                    )
+                                    // Inside the row's DM button, so a span with the link role
+                                    // (a nested <a> would be invalid), like the replay action.
+                                    return href ? (
+                                      // biome-ignore lint/a11y/useSemanticElements: inside the row's DM button, where a nested <a> is invalid
+                                      <span
+                                        role='link'
+                                        tabIndex={0}
+                                        className='-mx-1 flex w-fit max-w-full cursor-pointer items-start gap-1 rounded px-1 text-[11px] text-slate-500 hover:bg-slate-100 hover:text-nvr-cyan hover:underline dark:text-slate-300 dark:hover:bg-muted'
+                                        data-chat-online-page
+                                        data-chat-online-page-href={href}
+                                        data-tip={fullHref(href)}
+                                        aria-label={`${pageText}: open the page`}
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          openSession(href)
+                                        }}
+                                        onKeyDown={(e) => {
+                                          if (e.key === 'Enter' || e.key === ' ') {
+                                            e.preventDefault()
+                                            e.stopPropagation()
+                                            openSession(href)
+                                          }
+                                        }}
+                                      >
+                                        {body}
+                                      </span>
+                                    ) : (
+                                      <span
+                                        className='flex items-start gap-1 text-[11px] text-slate-500 dark:text-slate-300'
+                                        data-chat-online-page
+                                        data-tip={x?.current_path ?? pageText}
+                                      >
+                                        {body}
+                                      </span>
+                                    )
+                                  })()}
                               </>
                             )
                           })()}

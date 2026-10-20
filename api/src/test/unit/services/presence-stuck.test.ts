@@ -183,11 +183,12 @@ describe('stuckMinutes', () => {
 })
 
 describe('stuckLabel', () => {
-  it('names the record by its friendly id, else the path', () => {
+  it('names the record by its friendly id, else the page text the presence line shows', () => {
     const labels = new Map([['claims:42', 'CM26-80332']])
     expect(stuckLabel('/records/claims/42?tab=2', labels)).toBe('CM26-80332')
-    expect(stuckLabel('/collections/claims/7', labels)).toBe('/collections/claims/7')
-    expect(stuckLabel('/portal/upload/', labels)).toBe('/portal/upload')
+    expect(stuckLabel('/collections/claims/7', labels)).toBe('Claims')
+    expect(stuckLabel('/records/workflows/new', labels)).toBe('Workflows › New')
+    expect(stuckLabel('/portal/upload/', labels)).toBe('Portal')
     expect(stuckLabel(null, labels)).toBeNull()
   })
 })
