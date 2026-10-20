@@ -554,6 +554,19 @@ export * from './lib/live-list'
 export * from './lib/live-ops'
 export * from './lib/live-widgets'
 export {
+  createIdbMetadataStore,
+  isMetadataKey,
+  METADATA_MAX_AGE_MS,
+  type MetadataIdentity,
+  type MetadataQueryClient,
+  type MetadataStore,
+  metadataBuster,
+  restoreMetadata,
+  snapshotMetadata,
+  startMetadataPersistence,
+  wipeMetadataCache
+} from './lib/metadata-persist'
+export {
   type NotificationSound,
   playNotificationSound,
   soundForCategory

@@ -113,6 +113,10 @@ export type User = {
   delegate_expires_at: string | null
   is_out_of_office: boolean
   is_admin?: boolean
+  /** GET /auth/me while viewing as someone else. */
+  masquerade?: boolean
+  /** GET /auth/me: the API's config epoch (null = unknown / cloud). */
+  config_epoch?: number | null
   is_redacted?: boolean
   redacted_at?: string | null
   directory_status?: 'active' | 'disabled' | 'missing' | null

@@ -1,8 +1,13 @@
 import type { NivaroClient } from '@nivaro/sdk'
-import { QueryClient, QueryClientContext, QueryClientProvider } from '@tanstack/react-query'
+import {
+  QueryClient,
+  QueryClientContext,
+  QueryClientProvider,
+  useQueryClient
+} from '@tanstack/react-query'
 import type React from 'react'
 import type { ReactNode } from 'react'
-import { createContext, useCallback, useContext, useMemo, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 
 // ─── Grid flush registry ───────────────────────────────────────────────────
 
@@ -17,6 +22,11 @@ export function useGridFlush(): GridFlushContextValue | null {
   return useContext(GridFlushContext)
 }
 
+import {
+  type MetadataIdentity,
+  restoreMetadata,
+  startMetadataPersistence
+} from './lib/metadata-persist'
 import { isCoalesced, withGetCoalescing } from './lib/request-gate'
 
 // ─── Nivaro client context ─────────────────────────────────────────────────
@@ -27,10 +37,33 @@ type NivaroFormContextValue = {
 
 const NivaroFormContext = createContext<NivaroFormContextValue | null>(null)
 
+/**
+ * Opt-in metadata cache (#2449): once the host knows who is signed in, restore
+ * their last-session metadata (collections, fields, layouts, settings — never
+ * records) and keep it saved. Renders nothing.
+ */
+function MetadataPersistence({ identity }: { identity: MetadataIdentity }) {
+  const qc = useQueryClient()
+  const { userId, epoch, version } = identity
+  useEffect(() => {
+    let stop = () => {}
+    let cancelled = false
+    void restoreMetadata(qc, { userId, epoch, version }).then(() => {
+      if (!cancelled) stop = startMetadataPersistence(qc, { userId, epoch, version })
+    })
+    return () => {
+      cancelled = true
+      stop()
+    }
+  }, [qc, userId, epoch, version])
+  return null
+}
+
 export function NivaroProvider({
   client,
   children,
-  batchReads = false
+  batchReads = false,
+  persistMetadata = null
 }: {
   client: NivaroClient
   children: React.ReactNode
@@ -39,6 +72,13 @@ export function NivaroProvider({
    * `POST /items/batch-read`. Off by default; a host opts in.
    */
   batchReads?: boolean
+  /**
+   * #2449: keep metadata queries in IndexedDB between reloads. Pass the signed-in
+   * person, the API's `config_epoch` (GET /auth/me) and the app version once
+   * known; null/absent = off. A host calls `wipeMetadataCache()` on sign-out.
+   * Never use for a viewed-as (masquerade) person.
+   */
+  persistMetadata?: MetadataIdentity | null
 }) {
   // Components consume TanStack Query throughout. Hosts that already run a
   // QueryClientProvider (the admin) keep theirs; standalone consumers get one
@@ -60,6 +100,7 @@ export function NivaroProvider({
   )
   const inner = (
     <NivaroFormContext.Provider value={{ client: coalesced }}>
+      {persistMetadata ? <MetadataPersistence identity={persistMetadata} /> : null}
       {children}
     </NivaroFormContext.Provider>
   )
