@@ -130,6 +130,41 @@ useLiveRecordEvent('record:integrity', 'orders', id, () => refetchIntegrity())`
         'Never trust a payload value — re-read through your own permission-checked query.'
       ]
     },
+    { type: 'h3', id: 'live-records-queries', text: 'Queries that say what they read' },
+    {
+      type: 'p',
+      text: 'A react-query read can skip the hooks above and simply declare what it reads. The host mounts one bridge (`useLiveQueryBridge()` — the admin app and efp-new do it in their shell), and socket events then refresh exactly the queries they touch.'
+    },
+    {
+      type: 'pre',
+      code: `import { liveQueryMeta, useLiveRefetchInterval } from '@nivaro/shared'
+
+// A count of open orders: refreshed by any write to orders (at most once per 10 s).
+const poll = useLiveRefetchInterval(60_000, { requireBridge: true })
+useQuery({
+  queryKey: ['open-orders'],
+  queryFn,
+  refetchInterval: poll, // 60 s without a live socket, a 5-minute safety net with one
+  meta: liveQueryMeta({ reads: ['orders'], fields: ['status'] })
+})
+
+// One record's panel: refreshed only by writes naming it, or by a $state move.
+useQuery({
+  queryKey: ['order-summary', id],
+  queryFn,
+  meta: liveQueryMeta({ record: { collection: 'orders', id }, aspects: ['$state'] })
+})`
+    },
+    {
+      type: 'ul',
+      items: [
+        'Meta keys: `reads` (collections), `record` (`{collection, id}`), `fields` (only writes naming one of them count; creates, deletes and writes naming no fields always do), `aspects` (`$state`, `$comments`… — aspect notices are ignored otherwise), `includeOwn` (default on for `reads`, off for `record`, whose save already refreshed it), `minGapMs` (default 10 s for `reads`, 0 for `record`; a trailing refresh is never dropped), `reconcileOnly`.',
+        'The bridge joins the collection rooms that active tagged queries read and leaves them 30 s after the last one goes. Events coalesce for 300 ms per collection. Only queries on screen refetch; the rest are marked stale and refetch when they next mount. A hidden tab marks stale and refetches when it is shown again.',
+        'Reconcile — every tagged query plus the active record, list, queue, My Work and widget reads refetch once — after a reconnect whose catch-up could not replay the gap (`status().resumed` is `unverified`), on `nvr:catchup-full`, and when a tab comes back after being hidden five minutes or more. A reconnect that replayed every missed event does not reconcile.',
+        'At sign-in the server sends `catchup:cursor {seq}` — the event journal position — so a tab that has not received an event yet still replays its gap after a reconnect instead of missing it.',
+        'Permissions: the refetch runs through the query’s own route as the viewer. An event naming a record the viewer cannot read only re-asks for what they could already see.'
+      ]
+    },
     { type: 'h3', id: 'live-ops-pages', text: 'Live operations pages' },
     {
       type: 'p',

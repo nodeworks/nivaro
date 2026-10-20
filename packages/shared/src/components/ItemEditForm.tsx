@@ -73,6 +73,7 @@ import {
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
 import { extSlotKey } from '../lib/layout-slots'
+import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useRecordReader } from '../lib/record-loader'
 import {
   bindRecordOutbox,
@@ -5652,6 +5653,9 @@ export function ItemEditForm({
   // is capped at 350px and ellipsised, so this is the only place the whole
   // value is available.
   // "Edited 3d ago by <name>" — one activity row for the header chip.
+  // #2450 — RecordLiveSync refreshes it on every write by someone else, so while the socket is
+  // live the poll is only a 5-minute safety net.
+  const lastTouchPoll = useLiveRefetchInterval(60_000, { enabled: !isNew })
   const { data: lastTouch } = useQuery<{
     action: string
     timestamp: string
@@ -5673,9 +5677,9 @@ export function ItemEditForm({
         .catch(() => null),
     enabled: !isNew && !!itemId,
     staleTime: 60_000,
-    // The stale-record banner rides this poll — one indexed row a minute,
-    // paused while the tab is hidden (react-query default).
-    refetchInterval: 60_000
+    // The stale-record banner rides this read — one indexed row a minute without a live
+    // socket, paused while the tab is hidden (react-query default).
+    refetchInterval: lastTouchPoll
   })
 
   // Save-as-template dialog (#8) — styled, never a browser prompt.

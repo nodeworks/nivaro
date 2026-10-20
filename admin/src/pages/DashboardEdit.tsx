@@ -1,5 +1,12 @@
 import { createNivaro } from '@nivaro/sdk'
-import { liveWidgetInterval, NivaroProvider, QueryWidgetBody, useLiveWidget } from '@nivaro/shared'
+import {
+  liveQueryMeta,
+  liveWidgetInterval,
+  NivaroProvider,
+  QueryWidgetBody,
+  useLiveRefetchInterval,
+  useLiveWidget
+} from '@nivaro/shared'
 import { useMutation, useQueries, useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   ArrowLeft,
@@ -12,7 +19,7 @@ import {
   TrendingUp,
   X
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router'
 import {
   Bar,
@@ -42,7 +49,6 @@ import { Sheet, SheetContent, SheetFooter, SheetHeader, SheetTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton'
 import { api, type Collection, type Dashboard, type DashboardWidget } from '@/lib/api'
 import { useGoBack } from '@/lib/nav'
-import { adminRealtime } from '@/lib/socket'
 import { cn, formatNumber } from '@/lib/utils'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -203,6 +209,17 @@ function WidgetCard({
     onData: (d) => qc.setQueryData(['widget-data', widget.id, filtersKey], d),
     onStale: () => void qc.invalidateQueries({ queryKey: ['widget-data', widget.id] })
   })
+  // #53 — the widget's own interval when it has one, else the page default.
+  const baseInterval =
+    widget.refresh_seconds && widget.refresh_seconds >= 10 ? widget.refresh_seconds * 1000 : 60_000
+  // Live dashboards (#264, #2450): a widget the server does not push still refreshes when its
+  // source collection changes — the live-query bridge refetches it (bursts coalesce, at most
+  // once per 2 s) — so its poll is only a safety net while the bridge is listening.
+  const followsCollection = !live && !!widget.collection
+  const collectionPoll = useLiveRefetchInterval(baseInterval, {
+    requireBridge: true,
+    enabled: followsCollection
+  })
   const { data, isLoading } = useQuery({
     queryKey: ['widget-data', widget.id, filtersKey],
     queryFn: () =>
@@ -211,33 +228,11 @@ function WidgetCard({
           params: globalFilters.length ? { extra_filters: filtersKey } : {}
         })
         .then((r) => r.data.data),
-    // #53 — the widget's own interval when it has one, else the page default.
-    refetchInterval: liveWidgetInterval(
-      live,
-      widget.refresh_seconds && widget.refresh_seconds >= 10
-        ? widget.refresh_seconds * 1000
-        : 60_000
-    )
+    refetchInterval: live ? liveWidgetInterval(true, baseInterval) : collectionPoll,
+    meta: followsCollection
+      ? liveQueryMeta({ reads: [widget.collection as string], minGapMs: 2000 })
+      : undefined
   })
-
-  // Live dashboards (#264): a write to this widget's source collection
-  // refreshes its number within ~2s instead of the 60s poll. Debounced so
-  // bulk writes coalesce into one refetch.
-  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  useEffect(() => {
-    if (!widget.collection || live) return
-    const unsub = adminRealtime.subscribeCollections([widget.collection], () => {
-      if (debounceRef.current) return
-      debounceRef.current = setTimeout(() => {
-        debounceRef.current = null
-        void qc.invalidateQueries({ queryKey: ['widget-data', widget.id] })
-      }, 2000)
-    })
-    return () => {
-      unsub()
-      if (debounceRef.current) clearTimeout(debounceRef.current)
-    }
-  }, [widget.collection, widget.id, qc, live])
 
   const cfg = TYPE_CONFIG[widget.type]
 

@@ -5,6 +5,7 @@ import {
   RecentRecordsRail
 } from '@nivaro/react'
 import { createNivaro } from '@nivaro/sdk'
+import { useLiveRefetchInterval } from '@nivaro/shared'
 import { useQuery } from '@tanstack/react-query'
 import {
   Activity,
@@ -325,6 +326,9 @@ export function DashboardPage() {
         .catch(() => ({ data: [] }))
   })
 
+  // #2450 — the socket's presence:update (joined below) carries the live count; while the socket
+  // is up this read is only the first figure and a 5-minute safety net.
+  const presencePoll = useLiveRefetchInterval(10_000)
   const { data: presenceData } = useQuery({
     queryKey: ['presence-sessions'],
     queryFn: () =>
@@ -332,7 +336,7 @@ export function DashboardPage() {
         .get<{ data: unknown[]; total: number }>('/presence/sessions')
         .then((r) => r.data)
         .catch(() => null),
-    refetchInterval: 10_000
+    refetchInterval: presencePoll
   })
 
   const [onlineCount, setOnlineCount] = useState<number | null>(null)

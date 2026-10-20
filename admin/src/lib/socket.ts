@@ -48,14 +48,15 @@ let lastSeq = 0
 let everAuthed = false
 
 // ── Connection state (#1725) ────────────────────────────────────────────────
-let status: RealtimeStatus = { state: 'live', transport: null, refreshed: null }
+let status: RealtimeStatus = { state: 'live', transport: null, refreshed: null, resumed: null }
 const statusListeners = new Set<(s: RealtimeStatus) => void>()
 function setStatus(patch: Partial<RealtimeStatus>) {
   const next = { ...status, ...patch }
   if (
     next.state === status.state &&
     next.transport === status.transport &&
-    next.refreshed === status.refreshed
+    next.refreshed === status.refreshed &&
+    next.resumed === status.resumed
   )
     return
   status = next
@@ -63,10 +64,10 @@ function setStatus(patch: Partial<RealtimeStatus>) {
 }
 /** Waiting for the catch-up answer after a reconnect; the state turns live when it lands. */
 let catchupTimer: ReturnType<typeof setTimeout> | null = null
-function caughtUp(refreshed: string | null) {
+function caughtUp(refreshed: string | null, resumed: NonNullable<RealtimeStatus['resumed']>) {
   if (catchupTimer) clearTimeout(catchupTimer)
   catchupTimer = null
-  setStatus({ state: 'live', refreshed })
+  setStatus({ state: 'live', refreshed, resumed })
 }
 
 /**
@@ -300,12 +301,24 @@ export function getSocket(): Socket {
       setStatus({ transport: transportName() })
       // Live once the catch-up answers (or after a while without one — the replay is a bonus).
       if (catchupTimer) clearTimeout(catchupTimer)
-      catchupTimer = setTimeout(() => caughtUp(null), 8000)
+      catchupTimer = setTimeout(() => caughtUp(null, 'unverified'), 8000)
       setTimeout(() => socket?.emit('catchup', { cursor }), Math.random() * 2000)
     } else {
-      setStatus({ state: 'live', transport: transportName(), refreshed: null })
+      // #2450 — a reconnect with no cursor could not replay what it missed (the live-query
+      // bridge reconciles); a first connection has nothing to catch up on.
+      setStatus({
+        state: 'live',
+        transport: transportName(),
+        refreshed: null,
+        resumed: everAuthed && status.state === 'reconnecting' ? 'unverified' : null
+      })
     }
     everAuthed = true
+  })
+  // #2450 — the journal position at sign-in: a reconnect replays from here even when no event
+  // reached this socket yet (a quiet tab used to have no cursor, so it missed the gap).
+  socket.on('catchup:cursor', (p: { seq?: number }) => {
+    if (lastSeq === 0 && typeof p?.seq === 'number' && p.seq > 0) lastSeq = p.seq
   })
   socket.on('nvr:ping', (p: { t?: number }) => socket?.emit('nvr:pong', { t: p?.t }))
   socket.onAny((_event, payload) => {
@@ -322,13 +335,14 @@ export function getSocket(): Socket {
           l({ ...ev.payload, _seq: ev.seq })
         }
       }
-      caughtUp(null)
+      caughtUp(null, 'replayed')
     }
   )
   socket.on('catchup:full', () => {
     window.dispatchEvent(new CustomEvent('nvr:catchup-full'))
     caughtUp(
-      'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.'
+      'Live updates resumed. The connection was gone too long to replay each change, so the lists and records on this page were reloaded.',
+      'reloaded'
     )
   })
   socket.on('client:force-refresh', (p: { seconds?: number; message?: string }) => {
