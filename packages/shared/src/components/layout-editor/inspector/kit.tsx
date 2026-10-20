@@ -51,7 +51,8 @@ export interface GlobalDraft {
 }
 
 export interface GlobalPending {
-  /** Parity key of the setting changed last: the confirm shows under it. */
+  /** Where the confirm shows: the setting changed last (its parity key, or
+   *  its row key when the setting repeats per row — Setting `confirmAt`). */
   key: string
   /** What each changed control shows while the confirm is open, by parity key. */
   values: Record<string, unknown>
@@ -70,8 +71,15 @@ export interface GlobalWriter {
   draft: GlobalDraft
   saving: boolean
   error: string | null
-  /** Merge one change into the pending patch (one confirm for all of them). */
-  propose(key: string, value: unknown, label: string, change: (d: GlobalDraft) => GlobalDraft): void
+  /** Merge one change into the pending patch (one confirm for all of them).
+   *  `labelKey` (default `key`) keeps one label per row of a repeated setting. */
+  propose(
+    key: string,
+    value: unknown,
+    label: string,
+    change: (d: GlobalDraft) => GlobalDraft,
+    labelKey?: string
+  ): void
   cancel(): void
   confirm(): void
 }
@@ -221,11 +229,14 @@ export function Setting({
   scope = 'form',
   enforced,
   inline,
+  confirmAt,
   children,
   className
 }: {
   /** Parity key (data-setting). */
   k: string
+  /** Row key of a setting repeated per row; the confirm shows under that row. */
+  confirmAt?: string
   label: ReactNode
   /** One sentence: what this does. Every setting says it. */
   effect: ReactNode
@@ -252,7 +263,7 @@ export function Setting({
         {effect}
       </p>
       {enforced && <EnforcementNote />}
-      {scope === 'field' && w?.pending?.key === k && <GlobalConfirm />}
+      {scope === 'field' && w?.pending?.key === (confirmAt ?? k) && <GlobalConfirm />}
     </div>
   )
 }
@@ -265,19 +276,29 @@ export function Toggle({
   enforced,
   checked,
   onChange,
-  disabled
+  disabled,
+  confirmAt
 }: {
   k: string
   label: ReactNode
   effect: ReactNode
   scope?: Scope
   enforced?: boolean
+  confirmAt?: string
   checked: boolean
   onChange: (v: boolean) => void
   disabled?: boolean
 }) {
   return (
-    <Setting k={k} label={label} effect={effect} scope={scope} enforced={enforced} inline>
+    <Setting
+      k={k}
+      label={label}
+      effect={effect}
+      scope={scope}
+      enforced={enforced}
+      confirmAt={confirmAt}
+      inline
+    >
       <Switch
         checked={checked}
         disabled={disabled}

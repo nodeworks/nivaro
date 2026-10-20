@@ -1,10 +1,18 @@
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useContext, useEffect, useState } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { type CascadeFilterRule, CascadeFiltersEditor } from '../editors/cascade-filters'
 import { useFieldCtx } from './field-context'
-import { Choice, Section, Setting, TextInput, Toggle, useGlobalValue } from './kit'
+import {
+  Choice,
+  GlobalWriterContext,
+  Section,
+  Setting,
+  TextInput,
+  Toggle,
+  useGlobalValue
+} from './kit'
 import { asArray, asObject, describeField, relKindOf, withKey } from './model'
 
 type Rel = {
@@ -112,9 +120,10 @@ export function PickerTab() {
     typeof globalOptions.option_field === 'string' ? globalOptions.option_field : ''
   )
 
-  // Cascade filters (nivaro_fields.dependency_config — every form)
-  const storedRules = asArray<CascadeFilterRule>(globalDependency.cascade_filters)
-  const rules = useGlobalValue('field.cascade_filters', storedRules)
+  // Cascade filters (nivaro_fields.dependency_config — every form). Read from the
+  // pending draft like the raw rows in Advanced, so a change made there is kept.
+  const draftDependency = useContext(GlobalWriterContext)?.draft.dependency_config
+  const rules = asArray<CascadeFilterRule>((draftDependency ?? globalDependency).cascade_filters)
   const names = new Set<string>(ctx.globals.map((f) => f.field))
   for (const r of ctx.relations) {
     if (r.one_field && r.one_field !== 'id' && r.one_collection === env.collection)

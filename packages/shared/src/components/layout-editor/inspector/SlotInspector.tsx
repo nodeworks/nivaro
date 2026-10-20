@@ -15,7 +15,7 @@ import {
   Toggle,
   useInspectorEnv
 } from './kit'
-import { placeSlotOps, readOverrides, withKey } from './model'
+import { placeSlotOps, readOverrides, rowlessExpanded, withKey } from './model'
 import { useLayoutsOf } from './PickerTab'
 
 export const WIDTHS = [
@@ -102,7 +102,7 @@ export function SlotInspector({
             k='slot.default_expanded'
             label='Starts open'
             effect='Off shows the panel folded until someone opens it.'
-            checked={row?.default_expanded ?? field !== '__related_records__'}
+            checked={row?.default_expanded ?? rowlessExpanded(field)}
             onChange={(v) =>
               write(
                 { default_expanded: v },

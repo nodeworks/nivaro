@@ -320,7 +320,11 @@ function FieldInspector({ row, readOnly }: { row: PlacementRow; readOnly: boolea
     fieldLabel: info.label,
     stored: {
       options: asObject(info.global?.options),
-      dependency_config: asObject(info.global?.dependency_config)
+      dependency_config: asObject(info.global?.dependency_config),
+      columns: {
+        deprecated: !!info.global?.deprecated_at,
+        deprecation_note: info.global?.deprecation_note || null
+      }
     }
   })
   const ctx = useFieldCtxValue({ env, row, meta: m, writer, readOnly })

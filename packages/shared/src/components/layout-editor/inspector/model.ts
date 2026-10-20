@@ -466,6 +466,26 @@ export const ROWLESS_SLOT_ORDER = [
 ]
 
 /**
+ * Whether the record page draws a slot open when it has no row (ItemEditForm
+ * renderSentinel and the rowless panels: Pipeline, Tasks, Comments, Related
+ * records and Owners start folded; Referenced by and Addendums start open).
+ * A first row writes this, so giving a slot a row never changes how it opens.
+ */
+export const ROWLESS_SLOT_EXPANDED: Record<string, boolean> = {
+  __pipeline__: false,
+  __tasks__: false,
+  __related_records__: false,
+  __referenced_by__: true,
+  __comments__: false,
+  __addendums__: true,
+  __owners__: false
+}
+
+export function rowlessExpanded(field: string): boolean {
+  return ROWLESS_SLOT_EXPANDED[field] ?? true
+}
+
+/**
  * Ops that give a slot without a row its first row, where it is drawn now:
  * after the top-level sections and slot rows, with rows for the rowless slots
  * drawn before it (so renaming Comments does not lift it above Tasks). In a
@@ -477,19 +497,31 @@ export function placeSlotOps(
   groupKey: string | null,
   patch: PlacementPatch
 ): LayoutOp[] {
+  // Panels keep how they open without a row (other slots have no fold).
+  const own =
+    field in ROWLESS_SLOT_EXPANDED ? { default_expanded: rowlessExpanded(field), ...patch } : patch
   if (groupKey !== null) {
     const n = bundle.placements.filter((p) => p.group_key === groupKey).length
-    return [{ op: 'place', field, group_key: groupKey, index: n, patch }]
+    return [{ op: 'place', field, group_key: groupKey, index: n, patch: own }]
   }
   const top =
     bundle.groups.filter((g) => g.parent_key === null).length +
     bundle.placements.filter(isCanvasSlot).length
   const at = ROWLESS_SLOT_ORDER.indexOf(field)
+  // Rowless = no row anywhere: a slot placed in a section is drawn there, not here.
   const before = (at < 0 ? [] : ROWLESS_SLOT_ORDER.slice(0, at)).filter(
-    (f) => !bundle.placements.some((p) => p.field === f && p.group_key === null)
+    (f) => !bundle.placements.some((p) => p.field === f)
   )
   return [
-    ...before.map((f, i): LayoutOp => ({ op: 'place', field: f, group_key: null, index: top + i })),
-    { op: 'place', field, group_key: null, index: top + before.length, patch }
+    ...before.map(
+      (f, i): LayoutOp => ({
+        op: 'place',
+        field: f,
+        group_key: null,
+        index: top + i,
+        patch: { default_expanded: rowlessExpanded(f) }
+      })
+    ),
+    { op: 'place', field, group_key: null, index: top + before.length, patch: own }
   ]
 }

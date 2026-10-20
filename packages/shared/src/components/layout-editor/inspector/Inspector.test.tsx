@@ -52,6 +52,13 @@ const FIELDS = [
           parent_field: 'region',
           filter_column: 'region_id',
           clear_on_parent_change: true,
+          show_all_if_no_parent: true,
+          value_map: { north: 'N' }
+        },
+        {
+          parent_field: 'region',
+          filter_column: 'zone_id',
+          clear_on_parent_change: true,
           show_all_if_no_parent: true
         }
       ]
@@ -384,12 +391,15 @@ async function mount(
     inheritedFrom?: string | null
     navigate?: (to: string) => void
     openLayout?: (id: number) => void
+    /** Fill the query cache first (another screen's reads). */
+    seed?: (qc: QueryClient) => void
   } = {}
 ) {
   const { client, calls } = makeClient()
   const apply = vi.fn()
   const flush = vi.fn()
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  opts.seed?.(qc)
   const draw = (bundle: LayoutBundle) =>
     root.render(
       <QueryClientProvider client={qc}>
@@ -842,14 +852,17 @@ describe('Inspector', () => {
         (b) => b.textContent === label
       )
 
-    it('format then currency: one confirm saves both', async () => {
+    it('format away and back, then currency: only what differs is confirmed', async () => {
       const b = makeBundle()
       const { calls } = await mount(field('amount'), {
         bundle: b
       })
-      // Stored: currency USD. Switch to Decimal, then back to Currency and type EUR.
+      // Stored: currency USD. Switch to Integer, then back to Currency and type EUR.
       await click(fmtButton('Integer'))
+      expect(host.querySelectorAll('[data-global-confirm]')).toHaveLength(1)
       await click(fmtButton('Currency'))
+      // Back to what is stored: nothing to confirm.
+      expect(host.querySelector('[data-global-confirm]')).toBeNull()
       const cur = host.querySelector('[data-setting="field.currency"] input') as HTMLInputElement
       expect(cur).not.toBeNull()
       await typeInto(cur, 'EUR')
@@ -862,7 +875,8 @@ describe('Inspector', () => {
       expect(
         confirms[0].parentElement?.closest('[data-setting]')?.getAttribute('data-setting')
       ).toBe('field.currency')
-      expect(confirms[0].querySelectorAll('[data-global-changes] li')).toHaveLength(2)
+      // The format change was undone, so only the currency is listed.
+      expect(confirms[0].querySelector('[data-global-changes]')).toBeNull()
       await click(host.querySelector('[data-global-save]'))
       const patches = calls.filter((c) => c._method === 'PATCH')
       expect(patches).toHaveLength(1)
@@ -880,6 +894,7 @@ describe('Inspector', () => {
         [...document.querySelectorAll('[role="option"]')].find((o) => o.textContent === 'Sum')
       )
       expect(fmtButton('Decimal')?.getAttribute('aria-pressed')).toBe('true')
+      expect(host.querySelectorAll('[data-global-changes] li')).toHaveLength(2)
       await click(host.querySelector('[data-global-save]'))
       const patch = calls.find((c) => c._method === 'PATCH')
       expect(patch?._body).toEqual({
@@ -910,7 +925,7 @@ describe('Inspector', () => {
     it('cancel drops every pending change', async () => {
       await mount(field('amount'))
       await click(fmtButton('Integer'))
-      await click(fmtButton('Currency'))
+      await click(fmtButton('Decimal'))
       await click(host.querySelector('[data-global-cancel]'))
       expect(fmtButton('Currency')?.getAttribute('aria-pressed')).toBe('true')
       expect(host.querySelector('[data-global-confirm]')).toBeNull()
@@ -920,9 +935,171 @@ describe('Inspector', () => {
   it('reads collection meta under its own key and leaves other shapes alone', async () => {
     const { qc } = await mount(field('title'))
     expect(qc.getQueryData(['layout-editor', 'collection-meta', 'orders'])).toMatchObject({
-      label: 'Orders'
+      fields: expect.any(Array)
     })
     expect(qc.getQueryData(['collection-meta', 'orders'])).toBeUndefined()
+  })
+
+  it('moved editors ignore the relations array other screens keep under collection-meta', async () => {
+    // RelationCombobox stores an ARRAY of relations under ['collection-meta', c].
+    const seed = (qc: QueryClient) => {
+      for (const c of ['orders', 'vendors', 'regions', 'order_lines', 'products'])
+        qc.setQueryData(['collection-meta', c], [{ many_collection: c, many_field: 'x' }])
+    }
+    await mount(field('vendor'), { seed })
+    await click(host.querySelector('[data-inspector-tab="picker"]'))
+    // The cascade editor reads the related collection's fields: add a filter.
+    const add = [...host.querySelectorAll('[data-setting="field.cascade_filters"] button')].find(
+      (b) => /add/i.test(b.textContent ?? '')
+    )
+    await click(add)
+    expect(host.querySelector('[data-setting="field.cascade_filters"]')).not.toBeNull()
+    // Lines: the grid tab's field pickers read the child collection.
+    await mount(field('lines'), { seed })
+    for (const t of [...host.querySelectorAll('[data-inspector-tab]')])
+      await click(
+        host.querySelector(`[data-inspector-tab="${t.getAttribute('data-inspector-tab')}"]`)
+      )
+    expect(host.querySelector('[data-inspector-tab]')).not.toBeNull()
+  })
+
+  describe('cascade filters edited on the Picker and Advanced tabs', () => {
+    const pickerClear = () =>
+      host.querySelector(
+        '[data-setting="field.cascade_filters.clear_on_parent_change"] [role="switch"]'
+      )
+    const valueMap = () =>
+      host.querySelector(
+        '[data-setting="field.cascade_filters.value_map"] textarea'
+      ) as HTMLTextAreaElement | null
+
+    it('a value map cleared in Advanced stays cleared after a Picker change', async () => {
+      const { calls } = await mount(field('vendor'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      const box = valueMap() as HTMLTextAreaElement
+      await typeInto(box, '')
+      await leave(box)
+      await click(host.querySelector('[data-inspector-tab="picker"]'))
+      await click(pickerClear())
+      await click(host.querySelector('[data-global-save]'))
+      const patches = calls.filter((c) => c._method === 'PATCH')
+      expect(patches).toHaveLength(1)
+      const rules = (patches[0]._body as { dependency_config: { cascade_filters: unknown[] } })
+        .dependency_config.cascade_filters as Array<Record<string, unknown>>
+      expect(rules[0].value_map).toBeUndefined()
+      expect(rules[0].clear_on_parent_change).toBe(false)
+      expect(rules).toHaveLength(2)
+    })
+
+    it('the Picker shows and keeps a value map changed in Advanced after its own change', async () => {
+      const { calls } = await mount(field('vendor'))
+      await click(host.querySelector('[data-inspector-tab="picker"]'))
+      await click(pickerClear())
+      expect(pickerClear()?.getAttribute('aria-checked')).toBe('false')
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      const box = valueMap() as HTMLTextAreaElement
+      await typeInto(box, '{"south": "S"}')
+      await leave(box)
+      await click(host.querySelector('[data-inspector-tab="picker"]'))
+      // Still the Picker change, now beside the Advanced one.
+      expect(pickerClear()?.getAttribute('aria-checked')).toBe('false')
+      const show = host.querySelector(
+        '[data-setting="field.cascade_filters.show_all_if_no_parent"] [role="switch"]'
+      )
+      await click(show)
+      await click(host.querySelector('[data-global-save]'))
+      const patches = calls.filter((c) => c._method === 'PATCH')
+      expect(patches).toHaveLength(1)
+      const rules = (patches[0]._body as { dependency_config: { cascade_filters: unknown[] } })
+        .dependency_config.cascade_filters as Array<Record<string, unknown>>
+      expect(rules[0]).toMatchObject({
+        value_map: { south: 'S' },
+        clear_on_parent_change: false,
+        show_all_if_no_parent: false
+      })
+    })
+
+    it('lists a change for each filter row, not one per setting', async () => {
+      await mount(field('vendor'))
+      await click(host.querySelector('[data-inspector-tab="advanced"]'))
+      const boxes = [
+        ...host.querySelectorAll('[data-setting="field.cascade_filters.value_map"] textarea')
+      ] as HTMLTextAreaElement[]
+      expect(boxes).toHaveLength(2)
+      await typeInto(boxes[0], '{"a": 1}')
+      await leave(boxes[0])
+      const second = [
+        ...host.querySelectorAll('[data-setting="field.cascade_filters.value_map"] textarea')
+      ][1] as HTMLTextAreaElement
+      await typeInto(second, '{"b": 2}')
+      await leave(second)
+      // One confirm, under the row changed last.
+      const confirms = host.querySelectorAll('[data-global-confirm]')
+      expect(confirms).toHaveLength(1)
+      expect(confirms[0].parentElement?.closest('[data-setting]')?.querySelector('textarea')).toBe(
+        second
+      )
+      const items = [...host.querySelectorAll('[data-global-changes] li')].map((l) => l.textContent)
+      expect(items).toEqual([
+        'Change the value map of filter 1 of Vendor',
+        'Change the value map of filter 2 of Vendor'
+      ])
+    })
+  })
+
+  it('a change back to what is stored hides the confirm and sends nothing', async () => {
+    const { calls } = await mount(field('title'))
+    await click(host.querySelector('[data-inspector-tab="advanced"]'))
+    const sw = () => host.querySelector('[data-setting="field.deprecated"] [role="switch"]')
+    await click(sw())
+    expect(host.querySelectorAll('[data-global-confirm]')).toHaveLength(1)
+    await click(sw())
+    expect(host.querySelector('[data-global-confirm]')).toBeNull()
+    expect(calls.some((c) => c._method === 'PATCH')).toBe(false)
+  })
+
+  describe('slots without a row keep how they open', () => {
+    const startsOpen = () =>
+      host
+        .querySelector('[data-setting="slot.default_expanded"] [role="switch"]')
+        ?.getAttribute('aria-checked')
+
+    it.each([
+      ['__comments__', 'false'],
+      ['__tasks__', 'false'],
+      ['__related_records__', 'false'],
+      ['__referenced_by__', 'true'],
+      ['__addendums__', 'true']
+    ])('%s shows Starts open as the record page draws it', async (f, open) => {
+      await mount({ kind: 'slot', field: f, group_key: null })
+      expect(startsOpen()).toBe(open)
+    })
+
+    it('a first row writes each panel’s rowless fold', async () => {
+      const b = makeBundle()
+      const bundle = { ...b, placements: b.placements.filter((p) => p.field !== '__pipeline__') }
+      const { apply } = await mount(
+        { kind: 'slot', field: '__comments__', group_key: null },
+        { bundle }
+      )
+      const input = host.querySelector(
+        '[data-setting="slot.label_override"] input'
+      ) as HTMLInputElement
+      await typeInto(input, 'Notes')
+      const [ops] = apply.mock.calls.at(-1) ?? []
+      expect(
+        ops.map((o: { field: string; patch: { default_expanded?: boolean } }) => [
+          o.field,
+          o.patch.default_expanded
+        ])
+      ).toEqual([
+        ['__pipeline__', false],
+        ['__tasks__', false],
+        ['__related_records__', false],
+        ['__referenced_by__', true],
+        ['__comments__', false]
+      ])
+    })
   })
 
   it('names the collection by its label in the every-form confirm', async () => {

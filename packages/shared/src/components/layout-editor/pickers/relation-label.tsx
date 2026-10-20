@@ -3,6 +3,7 @@ import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
 import { renderDisplayTemplate, USER_SYSTEM_COLS, userDisplayLabel } from '../../pipeline/relations'
 import { Skeleton } from '../../ui/skeleton'
+import { useCollectionBody } from '../collection-meta'
 
 interface RelationLabelProps {
   relatedCollection: string
@@ -24,11 +25,7 @@ export function RelationLabel({ relatedCollection, id }: RelationLabelProps) {
   // User relations resolve via /users — system tables have no /items route
   const isUserCol = USER_SYSTEM_COLS.has(relatedCollection)
 
-  const { data: colMeta } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
-    queryFn: () =>
-      client.request<{ data: any }>(get(`/collections/${relatedCollection}`)).then((r) => r.data),
-    staleTime: 10 * 60 * 1000,
+  const { data: colMeta } = useCollectionBody(relatedCollection, {
     enabled: !isSystemCol,
     retry: false
   })

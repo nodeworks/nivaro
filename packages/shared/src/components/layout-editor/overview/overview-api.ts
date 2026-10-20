@@ -2,13 +2,14 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback } from 'react'
 import { useNivaroClient } from '../../../context'
 import { get } from '../../../lib/commands'
+import { collectionMetaKey, useCollectionBody } from '../collection-meta'
 import type { DescribeField } from './describe-conditions'
 import type { ExplainResponse, OverviewReference, OverviewResponse } from './types'
 
 export const overviewKeys = {
   overview: (collection: string) => ['layout-editor', 'overview', collection] as const,
   fields: (collection: string) => ['layout-editor', 'fields', collection] as const,
-  meta: (collection: string) => ['layout-editor', 'collection-meta', collection] as const,
+  meta: (collection: string) => collectionMetaKey(collection),
   roles: () => ['layout-editor', 'roles'] as const
 }
 
@@ -66,19 +67,12 @@ export function useOverviewFields(collection: string) {
 }
 
 export function useDisplayTemplate(collection: string, enabled: boolean) {
-  const client = useNivaroClient()
-  return useQuery<string | null>({
-    queryKey: overviewKeys.meta(collection),
-    queryFn: () =>
-      client
-        .request<{ data: { display_template?: string | null } | null }>(
-          get(`/collections/${collection}`)
-        )
-        .then((r) => r.data?.display_template ?? null)
-        .catch(() => null),
+  const q = useCollectionBody(collection, {
     enabled,
-    staleTime: 5 * 60_000
+    select: (b) => (typeof b?.display_template === 'string' ? b.display_template : null)
   })
+  // A failed read means "no template", not "still loading".
+  return q.isError ? { ...q, data: null } : q
 }
 
 export function useRoleNames(enabled: boolean) {

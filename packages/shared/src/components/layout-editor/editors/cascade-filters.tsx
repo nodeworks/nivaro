@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import { Check, ChevronsUpDown, Pencil, Plus, X } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '../../../lib/utils'
@@ -14,7 +13,7 @@ import {
 import { Input } from '../../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { Switch } from '../../ui/switch'
-import { useEditorApi } from './editor-api'
+import { useCollectionBody } from '../collection-meta'
 
 export interface CascadeFilterRule {
   parent_field: string
@@ -45,7 +44,6 @@ export function CascadeFiltersEditor({
   relatedCollection?: string | null
   onChange: (rules: CascadeFilterRule[]) => void
 }) {
-  const api = useEditorApi()
   const [adding, setAdding] = useState(false)
   const [editingIdx, setEditingIdx] = useState<number | null>(null)
   const [parentField, setParentField] = useState('')
@@ -57,12 +55,7 @@ export function CascadeFiltersEditor({
   const [editParentField, setEditParentField] = useState('')
   const [editFilterColumn, setEditFilterColumn] = useState('')
 
-  const { data: relColMeta } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
-    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data),
-    enabled: !!relatedCollection,
-    staleTime: 10 * 60 * 1000
-  })
+  const { data: relColMeta } = useCollectionBody(relatedCollection)
   const relatedFields: string[] = relColMeta?.fields?.map((f: { field: string }) => f.field) ?? []
   const [clearOnChange, setClearOnChange] = useState(true)
   const [clearOnUnavailable, setClearOnUnavailable] = useState(false)

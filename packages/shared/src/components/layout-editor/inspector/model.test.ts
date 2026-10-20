@@ -242,6 +242,37 @@ describe('placeSlotOps', () => {
     expect(topOrder(applyLayoutOps(b, ops))).toEqual(['main', 'more', '__pipeline__'])
   })
 
+  it('a slot placed in a section gets no second row above the edited one', () => {
+    const b = bundle()
+    b.placements.push({ ...newPlacement('__tasks__', 'more'), sort: 0 })
+    const ops = placeSlotOps(b, '__comments__', null, {})
+    expect(ops.map((o) => (o as { field: string }).field)).toEqual([
+      '__related_records__',
+      '__referenced_by__',
+      '__comments__'
+    ])
+    const next = applyLayoutOps(b, ops)
+    expect(next.placements.filter((p) => p.field === '__tasks__')).toHaveLength(1)
+  })
+
+  it('every row it creates opens the way the record page draws that slot without one', () => {
+    const b = { ...bundle(), placements: [] }
+    const ops = placeSlotOps(b, '__addendums__', null, { label_override: 'Changes' })
+    const next = applyLayoutOps(b, ops)
+    const open = Object.fromEntries(next.placements.map((p) => [p.field, p.default_expanded]))
+    expect(open).toEqual({
+      __pipeline__: false,
+      __tasks__: false,
+      __related_records__: false,
+      __referenced_by__: true,
+      __comments__: false,
+      __addendums__: true
+    })
+    // An explicit choice wins over the rowless default.
+    const own = placeSlotOps(b, '__tasks__', 'main', { default_expanded: true })
+    expect(own.at(-1)).toMatchObject({ patch: { default_expanded: true } })
+  })
+
   it('a slot in a section goes to the end of that section', () => {
     const b = bundle()
     const ops = placeSlotOps(b, '__pdf__', 'main', { col_span: 6 })

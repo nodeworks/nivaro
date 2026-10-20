@@ -84,14 +84,20 @@ export function AdvancedTab() {
     value: unknown,
     label: string
   ) =>
-    ctx.proposeGlobal(settingKey, value, label, (d) => {
-      const rows = asArray<Record<string, unknown>>(d.dependency_config.cascade_filters)
-      const next = rows.map((r, j) => (j === i ? (withKey(r, key, value) ?? {}) : r))
-      return {
-        ...d,
-        dependency_config: withKey(d.dependency_config, 'cascade_filters', next) ?? {}
-      }
-    })
+    ctx.proposeGlobal(
+      settingKey,
+      value,
+      label,
+      (d) => {
+        const rows = asArray<Record<string, unknown>>(d.dependency_config.cascade_filters)
+        const next = rows.map((r, j) => (j === i ? (withKey(r, key, value) ?? {}) : r))
+        return {
+          ...d,
+          dependency_config: withKey(d.dependency_config, 'cascade_filters', next) ?? {}
+        }
+      },
+      `${settingKey}#${i}`
+    )
 
   return (
     <div className='space-y-4'>
@@ -195,6 +201,7 @@ export function AdvancedTab() {
               </p>
               <Toggle
                 k='field.cascade_filters.filter_via_many'
+                confirmAt={`field.cascade_filters.filter_via_many#${i}`}
                 label='Filter through the many side'
                 effect='Matches options through a many-to-many link instead of a column on the option.'
                 scope='field'
@@ -211,6 +218,7 @@ export function AdvancedTab() {
               />
               <Setting
                 k='field.cascade_filters.value_map'
+                confirmAt={`field.cascade_filters.value_map#${i}`}
                 label='Value map'
                 effect='Turns the parent value into the option value before filtering: {"parent": "option"}.'
                 scope='field'
@@ -232,6 +240,7 @@ export function AdvancedTab() {
               </Setting>
               <Setting
                 k='field.cascade_filters.value_map_default'
+                confirmAt={`field.cascade_filters.value_map_default#${i}`}
                 label='Value map default'
                 effect='Used when the parent value is not in the value map.'
                 scope='field'

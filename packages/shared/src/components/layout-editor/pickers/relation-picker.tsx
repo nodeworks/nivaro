@@ -7,6 +7,7 @@ import { extractTemplateFields, renderDisplayTemplate } from '../../pipeline/rel
 import { Input } from '../../ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
 import { ScrollArea } from '../../ui/scroll-area'
+import { useCollectionBody } from '../collection-meta'
 
 interface RelationPickerProps {
   relatedCollection: string
@@ -44,11 +45,7 @@ export function RelationPicker({
   // nivaro_users is a system table — use the /users endpoint instead of /items
   const isUserRelation = relatedCollection === 'nivaro_users'
 
-  const { data: colMeta, isError: colError } = useQuery({
-    queryKey: ['collection-meta', relatedCollection],
-    queryFn: () =>
-      client.request<{ data: any }>(get(`/collections/${relatedCollection}`)).then((r) => r.data),
-    staleTime: 10 * 60 * 1000,
+  const { data: colMeta, isError: colError } = useCollectionBody(relatedCollection, {
     retry: false,
     enabled: !isUserRelation
   })

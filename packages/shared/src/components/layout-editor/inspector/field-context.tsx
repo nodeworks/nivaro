@@ -1,10 +1,11 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { createContext, useContext, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
+import { createContext, useCallback, useContext, useMemo, useState } from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
-import { get, patch as patchCmd } from '../../../lib/commands'
+import { patch as patchCmd } from '../../../lib/commands'
 import type { PlacementKey, PlacementPatch, PlacementRow } from '../../../lib/layout-ops'
 import { titleCase } from '../../../lib/utils'
+import { type CollectionBody, collectionMetaKey, useCollectionBody } from '../collection-meta'
 import { parseSaveFailure } from '../useLayoutDraft'
 import type { GlobalDraft, GlobalPending, GlobalWriter, InspectorEnv } from './kit'
 import {
@@ -28,36 +29,19 @@ export interface CollectionMeta {
   label: string
 }
 
-/** The key of the inspector's GET /collections/:c read. Namespaced: other
- *  readers keep different shapes under ['collection-meta', c]. */
-export const collectionMetaKey = (collection: string | null | undefined) => [
-  'layout-editor',
-  'collection-meta',
-  collection
-]
+export { collectionMetaKey }
 
 /** GET /collections/:c — the field rows (global settings), relations and name. */
 export function useCollectionMeta(collection: string | null | undefined) {
-  const client = useNivaroClient()
-  return useQuery<CollectionMeta>({
-    queryKey: collectionMetaKey(collection),
-    queryFn: () =>
-      client
-        .request<{
-          data: {
-            fields?: GlobalFieldRow[]
-            relations?: RelationRow[]
-            display_name?: string | null
-          }
-        }>(get(`/collections/${collection}`))
-        .then((r) => ({
-          fields: r.data?.fields ?? [],
-          relations: r.data?.relations ?? [],
-          label: r.data?.display_name || titleCase(collection ?? '')
-        })),
-    enabled: !!collection,
-    staleTime: 60_000
-  })
+  const select = useCallback(
+    (b: CollectionBody | null): CollectionMeta => ({
+      fields: (b?.fields ?? []) as GlobalFieldRow[],
+      relations: (b?.relations ?? []) as RelationRow[],
+      label: b?.display_name || titleCase(collection ?? '')
+    }),
+    [collection]
+  )
+  return useCollectionBody(collection, { select })
 }
 
 export interface FieldCtx {
@@ -96,7 +80,9 @@ export interface FieldCtx {
     settingKey: string,
     shown: unknown,
     label: string,
-    change: (d: GlobalDraft) => GlobalDraft
+    change: (d: GlobalDraft) => GlobalDraft,
+    /** Names the change in the confirm when one setting has several rows. */
+    labelKey?: string
   ): void
 }
 
@@ -123,8 +109,9 @@ export function useGlobalWriter({
   collectionLabel: string
   field: string
   fieldLabel: string
-  /** nivaro_fields.options / dependency_config as stored. */
-  stored: { options: Obj; dependency_config: Obj }
+  /** nivaro_fields.options / dependency_config (and the other columns a
+   *  change may write, e.g. deprecated) as stored. */
+  stored: GlobalStored
 }): GlobalWriter {
   const client = useNivaroClient()
   const qc = useQueryClient()
@@ -142,7 +129,7 @@ export function useGlobalWriter({
     ? {
         key: changes.key,
         values: changes.values,
-        labels: Object.values(changes.labels),
+        labels: [...new Set(Object.values(changes.labels))],
         patch: globalPatch(stored, changes.draft)
       }
     : null
@@ -155,14 +142,19 @@ export function useGlobalWriter({
     draft,
     saving,
     error,
-    propose: (key, value, label, change) => {
+    propose: (key, value, label, change, labelKey = key) => {
       setError(null)
-      setChanges((prev) => ({
-        draft: change(prev?.draft ?? base),
-        values: { ...prev?.values, [key]: value },
-        labels: { ...prev?.labels, [key]: label },
-        key
-      }))
+      setChanges((prev) => {
+        const next = change(prev?.draft ?? base)
+        // Back to what is stored: nothing to confirm, nothing to send.
+        if (Object.keys(globalPatch(stored, next)).length === 0) return null
+        return {
+          draft: next,
+          values: { ...prev?.values, [key]: value },
+          labels: { ...prev?.labels, [labelKey]: label },
+          key: labelKey
+        }
+      })
     },
     cancel: () => {
       setError(null)
@@ -192,10 +184,19 @@ export function useGlobalWriter({
   }
 }
 
+export interface GlobalStored {
+  options: Obj
+  dependency_config: Obj
+  /** Other columns as a change writes them (deprecated: boolean). */
+  columns?: Obj
+}
+
 /** PATCH /field-config body: only what differs from what is stored. */
-export function globalPatch(stored: { options: Obj; dependency_config: Obj }, d: GlobalDraft): Obj {
-  const out: Obj = { ...d.columns }
+export function globalPatch(stored: GlobalStored, d: GlobalDraft): Obj {
+  const out: Obj = {}
   const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
+  const cols = stored.columns ?? {}
+  for (const [k, v] of Object.entries(d.columns)) if (!(k in cols) || !same(v, cols[k])) out[k] = v
   const orNull = (o: Obj) => (Object.keys(o).length ? o : null)
   if (!same(d.options, stored.options)) out.options = orNull(d.options)
   if (!same(d.dependency_config, stored.dependency_config))
@@ -259,8 +260,8 @@ export function useFieldCtxValue({
           ...d,
           dependency_config: withKey(d.dependency_config, depKey, value) ?? {}
         })),
-      proposeGlobal: (settingKey, shown, label, change) =>
-        writer.propose(settingKey, shown, label, change)
+      proposeGlobal: (settingKey, shown, label, change, labelKey) =>
+        writer.propose(settingKey, shown, label, change, labelKey)
     }
   }, [env, row, meta, writer, readOnly])
 }
