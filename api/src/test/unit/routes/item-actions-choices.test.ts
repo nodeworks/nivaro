@@ -127,6 +127,16 @@ describe('item action choose step', () => {
     expect(options).not.toHaveBeenCalled()
   })
 
+  it('never sends the extension error text to the browser', async () => {
+    options.mockRejectedValue(new Error("Invalid column name 'secret_col'"))
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/item-actions/push/choices?collection=workflows&item=42'
+    })
+    expect(res.statusCode).toBe(500)
+    expect(res.json()).toEqual({ error: 'Could not load the options' })
+  })
+
   it('needs a collection and an item', async () => {
     const res = await (await app()).inject({ method: 'GET', url: '/item-actions/push/choices' })
     expect(res.statusCode).toBe(400)

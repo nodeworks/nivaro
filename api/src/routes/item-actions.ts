@@ -95,9 +95,12 @@ export async function itemActionsRoutes(app: FastifyInstance) {
             }))
         }
       } catch (err) {
-        return reply
-          .status(500)
-          .send({ error: err instanceof Error ? err.message : 'Could not load the options' })
+        // Extension errors can be raw SQL text — log it, never send it.
+        req.log.error(
+          { err, action: req.params.id, collection, item },
+          'item action choices failed'
+        )
+        return reply.status(500).send({ error: 'Could not load the options' })
       }
     }
   )
