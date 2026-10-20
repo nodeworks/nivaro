@@ -1206,6 +1206,8 @@ export function GroupSection({
       <button
         type='button'
         onClick={toggle}
+        // Layout editor: a field dropped on the header goes first in the section.
+        data-design-group-header={design ? '' : undefined}
         className={cn(
           'flex w-full items-center gap-2 px-5 py-3 text-left hover:bg-slate-50/50 dark:hover:bg-white/[0.02] rounded-t-xl',
           // Round the bottom only when nothing renders below the header — an

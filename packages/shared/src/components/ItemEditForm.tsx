@@ -215,7 +215,7 @@ import type {
   SummaryAggConfig,
   SummaryEntry
 } from './item-edit/types'
-import { DesignDropZone, designWrap } from './layout-editor/DesignNode'
+import { DesignDropBody, DesignDropZone, designWrap } from './layout-editor/DesignNode'
 import { DesignCanvas } from './layout-editor/design-canvas'
 import type { DesignTarget, LayoutDesignProp } from './layout-editor/design-context'
 import {
@@ -8225,6 +8225,7 @@ function ItemEditFormView({
           </div>
         )}
         <div className='px-5 py-5'>
+          {designOn && activeChild && <DesignDropBody groupKey={activeChild.key} />}
           <GridContainer>
             {(cw) =>
               activeFields.map((f) => {
@@ -8744,6 +8745,11 @@ function ItemEditFormView({
         key={activeTab}
         className='nvr-tab-enter rounded-xl border border-slate-200 bg-white px-5 py-5'
       >
+        {/* Design: the pane takes its tab's fields ("General" in tab mode mixes
+            Ungrouped and sections, so it is not one drop target). */}
+        {designOn && (tabKey !== '__general__' || inStepsMode) && (
+          <DesignDropBody groupKey={tabKey === '__general__' ? '__ungrouped__' : tabKey} />
+        )}
         <GridContainer>
           {(cw) =>
             tabItems.map((item) => {
@@ -8865,7 +8871,11 @@ function ItemEditFormView({
             })
           }
         </GridContainer>
-        {designOn && tabItems.length === 0 && <DesignDropZone />}
+        {/* "General" in tab mode mixes Ungrouped fields and sections: no single
+            place to drop into, so no drop zone invitation either. */}
+        {designOn && tabItems.length === 0 && (tabKey !== '__general__' || inStepsMode) && (
+          <DesignDropZone />
+        )}
       </div>
     )
   }
