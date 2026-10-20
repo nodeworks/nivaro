@@ -1,5 +1,5 @@
-export { HistoryPanel } from './HistoryPanel'
 export { PdfCanvas, type PdfCanvasProps } from './canvases/PdfCanvas'
+export { HistoryPanel } from './HistoryPanel'
 export {
   type LayoutEditorHost,
   LayoutEditorHostContext,
@@ -15,3 +15,4 @@ export {
 export { IconPicker } from './pickers/icon-picker'
 export { RelationLabel } from './pickers/relation-label'
 export { RelationPicker } from './pickers/relation-picker'
+export * from './settings'

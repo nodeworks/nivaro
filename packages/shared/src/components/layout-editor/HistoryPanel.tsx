@@ -162,7 +162,10 @@ export function HistoryPanel({
   return (
     <div className='flex flex-col gap-2 text-[12px]' data-layout-history>
       {versions.length > 0 && (
-        <div className='rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-border dark:bg-muted/40'>
+        <div
+          data-setting='tool.version_diff'
+          className='rounded-lg border border-slate-200 bg-slate-50 p-2 dark:border-border dark:bg-muted/40'
+        >
           <div className='flex items-center justify-between gap-2'>
             <p className='text-[11px] font-semibold text-slate-600 dark:text-slate-300'>
               {diffFor == null
@@ -238,6 +241,7 @@ export function HistoryPanel({
                   <button
                     type='button'
                     data-restore={v.id}
+                    data-setting='tool.version_restore'
                     data-tip='Replace the layout with this version. The current one is kept as a version first.'
                     onClick={() => setConfirming(v.id)}
                     className={btn}
