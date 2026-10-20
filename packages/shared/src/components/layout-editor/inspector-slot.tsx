@@ -4,22 +4,23 @@ import type { DesignTarget } from './design-context'
 import { useOverviewFields } from './overview/overview-api'
 import type { ApplyOptions } from './useLayoutDraft'
 
-// The editor's right-hand panel contracts. The real Inspector and Form
-// settings (inspector/Inspector.tsx, settings/FormSettings.tsx) take exactly
-// these props; until they land, these placeholders name what is selected so
-// the shell is usable. Swapping them in is a change to the imports below only.
+// The editor's right-hand panel: the one place its parts are chosen. Form
+// settings is the real one; the Inspector below is a placeholder that names
+// what is selected until inspector/Inspector.tsx lands, which takes exactly
+// InspectorProps — the swap is this file re-exporting it:
+//   export { Inspector, type InspectorProps } from './inspector/Inspector'
+
+export { FormSettings, type FormSettingsProps } from './settings'
 
 export interface InspectorProps {
   bundle: LayoutBundle
   target: DesignTarget | null
   apply(ops: LayoutOp[], opts?: ApplyOptions): void
+  /** useLayoutDraft's flush — typed text goes out on blur. */
+  flush?: () => void
   collection: string
-}
-
-export interface FormSettingsProps {
-  bundle: LayoutBundle
-  apply(ops: LayoutOp[], opts?: ApplyOptions): void
-  collection: string
+  /** "Edit in <parent>": switch the editor to that layout. */
+  openLayout?: (layoutId: number) => void
 }
 
 const SLOT_NAMES: Record<string, string> = {
@@ -92,18 +93,6 @@ function InspectorHead({
       <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>{kind}</p>
       <h3 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>{title}</h3>
       {sub && <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>{sub}</p>}
-    </div>
-  )
-}
-
-/** Placeholder until settings/FormSettings.tsx lands. */
-export function FormSettings({ bundle }: FormSettingsProps) {
-  return (
-    <div className='border-b border-slate-200 px-4 py-3.5 dark:border-border'>
-      <p className='text-[12px] text-slate-500 dark:text-muted-foreground'>Form settings</p>
-      <h3 className='text-[14px] font-semibold text-slate-900 dark:text-foreground'>
-        {String(bundle.layout.name ?? '')}
-      </h3>
     </div>
   )
 }

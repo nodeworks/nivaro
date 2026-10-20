@@ -38,6 +38,13 @@ export interface FormSettingsProps {
   collection: string
   /** Preview as role: the canvas may mark the fields this role cannot see or edit. */
   onPreviewRole?: (preview: RolePreview | null) => void
+  /**
+   * The previewed role, when the host shares it with another picker (the
+   * editor's top bar). With `onPreviewRoleChange` the setting follows this
+   * value and reports picks instead of keeping its own.
+   */
+  previewRoleId?: string | null
+  onPreviewRoleChange?: (roleId: string | null) => void
 }
 
 /**
@@ -51,7 +58,9 @@ export function FormSettings({
   apply,
   flush,
   collection,
-  onPreviewRole
+  onPreviewRole,
+  previewRoleId,
+  onPreviewRoleChange
 }: FormSettingsProps) {
   const [query, setQuery] = useState('')
   const kind = layoutKindOf(bundle.layout)
@@ -125,7 +134,12 @@ export function FormSettings({
                     {section.title}
                   </h3>
                   <div className='divide-y divide-slate-100 dark:divide-border/60'>
-                    <Body {...props} onPreviewRole={onPreviewRole} />
+                    <Body
+                      {...props}
+                      onPreviewRole={onPreviewRole}
+                      previewRoleId={previewRoleId}
+                      onPreviewRoleChange={onPreviewRoleChange}
+                    />
                   </div>
                 </section>
               )

@@ -44,14 +44,16 @@ import { DndStore, DndStoreContext, IDLE, NO_DND } from './node'
 
 export { NO_DND }
 
-import { dropLabel, landsOnCanvas, orderAfterDrop } from './order'
+import { dropLabel, landsOnCanvas, orderAfterDrop, placeAfterDrop } from './order'
 
 // Drag and drop on the layout editor canvas (spec §7.5). Every DesignNode is
 // draggable and a drop target; what may land where is typedCollision's call,
 // the order a drop makes is orderAfterDrop's, and a drop is applied as one
 // op batch. Nothing on the form moves while dragging: the dragged node dims,
 // a DragOverlay copy follows the pointer, and an insertion line (absolutely
-// placed, so no reflow) shows where it will land.
+// placed, so no reflow) shows where it will land. Add panel rows
+// (useAddDragSource) drag the same way; their drop is placeAfterDrop's one
+// `place` op.
 
 const DndApiContext = createContext<DesignDnd>(NO_DND)
 
@@ -220,6 +222,7 @@ export function LayoutDndProvider({
     (x: { data: { current?: unknown } } | null | undefined) => {
       const d = nodeData(x?.data.current)
       if (!d) return 'this'
+      if (d.add) return d.add.label
       const t = d.target
       if (t.kind === 'group') {
         if (t.key === '__ungrouped__') return 'Ungrouped fields'
@@ -296,7 +299,9 @@ export function LayoutDndProvider({
     const k = `${active.id}|${over.id}|${hint.side}`
     let ops = plans.current.map.get(k)
     if (!ops) {
-      ops = orderAfterDrop(b, a.target, o.target, hint.side)
+      ops = a.add
+        ? placeAfterDrop(b, a.add.field, o.target, hint.side, a.add.patch)
+        : orderAfterDrop(b, a.target, o.target, hint.side)
       // A slot leaving for the canvas shows its line on the Ungrouped card;
       // where that card is not on screen (steps mode), no line — so no drop.
       if (landsOnCanvas(b, a.target, o.target) && !store.nodes.has(targetKey(UNGROUPED))) ops = []
@@ -337,7 +342,10 @@ export function LayoutDndProvider({
     const plan = planFor(active, over, collisions)
     const b = store.bundle
     reset()
-    if (plan?.ops.length && b) applyRef.current(plan.ops, { label: dropLabel(b, plan.a.target) })
+    if (!plan?.ops.length || !b) return
+    const add = plan.a.add
+    applyRef.current(plan.ops, { label: add ? `Add ${add.label}` : dropLabel(b, plan.a.target) })
+    add?.onAdded?.(plan.ops)
   }
 
   // The canvas (DesignCanvas) cancels pointerdown in its capture phase so

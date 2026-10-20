@@ -16,7 +16,7 @@ import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { bundleToActiveLayout, previewForRole } from './bundle-to-active'
 import { type DesignTarget, type LayoutDesign, targetKey } from './design-context'
-import { EditorDndProvider, useEditorDnd } from './dnd-adapter'
+import { LayoutDndProvider, useLayoutDnd } from './dnd/LayoutDndProvider'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
 import { versionsKey } from './HistoryPanel'
@@ -183,7 +183,8 @@ function useOverlayDialog(active: boolean, onBack: () => void) {
   return ref
 }
 
-/** The canvas, inside the drag-and-drop layer so it can read LayoutDesign.dnd. */
+/** The canvas, inside the drag-and-drop layer so it can read LayoutDesign.dnd. Nodes a
+ *  parent layout supplies never drag (DesignNode locks them). */
 function Canvas({
   collection,
   bundle,
@@ -207,7 +208,7 @@ function Canvas({
   apply: (ops: LayoutOp[], opts?: { label: string }) => void
   onOpenClassic?: () => void
 }) {
-  const dnd = useEditorDnd()
+  const dnd = useLayoutDnd()
   const canvas = useMemo(() => bundleToActiveLayout(bundle, parent), [bundle, parent])
   const layout = useMemo(
     () => previewForRole(canvas.active, preview.roleId, showHidden),
@@ -338,6 +339,12 @@ export function LayoutEditor({
     setPanel('inspector')
   }, [])
 
+  // Form settings' "Preview as role" and the top bar's role are one choice.
+  const onPreviewRoleChange = useCallback(
+    (roleId: string | null) => setPreview((p) => (p.roleId === roleId ? p : { ...p, roleId })),
+    []
+  )
+
   const openLayout = (id: number) => {
     setPanel('inspector')
     if (id === currentId) return
@@ -396,60 +403,61 @@ export function LayoutEditor({
           {warning}
         </div>
       )}
-      <div className='flex min-h-0 flex-1 overflow-hidden'>
-        <aside className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
-          <div
-            role='tablist'
-            aria-label='Left panel'
-            className='flex shrink-0 items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
-          >
-            <button
-              type='button'
-              role='tab'
-              aria-selected={left === 'layouts'}
-              data-editor-tab='layouts'
-              className={leftTab(left === 'layouts')}
-              onClick={() => setLeft('layouts')}
+      {/* Drag and drop spans the whole body: Add panel rows drag onto the canvas. */}
+      <LayoutDndProvider bundle={bundle} apply={draft.apply}>
+        <div className='flex min-h-0 flex-1 overflow-hidden'>
+          <aside className='flex w-[260px] shrink-0 flex-col border-r border-slate-200 bg-white dark:border-border dark:bg-card'>
+            <div
+              role='tablist'
+              aria-label='Left panel'
+              className='flex shrink-0 items-center gap-1 border-b border-slate-200 px-2 py-1.5 dark:border-border'
             >
-              Layouts
-            </button>
-            <button
-              type='button'
-              role='tab'
-              aria-selected={left === 'add'}
-              data-editor-tab='add'
-              className={leftTab(left === 'add')}
-              onClick={() => setLeft('add')}
-              disabled={!bundle}
-              data-tip='Add a field, section, panel or widget after the selection'
-            >
-              <Plus className='h-3.5 w-3.5' />
-              Add
-            </button>
-          </div>
-          <div className='min-h-0 flex-1 overflow-y-auto'>
-            {left === 'add' && bundle ? (
-              <AddPanel
-                bundle={bundle}
-                collection={collection}
-                selected={selected}
-                apply={draft.apply}
-                onSelect={onSelect}
-              />
-            ) : (
-              <LayoutsRail
-                collection={collection}
-                currentId={currentId}
-                onOpen={openLayout}
-                settingsOpen={panel === 'settings'}
-                onSettings={() => setPanel('settings')}
-              />
-            )}
-          </div>
-        </aside>
-        <main className='min-w-0 flex-1 overflow-y-auto'>
-          {bundle ? (
-            <EditorDndProvider bundle={bundle} apply={draft.apply}>
+              <button
+                type='button'
+                role='tab'
+                aria-selected={left === 'layouts'}
+                data-editor-tab='layouts'
+                className={leftTab(left === 'layouts')}
+                onClick={() => setLeft('layouts')}
+              >
+                Layouts
+              </button>
+              <button
+                type='button'
+                role='tab'
+                aria-selected={left === 'add'}
+                data-editor-tab='add'
+                className={leftTab(left === 'add')}
+                onClick={() => setLeft('add')}
+                disabled={!bundle}
+                data-tip='Add a field, section, panel or widget after the selection'
+              >
+                <Plus className='h-3.5 w-3.5' />
+                Add
+              </button>
+            </div>
+            <div className='min-h-0 flex-1 overflow-y-auto'>
+              {left === 'add' && bundle ? (
+                <AddPanel
+                  bundle={bundle}
+                  collection={collection}
+                  selected={selected}
+                  apply={draft.apply}
+                  onSelect={onSelect}
+                />
+              ) : (
+                <LayoutsRail
+                  collection={collection}
+                  currentId={currentId}
+                  onOpen={openLayout}
+                  settingsOpen={panel === 'settings'}
+                  onSettings={() => setPanel('settings')}
+                />
+              )}
+            </div>
+          </aside>
+          <main className='min-w-0 flex-1 overflow-y-auto'>
+            {bundle ? (
               <Canvas
                 collection={collection}
                 bundle={bundle}
@@ -462,33 +470,42 @@ export function LayoutEditor({
                 apply={draft.apply}
                 onOpenClassic={onOpenClassic ? () => onOpenClassic(currentId) : undefined}
               />
-            </EditorDndProvider>
-          ) : draft.error ? (
-            <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
-          ) : (
-            <div className='flex flex-col gap-3 p-6'>
-              <Skeleton className='h-10 w-full rounded-lg' />
-              <Skeleton className='h-48 w-full rounded-lg' />
-            </div>
-          )}
-        </main>
-        <aside
-          data-editor-inspector=''
-          className='w-[320px] shrink-0 overflow-y-auto border-l border-slate-200 bg-white dark:border-border dark:bg-card'
-        >
-          {bundle &&
-            (panel === 'settings' ? (
-              <FormSettings bundle={bundle} apply={draft.apply} collection={collection} />
+            ) : draft.error ? (
+              <p className='p-6 text-[13px] text-red-700 dark:text-red-300'>{draft.error}</p>
             ) : (
-              <Inspector
-                bundle={bundle}
-                target={selected}
-                apply={draft.apply}
-                collection={collection}
-              />
-            ))}
-        </aside>
-      </div>
+              <div className='flex flex-col gap-3 p-6'>
+                <Skeleton className='h-10 w-full rounded-lg' />
+                <Skeleton className='h-48 w-full rounded-lg' />
+              </div>
+            )}
+          </main>
+          <aside
+            data-editor-inspector=''
+            className='w-[320px] shrink-0 overflow-y-auto border-l border-slate-200 bg-white dark:border-border dark:bg-card'
+          >
+            {bundle &&
+              (panel === 'settings' ? (
+                <FormSettings
+                  bundle={bundle}
+                  apply={draft.apply}
+                  flush={draft.flush}
+                  collection={collection}
+                  previewRoleId={preview.roleId}
+                  onPreviewRoleChange={onPreviewRoleChange}
+                />
+              ) : (
+                <Inspector
+                  bundle={bundle}
+                  target={selected}
+                  apply={draft.apply}
+                  flush={draft.flush}
+                  collection={collection}
+                  openLayout={openLayout}
+                />
+              ))}
+          </aside>
+        </div>
+      </LayoutDndProvider>
     </div>
   )
 

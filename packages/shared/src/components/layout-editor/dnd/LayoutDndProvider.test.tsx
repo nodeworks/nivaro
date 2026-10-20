@@ -12,6 +12,7 @@ import {
 import { DesignDropBody, DesignNode } from '../DesignNode'
 import { type DesignTarget, type LayoutDesign, LayoutDesignContext } from '../design-context'
 import { LayoutDndProvider, NO_DND, useLayoutDnd } from './LayoutDndProvider'
+import { useAddDragSource } from './node'
 ;(globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true
 
 const bundle: LayoutBundle = {
@@ -53,8 +54,26 @@ const RECTS: Record<string, [number, number, number, number]> = {
   'group:__ungrouped__': [0, 580, 600, 100],
   'field:u1:': [20, 600, 560, 40],
   'top:g1': [0, 0, 600, 40],
-  'top:g2': [0, 220, 600, 40]
+  'top:g2': [0, 220, 600, 40],
+  'add:vendor': [700, 0, 200, 30]
 }
+/** An Add panel row (outside the canvas) that drags `vendor` in. */
+function AddRow({ onAdded, onClick }: { onAdded?: (ops: unknown) => void; onClick?: () => void }) {
+  const drag = useAddDragSource({ field: 'vendor', label: 'Vendor', to: 'form', onAdded })
+  return (
+    <button
+      type='button'
+      data-rect='add:vendor'
+      {...drag.props}
+      onClick={() => {
+        if (!drag.clickBlocked()) onClick?.()
+      }}
+    >
+      Vendor
+    </button>
+  )
+}
+
 const domRect = ([x, y, w, h]: [number, number, number, number]) =>
   ({ x, y, left: x, top: y, width: w, height: h, right: x + w, bottom: y + h }) as DOMRect
 
@@ -383,5 +402,44 @@ describe('LayoutDndProvider', () => {
     expect(node('header:amount').hasAttribute('data-drop-slot')).toBe(false)
     await drop(190, -40)
     expect(apply).not.toHaveBeenCalled()
+  })
+
+  it('an Add panel row dragged onto the form emits one place op', async () => {
+    const apply = vi.fn()
+    const onAdded = vi.fn()
+    const onClick = vi.fn()
+    render(
+      apply,
+      <>
+        <AddRow onAdded={onAdded} onClick={onClick} />
+        <Canvas blockPointer />
+      </>
+    )
+    const row = host.querySelector('[data-rect="add:vendor"]') as HTMLElement
+    expect(row.getAttribute('aria-roledescription')).toBe('draggable')
+    pointer('pointerdown', row, 750, 15)
+    pointer('pointermove', document, 740, 20)
+    await tick()
+    // The preview is a copy of the row.
+    expect(document.body.querySelector('[data-design-drag-preview]')?.textContent).toBe('Vendor')
+    // Lower half of field a: after it.
+    pointer('pointermove', document, 100, 80)
+    await tick()
+    expect(node('field:a:g1').getAttribute('data-drop-slot')).toBe('after')
+    pointer('pointerup', document, 100, 80)
+    await tick()
+    const ops = [{ op: 'place', field: 'vendor', group_key: 'g1', index: 1 }]
+    expect(apply).toHaveBeenCalledTimes(1)
+    expect(apply).toHaveBeenCalledWith(ops, { label: 'Add Vendor' })
+    expect(onAdded).toHaveBeenCalledWith(ops)
+    // The click that ends the drag adds nothing more.
+    act(() => row.click())
+    expect(onClick).not.toHaveBeenCalled()
+  })
+
+  it('an Add panel row is a plain button outside a provider', () => {
+    act(() => root.render(<AddRow />))
+    const row = host.querySelector('[data-rect="add:vendor"]') as HTMLElement
+    expect(row.hasAttribute('aria-roledescription')).toBe(false)
   })
 })

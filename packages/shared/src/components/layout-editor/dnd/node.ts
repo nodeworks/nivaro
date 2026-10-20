@@ -5,13 +5,14 @@ import {
   type PointerEvent,
   useCallback,
   useContext,
+  useEffect,
   useId,
   useRef,
   useSyncExternalStore
 } from 'react'
-import type { LayoutBundle } from '../../../lib/layout-ops'
+import { isCanvasSlot, type LayoutBundle } from '../../../lib/layout-ops'
 import { type DesignDnd, type DesignTarget, targetKey } from '../design-context'
-import { type DndNodeData, type DropSide, dndRole } from './collision'
+import { type AddSource, type DndNodeData, type DndRole, type DropSide, dndRole } from './collision'
 
 // The per-node half of the layout editor's drag and drop: the store a
 // LayoutDndProvider shares with its nodes, and the one hook every DesignNode
@@ -217,5 +218,79 @@ export function useDesignDropBody(groupKey: string) {
     ref,
     slot: over ? (store?.state.side ?? null) : null,
     indicator: over ? (store?.state.indicator ?? null) : null
+  }
+}
+
+// An Add panel row's zone: it shares no order with anything on the canvas.
+const ADD_ZONE = '__add__'
+
+/**
+ * What an Add panel row drags as: a slot card (pipeline, comments, owners, …)
+ * joins the page order, a header-strip tile the header tiles, anything else
+ * (fields, widgets) the fields and section bodies.
+ */
+export function addRole(field: string, to: 'form' | 'header'): DndRole {
+  if (to === 'header') return { kind: 'header' }
+  if (isCanvasSlot({ field, group_key: null }))
+    return { kind: 'group', key: field, parent: null, body: false }
+  return { kind: 'item', zone: ADD_ZONE }
+}
+
+// A click that ends a drag (the keyup of space, a pointerup on the row) is not an add.
+const CLICK_AFTER_DRAG_MS = 400
+
+/**
+ * An Add panel row as a drag source (spec §7.2: "drag from it or click to
+ * add"). Inside a LayoutDndProvider the row drags like a canvas node and a
+ * drop applies one `place` op; outside one, or with `source` null (already on
+ * the form), it is a plain button. `clickBlocked()` tells the row's onClick
+ * that the click belongs to a drag.
+ */
+export function useAddDragSource(source: (AddSource & { to: 'form' | 'header' }) | null) {
+  const store = useContext(DndStoreContext)
+  const uid = useId()
+  const live = !!store && !!source
+  const target: DesignTarget = { kind: 'field', field: source?.field ?? uid, group_key: ADD_ZONE }
+  const key = targetKey(target)
+  const data: DndNodeData | undefined = source
+    ? {
+        target,
+        role: addRole(source.field, source.to),
+        add: {
+          field: source.field,
+          label: source.label,
+          patch: source.patch,
+          onAdded: source.onAdded
+        }
+      }
+    : undefined
+  const drag = useDraggable({ id: live ? key : `${key}#${uid}`, data, disabled: !live })
+  const nodeRef = useRef<HTMLElement | null>(null)
+  const { setNodeRef, setActivatorNodeRef } = drag
+  const ref = useCallback(
+    (el: HTMLElement | null) => {
+      // The drag preview is a copy of the row.
+      store?.track(key, nodeRef.current, el)
+      nodeRef.current = el
+      setNodeRef(el)
+      setActivatorNodeRef(el)
+    },
+    [key, setActivatorNodeRef, setNodeRef, store]
+  )
+  const endedAt = useRef(0)
+  const was = useRef(false)
+  useEffect(() => {
+    if (was.current && !drag.isDragging) endedAt.current = Date.now()
+    was.current = drag.isDragging
+  }, [drag.isDragging])
+  const dragging = drag.isDragging
+  const clickBlocked = useCallback(
+    () => dragging || Date.now() - endedAt.current < CLICK_AFTER_DRAG_MS,
+    [dragging]
+  )
+  return {
+    props: live ? { ref, ...drag.attributes, ...drag.listeners } : {},
+    dragging,
+    clickBlocked
   }
 }
