@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { definitionNameMatches, deployProcedure } from '../services/procedure-deploy.js'
 
 /**
  * Stored-procedure management (admin) — the Developer → Procedures page.
@@ -66,20 +67,6 @@ async function procParams(name: string): Promise<ProcParam[]> {
     position: r.parameter_id
   }))
 }
-
-/** The definition must be a single CREATE [OR ALTER] PROCEDURE for exactly
- * the named proc — deploying under one name while defining another is how
- * list state and reality diverge. */
-function definitionNameMatches(definition: string, name: string): boolean {
-  const m =
-    /create\s+(?:or\s+alter\s+)?proc(?:edure)?\s+(?:\[?dbo\]?\s*\.\s*)?\[?([A-Za-z_][A-Za-z0-9_]*)\]?/i.exec(
-      definition
-    )
-  return !!m && m[1].toLowerCase() === name.toLowerCase()
-}
-
-const toCreateOrAlter = (definition: string) =>
-  definition.replace(/create\s+(or\s+alter\s+)?proc(edure)?/i, 'CREATE OR ALTER PROCEDURE')
 
 /** Engine-accurate context for the AI routes: referenced base tables with
  * live columns/indexes/row counts, plus where the app invokes the proc. */
@@ -231,18 +218,9 @@ export async function procedureRoutes(app: FastifyInstance) {
         [name]
       )) as unknown[]
       try {
-        await db.raw(toCreateOrAlter(definition))
+        await deployProcedure(definition)
       } catch (e) {
-        // knex/mssql AggregateErrors carry an empty .message — the real SQL
-        // Server messages live in .errors.
-        const errs = (e as { errors?: Array<{ message?: string }> })?.errors ?? [e as Error]
-        return reply.code(400).send({
-          error:
-            errs
-              .map((x) => x?.message)
-              .filter(Boolean)
-              .join(' | ') || 'Deploy failed'
-        })
+        return reply.code(400).send({ error: (e as Error).message })
       }
       await logActivity({
         action: existing.length ? 'procedure-update' : 'procedure-create',

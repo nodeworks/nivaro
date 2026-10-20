@@ -106,7 +106,8 @@ export default function SqlChecks() {
               Every procedure, function, view and trigger in the database, plus import definitions’
               stored procedures and custom queries, checked for mistakes that corrupt or slow data:
               MERGE keys that skip empty values, writes without WHERE, transactions left open and
-              more. Checks read only; nothing is changed here.
+              more. Checks only read. Two kinds of procedure fix can be applied from a finding, with
+              a preview, a re-check and automatic undo.
             </p>
           </div>
           <div className='flex shrink-0 flex-wrap items-center gap-2'>

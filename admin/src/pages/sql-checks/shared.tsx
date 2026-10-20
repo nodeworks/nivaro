@@ -1,5 +1,5 @@
 import { COLOR_ROLES, useOverflowTip } from '@nivaro/shared'
-import { useLayoutEffect, useState } from 'react'
+import { useEffect, useLayoutEffect, useState } from 'react'
 import { cn } from '@/lib/utils'
 
 /** SQL checks (#2562) — types and labels shared by the page's tabs. */
@@ -109,7 +109,15 @@ export interface FindingDetail extends FindingRow {
   events: Array<{
     id: number
     run_id: number | null
-    event: 'opened' | 'resolved' | 'reopened' | 'accepted' | 'unaccepted'
+    event:
+      | 'opened'
+      | 'resolved'
+      | 'reopened'
+      | 'accepted'
+      | 'unaccepted'
+      | 'fixed'
+      | 'fix_undone'
+      | 'reverted'
     at: string
     by: string | null
     /** The person's name (null when the event came from a run). */
@@ -129,6 +137,142 @@ export interface FixRow {
   detail: Record<string, unknown> | null
   run_by: string | null
   created_at: string
+}
+
+// ─── proposed fixes (#2563) ─────────────────────────────────────────────────
+
+/** Checks a fix can be proposed for (procedures and stored import bodies only). */
+export const FIXABLE_CHECKS = new Set(['tran-without-xact-abort', 'merge-null-key'])
+
+export interface DiffLine {
+  type: ' ' | '-' | '+'
+  text: string
+  old_no: number | null
+  new_no: number | null
+}
+export interface DiffHunk {
+  old_start: number
+  new_start: number
+  lines: DiffLine[]
+}
+
+export interface Proposal {
+  finding_id: number
+  proposable: boolean
+  class: 'xact-abort' | 'merge-null-safe' | null
+  manual_reason?: string
+  risky: boolean
+  reasons: string[]
+  diff: DiffHunk[]
+  unified: string
+  current_hash: string
+  new_definition_hash: string | null
+  compile: { ok: boolean; error?: string; skipped?: boolean } | null
+  target: { type: ObjectType; label: string; kind: 'module' | 'import_definition' }
+  deploys: boolean
+  note: string
+}
+
+export interface ApplyOutcome {
+  fix_id: number
+  applied: boolean
+  rolled_back: boolean
+  reason?: string
+  deployed: boolean
+}
+
+/** A proc fix applied from this page, as its fixes row keeps it. */
+export interface PageFixDetail {
+  source?: string
+  applied?: boolean
+  rolled_back?: boolean
+  rollback_reason?: string
+  rollback_error?: string
+  error?: string
+  reverted?: boolean
+  reverted_at?: string
+  reverted_by?: string
+  deployed?: boolean
+  kind?: 'module' | 'import_definition'
+  diff?: DiffHunk[]
+  import_definitions_synced?: string[]
+}
+
+export const EVENT_LABEL: Record<string, string> = {
+  opened: 'Opened',
+  resolved: 'Resolved',
+  reopened: 'Reopened',
+  accepted: 'Marked as expected',
+  unaccepted: 'Reopened',
+  fixed: 'Fixed',
+  fix_undone: 'Fix put back automatically',
+  reverted: 'Fix reverted'
+}
+
+/** Two-click confirm: the first click arms it for a few seconds, the second acts. */
+export function useTwoClick(ms = 4000): [boolean, (v: boolean) => void] {
+  const [armed, setArmed] = useState(false)
+  useEffect(() => {
+    if (!armed) return
+    const t = setTimeout(() => setArmed(false), ms)
+    return () => clearTimeout(t)
+  }, [armed, ms])
+  return [armed, setArmed]
+}
+
+const DIFF_ROW: Record<DiffLine['type'], string> = {
+  ' ': '',
+  '-': 'bg-red-50 text-red-900 dark:bg-red-500/10 dark:text-red-200',
+  '+': 'bg-emerald-50 text-emerald-900 dark:bg-emerald-500/10 dark:text-emerald-200'
+}
+const DIFF_SR: Record<DiffLine['type'], string> = { ' ': '', '-': 'removed: ', '+': 'added: ' }
+
+/** Line diff with old / new line numbers; the +/- sign carries the meaning, colour only helps. */
+export function DiffView({ hunks, label }: { hunks: DiffHunk[]; label: string }) {
+  return (
+    <figure className='m-0 grid gap-1'>
+      <figcaption className='sr-only'>{label}</figcaption>
+      <pre className='m-0 max-h-[360px] overflow-auto rounded-md border border-slate-200 bg-white p-0 text-[11.5px] leading-[1.55] dark:border-border dark:bg-card'>
+        <code className='block min-w-max py-1'>
+          {hunks.map((h, hi) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: hunks are a fixed list, never reordered
+            <span key={hi} className='block'>
+              {hi > 0 && (
+                <span aria-hidden='true' className='block px-3 text-muted-foreground'>
+                  ⋯
+                </span>
+              )}
+              {h.lines.map((l, li) => (
+                <span
+                  // biome-ignore lint/suspicious/noArrayIndexKey: a fixed list of diff lines
+                  key={li}
+                  className={cn('block whitespace-pre pr-3', DIFF_ROW[l.type])}
+                >
+                  <span
+                    aria-hidden='true'
+                    className='inline-block w-10 select-none pr-2 text-right text-muted-foreground'
+                  >
+                    {l.old_no ?? ''}
+                  </span>
+                  <span
+                    aria-hidden='true'
+                    className='inline-block w-10 select-none pr-2 text-right text-muted-foreground'
+                  >
+                    {l.new_no ?? ''}
+                  </span>
+                  <span aria-hidden='true' className='inline-block w-4 select-none'>
+                    {l.type === ' ' ? '' : l.type}
+                  </span>
+                  <span className='sr-only'>{DIFF_SR[l.type]}</span>
+                  {l.text}
+                </span>
+              ))}
+            </span>
+          ))}
+        </code>
+      </pre>
+    </figure>
+  )
 }
 
 export const CHECK_LABEL: Record<string, string> = {

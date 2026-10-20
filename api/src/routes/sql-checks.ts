@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
+import { applyFix, FixError, proposalFor, revertFix } from '../services/sql-checks/apply.js'
 import { CHECK_KEYS, SEVERITIES } from '../services/sql-checks/checkers.js'
 import {
   EVENTS,
@@ -26,8 +27,9 @@ import { lintConfig } from '../services/sql-checks/sqlfluff.js'
 
 /**
  * SQL checks (#2562) — admin only. Findings are produced by runs (nightly cron `sql-checks`, or
- * POST /run); people only accept / reopen them. Fixes are logged by Nivaro (a changed procedure
- * that resolved findings) and by outside fix scripts through POST /fixes.
+ * POST /run); people accept / reopen them, and for two mechanical classes (#2563) preview, apply
+ * and revert a procedure fix (services/sql-checks/apply.ts). Fixes are logged by Nivaro (a changed
+ * procedure that resolved findings, a fix applied here) and by outside fix scripts (POST /fixes).
  */
 
 const STATUSES = ['open', 'resolved', 'accepted'] as const
@@ -370,6 +372,62 @@ export async function sqlChecksRoutes(app: FastifyInstance): Promise<void> {
       return { data: findingOut(out) }
     }
   )
+
+  const fixFailure = (reply: import('fastify').FastifyReply, err: unknown) => {
+    if (err instanceof FixError)
+      return reply.code(err.status).send({ error: err.message, code: err.code })
+    throw err
+  }
+  const who = (req: import('fastify').FastifyRequest) => ({
+    userId: req.user?.id ?? null,
+    label: String(req.user?.email ?? req.user?.id ?? 'admin'),
+    req
+  })
+
+  /** The proposed fix for a finding (#2563): diff, risks, compile result. Changes nothing. */
+  app.get<{ Params: { id: string } }>('/findings/:id/proposal', async (req, reply) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
+    try {
+      return { data: await proposalFor(id) }
+    } catch (err) {
+      return fixFailure(reply, err)
+    }
+  })
+
+  /** Apply the proposed fix (the hash ties it to the preview the person saw). */
+  app.post<{
+    Params: { id: string }
+    Body: { new_definition_hash?: string; confirm_risky?: boolean } | null
+  }>('/findings/:id/apply', async (req, reply) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
+    const hash = String(req.body?.new_definition_hash ?? '')
+    if (!/^[0-9a-f]{64}$/.test(hash))
+      return reply.code(400).send({ error: 'new_definition_hash is required' })
+    try {
+      const data = await applyFix({
+        findingId: id,
+        newDefinitionHash: hash,
+        confirmRisky: req.body?.confirm_risky === true,
+        who: who(req)
+      })
+      return { data }
+    } catch (err) {
+      return fixFailure(reply, err)
+    }
+  })
+
+  /** Put back the definition a fix from this page replaced. */
+  app.post<{ Params: { id: string } }>('/fixes/:id/revert', async (req, reply) => {
+    const id = Number(req.params.id)
+    if (!Number.isInteger(id)) return reply.code(400).send({ error: 'Bad id' })
+    try {
+      return { data: await revertFix(id, who(req)) }
+    } catch (err) {
+      return fixFailure(reply, err)
+    }
+  })
 
   app.get<{ Querystring: { page?: string; limit?: string } }>('/fixes', async (req) => {
     const p = page(req.query, 100)
