@@ -671,3 +671,62 @@ describe('evaluateTransitionRequirements — strict mode', () => {
     expect(result?.[0]).toMatchObject({ type: 'record_fields' })
   })
 })
+
+describe('evaluateTransitionRequirements — record_fields skip_when', () => {
+  const tables = (system: string) => ({
+    // chainDb ignores `where`: the hop's relation must be the first row.
+    nivaro_relations: [
+      {
+        many_collection: 'orders',
+        many_field: 'warehouse',
+        one_collection: 'warehouses',
+        one_field: null,
+        junction_field: null
+      }
+    ],
+    orders: [{ id: 'order-1', warehouse: 5, order_number: null }],
+    warehouses: [{ id: 5, ordering_system: system }]
+  })
+  const reqs = (skip: unknown) =>
+    JSON.stringify([{ type: 'record_fields', fields: ['order_number'], skip_when: skip }])
+  const rule = { field: 'warehouse.ordering_system', in: ['fusion_transfer'] }
+
+  it('drops the entry when the record matches (the warehouse assigns the number)', async () => {
+    const result = await evaluateTransitionRequirements(
+      chainDb(tables('fusion_transfer')),
+      reqs(rule),
+      'order-1',
+      makeLogger(),
+      'orders'
+    )
+    expect(result).toBeNull()
+  })
+
+  it('keeps the entry when the record does not match', async () => {
+    const result = await evaluateTransitionRequirements(
+      chainDb(tables('manual')),
+      reqs(rule),
+      'order-1',
+      makeLogger(),
+      'orders'
+    )
+    expect(result?.[0]).toMatchObject({ type: 'record_fields' })
+  })
+
+  it('keeps the entry when the skip read fails, and rethrows under strict', async () => {
+    const database = chainDb(tables('fusion_transfer'), ['warehouses'])
+    const kept = await evaluateTransitionRequirements(
+      database,
+      reqs(rule),
+      'order-1',
+      makeLogger(),
+      'orders'
+    )
+    expect(kept?.[0]).toMatchObject({ type: 'record_fields' })
+    await expect(
+      evaluateTransitionRequirements(database, reqs(rule), 'order-1', makeLogger(), 'orders', {
+        strict: true
+      })
+    ).rejects.toThrow('read failed: warehouses')
+  })
+})

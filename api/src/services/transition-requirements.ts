@@ -273,6 +273,23 @@ export async function evaluateTransitionRequirements(
     if (!raw || typeof raw !== 'object') continue
     const entry = raw as Record<string, unknown>
     if (entry.type === 'record_fields') {
+      // skip_when: same {field, in} rules as review_when (one M2O hop) — the
+      // entry does not apply to this record at all, e.g. the order number is
+      // not asked when the warehouse's own system assigns it. A failed read
+      // keeps the entry (shown, as before).
+      const skipRules = normalizeReviewRules(entry.skip_when)
+      if (skipRules.length > 0 && recordCollection && IDENTIFIER_RE.test(recordCollection)) {
+        try {
+          const rec = await readReviewValues(database, recordCollection, itemId, [
+            ...new Set(skipRules.map((r) => r.field))
+          ])
+          if (skipRules.some((r) => r.in.some((v) => String(v) === String(rec[r.field] ?? ''))))
+            continue
+        } catch (err) {
+          if (options.strict === true) throw err
+          logger.warn({ err }, 'transition requirements: skip_when query failed, keeping the entry')
+        }
+      }
       const block = await evaluateRecordFieldsEntry(
         database,
         entry,
