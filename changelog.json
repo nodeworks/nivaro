@@ -1,10 +1,41 @@
 {
-  "generated_at": "2026-10-20T00:53:07.461Z",
+  "generated_at": "2026-10-20T02:15:31.968Z",
   "releases": [
+    {
+      "version": "0.2.71",
+      "tag": "v0.2.71",
+      "date": "2026-10-19T22:15:14-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks fixes: review round 2 (#2563)",
+              "hash": "a938ccb8"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks fixes: security and design review follow-ups (#2563)",
+              "hash": "6d5b1ab1"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks: propose and apply safe procedure fixes (#2563)",
+              "hash": "29a0f0b4"
+            }
+          ]
+        }
+      ],
+      "count": 3
+    },
     {
       "version": "0.2.70",
       "tag": "v0.2.70",
-      "date": "2026-10-19T20:52:53-04:00",
+      "date": "2026-10-19T20:53:07-04:00",
       "sections": [
         {
           "label": "Documentation",
