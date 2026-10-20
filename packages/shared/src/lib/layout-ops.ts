@@ -422,6 +422,14 @@ function renumberAll(d: Draft): void {
 /**
  * Apply ops in order to a copy of the bundle. Throws LayoutOpError naming the
  * failing op's index; the input bundle is never mutated.
+ *
+ * Slot rule: the six slot cards (CANVAS_SLOT_KEYS, group_key null) store
+ * their sort among the top-level groups, as the record page reads it — so
+ * they are renumbered with top-level groups and `__ungrouped__` (ties:
+ * groups < Ungrouped < pipeline < tasks < comments < addendums <
+ * referenced-by < related records), never with the Ungrouped zone's fields,
+ * and move with group_move { key: '__pipeline__', parent_key: null, index }.
+ * Every other group_key-null placement belongs to the Ungrouped zone.
  */
 export function applyLayoutOps(bundle: LayoutBundle, ops: LayoutOp[]): LayoutBundle {
   const d: Draft = {
