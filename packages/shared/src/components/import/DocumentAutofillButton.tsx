@@ -598,6 +598,13 @@ export function DocumentAutofillButton({
   const accept = (config?.accept ?? []).join(',')
   const openAsks = proposal?.asks ?? []
 
+  // Focus lands on the dialog itself, not its first control: Radix picked the corner close
+  // button, which lit up (and showed its tooltip) the moment the reading dialog opened.
+  const focusPanel = (e: Event) => {
+    e.preventDefault()
+    ;(e.currentTarget as HTMLElement | null)?.focus()
+  }
+
   return (
     <>
       <input
@@ -624,7 +631,13 @@ export function DocumentAutofillButton({
           data-autofill-button
           disabled={!!busy}
           onClick={() => fileInputRef.current?.click()}
-          title='Fill this record from one or more documents — a statement of work and its quote, a spreadsheet'
+          // No tooltip while reading: the button is still under the cursor when the file picker
+          // closes, and its native tooltip hung over the reading dialog.
+          title={
+            busy
+              ? undefined
+              : 'Fill this record from one or more documents — a statement of work and its quote, a spreadsheet'
+          }
           className={cn(
             'inline-flex h-9 items-center gap-1.5 rounded-md border border-input bg-background px-3 text-sm font-medium shadow-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-70',
             className
@@ -649,7 +662,11 @@ export function DocumentAutofillButton({
         }}
       >
         {busy && !proposal ? (
-          <DialogContent className='max-w-md' data-autofill-waiting>
+          <DialogContent
+            className='max-w-md outline-none'
+            data-autofill-waiting
+            onOpenAutoFocus={focusPanel}
+          >
             <DialogHeader>
               <DialogTitle className='flex items-center gap-2 text-[15px]'>
                 <Loader2 className='h-4 w-4 animate-spin text-nvr-navy dark:text-nvr-cyan' />
@@ -676,8 +693,9 @@ export function DocumentAutofillButton({
           </DialogContent>
         ) : (
           <DialogContent
-            className='flex max-h-[88vh] w-[880px] max-w-[96vw] flex-col gap-0 p-0'
+            className='flex max-h-[88vh] w-[880px] max-w-[96vw] flex-col gap-0 p-0 outline-none'
             data-autofill-review
+            onOpenAutoFocus={focusPanel}
           >
             {proposal && (
               <>

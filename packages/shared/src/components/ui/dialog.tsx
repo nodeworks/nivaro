@@ -46,7 +46,7 @@ function DialogContent({
       >
         {children}
         {!hideClose && (
-          <DialogPrimitive.Close className='absolute right-4 top-2 rounded-lg p-1 text-slate-400 hover:text-slate-600 focus:outline-none focus:ring-2 focus:ring-nvr-cyan'>
+          <DialogPrimitive.Close className='absolute right-4 top-2 rounded-lg p-1 text-slate-400 hover:text-slate-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-nvr-cyan'>
             <X className='h-4 w-4' />
             <span className='sr-only'>Close</span>
           </DialogPrimitive.Close>
