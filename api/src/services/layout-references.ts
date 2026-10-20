@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { getTenantId } from '../db/tenant-context.js'
 import type { OverviewReference } from './layout-overview.js'
 
 /**
@@ -27,7 +28,10 @@ function parseJson(raw: unknown): unknown {
 const asRecord = (v: unknown): Record<string, unknown> | null =>
   v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
 
-const titled = (key: string) => key.replace(/_/g, ' ').replace(/^\w/, (c) => c.toUpperCase())
+const titled = (key: unknown) =>
+  String(key ?? '')
+    .replace(/_/g, ' ')
+    .replace(/^\w/, (c) => c.toUpperCase())
 
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
@@ -60,7 +64,30 @@ function pageDrillIds(node: unknown, out: Set<number>, depth = 0): void {
   for (const v of Object.values(rec)) pageDrillIds(v, out, depth + 1)
 }
 
-export async function findLayoutReferences(collection: string): Promise<Refs> {
+// Memo per tenant + collection: the reads scan several whole tables (~1 s on a
+// large database). Any successful write to collection-layouts, field-groups
+// or field-config drops it (routes/index.ts, beside clearMetadataCache);
+// references held elsewhere (queues, share links, forms, pages) wait out the TTL.
+const REFS_TTL_MS = 30_000
+const refsMemo = new Map<string, { at: number; refs: Promise<Refs> }>()
+
+export function bustLayoutReferences(): void {
+  refsMemo.clear()
+}
+
+export function findLayoutReferences(collection: string): Promise<Refs> {
+  const key = `${getTenantId() ?? ''}\u0000${collection}`
+  const hit = refsMemo.get(key)
+  if (hit && Date.now() - hit.at < REFS_TTL_MS) return hit.refs
+  const refs = loadLayoutReferences(collection)
+  refsMemo.set(key, { at: Date.now(), refs })
+  refs.catch(() => {
+    if (refsMemo.get(key)?.refs === refs) refsMemo.delete(key)
+  })
+  return refs
+}
+
+async function loadLayoutReferences(collection: string): Promise<Refs> {
   const refs: Refs = new Map()
   const layouts = await safe(() =>
     db('nivaro_collection_layouts').where({ collection }).select('id', 'name', 'slug')

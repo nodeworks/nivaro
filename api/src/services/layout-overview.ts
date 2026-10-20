@@ -98,10 +98,11 @@ function shapeOf(l: OverviewLayoutInput): OverviewRow['shape'] {
   let container_mode: 'tabs' | 'steps' | null = null
   if (topTabs.length > 0) {
     steps_or_tabs = topTabs.length
-    container_mode = l.tab_mode === 'tabs' ? 'tabs' : 'steps'
+    // The renderer treats only tab_mode 'steps' as steps; anything else is tabs.
+    container_mode = l.tab_mode === 'steps' ? 'steps' : 'tabs'
   } else if (container) {
     steps_or_tabs = groups.filter((g) => g.type === 'tab' && g.container_id === container.id).length
-    container_mode = (container.tab_mode ?? l.tab_mode) === 'steps' ? 'steps' : 'tabs'
+    container_mode = container.tab_mode === 'steps' ? 'steps' : 'tabs'
   }
   const sections = groups.filter(
     (g) => g.type !== 'tab' && g.type !== 'container' && g.type !== 'content'
@@ -114,7 +115,9 @@ function shapeOf(l: OverviewLayoutInput): OverviewRow['shape'] {
   return { groups: sections, steps_or_tabs, fields, container_mode }
 }
 
-const ruleKey = (r: RecordConditionRule) => `${r.field}|${r.op}|${String(r.value ?? '')}`
+// String(value) exactly as matchesRecordConditions compares it: `eq null`
+// ('null') and `eq ''` (also matches NULL) are different rules.
+const ruleKey = (r: RecordConditionRule) => `${r.field}|${r.op}|${String(r.value)}`
 
 /** Does every record that satisfies `rules` also satisfy `rule`? Identical
  *  rules, `nnull` under a non-empty `eq`, and `neq v` under `eq w` (w ≠ v). */
@@ -123,7 +126,7 @@ function implied(rule: RecordConditionRule, rules: RecordConditionRule[]): boole
     if (r.field !== rule.field) return false
     if (ruleKey(r) === ruleKey(rule)) return true
     if (r.op !== 'eq') return false
-    if (rule.op === 'nnull') return String(r.value ?? '') !== ''
+    if (rule.op === 'nnull') return String(r.value) !== ''
     if (rule.op === 'neq') return String(r.value) !== String(rule.value)
     return false
   })
@@ -194,9 +197,11 @@ export function buildLayoutOverview(
     let new_menu: OverviewRow['new_menu'] = null
     if (isGrouped(l)) {
       const label = l.create_label || l.name
+      // use-new-item-layouts.ts: only layout_type 'grouped' (not legacy NULL)
+      // joins the New menu, and then only with a slug and not create_hidden.
       new_menu = l.is_active
         ? { label, hidden: false }
-        : { label, hidden: !(slug && !l.create_hidden) }
+        : { label, hidden: !(l.layout_type === 'grouped' && slug && !l.create_hidden) }
     }
     return {
       layout_id: Number(l.id),

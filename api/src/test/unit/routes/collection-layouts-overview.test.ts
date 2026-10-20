@@ -13,6 +13,7 @@ const fake = vi.hoisted(() => {
   process.env.LAYOUT_EDIT_WARNING = 'Layouts here are replaced every night from development.'
   const tables: Record<string, Row[]> = {}
   const inserts: Array<{ table: string; rows: Row[] }> = []
+  const failInsertInto: { table: string | null } = { table: null }
   let nextId = 500
   const chain = (table: string) => {
     const filters: Row[] = []
@@ -46,6 +47,7 @@ const fake = vi.hoisted(() => {
     q.first = async () => rows()[0]
     q.pluck = async (col: string) => rows().map((r) => r[col])
     q.insert = async (data: Row | Row[]) => {
+      if (failInsertInto.table === table) throw new Error(`insert into ${table} failed`)
       const list = (Array.isArray(data) ? data : [data]).map((d) => ({ id: nextId++, ...d }))
       tables[table] = [...(tables[table] ?? []), ...list]
       inserts.push({ table, rows: list })
@@ -57,15 +59,26 @@ const fake = vi.hoisted(() => {
     return q
   }
   const db = Object.assign((table: string) => chain(table), {
-    transaction: async (cb: (trx: unknown) => unknown) => cb(db)
+    // Rolls back like a real transaction: a throw restores every table.
+    transaction: async (cb: (trx: unknown) => unknown) => {
+      const before = JSON.parse(JSON.stringify(tables)) as Record<string, Row[]>
+      try {
+        return await cb(db)
+      } catch (err) {
+        for (const k of Object.keys(tables)) delete tables[k]
+        Object.assign(tables, before)
+        throw err
+      }
+    }
   })
   const reset = (seed: Record<string, Row[]>) => {
     for (const k of Object.keys(tables)) delete tables[k]
     Object.assign(tables, seed)
     inserts.length = 0
+    failInsertInto.table = null
     nextId = 500
   }
-  return { db, tables, inserts, reset }
+  return { db, tables, inserts, reset, failInsertInto }
 })
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -230,6 +243,22 @@ describe('POST /collection-layouts seed_fields', () => {
       ['title', 'main', 0],
       ['lines', 'main', 1]
     ])
+  })
+
+  it('a failed seed leaves no layout behind (create + seed are one transaction)', async () => {
+    fake.reset({
+      nivaro_collection_layouts: [],
+      nivaro_fields: [{ field: 'title', hidden: false, type: 'string' }]
+    })
+    fake.failInsertInto.table = 'nivaro_layout_field_assignments'
+    const res = await call('POST', '', {
+      collection: 'things',
+      name: 'Main form',
+      seed_fields: true
+    })
+    expect(res.statusCode).toBe(500)
+    expect(fake.tables.nivaro_collection_layouts).toEqual([])
+    expect(fake.tables.nivaro_field_groups ?? []).toEqual([])
   })
 
   it('without seed_fields creates an empty layout', async () => {

@@ -395,7 +395,9 @@ export function pickBestLayoutTraced(
             ? 'Listed for this role'
             : reason?.kind === 'default'
               ? 'The default form'
-              : 'First in order (no form is marked default)'
+              : allCandidates.some((c) => c.is_active)
+                ? 'First in order among the forms this role can open'
+                : 'First in order (no form is marked default)'
       return { layout_id, matched: true, why }
     }
     if (!layouts.includes(row))
@@ -498,8 +500,11 @@ const SEED_SKIP_FIELDS = new Set([
  * and presentation/group pseudo fields (no value of their own) are left out;
  * relation alias fields stay — they render as grids and pickers.
  */
-export async function seedLayoutFields(layout: { id: number; collection: string }) {
-  const fields = (await db('nivaro_fields')
+export async function seedLayoutFields(
+  layout: { id: number; collection: string },
+  trx: Knex | Knex.Transaction
+) {
+  const fields = (await trx('nivaro_fields')
     .where({ collection: layout.collection })
     .select('field', 'hidden', 'type', 'interface')
     .orderBy([
@@ -510,28 +515,26 @@ export async function seedLayoutFields(layout: { id: number; collection: string 
   const keep = fields.filter(
     (f) => !f.hidden && !SEED_SKIP_FIELDS.has(f.field) && !pseudo(f.type) && !pseudo(f.interface)
   )
-  await db.transaction(async (trx) => {
-    await trx('nivaro_field_groups').insert({
-      collection: layout.collection,
-      key: 'main',
-      label: 'Main',
-      type: 'section',
-      sort: 0,
-      is_collapsed: 0,
-      layout_id: Number(layout.id)
-    })
-    const rows = keep.map((f, i) => ({
-      layout_id: Number(layout.id),
-      field: f.field,
-      group_key: 'main',
-      sort: i,
-      is_visible: 1
-    }))
-    // 5 bindings a row: stay well under the ~2100 parameter cap.
-    for (let i = 0; i < rows.length; i += 200) {
-      await trx('nivaro_layout_field_assignments').insert(rows.slice(i, i + 200))
-    }
+  await trx('nivaro_field_groups').insert({
+    collection: layout.collection,
+    key: 'main',
+    label: 'Main',
+    type: 'section',
+    sort: 0,
+    is_collapsed: 0,
+    layout_id: Number(layout.id)
   })
+  const rows = keep.map((f, i) => ({
+    layout_id: Number(layout.id),
+    field: f.field,
+    group_key: 'main',
+    sort: i,
+    is_visible: 1
+  }))
+  // 5 bindings a row: stay well under the ~2100 parameter cap.
+  for (let i = 0; i < rows.length; i += 200) {
+    await trx('nivaro_layout_field_assignments').insert(rows.slice(i, i + 200))
+  }
 }
 
 let driftCheckRegistered = false
@@ -1049,14 +1052,25 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
     // ?layout=, offered in New-item menus or named by queues and grids.
     const slug = await nextFreeSlug(body.collection, body.slug || body.name)
 
+    // Create and seed are one transaction: a failed seed leaves no empty
+    // layout behind (and no name clash for the retry).
+    let created: Record<string, unknown> & { id: number; collection: string }
     try {
-      await db('nivaro_collection_layouts').insert({
-        collection: body.collection,
-        name: body.name,
-        slug,
-        ...(body.layout_type ? { layout_type: body.layout_type } : {}),
-        is_active: 0,
-        sort: maxSort + 1
+      created = await db.transaction(async (trx) => {
+        await trx('nivaro_collection_layouts').insert({
+          collection: body.collection,
+          name: body.name,
+          slug,
+          ...(body.layout_type ? { layout_type: body.layout_type } : {}),
+          is_active: 0,
+          sort: maxSort + 1
+        })
+        const row = await trx('nivaro_collection_layouts')
+          .where({ collection: body.collection, name: body.name })
+          .orderBy('id', 'desc')
+          .first()
+        if (body.seed_fields === true && row) await seedLayoutFields(row, trx)
+        return row
       })
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : ''
@@ -1065,12 +1079,6 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
       }
       throw err
     }
-    const created = await db('nivaro_collection_layouts')
-      .where({ collection: body.collection, name: body.name })
-      .orderBy('id', 'desc')
-      .first()
-
-    if (body.seed_fields === true && created) await seedLayoutFields(created)
 
     await logActivity({
       action: 'create',

@@ -4,6 +4,7 @@ import { bustPortalLinkCache } from '../services/app-links.js'
 import { clearMetadataCache } from '../services/collections.js'
 import { announceConfigChanged, collectionHint } from '../services/config-live.js'
 import { bustDefinitionCache } from '../services/definition-cache.js'
+import { bustLayoutReferences } from '../services/layout-references.js'
 import { clearPickerRuleCache } from '../services/picker-rules.js'
 import { accessAnnouncement, announceAccessChanged } from '../services/record-events.js'
 import { clearRelationLimitCache } from '../services/relation-limits.js'
@@ -345,6 +346,7 @@ export async function registerRoutes(app: FastifyInstance) {
       clearRowRuleCache()
       clearRelationLimitCache()
       clearPickerRuleCache()
+      bustLayoutReferences()
       // Config hot-push (#268): tell open clients the schema/layout changed —
       // they re-resolve field-config/layout queries in place and show an
       // "updated" chip instead of serving a stale form until reload.

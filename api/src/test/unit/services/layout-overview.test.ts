@@ -369,5 +369,104 @@ describe('pickBestLayoutTraced — explain path', () => {
     expect(res.row?.id).toBe(2)
     expect(res.reason).toEqual({ kind: 'fallback' })
     expect(res.checked[0]).toMatchObject({ layout_id: 1, matched: false })
+    // A default exists but this role can't open it: say so, not "none is marked default".
+    expect(res.checked[1]).toEqual({
+      layout_id: 2,
+      matched: true,
+      why: 'First in order among the forms this role can open'
+    })
+  })
+
+  it('says no form is marked default only when none is active', () => {
+    const res = pickBestLayoutTraced(
+      [
+        { id: 1, name: 'A', is_active: 0 },
+        { id: 2, name: 'B', is_active: 0 }
+      ],
+      null,
+      null,
+      true
+    )
+    expect(res.checked[0].why).toBe('First in order (no form is marked default)')
+  })
+})
+
+describe('buildLayoutOverview — matches the renderer and the New menu', () => {
+  const grouped = (over: Partial<OverviewLayoutInput>): OverviewLayoutInput => ({
+    id: 1,
+    name: 'L',
+    layout_type: 'grouped',
+    is_active: 0,
+    sort: 0,
+    slug: null,
+    ...over
+  })
+  const steps = [
+    { id: 1, key: 'a', type: 'tab' },
+    { id: 2, key: 'b', type: 'tab' }
+  ]
+
+  it('top-level tabs with a null tab_mode render as tabs', () => {
+    const rows = buildLayoutOverview(
+      [grouped({ is_active: 1, tab_mode: null, groups: steps })],
+      new Map(),
+      []
+    )
+    expect(rows[0].shape.container_mode).toBe('tabs')
+    const asSteps = buildLayoutOverview(
+      [grouped({ is_active: 1, tab_mode: 'steps', groups: steps })],
+      new Map(),
+      []
+    )
+    expect(asSteps[0].shape.container_mode).toBe('steps')
+  })
+
+  it("a container's own tab_mode decides (null = tabs, even under a steps layout)", () => {
+    const rows = buildLayoutOverview(
+      [
+        grouped({
+          is_active: 1,
+          tab_mode: 'steps',
+          groups: [
+            { id: 10, key: 'c', type: 'container', tab_mode: null },
+            { id: 11, key: 't', type: 'tab', container_id: 10 }
+          ]
+        })
+      ],
+      new Map(),
+      []
+    )
+    expect(rows[0].shape.container_mode).toBe('tabs')
+  })
+
+  it("`eq null` and `eq ''` are different rules: no false shadow warning", () => {
+    const rows = buildLayoutOverview(
+      [
+        grouped({ id: 1, name: 'Empty', record_conditions: [{ field: 'x', op: 'eq', value: '' }] }),
+        grouped({
+          id: 2,
+          name: 'Null',
+          sort: 1,
+          record_conditions: [{ field: 'x', op: 'eq', value: null }]
+        })
+      ],
+      new Map(),
+      []
+    )
+    expect(byId(rows, 2).warnings).toEqual([])
+  })
+
+  it('a legacy NULL-type slugged layout is not on the New menu', () => {
+    const rows = buildLayoutOverview(
+      [
+        grouped({ id: 1, name: 'Default', is_active: 1 }),
+        grouped({ id: 2, name: 'Legacy', sort: 1, layout_type: null, slug: 'legacy' }),
+        grouped({ id: 3, name: 'Typed', sort: 2, slug: 'typed' })
+      ],
+      new Map(),
+      []
+    )
+    expect(byId(rows, 2).new_menu).toEqual({ label: 'Legacy', hidden: true })
+    expect(byId(rows, 3).new_menu).toEqual({ label: 'Typed', hidden: false })
   })
 })
