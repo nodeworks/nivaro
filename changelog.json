@@ -1,10 +1,47 @@
 {
-  "generated_at": "2026-10-19T23:13:14.589Z",
+  "generated_at": "2026-10-20T00:22:48.120Z",
   "releases": [
+    {
+      "version": "0.2.69",
+      "tag": "v0.2.69",
+      "date": "2026-10-19T20:22:31-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks: name the returning-id normaliser so lint:traps sees it",
+              "hash": "d1cf1b49"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks page: design review round 2",
+              "hash": "704d19e9"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks page: design review fixes",
+              "hash": "fd1429a0"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "SQL checks: nightly checks over the database's SQL, with a page (#2562)",
+              "hash": "b5d70f49"
+            }
+          ]
+        }
+      ],
+      "count": 4
+    },
     {
       "version": "0.2.68",
       "tag": "v0.2.68",
-      "date": "2026-10-19T19:13:02-04:00",
+      "date": "2026-10-19T19:13:14-04:00",
       "sections": [
         {
           "label": "Other",

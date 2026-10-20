@@ -452,7 +452,7 @@ interface Seen {
   hash: string
 }
 
-const idOf = (r: unknown): number =>
+const normaliseId = (r: unknown): number =>
   Number(typeof r === 'object' && r ? (r as { id: unknown }).id : r)
 
 /** Every finding of this run, fingerprinted (exported for tests). */
@@ -566,7 +566,7 @@ async function persist(
         first_seen_at: now
       })
       .returning('id')
-    await db(EVENTS).insert({ finding_id: idOf(r), run_id: runId, event: 'opened', at: now })
+    await db(EVENTS).insert({ finding_id: normaliseId(r), run_id: runId, event: 'opened', at: now })
     added++
   }
   for (const { row, seen: s } of updates) {
@@ -694,7 +694,7 @@ export async function runSqlChecks(opts: {
       started_at: new Date()
     })
     .returning('id')
-  const runId = idOf(created)
+  const runId = normaliseId(created)
   opts.onStarted?.(runId)
   const stats: RunStats = {
     objects_by_type: {},
