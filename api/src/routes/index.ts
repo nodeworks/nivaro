@@ -268,6 +268,8 @@ export async function registerRoutes(app: FastifyInstance) {
       // Batches of reads (#1304, people cards) are POSTs only because they carry a body.
       url.startsWith('/api/items/batch-read') ||
       url.startsWith('/api/users/cards') ||
+      // The layout editor canvas's draft field rows: a read carrying placements.
+      /^\/api\/field-config\/[^/?]+\/project(\?|$)/.test(url) ||
       // The MCP endpoint only carries protocol messages; each tool call inside it is its
       // own API request, judged by this hook on its own method and path.
       url === '/api/mcp' ||
