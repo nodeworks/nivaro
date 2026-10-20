@@ -149,6 +149,7 @@ export async function ticketTraffic(
     if (await db.schema.hasTable('nivaro_rum_events')) {
       rum = (await db('nivaro_rum_events')
         .where('user', userId)
+        .whereNot('kind', 'widget')
         .whereBetween('created_at', [from, to])
         .orderBy('created_at', 'desc')
         .limit(1000)

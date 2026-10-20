@@ -454,6 +454,7 @@ export {
   rowHighlightClass,
   rowHighlightTextClass,
   rumRouteChange,
+  rumWidget,
   runNotificationTarget,
   SignalCard,
   type SignalCardProps,

@@ -109,6 +109,25 @@ GET /api/partner-dependencies/field/:collection/:field   // callers of one field
 GET /api/partner-dependencies/:key                       // key = key:<id> | user:<uuid>
 GET /api/partner-dependencies/:key/openapi.json?download=1
 GET /api/partner-dependencies/:key/schema.graphql?download=1`
+    },
+    { type: 'h2', id: 'api-analytics-widget-timing', text: 'Per-widget timing on dashboards' },
+    {
+      type: 'p',
+      text: 'A host with a widget canvas (the EFP portal) reports, for every widget it shows, how long the widget took to get its data (first sign of life to nothing left loading) and how long the screen took to paint it (the next painted frame after that). Each report carries the widget’s catalog key and the viewer’s role id; nothing about the record or the person is sent beyond the signed-in user the real-user timings already carry. Reports ride the same beacon batch as page timings, once per widget per page view, never while the layout is being arranged, and never for a hidden tab.'
+    },
+    {
+      type: 'ul',
+      items: [
+        'Stored in `nivaro_rum_events` with kind `widget` — no extra table. route is `widget:<catalog key>@<ROLE UUID>` (`@-` for a person with no role), ttfb_ms = data time, fcp_ms = paint time, duration_ms = both. The 14-day retention applies.',
+        'Page and route p75s, the people lenses and support-ticket traffic ignore widget rows.',
+        'Dashboard defaults shows “Slowest widgets for <role>” (p75, last 7 days): bars split data and paint, amber from 2 s, `n=` marks a thin sample.',
+        'Client: `rumWidget({ key, roleId, fetchMs, paintMs })` from @nivaro/react (after `startRum`). A bearer-token host passes `getToken` to `startRum`, since a beacon cannot carry an Authorization header.'
+      ]
+    },
+    {
+      type: 'pre',
+      code: `GET /api/rum/widgets?role=<role uuid>&days=7&limit=10   // admin; role optional (all roles)
+// { data: [{ key, samples, fetch_p75, paint_p75, total_p75 }], days, role, total_events }`
     }
   ]
 }
@@ -1066,10 +1085,16 @@ export const obsTrafficMapPlatform: DocSection = {
       type: 'table',
       head: ['Setting', 'What it does'],
       rows: [
-        ['`TRACE_EXPORT_URL`', 'OTLP/HTTP traces endpoint, e.g. `http://efp_obs_alloy:4318/v1/traces`.'],
+        [
+          '`TRACE_EXPORT_URL`',
+          'OTLP/HTTP traces endpoint, e.g. `http://efp_obs_alloy:4318/v1/traces`.'
+        ],
         ['`TRACE_EXPORT_TOKEN`', 'Bearer token the receiver expects.'],
         ['`TRACE_EXPORT_SAMPLE`', 'Share of other requests sent (default 0.02).'],
-        ['`TRACE_EXPORT_ENV`', '`deployment.environment.name` on every span (defaults to `TELEMETRY_STORE_ENV`).'],
+        [
+          '`TRACE_EXPORT_ENV`',
+          '`deployment.environment.name` on every span (defaults to `TELEMETRY_STORE_ENV`).'
+        ],
         ['`TELEMETRY_GRAFANA_URL`', 'Where the Telemetry page’s Open Grafana button points.']
       ]
     },
