@@ -5328,7 +5328,7 @@ function ItemEditFormView({
     // Design mode: switching tabs on the canvas leaves the record page's
     // remembered tab and the host's URL alone.
     if (designOn) {
-      bodyRef.current?.scrollTo({ top: 0 })
+      scrollBodyTop()
       return
     }
     try {
@@ -5345,7 +5345,13 @@ function ItemEditFormView({
     } catch {
       /* noop */
     }
-    bodyRef.current?.scrollTo({ top: 0 })
+    scrollBodyTop()
+  }
+  // Older engines and jsdom have no Element.scrollTo — a tab switch must
+  // never throw over it.
+  function scrollBodyTop() {
+    const el = bodyRef.current
+    if (typeof el?.scrollTo === 'function') el.scrollTo({ top: 0 })
   }
 
   const allSteps = useMemo<StepDef[]>(() => {
@@ -11575,7 +11581,7 @@ function ItemEditFormView({
                                                   )
                                                   if (ownerContainer) {
                                                     setContainerTab(ownerContainer, stepKey)
-                                                    bodyRef.current?.scrollTo({ top: 0 })
+                                                    scrollBodyTop()
                                                   } else {
                                                     setActiveTab(stepKey)
                                                   }
