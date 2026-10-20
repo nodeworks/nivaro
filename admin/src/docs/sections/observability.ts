@@ -62,6 +62,7 @@ export const obsApiAnalytics: DocSection = {
       items: [
         'The process that makes a configuration change skips the shared level until its own move of the number has landed, so it never reads back what it just replaced. A clear made after the change (saving in the Data Model, Clear on the Caches card) also drops the entries this process keyed on.',
         'Only reads of the primary database are shared. A read replica can lag the number, so its reads stay in memory only.',
+        "A restored database (a staging copy refreshed from production every night) brings its own configuration number, which may be lower or one already used. Keys also carry the database's incarnation: the newest restore date in `msdb.dbo.restorehistory` with the database's `create_date` (a restore over an existing database keeps its `create_date`). The incarnation is re-read when the number cannot be read, moves in another process or goes backwards, and at least once a minute. A number that goes backwards, or a changed incarnation, also clears every in-process cache.",
         'Redis slow, down or erroring: the read goes to the database, the error is counted and the shared level rests for 5 seconds. Nothing fails because of it.',
         'An edit that does not move the number (a raw UPDATE from SQL Server Management Studio) stays invisible for up to the shared lifetime, not the 30 seconds of the in-memory cache. Clear all caches on the Caches card afterwards: it moves the number.',
         'Off when the number is off (`CACHE_EPOCH=off`) and in cloud mode.',

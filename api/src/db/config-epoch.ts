@@ -270,8 +270,36 @@ async function bump(name: string): Promise<number | null> {
 function assignKnown(value: number, seq: number): void {
   if (seq < lastAssignedSeq) return
   lastAssignedSeq = seq
+  const backwards = latestKnown != null && value < latestKnown
   latestKnown = value
   lastReadAt = Date.now()
+  // The number only ever grows; smaller means the database was restored underneath us.
+  if (backwards) emitReset(true)
+}
+
+const resetListeners = new Set<(e: { backwards: boolean }) => void>()
+let pollFailing = false
+
+/**
+ * #2441 — hear what a database restore looks like from here: the configuration number went
+ * BACKWARDS (`backwards: true`), or moved in another process / could not be read (`false`: a
+ * restore may hide behind it). Synchronous; a throw is swallowed.
+ */
+export function onEpochReset(fn: (e: { backwards: boolean }) => void): () => void {
+  resetListeners.add(fn)
+  return () => {
+    resetListeners.delete(fn)
+  }
+}
+
+function emitReset(backwards: boolean): void {
+  for (const fn of resetListeners) {
+    try {
+      fn({ backwards })
+    } catch {
+      /* a listener never breaks the watch */
+    }
+  }
 }
 
 /** A read of the number, begun now: assigns its answer when it lands, unless a move by this
@@ -471,11 +499,18 @@ export function startEpochWatch(intervalMs = 5_000): void {
   const tick = async () => {
     const land = beginRead()
     const now = await readEpochs()
-    if (!now) return
+    if (!now) {
+      // A restore takes the database away for a while: once per outage, say so (#2441).
+      if (!pollFailing) emitReset(false)
+      pollFailing = true
+      return
+    }
+    pollFailing = false
     land(now.get(CONFIG_EPOCH) ?? 0)
     const moved = primed ? movedNames(seen, now, own) : []
     primed = true
     for (const [name, value] of now) seen.set(name, value)
+    if (moved.includes(CONFIG_EPOCH)) emitReset(false)
     for (const name of moved) {
       const handler = handlers.get(name)
       if (!handler) continue

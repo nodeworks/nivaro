@@ -26,8 +26,15 @@
  * started reads what another process already read.
  */
 
-import { isConfigWrite, noteConfigWrite } from './config-epoch.js'
-import { metadataL2Get, metadataL2Put, setMetadataL2PrimaryScope } from './metadata-l2.js'
+import { isConfigWrite, noteConfigWrite, onEpochReset } from './config-epoch.js'
+import {
+  type L2Gen,
+  metadataL2Get,
+  metadataL2Put,
+  onMetadataL2IdentityChange,
+  setMetadataL2Database,
+  setMetadataL2PrimaryScope
+} from './metadata-l2.js'
 import { opsTopicsOfWrite, raiseOpsWrite } from './ops-signal.js'
 import { isOwnerWrite, ownersChanged } from './owner-signal.js'
 
@@ -128,6 +135,13 @@ export function clearMetadataQueryCache(): void {
   generation++
 }
 
+// #2441 — the database was restored underneath this process (the configuration
+// number went backwards, or its incarnation changed): nothing held here is from it.
+onEpochReset((e) => {
+  if (e.backwards) clearMetadataQueryCache()
+})
+onMetadataL2IdentityChange(() => clearMetadataQueryCache())
+
 export function metadataQueryCacheStats(): Record<string, number | boolean> {
   return { enabled: ENABLED, ttl_ms: TTL_MS, entries: cache.size, ...counters }
 }
@@ -193,6 +207,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
   if (!proto || proto[PATCHED] || typeof proto._query !== 'function') return
   proto[PATCHED] = true
   setMetadataL2PrimaryScope(scopeOf(client))
+  setMetadataL2Database(knexInstance as { raw: (sql: string) => unknown })
   const original = proto._query
 
   proto._query = function patched(this: DriverClient, connection: unknown, query: QueryObj) {
@@ -271,7 +286,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
     inflight.set(key, shared)
 
     const scope = scopeOf(this)
-    const fromDatabase = (epoch: number | null) =>
+    const fromDatabase = (gen: L2Gen | null) =>
       original.call(this, connection, query).then(
         (done) => {
           inflight.delete(key)
@@ -281,7 +296,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
               if (cache.size >= MAX_ENTRIES) cache.clear()
               cache.set(key, { at: Date.now(), rows })
               // Shared level: only under the epoch the lookup began on (put re-checks it).
-              if (epoch != null) void metadataL2Put(scope, key, epoch, rows)
+              if (gen) void metadataL2Put(scope, key, gen, rows)
             }
             settle(rows)
           } else {
@@ -306,7 +321,7 @@ export function attachMetadataQueryCache(knexInstance: { client?: unknown }): vo
         query.response = rebuild(found.rows)
         return query
       }
-      return fromDatabase(startedAt === generation ? found.epoch : null)
+      return fromDatabase(startedAt === generation ? found.gen : null)
     })
   }
 }

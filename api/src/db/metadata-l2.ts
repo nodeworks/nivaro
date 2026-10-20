@@ -12,12 +12,24 @@
  * write moves that number, so entries stored before the write become
  * unreachable without anyone deleting them. Also keyed by the API version (the
  * row shape is the driver's and may change between releases), the tenant
- * (cloud) and the database the read went to.
+ * (cloud), the database the read went to, and that database's INCARNATION.
+ *
+ * Incarnation: a restore (EFP staging is restored from a production clone every
+ * night) puts a different epoch row in place — possibly a lower number, possibly
+ * one already used — so the epoch alone cannot retire what was stored before
+ * it. The incarnation tag is the newest msdb restore_date for the database plus
+ * its sys.databases create_date (which RESTORE ... WITH REPLACE does NOT change:
+ * EFP_Staging, restored nightly, still shows its 2023 create_date). It is read
+ * before the level is first used and re-read whenever the epoch could not be
+ * read, was moved by another process or went backwards, and at least once a
+ * minute. An epoch going BACKWARDS also drops every generation this process
+ * used and clears the in-process caches; a changed tag clears them too.
  *
  * Never used:
  *   - when the epoch is off (CACHE_EPOCH=off, cloud mode) — nothing would retire stale entries;
  *   - while THIS process has a configuration write settling (its own epoch move has not
  *     landed yet) — the entries it would read or store belong to the epoch it is leaving;
+ *   - while the database incarnation is unknown;
  *   - for a database other than the primary pool's (a read replica may lag the epoch);
  *   - for an entry larger than METADATA_L2_MAX_BYTES compressed.
  * Redis slow, down or erroring → straight to the database, counted, never thrown.
@@ -28,7 +40,7 @@ import { createHash } from 'node:crypto'
 import { promisify } from 'node:util'
 import { deflateRaw, inflateRaw } from 'node:zlib'
 import { NIVARO_VERSION } from '../version.js'
-import { configEpochForRead, configEpochNow } from './config-epoch.js'
+import { configEpochForRead, configEpochNow, onEpochReset } from './config-epoch.js'
 import { getTenantId } from './tenant-context.js'
 
 export type L2Cell = { n: string; v: unknown }
@@ -49,6 +61,16 @@ interface EpochSource {
   now: () => number | null
 }
 
+/** One generation of entries: an epoch of one incarnation of the database. */
+export interface L2Gen {
+  epoch: number
+  tag: string
+}
+
+/** Reads the database incarnation tag (null = unknown: the level is skipped). */
+type IdentitySource = () => Promise<string | null>
+type RawRunner = { raw: (sql: string) => unknown }
+
 const FORMAT = 'v1'
 const PREFIX = 'nvr:mdl2'
 
@@ -59,6 +81,8 @@ const TIMEOUT_MS = Math.max(5, Number(process.env.METADATA_L2_TIMEOUT_MS) || 150
 /** After a Redis error or timeout, skip this level for a moment instead of paying the timeout on
  *  every read. */
 const BACKOFF_MS = 5_000
+/** The incarnation tag is re-checked (in the background) at least this often. */
+const IDENTITY_RECHECK_MS = 60_000
 
 const deflateAsync = promisify(deflateRaw)
 const inflateAsync = promisify(inflateRaw)
@@ -67,8 +91,19 @@ let redis: L2Redis | null = null
 let epochs: EpochSource = { forRead: configEpochForRead, now: configEpochNow }
 let primaryScope: string | null = null
 let downUntil = 0
-/** Epochs this process read or stored under lately — what a local clear drops. */
-const recentEpochs: number[] = []
+/** Generations this process read or stored under lately — what a clear drops. */
+const recentGens: L2Gen[] = []
+
+let identityDb: RawRunner | null = null
+let identitySource: IdentitySource = readIdentity
+/** The tag reads and stores use now; null = must be (re-)read before the level is used. */
+let identityTag: string | null = null
+/** The last tag read successfully (kept across a reset, to notice a change). */
+let knownTag: string | null = null
+let identityAt = 0
+let identityLoading: Promise<void> | null = null
+const identityListeners = new Set<() => void>()
+let inIdentityChange = false
 
 const counters = {
   hits: 0,
@@ -87,10 +122,17 @@ const counters = {
   skipped_unavailable: 0,
   /** Reads that skipped this level: no usable epoch (off, unknown, or a local write settling). */
   skipped_no_epoch: 0,
-  /** A database read whose epoch moved (or started settling) before it could be stored. */
+  /** Reads that skipped this level: the database incarnation could not be read. */
+  skipped_no_identity: 0,
+  /** A database read whose generation moved before it could be stored. */
   skipped_store: 0,
-  /** Generations dropped by a local clear (clearMetadataCache). */
-  drops: 0
+  /** Generation drops: a local clear (clearMetadataCache) or a backwards epoch. */
+  drops: 0,
+  /** Incarnation reads, and how often the tag came back different (a restore). */
+  identity_reads: 0,
+  identity_changes: 0,
+  /** Times the configuration epoch went backwards (a restore). */
+  rewinds: 0
 }
 
 /** Wire the process's Redis connection (server boot). null turns the level off. */
@@ -104,13 +146,33 @@ export function setMetadataL2PrimaryScope(scope: string): void {
   if (primaryScope == null) primaryScope = scope
 }
 
+/** The primary pool, for the incarnation read. First call wins. */
+export function setMetadataL2Database(runner: RawRunner): void {
+  if (identityDb == null) identityDb = runner
+}
+
+/** Hear that the database turned out to be a different incarnation (restored underneath us). */
+export function onMetadataL2IdentityChange(fn: () => void): () => void {
+  identityListeners.add(fn)
+  return () => {
+    identityListeners.delete(fn)
+  }
+}
+
 /** Tests only. */
-export function resetMetadataL2ForTests(opts: { epochs?: EpochSource } = {}): void {
+export function resetMetadataL2ForTests(
+  opts: { epochs?: EpochSource; identity?: IdentitySource } = {}
+): void {
   redis = null
   primaryScope = null
   downUntil = 0
-  recentEpochs.length = 0
+  recentGens.length = 0
   epochs = opts.epochs ?? { forRead: configEpochForRead, now: configEpochNow }
+  identitySource = opts.identity ?? readIdentity
+  identityTag = null
+  knownTag = null
+  identityAt = 0
+  identityLoading = null
   for (const k of Object.keys(counters)) (counters as Record<string, number>)[k] = 0
 }
 
@@ -123,6 +185,7 @@ export function metadataL2Stats(): Record<string, number | boolean | string | nu
     max_bytes: MAX_BYTES,
     timeout_ms: TIMEOUT_MS,
     epoch: epochs.now(),
+    identity: identityTag,
     hit_rate: lookups ? Math.round((counters.hits / lookups) * 1000) / 1000 : null,
     ...counters
   }
@@ -132,28 +195,147 @@ function isReady(r: L2Redis): boolean {
   return r.status == null || r.status === 'ready'
 }
 
+// ── database incarnation ────────────────────────────────────────────────────
+
+function firstRow(res: unknown): Record<string, unknown> | undefined {
+  const rows = Array.isArray(res) ? res : (res as { recordset?: unknown[] } | null)?.recordset
+  return Array.isArray(rows) ? (rows[0] as Record<string, unknown> | undefined) : undefined
+}
+
+/**
+ * sys.databases create_date plus the newest msdb.dbo.restorehistory restore_date
+ * for this database, when the login may read msdb (create_date alone otherwise;
+ * a restore then shows only through the epoch moving or going backwards).
+ */
+async function readIdentity(): Promise<string | null> {
+  const k = identityDb
+  if (!k) return null
+  let created: unknown
+  try {
+    created = firstRow(
+      await k.raw(
+        'SELECT CONVERT(varchar(33), create_date, 126) AS created FROM sys.databases WHERE name = DB_NAME()'
+      )
+    )?.created
+  } catch {
+    return null
+  }
+  if (created == null) return null
+  let restored: unknown = null
+  try {
+    restored = firstRow(
+      await k.raw(
+        'SELECT CONVERT(varchar(33), MAX(restore_date), 126) AS restored FROM msdb.dbo.restorehistory WHERE destination_database_name = DB_NAME()'
+      )
+    )?.restored
+  } catch {
+    /* msdb not readable */
+  }
+  return createHash('sha1')
+    .update(`${String(created)}|${restored == null ? '' : String(restored)}`)
+    .digest('hex')
+    .slice(0, 10)
+}
+
+function loadIdentity(): Promise<void> {
+  if (identityLoading) return identityLoading
+  identityLoading = (async () => {
+    let tag: string | null = null
+    try {
+      tag = await identitySource()
+    } catch {
+      tag = null
+    }
+    counters.identity_reads++
+    identityAt = Date.now()
+    if (tag == null) {
+      identityTag = null
+      return
+    }
+    const changed = knownTag != null && knownTag !== tag
+    knownTag = tag
+    identityTag = tag
+    if (changed) {
+      counters.identity_changes++
+      // Restored underneath us: the generations of the old database can never match again,
+      // and what this process holds in memory came from it. The clears the listeners make
+      // must not drop the NEW incarnation's generation other processes are filling.
+      recentGens.length = 0
+      inIdentityChange = true
+      try {
+        for (const fn of identityListeners) {
+          try {
+            fn()
+          } catch {
+            /* a listener never breaks the read */
+          }
+        }
+      } finally {
+        inIdentityChange = false
+      }
+    }
+  })().finally(() => {
+    identityLoading = null
+  })
+  return identityLoading
+}
+
+/** The incarnation tag to key on now (reading it first when unknown), or null. */
+async function currentIdentity(): Promise<string | null> {
+  if (identityTag == null) {
+    await loadIdentity()
+    return identityTag
+  }
+  if (Date.now() - identityAt > IDENTITY_RECHECK_MS) void loadIdentity()
+  return identityTag
+}
+
+/**
+ * The epoch watch saw something a restore causes (config-epoch onEpochReset): the number moved
+ * elsewhere, could not be read, or went BACKWARDS. The incarnation is re-read before the level
+ * is used again; backwards also drops every generation this process used. Exported for tests.
+ */
+export function noteEpochReset(e: { backwards: boolean }): void {
+  if (e.backwards) {
+    counters.rewinds++
+    void dropGenerations([...recentGens])
+    recentGens.length = 0
+  }
+  identityTag = null
+}
+
+onEpochReset(noteEpochReset)
+
+// ── keys ────────────────────────────────────────────────────────────────────
+
 function scopeTag(scope: string): string {
   return createHash('sha1').update(scope).digest('hex').slice(0, 12)
 }
 
-function genPrefix(scope: string, epoch: number): string {
+function genPrefix(scope: string, gen: L2Gen): string {
   const tenant = (getTenantId() ?? '-').replace(/[^\w.-]/g, '_')
-  return `${PREFIX}:${FORMAT}:${NIVARO_VERSION}:${tenant}:${scopeTag(scope)}:${epoch}`
+  const database = `${scopeTag(scope)}.${gen.tag.replace(/[^\w]/g, '_')}`
+  return `${PREFIX}:${FORMAT}:${NIVARO_VERSION}:${tenant}:${database}:${gen.epoch}`
 }
 
-/** Exported for tests: the Redis key of one statement at one epoch. */
-export function l2KeyOf(scope: string, epoch: number, statementKey: string): string {
-  return `${genPrefix(scope, epoch)}:${createHash('sha1').update(statementKey).digest('hex')}`
+/** Exported for tests: the Redis key of one statement in one generation. */
+export function l2KeyOf(scope: string, gen: L2Gen, statementKey: string): string {
+  return `${genPrefix(scope, gen)}:${createHash('sha1').update(statementKey).digest('hex')}`
 }
 
-function indexKeyOf(scope: string, epoch: number): string {
-  return `${genPrefix(scope, epoch)}:idx`
+function indexKeyOf(scope: string, gen: L2Gen): string {
+  return `${genPrefix(scope, gen)}:idx`
 }
 
-function noteEpoch(epoch: number): void {
-  if (recentEpochs.includes(epoch)) return
-  recentEpochs.push(epoch)
-  if (recentEpochs.length > 4) recentEpochs.shift()
+function noteGen(gen: L2Gen): void {
+  if (recentGens.some((g) => g.epoch === gen.epoch && g.tag === gen.tag)) return
+  recentGens.push(gen)
+  if (recentGens.length > 4) recentGens.shift()
+}
+
+/** Is this generation still the one to read and store under? */
+function isCurrent(gen: L2Gen): boolean {
+  return epochs.now() === gen.epoch && identityTag === gen.tag
 }
 
 function usable(scope: string): L2Redis | null {
@@ -258,14 +440,15 @@ export async function decodeRows(buf: Buffer): Promise<L2Cell[][]> {
 export interface L2Lookup {
   /** The rows Redis held, or null (miss, skipped, error). */
   rows: L2Cell[][] | null
-  /** The epoch the read is keyed on — store the database's answer under it. null = do not store. */
-  epoch: number | null
+  /** The generation the read is keyed on — store the database's answer under it. null = do not
+   *  store. */
+  gen: L2Gen | null
 }
 
 /** Look a statement up. Never throws: every failure reads as a miss. */
 export async function metadataL2Get(scope: string, statementKey: string): Promise<L2Lookup> {
   const r = usable(scope)
-  if (!r) return { rows: null, epoch: null }
+  if (!r) return { rows: null, gen: null }
   let epoch: number | null = null
   try {
     epoch = await epochs.forRead()
@@ -274,46 +457,56 @@ export async function metadataL2Get(scope: string, statementKey: string): Promis
   }
   if (epoch == null) {
     counters.skipped_no_epoch++
-    return { rows: null, epoch: null }
+    return { rows: null, gen: null }
   }
-  noteEpoch(epoch)
+  const tag = await currentIdentity()
+  if (tag == null) {
+    counters.skipped_no_identity++
+    return { rows: null, gen: null }
+  }
+  const gen: L2Gen = { epoch, tag }
+  if (!isCurrent(gen)) {
+    counters.skipped_no_epoch++
+    return { rows: null, gen: null }
+  }
+  noteGen(gen)
   let buf: Buffer | null
   try {
-    buf = await withTimeout(r.getBuffer(l2KeyOf(scope, epoch, statementKey)))
+    buf = await withTimeout(r.getBuffer(l2KeyOf(scope, gen, statementKey)))
   } catch {
     failed()
-    return { rows: null, epoch: null }
+    return { rows: null, gen: null }
   }
   if (!buf) {
     counters.misses++
-    return { rows: null, epoch }
+    return { rows: null, gen }
   }
   try {
     const rows = await decodeRows(buf)
-    // The epoch may have moved while Redis answered (a local write began settling).
-    if (epochs.now() !== epoch) {
+    // The epoch or the incarnation may have moved while Redis answered.
+    if (!isCurrent(gen)) {
       counters.skipped_no_epoch++
-      return { rows: null, epoch: null }
+      return { rows: null, gen: null }
     }
     counters.hits++
     counters.bytes_read += buf.length
-    return { rows, epoch }
+    return { rows, gen }
   } catch {
     counters.errors++
-    return { rows: null, epoch }
+    return { rows: null, gen }
   }
 }
 
-/** Keep a database answer under the epoch its read began on — if that epoch is still current. */
+/** Keep a database answer under the generation its read began in — if that is still current. */
 export function metadataL2Put(
   scope: string,
   statementKey: string,
-  epoch: number,
+  gen: L2Gen,
   rows: L2Cell[][]
 ): Promise<void> {
   const r = usable(scope)
   if (!r) return Promise.resolve()
-  if (epochs.now() !== epoch) {
+  if (!isCurrent(gen)) {
     counters.skipped_store++
     return Promise.resolve()
   }
@@ -333,17 +526,17 @@ export function metadataL2Put(
       return
     }
     // Compression yielded; check once more that nothing moved meanwhile.
-    if (epochs.now() !== epoch) {
+    if (!isCurrent(gen)) {
       counters.skipped_store++
       return
     }
-    const key = l2KeyOf(scope, epoch, statementKey)
-    const idx = indexKeyOf(scope, epoch)
+    const key = l2KeyOf(scope, gen, statementKey)
+    const idx = indexKeyOf(scope, gen)
     try {
       await withTimeout(
         Promise.all([r.set(key, buf, 'EX', TTL_S), r.sadd(idx, key), r.expire(idx, TTL_S + 60)])
       )
-      noteEpoch(epoch)
+      noteGen(gen)
       counters.stores++
       counters.bytes_written += buf.length
       if (buf.length > counters.max_entry_bytes) counters.max_entry_bytes = buf.length
@@ -355,22 +548,30 @@ export function metadataL2Put(
 
 /**
  * A local clear (clearMetadataCache in the process that changed configuration): drop every
- * entry this process keyed on lately, for the primary database and the current tenant. The
- * epoch move retires them for everyone anyway; dropping covers a write that committed after
+ * generation this process keyed on lately, for the primary database and the current tenant.
+ * The epoch move retires them for everyone anyway; dropping covers a write that committed after
  * its epoch move (a long transaction), which the epoch alone would not.
  */
 export function dropMetadataL2(): Promise<void> {
+  if (inIdentityChange) return Promise.resolve()
+  const gens = [...recentGens]
+  const now = epochs.now()
+  if (now != null && identityTag != null) {
+    const gen = { epoch: now, tag: identityTag }
+    if (!gens.some((g) => g.epoch === gen.epoch && g.tag === gen.tag)) gens.push(gen)
+  }
+  return dropGenerations(gens)
+}
+
+function dropGenerations(gens: L2Gen[]): Promise<void> {
   const r = redis
   const scope = primaryScope
   if (!ENABLED || !r || scope == null || !isReady(r)) return Promise.resolve()
-  const gens = [...recentEpochs]
-  const now = epochs.now()
-  if (now != null && !gens.includes(now)) gens.push(now)
   if (gens.length === 0) return Promise.resolve()
   counters.drops++
   return (async () => {
-    for (const epoch of gens) {
-      const idx = indexKeyOf(scope, epoch)
+    for (const gen of gens) {
+      const idx = indexKeyOf(scope, gen)
       try {
         const members = await withTimeout(r.smembers(idx))
         for (let i = 0; i < members.length; i += 500) {

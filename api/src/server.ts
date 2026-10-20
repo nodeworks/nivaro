@@ -271,6 +271,18 @@ export async function buildServer() {
       const { resyncAllSchedules } = await import('./services/row-schedules.js')
       await resyncAllSchedules(app)
     })
+    // #2441 — a restore underneath this process (the number went backwards, or the database's
+    // incarnation changed): every in-process cache came from the old database.
+    const { onEpochReset } = await import('./db/config-epoch.js')
+    const { onMetadataL2IdentityChange } = await import('./db/metadata-l2.js')
+    const restored = (why: string) => {
+      const names = bustAllCaches()
+      app.log.warn({ caches: names.length, why }, 'Database restored underneath — caches cleared')
+    }
+    onEpochReset((e) => {
+      if (e.backwards) restored('configuration number went backwards')
+    })
+    onMetadataL2IdentityChange(() => restored('database incarnation changed'))
     startEpochWatch(Number(process.env.CACHE_EPOCH_POLL_MS ?? 5000))
     app.addHook('onClose', async () => stopEpochWatch())
     const { startInstanceRoster } = await import('./services/instance-roster.js')

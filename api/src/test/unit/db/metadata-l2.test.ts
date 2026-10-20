@@ -8,6 +8,7 @@ import {
   type L2Redis,
   l2KeyOf,
   metadataL2Stats,
+  noteEpochReset,
   resetMetadataL2ForTests,
   setMetadataL2PrimaryScope,
   setMetadataL2Redis
@@ -109,11 +110,18 @@ const flush = () => new Promise((r) => setTimeout(r, 5))
 const stored = (n: number) => vi.waitFor(() => expect(metadataL2Stats().stores).toBe(n))
 
 let epoch: number | null = 7
+/** The database incarnation the fake reports (null = unreadable). */
+let tag: string | null = 'A'
 let redis: FakeRedis
+const sources = () => ({
+  epochs: { forRead: async () => epoch, now: () => epoch },
+  identity: async () => tag
+})
 
 beforeEach(() => {
   epoch = 7
-  resetMetadataL2ForTests({ epochs: { forRead: async () => epoch, now: () => epoch } })
+  tag = 'A'
+  resetMetadataL2ForTests(sources())
   setMetadataL2PrimaryScope(SCOPE)
   redis = new FakeRedis()
   setMetadataL2Redis(redis)
@@ -264,7 +272,7 @@ describe('metadata L2 — read-through at the driver seam', () => {
   })
 
   it('reads of another database (a read replica) never use the level', async () => {
-    resetMetadataL2ForTests({ epochs: { forRead: async () => epoch, now: () => epoch } })
+    resetMetadataL2ForTests(sources())
     setMetadataL2PrimaryScope('replica/cfg')
     setMetadataL2Redis(redis)
     await read()
@@ -276,15 +284,16 @@ describe('metadata L2 — read-through at the driver seam', () => {
 })
 
 describe('metadata L2 — keys', () => {
-  it('separates tenants, epochs and databases', () => {
-    const plain = l2KeyOf(SCOPE, 7, 'k')
+  it('separates tenants, epochs, databases and database incarnations', () => {
+    const g7 = { epoch: 7, tag: 'A' }
+    const plain = l2KeyOf(SCOPE, g7, 'k')
     let a = ''
     let b = ''
     runWithTenantDb(
       {} as never,
       'acme',
       () => {
-        a = l2KeyOf(SCOPE, 7, 'k')
+        a = l2KeyOf(SCOPE, g7, 'k')
       },
       'tenant-a'
     )
@@ -292,14 +301,15 @@ describe('metadata L2 — keys', () => {
       {} as never,
       'beta',
       () => {
-        b = l2KeyOf(SCOPE, 7, 'k')
+        b = l2KeyOf(SCOPE, g7, 'k')
       },
       'tenant-b'
     )
     expect(new Set([plain, a, b]).size).toBe(3)
     expect(a).toContain(':tenant-a:')
-    expect(l2KeyOf(SCOPE, 8, 'k')).not.toBe(plain)
-    expect(l2KeyOf('other/db', 7, 'k')).not.toBe(plain)
+    expect(l2KeyOf(SCOPE, { epoch: 8, tag: 'A' }, 'k')).not.toBe(plain)
+    expect(l2KeyOf(SCOPE, { epoch: 7, tag: 'B' }, 'k')).not.toBe(plain)
+    expect(l2KeyOf('other/db', g7, 'k')).not.toBe(plain)
   })
 
   it('a tenant never reads another tenant’s entry', async () => {
@@ -339,5 +349,82 @@ describe('metadata L2 — bust on a local clear', () => {
     clearMetadataCache('projects')
     await vi.waitFor(() => expect(redis.dataKeys()).toHaveLength(0))
     expect(metadataL2Stats().drops).toBe(1)
+  })
+})
+
+describe('metadata L2 — a database restored underneath (nightly staging restore)', () => {
+  it('a different incarnation tag is a miss, even at the same epoch number', async () => {
+    await read()
+    await stored(1)
+    // The restore: same epoch number, new incarnation. The watch saw the number move / vanish.
+    tag = 'B'
+    client.rows = rowsOf({ id: 1, field: 'from-production', created_at: null, hidden: false })
+    noteEpochReset({ backwards: false })
+    const after = await read()
+    expect(client.calls).toBe(2) // the old entry was not matched
+    expect(after[0].field).toBe('from-production')
+    expect(metadataL2Stats().identity_changes).toBe(1)
+    // The read that discovered the change cleared L1 under itself, so it stores nothing; the
+    // next one fills the new incarnation's generation.
+    await flush()
+    expect(metadataL2Stats().stores).toBe(1)
+    await read()
+    expect(client.calls).toBe(3)
+    await stored(2)
+    // The new incarnation's entry carries the new tag.
+    expect(redis.dataKeys().filter((k) => k.includes('.B:7:'))).toHaveLength(1)
+  })
+
+  it('a backwards epoch drops every generation used and re-reads the tag', async () => {
+    await read(['projects'])
+    await stored(1)
+    epoch = 8
+    await read(['orders'])
+    await stored(2)
+    expect(redis.dataKeys()).toHaveLength(2)
+    // Restored from a production clone: the number is LOWER, the incarnation is new.
+    epoch = 5
+    tag = 'C'
+    noteEpochReset({ backwards: true })
+    await vi.waitFor(() => expect(redis.dataKeys()).toHaveLength(0))
+    expect(metadataL2Stats().rewinds).toBe(1)
+    const reads = metadataL2Stats().identity_reads as number
+    await read(['projects'])
+    expect(client.calls).toBe(3)
+    expect(metadataL2Stats().identity_reads).toBe(reads + 1)
+    expect(metadataL2Stats().identity).toBe('C')
+    await read(['projects'])
+    expect(client.calls).toBe(4)
+    await stored(3)
+    expect(redis.dataKeys()).toHaveLength(1)
+    expect(redis.dataKeys()[0]).toContain('.C:5:')
+  })
+
+  it('an incarnation that cannot be read skips the level', async () => {
+    tag = null
+    await read()
+    await read()
+    await flush()
+    expect(client.calls).toBe(2)
+    expect(redis.dataKeys()).toHaveLength(0)
+    expect(metadataL2Stats().skipped_no_identity).toBe(2)
+  })
+
+  it('a changed incarnation clears the in-process cache too', async () => {
+    // Fill L1 (no fresh-process clear between the two reads below).
+    tag = 'A'
+    clearMetadataQueryCache()
+    await client._query(null, { sql: SQL, bindings: ['l1'] })
+    await stored(1)
+    await client._query(null, { sql: SQL, bindings: ['l1'] })
+    expect(client.calls).toBe(1) // L1 hit
+    tag = 'D'
+    noteEpochReset({ backwards: false })
+    // Next lookup of any statement re-reads the tag, sees it changed, clears L1.
+    await client._query(null, { sql: SQL, bindings: ['other'] })
+    expect(metadataL2Stats().identity_changes).toBe(1)
+    await client._query(null, { sql: SQL, bindings: ['l1'] })
+    expect(client.calls).toBe(3) // L1 was cleared and the old-incarnation entry not matched
+    await stored(2)
   })
 })

@@ -7,13 +7,14 @@ import {
   isRemoteEpochClear,
   noteConfigWrite,
   onEpoch,
+  onEpochReset,
   startEpochWatch,
   stopEpochWatch
 } from '../../../db/config-epoch.js'
 
 // #2441 — the epoch a shared cache keys on.
 
-const state = { epoch: 41, reads: 0 }
+const state = { epoch: 41, reads: 0, failing: false }
 
 function fakeKnex() {
   const k = ((_table: string) => ({
@@ -29,6 +30,7 @@ function fakeKnex() {
     }),
     insert: async () => [1],
     select: async () => {
+      if (state.failing) throw new Error('Login failed: database is in single-user mode')
       state.reads++
       return [{ name: CONFIG_EPOCH, epoch: state.epoch }]
     }
@@ -76,5 +78,27 @@ describe('configuration epoch for a shared cache', () => {
     stopEpochWatch()
     expect(seen).toEqual([true])
     expect(isRemoteEpochClear()).toBe(false)
+  })
+
+  it('reports a restore: the number going BACKWARDS, moving elsewhere, or becoming unreadable', async () => {
+    const resets: boolean[] = []
+    const off = onEpochReset((e) => resets.push(e.backwards))
+    state.epoch = 60
+    startEpochWatch(40)
+    await wait(80)
+    expect(configEpochNow()).toBe(60)
+    // Restored from a production clone whose number is lower.
+    state.epoch = 12
+    await wait(120)
+    expect(resets).toContain(true)
+    expect(configEpochNow()).toBe(12)
+    // The database goes away for the restore: said once per outage, not every poll.
+    resets.length = 0
+    state.failing = true
+    await wait(200)
+    expect(resets).toEqual([false])
+    stopEpochWatch()
+    state.failing = false
+    off()
   })
 })
