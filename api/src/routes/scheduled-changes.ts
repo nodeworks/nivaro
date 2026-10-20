@@ -17,8 +17,11 @@ function parseJsonSafe(val: unknown): unknown {
 
 function formatChange(row: Record<string, unknown>, readable: Set<string> | null = null) {
   const changes = parseJsonSafe(row.changes)
-  if (!readable || !changes || typeof changes !== 'object' || Array.isArray(changes)) {
-    return { ...row, changes }
+  if (!readable) return { ...row, changes }
+  // A stored value that is not a field map can't be filtered, so it never
+  // reaches a viewer limited to some fields.
+  if (!changes || typeof changes !== 'object' || Array.isArray(changes)) {
+    return { ...row, changes: {} }
   }
   // Values of fields the viewer may not read never leave the server.
   return {
@@ -59,7 +62,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       ).catch(() => null)
       if (!visible) return reply.code(404).send({ error: 'Not found' })
       const fields = await getAllowedFields(req.user!, 'read', collection)
-      readable = fields === null ? null : new Set(fields)
+      readable = fields === null || fields.includes('*') ? null : new Set(fields)
     }
 
     const rows = (await db('nivaro_scheduled_changes')
@@ -109,7 +112,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       String(body.item_id),
       'allow_schedule',
       {
-        layout: body.layout,
+        layout: typeof body.layout === 'string' ? body.layout : null,
         denied: 'Only administrators can schedule changes here'
       }
     )
@@ -121,7 +124,7 @@ export async function scheduledChangesRoutes(app: FastifyInstance) {
       // Execution writes every key as a column, whatever the change type, so
       // each one must be a field the caller may update.
       const allowed = await getAllowedFields(req.user!, 'update', body.collection)
-      if (allowed !== null) {
+      if (allowed !== null && !allowed.includes('*')) {
         const allowedSet = new Set(allowed)
         const blocked = Object.keys(body.changes ?? {}).find((k) => !allowedSet.has(k))
         if (blocked) {

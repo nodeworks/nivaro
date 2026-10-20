@@ -159,6 +159,28 @@ describe('POST /scheduled-changes', () => {
     expect(state.inserts).toBe(1)
   })
 
+  it('treats a "*" update policy as every field', async () => {
+    state.updateFields = ['*']
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/scheduled-changes',
+      payload: body({ status: 'closed', budget: 5 })
+    })
+    expect(res.statusCode).toBe(201)
+    expect(state.inserts).toBe(1)
+  })
+
+  it('ignores a layout pin that is not a string', async () => {
+    state.layout = null
+    const res = await (await app()).inject({
+      method: 'POST',
+      url: '/api/scheduled-changes',
+      payload: { ...body(), layout: { slug: 'x' } }
+    })
+    expect(res.statusCode).toBe(403)
+    expect(state.inserts).toBe(0)
+  })
+
   it('lets administrators schedule without a grant or field check', async () => {
     state.admin = true
     state.layout = null
@@ -195,6 +217,31 @@ describe('GET /scheduled-changes/:collection/:itemId', () => {
     })
     expect(res.statusCode).toBe(200)
     expect(res.json().data[0].changes).toEqual({ status: 'closed' })
+  })
+
+  it('never shows a stored value it cannot filter to a field-limited caller', async () => {
+    state.readFields = ['status']
+    state.rows = [
+      { id: 1, changes: '"budget=5"' },
+      { id: 2, changes: '[{"budget":5}]' },
+      { id: 3, changes: 'not json' }
+    ]
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/api/scheduled-changes/orders/7'
+    })
+    expect(res.statusCode).toBe(200)
+    expect(res.json().data.map((r: { changes: unknown }) => r.changes)).toEqual([{}, {}, {}])
+  })
+
+  it('treats a "*" read policy as every field', async () => {
+    state.readFields = ['*']
+    state.rows = [{ id: 1, changes: '{"status":"closed","budget":5}' }]
+    const res = await (await app()).inject({
+      method: 'GET',
+      url: '/api/scheduled-changes/orders/7'
+    })
+    expect(res.json().data[0].changes).toEqual({ status: 'closed', budget: 5 })
   })
 
   it('shows administrators every value', async () => {
