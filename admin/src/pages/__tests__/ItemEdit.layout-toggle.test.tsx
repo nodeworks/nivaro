@@ -51,7 +51,7 @@ vi.mock('@nivaro/shared', async (importOriginal) => {
 })
 
 // A real axios instance whose adapter answers from fixtures and records every
-// call, so the classic editor's request guard (an interceptor) is exercised.
+// call, so what the page requests can be asserted.
 const LAYOUTS = [
   {
     id: 7,
@@ -117,8 +117,6 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 import { NivaroProvider } from '@nivaro/shared'
-import { api } from '@/lib/api'
-import { ClassicLayoutsView } from '@/pages/TableEditor'
 
 // jsdom lacks what Radix and the editors measure with.
 class NoopObserver {
@@ -145,7 +143,7 @@ window.matchMedia ??= ((q: string) => ({
 
 function renderWith(ui: React.ReactNode, Provider: typeof NivaroProvider = NivaroProvider) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  // AppLayout's provider in the app; the classic tab's shared pickers read it.
+  // AppLayout's provider in the app.
   const client = {
     url: 'http://test',
     request: vi.fn(async (c: { _method?: string; _path?: string }) => {
@@ -161,8 +159,6 @@ function renderWith(ui: React.ReactNode, Provider: typeof NivaroProvider = Nivar
     </QueryClientProvider>
   )
 }
-
-const writes = () => state.requests.filter((r) => r.method !== 'GET')
 
 // A fresh module registry per test re-runs the lazy chunk's mock factory, so
 // the load count belongs to the test, not to the order the tests run in.
@@ -239,82 +235,5 @@ describe('record page Edit layout toggle', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }))
     await waitFor(() => expect(screen.queryByTestId('record-layout-editor')).toBeNull())
     await waitFor(() => expect(activeReads()).toBeGreaterThan(before))
-  })
-})
-
-// ── Classic Layouts tab (read-only) ─────────────────────────────────────────
-
-describe('classic layout editor', () => {
-  it('classic editor makes no write calls', async () => {
-    state.user = { id: 'u1', is_admin: true }
-    const onOpenNew = vi.fn()
-    renderWith(
-      <ClassicLayoutsView
-        tableName='orders'
-        dbColumns={[
-          { name: 'title', data_type: 'nvarchar' },
-          { name: 'amount', data_type: 'decimal' }
-        ]}
-        layoutId={7}
-        onOpenNew={onOpenNew}
-      />
-    )
-    expect(screen.getByText(/Read-only — use the new editor/)).toBeTruthy()
-    await screen.findAllByText('Order form')
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50))
-    })
-
-    // Press every control the classic tab shows, twice (popovers and menus
-    // open on the first pass), and type into every box.
-    const root = document.querySelector('[data-classic-read-only]') as HTMLElement
-    for (let pass = 0; pass < 2; pass++) {
-      const controls = Array.from(
-        document.querySelectorAll<HTMLElement>(
-          'button, [role="switch"], [role="checkbox"], [role="menuitem"], [role="option"], input[type="checkbox"]'
-        )
-      ).filter((el) => !el.textContent?.includes('Open in the new editor'))
-      for (const el of controls) {
-        if (!el.isConnected) continue
-        await act(async () => {
-          fireEvent.pointerDown(el)
-          fireEvent.mouseDown(el)
-          fireEvent.click(el)
-        })
-      }
-      for (const el of Array.from(
-        root.querySelectorAll<HTMLInputElement>('input:not([type="checkbox"]), textarea')
-      )) {
-        await act(async () => {
-          fireEvent.keyDown(el, { key: 'a' })
-          fireEvent.change(el, { target: { value: 'changed' } })
-          fireEvent.keyDown(el, { key: 'Enter' })
-          fireEvent.blur(el)
-        })
-      }
-    }
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 700)) // past any autosave debounce
-    })
-    expect(writes()).toEqual([])
-
-    // The guard itself: a write made through admin's axios while the classic
-    // view is open never leaves the browser.
-    await expect(api.patch('/collection-layouts/7', { name: 'x' })).rejects.toThrow(/Read-only/)
-    await expect(api.post('/field-groups', { collection: 'orders' })).rejects.toThrow(/Read-only/)
-    await expect(api.put('/collection-layouts/7/assignments', { assignments: [] })).rejects.toThrow(
-      /Read-only/
-    )
-    expect(writes()).toEqual([])
-    // The page around it keeps writing: sign-out, preferences.
-    await api.post('/auth/logout')
-    await api.patch('/users/me/preferences', { x: 1 })
-    expect(writes().map((w) => `${w.method} ${w.url}`)).toEqual([
-      'POST /auth/logout',
-      'PATCH /users/me/preferences'
-    ])
-    // Reads still work.
-    await api.get('/collection-layouts', { params: { collection: 'orders' } })
-    expect(state.requests.at(-1)?.method).toBe('GET')
   })
 })

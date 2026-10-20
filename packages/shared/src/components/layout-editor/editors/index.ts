@@ -1,5 +1,5 @@
 // Field, group and slot editors moved from the admin Layouts tab. The new
-// layout editor's inspector and the classic Layouts tab both use them.
+// layout editor's inspector uses them.
 export {
   type CascadeFilterRule,
   CascadeFiltersEditor,
