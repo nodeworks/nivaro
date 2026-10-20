@@ -23,7 +23,8 @@ export interface LayoutDesign {
  * (useDesignDndNode) and these only answer questions; outside one (tests,
  * hosts without drag and drop) DesignNode takes its props and state from
  * here. `disabled` (inherited nodes, the folded copy of a header tile) asks
- * for no drag props.
+ * for no drag props. Passing NO_DND (dnd/node.ts) turns dragging off even
+ * inside a provider.
  */
 export interface DesignDnd {
   draggableProps(t: DesignTarget, opts?: { disabled?: boolean }): object

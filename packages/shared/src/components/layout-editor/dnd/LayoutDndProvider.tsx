@@ -297,6 +297,9 @@ export function LayoutDndProvider({
     let ops = plans.current.map.get(k)
     if (!ops) {
       ops = orderAfterDrop(b, a.target, o.target, hint.side)
+      // A slot leaving for the canvas shows its line on the Ungrouped card;
+      // where that card is not on screen (steps mode), no line — so no drop.
+      if (landsOnCanvas(b, a.target, o.target) && !store.nodes.has(targetKey(UNGROUPED))) ops = []
       plans.current.map.set(k, ops)
     }
     return { a, o, hint, ops }

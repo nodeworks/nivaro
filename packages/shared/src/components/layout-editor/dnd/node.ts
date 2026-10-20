@@ -118,7 +118,9 @@ export function useDesignDndNode(dnd: DesignDnd, t: DesignTarget, opts: NodeDndO
   const uid = useId()
   const nodeRef = useRef<HTMLElement | null>(null)
   const role = store?.bundle ? dndRole(store.bundle, t) : null
-  const live = !!store && !!role && !opts.disabled
+  // A host turns drag and drop off by passing NO_DND (read-only, staging),
+  // provider or not.
+  const live = !!store && !!role && !opts.disabled && dnd !== NO_DND
   // A node that is not live never shares an id with the live one.
   const id = live ? key : `${key}#${uid}`
   const data: DndNodeData | undefined = role

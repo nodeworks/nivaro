@@ -8871,7 +8871,11 @@ function ItemEditFormView({
             })
           }
         </GridContainer>
-        {designOn && tabItems.length === 0 && <DesignDropZone />}
+        {/* "General" in tab mode mixes Ungrouped fields and sections: no single
+            place to drop into, so no drop zone invitation either. */}
+        {designOn && tabItems.length === 0 && (tabKey !== '__general__' || inStepsMode) && (
+          <DesignDropZone />
+        )}
       </div>
     )
   }

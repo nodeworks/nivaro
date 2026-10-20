@@ -60,7 +60,16 @@ const domRect = ([x, y, w, h]: [number, number, number, number]) =>
 
 const field = (f: string, g: string): DesignTarget => ({ kind: 'field', field: f, group_key: g })
 
-function Canvas({ blockPointer, dndOff }: { blockPointer?: boolean; dndOff?: boolean }) {
+function Canvas({
+  blockPointer,
+  dndOff,
+  steps
+}: {
+  blockPointer?: boolean
+  dndOff?: boolean
+  /** Steps mode: Ungrouped fields sit in the General step's pane; no Ungrouped card. */
+  steps?: boolean
+}) {
   const dnd = useLayoutDnd()
   const design: LayoutDesign = {
     selected: null,
@@ -103,9 +112,16 @@ function Canvas({ blockPointer, dndOff }: { blockPointer?: boolean; dndOff?: boo
         <div data-rect='pane:g3'>
           <DesignDropBody groupKey='g3' />
         </div>
-        <DesignNode target={{ kind: 'group', key: '__ungrouped__' }}>
-          <div>{cell({ kind: 'field', field: 'u1', group_key: null }, 'Field U1')}</div>
-        </DesignNode>
+        {steps ? (
+          <div data-rect='group:__ungrouped__'>
+            <DesignDropBody groupKey='__ungrouped__' />
+            {cell({ kind: 'field', field: 'u1', group_key: null }, 'Field U1')}
+          </div>
+        ) : (
+          <DesignNode target={{ kind: 'group', key: '__ungrouped__' }}>
+            <div>{cell({ kind: 'field', field: 'u1', group_key: null }, 'Field U1')}</div>
+          </DesignNode>
+        )}
       </div>
     </LayoutDesignContext.Provider>
   )
@@ -325,11 +341,37 @@ describe('LayoutDndProvider', () => {
     const apply = vi.fn()
     render(apply)
     expect(node('field:a:g1').getAttribute('aria-roledescription')).toBe('draggable')
-    render(apply, <Canvas dndOff />)
+    // NO_DND inside a provider turns dragging off.
+    render(apply, <Canvas dndOff blockPointer />)
+    expect(node('field:a:g1').hasAttribute('aria-roledescription')).toBe(false)
+    await dragTo(node('field:a:g1'), 300, 290)
+    expect(host.querySelector('[data-drop-slot]')).toBeNull()
+    expect(document.body.querySelector('[data-design-drag-preview]')).toBeNull()
+    await drop(300, 290)
+    expect(apply).not.toHaveBeenCalled()
+    // No provider at all.
     act(() => root.render(<Canvas />))
     expect(node('field:a:g1').hasAttribute('aria-roledescription')).toBe(false)
     render(apply)
     expect(node('field:a:g1').getAttribute('aria-roledescription')).toBe('draggable')
+  })
+
+  it('steps mode: a slot over Ungrouped fields has no card to land by, so no line and no drop', async () => {
+    const apply = vi.fn()
+    render(apply, <Canvas blockPointer steps />)
+    await dragTo(node('slot:__owners__:g2'), 300, 630)
+    expect(host.querySelector('[data-drop-slot]')).toBeNull()
+    expect(host.querySelector('[data-design-drop-indicator]:not([hidden])')).toBeNull()
+    await drop(300, 630)
+    expect(apply).not.toHaveBeenCalled()
+    // A plain field still drops into the General step's Ungrouped fields.
+    await dragTo(node('field:a:g1'), 300, 630)
+    expect(node('field:u1:').getAttribute('data-drop-slot')).toBe('after')
+    await drop(300, 630)
+    expect(apply).toHaveBeenCalledWith(
+      [{ op: 'move', from: { field: 'a', group_key: 'g1' }, to_group_key: null, index: 1 }],
+      { label: 'Move field' }
+    )
   })
 
   it('a folded header tile is not a drop target', async () => {

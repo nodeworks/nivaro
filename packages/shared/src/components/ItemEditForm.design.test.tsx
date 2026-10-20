@@ -420,6 +420,26 @@ describe('ItemEditForm design mode', () => {
     })
   }
 
+  it('tabs: an empty General tab offers no drop zone (it is not one place to drop)', async () => {
+    const base = tabsLayout('tabs')
+    const layout: ActiveLayoutData = {
+      ...base,
+      groups: [...base.groups, group(14, 's1', 'Section', 3)]
+    }
+    localStorage.setItem('nvr_tab_orders', '__general__')
+    try {
+      await mount(
+        { design: { layout, record: { ...RECORD }, context: makeDesign() } },
+        () => !!host.querySelector('[data-tab-key="__general__"]')
+      )
+      expect(host.querySelector('[data-tab-key="__general__"]')).not.toBeNull()
+      expect(host.querySelector('[data-design-drop-zone]')).toBeNull()
+      expect(host.querySelector('[data-design-drop-body]')).toBeNull()
+    } finally {
+      localStorage.removeItem('nvr_tab_orders')
+    }
+  })
+
   it(`tabs: without showHidden the rule-hidden tab and hidden field stay out`, async () => {
     await mount(
       { design: { layout: tabsLayout('tabs'), record: { ...RECORD }, context: makeDesign() } },
