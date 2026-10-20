@@ -73,6 +73,7 @@ import {
   HEADER_VALUE_HERO,
   HEADER_VALUE_LINE
 } from '../lib/header-strip'
+import { type LayoutGrantFlags, layoutGrantedTools } from '../lib/layout-grants'
 import { extSlotKey } from '../lib/layout-slots'
 import { useLiveRefetchInterval } from '../lib/live-queries'
 import { useRecordReader } from '../lib/record-loader'
@@ -180,6 +181,7 @@ import { QueueReturnChip } from './item-edit/QueueReturnChip'
 import { QuickPicker } from './item-edit/QuickPicker'
 import { RawEditSheet } from './item-edit/RawEditSheet'
 import { RecordChatActions } from './item-edit/RecordChatActions'
+import { PickerExclusionToggle, ScheduleChangeButton } from './item-edit/RecordGrantTools'
 import {
   invalidateRecordInsights,
   invalidateRecordNotes,
@@ -540,6 +542,12 @@ export interface ItemEditFormProps {
    *  header toolbar. Off by default — the admin's ItemEdit page renders its
    *  own copy in the page header; headless hosts opt in. */
   showItemActions?: boolean
+  /** Offer "Schedule a change…" and "Disable in pickers" in the More menu
+   *  when this record's form grants them to everyone (allow_schedule /
+   *  allow_disable_pickers) or the viewer is an admin. Off by default — the
+   *  admin's ItemEdit page renders its own copies in the page header;
+   *  headless hosts opt in. */
+  showGrantedTools?: boolean
   /** Scroll to + flash a field on load (deep links: ?focus=<field>). */
   focusField?: string | null
   /**
@@ -1241,6 +1249,7 @@ function ItemEditFormView({
   headerExtra,
   focusField,
   showItemActions = false,
+  showGrantedTools = false,
   onDirtyChange,
   documentTitle = true,
   registerSaveHandler,
@@ -4841,6 +4850,19 @@ function ItemEditFormView({
   // Find-in-record (#82): searchable field list from the deduped config +
   // current draft values; jump = the same flash, reporting a miss when the
   // field's DOM node isn't mounted (another tab/step).
+  // Record tools a form can grant everyone (Form settings → Buttons & panels).
+  const grantedTools = useMemo(() => {
+    const g = layoutGrantedTools(activeLayoutData?.layout as LayoutGrantFlags | undefined, isAdmin)
+    return showGrantedTools && !designOn ? g : { schedule: false, disablePickers: false }
+  }, [activeLayoutData?.layout, isAdmin, showGrantedTools, designOn])
+  const scheduleFields = useMemo(
+    () =>
+      allFields
+        .filter((f) => !f.hidden && f.type !== 'alias')
+        .map((f) => ({ field: f.field, label: f.label })),
+    [allFields]
+  )
+
   const findableFields = useMemo<FindableField[]>(() => {
     const m2oByField = new Map(
       relations
@@ -9925,6 +9947,21 @@ function ItemEditFormView({
                                                     | undefined
                                                 )?.dossier_label || 'Dossier'}
                                               </button>
+                                            )}
+                                            {grantedTools.disablePickers && (
+                                              <PickerExclusionToggle
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                                layoutSlug={layoutSlug ?? null}
+                                              />
+                                            )}
+                                            {grantedTools.schedule && (
+                                              <ScheduleChangeButton
+                                                collection={collection}
+                                                itemId={String(itemId)}
+                                                fields={scheduleFields}
+                                                layoutSlug={layoutSlug ?? null}
+                                              />
                                             )}
                                             <div data-nvr-menu-divider />
                                             {onDuplicate && (

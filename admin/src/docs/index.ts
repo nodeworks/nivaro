@@ -19,7 +19,6 @@ export * from './sections/config-review.js'
 export * from './sections/content-ops.js'
 export * from './sections/data-safety.js'
 export * from './sections/db-tuning.js'
-export * from './sections/sql-checks.js'
 export * from './sections/detail-sheets.js'
 export * from './sections/devex.js'
 export * from './sections/extensions-system.js'
@@ -33,6 +32,7 @@ export * from './sections/import-templates.js'
 export * from './sections/integration-obligations.js'
 export * from './sections/integrations.js'
 export * from './sections/integrations-console.js'
+export * from './sections/layout-editor.js'
 export * from './sections/live-feeds.js'
 export * from './sections/live-lists.js'
 export * from './sections/live-ops.js'
@@ -55,6 +55,7 @@ export * from './sections/rest-api.js'
 export * from './sections/sdk-core.js'
 export * from './sections/sdk-extended.js'
 export * from './sections/security.js'
+export * from './sections/sql-checks.js'
 export * from './sections/storage.js'
 export * from './sections/summary-mode.js'
 export * from './sections/team-throughput.js'
@@ -156,7 +157,6 @@ import {
   trashDocs
 } from './sections/data-safety.js'
 import { dbTuning } from './sections/db-tuning.js'
-import { sqlChecksDocs } from './sections/sql-checks.js'
 import { detailSheets } from './sections/detail-sheets.js'
 import {
   devexCdcStream,
@@ -249,6 +249,7 @@ import {
   integrationsSyncJobs
 } from './sections/integrations.js'
 import { integrationsConsole } from './sections/integrations-console.js'
+import { layoutEditor } from './sections/layout-editor.js'
 import { liveWidgetsDocs, viewStreamDocs } from './sections/live-feeds.js'
 import { collabLiveLists } from './sections/live-lists.js'
 import {
@@ -426,6 +427,7 @@ import {
   securityUserScopes,
   securityWorkspaceTemplates
 } from './sections/security.js'
+import { sqlChecksDocs } from './sections/sql-checks.js'
 import {
   storageFileExpiry,
   storageImageTransforms,
@@ -916,6 +918,7 @@ export const navSections: NavGroup[] = [
       fieldRulesGuide,
       attributesGuide,
       collectionLayouts,
+      layoutEditor,
       layoutStepsMode,
       layoutQuickPicker,
       detailSheets,

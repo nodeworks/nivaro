@@ -76,7 +76,9 @@ export async function nextFreeSlug(
 /** Layout settings a clone carries over — every column except identity
  *  (id/collection/name/slug/sort/is_active/created_at) and the type (the
  *  clone request may change it). parent_layout_id is carried: a copy of a
- *  child inherits from the same parent, so it renders the same form. */
+ *  child inherits from the same parent, so it renders the same form.
+ *  Retired settings nothing reads (summary_show_all, allow_clone,
+ *  addendum_lock_fields) are not copied: their columns stay, unwritten. */
 const CLONE_CARRIED_COLUMNS = [
   'parent_layout_id',
   'disable_comments',
@@ -84,10 +86,8 @@ const CLONE_CARRIED_COLUMNS = [
   'tab_mode',
   'validate_before_next',
   'summary_enabled',
-  'summary_show_all',
   'ai_enabled',
   'conditions',
-  'allow_clone',
   'allow_schedule',
   'allow_disable_pickers',
   'pdf_theme',
@@ -109,7 +109,6 @@ const CLONE_CARRIED_COLUMNS = [
   'workflow_template_id',
   'single_active_addendum',
   'addendum_default_view',
-  'addendum_lock_fields',
   'record_conditions',
   'default_values',
   'create_label',
@@ -373,6 +372,42 @@ export async function resolveLayout(opts: {
   }
   const res = pickBestLayoutTraced(layouts, userRoleId, record, isAdmin)
   return { ...res, checked: [...slugChecks, ...res.checked] }
+}
+
+/**
+ * A ?layout= pin the caller could legitimately be on for this record: a record
+ * form (grouped, or legacy untyped) their role may open whose record rules,
+ * when it has any, match the record. Null otherwise. /active honours any
+ * role-allowed slug because there it only chooses presentation; where a pin
+ * decides authorization (picker exclusions) it must pass this stricter check.
+ */
+export async function legitimatePinForRecord(opts: {
+  collection: string
+  slug: string
+  item: string
+  role: string | null
+}): Promise<Record<string, unknown> | null> {
+  const { collection, slug, item, role } = opts
+  const row = (await db('nivaro_collection_layouts')
+    .where({ collection, slug })
+    .where((b) => b.where({ layout_type: 'grouped' }).orWhereNull('layout_type'))
+    .first()) as Record<string, unknown> | undefined
+  if (!row || !roleAllows(row, role, false)) return null
+  const rules = parseRecordConditions(row.record_conditions)
+  if (!rules) return row
+  // Same guards as resolveLayout: a registered collection only, and only the
+  // columns this layout's rules name.
+  const registered = await db('nivaro_collections').where({ collection }).first()
+  if (!registered) return null
+  const columns = [
+    ...new Set(['id', ...rules.map((r) => r.field).filter((f) => typeof f === 'string')])
+  ]
+  const record = (await db(collection)
+    .where({ id: item })
+    .select(columns)
+    .first()
+    .catch(() => null)) as Record<string, unknown> | null | undefined
+  return record && matchesRecordConditions(rules, record) ? row : null
 }
 
 // Columns every record carries that a form never shows.

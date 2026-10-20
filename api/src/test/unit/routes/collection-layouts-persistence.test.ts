@@ -495,7 +495,16 @@ describe('POST /collection-layouts/:id/clone', () => {
     fake.reset({
       nivaro_collection_layouts: [
         layout({ id: 1, slug: 'base', is_active: 1 }),
-        layout({ id: 2, slug: 'main', parent_layout_id: 1, disable_clone: 1 })
+        layout({
+          id: 2,
+          slug: 'main',
+          parent_layout_id: 1,
+          disable_clone: 1,
+          // Retired settings nothing reads: a clone leaves them unwritten.
+          summary_show_all: 1,
+          allow_clone: 1,
+          addendum_lock_fields: 1
+        })
       ],
       nivaro_field_groups: [{ id: 10, layout_id: 2, key: 'general', label: 'General', sort: 0 }],
       nivaro_layout_field_assignments: [
@@ -508,6 +517,9 @@ describe('POST /collection-layouts/:id/clone', () => {
     expect(created.slug).toBe('main_copy')
     expect(created.parent_layout_id).toBe(1)
     expect(created.disable_clone).toBe(1)
+    expect(created.summary_show_all).toBeUndefined()
+    expect(created.allow_clone).toBeUndefined()
+    expect(created.addendum_lock_fields).toBeUndefined()
     expect(created.is_active).toBe(0)
     expect(
       fake.tables.nivaro_layout_field_assignments.filter((a) => a.layout_id === created.id)

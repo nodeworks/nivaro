@@ -617,6 +617,7 @@
           <a class="docs-nav-item" data-section="field-rules" href="#field-rules">Field Rules</a>
           <a class="docs-nav-item" data-section="dynamic-attributes" href="#dynamic-attributes">Dynamic Attributes</a>
           <a class="docs-nav-item" data-section="collection-layouts" href="#s-collection-layouts">Collection Layouts</a>
+          <a class="docs-nav-item" data-section="layout-editor" href="#s-layout-editor">Layout Editor</a>
           <a class="docs-nav-item" data-section="layout-steps-mode" href="#s-layout-steps-mode">Layout Steps / Wizard</a>
           <a class="docs-nav-item" data-section="layout-quick-picker" href="#s-layout-quick-picker">Quick Picker</a>
           <a class="docs-nav-item" data-section="detail-sheets" href="#s-detail-sheets">Detail Sheets &amp; Review Widgets</a>
@@ -10303,23 +10304,28 @@ const fields = await getAllowedFields(userId, 'articles', 'read');
         <div class="doc-section" id="s-collection-layouts" data-toc='[{"id":"collection-layouts","label":"Collection Layouts"}]'>
           <!-- SYNC:collection-layouts -->
           <h1 class="doc-h1" id="collection-layouts">Collection Layouts</h1>
-          <p class="doc-p">Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One layout is marked active and used by ItemEdit automatically; others can be referenced by name via the SDK.</p>
+          <p class="doc-p">Each registered collection can have multiple named layouts. A layout defines how fields are grouped and ordered in the item editor. One grouped layout is the default; others are picked by record rules or roles, opened by their link name (<code class="doc-code">?layout=&lt;slug&gt;</code>), or serve other views (summary, detail, PDF, addendum, grid columns).</p>
           <h3 class="doc-h3">Managing layouts</h3>
-          <p class="doc-p">Open Data Model → select a collection → Layout tab. The left panel lists layouts for the collection. Click a layout to edit its groups and field assignments. The active layout (shown with a cyan dot) is what the item editor displays. Double-click a layout name to rename it inline.</p>
+          <p class="doc-p">Open Data Model → select a collection → Layout tab. It opens on "Which form does each record get?" — every layout of the collection in the order the server checks them, with the conditions in plain words — and opens a layout in the layout editor from there. Admins can also edit a record's form from the record page with Edit layout. See Layout Editor for the overview, the editor, saving and history.</p>
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Action</th><th>How</th></tr></thead>
-            <tbody><tr><tr><td>Create layout</td><td>Click "+ Add layout" at the bottom of the left panel</td></tr>
-              <tr><td>Set active</td><td>Open a layout → click "Set active" in the toolbar</td></tr>
-              <tr><td>Clone layout</td><td>Open a layout → click "Clone" to duplicate groups + field assignments</td></tr>
-              <tr><td>Delete layout</td><td>Open a layout → click "Delete" (blocked if it is the only layout)</td></tr>
-              <tr><td>Rename layout</td><td>Double-click the layout name in the left panel</td></tr></tr></tbody>
+            <tbody><tr><tr><td>Create layout</td><td>Overview → New form (pick the kind up front); Create first form when there is none</td></tr>
+              <tr><td>Make default</td><td>Overview → row menu → Make default</td></tr>
+              <tr><td>Duplicate layout</td><td>Overview → row menu → Duplicate (or Duplicate as summary)</td></tr>
+              <tr><td>Delete layout</td><td>Overview → row menu → Delete (lists references first; history is kept)</td></tr>
+              <tr><td>Rename layout</td><td>Overview → row menu → Rename</td></tr></tr></tbody>
           </table></div>
           <h3 class="doc-h3">API</h3>
-          <pre class="doc-pre"><code>GET  /api/collection-layouts?collection=articles
-POST /api/collection-layouts                    { collection, name }
-PATCH /api/collection-layouts/:id               { name?, sort? }
+          <pre class="doc-pre"><code>GET  /api/collection-layouts?collection=articles[&amp;layout_type=grouped]
+GET  /api/collection-layouts/active?collection=articles[&amp;item=42|&amp;slug=x]
+GET  /api/collection-layouts/overview?collection=articles     (admin)
+GET  /api/collection-layouts/explain?collection=articles&amp;item=42[&amp;role_id=]   (admin)
+POST /api/collection-layouts                    { collection, name, layout_type?, slug?, seed_fields? }
+PATCH /api/collection-layouts/:id               { any layout setting }
 POST /api/collection-layouts/:id/activate
-POST /api/collection-layouts/:id/clone          { name }
+POST /api/collection-layouts/:id/clone          { name, slug?, layout_type? }
+GET  /api/collection-layouts/:id/bundle         (admin) → { layout, groups, placements, rev }
+POST /api/collection-layouts/:id/ops            (admin) { ops, base_rev, note? }
 GET  /api/collection-layouts/:id/assignments
 PUT  /api/collection-layouts/:id/assignments    { assignments: [{field, group_key, sort}] }
 DELETE /api/collection-layouts/:id</code></pre>
@@ -10335,6 +10341,119 @@ const active = await cms.request(readActiveLayout('articles'))
 // Use a specific layout in @nivaro/react
 useNivaroForm('articles', { mode: 'create', layoutId: 42 })</code></pre>
           <!-- /SYNC:collection-layouts -->
+        </div>
+
+        <!-- LAYOUT EDITOR -->
+        <div class="doc-section" id="s-layout-editor" data-toc='[{"id":"layout-editor","label":"Layout Editor"},{"id":"layout-editor-overview","label":"Which form does each record get?"},{"id":"layout-editor-test-record","label":"Test a record"},{"id":"layout-editor-editor","label":"The editor"},{"id":"layout-editor-scope","label":"This form only vs every form"},{"id":"layout-editor-saving","label":"Saving, undo and conflicts"},{"id":"layout-editor-history","label":"History"},{"id":"layout-editor-other-kinds","label":"Table and PDF layouts"},{"id":"layout-editor-record-page","label":"Edit layout from a record"},{"id":"layout-editor-warning","label":"Instances whose layouts are replaced"},{"id":"layout-editor-api","label":"API"}]'>
+          <!-- SYNC:layout-editor -->
+          <h1 class="doc-h1" id="layout-editor">Layout Editor</h1>
+          <p class="doc-p">Every form in Nivaro is a layout: which fields a record shows, in which sections, tabs or steps, with which panels and rules. The layout editor is where they are built. It opens from Data Model → a collection → Layout tab, and from any record page with Edit layout (admins only, in Nivaro admin and in headless frontends such as efp-new). The canvas is the real record form, so what you arrange is exactly what people get.</p>
+          <h2 class="doc-h2" id="layout-editor-overview">Which form does each record get?</h2>
+          <p class="doc-p">The Layout tab opens on an overview that answers one question in plain words: which form does each kind of record open with, and why. Rows are listed in the order the server checks them, so reading top to bottom is reading the resolution itself. A <code class="doc-code">?layout=&lt;id&gt;</code> link skips the overview and opens that layout in the editor.</p>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Section</th><th>What it lists</th></tr></thead>
+            <tbody><tr><tr><td>Forms people fill in — checked in this order</td><td>One row per grouped layout. "When the record…" is the layout's record rules as a sentence with field and choice labels ("is not unit-specific and is sparing"), role restrictions by role name ("for Finance only"), and "anything else" on the default. "Opens" names the layout with a default or rule pill and a shape line ("4 steps · 34 fields"). "Also" shows the New-menu label or "hidden from New menu". A row that can never be reached (another layout always matches first) carries a quiet warning.</td></tr>
+              <tr><td>Opened by a link or button only</td><td>Grouped layouts nothing resolves to on its own but that have a link name: reached by <code class="doc-code">?layout=&lt;slug&gt;</code>, a queue's item layout, a grid's layout_slug or a transition dialog. Known references are listed.</td></tr>
+              <tr><td>Other views of the same record</td><td>Summary (read mode), detail (drill-down panel), file (PDF), addendum and table (grid columns when the collection is shown inside another record), each with one line on what uses it.</td></tr>
+              <tr><td>Unused</td><td>Layouts nothing resolves to or references, with Delete. A layout with a link name is never called unused — it may be used by URLs or code. Delete lists any references it finds before asking you to confirm.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Order among grouped forms is computed (layouts with more record rules first, then role preferences, then the default), so those rows are not draggable. Drag to reorder exists only where <code class="doc-code">sort</code> decides — the first-by-sort fallbacks for table, addendum, detail and summary layouts.</p>
+          <ul class="doc-ul">
+            <li>New form — asks for the kind up front (form, summary, detail, PDF, addendum, grid columns), then opens it in the editor.</li>
+            <li>Row menu — Open, Rename, Duplicate, Duplicate as summary, Make default, Delete.</li>
+            <li>No layouts yet — the empty state explains what a form layout is and offers Create first form, which seeds one section "Main" holding every visible field of the collection.</li>
+          </ul>
+          <h3 class="doc-h3" id="layout-editor-test-record">Test a record</h3>
+          <p class="doc-p">Test a record… picks a saved record and lights up the row it resolves to, with the reason in words, and says for every other form why it was passed over ("Its record rules do not match", "A form with record rules matched first", "Restricted to other roles"). Optionally test as a role. The test runs the live <code class="doc-code">/active</code> resolution itself — there is no separate preview logic — so the answer is what that person would get.</p>
+          <h2 class="doc-h2" id="layout-editor-editor">The editor</h2>
+          <p class="doc-p">Three areas: on the left the layouts of the collection (grouped as on the overview, each with a one-line purpose) and an entry for Form settings; in the centre the canvas; on the right the inspector for whatever is selected. The top bar carries the layout name and purpose, Preview as, History, Undo / Redo and the save status.</p>
+          <h3 class="doc-h3">Canvas</h3>
+          <p class="doc-p">The canvas is the shared record form (ItemEditForm, or the read view for summary and detail layouts) running in design mode: same styles, spacing, steps or tabs, header strip and slot cards as a real record. Inputs are inert — nothing on the canvas writes to a record, takes a lock or runs a rule that saves. Click a field, section, tab, slot card, header strip item or widget to select it. Empty sections show a drop zone; Show hidden reveals fields and sections the preview would hide, faintly, so they can still be selected.</p>
+          <p class="doc-p">Preview as picks a record: the canvas shows its real values, its steps, and the fields its rules show or hide. "As a role" previews the form the way a role sees it — hidden and read-only fields are marked.</p>
+          <h3 class="doc-h3">Inspector</h3>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Tab</th><th>What it holds</th></tr></thead>
+            <tbody><tr><tr><td>Look</td><td>Label on this form (or hidden), width, help text, placeholder, how the value is shown: input type, format, currency, unit, precision, input mask.</td></tr>
+              <tr><td>Rules</td><td>Required, read-only, hidden, lock conditions, default value for new records, maximum number of values.</td></tr>
+              <tr><td>Picker</td><td>Relation fields only: cascade filters, option field and sort, picker rules, pick or upload, inline editing, prefill from the parent, drill-down panel.</td></tr>
+              <tr><td>Grid / Table</td><td>Child-record grids only: columns, row rules, parent cascades, parent context fields, the row-rule tester.</td></tr>
+              <tr><td>Advanced</td><td>Raw overrides and the keys that have no editor of their own.</td></tr></tr></tbody>
+          </table></div>
+          <p class="doc-p">Sections, tabs and steps, slot cards (pipeline, comments, tasks, owners, PDF, extension panels), header strip items, the subtitle and widgets each get an inspector of their own.</p>
+          <h3 class="doc-h3" id="layout-editor-scope">This form only vs every form</h3>
+          <p class="doc-p">Every setting says where it applies. Most are this form only: they save on the layout, autosave and can be undone. Some live on the field itself (format, currency, unit, mask, cascade filters, column presets, grid totals, file options, deprecation) and change every form that shows the field; a widget's own settings change every form that places it. Those are marked "every form", sit outside Undo and History, and save only after an inline confirm ("Save for every form") that names what else they affect.</p>
+          <div class="doc-note">Row rules, row lints, picker enforcement, max values and line SLA are enforced on the server from the default grouped form only. On any other layout the inspector labels those keys "enforced on the default form only".</div>
+          <h3 class="doc-h3">Form settings</h3>
+          <p class="doc-p">Layout-wide settings in short named sections, each control with a one-line effect, searchable from the box at the top: Who gets this form (kind, record rules, roles by name, link name, New-menu label and hiding) · How it's laid out (tabs or steps, check each step before Next, one section open at a time) · Buttons &amp; panels (hide comments, tasks, revisions, clone, delete, banners; Schedule and Hide-from-pickers buttons for everyone) · Read view &amp; summary · PDF (file layouts only) · Addendum · Defaults for new records · Inheritance · AI review, previews, version history. Only the settings that apply to the layout's kind are shown — addendum layouts get every setting that applies to them.</p>
+          <p class="doc-p">"Schedule button for everyone" and "Hide-from-pickers button for everyone" give people who may edit the record "Schedule a change…" and "Disable in pickers" (administrators always have both). Nivaro admin shows them in the record header; the shared record form shows them in its More menu when the host turns on <code class="doc-code">showGrantedTools</code> (efp-new does). The server checks the same grant for both. A non-admin must be able to see the record (otherwise the answer is Not found), the form that record opens with for them must have the setting on, and they must be allowed to update this record — the update rules of their role for the collection, its row filter and any tree permission, not just access to the collection. A form opened with a <code class="doc-code">?layout=</code> link counts only when it is a record form their role may open and its record rules match this record; naming any other form never grants the tool. Scheduling also checks every field in the change: each must be one the person may update, otherwise the request is refused naming the field. People who are not administrators see the scheduled changes on a record only when they can see the record, with values of fields they may not read left out, and may cancel only their own changes on records they can still update.</p>
+          <h3 class="doc-h3">Add panel</h3>
+          <p class="doc-p">Add a field, section, panel or widget opens a searchable list showing labels (the key as secondary text), the type and an "on this form" mark for what is already placed. Click a row to add it after the selection, or drag it onto the canvas. A field already on the form can be added again ("Add another copy") — the same field may sit in two places, such as the header strip and a section.</p>
+          <h3 class="doc-h3">Drag and drop</h3>
+          <ul class="doc-ul">
+            <li>The whole element is the handle: field, section header, tab, step or slot card. Keyboard drag works too (focus, Space to lift, arrows to move, Space to drop, Escape to cancel).</li>
+            <li>The drag preview is a copy of the element as it looks on the form, under the cursor at any scroll position; the canvas scrolls when you near its edge.</li>
+            <li>An insertion slot opens where the element will land, within a section or across sections, including into an empty section. Dropping on a section header puts the field first in that section; sections reorder by dropping anywhere on the target section.</li>
+            <li>Widths change with the inspector's width control, snapping to the grid fractions.</li>
+          </ul>
+          <h3 class="doc-h3" id="layout-editor-saving">Saving, undo and conflicts</h3>
+          <p class="doc-p">Every change saves itself. The status chip reads Saving… then Saved. Undo and Redo (⌘Z / ⇧⌘Z, Ctrl+Y) step back through this session's changes, each named ("Undo Move Status"). Text in the inspector commits when you pause or leave the box, never per keystroke, and a refresh never overwrites what you are typing.</p>
+          <p class="doc-p">Changes go to the server as small operations against the revision the editor last saw. If another admin (or you in another tab) saved in between, the server refuses the batch; the editor reloads the layout, clears Undo and the chip reads "Reloaded — someone else saved". Nothing is silently overwritten. A refused change rolls back on screen and says why.</p>
+          <h3 class="doc-h3" id="layout-editor-history">History</h3>
+          <p class="doc-p">History lists the saved versions of the layout — one per editing burst, sections included — with who saved and the change's name. "What the last save changed" shows the newest difference first; any version can be compared with the layout now. Restore replaces the layout with that version exactly (sections added since are removed) after keeping the current one as a version first. Versions survive a layout delete.</p>
+          <h3 class="doc-h3">Inherited layouts</h3>
+          <p class="doc-p">A layout that inherits from a parent shows the parent's placements on its canvas marked "from &lt;parent&gt;" and locked. The inspector offers Override here (copies the placement into this layout, then editable) and Edit in &lt;parent&gt;.</p>
+          <h2 class="doc-h2" id="layout-editor-other-kinds">Table and PDF layouts</h2>
+          <ul class="doc-ul">
+            <li>Table layouts (the columns a collection shows when it is a grid inside another record) edit on a columns strip that looks like the real grid header: column order and width, plus the Apply values and Create with defaults zones.</li>
+            <li>File (PDF) layouts edit their sections in form style; Preview with sample values renders the real PDF in a new tab. Theme, cover, logo, page size, orientation and button label live in Form settings → PDF, which has its own Preview PDF.</li>
+            <li>Summary and detail layouts edit on the read view they render as, with the same selection and drag handles.</li>
+          </ul>
+          <h2 class="doc-h2" id="layout-editor-record-page">Edit layout from a record</h2>
+          <p class="doc-p">On a record page an admin sees Edit layout in the record header (Nivaro admin ItemEdit and efp-new RecordDetail). It switches that page's form into design mode on the layout this record resolved to, with the layouts list, inspector and add panel as side panels over the page. The editor keeps the layout it opened on even if a save changes which layout the record resolves to. Back to record closes it, and the record re-reads its layout. When the collection has no layout yet, the button links to the Layout tab to create the first form.</p>
+          <p class="doc-p">Edits are the same operations, saving and History as in the Layout tab. People who are not administrators never see the button and never download the editor: it is a separate chunk, loaded only when an admin turns the mode on (efp-new loads it through the <code class="doc-code">@nivaro/react/layout-editor</code> subpath export).</p>
+          <h2 class="doc-h2" id="layout-editor-warning">Instances whose layouts are replaced</h2>
+          <p class="doc-p">Layout configuration travels one way: development → staging every night (promote:config copies the layout, section and placement tables), staging → production at go-live. An edit made on staging is therefore gone the next morning. Set <code class="doc-code">LAYOUT_EDIT_WARNING</code> on such an instance and every layout editing surface — the overview, the editor and record-page Edit layout — shows it as an always-visible banner. Unset = no banner. The editor still works either way.</p>
+          <pre class="doc-pre"><code># staging .env
+LAYOUT_EDIT_WARNING=Layouts here are replaced every night from development. Make lasting changes on development.</code></pre>
+          <h2 class="doc-h2" id="layout-editor-api">API</h2>
+          <p class="doc-p">Layout writes are admin-only. The older endpoints (PATCH a layout, PUT all placements, the field-groups routes) keep working for scripts; the editor uses the bundle + ops pair.</p>
+          <pre class="doc-pre"><code>GET  /api/collection-layouts/overview?collection=orders
+     → { data: { rows: [...], warning: string | null } }   // sectioned, in /active order
+
+GET  /api/collection-layouts/explain?collection=orders&amp;item=42[&amp;role_id=&lt;uuid&gt;][&amp;slug=x]
+     → { data: { layout_id, reason, checked: [{ layout_id, matched, why }] } }
+
+POST /api/collection-layouts  { collection, name, layout_type?, slug?, seed_fields?: true }
+     // seed_fields: one section "Main" holding every visible field ("Create first form")
+
+GET  /api/collection-layouts/:id/bundle
+     → { layout, groups, placements, rev }
+
+POST /api/collection-layouts/:id/ops  { ops: LayoutOp[], base_rev, note? }
+     → the new bundle (applied all or nothing, at most 500 ops)
+     409 { error: 'stale', bundle }       // someone saved since base_rev
+     400 { error, op_index }              // an op was refused
+
+POST /api/field-config/:collection/project  { assignments: [...] }
+     // the field rows GET /field-config would return if these placements were saved
+     // (read-only: the canvas renders unsaved drafts through it)
+
+GET  /api/widgets-internal/:id/placements
+     → { data: [{ layout_id, name, collection }] }   // every layout placing the widget</code></pre>
+          <div class="doc-table-wrap"><table class="doc-table">
+            <thead><tr><th>Op</th><th>Shape</th></tr></thead>
+            <tbody><tr><tr><td>place</td><td><code class="doc-code">{ op, field, group_key, index, patch? }</code> — add a placement</td></tr>
+              <tr><td>move</td><td><code class="doc-code">{ op, from: { field, group_key }, to_group_key, index }</code></td></tr>
+              <tr><td>update_placement</td><td><code class="doc-code">{ op, at: { field, group_key }, patch }</code></td></tr>
+              <tr><td>remove</td><td><code class="doc-code">{ op, at: { field, group_key } }</code></td></tr>
+              <tr><td>group_create</td><td><code class="doc-code">{ op, key, label, group_type, parent_key, index, patch? }</code> — section, tab or step</td></tr>
+              <tr><td>group_update</td><td><code class="doc-code">{ op, key, patch }</code></td></tr>
+              <tr><td>group_move</td><td><code class="doc-code">{ op, key, parent_key, index }</code> — also moves slot cards on the page</td></tr>
+              <tr><td>group_remove</td><td><code class="doc-code">{ op, key, placements: 'ungroup' | 'delete' }</code></td></tr>
+              <tr><td>layout_update</td><td><code class="doc-code">{ op, patch }</code> — any setting PATCH /collection-layouts/:id accepts</td></tr></tr></tbody>
+          </table></div>
+          <div class="doc-note">Placements are keyed by (field, group_key), matching the database's unique (layout_id, field, group_key): a field placed twice keeps both placements through every op and save path. After each op <code class="doc-code">sort</code> is renumbered per container, and the record page's top level (sections, the Ungrouped zone and slot cards) shares one order. <code class="doc-code">GET /collection-layouts/active</code> now also returns each placement's <code class="doc-code">col_span</code>, so slot cards keep their width on records.</div>
+          <!-- /SYNC:layout-editor -->
         </div>
 
         <!-- LAYOUT STEPS MODE -->
@@ -10522,7 +10641,7 @@ PATCH/DELETE /api/bulk-actions/defs/:id
           <div class="doc-table-wrap"><table class="doc-table">
             <thead><tr><th>Option</th><th>Effect</th></tr></thead>
             <tbody><tr><tr><td>summary_enabled</td><td>Enables the summary sidebar for the layout and shows the Summary button on ItemEdit.</td></tr>
-              <tr><td>summary_show_all</td><td>Includes fields with empty values in the summary; off by default (only populated fields are listed).</td></tr></tr></tbody>
+              <tr><td>summary_hide_empty</td><td>Leaves fields with no value out of the summary.</td></tr></tr></tbody>
           </table></div>
           <div class="doc-note">Clicking a field row in the summary navigates the editor to that field's tab or step, making the panel a fast jump-to index for long forms.</div>
           <!-- /SYNC:layout-summary-panel -->
