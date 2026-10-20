@@ -1,0 +1,2603 @@
+[
+  {
+    "key": "overview.layout_list",
+    "label": "List every layout of the collection, grouped by what it does",
+    "home": "overview",
+    "tab_or_section": "Rule table",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.rule_sentence",
+    "label": "Which form each record gets, in /active order, as plain sentences",
+    "home": "overview",
+    "tab_or_section": "Rule table",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "overview.shape_line",
+    "label": "Short shape line and pills per row (default, rule, summary, AI, PDF theme, roles)",
+    "home": "overview",
+    "tab_or_section": "Rule table",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.unreachable_warning",
+    "label": "Quiet warning on rows that can never be reached",
+    "home": "overview",
+    "tab_or_section": "Rule table",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "overview.link_only",
+    "label": "Opened by a link or button only, with where it is referenced",
+    "home": "overview",
+    "tab_or_section": "Opened by a link or button only",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.other_views",
+    "label": "Other views of the same record, one plain line each",
+    "home": "overview",
+    "tab_or_section": "Other views",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.unused",
+    "label": "Unused layouts judged on DB references; slugged layouts never called unused",
+    "home": "overview",
+    "tab_or_section": "Unused",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.empty_state",
+    "label": "Empty state + Create first form (replaces silent auto-seed of an inactive, slugless \"Default\")",
+    "home": "overview",
+    "tab_or_section": "Actions",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "overview.new_form",
+    "label": "New form, type picked up front",
+    "home": "overview",
+    "tab_or_section": "Actions",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.test_record",
+    "label": "Test a record: light up the row it resolves to, with the reason",
+    "home": "overview",
+    "tab_or_section": "Actions",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "overview.test_as_role",
+    "label": "Test a record as a role",
+    "home": "overview",
+    "tab_or_section": "Actions",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "overview.classic_editor",
+    "label": "View classic editor (read-only) during parity",
+    "home": "overview",
+    "tab_or_section": "Actions",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.open",
+    "label": "Open a layout in the editor; ?layout=<id> deep link goes straight to it",
+    "home": "overview",
+    "tab_or_section": "Row menu",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.rename",
+    "label": "Rename a layout",
+    "home": "overview",
+    "tab_or_section": "Row menu",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.make_default",
+    "label": "Make default (type-scoped activate)",
+    "home": "overview",
+    "tab_or_section": "Row menu",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "detail", "summary"]
+  },
+  {
+    "key": "overview.duplicate",
+    "label": "Duplicate as \"<name> (copy)\" and open it",
+    "home": "overview",
+    "tab_or_section": "Row menu",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.duplicate_as_summary",
+    "label": "Duplicate as summary",
+    "home": "overview",
+    "tab_or_section": "Row menu",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "overview.delete",
+    "label": "Delete, listing references found, transactional",
+    "home": "overview",
+    "tab_or_section": "Row menu",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "overview.reorder",
+    "label": "Reorder layouts where sort decides (first-by-sort fallbacks, ties)",
+    "home": "overview",
+    "tab_or_section": "Rule table",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["table", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.slug",
+    "label": "Link name (slug) + Generate",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.create_label",
+    "label": "New-menu label",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.create_hidden",
+    "label": "Hide from New menu",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.layout_type",
+    "label": "Kind of layout (6 types)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.record_conditions",
+    "label": "Show for matching records (eq / neq / has value)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.conditions.role_ids",
+    "label": "Roles that may get this form (by name)",
+    "home": "form_settings",
+    "tab_or_section": "Who gets this form",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.validate_before_next",
+    "label": "Validate each step before Next",
+    "home": "form_settings",
+    "tab_or_section": "How it's laid out",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum"]
+  },
+  {
+    "key": "layout.tab_mode",
+    "label": "Tabs or steps for legacy loose tabs",
+    "home": "form_settings",
+    "tab_or_section": "How it's laid out",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "addendum"]
+  },
+  {
+    "key": "layout.accordion_mode",
+    "label": "Accordion: one section open at a time",
+    "home": "form_settings",
+    "tab_or_section": "How it's laid out",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.row_order_field",
+    "label": "Allow row reordering + order field",
+    "home": "form_settings",
+    "tab_or_section": "How it's laid out",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["table"]
+  },
+  {
+    "key": "layout.ai_enabled",
+    "label": "AI buttons on the form",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.dossier_enabled",
+    "label": "Dossier export button",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.dossier_label",
+    "label": "Dossier button label",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.disable_comments",
+    "label": "Hide comments",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.disable_tasks",
+    "label": "Hide tasks",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.disable_revisions",
+    "label": "Hide revisions",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.disable_clone",
+    "label": "Hide clone button",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.disable_delete",
+    "label": "Hide delete button",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.hide_integrity_banner",
+    "label": "Hide data-integrity banner",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.hide_sla_banner",
+    "label": "Hide SLA breach banner",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.changes_tray",
+    "label": "Unsaved-changes tray",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.allow_schedule",
+    "label": "Schedule button for everyone",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.allow_disable_pickers",
+    "label": "Disable-in-pickers button for everyone",
+    "home": "form_settings",
+    "tab_or_section": "Buttons & panels",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.summary_enabled",
+    "label": "Summary side panel",
+    "home": "form_settings",
+    "tab_or_section": "Read view & summary",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.summary_hide_empty",
+    "label": "Summary panel: hide fields with no values",
+    "home": "form_settings",
+    "tab_or_section": "Read view & summary",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.sheet_width",
+    "label": "Read view: sheet width (px)",
+    "home": "form_settings",
+    "tab_or_section": "Read view & summary",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["detail", "summary"]
+  },
+  {
+    "key": "layout.header_fields",
+    "label": "Read view: header band fields (first = title)",
+    "home": "form_settings",
+    "tab_or_section": "Read view & summary",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["detail", "summary"]
+  },
+  {
+    "key": "layout.hide_empty",
+    "label": "Read view: hide empty values",
+    "home": "form_settings",
+    "tab_or_section": "Read view & summary",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["detail", "summary"]
+  },
+  {
+    "key": "layout.display_mode",
+    "label": "Drill-down opens as form or read view",
+    "home": "form_settings",
+    "tab_or_section": "Read view & summary",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["detail"]
+  },
+  {
+    "key": "layout.pdf_export_active",
+    "label": "PDF button shows on records (is_active, several allowed)",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_theme",
+    "label": "PDF theme classic / minimal / executive / custom",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_template_id",
+    "label": "Custom template",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_cover_enabled",
+    "label": "Cover page",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_cover_title_field",
+    "label": "Cover title field",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_cover_subtitle",
+    "label": "Cover subtitle",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_button_label",
+    "label": "PDF button label",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_show_logo",
+    "label": "Include logo",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_page_size",
+    "label": "Page size A4 / Letter",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_orientation",
+    "label": "Orientation",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.pdf_preview",
+    "label": "Preview PDF",
+    "home": "form_settings",
+    "tab_or_section": "PDF",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["file"]
+  },
+  {
+    "key": "layout.workflow_template_id",
+    "label": "Addendum workflow",
+    "home": "form_settings",
+    "tab_or_section": "Addendum",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["addendum"]
+  },
+  {
+    "key": "layout.single_active_addendum",
+    "label": "One addendum at a time",
+    "home": "form_settings",
+    "tab_or_section": "Addendum",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["addendum"]
+  },
+  {
+    "key": "layout.addendum_layout_id",
+    "label": "Addendum form this form uses",
+    "home": "form_settings",
+    "tab_or_section": "Addendum",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.addendum_default_view",
+    "label": "Open on the active addendum's changes",
+    "home": "form_settings",
+    "tab_or_section": "Addendum",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped"]
+  },
+  {
+    "key": "layout.default_values",
+    "label": "Defaults for new records (typed per field)",
+    "home": "form_settings",
+    "tab_or_section": "Defaults for new records",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "addendum"]
+  },
+  {
+    "key": "layout.quick_picker",
+    "label": "Quick picker steps",
+    "home": "form_settings",
+    "tab_or_section": "Defaults for new records",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.quick_picker_seed",
+    "label": "Quick picker: seed from cascade filters",
+    "home": "form_settings",
+    "tab_or_section": "Defaults for new records",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.parent_layout_id",
+    "label": "Inherit from layout",
+    "home": "form_settings",
+    "tab_or_section": "Inheritance",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.version_history",
+    "label": "Version history list",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.version_diff",
+    "label": "What the last save changed + per-version diff",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.version_restore",
+    "label": "Restore a version (exact)",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.ai_review",
+    "label": "Review this layout (AI) + Apply fix + Undo",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.describe",
+    "label": "Describe this layout",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.preview_as_role",
+    "label": "Preview as role: summary line + hidden/read-only marks",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.preview_record",
+    "label": "Preview with a record",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "tool.layout_drift",
+    "label": "Layout drift",
+    "home": "form_settings",
+    "tab_or_section": "AI review, previews, version history",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "layout.summary_show_all",
+    "label": "Show all fields in summary",
+    "home": null,
+    "tab_or_section": null,
+    "scope": "form",
+    "status": "retired",
+    "layout_types": ["grouped", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.allow_clone",
+    "label": "Clone button for everyone",
+    "home": null,
+    "tab_or_section": null,
+    "scope": "form",
+    "status": "retired",
+    "layout_types": ["grouped", "table", "file", "detail", "summary"]
+  },
+  {
+    "key": "layout.addendum_lock_fields",
+    "label": "Lock fields on addendum",
+    "home": null,
+    "tab_or_section": null,
+    "scope": "form",
+    "status": "retired",
+    "layout_types": ["addendum"]
+  },
+  {
+    "key": "slot.pipeline.hide_actions_when_collapsed",
+    "label": "Assignment column hide_actions_when_collapsed",
+    "home": null,
+    "tab_or_section": null,
+    "scope": "form",
+    "status": "retired",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "widget.is_visible",
+    "label": "Widget visible flag",
+    "home": null,
+    "tab_or_section": null,
+    "scope": "form",
+    "status": "retired",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.fields",
+    "label": "Field list: labels, key secondary, type, \"on this form\" marker",
+    "home": "add_panel",
+    "tab_or_section": "Fields",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.search",
+    "label": "Search",
+    "home": "add_panel",
+    "tab_or_section": "Fields",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.category_filter",
+    "label": "Filter: all / fields / relations / widgets",
+    "home": "add_panel",
+    "tab_or_section": "Fields",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.virtual_aliases",
+    "label": "O2M / M2M aliases listed as fields",
+    "home": "add_panel",
+    "tab_or_section": "Fields",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.owners",
+    "label": "Owners",
+    "home": "add_panel",
+    "tab_or_section": "Fields",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.related_field",
+    "label": "Related field by path (one hop or more)",
+    "home": "add_panel",
+    "tab_or_section": "Related fields",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.section",
+    "label": "New section / tab / record info / container / content block",
+    "home": "add_panel",
+    "tab_or_section": "Sections",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.widget",
+    "label": "Add widget from catalog (one per widget per layout)",
+    "home": "add_panel",
+    "tab_or_section": "Widgets",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.report_widget",
+    "label": "Create a report widget inline",
+    "home": "add_panel",
+    "tab_or_section": "Widgets",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.pdf_button",
+    "label": "PDF button",
+    "home": "add_panel",
+    "tab_or_section": "Slots",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "add.extension_slot",
+    "label": "Extension slot by key",
+    "home": "add_panel",
+    "tab_or_section": "Slots",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.reorder_fields",
+    "label": "Reorder fields within a section",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.move_fields",
+    "label": "Move a field between sections (lands where dropped)",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.place_from_add_panel",
+    "label": "Drag or click from the add panel to place a field",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.remove_field",
+    "label": "Remove a field from this section",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.multi_group",
+    "label": "Same field in two places (e.g. header strip + body)",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.reorder_sections",
+    "label": "Reorder sections, Ungrouped and slots (drop anywhere on target)",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.nest_tab",
+    "label": "Drag a tab into or out of a container",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.width_handle",
+    "label": "Width handle snapping to grid fractions",
+    "home": "canvas",
+    "tab_or_section": "Drag and drop",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.ungrouped_position",
+    "label": "Ungrouped area position",
+    "home": "canvas",
+    "tab_or_section": "Ungrouped zone",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.header_strip",
+    "label": "Item header strip: drop fields, widgets, PDF button",
+    "home": "canvas",
+    "tab_or_section": "Header strip",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.table_columns",
+    "label": "Table columns zone",
+    "home": "canvas",
+    "tab_or_section": "Table zones",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["table"]
+  },
+  {
+    "key": "canvas.table_apply_values",
+    "label": "Apply-values zone (__apply_values__)",
+    "home": "canvas",
+    "tab_or_section": "Table zones",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["table"]
+  },
+  {
+    "key": "canvas.table_create_with_defaults",
+    "label": "Create-with-defaults zone (__create_with_defaults__)",
+    "home": "canvas",
+    "tab_or_section": "Table zones",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["table"]
+  },
+  {
+    "key": "canvas.role_preview_marks",
+    "label": "Hidden / read-only marks while previewing as a role",
+    "home": "canvas",
+    "tab_or_section": "Selection",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.override_marks",
+    "label": "Marks on elements with settings changed on this form",
+    "home": "canvas",
+    "tab_or_section": "Selection",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.inherited_placements",
+    "label": "Inherited placements shown locked \"from <parent>\"",
+    "home": "canvas",
+    "tab_or_section": "Inherited placements",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.save_status",
+    "label": "One save model: autosave, Saving / Saved, failures roll back and say so",
+    "home": "canvas",
+    "tab_or_section": "Top bar",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "canvas.undo_redo",
+    "label": "Undo / Redo for the session",
+    "home": "canvas",
+    "tab_or_section": "Top bar",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.label",
+    "label": "Section label",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.key",
+    "label": "Section key (read-only, shown as secondary text)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.icon",
+    "label": "Icon",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.type",
+    "label": "Section kind: section / tab / record info / container / content",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.is_collapsed",
+    "label": "Starts collapsed",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.tab_mode",
+    "label": "Container shows tabs or steps",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.container_id",
+    "label": "Container this tab belongs to",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.content_tone",
+    "label": "Content block style: note / warning / divider",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.content",
+    "label": "Content block text",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.visibility_mode",
+    "label": "Show section: always / new records / existing records",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.hide_when_empty",
+    "label": "Hide when all fields are empty",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.read_width",
+    "label": "Read-view width",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.skip_if_filled",
+    "label": "Skip as first step when these fields are filled",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.visible_when",
+    "label": "Step visible when (condition builder)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.hidden_for_roles",
+    "label": "Hidden for roles (role names)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.locked_for_roles",
+    "label": "Read-only for roles (role names)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.summary_fields",
+    "label": "Collapsed summary fields",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.summary_fields.label",
+    "label": "Collapsed summary: label per field",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.summary_fields.agg",
+    "label": "Collapsed summary: O2M aggregate count / sum / avg / min / max",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.summary_fields.agg_field",
+    "label": "Collapsed summary: aggregate of column",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.summary_hide_empty",
+    "label": "Collapsed summary: hide fields with no values",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.swap_config.enabled",
+    "label": "Field swap on",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.swap_config.primary_field",
+    "label": "Field swap: primary (M2O) field",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.swap_config.alternate_fields",
+    "label": "Field swap: alternate fields + half/full width",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.swap_config.toggle_label",
+    "label": "Field swap: toggle label",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.swap_config.back_label",
+    "label": "Field swap: back label",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "group.delete",
+    "label": "Delete section (fields return to unplaced)",
+    "home": "inspector",
+    "tab_or_section": "Group",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "slot.label_override",
+    "label": "Slot title",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "slot.is_visible",
+    "label": "Show / hide slot",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "slot.default_expanded",
+    "label": "Slot starts expanded",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "slot.pipeline.hide_actions_collapsed",
+    "label": "Pipeline: hide action buttons when collapsed",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "slot.pipeline.hide_actions_expanded",
+    "label": "Pipeline: hide action buttons when expanded",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "slot.pipeline.show_approval_chain",
+    "label": "Pipeline: approval chain button",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "pdf_button.attach_to_field",
+    "label": "PDF button: attach PDF to file field",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "pdf_button.filename_template",
+    "label": "PDF button: filename template",
+    "home": "inspector",
+    "tab_or_section": "Slot",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "pdf_button.source_layout_id",
+    "label": "PDF button: source file layout (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "pdf_button.auto_generate_on_save",
+    "label": "PDF button: generate on save (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "pdf_button.overwrite_generated",
+    "label": "PDF button: overwrite generated file (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "widget.label_override",
+    "label": "Widget label",
+    "home": "inspector",
+    "tab_or_section": "Widget",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "widget.remove",
+    "label": "Remove widget from this layout",
+    "home": "inspector",
+    "tab_or_section": "Widget",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "widget.input_bindings",
+    "label": "Widget inputs bound to field / fixed value / URL parameter",
+    "home": "inspector",
+    "tab_or_section": "Widget",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "widget.report_config",
+    "label": "Report widget: report, widget, entity filter field",
+    "home": "inspector",
+    "tab_or_section": "Widget",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "header.label_override",
+    "label": "Header item label",
+    "home": "inspector",
+    "tab_or_section": "Header item",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "header.display_format",
+    "label": "Header item format: text / currency / integer / decimal / percent / date / datetime",
+    "home": "inspector",
+    "tab_or_section": "Header item",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "header.color",
+    "label": "Header item colour",
+    "home": "inspector",
+    "tab_or_section": "Header item",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "header.weight",
+    "label": "Header item weight",
+    "home": "inspector",
+    "tab_or_section": "Header item",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "header.display_as",
+    "label": "Header item shown as text / pill / tag",
+    "home": "inspector",
+    "tab_or_section": "Header item",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "header.link_template",
+    "label": "Header item link template",
+    "home": "inspector",
+    "tab_or_section": "Header item",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "header.threshold",
+    "label": "Header item colour thresholds",
+    "home": "inspector",
+    "tab_or_section": "Header item",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "subtitle.enabled",
+    "label": "Header subtitle on",
+    "home": "inspector",
+    "tab_or_section": "Subtitle",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "subtitle.separator",
+    "label": "Subtitle separator",
+    "home": "inspector",
+    "tab_or_section": "Subtitle",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "subtitle.fields",
+    "label": "Subtitle fields (paths allowed)",
+    "home": "inspector",
+    "tab_or_section": "Subtitle",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "subtitle.field_style",
+    "label": "Subtitle field colour / weight / shown as",
+    "home": "inspector",
+    "tab_or_section": "Subtitle",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.label",
+    "label": "Label on this form",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.label_hidden",
+    "label": "Hide the label",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.interface",
+    "label": "Interface on this form",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.placeholder",
+    "label": "Placeholder",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.note",
+    "label": "Help text",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.hidden",
+    "label": "Hidden on this form",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.col_span",
+    "label": "Width Full / ½ / ⅓ / ¼",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.inline_display.mode",
+    "label": "Show under the value: stacked / inline",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.inline_display.separator",
+    "label": "Show under the value: separator",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.inline_display.fields",
+    "label": "Show under the value: fields",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.inline_display.label",
+    "label": "Show under the value: label per field",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.inline_display.format",
+    "label": "Show under the value: format text / date / date & time / yes-no",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.inline_display.line_break",
+    "label": "Show under the value: new line",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.date_mode",
+    "label": "Date & time / date only",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.precision",
+    "label": "Decimal places",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.format",
+    "label": "Number format default / integer / decimal / currency",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.currency",
+    "label": "Currency code",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.aggregate",
+    "label": "Footer aggregate in grids",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.unit",
+    "label": "Unit",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.input_mask",
+    "label": "Input mask",
+    "home": "inspector",
+    "tab_or_section": "Look",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.required",
+    "label": "Required on this form",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.readonly",
+    "label": "Read-only on this form",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.editable_computed",
+    "label": "Allow manual entry on a computed field",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.lock_conditions",
+    "label": "Read-only when (pipeline state / role)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.lock_conditions.type",
+    "label": "Lock condition kind: pipeline state / role",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.lock_conditions.pipeline_id",
+    "label": "Lock condition: pipeline",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.lock_conditions.state_keys",
+    "label": "Lock condition: states",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.lock_conditions.role_ids",
+    "label": "Lock condition: roles",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.default_value",
+    "label": "Default value for new records",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.max_values",
+    "label": "Max values (M2M)",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.max_values_enforce_on_write",
+    "label": "Refuse over-limit writes on the server too",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.apply_to_lines.grid",
+    "label": "Apply to lines: grid",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.apply_to_lines.target",
+    "label": "Apply to lines: target column",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.apply_to_lines.label",
+    "label": "Apply to lines: button label",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.prefill_from_parent",
+    "label": "Prefill from current record",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["addendum"]
+  },
+  {
+    "key": "inspector.enforcement_note",
+    "label": "Note \"enforced on the default form only\" on server-enforced keys of other layouts",
+    "home": "inspector",
+    "tab_or_section": "Rules",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.inline_relation",
+    "label": "Edit related record inline",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.option_sort",
+    "label": "Option sort",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.enforce_picker_rules",
+    "label": "Refuse values the picker would not offer",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.drilldown.enabled",
+    "label": "Click value opens detail panel",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.drilldown.layout_id",
+    "label": "Detail layout for the panel",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.drilldown.width",
+    "label": "Detail panel width",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.group_field",
+    "label": "Grouped combobox: group by field",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.option_field",
+    "label": "Grouped combobox: option field",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters",
+    "label": "Cascade filters (list)",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.parent_field",
+    "label": "Cascade filter: parent field",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.filter_column",
+    "label": "Cascade filter: filter column",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.clear_on_parent_change",
+    "label": "Cascade filter: clear on parent change",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.clear_on_unavailable",
+    "label": "Cascade filter: clear if value no longer offered",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.show_all_if_no_parent",
+    "label": "Cascade filter: show all if parent not set",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.upstream",
+    "label": "Cascade filter: fill parent upstream on pick",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.filter_via_many",
+    "label": "Cascade filter: filter_via_many (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.value_map",
+    "label": "Cascade filter: value_map (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.cascade_filters.value_map_default",
+    "label": "Cascade filter: value_map_default (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.allow_upload",
+    "label": "Files: allow upload",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.allow_pick",
+    "label": "Files: allow picking existing files",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.pending_save",
+    "label": "Files: save on form submit",
+    "home": "inspector",
+    "tab_or_section": "Picker",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.grid_layout",
+    "label": "Child layout for the grid / table (layout_id + layout_slug)",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.grid_show_totals",
+    "label": "Show column totals",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.save_mode",
+    "label": "Save rows with the main form",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.show_line_numbers",
+    "label": "Show line numbers",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.enable_reorder",
+    "label": "Drag rows to reorder",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_comments",
+    "label": "Line comments",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.freeze_first_column",
+    "label": "Freeze first column",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.parent_cascades",
+    "label": "Cascade from parent (list)",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.parent_cascades.parent_field",
+    "label": "Cascade from parent: parent field",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.parent_cascades.child_field",
+    "label": "Cascade from parent: row field",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.parent_cascades.on_unavailable",
+    "label": "Cascade from parent: when unavailable, swap to a default",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules",
+    "label": "Row auto-fill rules (list)",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.trigger_field",
+    "label": "Row rule: when field",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.trigger_fields",
+    "label": "Row rule: or when another field changes",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.trigger_related_field",
+    "label": "Row rule: via related field",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.trigger_op",
+    "label": "Row rule: condition",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.trigger_value",
+    "label": "Row rule: value",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.target_field",
+    "label": "Row rule: target field",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.target_type",
+    "label": "Row rule: action (literal / pick / from M2O / chain / clear / lock)",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.target_value",
+    "label": "Row rule: target value",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.sources",
+    "label": "Row rule: chain sources (first non-empty wins)",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.only_if_empty",
+    "label": "Row rule: only if target is empty",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.seed_only",
+    "label": "Row rule: seed only",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.on_update",
+    "label": "Row rule: re-run on API updates",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.except_admin",
+    "label": "Row rule (lock): except admins",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.reason",
+    "label": "Row rule (lock): message on hover",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.sort",
+    "label": "Row rule order",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules.sources_when",
+    "label": "Row rule source gate sources[].when (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules_lint",
+    "label": "Rule conflicts",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_rules_tester",
+    "label": "Test rules against a record",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.parent_context_fields",
+    "label": "Parent fields rules can read",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.unique_by",
+    "label": "Unique rows by",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.unique_by_enforce_on_write",
+    "label": "Refuse duplicate rows on the server too",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.sort_field",
+    "label": "Sort rows by",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.sort_dir",
+    "label": "Sort direction",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.section_group_by",
+    "label": "Group rows into sections",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.catalog_mode",
+    "label": "Catalog picker",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_match_panel",
+    "label": "Row match panel",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.header_summary",
+    "label": "Header summary figure",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.line_sla",
+    "label": "Line SLA",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_lints",
+    "label": "Row lints",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.stats",
+    "label": "Figure strip",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.sum_cap",
+    "label": "Sum cap",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.spread_remaining",
+    "label": "Spread remaining",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.compare_series",
+    "label": "Comparison series",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_split",
+    "label": "Plan grid (row split)",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.column_presets",
+    "label": "Column presets",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.column_presets.name",
+    "label": "Column preset name",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.column_presets.columns",
+    "label": "Column preset columns",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.default_preset",
+    "label": "Default column view",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.drawer_relations",
+    "label": "Drawer relations",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.drawer_relations.hint",
+    "label": "Drawer relation sum / cap hint",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.show_row_revisions",
+    "label": "Row revision history",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.allow_revision_restore",
+    "label": "Allow restoring a row revision",
+    "home": "inspector",
+    "tab_or_section": "Grid",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.deprecated",
+    "label": "Deprecated for API callers",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.deprecation_note",
+    "label": "What callers should use instead",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "field",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.impact",
+    "label": "Where this field is used",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.overrides_raw",
+    "label": "Raw overrides JSON for this form",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_bulk_actions",
+    "label": "row_bulk_actions (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.picker_facets",
+    "label": "picker_facets (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.option_filter",
+    "label": "option_filter (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_filter",
+    "label": "row_filter (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.row_defaults",
+    "label": "row_defaults (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.allocate_drawer",
+    "label": "allocate_drawer (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.auto_allocate",
+    "label": "auto_allocate (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.upload_template",
+    "label": "upload_template (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "field.quick_create",
+    "label": "quick_create (no editor today)",
+    "home": "inspector",
+    "tab_or_section": "Advanced",
+    "scope": "form",
+    "status": "keep",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "inspector.scope_marker",
+    "label": "Every control says \"this form only\" or \"every form that shows this field\"",
+    "home": "inspector",
+    "tab_or_section": "All tabs",
+    "scope": "form",
+    "status": "fix",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "inspector.global_confirm",
+    "label": "Inline confirm naming affected layouts before an every-form save",
+    "home": "inspector",
+    "tab_or_section": "All tabs",
+    "scope": "field",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  },
+  {
+    "key": "inspector.inherited_override",
+    "label": "Override here / Edit in <parent> for inherited placements",
+    "home": "inspector",
+    "tab_or_section": "All tabs",
+    "scope": "form",
+    "status": "add",
+    "layout_types": ["grouped", "table", "file", "addendum", "detail", "summary"]
+  }
+]
