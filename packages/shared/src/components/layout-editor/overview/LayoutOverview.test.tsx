@@ -351,7 +351,11 @@ describe('LayoutOverview', () => {
     await click(button('Create first form'))
     await settle(() => onCreate.mock.calls.length > 0)
     const post = calls.find((c) => c._method === 'POST' && c._path === '/collection-layouts')
-    expect(post?._body).toMatchObject({ collection: 'inventory_request', layout_type: 'grouped' })
+    expect(post?._body).toMatchObject({
+      collection: 'inventory_request',
+      layout_type: 'grouped',
+      seed_fields: true
+    })
     expect(onCreate).toHaveBeenCalledWith('grouped', 101)
   })
 
@@ -405,5 +409,72 @@ describe('LayoutOverview', () => {
     )
     expect(handles).toEqual(['46', '47'])
     expect(text()).toContain('Drag to change which one is used first')
+  })
+
+  it('says tabs when the form uses tabs', async () => {
+    const tabbed: OverviewRow = {
+      ...IR_ROWS[2],
+      shape: { groups: 3, steps_or_tabs: 3, fields: 12, container_mode: 'tabs' }
+    }
+    const { client } = makeClient([IR_ROWS[0], tabbed])
+    await mount(client)
+    await settle(() => text().includes('Unit Order'))
+    expect(document.querySelector('[data-layout-row="24"]')?.textContent).toContain(
+      '3 tabs · 12 fields'
+    )
+    expect(document.querySelector('[data-layout-row="22"]')?.textContent).toContain(
+      '4 steps · 31 fields'
+    )
+  })
+
+  describe('inline rename', () => {
+    // The input goes away on Enter / Escape and the browser blurs it on the way
+    // out; that blur can reach the last render's onBlur, with the typed text still
+    // in its closure, before the re-render lands. Same act = same window here.
+    async function startRename(typed: string) {
+      const { client, calls } = makeClient(IR_ROWS)
+      await mount(client)
+      await settle(() => text().includes('Sparing Order'))
+      const row = document.querySelector('[data-layout-row="22"]') as HTMLElement
+      await click(button('Layout actions', row))
+      await settle(() => text().includes('Rename'))
+      await click(button('Rename'))
+      await settle(() => !!document.querySelector('input[aria-label="Layout name"]'))
+      const input = document.querySelector('input[aria-label="Layout name"]') as HTMLInputElement
+      expect(document.activeElement).toBe(input)
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      await act(async () => {
+        setter?.call(input, typed)
+        input.dispatchEvent(new Event('input', { bubbles: true }))
+      })
+      return { input, calls }
+    }
+
+    const keyThenBlur = (el: HTMLElement, k: string) =>
+      act(async () => {
+        el.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true }))
+        el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }))
+      })
+    const patches = (calls: Cmd[]) =>
+      calls.filter((c) => c._method === 'PATCH' && c._path === '/collection-layouts/22')
+
+    it('Escape drops the typed name, even when the input blurs on the way out', async () => {
+      const { input, calls } = await startRename('Spare Parts Order')
+      await keyThenBlur(input, 'Escape')
+      await settle(() => !document.querySelector('input[aria-label="Layout name"]'))
+      expect(document.querySelector('input[aria-label="Layout name"]')).toBeNull()
+      expect(patches(calls)).toHaveLength(0)
+    })
+
+    it('Enter saves the name once', async () => {
+      const { input, calls } = await startRename('Spare Parts Order')
+      await keyThenBlur(input, 'Enter')
+      await settle(() => patches(calls).length > 0)
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 30))
+      })
+      expect(patches(calls)).toHaveLength(1)
+      expect(patches(calls)[0]._body).toEqual({ name: 'Spare Parts Order' })
+    })
   })
 })

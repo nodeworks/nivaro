@@ -51,7 +51,7 @@ describe('describeConditions', () => {
     const segs = describeConditions(
       [
         { field: 'is_unit_specific_order', op: 'eq', value: false },
-        { field: 'is_sparing', op: 'eq', value: 0 }
+        { field: 'is_sparing', op: 'eq', value: 'false' }
       ],
       FIELDS,
       CHOICES
@@ -69,17 +69,58 @@ describe('describeConditions', () => {
     expect(segmentsText(segs)).toBe('is not unit-specific')
     expect(strong(segs)).toEqual(['not unit-specific'])
     expect(
-      segmentsText(describeConditions([{ field: 'is_osp', op: 'eq', value: '1' }], FIELDS, CHOICES))
+      segmentsText(
+        describeConditions([{ field: 'is_osp', op: 'eq', value: 'true' }], FIELDS, CHOICES)
+      )
     ).toBe('is OSP')
   })
 
-  it('reads neq on a boolean as the opposite', () => {
-    const segs = describeConditions(
+  it('says neq on a boolean also matches empty records, and eq false does not', () => {
+    // /active compares String(value ?? ''): an empty is_sparing is not 'true'
+    // (neq matches) and is not 'false' either (eq false does not match).
+    const neq = describeConditions(
       [{ field: 'is_sparing', op: 'neq', value: 'true' }],
       FIELDS,
       CHOICES
     )
-    expect(segmentsText(segs)).toBe('is not sparing')
+    expect(segmentsText(neq)).toBe('is not sparing (or empty)')
+    expect(strong(neq)).toEqual(['not sparing'])
+    const eqFalse = describeConditions(
+      [{ field: 'is_sparing', op: 'eq', value: 'false' }],
+      FIELDS,
+      CHOICES
+    )
+    expect(segmentsText(eqFalse)).toBe('is not sparing')
+    const neqFalse = describeConditions(
+      [{ field: 'is_sparing', op: 'neq', value: false }],
+      FIELDS,
+      CHOICES
+    )
+    expect(segmentsText(neqFalse)).toBe('is sparing (or empty)')
+  })
+
+  it('shows a yes/no value /active can never match as the literal value', () => {
+    // A bit column reads back as true/false, so String() gives 'true'/'false' — never '1'.
+    const segs = describeConditions(
+      [{ field: 'is_sparing', op: 'eq', value: '1' }],
+      FIELDS,
+      CHOICES
+    )
+    expect(segmentsText(segs)).toBe('Is Sparing is 1')
+  })
+
+  it('reads a rule against an empty value as empty / set, never as false', () => {
+    const eq = describeConditions([{ field: 'is_sparing', op: 'eq', value: '' }], FIELDS, CHOICES)
+    expect(segmentsText(eq)).toBe('Is Sparing is empty')
+    expect(strong(eq)).toEqual(['Is Sparing'])
+    const eqNull = describeConditions(
+      [{ field: 'mdsi_status', op: 'eq', value: null }],
+      FIELDS,
+      CHOICES
+    )
+    expect(segmentsText(eqNull)).toBe('MDSi Status is empty')
+    const neq = describeConditions([{ field: 'is_sparing', op: 'neq', value: '' }], FIELDS, CHOICES)
+    expect(segmentsText(neq)).toBe('Is Sparing is set')
   })
 
   it('names a choice by its label, not its value', () => {
@@ -95,11 +136,11 @@ describe('describeConditions', () => {
       FIELDS,
       CHOICES
     )
-    expect(segmentsText(neq)).toBe('MDSi Status is not Order Shipped')
+    expect(segmentsText(neq)).toBe('MDSi Status is not Order Shipped (or empty)')
     expect(strong(neq)).toEqual(['Order Shipped'])
   })
 
-  it('reads nnull as "has a" and null as "has no"', () => {
+  it('reads nnull as "is set" and null as "is empty"', () => {
     const segs = describeConditions(
       [
         { field: 'internal_contact', op: 'nnull' },
@@ -108,7 +149,7 @@ describe('describeConditions', () => {
       FIELDS,
       CHOICES
     )
-    expect(segmentsText(segs)).toBe('has a Ship-To Contact and has no Install Location')
+    expect(segmentsText(segs)).toBe('Ship-To Contact is set and Install Location is empty')
     expect(strong(segs)).toEqual(['Ship-To Contact', 'Install Location'])
   })
 

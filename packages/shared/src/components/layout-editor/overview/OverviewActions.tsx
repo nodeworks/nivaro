@@ -40,7 +40,7 @@ const labelCls = 'mb-1 block text-[11.5px] font-semibold text-slate-600 dark:tex
 /** Create a layout of a chosen type; returns the new id. */
 export async function createLayout(
   client: ReturnType<typeof useNivaroClient>,
-  body: { collection: string; name: string; layout_type: LayoutType }
+  body: { collection: string; name: string; layout_type: LayoutType; seed_fields?: boolean }
 ): Promise<number | null> {
   const res = await client.request<{ data?: { id?: number } | null; id?: number }>(
     post('/collection-layouts', body)

@@ -40,7 +40,13 @@ export interface OverviewRow {
   reason: OverviewReason
   is_default: boolean
   new_menu: { label: string; hidden: boolean } | null
-  shape: { groups: number; steps_or_tabs: number; fields: number }
+  shape: {
+    groups: number
+    steps_or_tabs: number
+    fields: number
+    /** Whether `steps_or_tabs` counts tabs or steps; null/absent = steps. */
+    container_mode?: 'tabs' | 'steps' | null
+  }
   references: OverviewReference[]
   warnings: string[]
 }

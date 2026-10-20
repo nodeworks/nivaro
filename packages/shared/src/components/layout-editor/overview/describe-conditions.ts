@@ -73,14 +73,15 @@ function labelOf(field: string, byField: Map<string, DescribeField>): string {
   return label?.trim() ? label.trim() : titleCase(field)
 }
 
+/**
+ * A yes/no rule value as /active reads it. The server compares strings, and a bit
+ * column reads back as 'true' / 'false', so only those spellings (or a real
+ * boolean) can ever match; '1', '0' or 'yes' are shown as the literal value.
+ */
 function asBool(v: unknown): boolean | null {
   if (typeof v === 'boolean') return v
-  if (typeof v === 'number') return v !== 0
-  if (typeof v === 'string') {
-    const s = v.trim().toLowerCase()
-    if (s === 'true' || s === '1' || s === 'yes') return true
-    if (s === 'false' || s === '0' || s === 'no' || s === '') return false
-  }
+  if (v === 'true') return true
+  if (v === 'false') return false
   return null
 }
 
@@ -115,16 +116,25 @@ function valueText(
   return choice ?? String(value)
 }
 
+/**
+ * Sentences stay true to how /active judges a rule (matchesRecordConditions in
+ * api/src/routes/collection-layouts.ts compares `String(value ?? '')`): an empty
+ * value never equals a real one, so `neq` also matches empty records and says so,
+ * and a rule against '' is about emptiness, not about false.
+ */
 function describeOne(
   rule: RecordCondition,
   byField: Map<string, DescribeField>,
   choices: ChoiceLabels
 ): Segment[] {
   const label = labelOf(rule.field, byField)
-  if (rule.op === 'nnull') {
-    return [{ text: `has ${/^[aeiou]/i.test(label) ? 'an' : 'a'} ` }, { text: label, strong: true }]
-  }
-  if (rule.op === 'null') return [{ text: 'has no ' }, { text: label, strong: true }]
+  const strongLabel: Segment = { text: label, strong: true }
+  if (rule.op === 'nnull') return [strongLabel, { text: ' is set' }]
+  if (rule.op === 'null') return [strongLabel, { text: ' is empty' }]
+  const emptyValue = rule.value == null || rule.value === ''
+  if (emptyValue && rule.op === 'eq') return [strongLabel, { text: ' is empty' }]
+  if (emptyValue && rule.op === 'neq') return [strongLabel, { text: ' is set' }]
+  const orEmpty: Segment[] = rule.op === 'neq' ? [{ text: ' (or empty)' }] : []
 
   const isBoolean = byField.get(rule.field)?.type === 'boolean' || typeof rule.value === 'boolean'
   const bool = isBoolean ? asBool(rule.value) : null
@@ -132,12 +142,14 @@ function describeOne(
     const holds = rule.op === 'eq' ? bool : !bool
     const { verb, name } = booleanName(label)
     const negated = verb === 'has' ? `no ${name}` : `not ${name}`
-    return [{ text: `${verb} ` }, { text: holds ? name : negated, strong: true }]
+    return [{ text: `${verb} ` }, { text: holds ? name : negated, strong: true }, ...orEmpty]
   }
 
   const value = valueText(rule.field, rule.value, byField, choices)
   if (rule.op === 'eq') return [{ text: `${label} is ` }, { text: value, strong: true }]
-  if (rule.op === 'neq') return [{ text: `${label} is not ` }, { text: value, strong: true }]
+  if (rule.op === 'neq') {
+    return [{ text: `${label} is not ` }, { text: value, strong: true }, ...orEmpty]
+  }
   const words = COMPARE_WORDS[rule.op] ?? rule.op
   return [{ text: `${label} ${words} ` }, { text: value, strong: true }]
 }

@@ -24,7 +24,15 @@ import {
   Plus,
   X
 } from 'lucide-react'
-import { type CSSProperties, Fragment, type ReactNode, useEffect, useMemo, useState } from 'react'
+import {
+  type CSSProperties,
+  Fragment,
+  type ReactNode,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from 'react'
 import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
 import { del, patch, post } from '../../../lib/commands'
@@ -100,8 +108,10 @@ function shapeLine(row: OverviewRow): string {
   const { steps_or_tabs, groups, fields } = row.shape
   if (!fields && !groups) return 'empty'
   const parts: string[] = []
-  if (steps_or_tabs > 0) parts.push(`${steps_or_tabs} ${steps_or_tabs === 1 ? 'step' : 'steps'}`)
-  else if (groups > 0) parts.push(`${groups} ${groups === 1 ? 'section' : 'sections'}`)
+  if (steps_or_tabs > 0) {
+    const unit = row.shape.container_mode === 'tabs' ? 'tab' : 'step'
+    parts.push(`${steps_or_tabs} ${unit}${steps_or_tabs === 1 ? '' : 's'}`)
+  } else if (groups > 0) parts.push(`${groups} ${groups === 1 ? 'section' : 'sections'}`)
   parts.push(`${fields} ${fields === 1 ? 'field' : 'fields'}`)
   return parts.join(' · ')
 }
@@ -433,8 +443,20 @@ function RowView({ row, fields, choices, tested, onOpen, onChanged, drag }: RowP
   const [renaming, setRenaming] = useState(false)
   const [draftName, setDraftName] = useState(row.name)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  // Enter and Escape unmount the focused input, and the browser then fires blur
+  // with the typed text still in the last render's closure: without this, Escape
+  // saved the name it meant to drop and Enter saved twice. Reset per rename.
+  const renameSettled = useRef(false)
+
+  const cancelRename = () => {
+    renameSettled.current = true
+    setDraftName(row.name)
+    setRenaming(false)
+  }
 
   const commitRename = async () => {
+    if (renameSettled.current) return
+    renameSettled.current = true
     const next = draftName.trim()
     setRenaming(false)
     if (!next || next === row.name) return
@@ -481,10 +503,7 @@ function RowView({ row, fields, choices, tested, onOpen, onChanged, drag }: RowP
                 onBlur={() => void commitRename()}
                 onKeyDown={(e) => {
                   if (e.key === 'Enter') void commitRename()
-                  if (e.key === 'Escape') {
-                    setDraftName(row.name)
-                    setRenaming(false)
-                  }
+                  if (e.key === 'Escape') cancelRename()
                 }}
                 className='h-7 w-[220px] rounded-md border border-nvr-cyan bg-white px-2 text-[13px] font-semibold outline-none dark:bg-background dark:text-foreground'
               />
@@ -540,6 +559,7 @@ function RowView({ row, fields, choices, tested, onOpen, onChanged, drag }: RowP
             row={row}
             onOpen={() => onOpen(row.layout_id)}
             onRename={() => {
+              renameSettled.current = false
               setDraftName(row.name)
               setRenaming(true)
             }}
@@ -771,7 +791,8 @@ export function LayoutOverview({ collection, onOpen, onCreate }: LayoutOverviewP
       const id = await createLayout(client, {
         collection,
         name: 'Main form',
-        layout_type: 'grouped'
+        layout_type: 'grouped',
+        seed_fields: true
       })
       if (id == null) throw new Error('No id came back')
       created('grouped', id)
