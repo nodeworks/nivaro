@@ -2,9 +2,26 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronRight, Loader2, Search, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { api, type CMSField, type CMSRelation } from '@/lib/api'
-import { titleCase } from '@/lib/utils'
+import { useNivaroClient } from '../../../context'
+import { get } from '../../../lib/commands'
+import { titleCase } from '../../../lib/utils'
+import type { CMSRelation } from '../../pipeline/types'
+import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+
+// Only the columns the pickers read, so admin's and the shared CMSField both fit.
+export type CMSField = {
+  field: string
+  type: string
+  interface: string | null
+  note?: string | null
+  hidden: boolean
+}
+
+function useCollectionMeta() {
+  const client = useNivaroClient()
+  return (collection: string) =>
+    client.request<{ data: any }>(get(`/collections/${collection}`)).then((r) => r.data)
+}
 
 export interface PickedField {
   path: string[]
@@ -113,46 +130,48 @@ export function FieldPicker({
           <X className='h-3 w-3' />
         </button>
       )}
-      {open && pos && createPortal(
-        <div
-          ref={dropdownRef}
-          style={{ position: 'fixed', top: pos.top, left: pos.left }}
-          className='z-50 w-72 rounded-xl border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'
-        >
-          <div className='p-2'>
-            <div className='relative mb-1.5'>
-              <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
-              <input
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder='Search fields…'
-                className='h-8 w-full rounded-md border border-slate-200 bg-slate-50 pl-8 pr-3 text-[13px] placeholder-slate-400 focus:border-nvr-cyan/50 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
-              />
-            </div>
-            <div className='max-h-72 overflow-y-auto'>
-              {filtered.map((f) => (
-                <PickerFieldRow
-                  key={f.field}
-                  field={f}
-                  collection={collection}
-                  relations={relations}
-                  pathPrefix={[]}
-                  labelPrefix={[]}
-                  depth={0}
-                  onSelect={(picked) => {
-                    onChange(picked)
-                    setOpen(false)
-                  }}
+      {open &&
+        pos &&
+        createPortal(
+          <div
+            ref={dropdownRef}
+            style={{ position: 'fixed', top: pos.top, left: pos.left }}
+            className='z-50 w-72 rounded-xl border border-slate-200 bg-white shadow-lg dark:border-border dark:bg-card'
+          >
+            <div className='p-2'>
+              <div className='relative mb-1.5'>
+                <Search className='absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-slate-400' />
+                <input
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  placeholder='Search fields…'
+                  className='h-8 w-full rounded-md border border-slate-200 bg-slate-50 pl-8 pr-3 text-[13px] placeholder-slate-400 focus:border-nvr-cyan/50 focus:outline-none focus:ring-2 focus:ring-nvr-cyan/30'
                 />
-              ))}
-              {filtered.length === 0 && (
-                <div className='px-2 py-3 text-center text-[12px] text-slate-400'>No fields</div>
-              )}
+              </div>
+              <div className='max-h-72 overflow-y-auto'>
+                {filtered.map((f) => (
+                  <PickerFieldRow
+                    key={f.field}
+                    field={f}
+                    collection={collection}
+                    relations={relations}
+                    pathPrefix={[]}
+                    labelPrefix={[]}
+                    depth={0}
+                    onSelect={(picked) => {
+                      onChange(picked)
+                      setOpen(false)
+                    }}
+                  />
+                ))}
+                {filtered.length === 0 && (
+                  <div className='px-2 py-3 text-center text-[12px] text-slate-400'>No fields</div>
+                )}
+              </div>
             </div>
-          </div>
-        </div>,
-        document.body
-      )}
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
@@ -168,9 +187,10 @@ function PickerRelatedFields({
   labelPrefix: string[]
   onSelect: (picked: PickedField) => void
 }) {
+  const fetchMeta = useCollectionMeta()
   const { data, isLoading } = useQuery({
     queryKey: ['collection-meta', relatedCollection],
-    queryFn: () => api.get(`/collections/${relatedCollection}`).then((r) => r.data.data)
+    queryFn: () => fetchMeta(relatedCollection)
   })
 
   if (isLoading) {
@@ -233,9 +253,10 @@ export function CollectionFieldPicker({
   onClear?: () => void
   placeholder?: string
 }) {
+  const fetchMeta = useCollectionMeta()
   const { data, isLoading } = useQuery({
     queryKey: ['collection-meta', collection],
-    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    queryFn: () => fetchMeta(collection),
     enabled: !!collection
   })
 
@@ -473,9 +494,10 @@ export function CollectionFieldPickerPanel({
   collection: string
   onSelect: (picked: PickedField) => void
 }) {
+  const fetchMeta = useCollectionMeta()
   const { data, isLoading } = useQuery({
     queryKey: ['collection-meta', collection],
-    queryFn: () => api.get(`/collections/${collection}`).then((r) => r.data.data),
+    queryFn: () => fetchMeta(collection),
     enabled: !!collection
   })
 
