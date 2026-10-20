@@ -7,6 +7,7 @@ import { cn } from '../../../lib/utils'
 import { HistoryPanel } from '../HistoryPanel'
 import { useLayoutEditorHost } from '../host'
 import { useRoleNames } from '../overview/overview-api'
+import { labelText } from '../panel-style'
 import { RelationPicker } from '../pickers/relation-picker'
 import { PickList, quietText, Setting, smallBtn, useSettingVisible } from './controls'
 import type { SectionProps } from './section-props'
@@ -126,10 +127,7 @@ function PreviewRoleSetting({
       }
     >
       {roleId && (
-        <div
-          data-role-preview
-          className='rounded-md border border-slate-200 bg-slate-50 p-2 text-[12px] dark:border-border dark:bg-muted/40'
-        >
+        <div data-role-preview className='rounded-md bg-slate-50 p-3 text-[12px] dark:bg-muted/50'>
           {isFetching && !preview ? (
             <p className={quietText}>Checking…</p>
           ) : preview ? (
@@ -176,15 +174,13 @@ function HistorySetting({ layoutId }: { layoutId: number }) {
   if (!history && !diff && !restore) return null
   const def = settingDef('tool.version_history')
   return (
-    <div data-setting='tool.version_history' className='py-2.5'>
-      <p className='text-[12.5px] font-medium text-slate-800 dark:text-foreground'>{def?.label}</p>
-      <p className={cn('mt-0.5', quietText)}>
+    <div data-setting='tool.version_history' className='space-y-1.5'>
+      <p className={labelText}>{def?.label}</p>
+      <HistoryPanel layoutId={layoutId} />
+      <p className={quietText}>
         {def?.effect} {settingDef('tool.version_diff')?.effect}{' '}
         {settingDef('tool.version_restore')?.effect}
       </p>
-      <div className='mt-2'>
-        <HistoryPanel layoutId={layoutId} />
-      </div>
     </div>
   )
 }

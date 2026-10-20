@@ -2,6 +2,7 @@ import { Check, ChevronsUpDown, X } from 'lucide-react'
 import { createContext, type ReactNode, useContext, useMemo, useState } from 'react'
 import { cn } from '../../../lib/utils'
 import { Popover, PopoverContent, PopoverTrigger } from '../../ui/popover'
+import { effectText, inputBase, labelText, segOption, segTrack } from '../panel-style'
 import { settingDef } from './settings-registry'
 
 /**
@@ -19,13 +20,12 @@ export function useSettingVisible(key: string): boolean {
   return !visible || visible.has(key)
 }
 
-export const inputCls =
-  'h-8 w-full rounded-md border border-slate-200 bg-white px-2.5 text-[12.5px] text-slate-800 outline-none placeholder:text-slate-400 focus:border-nvr-cyan disabled:opacity-50 dark:border-border dark:bg-background dark:text-foreground dark:placeholder:text-muted-foreground'
+export const inputCls = inputBase
 
 export const smallBtn =
   'inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-md border border-slate-200 bg-white px-2 text-[12px] font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-50 dark:border-border dark:bg-card dark:text-foreground dark:hover:bg-muted'
 
-export const quietText = 'text-[11.5px] text-slate-500 dark:text-muted-foreground'
+export const quietText = effectText
 
 /**
  * One setting: its label and the sentence saying what it does, the control on the
@@ -49,21 +49,16 @@ export function Setting({
   const def = settingDef(k)
   if (!visible || !def) return null
   return (
-    <div data-setting={k} className='py-2.5'>
-      <div className='flex items-start justify-between gap-3'>
-        <div className='min-w-0'>
-          <label
-            htmlFor={htmlFor}
-            className='block text-[12.5px] font-medium text-slate-800 dark:text-foreground'
-          >
-            {def.label}
-          </label>
-          <p className={cn('mt-0.5', quietText)}>{def.effect}</p>
-        </div>
-        {control && <div className='shrink-0 pt-0.5'>{control}</div>}
+    <div data-setting={k} className='space-y-1.5'>
+      <div className='flex min-h-5 items-center justify-between gap-3'>
+        <label htmlFor={htmlFor} className={cn(labelText, 'min-w-0')}>
+          {def.label}
+        </label>
+        {control && <div className='flex shrink-0 items-center'>{control}</div>}
       </div>
-      {children && <div className='mt-2'>{children}</div>}
-      {note && <div className={cn('mt-1.5', quietText)}>{note}</div>}
+      {children}
+      <p className={quietText}>{def.effect}</p>
+      {note && <div className={quietText}>{note}</div>}
     </div>
   )
 }
@@ -118,7 +113,7 @@ export function Segmented<T extends string>({
   return (
     <fieldset
       aria-label={ariaLabel}
-      className='m-0 inline-flex min-w-0 p-0 flex-wrap overflow-hidden rounded-md border border-slate-200 bg-white dark:border-border dark:bg-background'
+      className={cn('m-0 min-w-0 border-0', segTrack(options.length))}
     >
       {options.map((o) => (
         <button
@@ -127,12 +122,7 @@ export function Segmented<T extends string>({
           aria-pressed={value === o.value}
           disabled={disabled}
           onClick={() => value !== o.value && onChange(o.value)}
-          className={cn(
-            'px-2.5 py-1 text-[12px] font-medium transition-colors disabled:opacity-50',
-            value === o.value
-              ? 'bg-[#172940] text-white dark:bg-nvr-cyan dark:text-[#0f172a]'
-              : 'text-slate-600 hover:bg-slate-50 dark:text-muted-foreground dark:hover:bg-muted'
-          )}
+          className={segOption(value === o.value)}
         >
           {o.label}
         </button>
@@ -194,7 +184,8 @@ export function PickList({
           disabled={disabled}
           data-pick-list={ariaLabel}
           className={cn(
-            'flex h-8 min-w-[140px] items-center justify-between gap-1.5 rounded-md border border-slate-200 bg-white px-2.5 text-left text-[12.5px] disabled:opacity-50 dark:border-border dark:bg-background',
+            inputBase,
+            'flex min-w-[140px] items-center justify-between gap-1.5 text-left hover:border-slate-300',
             className
           )}
         >
