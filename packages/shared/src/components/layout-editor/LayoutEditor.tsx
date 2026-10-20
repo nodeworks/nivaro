@@ -18,7 +18,10 @@ import { versionsKey } from './HistoryPanel'
 import { useLayoutEditorHost } from './host'
 import { FormSettings, Inspector } from './inspector-slot'
 import { LayoutsRail } from './LayoutsRail'
+import { choiceLabelsFrom, type DescribeField, type Segment } from './overview/describe-conditions'
 import { useInvalidateLayouts, useLayoutOverview, useOverviewFields } from './overview/overview-api'
+import { purposeSegments, Sentence } from './overview/purpose'
+import type { OverviewRow } from './overview/types'
 import { type LayoutDraft, layoutDraftKeys, parseBundle, useLayoutDraft } from './useLayoutDraft'
 
 /**
@@ -225,6 +228,48 @@ function Canvas({
   )
 }
 
+/** Overlay mode (record page): which layout this is and which records get it (spec §7.4). */
+function EditingBanner({
+  name,
+  row,
+  fields,
+  onDone
+}: {
+  name: string
+  row: OverviewRow | undefined
+  fields: DescribeField[]
+  onDone: () => void
+}) {
+  const segs: Segment[] = !row
+    ? []
+    : row.section === 'forms' && (row.reason.kind === 'default' || row.reason.kind === 'fallback')
+      ? [{ text: 'used by every record no rule catches' }]
+      : purposeSegments(row, fields, choiceLabelsFrom(fields))
+  return (
+    <div
+      data-editing-banner=''
+      className='flex shrink-0 items-center gap-3 border-b border-nvr-cyan/30 bg-nvr-cyan/10 px-4 py-1.5 text-[12.5px] text-slate-700 dark:text-slate-200'
+    >
+      <p className='m-0 min-w-0 flex-1 truncate'>
+        Editing <b className='font-semibold text-slate-900 dark:text-foreground'>{name}</b>
+        {segs.length > 0 && (
+          <>
+            {' — '}
+            <Sentence segs={segs} muted />
+          </>
+        )}
+      </p>
+      <button
+        type='button'
+        onClick={onDone}
+        className='inline-flex h-7 shrink-0 items-center rounded-md bg-nvr-cyan px-3 text-[12px] font-medium text-white transition-opacity hover:opacity-90'
+      >
+        Done
+      </button>
+    </div>
+  )
+}
+
 const leftTab = (on: boolean) =>
   cn(
     'inline-flex h-7 items-center gap-1 rounded-md px-2.5 text-[12px] font-medium transition-colors',
@@ -331,7 +376,9 @@ export function LayoutEditor({
         showHidden={showHidden}
         onShowHidden={setShowHidden}
         onBack={onBack}
+        backLabel={overlay ? 'Back to record' : 'Layouts'}
       />
+      {overlay && <EditingBanner name={layoutName} row={row} fields={fields} onDone={onBack} />}
       {warning && (
         <div
           role='note'

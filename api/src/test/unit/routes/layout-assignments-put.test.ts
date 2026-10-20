@@ -5,6 +5,7 @@ type Row = Record<string, unknown>
 
 const fake = vi.hoisted(() => {
   const tables: Record<string, Row[]> = {}
+  const selects: Array<{ table: string; cols: unknown[] }> = []
   let nextId = 500
   const match = (r: Row, w: Row) => Object.entries(w).every(([k, v]) => String(r[k]) === String(v))
   const q = (table: string) => {
@@ -24,7 +25,8 @@ const fake = vi.hoisted(() => {
         ids = v
         return api
       },
-      select() {
+      select(...cols: unknown[]) {
+        selects.push({ table, cols })
         return api
       },
       orderBy() {
@@ -52,9 +54,10 @@ const fake = vi.hoisted(() => {
   })
   const reset = (init: Record<string, Row[]>) => {
     for (const k of Object.keys(tables)) delete tables[k]
+    selects.length = 0
     for (const [k, v] of Object.entries(init)) tables[k] = v.map((r) => ({ ...r }))
   }
-  return { db, tables, reset }
+  return { db, tables, selects, reset }
 })
 
 vi.mock('../../../middleware/authenticate.js', () => ({
@@ -135,6 +138,16 @@ describe('PUT /collection-layouts/:id/assignments', () => {
         .map((r) => r.id)
         .sort()
     ).toEqual([1, 2])
+  })
+
+  it('answers without the retired hide_actions_when_collapsed column', async () => {
+    const res = await call('PUT', '/collection-layouts/1/assignments', {
+      assignments: [{ field: 'x', group_key: 'main', sort: 0 }]
+    })
+    expect(res.statusCode).toBe(200)
+    const read = fake.selects.filter((q) => q.table === 'nivaro_layout_field_assignments')
+    expect(read.length).toBeGreaterThan(0)
+    for (const q of read) expect(q.cols).not.toContain('hide_actions_when_collapsed')
   })
 
   it('deletes only (field,group_key) pairs that left', async () => {

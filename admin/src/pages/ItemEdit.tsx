@@ -21,12 +21,13 @@ import {
   ChevronsUpDown,
   EyeOff,
   History,
+  LayoutTemplate,
   Loader2,
   Network,
   Play,
   Sparkles
 } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router'
 import { toast } from 'sonner'
@@ -343,6 +344,10 @@ function ScheduleChangeDialog({
 
 // ─── ItemEditPage ─────────────────────────────────────────────────────────────
 
+// The layout editor (record page Edit layout mode) is admin-only: its own chunk,
+// requested only when an admin turns the mode on.
+const RecordLayoutEditor = lazy(() => import('@/components/record-layout-editor'))
+
 export function ItemEditPage() {
   const { collection, id } = useParams<{ collection: string; id: string }>()
   const navigate = useNavigate()
@@ -593,6 +598,7 @@ export function ItemEditPage() {
         .get<{
           data: {
             layout: {
+              id?: number
               ai_enabled?: boolean | number
               allow_schedule?: boolean | number
               allow_disable_pickers?: boolean | number
@@ -629,6 +635,16 @@ export function ItemEditPage() {
 
   // ── Derived values ────────────────────────────────────────────────────────
   const layoutMeta = activeLayoutData?.layout
+  // Edit layout mode keeps the layout it opened on: a save can change which
+  // layout /active resolves for this record, and the editor must not jump.
+  const [editingLayoutId, setEditingLayoutId] = useState<number | null>(null)
+  const editableLayoutId = user?.is_admin && layoutMeta?.id != null ? Number(layoutMeta.id) : null
+  const closeLayoutEditor = () => {
+    setEditingLayoutId(null)
+    // The form re-reads what it renders from: layouts, read/file views, field settings.
+    for (const key of ['active-layout', 'summary-layout', 'file-layouts', 'field-config'])
+      void queryClient.invalidateQueries({ queryKey: [key, collection] })
+  }
   const layoutAiEnabled = layoutMeta ? !!layoutMeta.ai_enabled : true
   const canSchedule = !!user?.is_admin || !!layoutMeta?.allow_schedule
   const canDisablePickers = !!user?.is_admin || !!layoutMeta?.allow_disable_pickers
@@ -1044,6 +1060,19 @@ export function ItemEditPage() {
                         <History className='h-3.5 w-3.5' />
                       </Button>
                     )}
+                    {editableLayoutId != null && (
+                      <Button
+                        variant='outline'
+                        size='sm'
+                        aria-pressed={editingLayoutId != null}
+                        onClick={() => setEditingLayoutId(editableLayoutId)}
+                        data-tip='Edit the layout this record opens with'
+                        className='rounded-none -ml-px first:ml-0'
+                      >
+                        <LayoutTemplate className='mr-1.5 h-3.5 w-3.5' />
+                        Edit layout
+                      </Button>
+                    )}
                     {id && !isNew && collection && (
                       <ShareLinkPopover
                         collection={collection}
@@ -1185,6 +1214,18 @@ export function ItemEditPage() {
                 {...(isNew && importResult ? { initialImportResult: importResult } : {})}
               />
             </div>
+            {/* Edit layout mode: mounted here, outside the header tools (inside
+                the record's providers), and portalled to the page by the editor. */}
+            {editingLayoutId != null && user?.is_admin && collection && (
+              <Suspense fallback={null}>
+                <RecordLayoutEditor
+                  collection={collection}
+                  layoutId={editingLayoutId}
+                  recordId={isNew ? null : (id ?? null)}
+                  onClose={closeLayoutEditor}
+                />
+              </Suspense>
+            )}
           </DrilldownContext.Provider>
         </ItemEditAuthContext.Provider>
       </NavigationContext.Provider>
