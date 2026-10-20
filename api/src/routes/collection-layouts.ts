@@ -374,6 +374,42 @@ export async function resolveLayout(opts: {
   return { ...res, checked: [...slugChecks, ...res.checked] }
 }
 
+/**
+ * A ?layout= pin the caller could legitimately be on for this record: a record
+ * form (grouped, or legacy untyped) their role may open whose record rules,
+ * when it has any, match the record. Null otherwise. /active honours any
+ * role-allowed slug because there it only chooses presentation; where a pin
+ * decides authorization (picker exclusions) it must pass this stricter check.
+ */
+export async function legitimatePinForRecord(opts: {
+  collection: string
+  slug: string
+  item: string
+  role: string | null
+}): Promise<Record<string, unknown> | null> {
+  const { collection, slug, item, role } = opts
+  const row = (await db('nivaro_collection_layouts')
+    .where({ collection, slug })
+    .where((b) => b.where({ layout_type: 'grouped' }).orWhereNull('layout_type'))
+    .first()) as Record<string, unknown> | undefined
+  if (!row || !roleAllows(row, role, false)) return null
+  const rules = parseRecordConditions(row.record_conditions)
+  if (!rules) return row
+  // Same guards as resolveLayout: a registered collection only, and only the
+  // columns this layout's rules name.
+  const registered = await db('nivaro_collections').where({ collection }).first()
+  if (!registered) return null
+  const columns = [
+    ...new Set(['id', ...rules.map((r) => r.field).filter((f) => typeof f === 'string')])
+  ]
+  const record = (await db(collection)
+    .where({ id: item })
+    .select(columns)
+    .first()
+    .catch(() => null)) as Record<string, unknown> | null | undefined
+  return record && matchesRecordConditions(rules, record) ? row : null
+}
+
 // Columns every record carries that a form never shows.
 const SEED_SKIP_FIELDS = new Set([
   'id',

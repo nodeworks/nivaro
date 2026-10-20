@@ -2,21 +2,23 @@ import type { FastifyInstance, FastifyRequest } from 'fastify'
 import { db } from '../db/index.js'
 import { authenticate, requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
-import { readOne } from '../services/items.js'
+import { canUpdateItem, readOne } from '../services/items.js'
 import { can } from '../services/permissions.js'
 import { isSystemCollection } from '../services/system-collections.js'
-import { resolveLayout } from './collection-layouts.js'
+import { legitimatePinForRecord, resolveLayout } from './collection-layouts.js'
 
 /**
  * Who may switch one record in or out of pickers: administrators, and anyone
  * whose form for this record turns on "Disable in pickers" for all users
- * (layout allow_disable_pickers) — provided they may update the collection
- * and can see the record. The layout is resolved exactly as /active resolves
- * it for that person (`layout` = the ?layout= link name the page opened with).
+ * (layout allow_disable_pickers) — provided they can see the record and may
+ * update THIS record (the item-level gates updateOne applies). The form is the
+ * one /active resolves for this person and record; a ?layout= pin (`layout`)
+ * only counts when it is a record form their role may open whose record rules
+ * match this record — the request never chooses the layout that grants it.
  * Null = allowed; otherwise the refusal to send.
  */
 export async function pickerToggleRefusal(
-  req: Pick<FastifyRequest, 'user' | 'isAdmin'>,
+  req: Pick<FastifyRequest, 'user' | 'isAdmin'> & { workspaceId?: string | null },
   collection: string,
   itemId: string,
   layout?: string | null
@@ -27,17 +29,27 @@ export async function pickerToggleRefusal(
   const denied = { status: 403, error: 'Only administrators can change picker visibility here' }
   if (isSystemCollection(collection)) return denied
   if (!(await can(user, 'update', collection))) return denied
+  const workspaceId = req.workspaceId ?? undefined
+  // readOne answers null (or throws) for a record the caller can't see —
+  // asked before the form is resolved, so a hidden record's fields never
+  // decide between 403 and 404.
+  const visible = await readOne(user, collection, itemId, workspaceId).catch(() => null)
+  if (!visible) return { status: 404, error: 'Not found' }
+  const role = user.role ?? null
   const { row } = await resolveLayout({
     collection,
-    slug: layout ?? null,
+    slug: null,
     item: itemId,
-    role: user.role ?? null,
+    role,
     isAdmin: false
   })
-  if (!row?.allow_disable_pickers) return denied
-  // readOne answers null (or throws) for a record the caller can't see.
-  const visible = await readOne(user, collection, itemId).catch(() => null)
-  if (!visible) return { status: 404, error: 'Not found' }
+  let granted = !!row?.allow_disable_pickers
+  if (!granted && layout) {
+    const pin = await legitimatePinForRecord({ collection, slug: layout, item: itemId, role })
+    granted = !!pin?.allow_disable_pickers
+  }
+  if (!granted) return denied
+  if (!(await canUpdateItem(user, collection, itemId, workspaceId))) return denied
   return null
 }
 
