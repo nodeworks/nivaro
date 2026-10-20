@@ -1,10 +1,65 @@
 {
-  "generated_at": "2026-10-20T17:47:29.206Z",
+  "generated_at": "2026-10-20T18:30:48.795Z",
   "releases": [
+    {
+      "version": "0.2.75",
+      "tag": "v0.2.75",
+      "date": "2026-10-20T14:30:36-04:00",
+      "sections": [
+        {
+          "label": "Other",
+          "entries": [
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Fill from document: no lit-up close button or stale tooltip on open",
+              "hash": "968d553d"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Presence links: only same-site paths from current_path",
+              "hash": "89d5fdad"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "stuck label matches the page line; places are links",
+              "hash": "b6ff9b0a"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Unsaved changes: name related records, choices and staged links",
+              "hash": "d5795b02"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Read view: section edit button left of the chevron",
+              "hash": "4f895753"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Traffic Map: steady In flight panel, flush panel columns",
+              "hash": "cda27604"
+            },
+            {
+              "section": "Other",
+              "scope": null,
+              "text": "Traffic Map: masonry page panels, level ticker row",
+              "hash": "23774bfe"
+            }
+          ]
+        }
+      ],
+      "count": 7
+    },
     {
       "version": "0.2.74",
       "tag": "v0.2.74",
-      "date": "2026-10-20T13:47:17-04:00",
+      "date": "2026-10-20T13:47:29-04:00",
       "sections": [
         {
           "label": "Other",
