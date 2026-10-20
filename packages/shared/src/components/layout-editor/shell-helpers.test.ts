@@ -154,3 +154,41 @@ describe('add targets', () => {
     expect(newGroupKey(b, 'section')).toBe('section_2')
   })
 })
+
+describe('bundleToActiveLayout parent merge edge cases (as /active)', () => {
+  const parent = (): LayoutBundle => ({
+    layout: { id: 3, collection: 'orders', name: 'Base form' },
+    groups: [
+      { ...newGroup('wizard', 'Wizard', 'container', null), id: 30, sort: 0 },
+      { ...newGroup('p_tab', 'Parent tab', 'tab', 'wizard'), id: 31, sort: 0 },
+      { ...ungroupedGroup(9) }
+    ],
+    placements: [{ ...newPlacement('vendor', 'p_tab'), id: 40, sort: 0 }],
+    rev: 'p1'
+  })
+
+  it('an overridden parent container leaves its tabs pointing at the parent container id', () => {
+    // The child defines its own `wizard`: /active drops the parent's, and the
+    // parent's tab keeps container_id 30, which is not on the form.
+    const { active } = bundleToActiveLayout(bundle(), parent())
+    const wizard = active.groups.filter((g) => g.key === 'wizard')
+    expect(wizard).toHaveLength(1)
+    expect(wizard[0].id).toBe(2)
+    expect(active.groups.find((g) => g.key === 'p_tab')?.container_id).toBe(30)
+  })
+
+  it('a parent container the child does not override keeps its tabs', () => {
+    const child = bundle()
+    child.groups = child.groups.filter((g) => !['wizard', 'step_a', 'step_b'].includes(g.key))
+    const { active } = bundleToActiveLayout(child, parent())
+    expect(active.groups.find((g) => g.key === 'wizard')?.id).toBe(30)
+    expect(active.groups.find((g) => g.key === 'p_tab')?.container_id).toBe(30)
+  })
+
+  it("the Ungrouped position is the child's, never the parent's", () => {
+    // /active uses the parent's stored row only until the child stores one,
+    // which the editor's first save does.
+    const { active } = bundleToActiveLayout(bundle(), parent())
+    expect(active.ungrouped_sort).toBe(2)
+  })
+})

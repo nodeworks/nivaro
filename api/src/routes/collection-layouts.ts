@@ -8,9 +8,8 @@ import { logActivity } from '../services/activity.js'
 import { buildAddendumRenderOverlay } from '../services/addendum-render.js'
 import { ForbiddenError, ItemNotFoundError, readOne } from '../services/items.js'
 import { activateLayout, lockLayout, whereLayoutType } from '../services/layout-activation.js'
-import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
-import { findLayoutReferences } from '../services/layout-references.js'
 import { loadLayoutBundle, placementColumns, runLayoutOps } from '../services/layout-ops.js'
+import { buildLayoutOverview, type OverviewLayoutInput } from '../services/layout-overview.js'
 import {
   isLayoutType,
   LAYOUT_TYPES,
@@ -24,6 +23,7 @@ import {
   type RecordConditionRule,
   slugify
 } from '../services/layout-patch.js'
+import { findLayoutReferences } from '../services/layout-references.js'
 import {
   diffLayoutVersions,
   getLayoutVersion,
@@ -659,7 +659,9 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
           'show_approval_chain',
           'widget_id',
           'input_bindings',
-          'allow_revision_restore'
+          'allow_revision_restore',
+          // Slot cards (owners, PDF, widgets) size by col_span on the record page.
+          'col_span'
         )
         .orderBy('sort', 'asc')
     ])
@@ -690,7 +692,8 @@ export async function collectionLayoutsRoutes(app: FastifyInstance) {
               'show_approval_chain',
               'widget_id',
               'input_bindings',
-              'allow_revision_restore'
+              'allow_revision_restore',
+              'col_span'
             )
             .orderBy('sort', 'asc')
         ])

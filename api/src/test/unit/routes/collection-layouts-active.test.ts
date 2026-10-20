@@ -559,6 +559,64 @@ describe('GET /collection-layouts/active — record-condition precedence', () =>
   })
 })
 
+// ─── GET /collection-layouts/active — placement columns ───────────────────
+
+describe('GET /collection-layouts/active — placement columns', () => {
+  it('returns col_span for the layout and its parent (slot card widths)', async () => {
+    const child = {
+      id: 2,
+      is_active: 1,
+      sort: 0,
+      conditions: null,
+      record_conditions: null,
+      default_values: null,
+      parent_layout_id: 5
+    }
+    // Rows as stored; the mock answers only the columns the route selects,
+    // like the database would.
+    const rows: Record<number, Record<string, unknown>[]> = {
+      2: [{ field: '__owners__', group_key: null, sort: 3, col_span: 4, secret_col: 'x' }],
+      5: [{ field: '__pdf__', group_key: null, sort: 4, col_span: 6 }]
+    }
+    vi.mocked(db).mockImplementation(((table: string) => {
+      if (table === 'nivaro_collection_layouts')
+        return {
+          where: vi.fn(() => {
+            const stage: Record<string, unknown> = {
+              orderByRaw: vi.fn(() => Promise.resolve([child]))
+            }
+            stage.where = vi.fn(() => stage)
+            return stage
+          })
+        }
+      if (table === 'nivaro_field_groups')
+        return { where: vi.fn(() => ({ orderBy: vi.fn(() => Promise.resolve([])) })) }
+      if (table === 'nivaro_layout_field_assignments')
+        return {
+          where: vi.fn((cond: { layout_id: number }) => ({
+            select: vi.fn((...cols: string[]) => ({
+              orderBy: vi.fn(() =>
+                Promise.resolve(
+                  (rows[cond.layout_id] ?? []).map((r) =>
+                    Object.fromEntries(cols.filter((c) => c in r).map((c) => [c, r[c]]))
+                  )
+                )
+              )
+            }))
+          }))
+        }
+      throw new Error(`unexpected table: ${table}`)
+    }) as unknown as typeof db)
+
+    const res = await getActive({ collection: 'workflows' })
+    expect(res.statusCode).toBe(200)
+    const assignments = JSON.parse(res.body).data.assignments as Array<Record<string, unknown>>
+    expect(assignments.find((a) => a.field === '__owners__')?.col_span).toBe(4)
+    expect(assignments.find((a) => a.field === '__pdf__')?.col_span).toBe(6)
+    expect(assignments[0]).not.toHaveProperty('secret_col')
+  })
+})
+
 // ─── PATCH /collection-layouts/:id — validation + round-trip ──────────────
 
 function makePatchDbMock(existing: Record<string, unknown>, updated: Record<string, unknown>) {

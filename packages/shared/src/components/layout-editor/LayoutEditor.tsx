@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Plus } from 'lucide-react'
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from 'react'
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
-import type { LayoutBundle } from '../../lib/layout-ops'
+import { HEADER_GROUP_KEY, type LayoutBundle, UNGROUPED_KEY } from '../../lib/layout-ops'
 import { cn } from '../../lib/utils'
+import { modalHostOf } from '../ui/popover'
 import { Skeleton } from '../ui/skeleton'
 import { AddPanel } from './AddPanel'
 import { bundleToActiveLayout, previewForRole } from './bundle-to-active'
@@ -13,6 +14,7 @@ import { type DesignTarget, type LayoutDesign, targetKey } from './design-contex
 import { EditorDndProvider, useEditorDnd } from './dnd-adapter'
 import { EditorCanvas } from './EditorCanvas'
 import { EditorTopBar, type PreviewAs } from './EditorTopBar'
+import { versionsKey } from './HistoryPanel'
 import { useLayoutEditorHost } from './host'
 import { FormSettings, Inspector } from './inspector-slot'
 import { LayoutsRail } from './LayoutsRail'
@@ -37,24 +39,34 @@ export interface LayoutEditorProps {
   previewRecordId?: string | null
   /** Shown for layouts this editor cannot draw yet (grid columns). */
   onOpenClassic?: (layoutId: number) => void
+  /** Overlay mode: where the overlay mounts. Default: the modal dialog/sheet
+   *  the editor is declared in (its scroll/pointer lock would make a body
+   *  portal dead), else document.body. */
+  portalContainer?: HTMLElement | null
 }
 
-const versionsKey = (id: number) => ['layout-editor', 'versions', id] as const
-
-const isTyping = (el: EventTarget | null) => {
+export const isTyping = (el: EventTarget | null) => {
   const t = el as HTMLElement | null
   if (!t?.closest) return false
-  return !!t.closest('input, textarea, select, [contenteditable=""], [contenteditable="true"]')
+  return (
+    t.isContentEditable ||
+    !!t.closest(
+      'input, textarea, select, [role="textbox"], [contenteditable]:not([contenteditable="false"])'
+    )
+  )
 }
 
-/** ⌘Z / ⇧⌘Z (Ctrl elsewhere) — never while typing, where the field's own undo wins. */
+/** ⌘Z / ⇧⌘Z / Ctrl+Y (Ctrl elsewhere) — never while typing, where the field's own undo wins. */
 function useUndoKeys(draft: LayoutDraft) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.key.toLowerCase() !== 'z') return
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return
+      const k = e.key.toLowerCase()
+      const redo = (k === 'z' && e.shiftKey) || (k === 'y' && !e.shiftKey)
+      if (k !== 'z' && !redo) return
       if (isTyping(e.target)) return
       e.preventDefault()
-      if (e.shiftKey) draft.redo()
+      if (redo) draft.redo()
       else draft.undo()
     }
     window.addEventListener('keydown', onKey)
@@ -111,11 +123,56 @@ function usePreviewRecord(collection: string, id: string | null) {
     queryKey: ['layout-editor', 'preview-record', collection, id],
     queryFn: () =>
       client
-        .request<{ data: Record<string, unknown> | null }>(get(`/items/${collection}/${id}`))
+        .request<{ data: Record<string, unknown> | null }>(
+          get(`/items/${encodeURIComponent(collection)}/${encodeURIComponent(String(id))}`)
+        )
         .then((r) => r.data ?? null),
     enabled: id != null,
     staleTime: 30_000
   })
+}
+
+/** Is `t` still on the layout (or supplied by its parent)? Undo, redo and other
+ *  writers can take the selected thing away. */
+export function targetExists(
+  t: DesignTarget,
+  bundle: LayoutBundle,
+  parent: LayoutBundle | null = null
+): boolean {
+  const has = (b: LayoutBundle) => {
+    if (t.kind === 'group') return t.key === UNGROUPED_KEY || b.groups.some((g) => g.key === t.key)
+    const gk = t.kind === 'header' ? HEADER_GROUP_KEY : t.group_key
+    return b.placements.some((p) => p.field === t.field && p.group_key === gk)
+  }
+  return has(bundle) || (parent != null && has(parent))
+}
+
+/**
+ * Overlay mode behaves as a modal dialog: focus moves in on open and back to
+ * whatever opened it on close; Escape leaves (onBack) unless a popover or
+ * menu is open, or the key is typed into a field.
+ */
+function useOverlayDialog(active: boolean, onBack: () => void) {
+  const ref = useRef<HTMLDivElement | null>(null)
+  const backRef = useRef(onBack)
+  backRef.current = onBack
+  useEffect(() => {
+    if (!active) return
+    const opener = document.activeElement as HTMLElement | null
+    ref.current?.focus()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented || isTyping(e.target)) return
+      if (document.querySelector('[data-radix-popper-content-wrapper], [role="menu"]')) return
+      e.preventDefault()
+      backRef.current()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('keydown', onKey)
+      if (opener?.isConnected) opener.focus()
+    }
+  }, [active])
+  return ref
 }
 
 /** The canvas, inside the drag-and-drop layer so it can read LayoutDesign.dnd. */
@@ -183,7 +240,8 @@ export function LayoutEditor({
   mode,
   onLayoutChange,
   previewRecordId = null,
-  onOpenClassic
+  onOpenClassic,
+  portalContainer
 }: LayoutEditorProps) {
   const host = useLayoutEditorHost()
   const [currentId, setCurrentId] = useState(layoutId)
@@ -212,6 +270,16 @@ export function LayoutEditor({
   useLeaveGuard(draft)
   useSavedRefresh(draft, currentId, collection)
 
+  // Undo, redo or another writer removed what was selected: nothing is.
+  useEffect(() => {
+    if (selected && bundle && !targetExists(selected, bundle, parent)) setSelected(null)
+  }, [selected, bundle, parent])
+
+  const overlay = mode === 'overlay'
+  // Where the overlay mounts: resolved from a marker where it is declared.
+  const [marker, setMarker] = useState<HTMLSpanElement | null>(null)
+  const dialogRef = useOverlayDialog(overlay && marker != null, onBack)
+
   const onSelect = useCallback((t: DesignTarget) => {
     setSelected(t)
     setPanel('inspector')
@@ -230,13 +298,24 @@ export function LayoutEditor({
   const layoutType = String(bundle?.layout.layout_type ?? row?.layout_type ?? 'grouped')
   const warning = host.warning ?? overview?.warning ?? null
 
+  // Overlay mode is a modal dialog over the record page.
+  const dialogProps = overlay
+    ? {
+        role: 'dialog',
+        'aria-modal': true,
+        'aria-label': `Edit layout ${layoutName}`,
+        tabIndex: -1
+      }
+    : {}
   const body: ReactNode = (
     <div
+      ref={overlay ? dialogRef : undefined}
       data-layout-editor=''
       data-mode={mode}
+      {...dialogProps}
       className={cn(
-        'flex min-h-0 flex-col bg-slate-50 dark:bg-background',
-        mode === 'page' ? 'flex-1' : 'fixed inset-0 z-[90]'
+        'flex min-h-0 flex-col bg-slate-50 outline-none dark:bg-background',
+        overlay ? 'fixed inset-0 z-[90]' : 'flex-1'
       )}
     >
       <EditorTopBar
@@ -357,8 +436,15 @@ export function LayoutEditor({
     </div>
   )
 
-  // Fixed under the page outlet would be offset by its transform: portal out.
-  return mode === 'overlay' && typeof document !== 'undefined'
-    ? createPortal(body, document.body)
-    : body
+  if (!overlay) return body
+  // Fixed under the page outlet would be offset by its transform: portal out —
+  // into the hosting modal when there is one (a body portal would sit under
+  // its pointer/scroll lock), else body.
+  const container = portalContainer ?? (marker ? (modalHostOf(marker) ?? document.body) : null)
+  return (
+    <>
+      <span ref={setMarker} hidden data-layout-editor-marker='' />
+      {container && createPortal(body, container)}
+    </>
+  )
 }

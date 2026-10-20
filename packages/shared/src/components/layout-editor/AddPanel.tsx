@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Check, LayoutPanelTop, Plus, Search } from 'lucide-react'
+import { Check, CopyPlus, LayoutPanelTop, Plus, Search } from 'lucide-react'
 import { type ReactNode, useMemo, useState } from 'react'
 import { useNivaroClient } from '../../context'
 import { get } from '../../lib/commands'
@@ -37,10 +37,15 @@ interface WidgetRow {
   widget_type: string
 }
 
+// The six slot cards (CANVAS_SLOT_KEYS), then owners, PDF and subtitle —
+// everything the classic editor could add.
 const BUILT_IN_SLOTS = [
   '__pipeline__',
   '__comments__',
   '__tasks__',
+  '__addendums__',
+  '__referenced_by__',
+  '__related_records__',
   '__owners__',
   '__pdf__',
   '__subtitle__'
@@ -50,6 +55,9 @@ const SLOT_HINTS: Record<string, string> = {
   __pipeline__: 'State track and actions',
   __comments__: 'Notes and replies',
   __tasks__: 'To-dos on this record',
+  __addendums__: 'Changes made to the saved record',
+  __referenced_by__: 'Records that point at this one',
+  __related_records__: 'Records linked to this one',
   __owners__: 'Who owns it at each step',
   __pdf__: 'Generate and download a PDF',
   __subtitle__: 'A line of values under the title'
@@ -108,20 +116,23 @@ function Row({
   sub,
   aside,
   onClick,
-  attrs
+  attrs,
+  extra
 }: {
   title: string
   sub?: string | null
   aside?: ReactNode
   onClick: () => void
   attrs?: Record<string, string | undefined>
+  /** A second action beside the row (buttons cannot nest). */
+  extra?: ReactNode
 }) {
-  return (
+  const main = (
     <button
       type='button'
       onClick={onClick}
       {...attrs}
-      className='group flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted'
+      className='group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted'
     >
       <span className='flex min-w-0 flex-1 flex-col'>
         <span className='truncate text-[12.5px] font-medium text-slate-900 dark:text-foreground'>
@@ -135,6 +146,13 @@ function Row({
       </span>
       {aside}
     </button>
+  )
+  if (!extra) return main
+  return (
+    <div className='flex items-center gap-0.5'>
+      {main}
+      {extra}
+    </div>
   )
 }
 
@@ -156,15 +174,15 @@ export function AddPanel({
   const [q, setQ] = useState('')
   const [to, setTo] = useState<'form' | 'header'>('form')
   const { data: fields = [] } = useOverviewFields(collection)
-  const { data: widgets = [] } = useQuery<WidgetRow[]>({
+  const { data: widgets = [], error: widgetsError } = useQuery<WidgetRow[]>({
     queryKey: ['layout-editor', 'widgets'],
     queryFn: () =>
-      client
-        .request<{ data: WidgetRow[] }>(get('/widgets-internal'))
-        .then((r) => r.data ?? [])
-        .catch(() => []),
-    staleTime: 60_000
+      client.request<{ data: WidgetRow[] }>(get('/widgets-internal')).then((r) => r.data ?? []),
+    staleTime: 60_000,
+    retry: false
   })
+  // "Add another copy" refused: which field, and why.
+  const [notice, setNotice] = useState<{ field: string; text: string } | null>(null)
 
   const needle = q.trim().toLowerCase()
   const matches = (...texts: Array<string | null | undefined>) =>
@@ -203,9 +221,30 @@ export function AddPanel({
   }
 
   const pick = (field: string, label: string, patch?: PlacementPatch) => {
+    setNotice(null)
     const existing = to === 'header' ? inHeader(field) : inBody(field)
     if (existing) onSelect(targetOf(existing))
     else place(field, label, patch)
+  }
+
+  // A field may sit in more than one group: a second copy goes where a new
+  // field would (after the selection), never twice in the same group.
+  const addCopy = (field: string, label: string) => {
+    const spot = fieldSpot(bundle, selected)
+    if ((placed.get(field) ?? []).some((p) => p.group_key === spot.group_key)) {
+      const where =
+        spot.group_key === null
+          ? 'Ungrouped'
+          : (bundle.groups.find((g) => g.key === spot.group_key)?.label ?? spot.group_key)
+      setNotice({
+        field,
+        text: `${label} is already in ${where}. Select another section first.`
+      })
+      return
+    }
+    setNotice(null)
+    apply([placeOp(field, spot)], { label: `Add another ${label}` })
+    onSelect(targetOf({ field, group_key: spot.group_key } as PlacementRow))
   }
 
   const fieldRows = (fields as FieldRow[])
@@ -276,20 +315,44 @@ export function AddPanel({
       {fieldRows.map((f) => {
         const on = to === 'header' ? inHeader(f.field) : inBody(f.field)
         return (
-          <Row
-            key={f.field}
-            title={f.title}
-            sub={[f.field, typeWord(f)].filter(Boolean).join(' · ')}
-            attrs={{ 'data-add-field': f.field, 'data-on-form': on ? 'true' : undefined }}
-            aside={
-              on ? (
-                <OnForm>{to === 'header' ? 'in header' : 'on this form'}</OnForm>
-              ) : (
-                <Plus className='h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 group-hover:opacity-100' />
-              )
-            }
-            onClick={() => pick(f.field, f.title)}
-          />
+          <div key={f.field}>
+            <Row
+              title={f.title}
+              sub={[f.field, typeWord(f)].filter(Boolean).join(' · ')}
+              attrs={{ 'data-add-field': f.field, 'data-on-form': on ? 'true' : undefined }}
+              aside={
+                on ? (
+                  <OnForm>{to === 'header' ? 'in header' : 'on this form'}</OnForm>
+                ) : (
+                  <Plus className='h-3.5 w-3.5 shrink-0 text-slate-400 opacity-0 group-hover:opacity-100' />
+                )
+              }
+              onClick={() => pick(f.field, f.title)}
+              extra={
+                on && to === 'form' ? (
+                  <button
+                    type='button'
+                    aria-label={`Add another copy of ${f.title}`}
+                    data-add-copy={f.field}
+                    data-tip='Add another copy after the selection'
+                    onClick={() => addCopy(f.field, f.title)}
+                    className='inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-muted hover:text-slate-700 dark:hover:text-foreground'
+                  >
+                    <CopyPlus className='h-3.5 w-3.5' />
+                  </button>
+                ) : null
+              }
+            />
+            {notice?.field === f.field && (
+              <p
+                role='status'
+                data-add-notice=''
+                className='px-2 pb-1 text-[11.5px] text-amber-700 dark:text-amber-300'
+              >
+                {notice.text}
+              </p>
+            )}
+          </div>
         )
       })}
       {!fieldRows.length && (
@@ -325,7 +388,12 @@ export function AddPanel({
         )
       })}
 
-      {to === 'form' && widgetRows.length > 0 && <p className={head}>Widgets</p>}
+      {to === 'form' && (widgetRows.length > 0 || widgetsError) && <p className={head}>Widgets</p>}
+      {to === 'form' && widgetsError && (
+        <p role='alert' className='px-2 py-1.5 text-[12px] text-red-700 dark:text-red-300'>
+          Widgets could not be loaded: {(widgetsError as Error).message}
+        </p>
+      )}
       {to === 'form' &&
         widgetRows.map((w) => {
           const key = `__widget_${w.id}__`

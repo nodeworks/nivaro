@@ -55,35 +55,47 @@ function placementTarget(p: PlacementRow): DesignTarget {
 }
 
 /**
- * The draft as ActiveLayoutData. With `parent` (the layout this one extends),
- * parent placements fill in for fields the child does not place and parent
- * groups ride along unless the child has the same key — exactly what /active
- * merges — and are reported in `inherited`.
+ * The draft as ActiveLayoutData. With `parent` (the layout this one extends)
+ * it merges exactly as GET /collection-layouts/active does, and reports what
+ * the parent supplies in `inherited`:
+ *
+ * - parent placements fill in for fields the child does not place at all;
+ * - parent groups ride along unless the child has a group with the same key;
+ * - a parent group keeps the parent's container id, as /active sends the
+ *   stored rows: when the child overrides the parent's container (same key),
+ *   the parent's tabs point at a container id that is not on the form —
+ *   on the canvas exactly as on the record page;
+ * - the Ungrouped zone's position is the child's. /active falls back to the
+ *   parent's stored position only while the child has never stored one, and
+ *   the editor's first save stores it (layout-ops writer), so after any edit
+ *   the record page agrees with the canvas. The bundle cannot tell a stored
+ *   position from the default it fills in, so the canvas cannot show that
+ *   pre-save fallback.
  */
 export function bundleToActiveLayout(
   bundle: LayoutBundle,
   parent?: LayoutBundle | null
 ): CanvasLayout {
   const inherited = new Map<string, string>()
-  let groups = bundle.groups
+  const ungrouped = bundle.groups.find((g) => g.key === UNGROUPED_KEY)
+  const own = bundle.groups.filter((g) => g.key !== UNGROUPED_KEY)
+  const ownIds = groupIds(own)
+  const groups = own.map((g) => toGroup(g, ownIds))
   let placements = bundle.placements
   if (parent) {
     const parentName = String(parent.layout.name ?? 'the parent layout')
     const childFields = new Set(placements.map((p) => p.field))
-    const childKeys = new Set(groups.map((g) => g.key))
+    const childKeys = new Set(own.map((g) => g.key))
+    const parentGroups = parent.groups.filter((g) => g.key !== UNGROUPED_KEY)
+    const parentIds = groupIds(parentGroups)
+    const extraGroups = parentGroups.filter((g) => !childKeys.has(g.key))
     const extraPlacements = parent.placements.filter((p) => !childFields.has(p.field))
-    const extraGroups = parent.groups.filter(
-      (g) => g.key !== UNGROUPED_KEY && !childKeys.has(g.key)
-    )
     for (const p of extraPlacements) inherited.set(targetKey(placementTarget(p)), parentName)
     for (const g of extraGroups) inherited.set(targetKey({ kind: 'group', key: g.key }), parentName)
-    groups = [...groups, ...extraGroups]
+    groups.push(...extraGroups.map((g) => toGroup(g, parentIds)))
     placements = [...placements, ...extraPlacements]
   }
 
-  const ungrouped = groups.find((g) => g.key === UNGROUPED_KEY)
-  const real = groups.filter((g) => g.key !== UNGROUPED_KEY)
-  const ids = groupIds(real)
   const row = bundle.layout
   const layout = {
     ...row,
@@ -99,7 +111,7 @@ export function bundleToActiveLayout(
   return {
     active: {
       layout,
-      groups: real.map((g) => toGroup(g, ids)),
+      groups,
       assignments: placements.map(toAssignment),
       ungrouped_sort: ungrouped ? ungrouped.sort : null
     },
