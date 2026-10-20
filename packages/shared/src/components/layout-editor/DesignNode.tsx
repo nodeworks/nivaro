@@ -1,3 +1,4 @@
+import { EyeOff, Lock } from 'lucide-react'
 import {
   type CSSProperties,
   cloneElement,
@@ -99,6 +100,7 @@ export function DesignNode({
 
   const key = targetKey(target)
   const selected = design.selected != null && targetKey(design.selected) === key
+  const mark = design.roleMark?.(target) ?? null
   const dragProps = (locked ? {} : nd.props) as Props
   const dragging = nd.dragging
   const slot = locked ? null : nd.slot
@@ -116,7 +118,9 @@ export function DesignNode({
       ? 'outline outline-2 outline-nvr-cyan'
       : 'hover:outline hover:outline-1 hover:outline-slate-300 dark:hover:outline-slate-600',
     'focus-visible:outline focus-visible:outline-2 focus-visible:outline-nvr-cyan',
-    dragging && 'opacity-40'
+    dragging && 'opacity-40',
+    // Hidden for the previewed role: faint, its tags not.
+    mark?.kind === 'hidden' && '[&>:not([data-design-badges])]:opacity-40'
   )
 
   // Capture phase, so nothing inside (inputs, buttons, links) acts on the
@@ -137,14 +141,33 @@ export function DesignNode({
     'data-selected': selected ? 'true' : undefined,
     'data-design-pass': pass ? '' : undefined,
     'data-drop-slot': slot ?? undefined,
+    'data-role-mark': mark?.kind,
     className: cls,
     onClickCapture
   }
-  const badge = parent ? (
-    <span className='absolute -top-2 right-1 z-10 rounded bg-slate-100 px-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300'>
-      from {parent}
-    </span>
-  ) : null
+  const MarkIcon = mark?.kind === 'hidden' ? EyeOff : Lock
+  const badge =
+    parent || mark ? (
+      <span
+        data-design-badges=''
+        className='pointer-events-none absolute -top-2 right-1 z-10 flex items-center gap-1'
+      >
+        {mark && (
+          <span
+            data-design-role-tag={mark.kind}
+            className='inline-flex items-center gap-0.5 rounded bg-amber-50 px-1 text-[11px] text-amber-800 ring-1 ring-amber-200 dark:bg-amber-500/15 dark:text-amber-200 dark:ring-amber-500/30'
+          >
+            <MarkIcon aria-hidden className='h-3 w-3' />
+            {mark.kind === 'hidden' ? 'Hidden' : 'Read-only'} for {mark.role}
+          </span>
+        )}
+        {parent && (
+          <span className='rounded bg-slate-100 px-1 text-[11px] text-slate-600 dark:bg-slate-800 dark:text-slate-300'>
+            from {parent}
+          </span>
+        )}
+      </span>
+    ) : null
   // The insertion line: absolutely placed inside the node, so showing it
   // never moves anything (a border would grow the node and make the drop
   // target jitter under the pointer).

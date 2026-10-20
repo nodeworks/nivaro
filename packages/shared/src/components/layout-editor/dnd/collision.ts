@@ -5,7 +5,13 @@ import type {
   DroppableContainer,
   KeyboardCoordinateGetter
 } from '@dnd-kit/core'
-import { isCanvasSlot, type LayoutBundle, UNGROUPED_KEY } from '../../../lib/layout-ops'
+import {
+  isCanvasSlot,
+  type LayoutBundle,
+  type LayoutOp,
+  type PlacementPatch,
+  UNGROUPED_KEY
+} from '../../../lib/layout-ops'
 import type { DesignTarget } from '../design-context'
 
 // Typed drag and drop for the layout editor canvas (spec §7.5): what may land
@@ -26,12 +32,24 @@ export type DndRole =
 
 export type DropSide = 'before' | 'after'
 
+/** Something new dragged from the Add panel: dropped, it becomes one `place` op. */
+export interface AddSource {
+  field: string
+  /** Plain words for the undo step ("Add <label>") and the announcements. */
+  label: string
+  patch?: PlacementPatch
+  /** Told the ops a drop applied (the Add panel selects what it added). */
+  onAdded?: (ops: LayoutOp[]) => void
+}
+
 /** What every registered node carries in dnd-kit's data ref. */
 export interface DndNodeData {
   target: DesignTarget
   role: DndRole
   /** A group's header strip height, measured live (0 or absent: none). */
   headerHeight?: () => number
+  /** Set on an Add panel row: the drag places something new instead of moving. */
+  add?: AddSource
 }
 
 /**
@@ -229,7 +247,15 @@ export const typedKeyboardCoordinates: KeyboardCoordinateGetter = (event, ctx) =
   const here = stops
     .filter((x) => contains(x.r, p))
     .sort((a, b) => a.r.width * a.r.height - b.r.width * b.r.height)[0]
-  const at = stops.indexOf(here ?? nearest(stops, p) ?? stops[0])
+  // An Add panel row is no stop: its first arrow lands on the first stop
+  // (down) or the last (up), not one past the stop nearest the row.
+  const at = here
+    ? stops.indexOf(here)
+    : data.add
+      ? forward
+        ? -1
+        : stops.length
+      : stops.indexOf(nearest(stops, p) ?? stops[0])
   const next = stops[at + (forward ? 1 : -1)]
   if (!next) return ctx.currentCoordinates
   const c = center(next.r)

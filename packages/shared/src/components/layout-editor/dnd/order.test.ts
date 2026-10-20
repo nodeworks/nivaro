@@ -10,7 +10,7 @@ import {
   ungroupedGroup
 } from '../../../lib/layout-ops'
 import type { DesignTarget } from '../design-context'
-import { orderAfterDrop } from './order'
+import { orderAfterDrop, placeAfterDrop } from './order'
 
 const group = (key: string, sort: number, type = 'section', parent: string | null = null) =>
   ({ ...newGroup(key, key.toUpperCase(), type, parent), sort }) as GroupRow
@@ -293,5 +293,63 @@ describe('orderAfterDrop', () => {
       expect(ops).toEqual([{ op: 'group_move', key: f, parent_key: null, index: 0 }])
       expect(top(applyLayoutOps(onCanvas, ops))[0]).toBe(f)
     })
+  })
+})
+
+describe('placeAfterDrop', () => {
+  it('places a new field beside the field it is dropped on', () => {
+    const ops = placeAfterDrop(bundle, 'vendor', field('amount', 'g2'), 'after')
+    expect(ops).toEqual([{ op: 'place', field: 'vendor', group_key: 'g2', index: 2 }])
+    expect(zone(applyLayoutOps(bundle, ops), 'g2')).toEqual(['d', 'amount', 'vendor', 'f'])
+  })
+
+  it('a section header puts it first; the rest of an empty section puts it last', () => {
+    expect(placeAfterDrop(bundle, 'vendor', grp('g1'), 'before')).toEqual([
+      { op: 'place', field: 'vendor', group_key: 'g1', index: 0 }
+    ])
+    const ops = placeAfterDrop(bundle, 'vendor', grp('g3'), 'after')
+    expect(ops).toEqual([{ op: 'place', field: 'vendor', group_key: 'g3', index: 0 }])
+    expect(zone(applyLayoutOps(bundle, ops), 'g3')).toEqual(['vendor'])
+  })
+
+  it('the Ungrouped zone takes fields as group_key null', () => {
+    const ops = placeAfterDrop(bundle, 'vendor', field('u1', null), 'after')
+    expect(ops).toEqual([{ op: 'place', field: 'vendor', group_key: null, index: 1 }])
+    // The pipeline card at group_key null is in the page order, not the zone.
+    expect(zone(applyLayoutOps(bundle, ops), null)).toEqual(['u1', 'vendor', 'u2'])
+  })
+
+  it('never places a field twice in one group, nor onto a container', () => {
+    expect(placeAfterDrop(bundle, 'amount', field('d', 'g2'), 'after')).toEqual([])
+    expect(placeAfterDrop(bundle, 'vendor', grp('c'), 'after')).toEqual([])
+  })
+
+  it('header strip tiles take a new tile beside them', () => {
+    const ops = placeAfterDrop(bundle, 'vendor', { kind: 'header', field: 'amount' }, 'after')
+    expect(ops).toEqual([{ op: 'place', field: 'vendor', group_key: '__header__', index: 1 }])
+    // Owners as a header tile, not a slot card.
+    expect(
+      placeAfterDrop(bundle, '__owners__', { kind: 'header', field: 'status' }, 'before')
+    ).toEqual([{ op: 'place', field: '__owners__', group_key: '__header__', index: 1 }])
+  })
+
+  it('a slot card goes into the page order beside the section it is dropped on', () => {
+    const ops = placeAfterDrop(bundle, '__comments__', grp('g2'), 'before')
+    expect(ops).toEqual([{ op: 'place', field: '__comments__', group_key: null, index: 2 }])
+    expect(top(applyLayoutOps(bundle, ops)).slice(0, 4)).toEqual([
+      'g1',
+      '__ungrouped__',
+      '__comments__',
+      'g2'
+    ])
+    // Already a card on the form: nothing.
+    expect(placeAfterDrop(bundle, '__pipeline__', grp('g2'), 'before')).toEqual([])
+  })
+
+  it('carries the patch (a widget binding) on the place op', () => {
+    const patch = { widget_id: 4 }
+    expect(placeAfterDrop(bundle, '__widget_4__', field('a', 'g1'), 'before', patch)).toEqual([
+      { op: 'place', field: '__widget_4__', group_key: 'g1', index: 0, patch }
+    ])
   })
 })

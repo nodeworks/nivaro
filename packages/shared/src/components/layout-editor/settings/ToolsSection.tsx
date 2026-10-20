@@ -16,6 +16,9 @@ import { settingDef } from './settings-registry'
 export interface ToolsSectionProps extends SectionProps {
   /** Told when the admin previews as a role, so the canvas can mark hidden / read-only fields. */
   onPreviewRole?: (preview: RolePreview | null) => void
+  /** Shared role choice (FormSettingsProps): followed instead of local state when both are set. */
+  previewRoleId?: string | null
+  onPreviewRoleChange?: (roleId: string | null) => void
 }
 
 export function ToolsSection(props: ToolsSectionProps) {
@@ -87,16 +90,25 @@ export function rolePreviewSummary(preview: RolePreview, collection: string): st
   return `As ${preview.role.name}: ${parts.join(' · ')}`
 }
 
-function PreviewRoleSetting({ collection, onPreviewRole }: ToolsSectionProps) {
+function PreviewRoleSetting({
+  collection,
+  onPreviewRole,
+  previewRoleId,
+  onPreviewRoleChange
+}: ToolsSectionProps) {
   const { data: roles = [] } = useRoleNames(true)
-  const [roleId, setRoleId] = useState<string | null>(null)
+  const [ownRoleId, setOwnRoleId] = useState<string | null>(null)
+  const roleId = onPreviewRoleChange ? (previewRoleId ?? null) : ownRoleId
+  const setRoleId = onPreviewRoleChange ?? setOwnRoleId
   const { data: preview = null, isFetching } = useRolePreview(collection, roleId)
   const report = useRef(onPreviewRole)
   report.current = onPreviewRole
   useEffect(() => {
     report.current?.(roleId ? preview : null)
   }, [roleId, preview])
-  // Leaving Form settings (or the editor) ends the preview: the canvas marks go too.
+  // Unmounting stops the onPreviewRole reports (canvas marks fed by them go).
+  // A shared role (previewRoleId + onPreviewRoleChange) is not ended here:
+  // the host owns it and keeps previewing after Form settings closes.
   useEffect(() => () => report.current?.(null), [])
   return (
     <Setting

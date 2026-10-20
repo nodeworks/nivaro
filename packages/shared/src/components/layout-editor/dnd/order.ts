@@ -5,6 +5,7 @@ import {
   type LayoutBundle,
   type LayoutOp,
   type PlacementKey,
+  type PlacementPatch,
   UNGROUPED_KEY
 } from '../../../lib/layout-ops'
 import type { DesignTarget } from '../design-context'
@@ -158,6 +159,55 @@ export function orderAfterDrop(
   const index = rest.indexOf(overKey) + after
   if (index === order.indexOf(a.key)) return []
   return [{ op: 'group_move', key: a.key, parent_key: a.parent, index }]
+}
+
+/**
+ * The ops a drop of something new from the Add panel makes: one `place` of
+ * `field` where `over` (and `pointer`) say, counted the way orderAfterDrop
+ * counts a move. Slot cards (pipeline, comments, owners, …) go into the page
+ * order beside the section they are dropped on; fields and widgets beside a
+ * field, first in a section (its header) or last in it; header tiles beside a
+ * tile. Empty when the field is already in that group or the spot takes
+ * nothing. A dropped slot card always joins the page order beside the
+ * top-level card it is dropped on (never inside a section); the Add panel's
+ * click places one with slotSpot instead (after the selection's top-level
+ * card), so a click and a drop can pick different spots.
+ */
+export function placeAfterDrop(
+  bundle: LayoutBundle,
+  field: string,
+  over: DesignTarget,
+  pointer: DropSide,
+  patch?: PlacementPatch
+): LayoutOp[] {
+  const b = normalized(bundle)
+  const o = dndRole(b, over)
+  if (!o) return []
+  const after = pointer === 'after' ? 1 : 0
+  const place = (zone: string | null, index: number): LayoutOp[] =>
+    index < 0 || b.placements.some((p) => p.field === field && p.group_key === zone)
+      ? []
+      : [{ op: 'place', field, group_key: zone, index, ...(patch ? { patch } : {}) }]
+  const beside = (zone: string | null, key: string) => {
+    const i = zoneFields(b, zone).findIndex((p) => p.field === key)
+    return i < 0 ? -1 : i + after
+  }
+
+  if (o.kind === 'header')
+    return over.kind === 'header'
+      ? place(HEADER_GROUP_KEY, beside(HEADER_GROUP_KEY, over.field))
+      : []
+  if (isCanvasSlot({ field, group_key: null })) {
+    const overKey = siblingFor(b, o, null)
+    return overKey ? place(null, siblings(b, null).indexOf(overKey) + after) : []
+  }
+  if (o.kind === 'item' && (over.kind === 'field' || over.kind === 'slot'))
+    return place(o.zone, beside(o.zone, over.field))
+  if (o.kind === 'group' && o.body) {
+    const zone = bodyZone(o.key)
+    return place(zone, after ? zoneFields(b, zone).length : 0)
+  }
+  return []
 }
 
 /** The undo/history label for a drop. */

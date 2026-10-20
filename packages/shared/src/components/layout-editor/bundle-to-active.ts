@@ -5,7 +5,8 @@ import {
   UNGROUPED_KEY
 } from '../../lib/layout-ops'
 import type { ActiveLayoutData, FieldGroup, LayoutMeta, SlotAssignment } from '../item-edit/types'
-import { type DesignTarget, targetKey } from './design-context'
+import { type DesignTarget, type RoleMark, targetKey } from './design-context'
+import type { RolePreview } from './settings/settings-api'
 
 // The editor's draft (LayoutBundle) in the shape GET /collection-layouts/active
 // answers, which is what the record form and read view render from.
@@ -145,4 +146,28 @@ export function previewForRole(
     (g) => !roleList((g as { hidden_for_roles?: unknown }).hidden_for_roles).includes(role)
   )
   return groups.length === active.groups.length ? active : { ...active, groups }
+}
+
+/**
+ * "Preview as role", field by field: what the role's permissions do to each
+ * field on the canvas (GET /collection-layouts/preview-as-role). Hidden ones
+ * stay on the canvas, marked; a role that cannot edit the collection at all
+ * sees every other field read-only. Slots and widgets are not fields: no mark.
+ */
+export function roleMarker(
+  preview: RolePreview | null
+): ((t: DesignTarget) => RoleMark | null) | undefined {
+  if (!preview || preview.role.admin_access) return undefined
+  const hidden = new Set(preview.hidden_fields)
+  const readonly = new Set(preview.readonly_fields)
+  const allReadonly = preview.can_read && !preview.can_update
+  const role = preview.role.name
+  if (!hidden.size && !readonly.size && !allReadonly) return undefined
+  return (t) => {
+    if (t.kind !== 'field' && t.kind !== 'header') return null
+    if (t.field.startsWith('__')) return null
+    if (hidden.has(t.field)) return { kind: 'hidden', role }
+    if (allReadonly || readonly.has(t.field)) return { kind: 'readonly', role }
+    return null
+  }
 }

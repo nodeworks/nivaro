@@ -15,6 +15,8 @@ import { listLayoutSlots } from '../../lib/layout-slots'
 import { cn, titleCase } from '../../lib/utils'
 import { fieldSpot, placeOp, sectionOp, slotSpot } from './add-target'
 import type { DesignTarget } from './design-context'
+import type { AddSource } from './dnd/collision'
+import { useAddDragSource } from './dnd/node'
 import { slotName } from './inspector-slot'
 import { useOverviewFields } from './overview/overview-api'
 import type { ApplyOptions } from './useLayoutDraft'
@@ -22,7 +24,9 @@ import type { ApplyOptions } from './useLayoutDraft'
 // "+ Add": everything that can go on the form — the collection's fields by
 // label, a new section, panels (slot cards) and widgets. A click adds right
 // after the selection (one op) and selects what it added; something already
-// on the form is selected instead of added twice.
+// on the form is selected instead of added twice. Rows not on the form also
+// drag onto the canvas (inside the editor's LayoutDndProvider): the drop is
+// one `place` op where the line shows.
 
 interface FieldRow {
   field: string
@@ -65,6 +69,15 @@ const SLOT_HINTS: Record<string, string> = {
 
 // Widgets that list rows for this record need its id bound to work at all.
 const RECORD_BOUND_WIDGETS = ['review_list', 'rollup']
+
+function widgetPatch(w: WidgetRow): PlacementPatch {
+  return {
+    widget_id: w.id,
+    input_bindings: RECORD_BOUND_WIDGETS.includes(w.widget_type)
+      ? [{ key: 'record_id', binding_type: 'item_field', binding_value: 'id' }]
+      : []
+  }
+}
 
 function typeWord(f: FieldRow): string {
   const ifc = f.interface ?? ''
@@ -117,7 +130,8 @@ function Row({
   aside,
   onClick,
   attrs,
-  extra
+  extra,
+  drag: source = null
 }: {
   title: string
   sub?: string | null
@@ -126,13 +140,22 @@ function Row({
   attrs?: Record<string, string | undefined>
   /** A second action beside the row (buttons cannot nest). */
   extra?: ReactNode
+  /** Drag this row onto the canvas to add it there; null: click only. */
+  drag?: (AddSource & { to: 'form' | 'header' }) | null
 }) {
+  const drag = useAddDragSource(source)
   const main = (
     <button
       type='button'
-      onClick={onClick}
+      {...drag.props}
+      onClick={() => {
+        if (!drag.clickBlocked()) onClick()
+      }}
       {...attrs}
-      className='group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted'
+      className={cn(
+        'group flex w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors hover:bg-muted',
+        drag.dragging && 'opacity-40'
+      )}
     >
       <span className='flex min-w-0 flex-1 flex-col'>
         <span className='truncate text-[12.5px] font-medium text-slate-900 dark:text-foreground'>
@@ -219,6 +242,22 @@ export function AddPanel({
     apply([placeOp(field, spot, patch)], { label: `Add ${label}` })
     onSelect(targetOf({ field, group_key: spot.group_key } as PlacementRow))
   }
+
+  // Dragged in from a row: select what landed, as a click does.
+  const dragOf = (field: string, label: string, on: unknown, patch?: PlacementPatch) =>
+    on
+      ? null
+      : {
+          field,
+          label,
+          patch,
+          to,
+          onAdded: (ops: LayoutOp[]) => {
+            const op = ops[0]
+            if (op?.op === 'place')
+              onSelect(targetOf({ field, group_key: op.group_key } as PlacementRow))
+          }
+        }
 
   const pick = (field: string, label: string, patch?: PlacementPatch) => {
     setNotice(null)
@@ -328,6 +367,7 @@ export function AddPanel({
                 )
               }
               onClick={() => pick(f.field, f.title)}
+              drag={dragOf(f.field, f.title, on)}
               extra={
                 on && to === 'form' ? (
                   <button
@@ -384,6 +424,7 @@ export function AddPanel({
             attrs={{ 'data-add-slot': s, 'data-on-form': on ? 'true' : undefined }}
             aside={on ? <OnForm>on this form</OnForm> : null}
             onClick={() => pick(s, slotName(s), patch)}
+            drag={s === '__subtitle__' ? null : dragOf(s, slotName(s), on)}
           />
         )
       })}
@@ -405,14 +446,8 @@ export function AddPanel({
               sub={titleCase(w.widget_type)}
               attrs={{ 'data-add-widget': String(w.id), 'data-on-form': on ? 'true' : undefined }}
               aside={on ? <OnForm>on this form</OnForm> : null}
-              onClick={() =>
-                pick(key, w.name, {
-                  widget_id: w.id,
-                  input_bindings: RECORD_BOUND_WIDGETS.includes(w.widget_type)
-                    ? [{ key: 'record_id', binding_type: 'item_field', binding_value: 'id' }]
-                    : []
-                })
-              }
+              onClick={() => pick(key, w.name, widgetPatch(w))}
+              drag={dragOf(key, w.name, on, widgetPatch(w))}
             />
           )
         })}
