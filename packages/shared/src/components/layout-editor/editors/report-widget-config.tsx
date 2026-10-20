@@ -26,13 +26,16 @@ export function useReportPickers(reportId: string) {
 // widget-slot settings popover. The config lives on the nivaro_widgets row
 // itself (global to the widget, not per-layout), so this PATCHes
 // /widgets-internal/:id — and only once BOTH ids are chosen, since the
-// server validator requires the pair.
+// server validator requires the pair. With `onSave` it hands the next config
+// over instead (the layout editor confirms first) and saves nothing itself.
 export function ReportWidgetConfigSection({
   widgetId,
-  config
+  config,
+  onSave
 }: {
   widgetId: number
   config: Record<string, unknown> | null
+  onSave?: (next: Record<string, unknown>) => void
 }) {
   const api = useEditorApi()
   const qc = useQueryClient()
@@ -47,20 +50,21 @@ export function ReportWidgetConfigSection({
   )
   const { reports, widgets } = useReportPickers(reportId)
 
+  const nextConfig = (r: string, w: string, f: string) => ({
+    ...(config ?? {}),
+    report_id: r,
+    widget_id: w,
+    entity_filter_field: f.trim() || null
+  })
   const save = useMutation({
-    mutationFn: (next: { report_id: string; widget_id: string; entity_filter_field: string }) =>
-      api.patch(`/widgets-internal/${widgetId}`, {
-        config: {
-          ...(config ?? {}),
-          report_id: next.report_id,
-          widget_id: next.widget_id,
-          entity_filter_field: next.entity_filter_field.trim() || null
-        }
-      }),
+    mutationFn: (next: Record<string, unknown>) =>
+      api.patch(`/widgets-internal/${widgetId}`, { config: next }),
     onSuccess: () => qc.invalidateQueries({ queryKey: ['widgets-internal'] })
   })
   const commit = (r: string, w: string, f: string) => {
-    if (r && w) save.mutate({ report_id: r, widget_id: w, entity_filter_field: f })
+    if (!r || !w) return
+    if (onSave) onSave(nextConfig(r, w, f))
+    else save.mutate(nextConfig(r, w, f))
   }
 
   return (

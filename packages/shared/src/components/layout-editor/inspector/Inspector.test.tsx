@@ -291,13 +291,28 @@ const PARENT: LayoutBundle = {
 
 type Cmd = { _method?: string; _path: string; _params?: Record<string, unknown>; _body?: unknown }
 
+const failPatch: { next: string | null } = { next: null }
+
 function makeClient() {
   const calls: Cmd[] = []
   const client = {
     request: vi.fn(async (cmd: Cmd) => {
       calls.push(cmd)
       const p = cmd._path
-      if (cmd._method === 'PATCH') return { data: { ok: true } }
+      if (cmd._method === 'PATCH') {
+        if (failPatch.next) throw Object.assign(new Error(failPatch.next), { status: 400 })
+        return { data: { ok: true } }
+      }
+      if (p === '/widgets-internal/5/placements')
+        return {
+          data: [
+            { layout_id: 7, name: 'Order form', collection: 'orders' },
+            { layout_id: 8, name: 'Order summary', collection: 'orders' }
+          ]
+        }
+      if (p === '/report-studio') return { data: [{ id: 'r1', name: 'Spend report' }] }
+      if (p === '/report-studio/r1')
+        return { data: { widgets: [{ id: 'w1', type: 'kpi', title: 'Total' }] } }
       if (p === '/collections/orders') return { data: { fields: FIELDS, relations: RELATIONS } }
       if (p === '/collections/order_lines')
         return { data: { fields: CHILD_FIELDS, relations: CHILD_RELATIONS } }
@@ -320,7 +335,14 @@ function makeClient() {
       if (p === '/pipelines') return { data: [] }
       if (p === '/widgets-internal')
         return {
-          data: [{ id: 5, name: 'Spend', widget_type: 'report_widget', config: { report_id: 1 } }]
+          data: [
+            {
+              id: 5,
+              name: 'Spend',
+              widget_type: 'report_widget',
+              config: { report_id: 'r1', widget_id: 'w1' }
+            }
+          ]
         }
       if (p === '/collection-layouts/3/bundle') return PARENT
       if (p === '/collection-layouts') return { data: [] }
@@ -824,5 +846,43 @@ describe('Inspector', () => {
     const confirm = host.querySelector('[data-global-confirm]')
     expect(confirm?.textContent).toContain('Forms of Orders')
     expect(confirm?.textContent).toContain('the Orders list')
+  })
+
+  describe("a report widget's own config", () => {
+    const slot: DesignTarget = { kind: 'slot', field: '__widget_5__', group_key: 'main' }
+    const applyBtn = () =>
+      [...host.querySelectorAll('[data-setting="widget.report_config"] button')].find(
+        (b) => b.textContent === 'Apply'
+      )
+
+    it('asks first, names the forms placing it, then saves and refreshes the catalog', async () => {
+      failPatch.next = null
+      const { calls, apply, qc } = await mount(slot)
+      await click(applyBtn())
+      expect(calls.some((c) => c._method === 'PATCH')).toBe(false)
+      const confirm = host.querySelector('[data-widget-confirm]')
+      expect(confirm?.textContent).toContain('Order form, Order summary')
+      const before = calls.filter((c) => c._path === '/widgets-internal').length
+      expect(qc.getQueryState(['layout-editor', 'widgets'])).toBeTruthy()
+      await click(host.querySelector('[data-widget-save]'))
+      const p = calls.find((c) => c._method === 'PATCH')
+      expect(p?._path).toBe('/widgets-internal/5')
+      expect(p?._body).toEqual({
+        config: { report_id: 'r1', widget_id: 'w1', entity_filter_field: null }
+      })
+      expect(apply).not.toHaveBeenCalled()
+      expect(host.querySelector('[data-widget-confirm]')).toBeNull()
+      // The inspector's own catalog read is refetched (not just ['widgets-internal']).
+      expect(calls.filter((c) => c._path === '/widgets-internal').length).toBeGreaterThan(before)
+    })
+
+    it('shows a failed save and keeps the confirm open', async () => {
+      failPatch.next = 'Report not found'
+      await mount(slot)
+      await click(applyBtn())
+      await click(host.querySelector('[data-widget-save]'))
+      expect(host.querySelector('[data-widget-confirm]')?.textContent).toContain('Report not found')
+      failPatch.next = null
+    })
   })
 })

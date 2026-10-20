@@ -1,11 +1,13 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import { toast } from 'sonner'
 import { useNivaroClient } from '../../../context'
-import { get } from '../../../lib/commands'
+import { get, patch } from '../../../lib/commands'
 import type { PlacementRow } from '../../../lib/layout-ops'
 import type { CMSRelation } from '../../pipeline/types'
 import { ReportWidgetConfigSection } from '../editors/report-widget-config'
 import { FieldPicker } from '../pickers/field-picker'
+import { parseSaveFailure } from '../useLayoutDraft'
 import { useCollectionMeta } from './field-context'
 import { Section, Segmented, Setting, TextInput, useInspectorEnv } from './kit'
 import { type Binding, bindingsOf } from './model'
@@ -55,6 +57,8 @@ export function WidgetInspector({ row }: { row: PlacementRow }) {
   const at = { field: row.field, group_key: row.group_key }
   const bindings = bindingsOf(row)
   const [confirmRemove, setConfirmRemove] = useState(false)
+  const [pendingConfig, setPendingConfig] = useState<Record<string, unknown> | null>(null)
+  const [configResets, setConfigResets] = useState(0)
 
   const setBinding = (key: string, patch: Partial<Binding>, text?: boolean) => {
     const existing = bindings.find((b) => b.key === key) ?? {
@@ -152,7 +156,23 @@ export function WidgetInspector({ row }: { row: PlacementRow }) {
             scope='field'
             effect='Saved on the widget itself: every form using this widget changes.'
           >
-            <ReportWidgetConfigSection widgetId={def.id} config={def.config ?? null} />
+            <ReportWidgetConfigSection
+              // Shows the stored config again after a save or a cancel.
+              key={`${JSON.stringify(def.config ?? null)}:${configResets}`}
+              widgetId={def.id}
+              config={def.config ?? null}
+              onSave={setPendingConfig}
+            />
+            {pendingConfig && (
+              <WidgetConfigConfirm
+                widget={def}
+                config={pendingConfig}
+                onDone={() => {
+                  setPendingConfig(null)
+                  setConfigResets((n) => n + 1)
+                }}
+              />
+            )}
           </Setting>
         </Section>
       )}
@@ -188,6 +208,92 @@ export function WidgetInspector({ row }: { row: PlacementRow }) {
             Remove from this form
           </button>
         )}
+      </div>
+    </div>
+  )
+}
+
+/** "Changes every form that places this widget" — names them, then saves the
+ *  widget's own config. Outside undo, like every every-form change. */
+function WidgetConfigConfirm({
+  widget,
+  config,
+  onDone
+}: {
+  widget: WidgetDef
+  config: Record<string, unknown>
+  onDone: () => void
+}) {
+  const client = useNivaroClient()
+  const qc = useQueryClient()
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const { data: placements, isLoading } = useQuery({
+    queryKey: ['layout-editor', 'widget-placements', widget.id],
+    queryFn: () =>
+      client
+        .request<{ data: Array<{ layout_id: number; name: string; collection: string }> }>(
+          get(`/widgets-internal/${widget.id}/placements`)
+        )
+        .then((r) => r.data ?? []),
+    staleTime: 30_000
+  })
+  const names = (placements ?? []).map((p) => p.name)
+  const shown = names.slice(0, 8)
+  const save = () => {
+    setSaving(true)
+    setError(null)
+    client
+      .request(patch(`/widgets-internal/${widget.id}`, { config }))
+      .then(() => {
+        toast.success(`${widget.name} — saved for every form`)
+        onDone()
+        return Promise.all([
+          qc.invalidateQueries({ queryKey: ['layout-editor', 'widgets'] }),
+          qc.invalidateQueries({ queryKey: ['widgets-internal'] })
+        ])
+      })
+      .catch((e) => setError(parseSaveFailure(e, 'The widget could not be saved').message))
+      .finally(() => setSaving(false))
+  }
+  return (
+    <div
+      data-widget-confirm=''
+      className='mt-1.5 space-y-2 rounded-md border border-amber-300 bg-amber-50 p-2.5 text-[12px] text-amber-900 dark:border-amber-700/60 dark:bg-amber-950/40 dark:text-amber-100'
+    >
+      <p className='font-medium'>
+        This changes {widget.name} on every form that places it, not just this one.
+      </p>
+      {isLoading ? (
+        <p className='text-[11px] opacity-80'>Finding the forms that place {widget.name}…</p>
+      ) : (
+        shown.length > 0 && (
+          <p className='text-[11px]'>
+            Forms: {shown.join(', ')}
+            {names.length > shown.length && ` and ${names.length - shown.length} more`}
+          </p>
+        )
+      )}
+      <p className='text-[11px] opacity-80'>Undo does not reverse this.</p>
+      {error && <p className='text-[11px] text-red-700 dark:text-red-300'>{error}</p>}
+      <div className='flex gap-2'>
+        <button
+          type='button'
+          data-widget-save=''
+          disabled={saving}
+          onClick={save}
+          className='rounded-md bg-nvr-cyan px-2.5 py-1 text-[12px] font-medium text-nvr-navy hover:bg-[#00b8e0] disabled:opacity-40'
+        >
+          {saving ? 'Saving…' : 'Save for every form'}
+        </button>
+        <button
+          type='button'
+          data-widget-cancel=''
+          onClick={onDone}
+          className='rounded-md px-2.5 py-1 text-[12px] text-amber-900 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-900/40'
+        >
+          Cancel
+        </button>
       </div>
     </div>
   )

@@ -775,6 +775,20 @@ export async function widgetsInternalRoutes(app: FastifyInstance) {
     })
   })
 
+  // The layouts that place this widget: a change to its config changes every one of
+  // them, so the layout editor names them before saving.
+  app.get('/:id/placements', { preHandler: requireAdmin }, async (req, reply) => {
+    const { id } = req.params as { id: string }
+    const rows = (await db('nivaro_layout_field_assignments as a')
+      .join('nivaro_collection_layouts as l', 'l.id', 'a.layout_id')
+      .where('a.widget_id', Number(id))
+      .distinct('l.id', 'l.name', 'l.collection')
+      .orderBy('l.name', 'asc')) as Array<{ id: number; name: string; collection: string }>
+    return reply.send({
+      data: rows.map((r) => ({ layout_id: r.id, name: r.name, collection: r.collection }))
+    })
+  })
+
   app.post('/', { preHandler: requireAdmin }, async (req, reply) => {
     const body = req.body as Record<string, unknown>
     if (body.widget_type === 'review_list') {
