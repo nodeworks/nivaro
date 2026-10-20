@@ -1,5 +1,5 @@
 import type { Knex } from 'knex'
-import { db } from '../db/index.js'
+import { resolveDb } from '../db/index.js'
 
 /**
  * Long-running and multi-statement SQL, outside knex.raw's two limits.
@@ -112,7 +112,9 @@ export async function withLongConnection<R>(
   fn: (conn: LongConnection) => Promise<R>,
   opts: RunLongOptions = {}
 ): Promise<R> {
-  const knex = opts.knex ?? (db as unknown as Knex)
+  // Resolved once: the pool this context runs on (#1321 — background work
+  // pins a connection from the background pool), kept for acquire + release.
+  const knex = opts.knex ?? (resolveDb() as unknown as Knex)
   const fallback = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS
 
   if (!isMssqlClient(knex)) {

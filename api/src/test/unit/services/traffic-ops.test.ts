@@ -18,7 +18,8 @@ vi.mock('../../../db/index.js', () => {
     vi.fn(() => chain),
     { client: { pool: { numUsed: () => 3, numPendingAcquires: () => 0, max: 10 } } }
   )
-  return { db }
+  // capacity reads the main pool explicitly (#1321), never the caller's
+  return { db, _staticDb: db }
 })
 
 import {

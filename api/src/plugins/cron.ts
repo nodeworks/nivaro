@@ -2,6 +2,7 @@ import { Cron } from 'croner'
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
 import type { Redis } from 'ioredis'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { newChainId, startChain } from '../services/chain.js'
 import { cronTicksEnabled } from '../services/cron-ticks.js'
 import { INSTANCE_ID } from '../services/instance-roster.js'
@@ -134,17 +135,33 @@ function raiseCronIssue(message: string, severity: 'medium' | 'high'): void {
     .catch(() => {})
 }
 
-/** #75 — the knex pool's occupancy; null when the driver exposes no pool. */
-async function poolOccupancy(): Promise<{ used: number; max: number; pending: number } | null> {
+type Occupancy = { used: number; max: number; pending: number }
+
+/** #75 — the knex pools' occupancy; null when the driver exposes no pool.
+ *  #1321 — `background` is the pool the heavy job itself will run on (the
+ *  background pool when DB_POOL_BACKGROUND_MAX > 0, else the shared main
+ *  pool); `main` is the pool people's requests use (null when shared). */
+async function poolOccupancy(): Promise<{
+  background: Occupancy | null
+  main: Occupancy | null
+} | null> {
   try {
-    const { db } = await import('../db/index.js')
-    const pool = (
-      db.client as {
-        pool?: { numUsed: () => number; numPendingAcquires: () => number; max?: number }
-      }
-    ).pool
-    if (!pool) return null
-    return { used: pool.numUsed(), max: pool.max ?? 10, pending: pool.numPendingAcquires() }
+    const { _backgroundDb, _staticDb, db } = await import('../db/index.js')
+    const read = (k: unknown): Occupancy | null => {
+      const pool = (
+        k as {
+          client?: {
+            pool?: { numUsed: () => number; numPendingAcquires: () => number; max?: number }
+          }
+        }
+      ).client?.pool
+      if (!pool) return null
+      return { used: pool.numUsed(), max: pool.max ?? 10, pending: pool.numPendingAcquires() }
+    }
+    return {
+      background: read(_backgroundDb ?? db),
+      main: _backgroundDb ? read(_staticDb) : null
+    }
   } catch {
     return null
   }
@@ -154,15 +171,20 @@ const HOT_POOL_RATIO = 0.8
 const YIELD_STEP_MS = 5_000
 const YIELD_MAX_MS = 10 * 60_000
 
+const isHot = (p: Occupancy | null): boolean =>
+  !!p && (p.pending > 0 || p.used / Math.max(1, p.max) >= HOT_POOL_RATIO)
+
 /** Wait while the pool is hot (≥ 80% checked out, or acquires queued) —
- *  bounded, so a permanently busy instance still runs its heavy jobs. */
+ *  bounded, so a permanently busy instance still runs its heavy jobs.
+ *  #1321 — the background pool must have room for the job, and the job still
+ *  yields while people's requests have the main pool hot (they share the
+ *  database server, if not the connections). */
 async function waitForPoolHeadroom(): Promise<void> {
   const started = Date.now()
   while (Date.now() - started < YIELD_MAX_MS) {
     const p = await poolOccupancy()
     if (!p) return
-    const hot = p.pending > 0 || p.used / Math.max(1, p.max) >= HOT_POOL_RATIO
-    if (!hot) return
+    if (!isHot(p.background) && !isHot(p.main)) return
     await sleep(YIELD_STEP_MS)
   }
 }
@@ -630,7 +652,11 @@ export class CronManager {
   /** #1086 — run `work` holding the cluster-wide heavy-job slot. Waits its turn
    *  (polling, 2 h cap, then runs anyway with a warning); without Redis, or
    *  when Redis fails, it runs at once — the slot protects the pool, not data. */
-  async withHeavySlot(label: string, work: () => Promise<void>): Promise<void> {
+  async withHeavySlot(label: string, workFn: () => Promise<void>): Promise<void> {
+    // #1321 — whatever holds the heavy slot is background work: its queries
+    // go to the background pool (crons are bound already; this covers the
+    // boot cache warm and help-video renders that take the slot directly).
+    const work = () => runInBackgroundPool(workFn)
     const redis = this.leader.client()
     if (!redis) return work()
     const value = holdValue(label)
@@ -739,7 +765,9 @@ export class CronManager {
   async dryRun(id: string): Promise<{ supported: boolean; report: unknown }> {
     const e = this.entries.get(id)
     if (!e?.dryRun) return { supported: false, report: null }
-    return { supported: true, report: await e.dryRun() }
+    const dry = e.dryRun
+    // A dry run reads what the job would touch — background work too (#1321).
+    return { supported: true, report: await runInBackgroundPool(() => dry()) }
   }
 
   /** #81 — when the schedule last SHOULD have fired (null for one-shot or
@@ -819,11 +847,7 @@ export class CronManager {
           if (opts?.quiet) {
             const chainId = newChainId()
             try {
-              await startChain(
-                `cron:${id}`,
-                () => runAsTrafficSource(cronTrafficSource(id), fn),
-                chainId
-              )
+              await startChain(`cron:${id}`, () => runAsBackground(id, fn), chainId)
             } catch (err) {
               console.error({ err, cronId: id }, 'Cron job error')
               const run = await startJobRun('cron', id, {
@@ -857,11 +881,7 @@ export class CronManager {
             }, budget)
             try {
               // Every tick is its own integration event chain.
-              await startChain(
-                `cron:${id}`,
-                () => runAsTrafficSource(cronTrafficSource(id), fn),
-                chainId
-              )
+              await startChain(`cron:${id}`, () => runAsBackground(id, fn), chainId)
               await run.complete()
               this.triggerChained(id)
             } catch (err) {
@@ -982,11 +1002,7 @@ export class CronManager {
           // A NEW chain even when run-now comes from an HTTP request: the job's
           // writes are the cron's, not the admin click's (the click is recorded
           // on nivaro_job_runs.triggered_by).
-          await startChain(
-            `cron:${id}`,
-            () => runAsTrafficSource(cronTrafficSource(id), entry.fn),
-            chainId
-          )
+          await startChain(`cron:${id}`, () => runAsBackground(id, entry.fn), chainId)
           await run.complete()
           this.triggerChained(id)
         } catch (err) {
@@ -1138,6 +1154,13 @@ export const cronPlugin = fp(async (app: FastifyInstance) => {
       : 'Cron manager ready — scheduled ticks OFF on this instance (development default; CRON_TICKS=on to enable). Run-now still works.'
   )
 })
+
+/** A job's handler, attributed to its Traffic Map source and run on the
+ *  background pool (#1321): every db call it makes, awaited or not, borrows
+ *  from DB_POOL_BACKGROUND_MAX instead of the pool requests wait on. */
+function runAsBackground(id: string, fn: CronFn): Promise<void> {
+  return runInBackgroundPool(() => runAsTrafficSource(cronTrafficSource(id), fn))
+}
 
 /** The Traffic Map source a job's run is attributed to (#1105): its writes and partner calls. */
 function cronTrafficSource(id: string): TrafficSource {

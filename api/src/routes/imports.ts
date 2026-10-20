@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import { assertSafeUrl } from '../lib/ssrf.js'
 import { requireAdmin } from '../middleware/authenticate.js'
 import { logActivity } from '../services/activity.js'
@@ -513,8 +514,9 @@ async function createImportJob(input: CreateJobInput, app: FastifyInstance) {
 
   const job = await db('nivaro_import_jobs').where({ id }).first()
 
-  // Fire-and-forget
-  processImportJob(id, app).catch(console.error)
+  // Fire-and-forget, on the background connection pool (#1321): the rows it
+  // writes must not hold connections the people using the app wait for.
+  runInBackgroundPool(() => processImportJob(id, app)).catch(console.error)
 
   return job
 }

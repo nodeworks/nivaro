@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify'
 import fp from 'fastify-plugin'
-import { _staticDb, db, dbRead } from '../db/index.js'
+import { _backgroundDb, _staticDb, db, dbRead } from '../db/index.js'
 import { instanceKey } from '../services/instance-key.js'
 import {
   attachQueryTracing,
@@ -36,11 +36,12 @@ export const requestTracePlugin = fp(async (app: FastifyInstance) => {
     await flushTraceExport().catch(() => {})
   })
   // Round-trip accounting (#506/#507/#483): every statement a traced request
-  // runs is counted and timed off knex's query events. Both pools — the
-  // replica shares the request context, so its statements count too.
+  // runs is counted and timed off knex's query events. Every pool — the
+  // replica shares the request context, so its statements count too, and the
+  // background pool (#1321) carries the work a request hands to it.
   const clients = new Set<unknown>()
-  for (const k of [_staticDb, dbRead]) {
-    const client = (k as unknown as { client?: { on?: unknown } }).client
+  for (const k of [_staticDb, _backgroundDb, dbRead]) {
+    const client = (k as unknown as { client?: { on?: unknown } } | null)?.client
     if (client && typeof client.on === 'function' && !clients.has(client)) {
       clients.add(client)
       attachQueryTracing(client as Parameters<typeof attachQueryTracing>[0])

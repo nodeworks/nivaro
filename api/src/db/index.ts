@@ -6,6 +6,7 @@ import { attachConfigEpoch } from './config-epoch.js'
 import { attachMetadataQueryCache } from './metadata-query-cache.js'
 import { recordEffects } from './migration-effects.js'
 import { isMigrationLockedError } from './migration-lock.js'
+import { inBackgroundPool } from './pool-context.js'
 import { getTenantDb } from './tenant-context.js'
 
 const cloudMode = !!process.env.CLOUD_META_DB_URL
@@ -117,8 +118,38 @@ export const _staticDb = process.env.CLOUD_META_DB_URL
       }
     })
 
+// #1321 — the background pool: scheduled jobs, imports, cache warms and
+// backfills borrow from it (db/pool-context.ts binds them), so an interactive
+// request never waits for a connection background work is holding. Same
+// server, credentials and database as the main pool; `min: 0` so a process
+// that runs no background work opens no connection for it. Not created in
+// cloud mode (background work there runs outside any tenant and resolves to
+// nothing, see below) or when DB_POOL_BACKGROUND_MAX is 0 (shares the main
+// pool, the behaviour before #1321).
+const backgroundMax = Number(config.DB_POOL_BACKGROUND_MAX ?? 0) || 0
+export const _backgroundDb: ReturnType<typeof knex> | null =
+  !cloudMode && backgroundMax > 0
+    ? knex({
+        client: config.DB_CLIENT,
+        connection: buildConnection(config.DB_HOST, writePort),
+        pool: { min: 0, max: backgroundMax },
+        migrations: {
+          migrationSource,
+          tableName: 'nivaro_migrations',
+          disableMigrationsListValidation: true
+        }
+      })
+    : null
+
+/** The self-hosted knex the current async context runs on: the background
+ *  pool inside bound background work (when it exists), else the main pool. */
+function activeStaticDb(): typeof _staticDb {
+  return _backgroundDb && inBackgroundPool() ? _backgroundDb : _staticDb
+}
+
 // Configuration reads (relations, fields, rules, layouts, column lists) are
 // answered from a short-lived cache at the driver seam — see the module.
+// (It patches the driver prototype, so the background pool is covered too.)
 attachMetadataQueryCache(_staticDb)
 // A configuration write moves one number that every other process polls.
 attachConfigEpoch(_staticDb)
@@ -148,16 +179,20 @@ function silentQueryBuilder(): any {
 // (set via AsyncLocalStorage by the tenant middleware). In self-hosted mode,
 // getTenantDb() returns undefined and the Proxy falls back to _staticDb —
 // behaviour is identical to before for self-hosted users.
+//
+// #1321 — self-hosted, the proxy also picks the POOL: work bound with
+// runInBackgroundPool (crons, imports, warms) resolves to _backgroundDb.
+// A tenant context always wins: a tenant's work stays on that tenant's pool.
 export const db = new Proxy(_staticDb as any, {
   apply(_target, _thisArg, args) {
     const tenant = getTenantDb()
     if (tenant) return (tenant as any)(...args)
     if (cloudMode) return silentQueryBuilder()
-    return (_staticDb as any)(...args)
+    return (activeStaticDb() as any)(...args)
   },
   get(_target, prop) {
     const tenant = getTenantDb()
-    const d = tenant ?? (cloudMode ? null : _staticDb)
+    const d = tenant ?? (cloudMode ? null : activeStaticDb())
     if (!d) {
       if (prop === 'destroy') return () => Promise.resolve()
       if (prop === 'raw') return () => silentQueryBuilder()
@@ -181,10 +216,29 @@ export const db = new Proxy(_staticDb as any, {
   }
 }) as typeof _staticDb
 
+/**
+ * The concrete knex `db` resolves to right now — the tenant's in cloud mode,
+ * else the background or main pool (#1321). For code that holds on to the
+ * instance across calls (a pinned connection, driver internals) and must keep
+ * borrowing from the pool it started on. Cloud mode outside a tenant returns
+ * the proxy itself (its calls resolve to nothing, as before).
+ */
+export function resolveDb(): typeof _staticDb {
+  const tenant = getTenantDb()
+  if (tenant) return tenant as typeof _staticDb
+  if (cloudMode) return db
+  return activeStaticDb()
+}
+
 // ─── Read replica support ────────────────────────────────────────────────────
 // When DB_READ_HOST is set, dbRead is a second knex instance pointed at the
 // replica (same client/credentials/database). Otherwise it aliases db, so
 // services can import dbRead unconditionally for GET-heavy queries.
+// #1321 — self-hosted without a replica it IS the `db` proxy (it used to be
+// _staticDb), so a list read inside background work (items readByQuery from a
+// cron, a digest, a queue rebuild) takes the background pool like every other
+// call. Cloud mode keeps the old alias, unchanged. With a replica, list reads
+// share the replica's one pool whatever the context.
 export const dbRead: Database = config.DB_READ_HOST
   ? knex({
       client: config.DB_CLIENT,
@@ -198,12 +252,15 @@ export const dbRead: Database = config.DB_READ_HOST
         tableName: 'nivaro_migrations'
       }
     })
-  : _staticDb
+  : cloudMode
+    ? _staticDb
+    : db
 
-/** Graceful shutdown — destroys the static write pool and, if separate, the read replica pool. */
+/** Graceful shutdown — destroys the static write pool, the background pool and, if separate, the read replica pool. */
 export async function closeDb(): Promise<void> {
   await _staticDb.destroy()
-  if (dbRead !== _staticDb) {
+  if (_backgroundDb) await _backgroundDb.destroy()
+  if (config.DB_READ_HOST) {
     await (dbRead as any).destroy()
   }
 }

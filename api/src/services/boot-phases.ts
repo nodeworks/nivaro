@@ -6,8 +6,9 @@
  * instance in Redis, and a phase that took far longer than it usually does is
  * flagged.
  *
- * Leaf module: imports nothing of the app.
+ * Leaf module: imports nothing of the app (bar the pool-context leaf).
  */
+import { runInBackgroundPool } from '../db/pool-context.js'
 
 export interface BootPhase {
   name: string
@@ -36,7 +37,10 @@ function push(p: BootPhase): void {
   if (phases.length > 60) phases.shift()
 }
 
-/** Time a phase. The phase's own failure is recorded and rethrown. */
+/** Time a phase. The phase's own failure is recorded and rethrown.
+ *  A `background` phase (a warm beside the boot) runs on the background
+ *  connection pool (#1321), so it never holds a connection the boot's first
+ *  requests are waiting for. */
 export async function bootPhase<T>(
   name: string,
   fn: () => Promise<T> | T,
@@ -44,7 +48,7 @@ export async function bootPhase<T>(
 ): Promise<T> {
   const began = Date.now()
   try {
-    const out = await fn()
+    const out = opts.background ? await runInBackgroundPool(fn) : await fn()
     push({ name, ms: Date.now() - began, at: began - processStart, background: !!opts.background })
     return out
   } catch (err) {

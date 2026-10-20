@@ -49,5 +49,7 @@ vi.mock('../db/index.js', () => {
   // db.raw used by health route and permissions row filter
   ;(db as unknown as Record<string, unknown>).raw = vi.fn().mockResolvedValue([])
 
-  return { db }
+  // #1321 — no separate background pool under test; resolveDb() is the mock db.
+  // _staticDb is the same mock: pool readers name the main pool explicitly now.
+  return { db, _staticDb: db, _backgroundDb: null, resolveDb: () => db }
 })

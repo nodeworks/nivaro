@@ -39,6 +39,12 @@ const schema = z.object({
   // reaped, so an instance that never fans out still holds `min` (2).
   // Budget it per replica against the server's own connection limit.
   DB_POOL_MAX: z.coerce.number().int().min(2).max(200).default(60),
+  // #1321 — a second pool for background work (scheduled jobs, imports, cache
+  // warms, backfills, digests) so a request never waits for a connection a
+  // cron is holding. Same ceiling semantics as DB_POOL_MAX; a process can open
+  // DB_POOL_MAX + DB_POOL_BACKGROUND_MAX connections in all. 0 = no separate
+  // pool: background work shares the main one (the behaviour before #1321).
+  DB_POOL_BACKGROUND_MAX: z.coerce.number().int().min(0).max(200).default(10),
   DB_DATABASE: requiredStr(),
   DB_USER: requiredStr(),
   DB_PASSWORD: requiredStr(),

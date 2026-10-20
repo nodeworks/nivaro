@@ -1,4 +1,5 @@
 import { db } from '../db/index.js'
+import { runInBackgroundPool } from '../db/pool-context.js'
 import {
   type AtRiskRuleRow,
   evaluateRows,
@@ -105,7 +106,10 @@ export async function enqueueQueueMaterializationBackfill(queueId: string): Prom
       await markRerun(queueId)
       return
     }
-    void (async () => {
+    // On the background connection pool (#1321): a rebuild writes thousands
+    // of rows and must not hold connections the request that started it —
+    // or anyone else's — is waiting for.
+    void runInBackgroundPool(async () => {
       let again = true
       while (again) {
         try {
@@ -116,7 +120,7 @@ export async function enqueueQueueMaterializationBackfill(queueId: string): Prom
         again = await releaseBackfillLock(queueId)
         if (again && !(await takeBackfillLock(queueId))) again = false
       }
-    })()
+    })
   } catch (err) {
     console.warn(`Queue materialization backfill not started for ${queueId}`, err)
   }

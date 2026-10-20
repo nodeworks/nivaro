@@ -147,6 +147,19 @@ export const dbHealthDocs: DocSection = {
       type: 'p',
       text: 'The process panel reports the connection pool over the last five minutes, not at the instant you looked: p50 / p95 / max time a request WAITED for a connection, and the share of the window with every connection busy. Identical 80ms statements once read 2.2s because that wait was invisible — no query timing shows it. The pool-monitor job raises an issue when the p95 wait passes 500ms or the pool sits full for a quarter of the window.'
     },
+    { type: 'h3', id: 'background-pool', text: 'Background connection pool' },
+    {
+      type: 'p',
+      text: "Background work has its own connection pool, so a person never waits for a connection a background job is holding. Background work here means scheduled jobs (including dry runs and catch-up runs), staged and CSV imports, queue rebuilds, the cache warm after boot and other boot-time warms, and anything that holds the heavy-job slot, such as help-video renders. Requests use the main pool (`DB_POOL_MAX`, default 60). Background work uses `DB_POOL_BACKGROUND_MAX` (default 10). Both pools connect to the same server and database, so one process can open up to `DB_POOL_MAX + DB_POOL_BACKGROUND_MAX` connections; budget that against the server's connection limit for each replica. The background pool opens connections only when it needs them and closes idle ones, so a process with no background work holds none. Set `DB_POOL_BACKGROUND_MAX=0` to turn the separate pool off; background work then shares the main pool, as it did before."
+    },
+    {
+      type: 'p',
+      text: "No code changes are needed to use it: the `db` handle checks, on every call, whether the current work is background work and picks the pool to match. Everything a job awaits uses that pool too, including timers it sets and promises it starts. A transaction stays on the one connection it opened. Long-running statements (`runLongSql` / `withLongConnection`) take their connection from the same pool. An admin's \"Run now\" runs the job on the background pool, while the request that asked for it, and the job-run record, use the main pool. Before a heavy job starts, it waits until the background pool has room. In cloud mode, a tenant's work always uses that tenant's own pool, and no background pool is created."
+    },
+    {
+      type: 'p',
+      text: 'DB & Runtime Health shows both pools: "Pool · requests" and "Pool · background jobs", with in-use count, waiting count, p95 wait and the most connections this process can open. Held connections are listed with the pool that holds them. `GET /api/ops-db/pool` keeps the main pool at the top level (as before) and adds `background` (null when the pool is off) and `total_max`. `GET /api/ops/runtime` adds `background_pool`, and `/api/metrics` adds `nivaro_db_background_pool_used`, `_pending` and `_max`. The heavy-read gate is still sized from the main pool (`HEAVY_READ_CONCURRENCY`, default `max(4, DB_POOL_MAX/3)`).'
+    },
     {
       type: 'note',
       text: 'Storage runway needs at least 7 nightly snapshots before it projects a growth rate — until then it reports how many snapshots it has collected. Snapshots are written by the storage-snapshot job at 03:45 daily.'
