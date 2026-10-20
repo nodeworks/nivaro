@@ -1269,6 +1269,7 @@ function ItemEditFormView({
 }: ItemEditFormProps) {
   const designOn = design != null
   const designCtx = design?.context ?? null
+  const designMode = designCtx != null
   // Canvas "show hidden": hidden fields and rule-hidden tabs/steps stay on
   // the canvas, faint, so they can still be selected.
   const showHiddenDesign = !!designCtx?.showHidden
@@ -1694,11 +1695,13 @@ function ItemEditFormView({
       void qc.invalidateQueries({ queryKey: ['field-config'] })
       void qc.invalidateQueries({ queryKey: ['active-layout'] })
       void qc.invalidateQueries({ queryKey: ['collection-meta'] })
-      setConfigUpdated(true)
+      // An event naming no collection (a surface-wide push) is about no form in particular; and
+      // in design mode the canvas already re-reads the layout, so a Reload prompt means nothing.
+      if (changed === collection && !designMode) setConfigUpdated(true)
     }
     window.addEventListener('nvr:config-update', onConfig)
     return () => window.removeEventListener('nvr:config-update', onConfig)
-  }, [qc, collection])
+  }, [qc, collection, designMode])
   // Condensing header (#321): long forms shrink the header to a mini-bar
   // (title + state + save) once the body scrolls past ~90px.
   const [headerCondensed, setHeaderCondensed] = useState(false)
@@ -8902,6 +8905,7 @@ function ItemEditFormView({
                 key={t.key}
                 type='button'
                 data-tab-key={t.key}
+                data-design-tab=''
                 data-design-hidden={designHiddenTabs?.has(t.key) ? '' : undefined}
                 onClick={() => setActiveTab(t.key)}
                 className={cn(
